@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maestro - Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- Dry mode banner (hidden by default) -->
+  <div id="dryBanner" class="hidden bg-yellow-500/10 border-b border-yellow-500/30 text-yellow-400 text-sm text-center py-2 font-medium">
+    DRY MODE - No external writes
+  </div>
+
+  <!-- Header -->
+  <header class="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-7 h-7 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            <h1 class="text-xl font-semibold tracking-tight">Maestro</h1>
+          </div>
+          <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">Dashboard</span>
+        </div>
+        <div class="flex items-center gap-4">
+          <div id="wsStatus" class="flex items-center gap-2 text-xs text-gray-500">
+            <span class="inline-block w-2 h-2 bg-gray-600 rounded-full"></span>
+            Connecting...
+          </div>
+          <a href="/config.html" class="text-sm text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            Configuration
+          </a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+    <!-- Summary stats -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div id="countRunning" class="text-2xl font-semibold text-blue-400">0</div>
+        <div class="text-xs text-gray-500 mt-1">Running</div>
+      </div>
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div id="countCompleted" class="text-2xl font-semibold text-green-400">0</div>
+        <div class="text-xs text-gray-500 mt-1">Completed</div>
+      </div>
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div id="countErrors" class="text-2xl font-semibold text-red-400">0</div>
+        <div class="text-xs text-gray-500 mt-1">Errors</div>
+      </div>
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div id="countPaused" class="text-2xl font-semibold text-yellow-400">0</div>
+        <div class="text-xs text-gray-500 mt-1">Paused</div>
+      </div>
+    </div>
+
+    <!-- Empty state -->
+    <div id="emptyState" class="hidden text-center py-16">
+      <svg class="w-16 h-16 text-gray-700 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+      </svg>
+      <p class="text-gray-500 text-sm">No workflows yet. Maestro will pick up tickets automatically.</p>
+    </div>
+
+    <!-- Workflow cards grid -->
+    <div id="workflowGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+  </main>
+
+  <!-- Report Modal -->
+  <div id="reportModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in" onclick="closeReportModal()"></div>
+    <div class="relative flex items-center justify-center min-h-screen p-4">
+      <div class="animate-scale-in bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+        <div class="sticky top-0 bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between rounded-t-2xl z-10">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span id="reportTicketKey" class="font-mono text-sm font-medium"></span>
+              <span id="reportStatusBadge"></span>
+            </div>
+            <h2 id="reportTitle" class="text-lg font-semibold text-gray-100"></h2>
+          </div>
+          <button onclick="closeReportModal()" class="text-gray-400 hover:text-gray-200 transition-colors p-1 rounded-lg hover:bg-gray-800">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div id="reportBody" class="px-6 py-5 space-y-6"></div>
+        <div class="border-t border-gray-800 px-6 py-4 flex items-center justify-end sticky bottom-0 bg-gray-900 rounded-b-2xl">
+          <button onclick="closeReportModal()" class="text-sm font-medium px-4 py-2 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

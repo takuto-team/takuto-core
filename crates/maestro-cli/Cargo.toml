@@ -1,0 +1,18 @@
+[package]
+name = "maestro-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "maestro"
+path = "src/main.rs"
+
+[dependencies]
+maestro-core = { workspace = true }
+maestro-web = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+axum = { workspace = true }
+tokio-util = { workspace = true }

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maestro - Configuration</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-3">
+          <a href="/" class="flex items-center gap-2 text-gray-400 hover:text-gray-200 transition-colors">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+            Dashboard
+          </a>
+        </div>
+        <div class="flex items-center gap-2">
+          <svg class="w-7 h-7 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          </svg>
+          <h1 class="text-xl font-semibold tracking-tight">Maestro</h1>
+          <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">Config</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <form id="configForm" class="space-y-8">
+
+      <!-- Section: Repository -->
+      <section>
+        <div class="flex items-center gap-2 mb-5">
+          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Repository</h2>
+        </div>
+        <div class="space-y-4">
+          <div>
+            <label for="baseBranch" class="block text-sm font-medium text-gray-300 mb-1.5">Base Branch</label>
+            <input type="text" id="baseBranch" placeholder="e.g. main, develop"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600">Branch that PRs will be created against</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="border-t border-gray-800/60"></div>
+
+      <!-- Section: Jira -->
+      <section>
+        <div class="flex items-center gap-2 mb-5">
+          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Jira Integration</h2>
+        </div>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-300 mb-1.5">Project Keys</label>
+            <div class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 focus-within:ring-2 focus-within:ring-blue-500/40 focus-within:border-blue-500/60 transition-colors">
+              <div id="projectTags" class="flex flex-wrap gap-1.5 mb-1"></div>
+              <input type="text" id="projectKeyInput" placeholder="Type a project key and press Enter"
+                class="w-full bg-transparent text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none py-1" />
+            </div>
+            <p class="mt-1.5 text-xs text-gray-600">Jira project keys to monitor for new tickets</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-gray-300 mb-2.5">Item Types to Handle</label>
+            <div id="itemTypesContainer" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
+          </div>
+
+          <div>
+            <label for="pollInterval" class="block text-sm font-medium text-gray-300 mb-1.5">Poll Interval</label>
+            <div class="flex items-center gap-2">
+              <input type="number" id="pollInterval" min="10" max="3600"
+                class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+              <span class="text-sm text-gray-500">seconds</span>
+            </div>
+            <p class="mt-1.5 text-xs text-gray-600">How often to check Jira for new tickets (min: 10s)</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="border-t border-gray-800/60"></div>
+
+      <!-- Section: Commands -->
+      <section>
+        <div class="flex items-center gap-2 mb-5">
+          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Commands</h2>
+        </div>
+        <div class="space-y-4">
+          <div>
+            <label for="lintCmd" class="block text-sm font-medium text-gray-300 mb-1.5">Linting Command</label>
+            <input type="text" id="lintCmd" placeholder="e.g. npm run lint, cargo clippy"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+          </div>
+          <div>
+            <label for="unitTestCmd" class="block text-sm font-medium text-gray-300 mb-1.5">Unit Tests Command</label>
+            <input type="text" id="unitTestCmd" placeholder="e.g. npm test, cargo test"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+          </div>
+          <div>
+            <label for="e2eTestCmd" class="block text-sm font-medium text-gray-300 mb-1.5">E2E Tests Command</label>
+            <input type="text" id="e2eTestCmd" placeholder="e.g. npm run test:e2e"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600">Leave empty to skip E2E tests</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="border-t border-gray-800/60"></div>
+
+      <!-- Section: Integrations -->
+      <section>
+        <div class="flex items-center gap-2 mb-5">
+          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+          </svg>
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Integrations</h2>
+        </div>
+        <div class="space-y-4">
+          <div>
+            <label for="figmaToken" class="block text-sm font-medium text-gray-300 mb-1.5">Figma API Token</label>
+            <div class="relative">
+              <input type="password" id="figmaToken" placeholder="figd_..."
+                class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 pr-10 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+              <button type="button" onclick="togglePassword(this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+              </button>
+            </div>
+            <p class="mt-1.5 text-xs text-gray-600">Used to fetch design specs from Figma for UI tickets</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="border-t border-gray-800/60"></div>
+
+      <!-- Section: Advanced -->
+      <section>
+        <div class="flex items-center gap-2 mb-5">
+          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+          </svg>
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Advanced</h2>
+        </div>
+        <div class="space-y-5">
+          <div class="flex items-center justify-between bg-gray-900 border border-gray-700 rounded-lg px-4 py-3.5">
+            <div>
+              <div class="text-sm font-medium text-gray-300">Dry Mode</div>
+              <div class="text-xs text-gray-500 mt-0.5">Process tickets without creating branches or PRs</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="dryMode" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div>
+            <label for="maxConcurrent" class="block text-sm font-medium text-gray-300 mb-1.5">Max Concurrent Workflows</label>
+            <input type="number" id="maxConcurrent" min="1" max="10"
+              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+          </div>
+          <div>
+            <label for="maxFixAttempts" class="block text-sm font-medium text-gray-300 mb-1.5">Max Fix Attempts</label>
+            <input type="number" id="maxFixAttempts" min="1" max="10"
+              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600">Max attempts to fix lint/test failures per step</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="border-t border-gray-800/60"></div>
+
+      <!-- Save buttons -->
+      <div class="flex items-center justify-between pt-2 pb-8">
+        <div id="saveStatus" class="text-sm text-green-400 opacity-0 transition-opacity">
+          Configuration saved successfully
+        </div>
+        <button type="submit"
+          class="inline-flex items-center gap-2 text-sm font-medium px-6 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:ring-offset-2 focus:ring-offset-gray-950 transition-colors">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          Save Configuration
+        </button>
+      </div>
+
+    </form>
+  </main>
+
+  <script>
+    const ITEM_TYPES = ['Task', 'Bug', 'Story', 'Epic', 'Sub-task', 'Spike'];
+    let currentConfig = null;
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        currentConfig = await res.json();
+        populateForm(currentConfig);
+      } catch (e) {
+        console.error('Failed to load config:', e);
+      }
+    }
+
+    function populateForm(cfg) {
+      document.getElementById('baseBranch').value = cfg.git.base_branch;
+      document.getElementById('pollInterval').value = cfg.general.poll_interval_secs;
+      document.getElementById('lintCmd').value = cfg.commands.lint;
+      document.getElementById('unitTestCmd').value = cfg.commands.unit_test;
+      document.getElementById('e2eTestCmd').value = cfg.commands.e2e_test;
+      document.getElementById('figmaToken').value = cfg.claude.figma_api_token;
+      document.getElementById('dryMode').checked = cfg.general.dry_mode;
+      document.getElementById('maxConcurrent').value = cfg.general.max_concurrent_workflows;
+      document.getElementById('maxFixAttempts').value = cfg.general.max_fix_attempts;
+
+      // Project keys
+      const tagContainer = document.getElementById('projectTags');
+      tagContainer.innerHTML = '';
+      cfg.jira.project_keys.forEach(key => addTag(key));
+
+      // Item types
+      const container = document.getElementById('itemTypesContainer');
+      container.innerHTML = '';
+      ITEM_TYPES.forEach(type => {
+        const checked = cfg.jira.item_types.includes(type) ? 'checked' : '';
+        container.innerHTML += `
+          <label class="flex items-center gap-2.5 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 cursor-pointer hover:border-gray-600 transition-colors has-[:checked]:border-blue-500/40 has-[:checked]:bg-blue-500/5">
+            <input type="checkbox" value="${type}" ${checked} class="item-type-cb w-4 h-4 rounded border-gray-600 text-blue-500 bg-gray-800 focus:ring-blue-500/40 focus:ring-offset-0" />
+            <span class="text-sm text-gray-300">${type}</span>
+          </label>`;
+      });
+    }
+
+    function addTag(value) {
+      const tagContainer = document.getElementById('projectTags');
+      const tag = document.createElement('span');
+      tag.className = 'tag text-xs font-mono bg-blue-500/15 text-blue-400 border border-blue-500/20 px-2 py-1 rounded-md inline-flex items-center gap-1';
+      tag.innerHTML = `${value} <span class="cursor-pointer opacity-60 hover:opacity-100" onclick="this.parentElement.remove()">&times;</span>`;
+      tagContainer.appendChild(tag);
+    }
+
+    function getProjectKeys() {
+      return Array.from(document.querySelectorAll('#projectTags .tag'))
+        .map(t => t.textContent.trim().replace('\u00d7', '').trim());
+    }
+
+    function getItemTypes() {
+      return Array.from(document.querySelectorAll('.item-type-cb:checked')).map(cb => cb.value);
+    }
+
+    function buildConfigPayload() {
+      return {
+        general: {
+          dry_mode: document.getElementById('dryMode').checked,
+          poll_interval_secs: parseInt(document.getElementById('pollInterval').value, 10),
+          max_concurrent_workflows: parseInt(document.getElementById('maxConcurrent').value, 10),
+          max_fix_attempts: parseInt(document.getElementById('maxFixAttempts').value, 10),
+          log_level: currentConfig ? currentConfig.general.log_level : 'info',
+        },
+        jira: {
+          project_keys: getProjectKeys(),
+          item_types: getItemTypes(),
+          jql_filter: currentConfig ? currentConfig.jira.jql_filter : '',
+        },
+        git: {
+          base_branch: document.getElementById('baseBranch').value,
+          repo_path: currentConfig ? currentConfig.git.repo_path : '/workspace',
+        },
+        commands: {
+          lint: document.getElementById('lintCmd').value,
+          unit_test: document.getElementById('unitTestCmd').value,
+          e2e_test: document.getElementById('e2eTestCmd').value,
+        },
+        web: currentConfig ? currentConfig.web : { host: '0.0.0.0', port: 8080 },
+        claude: {
+          skills_path: currentConfig ? currentConfig.claude.skills_path : '/root/.claude/skills',
+          address_ticket_passes: currentConfig ? currentConfig.claude.address_ticket_passes : 3,
+          step_timeout_secs: currentConfig ? currentConfig.claude.step_timeout_secs : 600,
+          figma_api_token: document.getElementById('figmaToken').value,
+        },
+      };
+    }
+
+    // Tag input
+    document.getElementById('projectKeyInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        const value = e.target.value.trim().toUpperCase().replace(',', '');
+        if (value && !getProjectKeys().includes(value)) {
+          addTag(value);
+        }
+        e.target.value = '';
+      }
+    });
+
+    // Toggle password visibility
+    function togglePassword(btn) {
+      const input = btn.previousElementSibling;
+      input.type = input.type === 'password' ? 'text' : 'password';
+    }
+
+    // Save form
+    document.getElementById('configForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const status = document.getElementById('saveStatus');
+      try {
+        const res = await fetch('/api/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildConfigPayload()),
+        });
+        if (res.ok) {
+          currentConfig = await res.json();
+          status.textContent = 'Configuration saved successfully';
+          status.className = 'text-sm text-green-400 transition-opacity';
+        } else {
+          const err = await res.text();
+          status.textContent = 'Error: ' + err;
+          status.className = 'text-sm text-red-400 transition-opacity';
+        }
+        status.style.opacity = '1';
+        setTimeout(() => { status.style.opacity = '0'; }, 4000);
+      } catch (err) {
+        status.textContent = 'Failed to save: ' + err.message;
+        status.className = 'text-sm text-red-400 transition-opacity';
+        status.style.opacity = '1';
+        setTimeout(() => { status.style.opacity = '0'; }, 4000);
+      }
+    });
+
+    loadConfig();
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,12 @@
+target/
+.git/
+.claude/
+*.md
+!crates/**/*.md
+docker-compose.yml
+.dockerignore
+.env
+.env.*
+*.log
+tests/
+design/

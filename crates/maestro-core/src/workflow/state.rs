@@ -1,0 +1,59 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WorkflowState {
+    Pending,
+    Assigning,
+    RetrievingDetails,
+    CreatingWorktree,
+    AddressingTicket { pass: u8 },
+    Reviewing,
+    Linting,
+    UnitTesting,
+    E2ETesting,
+    CreatingPR,
+    Done,
+    Error {
+        source_state: Box<WorkflowState>,
+        message: String,
+    },
+    Paused {
+        source_state: Box<WorkflowState>,
+    },
+    Stopped,
+}
+
+impl WorkflowState {
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::Pending => "Pending".to_string(),
+            Self::Assigning => "Assigning Ticket".to_string(),
+            Self::RetrievingDetails => "Retrieving Details".to_string(),
+            Self::CreatingWorktree => "Creating Worktree".to_string(),
+            Self::AddressingTicket { pass } => format!("Address Ticket - Pass {pass} of 3"),
+            Self::Reviewing => "Reviewing Changes".to_string(),
+            Self::Linting => "Running Lint".to_string(),
+            Self::UnitTesting => "Running Unit Tests".to_string(),
+            Self::E2ETesting => "Running E2E Tests".to_string(),
+            Self::CreatingPR => "Creating PR".to_string(),
+            Self::Done => "Done".to_string(),
+            Self::Error { message, .. } => format!("Error: {message}"),
+            Self::Paused { .. } => "Paused".to_string(),
+            Self::Stopped => "Stopped".to_string(),
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Done | Self::Stopped)
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.is_terminal() && !matches!(self, Self::Paused { .. } | Self::Error { .. })
+    }
+}
+
+impl std::fmt::Display for WorkflowState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display_name())
+    }
+}

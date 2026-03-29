@@ -1,0 +1,212 @@
+use std::path::Path;
+use std::process::Stdio;
+
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, warn};
+
+use crate::error::{MaestroError, Result};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandOutput {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl CommandOutput {
+    pub fn success(&self) -> bool {
+        self.exit_code == 0
+    }
+}
+
+pub struct ProcessHandle {
+    child: Child,
+    pub stdout_lines: Vec<String>,
+    pub stderr_lines: Vec<String>,
+    cancel_token: CancellationToken,
+}
+
+/// Kill the entire process group for a child process (Unix only).
+/// Falls back to killing just the child on non-Unix or if pgid kill fails.
+async fn kill_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // Send SIGKILL to the entire process group (negative PID)
+            let pgid = pid as i32;
+            unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
+    }
+    // Always also kill the direct child as a fallback
+    let _ = child.kill().await;
+}
+
+/// Configure a command to create a new process group (Unix only).
+/// This ensures all child processes can be killed together.
+#[cfg(unix)]
+fn set_process_group(cmd: &mut Command) {
+    unsafe {
+        cmd.pre_exec(|| {
+            // Create a new process group with this process as the leader
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn set_process_group(_cmd: &mut Command) {
+    // No-op on non-Unix platforms
+}
+
+impl ProcessHandle {
+    pub async fn spawn(
+        program: &str,
+        args: &[&str],
+        cwd: &Path,
+        cancel_token: CancellationToken,
+    ) -> Result<Self> {
+        let mut cmd = Command::new(program);
+        cmd.args(args)
+            .current_dir(cwd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        set_process_group(&mut cmd);
+        let child = cmd.spawn()?;
+
+        Ok(Self {
+            child,
+            stdout_lines: Vec::new(),
+            stderr_lines: Vec::new(),
+            cancel_token,
+        })
+    }
+
+    pub async fn spawn_shell(
+        command: &str,
+        cwd: &Path,
+        cancel_token: CancellationToken,
+    ) -> Result<Self> {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(command)
+            .current_dir(cwd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        set_process_group(&mut cmd);
+        let child = cmd.spawn()?;
+
+        Ok(Self {
+            child,
+            stdout_lines: Vec::new(),
+            stderr_lines: Vec::new(),
+            cancel_token,
+        })
+    }
+
+    pub async fn wait_with_output(mut self) -> Result<CommandOutput> {
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .expect("stdout was already taken");
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .expect("stderr was already taken");
+
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+
+        let cancel = self.cancel_token.clone();
+
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    warn!("Process cancelled, killing process group");
+                    kill_process_group(&mut self.child).await;
+                    return Err(MaestroError::Cancelled);
+                }
+                line = stdout_reader.next_line() => {
+                    match line {
+                        Ok(Some(line)) => {
+                            debug!(stdout = %line);
+                            self.stdout_lines.push(line);
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            warn!(error = %e, "Error reading stdout");
+                            break;
+                        }
+                    }
+                }
+                line = stderr_reader.next_line() => {
+                    match line {
+                        Ok(Some(line)) => {
+                            debug!(stderr = %line);
+                            self.stderr_lines.push(line);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!(error = %e, "Error reading stderr");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Drain remaining stderr
+        while let Ok(Some(line)) = stderr_reader.next_line().await {
+            self.stderr_lines.push(line);
+        }
+
+        let status = self.child.wait().await?;
+
+        Ok(CommandOutput {
+            exit_code: status.code().unwrap_or(-1),
+            stdout: self.stdout_lines.join("\n"),
+            stderr: self.stderr_lines.join("\n"),
+        })
+    }
+
+    pub async fn wait_with_timeout(
+        self,
+        timeout_secs: u64,
+    ) -> Result<CommandOutput> {
+        // Capture the child PID before self is consumed, so we can kill the
+        // process group from the timeout branch.
+        #[cfg(unix)]
+        let child_pid = self.child.id();
+
+        tokio::select! {
+            result = self.wait_with_output() => result,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+                warn!(timeout_secs = timeout_secs, "Process timed out, killing process group");
+                #[cfg(unix)]
+                if let Some(pid) = child_pid {
+                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                }
+                Err(MaestroError::Timeout(timeout_secs))
+            }
+        }
+    }
+}
+
+pub async fn run_shell_command(
+    command: &str,
+    cwd: &Path,
+    cancel_token: CancellationToken,
+) -> Result<CommandOutput> {
+    let handle = ProcessHandle::spawn_shell(command, cwd, cancel_token).await?;
+    handle.wait_with_output().await
+}

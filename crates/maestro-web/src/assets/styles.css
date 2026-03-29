@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+body { font-family: 'Inter', sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* Pulse animation for running status */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+/* Slide-in for cards */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-up { animation: slide-up 0.3s ease-out; }
+
+/* Modal animations */
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+.animate-fade-in { animation: fade-in 0.2s ease-out; }
+.animate-scale-in { animation: scale-in 0.25s ease-out; }
+
+/* Collapsible error */
+.error-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+.error-content.expanded { max-height: 500px; }
+
+/* Custom toggle switch */
+.toggle-switch { position: relative; width: 44px; height: 24px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; inset: 0; cursor: pointer;
+  background-color: #374151; border-radius: 9999px; transition: 0.3s;
+}
+.toggle-slider::before {
+  content: ''; position: absolute; height: 18px; width: 18px;
+  left: 3px; bottom: 3px; background-color: #9ca3af;
+  border-radius: 9999px; transition: 0.3s;
+}
+.toggle-switch input:checked + .toggle-slider { background-color: #3b82f6; }
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px); background-color: white;
+}
+
+/* Tag input */
+.tag { display: inline-flex; align-items: center; gap: 4px; }

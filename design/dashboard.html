@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maestro - Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+    /* Pulse animation for running status */
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+    /* Slide-in for cards */
+    @keyframes slide-up {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-slide-up { animation: slide-up 0.3s ease-out; }
+
+    /* Collapsible error */
+    .error-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+    .error-content.expanded { max-height: 200px; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-7 h-7 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            <h1 class="text-xl font-semibold tracking-tight">Maestro</h1>
+          </div>
+          <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">Dashboard</span>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-2 text-xs text-gray-500">
+            <span class="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse-dot"></span>
+            Connected
+          </div>
+          <a href="config.html" class="text-sm text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            Configuration
+          </a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+    <!-- Summary stats -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div class="text-2xl font-semibold text-blue-400">3</div>
+        <div class="text-xs text-gray-500 mt-1">Running</div>
+      </div>
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div class="text-2xl font-semibold text-green-400">5</div>
+        <div class="text-xs text-gray-500 mt-1">Completed</div>
+      </div>
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div class="text-2xl font-semibold text-red-400">1</div>
+        <div class="text-xs text-gray-500 mt-1">Errors</div>
+      </div>
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div class="text-2xl font-semibold text-yellow-400">1</div>
+        <div class="text-xs text-gray-500 mt-1">Paused</div>
+      </div>
+    </div>
+
+    <!-- Workflow cards grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+      <!-- Card: Running -->
+      <div class="animate-slide-up bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-colors">
+        <div class="p-5">
+          <!-- Header row -->
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-mono text-sm text-blue-400 font-medium">PROJ-1234</span>
+                <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20">
+                  <span class="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse-dot"></span>
+                  Running
+                </span>
+              </div>
+              <h3 class="text-sm font-medium text-gray-200 truncate">Implement user authentication flow</h3>
+            </div>
+          </div>
+
+          <!-- Current step -->
+          <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-4">
+            <div class="text-xs text-gray-500 mb-1">Current step</div>
+            <div class="text-sm font-mono text-gray-300">Addressing Ticket (Pass 2/3)</div>
+            <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+              <div class="bg-blue-500 h-1.5 rounded-full" style="width: 66%"></div>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="flex items-center gap-2">
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Pause
+            </button>
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+              </svg>
+              Stop
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card: Running (linting step) -->
+      <div class="animate-slide-up bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-colors">
+        <div class="p-5">
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-mono text-sm text-blue-400 font-medium">PROJ-1291</span>
+                <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20">
+                  <span class="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse-dot"></span>
+                  Running
+                </span>
+              </div>
+              <h3 class="text-sm font-medium text-gray-200 truncate">Fix date parsing bug in reports module</h3>
+            </div>
+          </div>
+
+          <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-4">
+            <div class="text-xs text-gray-500 mb-1">Current step</div>
+            <div class="text-sm font-mono text-gray-300">Running Linting</div>
+            <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+              <div class="bg-blue-500 h-1.5 rounded-full" style="width: 45%"></div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Pause
+            </button>
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+              </svg>
+              Stop
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card: Running (creating PR) -->
+      <div class="animate-slide-up bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-colors">
+        <div class="p-5">
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-mono text-sm text-blue-400 font-medium">PROJ-1305</span>
+                <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20">
+                  <span class="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse-dot"></span>
+                  Running
+                </span>
+              </div>
+              <h3 class="text-sm font-medium text-gray-200 truncate">Add pagination to API endpoints</h3>
+            </div>
+          </div>
+
+          <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-4">
+            <div class="text-xs text-gray-500 mb-1">Current step</div>
+            <div class="text-sm font-mono text-gray-300">Creating PR</div>
+            <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+              <div class="bg-blue-500 h-1.5 rounded-full" style="width: 90%"></div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Pause
+            </button>
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+              </svg>
+              Stop
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card: Completed -->
+      <div class="animate-slide-up bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-colors">
+        <div class="p-5">
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-mono text-sm text-green-400 font-medium">PROJ-1188</span>
+                <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/20">
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  Completed
+                </span>
+              </div>
+              <h3 class="text-sm font-medium text-gray-200 truncate">Refactor logging middleware</h3>
+            </div>
+          </div>
+
+          <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-4">
+            <div class="text-xs text-gray-500 mb-1">Completed</div>
+            <div class="text-sm text-gray-400">All steps passed &middot; PR #247 created</div>
+            <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+              <div class="bg-green-500 h-1.5 rounded-full" style="width: 100%"></div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button onclick="openReportModal()" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-700/50 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              View Report
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card: Error -->
+      <div class="animate-slide-up bg-gray-900 border border-red-500/30 rounded-xl overflow-hidden hover:border-red-500/40 transition-colors">
+        <div class="p-5">
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-mono text-sm text-red-400 font-medium">PROJ-1302</span>
+                <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/20">
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  Error
+                </span>
+              </div>
+              <h3 class="text-sm font-medium text-gray-200 truncate">Update database migration scripts</h3>
+            </div>
+          </div>
+
+          <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-3">
+            <div class="text-xs text-gray-500 mb-1">Failed at step</div>
+            <div class="text-sm font-mono text-gray-300">Running Unit Tests</div>
+            <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+              <div class="bg-red-500 h-1.5 rounded-full" style="width: 55%"></div>
+            </div>
+          </div>
+
+          <!-- Collapsible error -->
+          <div class="mb-4">
+            <button onclick="toggleError(this)" class="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 transition-colors">
+              <svg class="w-3.5 h-3.5 transform transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+              Show error details
+            </button>
+            <div class="error-content mt-2">
+              <pre class="text-xs font-mono text-red-300/80 bg-red-950/30 border border-red-900/30 rounded-lg p-3 overflow-x-auto">FAILED: test_migration_v42
+  Expected table "users" to have column "email_verified"
+  but the column was not found.
+
+  at tests/migrations/test_v42.rs:28
+  at migration_runner::run_all (src/runner.rs:145)</pre>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Retry
+            </button>
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+              </svg>
+              Stop
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card: Paused -->
+      <div class="animate-slide-up bg-gray-900 border border-yellow-500/30 rounded-xl overflow-hidden hover:border-yellow-500/40 transition-colors">
+        <div class="p-5">
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-mono text-sm text-yellow-400 font-medium">PROJ-1299</span>
+                <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 border border-yellow-500/20">
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6" />
+                  </svg>
+                  Paused
+                </span>
+              </div>
+              <h3 class="text-sm font-medium text-gray-200 truncate">Add rate limiting to public API</h3>
+            </div>
+          </div>
+
+          <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-4">
+            <div class="text-xs text-gray-500 mb-1">Paused at step</div>
+            <div class="text-sm font-mono text-gray-300">Addressing Ticket (Pass 1/3)</div>
+            <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+              <div class="bg-yellow-500 h-1.5 rounded-full" style="width: 33%"></div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Resume
+            </button>
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+              </svg>
+              Stop
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card: Stopped -->
+      <div class="animate-slide-up bg-gray-900 border border-gray-800 rounded-xl overflow-hidden opacity-60 hover:opacity-80 transition-opacity">
+        <div class="p-5">
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-mono text-sm text-gray-500 font-medium">PROJ-1275</span>
+                <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-gray-500/15 text-gray-400 border border-gray-500/20">
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                  </svg>
+                  Stopped
+                </span>
+              </div>
+              <h3 class="text-sm font-medium text-gray-400 truncate">Upgrade to Axum 0.8</h3>
+            </div>
+          </div>
+
+          <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-4">
+            <div class="text-xs text-gray-500 mb-1">Stopped at step</div>
+            <div class="text-sm font-mono text-gray-500">Running E2E Tests</div>
+            <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+              <div class="bg-gray-600 h-1.5 rounded-full" style="width: 70%"></div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Restart
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Report Modal (hidden by default) -->
+  <div id="reportModal" class="fixed inset-0 z-50 hidden">
+    <!-- Backdrop -->
+    <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeReportModal()"></div>
+    <!-- Modal content -->
+    <div class="relative flex items-center justify-center min-h-screen p-4">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+        <!-- Modal header -->
+        <div class="sticky top-0 bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between rounded-t-2xl">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="font-mono text-sm text-green-400 font-medium">PROJ-1188</span>
+              <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/20">
+                Completed
+              </span>
+            </div>
+            <h2 class="text-lg font-semibold text-gray-100">Refactor logging middleware</h2>
+          </div>
+          <button onclick="closeReportModal()" class="text-gray-400 hover:text-gray-200 transition-colors p-1">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Modal body -->
+        <div class="px-6 py-5 space-y-5">
+
+          <!-- Ticket info -->
+          <div>
+            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Ticket Info</h3>
+            <div class="grid grid-cols-2 gap-3 text-sm">
+              <div class="bg-gray-800/50 rounded-lg px-3 py-2">
+                <div class="text-xs text-gray-500">Type</div>
+                <div class="text-gray-300">Task</div>
+              </div>
+              <div class="bg-gray-800/50 rounded-lg px-3 py-2">
+                <div class="text-xs text-gray-500">Priority</div>
+                <div class="text-gray-300">Medium</div>
+              </div>
+              <div class="bg-gray-800/50 rounded-lg px-3 py-2">
+                <div class="text-xs text-gray-500">Total Time</div>
+                <div class="text-gray-300">4m 32s</div>
+              </div>
+              <div class="bg-gray-800/50 rounded-lg px-3 py-2">
+                <div class="text-xs text-gray-500">PR</div>
+                <div class="text-blue-400 font-mono">#247</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Workflow steps -->
+          <div>
+            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Workflow Steps</h3>
+            <div class="space-y-2">
+              <!-- Step 1 -->
+              <div class="flex items-center gap-3 bg-gray-800/50 rounded-lg px-4 py-3">
+                <div class="flex-shrink-0 w-6 h-6 rounded-full bg-green-500/15 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-gray-200">Addressing Ticket (Pass 1/3)</div>
+                  <div class="text-xs text-gray-500 font-mono">12 files changed, +234 -89</div>
+                </div>
+                <div class="text-xs text-gray-500">1m 12s</div>
+              </div>
+
+              <!-- Step 2 -->
+              <div class="flex items-center gap-3 bg-gray-800/50 rounded-lg px-4 py-3">
+                <div class="flex-shrink-0 w-6 h-6 rounded-full bg-green-500/15 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-gray-200">Running Linting</div>
+                  <div class="text-xs text-gray-500 font-mono">cargo clippy -- passed</div>
+                </div>
+                <div class="text-xs text-gray-500">0m 18s</div>
+              </div>
+
+              <!-- Step 3 -->
+              <div class="flex items-center gap-3 bg-gray-800/50 rounded-lg px-4 py-3">
+                <div class="flex-shrink-0 w-6 h-6 rounded-full bg-green-500/15 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-gray-200">Running Unit Tests</div>
+                  <div class="text-xs text-gray-500 font-mono">42 tests passed, 0 failed</div>
+                </div>
+                <div class="text-xs text-gray-500">0m 45s</div>
+              </div>
+
+              <!-- Step 4 -->
+              <div class="flex items-center gap-3 bg-gray-800/50 rounded-lg px-4 py-3">
+                <div class="flex-shrink-0 w-6 h-6 rounded-full bg-green-500/15 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-gray-200">Addressing Ticket (Pass 2/3)</div>
+                  <div class="text-xs text-gray-500 font-mono">3 files changed, +18 -7</div>
+                </div>
+                <div class="text-xs text-gray-500">0m 52s</div>
+              </div>
+
+              <!-- Step 5 -->
+              <div class="flex items-center gap-3 bg-gray-800/50 rounded-lg px-4 py-3">
+                <div class="flex-shrink-0 w-6 h-6 rounded-full bg-green-500/15 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-gray-200">Running Linting</div>
+                  <div class="text-xs text-gray-500 font-mono">cargo clippy -- passed</div>
+                </div>
+                <div class="text-xs text-gray-500">0m 15s</div>
+              </div>
+
+              <!-- Step 6 -->
+              <div class="flex items-center gap-3 bg-gray-800/50 rounded-lg px-4 py-3">
+                <div class="flex-shrink-0 w-6 h-6 rounded-full bg-green-500/15 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-gray-200">Running Unit Tests</div>
+                  <div class="text-xs text-gray-500 font-mono">42 tests passed, 0 failed</div>
+                </div>
+                <div class="text-xs text-gray-500">0m 42s</div>
+              </div>
+
+              <!-- Step 7 -->
+              <div class="flex items-center gap-3 bg-gray-800/50 rounded-lg px-4 py-3">
+                <div class="flex-shrink-0 w-6 h-6 rounded-full bg-green-500/15 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-gray-200">Creating PR</div>
+                  <div class="text-xs text-gray-500 font-mono">PR #247 opened on main</div>
+                </div>
+                <div class="text-xs text-gray-500">0m 08s</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Commits -->
+          <div>
+            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Commits</h3>
+            <div class="space-y-1.5">
+              <div class="flex items-center gap-2 text-sm">
+                <span class="font-mono text-xs text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded">a3f8c21</span>
+                <span class="text-gray-300 truncate">refactor: extract logging middleware into separate module</span>
+              </div>
+              <div class="flex items-center gap-2 text-sm">
+                <span class="font-mono text-xs text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded">b7e2d09</span>
+                <span class="text-gray-300 truncate">refactor: add structured logging with tracing spans</span>
+              </div>
+              <div class="flex items-center gap-2 text-sm">
+                <span class="font-mono text-xs text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded">c1a4f56</span>
+                <span class="text-gray-300 truncate">fix: address clippy warnings in logging module</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Modal footer -->
+        <div class="border-t border-gray-800 px-6 py-4 flex items-center justify-between">
+          <a href="#" class="text-sm text-blue-400 hover:text-blue-300 transition-colors font-mono">
+            PR #247 &rarr;
+          </a>
+          <button onclick="closeReportModal()" class="text-sm font-medium px-4 py-2 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleError(btn) {
+      const content = btn.nextElementSibling;
+      const arrow = btn.querySelector('svg');
+      content.classList.toggle('expanded');
+      arrow.style.transform = content.classList.contains('expanded') ? 'rotate(90deg)' : '';
+      btn.querySelector('span') || (btn.textContent = content.classList.contains('expanded') ? '' : '');
+    }
+
+    function openReportModal() {
+      document.getElementById('reportModal').classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeReportModal() {
+      document.getElementById('reportModal').classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+
+    // Close on Escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeReportModal();
+    });
+  </script>
+
+</body>
+</html>

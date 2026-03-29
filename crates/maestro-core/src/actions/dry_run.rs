@@ -1,0 +1,187 @@
+use std::path::{Path, PathBuf};
+
+use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
+
+use super::traits::ExternalActions;
+use crate::error::{MaestroError, Result};
+use crate::process::{self, CommandOutput};
+
+pub struct DryRunActions {
+    pub repo_path: PathBuf,
+}
+
+impl DryRunActions {
+    pub fn new(repo_path: PathBuf) -> Self {
+        Self { repo_path }
+    }
+}
+
+#[async_trait]
+impl ExternalActions for DryRunActions {
+    async fn assign_ticket(&self, key: &str, user: &str) -> Result<()> {
+        info!(ticket = key, user = user, "[DRY] Would assign ticket");
+        Ok(())
+    }
+
+    async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
+        info!(ticket = key, status = status, "[DRY] Would transition ticket");
+        Ok(())
+    }
+
+    async fn unassign_ticket(&self, key: &str) -> Result<()> {
+        info!(ticket = key, "[DRY] Would unassign ticket");
+        Ok(())
+    }
+
+    async fn get_ticket_details(&self, key: &str) -> Result<String> {
+        info!(ticket = key, "Retrieving ticket details (dry mode — read-only, executes normally)");
+        let output = process::run_shell_command(
+            &format!("acli jira issue view {key} --output json"),
+            &self.repo_path,
+            CancellationToken::new(),
+        )
+        .await?;
+        if !output.success() {
+            return Err(MaestroError::Jira(format!(
+                "Failed to get ticket details for {key}: {}",
+                output.stderr
+            )));
+        }
+        Ok(output.stdout)
+    }
+
+    async fn create_worktree(&self, branch: &str, base: &str) -> Result<PathBuf> {
+        let worktree_path = self.repo_path.join("worktrees").join(branch.replace('/', "-"));
+        info!(
+            branch = branch,
+            base = base,
+            path = %worktree_path.display(),
+            "Creating git worktree (dry mode — local operation, executes normally)"
+        );
+
+        if let Some(parent) = worktree_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        if worktree_path.exists() {
+            info!(path = %worktree_path.display(), "Worktree already exists, reusing");
+            return Ok(worktree_path);
+        }
+
+        let output = process::run_shell_command(
+            &format!(
+                "git worktree add -b {branch} {} {base}",
+                worktree_path.display()
+            ),
+            &self.repo_path,
+            CancellationToken::new(),
+        )
+        .await?;
+
+        if !output.success() {
+            let output2 = process::run_shell_command(
+                &format!("git worktree add {} {branch}", worktree_path.display()),
+                &self.repo_path,
+                CancellationToken::new(),
+            )
+            .await?;
+            if !output2.success() {
+                return Err(MaestroError::Git(format!(
+                    "Failed to create worktree: {}",
+                    output2.stderr
+                )));
+            }
+        }
+
+        Ok(worktree_path)
+    }
+
+    async fn remove_worktree(&self, path: &Path) -> Result<()> {
+        info!(
+            path = %path.display(),
+            "Removing git worktree (dry mode — local operation, executes normally)"
+        );
+        let output = process::run_shell_command(
+            &format!("git worktree remove {}", path.display()),
+            &self.repo_path,
+            CancellationToken::new(),
+        )
+        .await?;
+        if !output.success() {
+            return Err(MaestroError::Git(format!(
+                "Failed to remove worktree: {}",
+                output.stderr
+            )));
+        }
+        Ok(())
+    }
+
+    async fn create_pr(
+        &self,
+        title: &str,
+        _body: &str,
+        branch: &str,
+        _base: &str,
+    ) -> Result<String> {
+        info!(title = title, branch = branch, "[DRY] Would create pull request");
+        Ok(format!("https://dry-run/pr/{branch}"))
+    }
+
+    async fn commit_changes(&self, cwd: &Path, message: &str) -> Result<()> {
+        info!(
+            cwd = %cwd.display(),
+            message = message,
+            "Committing changes (dry mode — local operation, executes normally)"
+        );
+
+        let add_output = process::run_shell_command(
+            "git add -A",
+            cwd,
+            CancellationToken::new(),
+        )
+        .await?;
+        if !add_output.success() {
+            return Err(MaestroError::Git(format!(
+                "Failed to stage changes: {}",
+                add_output.stderr
+            )));
+        }
+
+        let status_output = process::run_shell_command(
+            "git diff --cached --quiet",
+            cwd,
+            CancellationToken::new(),
+        )
+        .await?;
+        if status_output.success() {
+            info!("No changes to commit");
+            return Ok(());
+        }
+
+        let escaped_message = message.replace('"', r#"\""#);
+        let commit_output = process::run_shell_command(
+            &format!("git commit -m \"{escaped_message}\""),
+            cwd,
+            CancellationToken::new(),
+        )
+        .await?;
+        if !commit_output.success() {
+            return Err(MaestroError::Git(format!(
+                "Failed to commit: {}",
+                commit_output.stderr
+            )));
+        }
+        Ok(())
+    }
+
+    async fn run_command(&self, cmd: &str, cwd: &Path) -> Result<CommandOutput> {
+        info!(
+            cmd = cmd,
+            cwd = %cwd.display(),
+            "Running command (dry mode — local operation, executes normally)"
+        );
+        process::run_shell_command(cmd, cwd, CancellationToken::new()).await
+    }
+}
