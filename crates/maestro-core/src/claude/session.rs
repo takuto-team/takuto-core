@@ -29,7 +29,12 @@ impl ClaudeSession {
             "Starting Claude Code /address-ticket session"
         );
 
-        let prompt = format!("/address-ticket {ticket_context}");
+        let prompt = format!(
+            "/address-ticket {ticket_context}\n\n\
+            IMPORTANT: You are running in fully automated headless mode with no human operator. \
+            Do NOT use AskUserQuestion at any point. Do NOT wait for user input or selection. \
+            Approve all plans and test plans automatically. Make all decisions autonomously."
+        );
 
         let (session_id, output) = run_claude_session(
             worktree, &prompt, cancel_token, timeout_secs, line_tx, model, resume_session_id,
@@ -53,7 +58,13 @@ impl ClaudeSession {
             "Starting Claude Code /review-changes session"
         );
 
-        let prompt = "/review-changes".to_string();
+        let prompt = concat!(
+            "/review-changes\n\n",
+            "IMPORTANT: You are running in fully automated headless mode with no human operator. ",
+            "Do NOT use AskUserQuestion at any point. Do NOT wait for user input or selection. ",
+            "Address ALL findings automatically. If a skill asks you to select which findings ",
+            "to address, address all of them without asking."
+        ).to_string();
 
         let (session_id, output) = run_claude_session(
             worktree, &prompt, cancel_token, timeout_secs, line_tx, model, resume_session_id,
