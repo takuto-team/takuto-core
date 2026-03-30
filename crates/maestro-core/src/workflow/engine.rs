@@ -570,6 +570,8 @@ async fn run_workflow_steps(
     let pm_agent = PmAgent::new(ticket_detail.description.clone(), acceptance_criteria);
 
     let mut has_critical_failure = false;
+    // Track Claude session ID across passes for --resume (keeps conversation context)
+    let mut claude_session_id: Option<String> = None;
 
     for pass in 1..=passes {
         check_cancelled(cancel_token)?;
@@ -604,10 +606,13 @@ async fn run_workflow_steps(
             timeout,
             Some(address_line_tx),
             claude_model.as_deref(),
+            claude_session_id.as_deref(),
         )
         .await
         {
             Ok(session) => {
+                info!(session_id = %session.session_id, pass = pass, "Address ticket session completed");
+                claude_session_id = Some(session.session_id.clone());
                 step_log.output.push(format!("Session {} completed", session.session_id));
 
                 // PM agent validates the session output against ticket requirements
@@ -653,7 +658,7 @@ async fn run_workflow_steps(
         check_cancelled(cancel_token)?;
         wait_if_paused(workflows, ticket_key, cancel_token).await?;
 
-        // Review changes
+        // Review changes — resume same session for context continuity
         transition(workflows, event_tx, ticket_key, WorkflowState::Reviewing).await;
         let review_label = format!("Review Changes (Pass {pass}/{passes})");
         let mut step_log = StepLog::new(review_label.clone());
@@ -673,10 +678,12 @@ async fn run_workflow_steps(
             timeout,
             Some(review_line_tx),
             claude_model.as_deref(),
+            claude_session_id.as_deref(),
         )
         .await
         {
             Ok(session) => {
+                claude_session_id = Some(session.session_id.clone());
                 step_log.output.push(format!("Review session {} completed", session.session_id));
                 step_log.complete(StepStatus::Success);
             }
@@ -716,6 +723,7 @@ async fn run_workflow_steps(
             event_tx,
             log_writer,
             claude_model.as_deref(),
+            claude_session_id.as_deref(),
         )
         .await;
 
@@ -745,6 +753,7 @@ async fn run_workflow_steps(
             event_tx,
             log_writer,
             claude_model.as_deref(),
+            claude_session_id.as_deref(),
         )
         .await;
 
@@ -776,6 +785,7 @@ async fn run_workflow_steps(
             event_tx,
             log_writer,
             claude_model.as_deref(),
+            claude_session_id.as_deref(),
         )
         .await;
 
@@ -865,6 +875,7 @@ async fn run_fix_loop(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     log_writer: &Arc<WorkflowLogWriter>,
     claude_model: Option<&str>,
+    claude_session_id: Option<&str>,
 ) {
     let mut step_log = StepLog::new(step_name.to_string());
     broadcast_step_started(event_tx, ticket_key, step_name);
@@ -920,6 +931,7 @@ async fn run_fix_loop(
                         timeout,
                         Some(fix_line_tx),
                         claude_model,
+                        claude_session_id,
                     )
                     .await
                     {

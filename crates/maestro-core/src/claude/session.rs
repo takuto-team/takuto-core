@@ -7,11 +7,13 @@ use crate::error::{MaestroError, Result};
 use crate::process::{OutputLine, ProcessHandle};
 
 pub struct ClaudeSession {
+    /// The Claude Code session ID (from the init event), used for --resume
     pub session_id: String,
     pub output: String,
 }
 
 impl ClaudeSession {
+    /// Start a new Claude session with /address-ticket
     pub async fn start_address_ticket(
         worktree: &Path,
         ticket_context: &str,
@@ -19,46 +21,48 @@ impl ClaudeSession {
         timeout_secs: u64,
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
         model: Option<&str>,
+        resume_session_id: Option<&str>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
+            resume = ?resume_session_id,
             "Starting Claude Code /address-ticket session"
         );
 
-        let session_id = uuid::Uuid::new_v4().to_string();
         let prompt = format!("/address-ticket {ticket_context}");
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx, model).await?;
+        let (session_id, output) = run_claude_session(
+            worktree, &prompt, cancel_token, timeout_secs, line_tx, model, resume_session_id,
+        ).await?;
 
-        Ok(Self {
-            session_id,
-            output,
-        })
+        Ok(Self { session_id, output })
     }
 
+    /// Start a review-changes session, optionally resuming a previous session
     pub async fn start_review_changes(
         worktree: &Path,
         cancel_token: CancellationToken,
         timeout_secs: u64,
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
         model: Option<&str>,
+        resume_session_id: Option<&str>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
+            resume = ?resume_session_id,
             "Starting Claude Code /review-changes session"
         );
 
-        let session_id = uuid::Uuid::new_v4().to_string();
         let prompt = "/review-changes".to_string();
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx, model).await?;
+        let (session_id, output) = run_claude_session(
+            worktree, &prompt, cancel_token, timeout_secs, line_tx, model, resume_session_id,
+        ).await?;
 
-        Ok(Self {
-            session_id,
-            output,
-        })
+        Ok(Self { session_id, output })
     }
 
+    /// Start a fix session to address lint/test errors
     pub async fn start_fix_session(
         worktree: &Path,
         error_output: &str,
@@ -67,26 +71,28 @@ impl ClaudeSession {
         timeout_secs: u64,
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
         model: Option<&str>,
+        resume_session_id: Option<&str>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
+            resume = ?resume_session_id,
             "Starting Claude Code fix session"
         );
 
-        let session_id = uuid::Uuid::new_v4().to_string();
         let prompt = format!(
             "The following command failed with this output:\n\n```\n{error_output}\n```\n\n{fix_instructions}"
         );
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx, model).await?;
+        let (session_id, output) = run_claude_session(
+            worktree, &prompt, cancel_token, timeout_secs, line_tx, model, resume_session_id,
+        ).await?;
 
-        Ok(Self {
-            session_id,
-            output,
-        })
+        Ok(Self { session_id, output })
     }
 }
 
+/// Run a Claude Code session. Returns (session_id, output).
+/// If resume_session_id is provided, continues that session instead of starting fresh.
 async fn run_claude_session(
     worktree: &Path,
     prompt: &str,
@@ -94,11 +100,13 @@ async fn run_claude_session(
     timeout_secs: u64,
     line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
     model: Option<&str>,
-) -> Result<String> {
+    resume_session_id: Option<&str>,
+) -> Result<(String, String)> {
     let prompt_preview = &prompt[..prompt.len().min(200)];
     info!(
         prompt_len = prompt.len(),
         prompt_preview = %prompt_preview,
+        resume = ?resume_session_id,
         "Claude session prompt"
     );
 
@@ -112,11 +120,19 @@ async fn run_claude_session(
         "stream-json",
     ];
 
+    // Resume a previous session to keep conversation context
+    let resume_flag;
+    if let Some(sid) = resume_session_id {
+        resume_flag = sid.to_string();
+        args_vec.push("--resume");
+        args_vec.push(&resume_flag);
+    }
+
     // Add model flag if configured
     let model_flag;
-    if let Some(model) = model {
-        if !model.is_empty() {
-            model_flag = model.to_string();
+    if let Some(m) = model {
+        if !m.is_empty() {
+            model_flag = m.to_string();
             args_vec.push("--model");
             args_vec.push(&model_flag);
         }
@@ -164,15 +180,20 @@ async fn run_claude_session(
                 ));
             }
 
+            // Extract the real session ID from the init event
+            let real_session_id = extract_session_id(&output.stdout)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
             // Parse stream-json output to extract the final result
             let parsed = parse_stream_json_output(&output.stdout);
             info!(
+                session_id = %real_session_id,
                 session_output_len = parsed.len(),
                 exit_code = output.exit_code,
                 "Claude session completed: output {} chars",
                 parsed.len()
             );
-            Ok(parsed)
+            Ok((real_session_id, parsed))
         }
         Err(MaestroError::Timeout(secs)) => {
             warn!(timeout_secs = secs, "Claude Code session timed out");
@@ -182,6 +203,21 @@ async fn run_claude_session(
             "Claude Code session error: {e}"
         ))),
     }
+}
+
+/// Extract the session_id from the stream-json init event
+fn extract_session_id(raw: &str) -> Option<String> {
+    for line in raw.lines() {
+        let line = line.trim();
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value.get("type").and_then(|v| v.as_str()) == Some("system")
+                && value.get("subtype").and_then(|v| v.as_str()) == Some("init")
+            {
+                return value.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn parse_stream_json_output(raw: &str) -> String {
@@ -194,7 +230,6 @@ fn parse_stream_json_output(raw: &str) -> String {
         }
 
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-            // Look for result/content events in the stream
             if let Some(event_type) = value.get("type").and_then(|v| v.as_str()) {
                 match event_type {
                     "system" => {
@@ -231,7 +266,6 @@ fn parse_stream_json_output(raw: &str) -> String {
                             );
                             result_parts.push(result.to_string());
                         }
-                        // Log usage/cost data if present
                         if let Some(usage) = value.get("usage") {
                             let input_tokens = usage
                                 .get("input_tokens")
@@ -247,7 +281,7 @@ fn parse_stream_json_output(raw: &str) -> String {
                                 "Claude session token usage"
                             );
                         }
-                        if let Some(cost) = value.get("cost_usd").and_then(|v| v.as_f64()) {
+                        if let Some(cost) = value.get("total_cost_usd").and_then(|v| v.as_f64()) {
                             info!(cost_usd = cost, "Claude session cost");
                         }
                     }
@@ -283,7 +317,6 @@ fn parse_stream_json_output(raw: &str) -> String {
     );
 
     if result_parts.is_empty() {
-        // Fallback: return raw output if no structured events found
         raw.to_string()
     } else {
         result_parts.join("")
