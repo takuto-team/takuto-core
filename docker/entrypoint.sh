@@ -110,7 +110,8 @@ if [ "${1:-}" = "setup" ]; then
         fi
     else
         echo "Cloning $repo_url into /workspace..."
-        gh repo clone "$repo_url" /workspace
+        chown maestro:maestro /workspace
+        su maestro -c "gh repo clone '$repo_url' /workspace"
     fi
     git config --global --add safe.directory /workspace
     echo ""
