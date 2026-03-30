@@ -21,6 +21,17 @@ use super::log_writer::WorkflowLogWriter;
 use super::state::WorkflowState;
 use super::step::{StepLog, StepStatus};
 
+/// Maximum number of terminal lines stored per workflow for persistence.
+const TERMINAL_LINES_MAX: usize = 100;
+
+/// A single line of terminal output stored on the workflow for persistence
+/// across page reloads. Populated by spawn_output_relay after humanizing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TerminalLine {
+    pub text: String,
+    pub stream: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WorkflowEvent {
     pub event_type: String,
@@ -51,6 +62,8 @@ pub struct Workflow {
     pub worktree_path: Option<PathBuf>,
     pub pr_url: Option<String>,
     pub cancel_token: CancellationToken,
+    /// Recent terminal output lines for persistence across page reloads.
+    pub terminal_lines: Vec<TerminalLine>,
 }
 
 impl Workflow {
@@ -70,6 +83,7 @@ impl Workflow {
             worktree_path: None,
             pr_url: None,
             cancel_token: CancellationToken::new(),
+            terminal_lines: Vec::new(),
         }
     }
 }
@@ -469,7 +483,7 @@ async fn run_workflow_steps(
         log_writer.write_step("Install Dependencies", &format!("Running: {install_cmd}")).await;
 
         broadcast_step_started(event_tx, ticket_key, "Install Dependencies");
-        let line_tx = spawn_output_relay(event_tx, ticket_key, "Install Dependencies", log_writer);
+        let line_tx = spawn_output_relay(event_tx, ticket_key, "Install Dependencies", log_writer, workflows);
         match crate::process::run_shell_command_streaming(
             &install_cmd,
             &worktree_path,
@@ -538,6 +552,7 @@ async fn run_workflow_steps(
             ticket_key,
             &format!("Address Ticket (Pass {pass}/{passes})"),
             log_writer,
+            workflows,
         );
         match ClaudeSession::start_address_ticket(
             &worktree_path,
@@ -606,6 +621,7 @@ async fn run_workflow_steps(
             ticket_key,
             &format!("Review Changes (Pass {pass}/{passes})"),
             log_writer,
+            workflows,
         );
         match ClaudeSession::start_review_changes(
             &worktree_path,
@@ -811,7 +827,7 @@ async fn run_fix_loop(
         info!(step = step_name, attempt = attempt, "Running command");
         step_log.output.push(format!("Attempt {attempt}/{max_attempts}: {command}"));
 
-        let line_tx = spawn_output_relay(event_tx, ticket_key, step_name, log_writer);
+        let line_tx = spawn_output_relay(event_tx, ticket_key, step_name, log_writer, workflows);
         match crate::process::run_shell_command_streaming(
             command,
             worktree_path,
@@ -845,6 +861,7 @@ async fn run_fix_loop(
                         ticket_key,
                         &format!("{step_name} (fix)"),
                         log_writer,
+                        workflows,
                     );
                     match ClaudeSession::start_fix_session(
                         worktree_path,
@@ -1024,43 +1041,153 @@ fn broadcast_step_completed(
     });
 }
 
+/// Parse a raw Claude stream-json line and return a human-readable version.
+/// Returns None for events that should be silently skipped (noise).
+/// Non-JSON lines pass through as-is.
+fn humanize_claude_output(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // If it doesn't look like JSON, pass through as-is
+    if !trimmed.starts_with('{') {
+        return Some(raw.to_string());
+    }
+
+    let value: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return Some(raw.to_string()), // Not valid JSON, pass through
+    };
+
+    let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    match event_type {
+        "system" => {
+            let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+            match subtype {
+                "init" => Some("Claude Code session initialized".to_string()),
+                "api_retry" => {
+                    let attempt = value.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let error = value
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    Some(format!(
+                        "Retrying API connection (attempt {attempt}): {error}"
+                    ))
+                }
+                _ => None, // Skip other system noise
+            }
+        }
+        "result" => {
+            // Extract and display the result text
+            if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
+                if !result.is_empty() {
+                    Some(result.to_string())
+                } else {
+                    Some("Session completed.".to_string())
+                }
+            } else {
+                Some("Session completed.".to_string())
+            }
+        }
+        "assistant" => {
+            // Extract message.content — can be a string or an array of content blocks
+            if let Some(message) = value.get("message") {
+                if let Some(content) = message.get("content") {
+                    if let Some(text) = content.as_str() {
+                        return Some(text.to_string());
+                    }
+                    if let Some(arr) = content.as_array() {
+                        let texts: Vec<&str> = arr
+                            .iter()
+                            .filter_map(|item| {
+                                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                    item.get("text").and_then(|t| t.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if !texts.is_empty() {
+                            return Some(texts.join(""));
+                        }
+                    }
+                }
+            }
+            None
+        }
+        "content_block_delta" => {
+            value
+                .get("delta")
+                .and_then(|d| d.get("text"))
+                .and_then(|t| t.as_str())
+                .map(|t| t.to_string())
+        }
+        _ => None, // Skip unknown event types
+    }
+}
+
 fn spawn_output_relay(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     ticket_key: &str,
     step_name: &str,
     log_writer: &Arc<WorkflowLogWriter>,
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
 ) -> tokio::sync::mpsc::UnboundedSender<OutputLine> {
     let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<OutputLine>();
     let event_tx = event_tx.clone();
     let ticket_key = ticket_key.to_string();
     let step_name = step_name.to_string();
     let log_writer = log_writer.clone();
+    let workflows = workflows.clone();
 
     tokio::spawn(async move {
         while let Some(line) = line_rx.recv().await {
-            // Write to log file
+            // Always write raw output to log file
             log_writer
                 .write_output(&step_name, &line.stream, &line.content)
                 .await;
 
-            // Broadcast to WebSocket
-            let result = event_tx.send(WorkflowEvent {
-                event_type: "step_output".to_string(),
-                workflow_id: String::new(),
-                ticket_key: ticket_key.clone(),
-                state: String::new(),
-                timestamp: Utc::now(),
-                error: None,
-                step_name: Some(step_name.clone()),
-                output_line: Some(line.content),
-                stream: Some(line.stream),
-            });
-            match result {
-                Ok(count) => {
-                    info!(receivers = count, step = %step_name, "step_output broadcast sent");
+            // Parse and humanize the output for display
+            let humanized = humanize_claude_output(&line.content);
+            if let Some(display_text) = humanized {
+                // Store in workflow's terminal_lines for persistence
+                {
+                    let mut wf = workflows.write().await;
+                    if let Some(workflow) = wf.get_mut(&ticket_key) {
+                        workflow.terminal_lines.push(TerminalLine {
+                            text: display_text.clone(),
+                            stream: line.stream.clone(),
+                        });
+                        // Cap at TERMINAL_LINES_MAX
+                        if workflow.terminal_lines.len() > TERMINAL_LINES_MAX {
+                            let drain_count = workflow.terminal_lines.len() - TERMINAL_LINES_MAX;
+                            workflow.terminal_lines.drain(..drain_count);
+                        }
+                    }
                 }
-                Err(_) => {
-                    warn!(step = %step_name, "step_output broadcast: no receivers");
+
+                // Broadcast humanized text to WebSocket
+                let result = event_tx.send(WorkflowEvent {
+                    event_type: "step_output".to_string(),
+                    workflow_id: String::new(),
+                    ticket_key: ticket_key.clone(),
+                    state: String::new(),
+                    timestamp: Utc::now(),
+                    error: None,
+                    step_name: Some(step_name.clone()),
+                    output_line: Some(display_text),
+                    stream: Some(line.stream),
+                });
+                match result {
+                    Ok(count) => {
+                        debug!(receivers = count, step = %step_name, "step_output broadcast sent");
+                    }
+                    Err(_) => {
+                        warn!(step = %step_name, "step_output broadcast: no receivers");
+                    }
                 }
             }
         }

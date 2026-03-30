@@ -57,11 +57,20 @@ allow_host raw.githubusercontent.com
 allow_host objects.githubusercontent.com
 
 # Anthropic (Claude API + auth)
+# Claude Code headless uses api.claude.ai for API calls, not api.anthropic.com
 allow_host api.anthropic.com
+allow_host api.claude.ai
 allow_host claude.ai
 allow_host console.anthropic.com
+allow_host cdn.anthropic.com
 allow_host statsig.anthropic.com
+allow_host statsig.claude.ai
+
+# Sentry error reporting — Claude Code uses subdomain-based ingest endpoints
 allow_host sentry.io
+allow_host o0.ingest.sentry.io
+allow_host o1.ingest.sentry.io
+allow_host o2.ingest.sentry.io
 
 # ---------------------------------------------------------------------------
 # Package registries (dependency installs)

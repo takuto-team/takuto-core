@@ -128,29 +128,11 @@ function handleStepStarted(evt) {
   }
 }
 
-function isClaudeJsonNoise(text) {
-  if (!text) return false;
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('{')) return false;
-  try {
-    const obj = JSON.parse(trimmed);
-    // Filter out Claude stream-json system/retry/init events
-    if (obj.type === 'system' || obj.type === 'result' || obj.type === 'assistant') return true;
-    return false;
-  } catch {
-    return false;
-  }
-}
-
 function handleStepOutput(evt) {
-  console.log('step_output event:', evt.ticket_key, evt.step_name, 'line:', evt.output_line, 'stream:', evt.stream);
   const text = evt.output_line || '';
 
   // Skip empty lines
   if (!text) return;
-
-  // Filter out Claude Code stream-json noise
-  if (isClaudeJsonNoise(text)) return;
 
   const ts = ensureTerminalState(evt.ticket_key);
   ts.lines.push({ text, stream: evt.stream });
@@ -227,7 +209,18 @@ async function fetchWorkflowsSilent() {
     const res = await fetch('/api/workflows');
     const list = await res.json();
     workflows = {};
-    list.forEach(w => { workflows[w.ticket_key] = w; });
+    list.forEach(w => {
+      workflows[w.ticket_key] = w;
+      // Populate terminal state from API data if not already set by WebSocket.
+      // This ensures terminal output is visible on page load/reload.
+      if (w.terminal_lines && w.terminal_lines.length > 0 && !terminalState[w.ticket_key]) {
+        terminalState[w.ticket_key] = {
+          stepName: w.state,
+          lines: w.terminal_lines.map(l => ({ text: l.text, stream: l.stream })),
+          completed: false,
+        };
+      }
+    });
     renderWorkflows();
   } catch (e) {
     console.error('Failed to fetch workflows:', e);

@@ -91,22 +91,33 @@ async fn run_claude_session(
     timeout_secs: u64,
     line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
 ) -> Result<String> {
-    let handle = ProcessHandle::spawn(
-        "claude",
-        &[
-            "--allow-dangerously-skip-permissions",
-            "--print",
-            "--verbose",
-            "-p",
-            prompt,
-            "--output-format",
-            "stream-json",
-        ],
-        worktree,
-        cancel_token,
-    )
-    .await
-    .map_err(|e| MaestroError::Claude(format!("Failed to spawn Claude Code: {e}")))?;
+    let prompt_preview = &prompt[..prompt.len().min(200)];
+    info!(
+        prompt_len = prompt.len(),
+        prompt_preview = %prompt_preview,
+        "Claude session prompt"
+    );
+
+    let args = &[
+        "--allow-dangerously-skip-permissions",
+        "--print",
+        "--verbose",
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
+    ];
+    info!(
+        program = "claude",
+        args = ?args,
+        worktree = %worktree.display(),
+        timeout_secs = timeout_secs,
+        "Spawning Claude Code process"
+    );
+
+    let handle = ProcessHandle::spawn("claude", args, worktree, cancel_token)
+        .await
+        .map_err(|e| MaestroError::Claude(format!("Failed to spawn Claude Code: {e}")))?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await
@@ -141,7 +152,9 @@ async fn run_claude_session(
             let parsed = parse_stream_json_output(&output.stdout);
             info!(
                 session_output_len = parsed.len(),
-                "Claude Code session completed successfully"
+                exit_code = output.exit_code,
+                "Claude session completed: output {} chars",
+                parsed.len()
             );
             Ok(parsed)
         }
@@ -168,9 +181,58 @@ fn parse_stream_json_output(raw: &str) -> String {
             // Look for result/content events in the stream
             if let Some(event_type) = value.get("type").and_then(|v| v.as_str()) {
                 match event_type {
+                    "system" => {
+                        let subtype = value
+                            .get("subtype")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        if subtype == "api_retry" {
+                            let attempt = value
+                                .get("attempt")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let error = value
+                                .get("error")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            warn!(
+                                attempt = attempt,
+                                error = error,
+                                "Claude API retry detected in output"
+                            );
+                        } else {
+                            info!(
+                                subtype = subtype,
+                                "Claude stream event: system/{}", subtype
+                            );
+                        }
+                    }
                     "result" => {
                         if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
+                            info!(
+                                result_len = result.len(),
+                                "Claude stream: result received"
+                            );
                             result_parts.push(result.to_string());
+                        }
+                        // Log usage/cost data if present
+                        if let Some(usage) = value.get("usage") {
+                            let input_tokens = usage
+                                .get("input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let output_tokens = usage
+                                .get("output_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            info!(
+                                input_tokens = input_tokens,
+                                output_tokens = output_tokens,
+                                "Claude session token usage"
+                            );
+                        }
+                        if let Some(cost) = value.get("cost_usd").and_then(|v| v.as_f64()) {
+                            info!(cost_usd = cost, "Claude session cost");
                         }
                     }
                     "content_block_delta" => {
@@ -196,6 +258,13 @@ fn parse_stream_json_output(raw: &str) -> String {
             }
         }
     }
+
+    let total_len: usize = result_parts.iter().map(|p| p.len()).sum();
+    info!(
+        parts = result_parts.len(),
+        total_len = total_len,
+        "Parsed stream-json output"
+    );
 
     if result_parts.is_empty() {
         // Fallback: return raw output if no structured events found

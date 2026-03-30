@@ -3,10 +3,26 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::Serialize;
 
+use maestro_core::workflow::engine::TerminalLine;
 use maestro_core::workflow::state::WorkflowState;
 use maestro_core::workflow::step::StepLog;
 
 use crate::state::AppState;
+
+#[derive(Serialize)]
+pub struct TerminalLineDto {
+    pub text: String,
+    pub stream: String,
+}
+
+impl From<&TerminalLine> for TerminalLineDto {
+    fn from(tl: &TerminalLine) -> Self {
+        Self {
+            text: tl.text.clone(),
+            stream: tl.stream.clone(),
+        }
+    }
+}
 
 #[derive(Serialize)]
 pub struct WorkflowSummary {
@@ -21,6 +37,7 @@ pub struct WorkflowSummary {
     pub pr_url: Option<String>,
     pub steps_log: Vec<StepLog>,
     pub error: Option<String>,
+    pub terminal_lines: Vec<TerminalLineDto>,
 }
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
@@ -46,6 +63,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
             pr_url: w.pr_url.clone(),
             steps_log: w.steps_log.clone(),
             error: extract_error(&w.state),
+            terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
         })
         .collect();
     // Newest first
@@ -73,6 +91,7 @@ pub async fn get_workflow(
                 pr_url: w.pr_url.clone(),
                 steps_log: w.steps_log.clone(),
                 error: extract_error(&w.state),
+                terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
             })
         })
         .ok_or(StatusCode::NOT_FOUND)
