@@ -499,7 +499,8 @@ async fn run_workflow_steps(
                 broadcast_step_completed(event_tx, ticket_key, "Pre-install");
             }
             Ok(output) => {
-                let msg = format!("Pre-install failed (exit code {}): {}", output.exit_code, output.stderr.lines().take(5).collect::<Vec<_>>().join("\n"));
+                let stderr_tail = output.stderr.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+                let msg = format!("Pre-install failed (exit code {}):\n{}", output.exit_code, stderr_tail);
                 step_log.fail(msg.clone());
                 add_step_log(workflows, ticket_key, step_log).await;
                 return Err(MaestroError::Git(msg));
@@ -537,7 +538,9 @@ async fn run_workflow_steps(
                 broadcast_step_completed(event_tx, ticket_key, "Install Dependencies");
             }
             Ok(output) => {
-                let msg = format!("Install failed (exit code {}): {}", output.exit_code, output.stderr.lines().take(5).collect::<Vec<_>>().join("\n"));
+                let stderr_tail = output.stderr.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+                let stdout_tail = output.stdout.lines().rev().take(10).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+                let msg = format!("Install failed (exit code {}):\nSTDERR:\n{}\nSTDOUT:\n{}", output.exit_code, stderr_tail, stdout_tail);
                 step_log.fail(msg.clone());
                 add_step_log(workflows, ticket_key, step_log).await;
                 return Err(MaestroError::Git(msg));
