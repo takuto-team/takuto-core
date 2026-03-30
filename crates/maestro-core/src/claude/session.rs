@@ -96,6 +96,7 @@ async fn run_claude_session(
         &[
             "--allow-dangerously-skip-permissions",
             "--print",
+            "--verbose",
             "-p",
             prompt,
             "--output-format",

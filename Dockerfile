@@ -60,12 +60,16 @@ COPY --from=builder /app/target/release/maestro /usr/local/bin/maestro
 # Copy default config
 COPY config.toml.example /etc/maestro/config.toml
 
-# Source custom env file on any shell login (bash, sh, entrypoint, exec)
-RUN echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /etc/profile.d/maestro-env.sh \
-    && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /root/.bashrc
+# Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
+RUN groupadd -r maestro && useradd -r -g maestro -m -s /bin/bash maestro
 
-# Create workspace directory
-RUN mkdir -p /workspace
+# Source custom env file on any shell login
+RUN echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /etc/profile.d/maestro-env.sh \
+    && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /home/maestro/.bashrc
+
+# Create workspace and log directories with correct ownership
+RUN mkdir -p /workspace /workspace/logs \
+    && chown -R maestro:maestro /workspace
 
 WORKDIR /workspace
 

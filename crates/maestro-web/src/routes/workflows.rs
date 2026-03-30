@@ -107,6 +107,19 @@ pub async fn resume_workflow(
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
 }
 
+/// Retry a failed/stopped/completed workflow. Removes the old workflow and starts fresh.
+pub async fn retry_workflow(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .engine
+        .retry_workflow(&id)
+        .await
+        .map(|_| StatusCode::OK)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
 /// Stop a workflow. Delegates to WorkflowEngine::stop_workflow which:
 /// - Cancels the CancellationToken (killing running processes)
 /// - Sets Stopped state

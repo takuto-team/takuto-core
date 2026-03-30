@@ -243,6 +243,18 @@ async function resumeWorkflow(id) {
   }
 }
 
+async function retryWorkflow(id) {
+  try {
+    await fetch(`/api/workflows/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+    // Clear terminal state for this workflow
+    delete terminalState[id];
+    // Fetch fresh state since the workflow was replaced
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Failed to retry workflow:', e);
+  }
+}
+
 async function stopWorkflow(id) {
   if (!confirm('Are you sure you want to stop this workflow? The ticket will be unassigned.')) return;
   try {
@@ -346,6 +358,10 @@ function renderWorkflowCard(w) {
     actions = `
       <button onclick="resumeWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 transition-colors">Resume</button>
       <button onclick="stopWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">Stop</button>`;
+  }
+  if (['Error', 'Stopped', 'Completed'].includes(status.label)) {
+    actions += `
+      <button onclick="retryWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">Retry</button>`;
   }
   actions += `
     <button onclick="openReportModal('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-700/50 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">Report</button>`;

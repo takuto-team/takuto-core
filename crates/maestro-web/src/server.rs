@@ -29,6 +29,10 @@ pub fn build_router(state: AppState) -> Router {
             "/workflows/{id}/stop",
             post(routes::workflows::stop_workflow),
         )
+        .route(
+            "/workflows/{id}/retry",
+            post(routes::workflows::retry_workflow),
+        )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
         .route("/health", get(health));

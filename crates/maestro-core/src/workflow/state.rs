@@ -44,7 +44,7 @@ impl WorkflowState {
     }
 
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Done | Self::Stopped)
+        matches!(self, Self::Done | Self::Stopped | Self::Error { .. })
     }
 
     pub fn is_active(&self) -> bool {

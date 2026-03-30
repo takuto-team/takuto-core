@@ -150,7 +150,7 @@ if [ "$auth_ok" = false ]; then
     exit 1
 fi
 
-# Try to apply egress rules (requires NET_ADMIN capability)
+# Try to apply egress rules as root (requires NET_ADMIN capability)
 if iptables -L -n >/dev/null 2>&1; then
     echo "NET_ADMIN capability detected, applying egress rules..."
     /usr/local/bin/egress-rules.sh
@@ -159,9 +159,34 @@ else
     echo "         Run container with --cap-add=NET_ADMIN to enable network restrictions."
 fi
 
-# Configure git to use gh for authentication
-git config --global --add safe.directory /workspace
-gh auth setup-git
+# Ensure workspace is owned by maestro user
+chown -R maestro:maestro /workspace
 
-# Start Maestro
-exec /usr/local/bin/maestro "$@"
+# Copy auth state to maestro user's home if it was set up as root
+if [ -d /root/.claude ]; then
+    cp -rn /root/.claude /home/maestro/.claude 2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.claude
+fi
+if [ -d /root/.config/gh ]; then
+    mkdir -p /home/maestro/.config
+    cp -rn /root/.config/gh /home/maestro/.config/gh 2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.config
+fi
+if [ -d /root/.config/acli ]; then
+    mkdir -p /home/maestro/.config
+    cp -rn /root/.config/acli /home/maestro/.config/acli 2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.config
+fi
+if [ -d /root/.npm ]; then
+    cp -rn /root/.npm /home/maestro/.npm 2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.npm
+fi
+
+# Switch to non-root user and start Maestro
+# (Claude Code refuses --dangerously-skip-permissions as root)
+exec su maestro -c "
+    git config --global --add safe.directory /workspace
+    gh auth setup-git 2>/dev/null || true
+    source /etc/profile.d/maestro-env.sh 2>/dev/null || true
+    exec /usr/local/bin/maestro $*
+"

@@ -253,6 +253,30 @@ impl WorkflowEngine {
         Ok(())
     }
 
+    pub async fn retry_workflow(&self, ticket_key: &str) -> Result<String> {
+        let (ticket_summary,) = {
+            let workflows = self.workflows.read().await;
+            let workflow = workflows
+                .get(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+
+            if !workflow.state.is_terminal() {
+                return Err(MaestroError::Config(format!(
+                    "Cannot retry workflow in state: {} (must be Error, Stopped, or Done)",
+                    workflow.state
+                )));
+            }
+
+            (workflow.ticket_summary.clone(),)
+        };
+
+        // Remove the old workflow
+        self.workflows.write().await.remove(ticket_key);
+
+        // Start a fresh one
+        self.start_workflow(ticket_key.to_string(), ticket_summary).await
+    }
+
     pub async fn stop_all_workflows(&self) {
         let keys: Vec<String> = {
             let workflows = self.workflows.read().await;
