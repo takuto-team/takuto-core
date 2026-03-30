@@ -472,10 +472,49 @@ async fn run_workflow_steps(
     step_log.complete(StepStatus::Success);
     add_step_log(workflows, ticket_key, step_log).await;
 
-    // Step 3b: Install dependencies
+    // Step 3b: Pre-install (e.g., registry auth)
     let cfg = config.read().await;
+    let pre_install_cmd = cfg.commands.pre_install.clone();
     let install_cmd = cfg.commands.install.clone();
     drop(cfg);
+
+    if !pre_install_cmd.is_empty() {
+        let mut step_log = StepLog::new("Pre-install".to_string());
+        info!(command = %pre_install_cmd, "Running pre-install command");
+        log_writer.write_step("Pre-install", &format!("Running: {pre_install_cmd}")).await;
+
+        broadcast_step_started(event_tx, ticket_key, "Pre-install");
+        let line_tx = spawn_output_relay(event_tx, ticket_key, "Pre-install", log_writer, workflows);
+        match crate::process::run_shell_command_streaming(
+            &pre_install_cmd,
+            &worktree_path,
+            cancel_token.child_token(),
+            line_tx,
+        )
+        .await
+        {
+            Ok(output) if output.success() => {
+                step_log.output.push("Pre-install completed".to_string());
+                step_log.complete(StepStatus::Success);
+                broadcast_step_completed(event_tx, ticket_key, "Pre-install");
+            }
+            Ok(output) => {
+                let msg = format!("Pre-install failed (exit code {}): {}", output.exit_code, output.stderr.lines().take(5).collect::<Vec<_>>().join("\n"));
+                step_log.fail(msg.clone());
+                add_step_log(workflows, ticket_key, step_log).await;
+                return Err(MaestroError::Git(msg));
+            }
+            Err(e) => {
+                let msg = format!("Pre-install error: {e}");
+                step_log.fail(msg.clone());
+                add_step_log(workflows, ticket_key, step_log).await;
+                return Err(MaestroError::Git(msg));
+            }
+        }
+        add_step_log(workflows, ticket_key, step_log).await;
+    }
+
+    // Step 3c: Install dependencies
 
     if !install_cmd.is_empty() {
         let mut step_log = StepLog::new("Install Dependencies".to_string());

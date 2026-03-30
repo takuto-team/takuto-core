@@ -27,6 +27,7 @@ if [ "$(id -u)" = "0" ]; then
     chown -R maestro:maestro /home/maestro/.claude  2>/dev/null || true
     chown -R maestro:maestro /home/maestro/.config   2>/dev/null || true
     chown -R maestro:maestro /home/maestro/.npm       2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.aws       2>/dev/null || true
     chown -R maestro:maestro /workspace               2>/dev/null || true
 
     # In normal (non-setup) mode, apply egress rules before dropping privileges

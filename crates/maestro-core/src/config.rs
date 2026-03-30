@@ -69,6 +69,8 @@ pub struct GitConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandsConfig {
     #[serde(default)]
+    pub pre_install: String,
+    #[serde(default)]
     pub install: String,
     #[serde(default)]
     pub lint: String,
@@ -182,6 +184,7 @@ impl Default for GitConfig {
 impl Default for CommandsConfig {
     fn default() -> Self {
         Self {
+            pre_install: String::new(),
             install: String::new(),
             lint: String::new(),
             unit_test: String::new(),

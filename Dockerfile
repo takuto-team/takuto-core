@@ -47,6 +47,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
     && apt-get update && apt-get install -y --no-install-recommends acli \
     && rm -rf /var/lib/apt/lists/*
 
+# Install AWS CLI (optional, for CodeArtifact npm registry auth)
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/awscliv2.zip /tmp/aws /var/lib/apt/lists/*
+
 # Install figma-cli (npm global)
 RUN npm install -g figma-cli || echo "WARN: figma-cli install failed, Figma features will be unavailable"
 

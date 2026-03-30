@@ -19,6 +19,8 @@ repo_url = "https://github.com/org/repo.git"
 repo_path = "/workspace"
 
 [commands]
+# Command to run before install (e.g., registry auth: "aws codeartifact login ...")
+pre_install = ""
 install = "npm install"
 lint = "npm run lint"
 unit_test = "npm test"

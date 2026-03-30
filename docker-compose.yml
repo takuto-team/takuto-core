@@ -18,6 +18,8 @@ services:
       - workspace:/workspace
       # npm cache — persisted for the maestro user
       - npm-cache:/home/maestro/.npm
+      # AWS credentials (optional, for CodeArtifact auth)
+      - aws-config:/home/maestro/.aws
     environment:
       # Figma API token (optional, also configurable in config.toml)
       - FIGMA_API_TOKEN=${FIGMA_API_TOKEN:-}
@@ -35,3 +37,4 @@ volumes:
   acli-auth:
   workspace:
   npm-cache:
+  aws-config:
