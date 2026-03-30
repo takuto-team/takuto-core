@@ -99,7 +99,7 @@ async fn run_claude_session(
     );
 
     let args = &[
-        "--allow-dangerously-skip-permissions",
+        "--dangerously-skip-permissions",
         "--print",
         "--verbose",
         "-p",
