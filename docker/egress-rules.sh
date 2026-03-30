@@ -93,6 +93,13 @@ if [ -f "$MAESTRO_CONFIG" ]; then
     fi
 fi
 
+# AWS (for CodeArtifact, STS, SSO)
+allow_host sts.amazonaws.com
+allow_host sts.ap-northeast-1.amazonaws.com
+allow_host portal.sso.ap-northeast-1.amazonaws.com
+# Allow all CodeArtifact endpoints (resolved dynamically from config)
+# The specific CodeArtifact domain is added via extra_egress_hosts in config.toml
+
 # npm registry
 allow_host registry.npmjs.org
 
