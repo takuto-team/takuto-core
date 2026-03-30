@@ -4,52 +4,83 @@
 # Supports two modes:
 #   setup  — interactive auth for Claude Code, GitHub CLI, Atlassian CLI, then clone repo
 #   (default) — apply egress rules and start Maestro
+#
+# Architecture:
+#   The script always starts as root (needed for iptables and chown).
+#   Root performs privileged operations, then re-execs the script as the
+#   maestro user via `su -` (login shell), which guarantees HOME, PATH,
+#   and /etc/profile.d/* are set correctly. The re-exec is detected by
+#   checking `id -u`.
 
 set -euo pipefail
 
-# Source custom environment file if mounted
-if [ -f /etc/maestro/env ]; then
-    set -a
-    source /etc/maestro/env
-    set +a
+# ─── Root preamble (runs only as root) ──────────────────────────────────────
+if [ "$(id -u)" = "0" ]; then
+    # Source custom environment file if mounted (needed for MAESTRO_CONFIG, etc.)
+    if [ -f /etc/maestro/env ]; then
+        set -a
+        source /etc/maestro/env
+        set +a
+    fi
+
+    # Ensure volumes are owned by maestro
+    chown -R maestro:maestro /home/maestro/.claude  2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.config   2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.npm       2>/dev/null || true
+    chown -R maestro:maestro /workspace               2>/dev/null || true
+
+    # In normal (non-setup) mode, apply egress rules before dropping privileges
+    if [ "${1:-}" != "setup" ]; then
+        if iptables -L -n >/dev/null 2>&1; then
+            echo "NET_ADMIN capability detected, applying egress rules..."
+            /usr/local/bin/egress-rules.sh
+        else
+            echo "WARNING: NET_ADMIN capability not available. Egress rules NOT applied."
+            echo "         Run container with --cap-add=NET_ADMIN to enable network restrictions."
+        fi
+    fi
+
+    # Re-exec this script as maestro with a login shell.
+    # `su -` sets HOME=/home/maestro, sources /etc/profile (which loads
+    # /etc/profile.d/maestro-env.sh → /etc/maestro/env), and runs .bashrc.
+    # We cd back to /workspace since login shell changes to $HOME.
+    exec su - maestro -c "cd /workspace && exec /usr/local/bin/entrypoint.sh $(printf '%q ' "$@")"
 fi
+
+# ─── Everything below runs as the maestro user ─────────────────────────────
 
 # --- Setup mode: interactive authentication + repo clone ---
 if [ "${1:-}" = "setup" ]; then
     echo "=== Maestro Setup ==="
     echo ""
 
-    # Ensure volumes are owned by maestro
-    chown -R maestro:maestro /home/maestro/.claude 2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.config 2>/dev/null || true
-
-    # Step 1: Claude Code auth (run as maestro user)
+    # Step 1: Claude Code auth
     echo "--- Step 1/5: Claude Code authentication ---"
-    if su maestro -c "claude auth status" >/dev/null 2>&1; then
+    if claude auth status >/dev/null 2>&1; then
         echo "Claude Code: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            su maestro -c "claude auth login"
+            claude auth login
         fi
     else
         echo "Claude Code: not authenticated."
-        su maestro -c "claude auth login"
+        claude auth login
     fi
     echo ""
 
-    # Step 2: GitHub CLI auth (run as maestro user)
+    # Step 2: GitHub CLI auth
     echo "--- Step 2/5: GitHub CLI authentication ---"
-    if su maestro -c "gh auth status" >/dev/null 2>&1; then
+    if gh auth status >/dev/null 2>&1; then
         echo "GitHub CLI: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            su maestro -c "gh auth login"
+            gh auth login
         fi
     else
         echo "GitHub CLI: not authenticated."
-        su maestro -c "gh auth login"
+        gh auth login
     fi
     echo ""
 
@@ -73,13 +104,13 @@ if [ "${1:-}" = "setup" ]; then
             fi
             read -sp "Paste your Atlassian API token: " api_token
             echo
-            echo "$api_token" | su maestro -c "acli jira auth login --site \"$jira_site\" --email \"$jira_email\" --token"
+            echo "$api_token" | acli jira auth login --site "$jira_site" --email "$jira_email" --token
         else
-            su maestro -c "acli jira auth login --web"
+            acli jira auth login --web
         fi
     }
 
-    if su maestro -c "acli jira auth status" >/dev/null 2>&1; then
+    if acli jira auth status >/dev/null 2>&1; then
         echo "Atlassian CLI: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
         echo
@@ -106,27 +137,26 @@ if [ "${1:-}" = "setup" ]; then
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
-            su maestro -c "gh repo clone '$repo_url' /workspace"
+            gh repo clone "$repo_url" /workspace
         fi
     else
         echo "Cloning $repo_url into /workspace..."
-        chown maestro:maestro /workspace
-        su maestro -c "gh repo clone '$repo_url' /workspace"
+        gh repo clone "$repo_url" /workspace
     fi
     git config --global --add safe.directory /workspace
     echo ""
 
-    # Step 5: Install Claude Code skills (as maestro user since that's who runs Claude)
+    # Step 5: Install Claude Code skills
     echo "--- Step 5/5: Installing Claude Code skills ---"
-    if [ -d "/home/maestro/.claude/skills" ] && [ "$(ls -A /home/maestro/.claude/skills 2>/dev/null)" ]; then
+    if [ -d "$HOME/.claude/skills" ] && [ "$(ls -A "$HOME/.claude/skills" 2>/dev/null)" ]; then
         echo "Skills already installed."
         read -p "Re-install? [y/N] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            su maestro -c 'curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh && bash /tmp/install-skills.sh && rm /tmp/install-skills.sh'
+            curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh && bash /tmp/install-skills.sh && rm /tmp/install-skills.sh
         fi
     else
-        su maestro -c 'curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh && bash /tmp/install-skills.sh && rm /tmp/install-skills.sh'
+        curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh && bash /tmp/install-skills.sh && rm /tmp/install-skills.sh
     fi
     echo ""
 
@@ -141,19 +171,19 @@ fi
 # Check auth before starting
 auth_ok=true
 
-if ! su maestro -c "claude auth status" >/dev/null 2>&1; then
+if ! claude auth status >/dev/null 2>&1; then
     echo "ERROR: Claude Code is not authenticated."
     echo "       Run: docker compose run maestro setup"
     auth_ok=false
 fi
 
-if ! su maestro -c "gh auth status" >/dev/null 2>&1; then
+if ! gh auth status >/dev/null 2>&1; then
     echo "ERROR: GitHub CLI is not authenticated."
     echo "       Run: docker compose run maestro setup"
     auth_ok=false
 fi
 
-if ! su maestro -c "acli jira auth status" >/dev/null 2>&1; then
+if ! acli jira auth status >/dev/null 2>&1; then
     echo "ERROR: Atlassian CLI is not authenticated."
     echo "       Run: docker compose run maestro setup"
     auth_ok=false
@@ -169,28 +199,7 @@ if [ "$auth_ok" = false ]; then
     exit 1
 fi
 
-# Try to apply egress rules as root (requires NET_ADMIN capability)
-if iptables -L -n >/dev/null 2>&1; then
-    echo "NET_ADMIN capability detected, applying egress rules..."
-    /usr/local/bin/egress-rules.sh
-else
-    echo "WARNING: NET_ADMIN capability not available. Egress rules NOT applied."
-    echo "         Run container with --cap-add=NET_ADMIN to enable network restrictions."
-fi
-
-# Ensure workspace is owned by maestro user
-chown -R maestro:maestro /workspace
-
-# Ensure volumes mounted at maestro's home are owned correctly
-chown -R maestro:maestro /home/maestro/.claude 2>/dev/null || true
-chown -R maestro:maestro /home/maestro/.config 2>/dev/null || true
-chown -R maestro:maestro /home/maestro/.npm 2>/dev/null || true
-
-# Switch to non-root user and start Maestro
-# (Claude Code refuses --dangerously-skip-permissions as root)
-exec su maestro -c "
-    git config --global --add safe.directory /workspace
-    gh auth setup-git 2>/dev/null || true
-    source /etc/profile.d/maestro-env.sh 2>/dev/null || true
-    exec /usr/local/bin/maestro $*
-"
+# Configure git and start Maestro
+git config --global --add safe.directory /workspace
+gh auth setup-git 2>/dev/null || true
+exec /usr/local/bin/maestro "$@"
