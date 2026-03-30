@@ -106,7 +106,7 @@ if [ "${1:-}" = "setup" ]; then
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
-            gh repo clone "$repo_url" /workspace
+            su maestro -c "gh repo clone '$repo_url' /workspace"
         fi
     else
         echo "Cloning $repo_url into /workspace..."
