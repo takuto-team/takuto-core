@@ -140,6 +140,11 @@ if [ "${1:-}" = "setup" ]; then
             gh repo clone "$repo_url" /workspace
         fi
     else
+        # Clean any leftover files before cloning
+        if [ "$(ls -A /workspace 2>/dev/null)" ]; then
+            echo "Workspace is not empty but has no git repo. Cleaning..."
+            rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
+        fi
         echo "Cloning $repo_url into /workspace..."
         gh repo clone "$repo_url" /workspace
     fi
