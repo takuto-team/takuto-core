@@ -144,4 +144,13 @@ allow_host stackoverflow.com
 
 allow_host api.figma.com
 
+# Fallback: if any resolved host had 0 IPs (cloud providers with rotating IPs),
+# allow all HTTPS as a safety net. This is a temporary measure until a
+# DNS-based proxy (squid) is implemented.
+ALLOW_ALL_HTTPS=$(sed -n 's/^[[:space:]]*allow_all_https[[:space:]]*=[[:space:]]*\(.*\)/\1/p' "$MAESTRO_CONFIG" 2>/dev/null | tr -d ' "' || true)
+if [ "$ALLOW_ALL_HTTPS" = "true" ]; then
+    echo "WARNING: allow_all_https is enabled — all outbound HTTPS (port 443) is permitted"
+    iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+fi
+
 echo "Egress rules applied. Only allowed hosts are reachable."

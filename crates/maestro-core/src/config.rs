@@ -26,6 +26,8 @@ pub struct Config {
 pub struct NetworkConfig {
     #[serde(default)]
     pub extra_egress_hosts: Vec<String>,
+    #[serde(default)]
+    pub allow_all_https: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +145,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             extra_egress_hosts: Vec::new(),
+            allow_all_https: false,
         }
     }
 }
