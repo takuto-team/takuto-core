@@ -18,6 +18,14 @@ pub struct Config {
     pub web: WebConfig,
     #[serde(default)]
     pub claude: ClaudeConfig,
+    #[serde(default)]
+    pub network: NetworkConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    #[serde(default)]
+    pub extra_egress_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +137,14 @@ fn default_step_timeout() -> u64 {
     1800
 }
 
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            extra_egress_hosts: Vec::new(),
+        }
+    }
+}
+
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
@@ -203,6 +219,7 @@ impl Default for Config {
             commands: CommandsConfig::default(),
             web: WebConfig::default(),
             claude: ClaudeConfig::default(),
+            network: NetworkConfig::default(),
         }
     }
 }

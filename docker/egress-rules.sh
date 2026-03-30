@@ -76,8 +76,44 @@ allow_host o2.ingest.sentry.io
 # Package registries (dependency installs)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Custom egress hosts (from config.toml [network] extra_egress_hosts)
+# ---------------------------------------------------------------------------
+MAESTRO_CONFIG="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
+if [ -f "$MAESTRO_CONFIG" ]; then
+    # Parse TOML array: extra_egress_hosts = ["host1", "host2"]
+    extra_hosts=$(sed -n 's/^[[:space:]]*extra_egress_hosts[[:space:]]*=[[:space:]]*\[//p' "$MAESTRO_CONFIG" 2>/dev/null \
+        | tr -d '[]"' | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | grep -v '^$')
+    if [ -n "$extra_hosts" ]; then
+        echo "Adding custom egress hosts from config..."
+        echo "$extra_hosts" | while read -r host; do
+            echo "  Allowing: $host"
+            allow_host "$host"
+        done
+    fi
+fi
+
 # npm registry
 allow_host registry.npmjs.org
+
+# AWS CodeArtifact (private npm registries)
+# Read from .npmrc in the workspace if available
+NPMRC="/workspace/.npmrc"
+if [ -f "$NPMRC" ]; then
+    for registry_host in $(grep -oP 'https?://\K[^/]+' "$NPMRC" 2>/dev/null | sort -u); do
+        echo "Allowing npm registry host from .npmrc: $registry_host"
+        allow_host "$registry_host"
+    done
+fi
+# Also check worktree .npmrc files
+for npmrc in /workspace/worktrees/*/.npmrc 2>/dev/null; do
+    if [ -f "$npmrc" ]; then
+        for registry_host in $(grep -oP 'https?://\K[^/]+' "$npmrc" 2>/dev/null | sort -u); do
+            echo "Allowing npm registry host from $npmrc: $registry_host"
+            allow_host "$registry_host"
+        done
+    fi
+done
 
 # Rust / Cargo
 allow_host static.rust-lang.org
