@@ -38,7 +38,7 @@ impl ExternalActions for DryRunActions {
     async fn get_ticket_details(&self, key: &str) -> Result<String> {
         info!(ticket = key, "Retrieving ticket details (dry mode — read-only, executes normally)");
         let output = process::run_shell_command(
-            &format!("acli jira issue view {key} --output json"),
+            &format!("acli jira workitem view {key} --json --fields 'key,issuetype,summary,status,assignee,description'"),
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -70,9 +70,24 @@ impl ExternalActions for DryRunActions {
             return Ok(worktree_path);
         }
 
+        // Fetch the base branch from origin
+        info!(base = base, "Fetching base branch from origin");
+        let fetch_output = process::run_shell_command(
+            &format!("git fetch origin {base}"),
+            &self.repo_path,
+            CancellationToken::new(),
+        )
+        .await?;
+        if !fetch_output.success() {
+            return Err(MaestroError::Git(format!(
+                "Failed to fetch base branch '{}': {}",
+                base, fetch_output.stderr
+            )));
+        }
+
         let output = process::run_shell_command(
             &format!(
-                "git worktree add -b {branch} {} {base}",
+                "git worktree add -b {branch} {} origin/{base}",
                 worktree_path.display()
             ),
             &self.repo_path,

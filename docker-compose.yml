@@ -6,28 +6,20 @@ services:
     cap_add:
       - NET_ADMIN
     volumes:
-      # Configuration file (read-only)
+      # Configuration file
       - ./config.toml:/etc/maestro/config.toml:ro
-      # GitHub CLI auth (read-only) — pre-authenticate with `gh auth login` on the host
-      - gh-auth:/root/.config/gh:ro
-      # Workspace for git operations (the repository to work on)
+      # Custom environment variables (optional)
+      - ./maestro.env:/etc/maestro/env:ro
+      # Persistent auth state — survives container restarts
+      - claude-auth:/root/.claude
+      - gh-auth:/root/.config/gh
+      - acli-auth:/root/.config/acli
+      # Workspace — cloned during setup, persisted across restarts
       - workspace:/workspace
     environment:
-      # Anthropic API key for Claude Code headless sessions
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       # Figma API token (optional, also configurable in config.toml)
       - FIGMA_API_TOKEN=${FIGMA_API_TOKEN:-}
-      # Jira authentication for acli
-      # Option 1: API token directly
-      - ACLI_API_TOKEN=${ACLI_API_TOKEN:-}
-      # Option 2: Jira Cloud credentials
-      - JIRA_BASE_URL=${JIRA_BASE_URL:-}
-      - JIRA_USER_EMAIL=${JIRA_USER_EMAIL:-}
-      - JIRA_API_TOKEN=${JIRA_API_TOKEN:-}
-      # GitHub token (alternative to volume-mounted gh auth)
-      - GH_TOKEN=${GH_TOKEN:-}
     restart: unless-stopped
-    # Healthcheck via the /api/health endpoint
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
@@ -36,12 +28,7 @@ services:
       start_period: 10s
 
 volumes:
-  # Pre-authenticated gh CLI config
-  # Create with: docker volume create gh-auth
-  # Populate with: docker run --rm -v gh-auth:/data -v ~/.config/gh:/src:ro alpine cp -r /src/. /data/
+  claude-auth:
   gh-auth:
-    external: true
-  # The git repository workspace
-  # Create with: docker volume create workspace
-  # Populate by cloning: docker run --rm -v workspace:/workspace alpine sh -c "apk add git && git clone <repo-url> /workspace"
+  acli-auth:
   workspace:

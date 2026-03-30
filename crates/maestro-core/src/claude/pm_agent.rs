@@ -106,12 +106,14 @@ Be pragmatic — approve plans that reasonably cover the requirements even if th
             warn!(?reasons, "PM agent rejected the plan");
             Ok(PmVerdict::Rejected { reasons })
         } else {
-            // Default to approved if we can't parse the response
+            // Default to rejected if we can't parse the response
             warn!(
                 response = %output.stdout,
-                "Could not parse PM agent response, defaulting to approved"
+                "Could not parse PM agent response, defaulting to rejected"
             );
-            Ok(PmVerdict::Approved)
+            Ok(PmVerdict::Rejected {
+                reasons: vec!["PM agent response could not be parsed".to_string()],
+            })
         }
     }
 }

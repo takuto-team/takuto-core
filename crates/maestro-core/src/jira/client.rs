@@ -3,7 +3,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::error::{MaestroError, Result};
-use crate::process;
+use crate::process::{self, CommandOutput};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JiraTicket {
@@ -33,6 +33,25 @@ impl JiraClient {
         Self { repo_path }
     }
 
+    /// Run an acli command with explicit args (no shell interpretation).
+    async fn acli(&self, args: &[&str]) -> Result<CommandOutput> {
+        info!(args = ?args, "Running acli command");
+        let output = process::run_command("acli", args, &self.repo_path, CancellationToken::new()).await?;
+        if !output.success() {
+            info!(
+                exit_code = output.exit_code,
+                stderr = %output.stderr,
+                "acli command failed"
+            );
+        } else {
+            debug!(
+                stdout_len = output.stdout.len(),
+                "acli command succeeded"
+            );
+        }
+        Ok(output)
+    }
+
     pub async fn list_todo_tickets(
         &self,
         project_keys: &[String],
@@ -42,14 +61,22 @@ impl JiraClient {
 
         for project_key in project_keys {
             for item_type in item_types {
-                let output = process::run_shell_command(
-                    &format!(
-                        "acli jira issue list --project {project_key} --status \"To Do\" --type \"{item_type}\" --output json"
-                    ),
-                    &self.repo_path,
-                    CancellationToken::new(),
-                )
-                .await?;
+                let jql = format!(
+                    "project = {project_key} AND status = \"To Do\" AND issuetype = \"{item_type}\""
+                );
+                info!(
+                    project = project_key,
+                    item_type = item_type,
+                    jql = %jql,
+                    "Searching for tickets"
+                );
+
+                let output = self.acli(&[
+                    "jira", "workitem", "search",
+                    "--jql", &jql,
+                    "--json",
+                    "--limit", "50",
+                ]).await?;
 
                 if !output.success() {
                     warn!(
@@ -62,6 +89,12 @@ impl JiraClient {
                 }
 
                 let tickets = parse_ticket_list(&output.stdout, item_type)?;
+                info!(
+                    project = project_key,
+                    item_type = item_type,
+                    count = tickets.len(),
+                    "Parsed tickets from response"
+                );
                 all_tickets.extend(tickets);
             }
         }
@@ -77,12 +110,11 @@ impl JiraClient {
         project_keys: &[String],
     ) -> Result<JiraTicket> {
         info!(ticket = key, "Retrieving ticket details");
-        let output = process::run_shell_command(
-            &format!("acli jira issue view {key} --output json"),
-            &self.repo_path,
-            CancellationToken::new(),
-        )
-        .await?;
+        let output = self.acli(&[
+            "jira", "workitem", "view", key,
+            "--json",
+            "--fields", "key,issuetype,summary,status,assignee,description",
+        ]).await?;
 
         if !output.success() {
             return Err(MaestroError::Jira(format!(
@@ -113,13 +145,66 @@ impl JiraClient {
         Ok(ticket)
     }
 
+    pub async fn assign_ticket(&self, key: &str) -> Result<()> {
+        info!(ticket = key, "Assigning ticket to self");
+        let output = self.acli(&[
+            "jira", "workitem", "assign",
+            "--key", key,
+            "--assignee", "@me",
+            "--yes",
+        ]).await?;
+
+        if !output.success() {
+            return Err(MaestroError::Jira(format!(
+                "Failed to assign ticket {key}: {}",
+                output.stderr
+            )));
+        }
+        Ok(())
+    }
+
+    pub async fn unassign_ticket(&self, key: &str) -> Result<()> {
+        info!(ticket = key, "Unassigning ticket");
+        let output = self.acli(&[
+            "jira", "workitem", "assign",
+            "--key", key,
+            "--remove-assignee",
+            "--yes",
+        ]).await?;
+
+        if !output.success() {
+            return Err(MaestroError::Jira(format!(
+                "Failed to unassign ticket {key}: {}",
+                output.stderr
+            )));
+        }
+        Ok(())
+    }
+
+    pub async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
+        info!(ticket = key, status = status, "Transitioning ticket");
+        let output = self.acli(&[
+            "jira", "workitem", "transition",
+            "--key", key,
+            "--status", status,
+            "--yes",
+        ]).await?;
+
+        if !output.success() {
+            return Err(MaestroError::Jira(format!(
+                "Failed to transition ticket {key} to {status}: {}",
+                output.stderr
+            )));
+        }
+        Ok(())
+    }
+
     async fn get_linked_item(&self, key: &str, link_type: &str) -> Result<LinkedItem> {
-        let output = process::run_shell_command(
-            &format!("acli jira issue view {key} --output json"),
-            &self.repo_path,
-            CancellationToken::new(),
-        )
-        .await?;
+        let output = self.acli(&[
+            "jira", "workitem", "view", key,
+            "--json",
+            "--fields", "key,issuetype,summary,status,description",
+        ]).await?;
 
         if !output.success() {
             return Err(MaestroError::Jira(format!(
@@ -135,16 +220,10 @@ impl JiraClient {
 }
 
 fn parse_ticket_list(json_str: &str, default_type: &str) -> Result<Vec<JiraTicket>> {
-    let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+    // acli returns a JSON array of work items directly
+    let issues: Vec<serde_json::Value> = serde_json::from_str(json_str).map_err(|e| {
         MaestroError::Jira(format!("Failed to parse ticket list JSON: {e}"))
     })?;
-
-    let issues = value
-        .get("issues")
-        .and_then(|v| v.as_array())
-        .or_else(|| value.as_array())
-        .unwrap_or(&Vec::new())
-        .clone();
 
     let mut tickets = Vec::new();
     for issue in &issues {
@@ -160,11 +239,7 @@ fn parse_ticket_list(json_str: &str, default_type: &str) -> Result<Vec<JiraTicke
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
-            description: fields
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
+            description: extract_description_text(fields),
             item_type: fields
                 .get("issuetype")
                 .and_then(|v| v.get("name"))
@@ -205,11 +280,7 @@ fn parse_ticket_detail(json_str: &str) -> Result<JiraTicket> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        description: fields
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        description: extract_description_text(fields),
         item_type: fields
             .get("issuetype")
             .and_then(|v| v.get("name"))
@@ -224,6 +295,40 @@ fn parse_ticket_detail(json_str: &str) -> Result<JiraTicket> {
             .to_string(),
         linked_items: Vec::new(),
     })
+}
+
+/// Extract plain text from Jira ADF (Atlassian Document Format) description.
+fn extract_description_text(fields: &serde_json::Value) -> String {
+    let Some(desc) = fields.get("description") else {
+        return String::new();
+    };
+
+    // If it's a simple string, return as-is
+    if let Some(s) = desc.as_str() {
+        return s.to_string();
+    }
+
+    // ADF format: extract text from content nodes recursively
+    fn collect_text(node: &serde_json::Value, buf: &mut String) {
+        if let Some(text) = node.get("text").and_then(|v| v.as_str()) {
+            buf.push_str(text);
+        }
+        if let Some(content) = node.get("content").and_then(|v| v.as_array()) {
+            for child in content {
+                collect_text(child, buf);
+            }
+            // Add newline after paragraph-level nodes
+            if let Some(node_type) = node.get("type").and_then(|v| v.as_str()) {
+                if matches!(node_type, "paragraph" | "heading" | "bulletList" | "orderedList") {
+                    buf.push('\n');
+                }
+            }
+        }
+    }
+
+    let mut text = String::new();
+    collect_text(desc, &mut text);
+    text.trim().to_string()
 }
 
 /// Returns (key, link_type) pairs extracted from Jira issuelinks.
@@ -295,11 +400,7 @@ fn parse_linked_item(json_str: &str) -> Result<LinkedItem> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        description: fields
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        description: extract_description_text(fields),
         status: fields
             .get("status")
             .and_then(|v| v.get("name"))

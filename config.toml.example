@@ -1,0 +1,35 @@
+[general]
+dry_mode = false
+poll_interval_secs = 60
+max_concurrent_workflows = 1
+max_fix_attempts = 3
+log_level = "info"
+
+[jira]
+project_keys = ["PROJ"]
+item_types = ["Task", "Bug"]
+jql_filter = ""
+# Required for token-based auth (leave empty to use OAuth during setup)
+site = "yourcompany.atlassian.net"
+email = "you@company.com"
+
+[git]
+base_branch = "main"
+repo_url = "https://github.com/org/repo.git"
+repo_path = "/workspace"
+
+[commands]
+install = "npm install"
+lint = "npm run lint"
+unit_test = "npm test"
+e2e_test = "npm run test:e2e"
+
+[web]
+host = "0.0.0.0"
+port = 8080
+
+[claude]
+skills_path = "/root/.claude/skills"
+address_ticket_passes = 3
+step_timeout_secs = 1800
+figma_api_token = ""

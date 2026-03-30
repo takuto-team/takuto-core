@@ -405,6 +405,36 @@ async fn run_workflow_steps(
     step_log.complete(StepStatus::Success);
     add_step_log(workflows, ticket_key, step_log).await;
 
+    // Step 3b: Install dependencies
+    let cfg = config.read().await;
+    let install_cmd = cfg.commands.install.clone();
+    drop(cfg);
+
+    if !install_cmd.is_empty() {
+        let mut step_log = StepLog::new("Install Dependencies".to_string());
+        info!(command = %install_cmd, "Installing dependencies in worktree");
+
+        match actions.run_command(&install_cmd, &worktree_path).await {
+            Ok(output) if output.success() => {
+                step_log.output.push("Dependencies installed".to_string());
+                step_log.complete(StepStatus::Success);
+            }
+            Ok(output) => {
+                let msg = format!("Install failed (exit code {}): {}", output.exit_code, output.stderr.lines().take(5).collect::<Vec<_>>().join("\n"));
+                step_log.fail(msg.clone());
+                add_step_log(workflows, ticket_key, step_log).await;
+                return Err(MaestroError::Git(msg));
+            }
+            Err(e) => {
+                let msg = format!("Install command error: {e}");
+                step_log.fail(msg.clone());
+                add_step_log(workflows, ticket_key, step_log).await;
+                return Err(MaestroError::Git(msg));
+            }
+        }
+        add_step_log(workflows, ticket_key, step_log).await;
+    }
+
     // Build ticket context for Claude
     let ticket_context = build_ticket_context(&ticket_detail);
 
@@ -417,6 +447,8 @@ async fn run_workflow_steps(
     // Create PM agent for plan validation
     let acceptance_criteria = extract_acceptance_criteria(&ticket_detail.description);
     let pm_agent = PmAgent::new(ticket_detail.description.clone(), acceptance_criteria);
+
+    let mut has_critical_failure = false;
 
     for pass in 1..=passes {
         check_cancelled(cancel_token)?;
@@ -473,9 +505,17 @@ async fn run_workflow_steps(
             Err(e) => {
                 warn!(pass = pass, error = %e, "Address ticket session failed");
                 step_log.fail(e.to_string());
+                has_critical_failure = true;
             }
         }
         add_step_log(workflows, ticket_key, step_log).await;
+
+        if has_critical_failure {
+            error!(ticket = ticket_key, "Claude session failed — aborting workflow");
+            return Err(MaestroError::Claude(
+                "Address ticket session failed — check that Claude Code is authenticated in the container".to_string()
+            ));
+        }
 
         check_cancelled(cancel_token)?;
         wait_if_paused(workflows, ticket_key, cancel_token).await?;
@@ -498,6 +538,7 @@ async fn run_workflow_steps(
             Err(e) => {
                 warn!(pass = pass, error = %e, "Review changes session failed");
                 step_log.fail(e.to_string());
+                // Review failure is non-fatal, continue to next pass
             }
         }
         add_step_log(workflows, ticket_key, step_log).await;
@@ -592,9 +633,34 @@ async fn run_workflow_steps(
         }
     }
 
-    // Step 13: Create PR
+    // Step 13: Create PR — only if there were no critical failures
     check_cancelled(cancel_token)?;
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
+
+    // Check if any steps failed — if so, don't create PR
+    {
+        let wf = workflows.read().await;
+        if let Some(workflow) = wf.get(ticket_key) {
+            let failed_steps: Vec<_> = workflow
+                .steps_log
+                .iter()
+                .filter(|s| s.status == StepStatus::Failed)
+                .map(|s| s.step_name.as_str())
+                .collect();
+
+            if !failed_steps.is_empty() {
+                let msg = format!("Skipping PR creation — failed steps: {}", failed_steps.join(", "));
+                warn!(ticket = ticket_key, %msg);
+
+                let mut step_log = StepLog::new("Create PR".to_string());
+                step_log.fail(msg.clone());
+                drop(wf);
+                add_step_log(workflows, ticket_key, step_log).await;
+
+                return Err(MaestroError::Config(msg));
+            }
+        }
+    }
 
     transition(workflows, event_tx, ticket_key, WorkflowState::CreatingPR).await;
     let mut step_log = StepLog::new("Create PR".to_string());

@@ -42,18 +42,26 @@ pub struct JiraConfig {
     pub item_types: Vec<String>,
     #[serde(default)]
     pub jql_filter: String,
+    #[serde(default)]
+    pub site: String,
+    #[serde(default)]
+    pub email: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitConfig {
     #[serde(default = "default_base_branch")]
     pub base_branch: String,
+    #[serde(default)]
+    pub repo_url: String,
     #[serde(default = "default_repo_path")]
     pub repo_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandsConfig {
+    #[serde(default)]
+    pub install: String,
     #[serde(default)]
     pub lint: String,
     #[serde(default)]
@@ -139,6 +147,8 @@ impl Default for JiraConfig {
             project_keys: Vec::new(),
             item_types: default_item_types(),
             jql_filter: String::new(),
+            site: String::new(),
+            email: String::new(),
         }
     }
 }
@@ -147,6 +157,7 @@ impl Default for GitConfig {
     fn default() -> Self {
         Self {
             base_branch: default_base_branch(),
+            repo_url: String::new(),
             repo_path: default_repo_path(),
         }
     }
@@ -155,6 +166,7 @@ impl Default for GitConfig {
 impl Default for CommandsConfig {
     fn default() -> Self {
         Self {
+            install: String::new(),
             lint: String::new(),
             unit_test: String::new(),
             e2e_test: String::new(),

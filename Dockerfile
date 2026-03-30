@@ -37,10 +37,15 @@ RUN npm install -g @anthropic-ai/claude-code
 # Install Playwright CLI with Chromium
 RUN npx playwright install --with-deps chromium
 
-# Install acli (Atlassian CLI)
-# Note: Replace with the actual download URL for your acli binary distribution
-# acli is typically distributed as a standalone binary or via npm
-RUN npm install -g atlassian-cli || echo "WARN: acli not available on npm, install manually"
+# Install acli (Atlassian CLI) via official apt repo
+RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
+    && mkdir -p -m 755 /etc/apt/keyrings \
+    && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/acli-archive-keyring.gpg] https://acli.atlassian.com/linux/deb stable main" \
+       | tee /etc/apt/sources.list.d/acli.list > /dev/null \
+    && apt-get update && apt-get install -y --no-install-recommends acli \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install figma-cli (npm global)
 RUN npm install -g figma-cli || echo "WARN: figma-cli install failed, Figma features will be unavailable"
@@ -53,7 +58,11 @@ RUN chmod +x /usr/local/bin/egress-rules.sh
 COPY --from=builder /app/target/release/maestro /usr/local/bin/maestro
 
 # Copy default config
-COPY config.toml /etc/maestro/config.toml
+COPY config.toml.example /etc/maestro/config.toml
+
+# Source custom env file on any shell login (bash, sh, entrypoint, exec)
+RUN echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /etc/profile.d/maestro-env.sh \
+    && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /root/.bashrc
 
 # Create workspace directory
 RUN mkdir -p /workspace

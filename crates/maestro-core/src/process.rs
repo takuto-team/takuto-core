@@ -210,3 +210,15 @@ pub async fn run_shell_command(
     let handle = ProcessHandle::spawn_shell(command, cwd, cancel_token).await?;
     handle.wait_with_output().await
 }
+
+/// Run a command with explicit args, bypassing shell interpretation.
+/// Use this when arguments contain quotes or special characters.
+pub async fn run_command(
+    program: &str,
+    args: &[&str],
+    cwd: &Path,
+    cancel_token: CancellationToken,
+) -> Result<CommandOutput> {
+    let handle = ProcessHandle::spawn(program, args, cwd, cancel_token).await?;
+    handle.wait_with_output().await
+}

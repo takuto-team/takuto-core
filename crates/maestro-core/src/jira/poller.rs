@@ -31,6 +31,13 @@ impl JiraPoller {
 
     pub async fn run(&self) {
         info!("Jira poller started");
+
+        // Poll immediately on startup
+        info!("Running initial poll...");
+        if let Err(e) = self.poll_once().await {
+            warn!(error = %e, "Initial Jira poll failed, will retry next interval");
+        }
+
         loop {
             let interval = {
                 let config = self.config.read().await;
@@ -61,6 +68,17 @@ impl JiraPoller {
 
         let max_concurrent = config.general.max_concurrent_workflows as usize;
         let active_count = self.engine.active_workflow_count().await;
+        let dry_mode = config.general.dry_mode;
+
+        info!(
+            projects = ?config.jira.project_keys,
+            item_types = ?config.jira.item_types,
+            dry_mode = dry_mode,
+            active_workflows = active_count,
+            max_concurrent = max_concurrent,
+            "Polling Jira for tickets"
+        );
+
         if active_count >= max_concurrent {
             info!(
                 active = active_count,
@@ -79,7 +97,20 @@ impl JiraPoller {
         let client = JiraClient::new(repo_path);
         let tickets = client.list_todo_tickets(&project_keys, &item_types).await?;
 
-        info!(count = tickets.len(), "Found tickets in To Do status");
+        if tickets.is_empty() {
+            info!("No tickets found in To Do status");
+        } else {
+            for t in &tickets {
+                info!(
+                    ticket = %t.key,
+                    summary = %t.summary,
+                    item_type = %t.item_type,
+                    status = %t.status,
+                    "Found ticket"
+                );
+            }
+            info!(count = tickets.len(), "Total tickets found in To Do status");
+        }
 
         let active_keys = self.engine.get_workflow_ids().await;
 

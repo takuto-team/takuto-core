@@ -107,19 +107,32 @@ async fn run_claude_session(
 
     match result {
         Ok(output) => {
+            info!(
+                exit_code = output.exit_code,
+                stdout_len = output.stdout.len(),
+                stderr_len = output.stderr.len(),
+                "Claude Code session finished"
+            );
+
             if !output.success() {
-                warn!(
-                    exit_code = output.exit_code,
-                    stderr = %output.stderr,
-                    "Claude Code session exited with non-zero status"
-                );
+                return Err(MaestroError::Claude(format!(
+                    "Claude Code exited with code {}: {}",
+                    output.exit_code,
+                    output.stderr.lines().take(5).collect::<Vec<_>>().join("\n")
+                )));
+            }
+
+            if output.stdout.trim().is_empty() {
+                return Err(MaestroError::Claude(
+                    "Claude Code session produced no output — check that Claude is authenticated in the container".to_string()
+                ));
             }
 
             // Parse stream-json output to extract the final result
             let parsed = parse_stream_json_output(&output.stdout);
-            debug!(
+            info!(
                 session_output_len = parsed.len(),
-                "Claude Code session completed"
+                "Claude Code session completed successfully"
             );
             Ok(parsed)
         }
