@@ -36,7 +36,14 @@ address_ticket_passes = 3
 step_timeout_secs = 1800
 figma_api_token = ""
 # Model to use (e.g., "claude-opus-4-6", "claude-sonnet-4-6"). Empty = Claude Code default.
+# Also passed to Cursor Agent when provider = "cursor".
 model = ""
+
+[agent]
+# AI tool for implement / review / fix steps: "claude" (Claude Code CLI) or "cursor" (Cursor Agent CLI).
+provider = "claude"
+# Executable for Cursor Agent (default: `agent` from https://cursor.com/install ). Only used when provider = "cursor".
+cursor_cli = "agent"
 
 [network]
 # Additional domains to allow through the egress firewall

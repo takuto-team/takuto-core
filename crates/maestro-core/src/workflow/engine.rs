@@ -11,7 +11,8 @@ use uuid::Uuid;
 use crate::actions::traits::ExternalActions;
 use crate::claude::pm_agent::{PmAgent, PmVerdict};
 use crate::claude::session::ClaudeSession;
-use crate::config::Config;
+use crate::config::{AiAgentProvider, Config};
+use crate::cursor::session::CursorSession;
 use crate::error::{MaestroError, Result};
 use crate::git;
 use crate::jira::client::JiraClient;
@@ -20,6 +21,7 @@ use crate::process::OutputLine;
 use super::log_writer::WorkflowLogWriter;
 use super::state::WorkflowState;
 use super::step::{StepLog, StepStatus};
+use super::stream_humanize::humanize_agent_stream_line;
 
 /// Maximum number of terminal lines stored per workflow for persistence.
 const TERMINAL_LINES_MAX: usize = 100;
@@ -476,6 +478,7 @@ async fn run_workflow_steps(
     let cfg = config.read().await;
     let pre_install_cmd = cfg.commands.pre_install.clone();
     let install_cmd = cfg.commands.install.clone();
+    let shell_stream_provider = cfg.agent.provider;
     drop(cfg);
 
     if !pre_install_cmd.is_empty() {
@@ -484,7 +487,14 @@ async fn run_workflow_steps(
         log_writer.write_step("Pre-install", &format!("Running: {pre_install_cmd}")).await;
 
         broadcast_step_started(event_tx, ticket_key, "Pre-install");
-        let line_tx = spawn_output_relay(event_tx, ticket_key, "Pre-install", log_writer, workflows);
+        let line_tx = spawn_output_relay(
+            event_tx,
+            ticket_key,
+            "Pre-install",
+            log_writer,
+            workflows,
+            shell_stream_provider,
+        );
         match crate::process::run_shell_command_streaming(
             &pre_install_cmd,
             &worktree_path,
@@ -523,7 +533,14 @@ async fn run_workflow_steps(
         log_writer.write_step("Install Dependencies", &format!("Running: {install_cmd}")).await;
 
         broadcast_step_started(event_tx, ticket_key, "Install Dependencies");
-        let line_tx = spawn_output_relay(event_tx, ticket_key, "Install Dependencies", log_writer, workflows);
+        let line_tx = spawn_output_relay(
+            event_tx,
+            ticket_key,
+            "Install Dependencies",
+            log_writer,
+            workflows,
+            shell_stream_provider,
+        );
         match crate::process::run_shell_command_streaming(
             &install_cmd,
             &worktree_path,
@@ -563,6 +580,10 @@ async fn run_workflow_steps(
     let passes = cfg.claude.address_ticket_passes;
     let timeout = cfg.claude.step_timeout_secs;
     let claude_model = if cfg.claude.model.is_empty() { None } else { Some(cfg.claude.model.clone()) };
+    let ai_stream_provider = cfg.agent.provider;
+    let cursor_cli = cfg.agent.cursor_cli.clone();
+    let agent_cfg_for_pm = cfg.agent.clone();
+    let model_for_pm = cfg.claude.model.clone();
     drop(cfg);
 
     // Create PM agent for plan validation
@@ -598,29 +619,53 @@ async fn run_workflow_steps(
             &format!("Address Ticket (Pass {pass}/{passes})"),
             log_writer,
             workflows,
+            ai_stream_provider,
         );
-        match ClaudeSession::start_address_ticket(
-            &worktree_path,
-            &ticket_context,
-            cancel_token.child_token(),
-            timeout,
-            Some(address_line_tx),
-            claude_model.as_deref(),
-            claude_session_id.as_deref(),
-        )
-        .await
+        let address_result = match ai_stream_provider {
+            AiAgentProvider::Claude => {
+                ClaudeSession::start_address_ticket(
+                    &worktree_path,
+                    &ticket_context,
+                    cancel_token.child_token(),
+                    timeout,
+                    Some(address_line_tx),
+                    claude_model.as_deref(),
+                    claude_session_id.as_deref(),
+                )
+                .await
+                .map(|s| (s.session_id, s.output))
+            }
+            AiAgentProvider::Cursor => {
+                CursorSession::start_address_ticket(
+                    &cursor_cli,
+                    &worktree_path,
+                    &ticket_context,
+                    cancel_token.child_token(),
+                    timeout,
+                    Some(address_line_tx),
+                    claude_model.as_deref(),
+                    claude_session_id.as_deref(),
+                )
+                .await
+                .map(|s| (s.session_id, s.output))
+            }
+        };
+
+        match address_result
         {
-            Ok(session) => {
-                info!(session_id = %session.session_id, pass = pass, "Address ticket session completed");
-                claude_session_id = Some(session.session_id.clone());
-                step_log.output.push(format!("Session {} completed", session.session_id));
+            Ok((session_id, output)) => {
+                info!(session_id = %session_id, pass = pass, "Address ticket session completed");
+                claude_session_id = Some(session_id.clone());
+                step_log.output.push(format!("Session {session_id} completed"));
 
                 // PM agent validates the session output against ticket requirements
                 match pm_agent
                     .validate_plan(
-                        &session.output,
+                        &output,
                         &worktree_path,
                         cancel_token.child_token(),
+                        &agent_cfg_for_pm,
+                        &model_for_pm,
                     )
                     .await
                 {
@@ -649,10 +694,12 @@ async fn run_workflow_steps(
         add_step_log(workflows, ticket_key, step_log).await;
 
         if has_critical_failure {
-            error!(ticket = ticket_key, "Claude session failed — aborting workflow");
-            return Err(MaestroError::Claude(
-                "Address ticket session failed — check that Claude Code is authenticated in the container".to_string()
-            ));
+            error!(ticket = %ticket_key, "Address ticket AI session failed — aborting workflow");
+            let msg = match ai_stream_provider {
+                AiAgentProvider::Claude => "Address ticket session failed — check that Claude Code is authenticated in the container".to_string(),
+                AiAgentProvider::Cursor => "Address ticket session failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.cursor_cli".to_string(),
+            };
+            return Err(MaestroError::AiAgent(msg));
         }
 
         check_cancelled(cancel_token)?;
@@ -671,20 +718,41 @@ async fn run_workflow_steps(
             &format!("Review Changes (Pass {pass}/{passes})"),
             log_writer,
             workflows,
+            ai_stream_provider,
         );
-        match ClaudeSession::start_review_changes(
-            &worktree_path,
-            cancel_token.child_token(),
-            timeout,
-            Some(review_line_tx),
-            claude_model.as_deref(),
-            claude_session_id.as_deref(),
-        )
-        .await
+        let review_result = match ai_stream_provider {
+            AiAgentProvider::Claude => {
+                ClaudeSession::start_review_changes(
+                    &worktree_path,
+                    cancel_token.child_token(),
+                    timeout,
+                    Some(review_line_tx),
+                    claude_model.as_deref(),
+                    claude_session_id.as_deref(),
+                )
+                .await
+                .map(|s| s.session_id)
+            }
+            AiAgentProvider::Cursor => {
+                CursorSession::start_review_changes(
+                    &cursor_cli,
+                    &worktree_path,
+                    cancel_token.child_token(),
+                    timeout,
+                    Some(review_line_tx),
+                    claude_model.as_deref(),
+                    claude_session_id.as_deref(),
+                )
+                .await
+                .map(|s| s.session_id)
+            }
+        };
+
+        match review_result
         {
-            Ok(session) => {
-                claude_session_id = Some(session.session_id.clone());
-                step_log.output.push(format!("Review session {} completed", session.session_id));
+            Ok(session_id) => {
+                claude_session_id = Some(session_id.clone());
+                step_log.output.push(format!("Review session {session_id} completed"));
                 step_log.complete(StepStatus::Success);
             }
             Err(e) => {
@@ -702,6 +770,8 @@ async fn run_workflow_steps(
     let max_fix = cfg.general.max_fix_attempts;
     let unit_test_cmd = cfg.commands.unit_test.clone();
     let e2e_test_cmd = cfg.commands.e2e_test.clone();
+    let fix_ai_stream_provider = cfg.agent.provider;
+    let fix_cursor_cli = cfg.agent.cursor_cli.clone();
     drop(cfg);
 
     check_cancelled(cancel_token)?;
@@ -724,6 +794,8 @@ async fn run_workflow_steps(
             log_writer,
             claude_model.as_deref(),
             claude_session_id.as_deref(),
+            fix_ai_stream_provider,
+            &fix_cursor_cli,
         )
         .await;
 
@@ -754,6 +826,8 @@ async fn run_workflow_steps(
             log_writer,
             claude_model.as_deref(),
             claude_session_id.as_deref(),
+            fix_ai_stream_provider,
+            &fix_cursor_cli,
         )
         .await;
 
@@ -786,6 +860,8 @@ async fn run_workflow_steps(
             log_writer,
             claude_model.as_deref(),
             claude_session_id.as_deref(),
+            fix_ai_stream_provider,
+            &fix_cursor_cli,
         )
         .await;
 
@@ -814,7 +890,7 @@ async fn run_workflow_steps(
 
             if !failed_steps.is_empty() {
                 let msg = format!("Skipping PR creation — failed steps: {}", failed_steps.join(", "));
-                warn!(ticket = ticket_key, %msg);
+                warn!(ticket = %ticket_key, message = %msg);
 
                 let mut step_log = StepLog::new("Create PR".to_string());
                 step_log.fail(msg.clone());
@@ -876,6 +952,8 @@ async fn run_fix_loop(
     log_writer: &Arc<WorkflowLogWriter>,
     claude_model: Option<&str>,
     claude_session_id: Option<&str>,
+    ai_stream_provider: AiAgentProvider,
+    cursor_cli: &str,
 ) {
     let mut step_log = StepLog::new(step_name.to_string());
     broadcast_step_started(event_tx, ticket_key, step_name);
@@ -887,7 +965,14 @@ async fn run_fix_loop(
         info!(step = step_name, attempt = attempt, "Running command");
         step_log.output.push(format!("Attempt {attempt}/{max_attempts}: {command}"));
 
-        let line_tx = spawn_output_relay(event_tx, ticket_key, step_name, log_writer, workflows);
+        let line_tx = spawn_output_relay(
+            event_tx,
+            ticket_key,
+            step_name,
+            log_writer,
+            workflows,
+            ai_stream_provider,
+        );
         match crate::process::run_shell_command_streaming(
             command,
             worktree_path,
@@ -915,31 +1000,58 @@ async fn run_fix_loop(
                         &output.stderr
                     };
 
-                    info!(step = step_name, "Spawning Claude to fix errors");
+                    info!(step = step_name, "Spawning AI agent to fix errors");
                     let fix_line_tx = spawn_output_relay(
                         event_tx,
                         ticket_key,
                         &format!("{step_name} (fix)"),
                         log_writer,
                         workflows,
+                        ai_stream_provider,
                     );
-                    match ClaudeSession::start_fix_session(
-                        worktree_path,
-                        error_output,
-                        fix_instructions,
-                        cancel_token.child_token(),
-                        timeout,
-                        Some(fix_line_tx),
-                        claude_model,
-                        claude_session_id,
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            step_log.output.push("Fix session completed".to_string());
+                    match ai_stream_provider {
+                        AiAgentProvider::Claude => {
+                            match ClaudeSession::start_fix_session(
+                                worktree_path,
+                                error_output,
+                                fix_instructions,
+                                cancel_token.child_token(),
+                                timeout,
+                                Some(fix_line_tx),
+                                claude_model,
+                                claude_session_id,
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    step_log.output.push("Fix session completed".to_string());
+                                }
+                                Err(e) => {
+                                    step_log.output.push(format!("Fix session failed: {e}"));
+                                }
+                            }
                         }
-                        Err(e) => {
-                            step_log.output.push(format!("Fix session failed: {e}"));
+                        AiAgentProvider::Cursor => {
+                            match CursorSession::start_fix_session(
+                                cursor_cli,
+                                worktree_path,
+                                error_output,
+                                fix_instructions,
+                                cancel_token.child_token(),
+                                timeout,
+                                Some(fix_line_tx),
+                                claude_model,
+                                claude_session_id,
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    step_log.output.push("Fix session completed".to_string());
+                                }
+                                Err(e) => {
+                                    step_log.output.push(format!("Fix session failed: {e}"));
+                                }
+                            }
                         }
                     }
                 }
@@ -1103,100 +1215,13 @@ fn broadcast_step_completed(
     });
 }
 
-/// Parse a raw Claude stream-json line and return a human-readable version.
-/// Returns None for events that should be silently skipped (noise).
-/// Non-JSON lines pass through as-is.
-fn humanize_claude_output(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    // If it doesn't look like JSON, pass through as-is
-    if !trimmed.starts_with('{') {
-        return Some(raw.to_string());
-    }
-
-    let value: serde_json::Value = match serde_json::from_str(trimmed) {
-        Ok(v) => v,
-        Err(_) => return Some(raw.to_string()), // Not valid JSON, pass through
-    };
-
-    let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-    match event_type {
-        "system" => {
-            let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
-            match subtype {
-                "init" => Some("Claude Code session initialized".to_string()),
-                "api_retry" => {
-                    let attempt = value.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let error = value
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    Some(format!(
-                        "Retrying API connection (attempt {attempt}): {error}"
-                    ))
-                }
-                _ => None, // Skip other system noise
-            }
-        }
-        "result" => {
-            // Extract and display the result text
-            if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
-                if !result.is_empty() {
-                    Some(result.to_string())
-                } else {
-                    Some("Session completed.".to_string())
-                }
-            } else {
-                Some("Session completed.".to_string())
-            }
-        }
-        "assistant" => {
-            // Extract message.content — can be a string or an array of content blocks
-            if let Some(message) = value.get("message") {
-                if let Some(content) = message.get("content") {
-                    if let Some(text) = content.as_str() {
-                        return Some(text.to_string());
-                    }
-                    if let Some(arr) = content.as_array() {
-                        let texts: Vec<&str> = arr
-                            .iter()
-                            .filter_map(|item| {
-                                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                    item.get("text").and_then(|t| t.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if !texts.is_empty() {
-                            return Some(texts.join(""));
-                        }
-                    }
-                }
-            }
-            None
-        }
-        "content_block_delta" => {
-            value
-                .get("delta")
-                .and_then(|d| d.get("text"))
-                .and_then(|t| t.as_str())
-                .map(|t| t.to_string())
-        }
-        _ => None, // Skip unknown event types
-    }
-}
-
 fn spawn_output_relay(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     ticket_key: &str,
     step_name: &str,
     log_writer: &Arc<WorkflowLogWriter>,
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    stream_provider: AiAgentProvider,
 ) -> tokio::sync::mpsc::UnboundedSender<OutputLine> {
     let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<OutputLine>();
     let event_tx = event_tx.clone();
@@ -1213,7 +1238,7 @@ fn spawn_output_relay(
                 .await;
 
             // Parse and humanize the output for display
-            let humanized = humanize_claude_output(&line.content);
+            let humanized = humanize_agent_stream_line(stream_provider, &line.content);
             if let Some(display_text) = humanized {
                 // Store in workflow's terminal_lines for persistence
                 {

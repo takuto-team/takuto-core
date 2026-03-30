@@ -143,6 +143,16 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 | `address_ticket_passes` | `3` | Number of address-ticket + review rounds |
 | `step_timeout_secs` | `1800` | Timeout per Claude session (30 min) |
 | `figma_api_token` | `""` | Figma API token for design references |
+| `model` | `""` | Model override; also used when `[agent] provider = "cursor"` |
+
+### `[agent]`
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `provider` | `"claude"` | `claude` (Claude Code CLI) or `cursor` (Cursor Agent CLI) for implement / review / fix / PM steps |
+| `cursor_cli` | `"agent"` | Executable name or path for Cursor Agent (see [Cursor CLI](https://cursor.com/docs/cli/overview)); only used when `provider = "cursor"` |
+
+For Cursor in a container, install the CLI (`curl … \| bash` from Cursor docs), run `agent login` or set `CURSOR_API_KEY`, and ensure egress allows Cursor’s API hosts if you use a firewall.
 
 ### `[network]`
 

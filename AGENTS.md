@@ -18,7 +18,7 @@ This file is the **canonical high-level reference** for what the repository is, 
 
 | Path | Role |
 |------|------|
-| `crates/maestro-core` | Domain logic: config, workflow engine and state machine, Jira (`acli`), git worktrees, `gh` PR/commits, process/Claude sessions, dry/real actions |
+| `crates/maestro-core` | Domain logic: config, workflow engine and state machine, Jira (`acli`), git worktrees, `gh` PR/commits, Claude/Cursor agent sessions, process management, dry/real actions |
 | `crates/maestro-web` | Axum app: `/api/*`, WebSocket `/ws`, embedded static UI under `src/assets/` |
 | `crates/maestro-cli` | Binary entrypoint: load config, init tracing, construct engine + poller + router, `tokio::select!` for poller, HTTP server, and graceful shutdown |
 | `docker/` | Container entrypoint, egress scripts, diagnostics |
@@ -71,8 +71,8 @@ Implemented in `run_workflow_steps` inside `workflow/engine.rs`:
 2. **Jira details** via `JiraClient` / `get_ticket_details`; populate description, summary, type on `Workflow`.
 3. **Worktree** from `git::worktree::branch_name_for_ticket` and configured `base_branch`.
 4. Optional **`pre_install`** then optional **`install`** shell commands in the worktree (streaming output).
-5. **`address_ticket_passes`** iterations (from `[claude] address_ticket_passes`, default `3`): for each pass, **`ClaudeSession::start_address_ticket`** then **`PmAgent::validate_plan`** on the session output (separate `claude` process), then **`ClaudeSession::start_review_changes`**. Claude session IDs are **resumed** across passes via `--resume`.
-6. **Lint / unit / e2e** phases run configured commands; on failure, **`ClaudeSession::start_fix_session`** may run up to `general.max_fix_attempts`, with commits between stages as implemented in the engine.
+5. **`address_ticket_passes`** iterations (from `[claude] address_ticket_passes`, default `3`): for each pass, the engine runs either **`ClaudeSession`** (Claude Code CLI) or **`CursorSession`** (`cursor/session.rs`, Cursor Agent CLI) based on **`[agent] provider`** (`claude` | `cursor`). Then **`PmAgent::validate_plan`** runs the same provider for a short plan check, then address/review resume the same session via **`--resume`** where supported.
+6. **Lint / unit / e2e** phases run configured commands; on failure, the configured provider’s **fix session** runs up to `general.max_fix_attempts`, with commits between stages as implemented in the engine.
 7. **Create PR** via `create_pr` on the actions trait (title/body/branch/base per implementation).
 
 Pause/resume: workflow state wraps prior state in `Paused`; `wait_if_paused` blocks the driver until resumed.
@@ -83,27 +83,33 @@ File logging: `WorkflowLogWriter` writes under `{repo_path}/logs/<TICKET>.log`.
 
 ---
 
-## Claude Code integration
+## AI agent integration (Claude Code or Cursor Agent)
 
-### Session runner
+### Provider selection
 
-`crates/maestro-core/src/claude/session.rs` spawns the **`claude`** CLI with:
+`[agent] provider` in config: **`claude`** (default) or **`cursor`**. **`[agent] cursor_cli`** sets the Cursor Agent executable (default **`agent`**). **`[claude] model`** is passed to both CLIs when non-empty.
 
-- `--dangerously-skip-permissions`, `--print`, `--verbose`, `-p <prompt>`, `--output-format stream-json`
-- Optional `--resume <session_id>` for continuity
-- Optional `--model <name>` when `[claude] model` is non-empty
+### Claude Code
 
-Stdout is parsed: **session id** from the stream-json `system`/`init` line; human-readable **result** via `parse_stream_json_output`. Failures include empty stdout and non-zero exit.
+`crates/maestro-core/src/claude/session.rs` spawns **`claude`** with `--dangerously-skip-permissions`, `--print`, `--verbose`, `-p`, `--output-format stream-json`, optional `--resume`, optional `--model`.
+
+### Cursor Agent (headless)
+
+`crates/maestro-core/src/cursor/session.rs` spawns **`cursor_cli`** (e.g. `agent`) with **print** mode, **`--output-format stream-json`**, **`--stream-partial-output`**, **`--trust`**, **`--force`**, **`--approve-mcps`**, **`--sandbox disabled`**, **`--workspace <worktree>`**, optional **`--resume`**, optional **`--model`**. This matches Cursor’s non-interactive / trusted automation flags from their CLI docs.
+
+### Dashboard streaming
+
+Raw stdout lines are turned into short lines for the web UI via **`workflow/stream_humanize.rs`**: **`humanize_agent_stream_line`** dispatches on provider. Cursor stream-json events include **assistant** text, **`tool_call` started** (e.g. read/write paths), and **result** — so operators still see **live progress** similar to Claude. (Cursor’s docs note **thinking** events are suppressed in print mode; internal chain-of-thought is not shown, but tool use and assistant text are.)
 
 ### Prompts
 
-- **Address ticket**: `/address-ticket` + ticket context plus **headless** instructions (no `AskUserQuestion`, autonomous approvals).
-- **Review**: `/review-changes` plus headless instructions (address all findings, no interactive selection).
-- **Fix**: free-form prompt with failing command output and instructions.
+- **Claude address**: `/address-ticket` + ticket context + headless instructions.
+- **Claude review**: `/review-changes` + headless instructions.
+- **Cursor address/review**: Natural-language task prompts derived from the same ticket context (no slash-commands); headless instructions included in the prompt.
 
 ### PM agent
 
-`crates/maestro-core/src/claude/pm_agent.rs` runs a **separate** short `claude --allow-dangerously-skip-permissions --print -p ...` invocation to return **APPROVED** or **REJECTED** against description + extracted acceptance criteria. The workflow logs the verdict; rejection does not automatically abort the pipeline unless combined with other failure logic (see engine).
+`crates/maestro-core/src/claude/pm_agent.rs` validates plans using **`claude`** or the **Cursor CLI** depending on **`[agent] provider`**. The workflow logs **APPROVED** / **REJECTED**; rejection does not automatically abort the pipeline (see engine).
 
 ---
 
@@ -149,6 +155,7 @@ Loaded in `crates/maestro-core/src/config.rs` — sections:
 - **`commands`**: `pre_install`, `install`, `lint`, `unit_test`, `e2e_test`
 - **`web`**: `host`, `port`
 - **`claude`**: `skills_path`, `address_ticket_passes`, `step_timeout_secs`, `figma_api_token`, `model`
+- **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**
 
 Runtime path defaults are described in `README.md` / `config.toml.example`.

@@ -4,6 +4,37 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{MaestroError, Result};
 
+/// Which CLI implements ticket implementation / review / fix steps.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AiAgentProvider {
+    #[default]
+    Claude,
+    Cursor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    #[serde(default)]
+    pub provider: AiAgentProvider,
+    /// Cursor Agent CLI executable (install script usually provides `agent` on PATH).
+    #[serde(default = "default_cursor_cli")]
+    pub cursor_cli: String,
+}
+
+fn default_cursor_cli() -> String {
+    "agent".to_string()
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            provider: AiAgentProvider::default(),
+            cursor_cli: default_cursor_cli(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -18,6 +49,8 @@ pub struct Config {
     pub web: WebConfig,
     #[serde(default)]
     pub claude: ClaudeConfig,
+    #[serde(default)]
+    pub agent: AgentConfig,
     #[serde(default)]
     pub network: NetworkConfig,
 }
@@ -228,6 +261,7 @@ impl Default for Config {
             commands: CommandsConfig::default(),
             web: WebConfig::default(),
             claude: ClaudeConfig::default(),
+            agent: AgentConfig::default(),
             network: NetworkConfig::default(),
         }
     }
@@ -293,6 +327,12 @@ impl Config {
         if self.claude.step_timeout_secs == 0 {
             return Err(MaestroError::Config(
                 "step_timeout_secs must be at least 1".to_string(),
+            ));
+        }
+
+        if self.agent.provider == AiAgentProvider::Cursor && self.agent.cursor_cli.trim().is_empty() {
+            return Err(MaestroError::Config(
+                "agent.cursor_cli must be set when agent.provider is \"cursor\"".to_string(),
             ));
         }
 

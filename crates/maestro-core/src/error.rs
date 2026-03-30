@@ -11,6 +11,9 @@ pub enum MaestroError {
     #[error("Claude session error: {0}")]
     Claude(String),
 
+    #[error("AI agent error: {0}")]
+    AiAgent(String),
+
     #[error("Command failed: {cmd} (exit code {code})\n{stderr}")]
     Command {
         cmd: String,

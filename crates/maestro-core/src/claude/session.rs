@@ -5,6 +5,7 @@ use tracing::{info, warn};
 
 use crate::error::{MaestroError, Result};
 use crate::process::{OutputLine, ProcessHandle};
+use crate::workflow::stream_humanize::extract_session_id_from_ndjson;
 
 pub struct ClaudeSession {
     /// The Claude Code session ID (from the init event), used for --resume
@@ -192,7 +193,7 @@ async fn run_claude_session(
             }
 
             // Extract the real session ID from the init event
-            let real_session_id = extract_session_id(&output.stdout)
+            let real_session_id = extract_session_id_from_ndjson(&output.stdout)
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
             // Parse stream-json output to extract the final result
@@ -214,21 +215,6 @@ async fn run_claude_session(
             "Claude Code session error: {e}"
         ))),
     }
-}
-
-/// Extract the session_id from the stream-json init event
-fn extract_session_id(raw: &str) -> Option<String> {
-    for line in raw.lines() {
-        let line = line.trim();
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-            if value.get("type").and_then(|v| v.as_str()) == Some("system")
-                && value.get("subtype").and_then(|v| v.as_str()) == Some("init")
-            {
-                return value.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn parse_stream_json_output(raw: &str) -> String {

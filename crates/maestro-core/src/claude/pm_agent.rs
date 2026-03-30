@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::config::{AgentConfig, AiAgentProvider};
 use crate::error::{MaestroError, Result};
 use crate::process::ProcessHandle;
 
@@ -31,8 +32,13 @@ impl PmAgent {
         plan: &str,
         worktree: &Path,
         cancel_token: CancellationToken,
+        agent_cfg: &AgentConfig,
+        model: &str,
     ) -> Result<PmVerdict> {
-        info!("PM agent validating plan against acceptance criteria");
+        info!(
+            provider = ?agent_cfg.provider,
+            "PM agent validating plan against acceptance criteria"
+        );
 
         let criteria_text = if self.acceptance_criteria.is_empty() {
             "No explicit acceptance criteria provided.".to_string()
@@ -69,23 +75,56 @@ Be pragmatic — approve plans that reasonably cover the requirements even if th
             plan = plan,
         );
 
-        let handle = ProcessHandle::spawn(
-            "claude",
-            &[
-                "--allow-dangerously-skip-permissions",
-                "--print",
-                "-p",
-                &prompt,
-            ],
-            worktree,
-            cancel_token,
-        )
-        .await
-        .map_err(|e| MaestroError::Claude(format!("Failed to spawn PM agent: {e}")))?;
+        let output = match agent_cfg.provider {
+            AiAgentProvider::Claude => {
+                let handle = ProcessHandle::spawn(
+                    "claude",
+                    &[
+                        "--allow-dangerously-skip-permissions",
+                        "--print",
+                        "-p",
+                        &prompt,
+                    ],
+                    worktree,
+                    cancel_token,
+                )
+                .await
+                .map_err(|e| MaestroError::Claude(format!("Failed to spawn PM agent: {e}")))?;
 
-        let output = handle.wait_with_timeout(120).await.map_err(|e| {
-            MaestroError::Claude(format!("PM agent failed: {e}"))
-        })?;
+                handle.wait_with_timeout(120).await.map_err(|e| {
+                    MaestroError::Claude(format!("PM agent failed: {e}"))
+                })?
+            }
+            AiAgentProvider::Cursor => {
+                let workspace = worktree.to_str().ok_or_else(|| {
+                    MaestroError::AiAgent("Worktree path is not valid UTF-8".to_string())
+                })?;
+                let mut owned: Vec<String> = vec![
+                    "-p".to_string(),
+                    prompt.clone(),
+                    "--output-format".to_string(),
+                    "text".to_string(),
+                    "--trust".to_string(),
+                    "--force".to_string(),
+                    "--approve-mcps".to_string(),
+                    "--sandbox".to_string(),
+                    "disabled".to_string(),
+                    "--workspace".to_string(),
+                    workspace.to_string(),
+                ];
+                if !model.trim().is_empty() {
+                    owned.push("--model".to_string());
+                    owned.push(model.to_string());
+                }
+                let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+                let handle = ProcessHandle::spawn(&agent_cfg.cursor_cli, &arg_refs, worktree, cancel_token)
+                    .await
+                    .map_err(|e| MaestroError::AiAgent(format!("Failed to spawn PM agent (Cursor): {e}")))?;
+                handle.wait_with_timeout(120).await.map_err(|e| {
+                    MaestroError::AiAgent(format!("PM agent (Cursor) failed: {e}"))
+                })?
+            }
+        };
 
         let response = output.stdout.trim().to_uppercase();
 
