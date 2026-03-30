@@ -143,7 +143,11 @@ function isClaudeJsonNoise(text) {
 }
 
 function handleStepOutput(evt) {
+  console.log('step_output event:', evt.ticket_key, evt.step_name, 'line:', evt.output_line, 'stream:', evt.stream);
   const text = evt.output_line || '';
+
+  // Skip empty lines
+  if (!text) return;
 
   // Filter out Claude Code stream-json noise
   if (isClaudeJsonNoise(text)) return;
