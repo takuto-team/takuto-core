@@ -10,10 +10,10 @@ services:
       - ./config.toml:/etc/maestro/config.toml:ro
       # Custom environment variables (optional)
       - ./maestro.env:/etc/maestro/env:ro
-      # Persistent auth state — mounted as root, copied to maestro user at startup
-      - claude-auth:/root/.claude
-      - gh-auth:/root/.config/gh
-      - acli-auth:/root/.config/acli
+      # Persistent auth + skills state for maestro user
+      - claude-auth:/home/maestro/.claude
+      - gh-auth:/home/maestro/.config/gh
+      - acli-auth:/home/maestro/.config/acli
       # Workspace — cloned during setup, persisted across restarts
       - workspace:/workspace
       # npm cache — persisted for the maestro user

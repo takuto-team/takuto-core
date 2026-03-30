@@ -63,12 +63,6 @@ COPY config.toml.example /etc/maestro/config.toml
 # Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
 RUN groupadd -r maestro && useradd -r -g maestro -m -s /bin/bash maestro
 
-# Install Claude Code skills as maestro user
-USER maestro
-RUN curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh \
-    && bash /tmp/install-skills.sh \
-    && rm /tmp/install-skills.sh
-USER root
 
 # Source custom env file on any shell login
 RUN echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /etc/profile.d/maestro-env.sh \

@@ -19,38 +19,42 @@ if [ "${1:-}" = "setup" ]; then
     echo "=== Maestro Setup ==="
     echo ""
 
-    # Step 1: Claude Code auth
-    echo "--- Step 1/4: Claude Code authentication ---"
-    if claude auth status >/dev/null 2>&1; then
+    # Ensure volumes are owned by maestro
+    chown -R maestro:maestro /home/maestro/.claude 2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.config 2>/dev/null || true
+
+    # Step 1: Claude Code auth (run as maestro user)
+    echo "--- Step 1/5: Claude Code authentication ---"
+    if su maestro -c "claude auth status" >/dev/null 2>&1; then
         echo "Claude Code: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            claude auth login
+            su maestro -c "claude auth login"
         fi
     else
         echo "Claude Code: not authenticated."
-        claude auth login
+        su maestro -c "claude auth login"
     fi
     echo ""
 
-    # Step 2: GitHub CLI auth
-    echo "--- Step 2/4: GitHub CLI authentication ---"
-    if gh auth status >/dev/null 2>&1; then
+    # Step 2: GitHub CLI auth (run as maestro user)
+    echo "--- Step 2/5: GitHub CLI authentication ---"
+    if su maestro -c "gh auth status" >/dev/null 2>&1; then
         echo "GitHub CLI: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            gh auth login
+            su maestro -c "gh auth login"
         fi
     else
         echo "GitHub CLI: not authenticated."
-        gh auth login
+        su maestro -c "gh auth login"
     fi
     echo ""
 
     # Step 3: Atlassian CLI auth
-    echo "--- Step 3/4: Atlassian CLI authentication ---"
+    echo "--- Step 3/5: Atlassian CLI authentication ---"
     CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
     jira_site=$(grep -E '^\s*site\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
     jira_email=$(grep -E '^\s*email\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
@@ -69,13 +73,13 @@ if [ "${1:-}" = "setup" ]; then
             fi
             read -sp "Paste your Atlassian API token: " api_token
             echo
-            echo "$api_token" | acli jira auth login --site "$jira_site" --email "$jira_email" --token
+            echo "$api_token" | su maestro -c "acli jira auth login --site \"$jira_site\" --email \"$jira_email\" --token"
         else
-            acli jira auth login --web
+            su maestro -c "acli jira auth login --web"
         fi
     }
 
-    if acli jira auth status >/dev/null 2>&1; then
+    if su maestro -c "acli jira auth status" >/dev/null 2>&1; then
         echo "Atlassian CLI: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
         echo
@@ -89,7 +93,7 @@ if [ "${1:-}" = "setup" ]; then
     echo ""
 
     # Step 4: Clone repository (read repo_url from config.toml)
-    echo "--- Step 4/4: Repository setup ---"
+    echo "--- Step 4/5: Repository setup ---"
     CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
     repo_url=$(grep -E '^\s*repo_url\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
 
@@ -111,6 +115,20 @@ if [ "${1:-}" = "setup" ]; then
     git config --global --add safe.directory /workspace
     echo ""
 
+    # Step 5: Install Claude Code skills (as maestro user since that's who runs Claude)
+    echo "--- Step 5/5: Installing Claude Code skills ---"
+    if [ -d "/home/maestro/.claude/skills" ] && [ "$(ls -A /home/maestro/.claude/skills 2>/dev/null)" ]; then
+        echo "Skills already installed."
+        read -p "Re-install? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            su maestro -c 'curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh && bash /tmp/install-skills.sh && rm /tmp/install-skills.sh'
+        fi
+    else
+        su maestro -c 'curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh && bash /tmp/install-skills.sh && rm /tmp/install-skills.sh'
+    fi
+    echo ""
+
     echo "=== Setup complete ==="
     echo "Auth and workspace are persisted in Docker volumes."
     echo "Start Maestro with: docker compose up"
@@ -122,21 +140,21 @@ fi
 # Check auth before starting
 auth_ok=true
 
-if ! claude auth status >/dev/null 2>&1; then
+if ! su maestro -c "claude auth status" >/dev/null 2>&1; then
     echo "ERROR: Claude Code is not authenticated."
-    echo "       Run: docker compose run --rm maestro setup"
+    echo "       Run: docker compose run maestro setup"
     auth_ok=false
 fi
 
-if ! gh auth status >/dev/null 2>&1; then
+if ! su maestro -c "gh auth status" >/dev/null 2>&1; then
     echo "ERROR: GitHub CLI is not authenticated."
-    echo "       Run: docker compose run --rm maestro setup"
+    echo "       Run: docker compose run maestro setup"
     auth_ok=false
 fi
 
-if ! acli jira session >/dev/null 2>&1; then
+if ! su maestro -c "acli jira auth status" >/dev/null 2>&1; then
     echo "ERROR: Atlassian CLI is not authenticated."
-    echo "       Run: docker compose run --rm maestro setup"
+    echo "       Run: docker compose run maestro setup"
     auth_ok=false
 fi
 
@@ -162,22 +180,9 @@ fi
 # Ensure workspace is owned by maestro user
 chown -R maestro:maestro /workspace
 
-# Copy auth state to maestro user's home if it was set up as root
-if [ -d /root/.claude ]; then
-    cp -rn /root/.claude /home/maestro/.claude 2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.claude
-fi
-if [ -d /root/.config/gh ]; then
-    mkdir -p /home/maestro/.config
-    cp -rn /root/.config/gh /home/maestro/.config/gh 2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.config
-fi
-if [ -d /root/.config/acli ]; then
-    mkdir -p /home/maestro/.config
-    cp -rn /root/.config/acli /home/maestro/.config/acli 2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.config
-fi
-# Ensure npm cache volume is owned by maestro
+# Ensure volumes mounted at maestro's home are owned correctly
+chown -R maestro:maestro /home/maestro/.claude 2>/dev/null || true
+chown -R maestro:maestro /home/maestro/.config 2>/dev/null || true
 chown -R maestro:maestro /home/maestro/.npm 2>/dev/null || true
 
 # Switch to non-root user and start Maestro
