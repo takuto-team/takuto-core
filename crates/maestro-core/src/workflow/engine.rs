@@ -812,13 +812,8 @@ async fn run_fix_loop(
         step_log.output.push(format!("Attempt {attempt}/{max_attempts}: {command}"));
 
         let line_tx = spawn_output_relay(event_tx, ticket_key, step_name, log_writer);
-        // Prepend node_modules/.bin to PATH so npm-installed tools are found
-        let cmd_with_path = format!(
-            "export PATH=\"{}/node_modules/.bin:$PATH\" && {command}",
-            worktree_path.display()
-        );
         match crate::process::run_shell_command_streaming(
-            &cmd_with_path,
+            command,
             worktree_path,
             cancel_token.child_token(),
             line_tx,
