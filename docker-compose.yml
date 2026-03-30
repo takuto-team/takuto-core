@@ -16,6 +16,8 @@ services:
       - acli-auth:/root/.config/acli
       # Workspace — cloned during setup, persisted across restarts
       - workspace:/workspace
+      # npm cache — speeds up npm ci across runs
+      - npm-cache:/root/.npm
     environment:
       # Figma API token (optional, also configurable in config.toml)
       - FIGMA_API_TOKEN=${FIGMA_API_TOKEN:-}
@@ -32,3 +34,4 @@ volumes:
   gh-auth:
   acli-auth:
   workspace:
+  npm-cache:

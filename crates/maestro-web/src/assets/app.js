@@ -1,8 +1,12 @@
 // Maestro Dashboard Application
 
 let workflows = {};
+let terminalState = {}; // { [ticket_key]: { stepName: string, lines: OutputLine[], completed: bool } }
 let ws = null;
 let wsReconnectTimer = null;
+let dryMode = false;
+let initialLoadDone = false;
+const TERMINAL_MAX_LINES = 500;
 
 // --- WebSocket ---
 
@@ -15,6 +19,10 @@ function connectWebSocket() {
     if (wsReconnectTimer) {
       clearTimeout(wsReconnectTimer);
       wsReconnectTimer = null;
+    }
+    // Only fetch on reconnect, not initial connect
+    if (initialLoadDone) {
+      fetchWorkflowsSilent();
     }
   };
 
@@ -57,40 +65,161 @@ function updateWsStatus(connected) {
 }
 
 function handleWorkflowEvent(evt) {
-  if (evt.workflow_id && workflows[evt.workflow_id]) {
-    workflows[evt.workflow_id].state = evt.state;
+  const eventType = evt.event_type;
+
+  // Handle terminal-related events — DOM-only updates, no full re-render
+  if (eventType === 'step_output') {
+    handleStepOutput(evt);
+    return;
+  }
+  if (eventType === 'step_started') {
+    handleStepStarted(evt);
+    return;
+  }
+  if (eventType === 'step_completed') {
+    handleStepCompleted(evt);
+    return;
+  }
+
+  // Workflow state events — update local state
+  const wf = Object.values(workflows).find(w => w.ticket_key === evt.ticket_key);
+  if (wf) {
+    wf.state = evt.state;
     if (evt.error) {
-      workflows[evt.workflow_id].error = evt.error;
+      wf.error = evt.error;
     }
+    // Update just this card, not the entire grid
+    updateCardState(wf);
+    updateCounts(Object.values(workflows));
+  } else if (evt.ticket_key) {
+    // New workflow — fetch once to get full data
+    fetchWorkflowsSilent();
+  }
+}
+
+function ensureTerminalState(ticketKey) {
+  if (!terminalState[ticketKey]) {
+    terminalState[ticketKey] = { stepName: 'Waiting...', lines: [], completed: false };
+  }
+  return terminalState[ticketKey];
+}
+
+function handleStepStarted(evt) {
+  const ts = ensureTerminalState(evt.ticket_key);
+  ts.stepName = evt.step_name;
+  ts.lines = [];
+  ts.completed = false;
+
+  const headerEl = document.getElementById(`terminal-step-${evt.ticket_key}`);
+  if (headerEl) {
+    headerEl.textContent = `$ ${evt.step_name}`;
+    headerEl.closest('.terminal-header').classList.remove('completed');
+  }
+
+  const bodyEl = document.getElementById(`terminal-body-${evt.ticket_key}`);
+  if (bodyEl) {
+    bodyEl.innerHTML = '';
+  }
+
+  // Also update the current step display on the card
+  const stepEl = document.getElementById(`step-display-${evt.ticket_key}`);
+  if (stepEl) {
+    stepEl.textContent = evt.step_name;
+  }
+}
+
+function handleStepOutput(evt) {
+  const ts = ensureTerminalState(evt.ticket_key);
+  ts.lines.push({ text: evt.output_line, stream: evt.stream });
+
+  if (ts.lines.length > TERMINAL_MAX_LINES) {
+    ts.lines.shift();
+    const bodyEl = document.getElementById(`terminal-body-${evt.ticket_key}`);
+    if (bodyEl && bodyEl.firstChild) {
+      bodyEl.removeChild(bodyEl.firstChild);
+    }
+  }
+
+  const bodyEl = document.getElementById(`terminal-body-${evt.ticket_key}`);
+  if (bodyEl) {
+    const lineEl = document.createElement('div');
+    lineEl.textContent = evt.output_line;
+    const text = evt.output_line || '';
+    const isWarn = /\bwarn(ing)?\b/i.test(text) || /\bWARN\b/.test(text);
+    if (isWarn) {
+      lineEl.className = 'terminal-line-warn';
+    } else if (evt.stream === 'stderr') {
+      lineEl.className = 'terminal-line-stderr';
+    }
+    bodyEl.appendChild(lineEl);
+    bodyEl.scrollTop = bodyEl.scrollHeight;
+  }
+}
+
+function handleStepCompleted(evt) {
+  const ts = ensureTerminalState(evt.ticket_key);
+  ts.completed = true;
+
+  const headerEl = document.getElementById(`terminal-step-${evt.ticket_key}`);
+  if (headerEl) {
+    headerEl.textContent = `${evt.step_name} -- completed`;
+    headerEl.closest('.terminal-header').classList.add('completed');
+  }
+}
+
+// Update a single card's state indicators without re-rendering the whole grid
+function updateCardState(wf) {
+  const card = document.getElementById(`card-${wf.ticket_key}`);
+  if (!card) {
+    // Card doesn't exist yet — need full render
     renderWorkflows();
-  } else {
-    // Unknown workflow, refetch all
-    fetchWorkflows();
+    return;
+  }
+
+  const status = getStatusInfo(wf.state);
+
+  // Update status badge
+  const badgeEl = card.querySelector('.status-badge');
+  if (badgeEl) badgeEl.innerHTML = statusBadgeHtml(status);
+
+  // Update step display
+  const stepEl = document.getElementById(`step-display-${wf.ticket_key}`);
+  if (stepEl) stepEl.textContent = wf.state;
+
+  // Update progress bar
+  const progress = getProgressPercent(wf.state);
+  const progressBar = card.querySelector('.progress-bar');
+  if (progressBar) progressBar.style.width = `${progress}%`;
+
+  // If workflow finished (completed/error/stopped), do a full render to update buttons and terminal visibility
+  if (['Completed', 'Error', 'Stopped'].includes(status.label)) {
+    renderWorkflows();
   }
 }
 
 // --- API ---
 
-async function fetchWorkflows() {
+// Silent fetch — doesn't cause a visual flash
+async function fetchWorkflowsSilent() {
   try {
     const res = await fetch('/api/workflows');
     const list = await res.json();
     workflows = {};
     list.forEach(w => { workflows[w.ticket_key] = w; });
     renderWorkflows();
-    checkDryMode();
   } catch (e) {
     console.error('Failed to fetch workflows:', e);
   }
 }
 
-async function checkDryMode() {
+async function fetchConfig() {
   try {
     const res = await fetch('/api/config');
     const cfg = await res.json();
+    dryMode = cfg.general.dry_mode;
     const banner = document.getElementById('dryBanner');
     if (banner) {
-      banner.classList.toggle('hidden', !cfg.general.dry_mode);
+      banner.classList.toggle('hidden', !dryMode);
     }
   } catch (e) {
     // ignore
@@ -100,7 +229,7 @@ async function checkDryMode() {
 async function pauseWorkflow(id) {
   try {
     await fetch(`/api/workflows/${encodeURIComponent(id)}/pause`, { method: 'POST' });
-    fetchWorkflows();
+    // State update comes via WebSocket, no need to refetch
   } catch (e) {
     console.error('Failed to pause workflow:', e);
   }
@@ -109,7 +238,6 @@ async function pauseWorkflow(id) {
 async function resumeWorkflow(id) {
   try {
     await fetch(`/api/workflows/${encodeURIComponent(id)}/resume`, { method: 'POST' });
-    fetchWorkflows();
   } catch (e) {
     console.error('Failed to resume workflow:', e);
   }
@@ -119,7 +247,6 @@ async function stopWorkflow(id) {
   if (!confirm('Are you sure you want to stop this workflow? The ticket will be unassigned.')) return;
   try {
     await fetch(`/api/workflows/${encodeURIComponent(id)}/stop`, { method: 'POST' });
-    fetchWorkflows();
   } catch (e) {
     console.error('Failed to stop workflow:', e);
   }
@@ -192,18 +319,6 @@ function statusBadgeHtml(status) {
   return `<span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-${color}-500/15 text-${color}-400 border border-${color}-500/20">${iconSvg} ${label}</span>`;
 }
 
-function elapsedTime(startedAt) {
-  const start = new Date(startedAt);
-  const now = new Date();
-  const secs = Math.floor((now - start) / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const rem = secs % 60;
-  if (mins < 60) return `${mins}m ${rem}s`;
-  const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m`;
-}
-
 function renderWorkflowCard(w) {
   const status = getStatusInfo(w.state);
   const progress = getProgressPercent(w.state);
@@ -219,61 +334,66 @@ function renderWorkflowCard(w) {
   else if (status.label === 'Stopped') stepLabel = 'Stopped at step';
 
   let stateDisplay = w.state;
-  if (status.label === 'Completed') stateDisplay = `All steps passed`;
+  if (status.label === 'Completed') stateDisplay = 'All steps passed';
   if (status.label === 'Error' && w.state.startsWith('Error:')) stateDisplay = w.state.replace('Error: ', '');
 
   let actions = '';
   if (status.label === 'Running') {
     actions = `
-      <button onclick="pauseWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-colors">
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-        Pause
-      </button>
-      <button onclick="stopWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /><path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" /></svg>
-        Stop
-      </button>`;
+      <button onclick="pauseWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-colors">Pause</button>
+      <button onclick="stopWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">Stop</button>`;
   } else if (status.label === 'Paused') {
     actions = `
-      <button onclick="resumeWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 transition-colors">
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-        Resume
-      </button>
-      <button onclick="stopWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /><path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" /></svg>
-        Stop
-      </button>`;
+      <button onclick="resumeWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 transition-colors">Resume</button>
+      <button onclick="stopWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">Stop</button>`;
+  }
+  actions += `
+    <button onclick="openReportModal('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-700/50 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">Report</button>`;
+
+  // Terminal panel for active workflows
+  let terminalHtml = '';
+  if (status.label === 'Running' || status.label === 'Paused') {
+    const ts = terminalState[w.ticket_key];
+    const stepDisplay = ts ? (ts.completed ? `${ts.stepName} -- completed` : `$ ${ts.stepName}`) : '$ Waiting...';
+    const headerCompletedClass = ts && ts.completed ? ' completed' : '';
+    let linesHtml = '';
+    if (ts && ts.lines.length > 0) {
+      linesHtml = ts.lines.map(l => {
+        const isWarn = /\bwarn(ing)?\b/i.test(l.text) || /\bWARN\b/.test(l.text);
+        const cls = isWarn ? ' class="terminal-line-warn"' : (l.stream === 'stderr' ? ' class="terminal-line-stderr"' : '');
+        return `<div${cls}>${escapeHtml(l.text)}</div>`;
+      }).join('');
+    }
+    terminalHtml = `
+      <div class="terminal-panel">
+        <div class="terminal-header${headerCompletedClass}">
+          <span id="terminal-step-${w.ticket_key}">${escapeHtml(stepDisplay)}</span>
+        </div>
+        <div class="terminal-body" id="terminal-body-${w.ticket_key}">${linesHtml}</div>
+      </div>`;
   }
 
-  // Always show report button
-  actions += `
-    <button onclick="openReportModal('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-700/50 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">
-      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-      Report
-    </button>`;
-
   return `
-    <div class="animate-slide-up bg-gray-900 border ${borderClass} rounded-xl overflow-hidden transition-colors ${opacityClass}">
+    <div id="card-${w.ticket_key}" class="bg-gray-900 border ${borderClass} rounded-xl overflow-hidden transition-colors ${opacityClass}">
       <div class="p-5">
         <div class="flex items-start justify-between mb-3">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
               <span class="font-mono text-sm text-${status.color}-400 font-medium">${w.ticket_key}</span>
-              ${statusBadgeHtml(status)}
+              <span class="status-badge">${statusBadgeHtml(status)}</span>
             </div>
             <h3 class="text-sm font-medium text-gray-200 truncate">${escapeHtml(w.ticket_summary)}</h3>
           </div>
         </div>
         <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-4">
           <div class="text-xs text-gray-500 mb-1">${stepLabel}</div>
-          <div class="text-sm font-mono text-gray-300">${escapeHtml(stateDisplay)}</div>
+          <div id="step-display-${w.ticket_key}" class="text-sm font-mono text-gray-300">${escapeHtml(stateDisplay)}</div>
           <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
-            <div class="bg-${status.color}-500 h-1.5 rounded-full transition-all" style="width: ${progress}%"></div>
+            <div class="progress-bar bg-${status.color}-500 h-1.5 rounded-full transition-all" style="width: ${progress}%"></div>
           </div>
         </div>
-        <div class="flex items-center gap-2">
-          ${actions}
-        </div>
+        <div class="flex items-center gap-2">${actions}</div>
+        ${terminalHtml}
       </div>
     </div>`;
 }
@@ -283,7 +403,6 @@ function renderWorkflows() {
   const empty = document.getElementById('emptyState');
   const list = Object.values(workflows);
 
-  // Sort: active first (running, then paused), then completed/error, then stopped
   list.sort((a, b) => {
     const order = { Running: 0, Paused: 1, Error: 2, Completed: 3, Stopped: 4 };
     const sa = getStatusInfo(a.state).label;
@@ -297,6 +416,12 @@ function renderWorkflows() {
   } else {
     empty.classList.add('hidden');
     grid.innerHTML = list.map(renderWorkflowCard).join('');
+
+    // Restore scroll position on terminal bodies after re-render
+    list.forEach(w => {
+      const bodyEl = document.getElementById(`terminal-body-${w.ticket_key}`);
+      if (bodyEl) bodyEl.scrollTop = bodyEl.scrollHeight;
+    });
   }
 
   updateCounts(list);
@@ -328,10 +453,7 @@ function renderReport(w) {
   document.getElementById('reportTitle').textContent = w.ticket_summary;
 
   const body = document.getElementById('reportBody');
-  let html = '';
-
-  // Ticket info
-  html += `
+  let html = `
     <div>
       <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Ticket Info</h3>
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
@@ -350,7 +472,6 @@ function renderReport(w) {
       </div>
     </div>`;
 
-  // Steps log
   if (w.steps_log && w.steps_log.length > 0) {
     html += `
       <div>
@@ -359,7 +480,6 @@ function renderReport(w) {
     w.steps_log.forEach(step => {
       const isFailed = step.status === 'Failed';
       const isSkipped = step.status === 'Skipped';
-      const isRunning = step.status === 'Running';
       const isSuccess = step.status === 'Success';
 
       let iconHtml, bgClass;
@@ -379,7 +499,6 @@ function renderReport(w) {
 
       const duration = step.completed_at ?
         formatDuration(new Date(step.started_at), new Date(step.completed_at)) : '--';
-
       const rowBg = isFailed ? 'bg-red-950/30 border border-red-900/30' : 'bg-gray-800/50';
       const opacity = isSkipped ? 'opacity-40' : '';
 
@@ -416,8 +535,10 @@ function escapeHtml(str) {
 
 // --- Init ---
 
-fetchWorkflows();
-connectWebSocket();
+async function init() {
+  await Promise.all([fetchWorkflowsSilent(), fetchConfig()]);
+  initialLoadDone = true;
+  connectWebSocket();
+}
 
-// Poll every 10 seconds as fallback
-setInterval(fetchWorkflows, 10000);
+init();

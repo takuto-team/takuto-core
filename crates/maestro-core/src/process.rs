@@ -9,6 +9,12 @@ use tracing::{debug, warn};
 
 use crate::error::{MaestroError, Result};
 
+#[derive(Debug, Clone)]
+pub struct OutputLine {
+    pub content: String,
+    pub stream: String, // "stdout" or "stderr"
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandOutput {
     pub exit_code: i32,
@@ -179,6 +185,87 @@ impl ProcessHandle {
         })
     }
 
+    pub async fn wait_with_streaming(
+        mut self,
+        line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
+    ) -> Result<CommandOutput> {
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .expect("stdout was already taken");
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .expect("stderr was already taken");
+
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+
+        let cancel = self.cancel_token.clone();
+
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    warn!("Process cancelled, killing process group");
+                    kill_process_group(&mut self.child).await;
+                    return Err(MaestroError::Cancelled);
+                }
+                line = stdout_reader.next_line() => {
+                    match line {
+                        Ok(Some(line)) => {
+                            debug!(stdout = %line);
+                            let _ = line_tx.send(OutputLine {
+                                content: line.clone(),
+                                stream: "stdout".to_string(),
+                            });
+                            self.stdout_lines.push(line);
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            warn!(error = %e, "Error reading stdout");
+                            break;
+                        }
+                    }
+                }
+                line = stderr_reader.next_line() => {
+                    match line {
+                        Ok(Some(line)) => {
+                            debug!(stderr = %line);
+                            let _ = line_tx.send(OutputLine {
+                                content: line.clone(),
+                                stream: "stderr".to_string(),
+                            });
+                            self.stderr_lines.push(line);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!(error = %e, "Error reading stderr");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Drain remaining stderr
+        while let Ok(Some(line)) = stderr_reader.next_line().await {
+            let _ = line_tx.send(OutputLine {
+                content: line.clone(),
+                stream: "stderr".to_string(),
+            });
+            self.stderr_lines.push(line);
+        }
+
+        let status = self.child.wait().await?;
+
+        Ok(CommandOutput {
+            exit_code: status.code().unwrap_or(-1),
+            stdout: self.stdout_lines.join("\n"),
+            stderr: self.stderr_lines.join("\n"),
+        })
+    }
+
     pub async fn wait_with_timeout(
         self,
         timeout_secs: u64,
@@ -190,6 +277,27 @@ impl ProcessHandle {
 
         tokio::select! {
             result = self.wait_with_output() => result,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+                warn!(timeout_secs = timeout_secs, "Process timed out, killing process group");
+                #[cfg(unix)]
+                if let Some(pid) = child_pid {
+                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                }
+                Err(MaestroError::Timeout(timeout_secs))
+            }
+        }
+    }
+
+    pub async fn wait_with_streaming_timeout(
+        self,
+        timeout_secs: u64,
+        line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
+    ) -> Result<CommandOutput> {
+        #[cfg(unix)]
+        let child_pid = self.child.id();
+
+        tokio::select! {
+            result = self.wait_with_streaming(line_tx) => result,
             _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
                 warn!(timeout_secs = timeout_secs, "Process timed out, killing process group");
                 #[cfg(unix)]
@@ -221,4 +329,25 @@ pub async fn run_command(
 ) -> Result<CommandOutput> {
     let handle = ProcessHandle::spawn(program, args, cwd, cancel_token).await?;
     handle.wait_with_output().await
+}
+
+pub async fn run_shell_command_streaming(
+    command: &str,
+    cwd: &Path,
+    cancel_token: CancellationToken,
+    line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
+) -> Result<CommandOutput> {
+    let handle = ProcessHandle::spawn_shell(command, cwd, cancel_token).await?;
+    handle.wait_with_streaming(line_tx).await
+}
+
+pub async fn run_command_streaming(
+    program: &str,
+    args: &[&str],
+    cwd: &Path,
+    cancel_token: CancellationToken,
+    line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
+) -> Result<CommandOutput> {
+    let handle = ProcessHandle::spawn(program, args, cwd, cancel_token).await?;
+    handle.wait_with_streaming(line_tx).await
 }

@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::error::{MaestroError, Result};
-use crate::process::ProcessHandle;
+use crate::process::{OutputLine, ProcessHandle};
 
 pub struct ClaudeSession {
     pub session_id: String,
@@ -17,6 +17,7 @@ impl ClaudeSession {
         ticket_context: &str,
         cancel_token: CancellationToken,
         timeout_secs: u64,
+        line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
@@ -26,7 +27,7 @@ impl ClaudeSession {
         let session_id = uuid::Uuid::new_v4().to_string();
         let prompt = format!("/address-ticket {ticket_context}");
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs).await?;
+        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx).await?;
 
         Ok(Self {
             session_id,
@@ -38,6 +39,7 @@ impl ClaudeSession {
         worktree: &Path,
         cancel_token: CancellationToken,
         timeout_secs: u64,
+        line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
@@ -47,7 +49,7 @@ impl ClaudeSession {
         let session_id = uuid::Uuid::new_v4().to_string();
         let prompt = "/review-changes".to_string();
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs).await?;
+        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx).await?;
 
         Ok(Self {
             session_id,
@@ -61,6 +63,7 @@ impl ClaudeSession {
         fix_instructions: &str,
         cancel_token: CancellationToken,
         timeout_secs: u64,
+        line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
@@ -72,7 +75,7 @@ impl ClaudeSession {
             "The following command failed with this output:\n\n```\n{error_output}\n```\n\n{fix_instructions}"
         );
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs).await?;
+        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx).await?;
 
         Ok(Self {
             session_id,
@@ -86,6 +89,7 @@ async fn run_claude_session(
     prompt: &str,
     cancel_token: CancellationToken,
     timeout_secs: u64,
+    line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
 ) -> Result<String> {
     let handle = ProcessHandle::spawn(
         "claude",
@@ -103,7 +107,11 @@ async fn run_claude_session(
     .await
     .map_err(|e| MaestroError::Claude(format!("Failed to spawn Claude Code: {e}")))?;
 
-    let result = handle.wait_with_timeout(timeout_secs).await;
+    let result = if let Some(tx) = line_tx {
+        handle.wait_with_streaming_timeout(timeout_secs, tx).await
+    } else {
+        handle.wait_with_timeout(timeout_secs).await
+    };
 
     match result {
         Ok(output) => {

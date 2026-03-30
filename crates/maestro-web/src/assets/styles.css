@@ -46,3 +46,57 @@ body { font-family: 'Inter', sans-serif; }
 
 /* Tag input */
 .tag { display: inline-flex; align-items: center; gap: 4px; }
+
+/* Terminal panel */
+.terminal-panel {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+.terminal-header {
+  background: #161b22;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  font-family: 'JetBrains Mono', monospace;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.terminal-header::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: #3fb950;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.terminal-header.completed::before {
+  background: #8b949e;
+}
+.terminal-body {
+  padding: 8px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c9d1d9;
+  max-height: calc(40 * 1.5em + 16px);
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.terminal-body:empty::after {
+  content: 'Waiting for output...';
+  color: #484f58;
+  font-style: italic;
+}
+.terminal-line-stderr {
+  color: #f85149;
+}
+.terminal-line-warn {
+  color: #d29922;
+}

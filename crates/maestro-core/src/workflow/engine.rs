@@ -15,7 +15,9 @@ use crate::config::Config;
 use crate::error::{MaestroError, Result};
 use crate::git;
 use crate::jira::client::JiraClient;
+use crate::process::OutputLine;
 
+use super::log_writer::WorkflowLogWriter;
 use super::state::WorkflowState;
 use super::step::{StepLog, StepStatus};
 
@@ -27,6 +29,12 @@ pub struct WorkflowEvent {
     pub state: String,
     pub timestamp: chrono::DateTime<Utc>,
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_line: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<String>,
 }
 
 pub struct Workflow {
@@ -163,6 +171,9 @@ impl WorkflowEngine {
             state: "Paused".to_string(),
             timestamp: Utc::now(),
             error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
         });
 
         Ok(())
@@ -186,6 +197,9 @@ impl WorkflowEngine {
                 state: workflow.state.display_name(),
                 timestamp: Utc::now(),
                 error: None,
+                step_name: None,
+                output_line: None,
+                stream: None,
             });
 
             Ok(())
@@ -231,6 +245,9 @@ impl WorkflowEngine {
             state: "Stopped".to_string(),
             timestamp: Utc::now(),
             error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
         });
 
         Ok(())
@@ -268,6 +285,12 @@ async fn drive_workflow(
 ) {
     info!(ticket = %ticket_key, "Workflow driver started");
 
+    let log_dir = {
+        let cfg = config.read().await;
+        PathBuf::from(&cfg.git.repo_path).join("logs")
+    };
+    let log_writer = Arc::new(WorkflowLogWriter::new(&log_dir, &ticket_key).await);
+
     let result = run_workflow_steps(
         &ticket_key,
         &config,
@@ -275,11 +298,13 @@ async fn drive_workflow(
         &actions,
         &event_tx,
         &cancel_token,
+        &log_writer,
     )
     .await;
 
     if let Err(e) = result {
         error!(ticket = %ticket_key, error = %e, "Workflow failed");
+        log_writer.write(&format!("WORKFLOW FAILED: {e}")).await;
         let mut wf = workflows.write().await;
         if let Some(workflow) = wf.get_mut(&ticket_key) {
             let source = Box::new(workflow.state.clone());
@@ -297,6 +322,9 @@ async fn drive_workflow(
             state: "Error".to_string(),
             timestamp: Utc::now(),
             error: Some(e.to_string()),
+            step_name: None,
+            output_line: None,
+            stream: None,
         });
     }
 }
@@ -308,6 +336,7 @@ async fn run_workflow_steps(
     actions: &Arc<dyn ExternalActions>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
     cancel_token: &CancellationToken,
+    log_writer: &Arc<WorkflowLogWriter>,
 ) -> Result<()> {
     // Step 1: Assign ticket
     transition(workflows, event_tx, ticket_key, WorkflowState::Assigning).await;
@@ -413,11 +442,22 @@ async fn run_workflow_steps(
     if !install_cmd.is_empty() {
         let mut step_log = StepLog::new("Install Dependencies".to_string());
         info!(command = %install_cmd, "Installing dependencies in worktree");
+        log_writer.write_step("Install Dependencies", &format!("Running: {install_cmd}")).await;
 
-        match actions.run_command(&install_cmd, &worktree_path).await {
+        broadcast_step_started(event_tx, ticket_key, "Install Dependencies");
+        let line_tx = spawn_output_relay(event_tx, ticket_key, "Install Dependencies", log_writer);
+        match crate::process::run_shell_command_streaming(
+            &install_cmd,
+            &worktree_path,
+            cancel_token.child_token(),
+            line_tx,
+        )
+        .await
+        {
             Ok(output) if output.success() => {
                 step_log.output.push("Dependencies installed".to_string());
                 step_log.complete(StepStatus::Success);
+                broadcast_step_completed(event_tx, ticket_key, "Install Dependencies");
             }
             Ok(output) => {
                 let msg = format!("Install failed (exit code {}): {}", output.exit_code, output.stderr.lines().take(5).collect::<Vec<_>>().join("\n"));
@@ -464,13 +504,23 @@ async fn run_workflow_steps(
             WorkflowState::AddressingTicket { pass },
         )
         .await;
-        let mut step_log = StepLog::new(format!("Address Ticket (Pass {pass}/{passes})"));
+        let step_label = format!("Address Ticket (Pass {pass}/{passes})");
+        let mut step_log = StepLog::new(step_label.clone());
+        broadcast_step_started(event_tx, ticket_key, &step_label);
+        log_writer.write_step(&step_label, "Starting").await;
 
+        let address_line_tx = spawn_output_relay(
+            event_tx,
+            ticket_key,
+            &format!("Address Ticket (Pass {pass}/{passes})"),
+            log_writer,
+        );
         match ClaudeSession::start_address_ticket(
             &worktree_path,
             &ticket_context,
             cancel_token.child_token(),
             timeout,
+            Some(address_line_tx),
         )
         .await
         {
@@ -522,12 +572,22 @@ async fn run_workflow_steps(
 
         // Review changes
         transition(workflows, event_tx, ticket_key, WorkflowState::Reviewing).await;
-        let mut step_log = StepLog::new(format!("Review Changes (Pass {pass}/{passes})"));
+        let review_label = format!("Review Changes (Pass {pass}/{passes})");
+        let mut step_log = StepLog::new(review_label.clone());
+        broadcast_step_started(event_tx, ticket_key, &review_label);
+        log_writer.write_step(&review_label, "Starting").await;
 
+        let review_line_tx = spawn_output_relay(
+            event_tx,
+            ticket_key,
+            &format!("Review Changes (Pass {pass}/{passes})"),
+            log_writer,
+        );
         match ClaudeSession::start_review_changes(
             &worktree_path,
             cancel_token.child_token(),
             timeout,
+            Some(review_line_tx),
         )
         .await
         {
@@ -568,6 +628,8 @@ async fn run_workflow_steps(
             timeout,
             workflows,
             ticket_key,
+            event_tx,
+            log_writer,
         )
         .await;
 
@@ -594,6 +656,8 @@ async fn run_workflow_steps(
             timeout,
             workflows,
             ticket_key,
+            event_tx,
+            log_writer,
         )
         .await;
 
@@ -622,6 +686,8 @@ async fn run_workflow_steps(
             timeout,
             workflows,
             ticket_key,
+            event_tx,
+            log_writer,
         )
         .await;
 
@@ -702,14 +768,18 @@ async fn run_fix_loop(
     command: &str,
     fix_instructions: &str,
     worktree_path: &PathBuf,
-    actions: &Arc<dyn ExternalActions>,
+    _actions: &Arc<dyn ExternalActions>,
     cancel_token: &CancellationToken,
     max_attempts: u32,
     timeout: u64,
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     ticket_key: &str,
+    event_tx: &broadcast::Sender<WorkflowEvent>,
+    log_writer: &Arc<WorkflowLogWriter>,
 ) {
     let mut step_log = StepLog::new(step_name.to_string());
+    broadcast_step_started(event_tx, ticket_key, step_name);
+    log_writer.write_step(step_name, &format!("Running: {command}")).await;
 
     for attempt in 1..=max_attempts {
         check_cancelled_silent(cancel_token);
@@ -717,11 +787,20 @@ async fn run_fix_loop(
         info!(step = step_name, attempt = attempt, "Running command");
         step_log.output.push(format!("Attempt {attempt}/{max_attempts}: {command}"));
 
-        match actions.run_command(command, worktree_path).await {
+        let line_tx = spawn_output_relay(event_tx, ticket_key, step_name, log_writer);
+        match crate::process::run_shell_command_streaming(
+            command,
+            worktree_path,
+            cancel_token.child_token(),
+            line_tx,
+        )
+        .await
+        {
             Ok(output) if output.success() => {
                 info!(step = step_name, "Command passed");
                 step_log.output.push("PASSED".to_string());
                 step_log.complete(StepStatus::Success);
+                broadcast_step_completed(event_tx, ticket_key, step_name);
                 add_step_log(workflows, ticket_key, step_log).await;
                 return;
             }
@@ -737,12 +816,19 @@ async fn run_fix_loop(
                     };
 
                     info!(step = step_name, "Spawning Claude to fix errors");
+                    let fix_line_tx = spawn_output_relay(
+                        event_tx,
+                        ticket_key,
+                        &format!("{step_name} (fix)"),
+                        log_writer,
+                    );
                     match ClaudeSession::start_fix_session(
                         worktree_path,
                         error_output,
                         fix_instructions,
                         cancel_token.child_token(),
                         timeout,
+                        Some(fix_line_tx),
                     )
                     .await
                     {
@@ -871,6 +957,79 @@ _Auto-generated by Maestro_"#,
     )
 }
 
+fn broadcast_step_started(
+    event_tx: &broadcast::Sender<WorkflowEvent>,
+    ticket_key: &str,
+    step_name: &str,
+) {
+    let _ = event_tx.send(WorkflowEvent {
+        event_type: "step_started".to_string(),
+        workflow_id: String::new(),
+        ticket_key: ticket_key.to_string(),
+        state: String::new(),
+        timestamp: Utc::now(),
+        error: None,
+        step_name: Some(step_name.to_string()),
+        output_line: None,
+        stream: None,
+    });
+}
+
+fn broadcast_step_completed(
+    event_tx: &broadcast::Sender<WorkflowEvent>,
+    ticket_key: &str,
+    step_name: &str,
+) {
+    let _ = event_tx.send(WorkflowEvent {
+        event_type: "step_completed".to_string(),
+        workflow_id: String::new(),
+        ticket_key: ticket_key.to_string(),
+        state: String::new(),
+        timestamp: Utc::now(),
+        error: None,
+        step_name: Some(step_name.to_string()),
+        output_line: None,
+        stream: None,
+    });
+}
+
+fn spawn_output_relay(
+    event_tx: &broadcast::Sender<WorkflowEvent>,
+    ticket_key: &str,
+    step_name: &str,
+    log_writer: &Arc<WorkflowLogWriter>,
+) -> tokio::sync::mpsc::UnboundedSender<OutputLine> {
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<OutputLine>();
+    let event_tx = event_tx.clone();
+    let ticket_key = ticket_key.to_string();
+    let step_name = step_name.to_string();
+    let log_writer = log_writer.clone();
+
+    tokio::spawn(async move {
+        while let Some(line) = line_rx.recv().await {
+            // Write to log file
+            log_writer
+                .write_output(&step_name, &line.stream, &line.content)
+                .await;
+
+            // Broadcast to WebSocket
+            let _ = event_tx.send(WorkflowEvent {
+                event_type: "step_output".to_string(),
+                workflow_id: String::new(),
+                ticket_key: ticket_key.clone(),
+                state: String::new(),
+                timestamp: Utc::now(),
+                error: None,
+                step_name: Some(step_name.clone()),
+                output_line: Some(line.content),
+                stream: Some(line.stream),
+            });
+        }
+    });
+
+    line_tx
+}
+
 async fn transition(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
@@ -892,6 +1051,9 @@ async fn transition(
             state: state_name,
             timestamp: Utc::now(),
             error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
         });
     }
 }
