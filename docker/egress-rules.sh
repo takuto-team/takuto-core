@@ -106,7 +106,7 @@ if [ -f "$NPMRC" ]; then
     done
 fi
 # Also check worktree .npmrc files
-for npmrc in /workspace/worktrees/*/.npmrc 2>/dev/null; do
+for npmrc in $(find /workspace/worktrees -name .npmrc 2>/dev/null); do
     if [ -f "$npmrc" ]; then
         for registry_host in $(grep -oP 'https?://\K[^/]+' "$npmrc" 2>/dev/null | sort -u); do
             echo "Allowing npm registry host from $npmrc: $registry_host"
