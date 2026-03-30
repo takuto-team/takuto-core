@@ -34,6 +34,10 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Install Claude Code CLI (npm global)
 RUN npm install -g @anthropic-ai/claude-code
 
+# Cursor Agent CLI (for [agent] provider = "cursor"); installs to ~/.local/bin then copy to PATH
+RUN curl -fsSL https://cursor.com/install | bash \
+    && ( [ -x /root/.local/bin/agent ] && install -m 755 /root/.local/bin/agent /usr/local/bin/agent || true )
+
 # Install Playwright CLI with Chromium
 RUN npx playwright install --with-deps chromium
 
@@ -64,7 +68,13 @@ RUN chmod +x /usr/local/bin/egress-rules.sh
 # Copy Maestro binary from builder
 COPY --from=builder /app/target/release/maestro /usr/local/bin/maestro
 
-# Copy default config
+# Optional: TOML file in build context used only for [docker] build_commands (default: example with empty hooks)
+ARG MAESTRO_BUILD_CONFIG=config.toml.example
+COPY ${MAESTRO_BUILD_CONFIG} /tmp/maestro-build-config.toml
+RUN mkdir -p /workspace \
+    && maestro --config /tmp/maestro-build-config.toml docker-hooks build
+
+# Copy default runtime config
 COPY config.toml.example /etc/maestro/config.toml
 
 # Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)

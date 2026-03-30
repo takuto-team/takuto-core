@@ -1,36 +1,30 @@
 #!/bin/bash
 # entrypoint.sh — Container entrypoint for Maestro
 #
-# Supports two modes:
-#   setup  — interactive auth for Claude Code, GitHub CLI, Atlassian CLI, then clone repo
-#   (default) — apply egress rules and start Maestro
+# Modes:
+#   setup  — required: GitHub + Atlassian auth; optional: Claude, Cursor, repo clone
+#   (default) — egress rules, preflight, compose_up_commands, start Maestro
 #
-# Architecture:
-#   The script always starts as root (needed for iptables and chown).
-#   Root performs privileged operations, then re-execs the script as the
-#   maestro user via `su -` (login shell), which guarantees HOME, PATH,
-#   and /etc/profile.d/* are set correctly. The re-exec is detected by
-#   checking `id -u`.
+# Root performs privileged work, then re-execs as maestro (see id -u check).
 
 set -euo pipefail
 
 # ─── Root preamble (runs only as root) ──────────────────────────────────────
 if [ "$(id -u)" = "0" ]; then
-    # Source custom environment file if mounted (needed for MAESTRO_CONFIG, etc.)
     if [ -f /etc/maestro/env ]; then
         set -a
         source /etc/maestro/env
         set +a
     fi
 
-    # Ensure volumes are owned by maestro
-    chown -R maestro:maestro /home/maestro/.claude  2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.claude   2>/dev/null || true
     chown -R maestro:maestro /home/maestro/.config   2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.npm       2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.aws       2>/dev/null || true
-    chown -R maestro:maestro /workspace               2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.cursor   2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.local    2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.npm      2>/dev/null || true
+    chown -R maestro:maestro /home/maestro/.aws      2>/dev/null || true
+    chown -R maestro:maestro /workspace              2>/dev/null || true
 
-    # In normal (non-setup) mode, apply egress rules before dropping privileges
     if [ "${1:-}" != "setup" ]; then
         if iptables -L -n >/dev/null 2>&1; then
             echo "NET_ADMIN capability detected, applying egress rules..."
@@ -41,37 +35,22 @@ if [ "$(id -u)" = "0" ]; then
         fi
     fi
 
-    # Re-exec this script as maestro with a login shell.
-    # `su -` sets HOME=/home/maestro, sources /etc/profile (which loads
-    # /etc/profile.d/maestro-env.sh → /etc/maestro/env), and runs .bashrc.
-    # We cd back to /workspace since login shell changes to $HOME.
     exec su - maestro -c "cd /workspace && exec /usr/local/bin/entrypoint.sh $(printf '%q ' "$@")"
 fi
 
-# ─── Everything below runs as the maestro user ─────────────────────────────
+# ─── Everything below runs as the maestro user ───────────────────────────────
 
-# --- Setup mode: interactive authentication + repo clone ---
+CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
+
+# --- Setup mode ---
 if [ "${1:-}" = "setup" ]; then
     echo "=== Maestro Setup ==="
+    echo "Required: GitHub CLI + Atlassian CLI. Optional: Claude Code, Cursor Agent, repository clone."
+    echo "Install custom skills (or other tools) via [docker] build_commands / compose_up_commands in config.toml."
     echo ""
 
-    # Step 1: Claude Code auth
-    echo "--- Step 1/5: Claude Code authentication ---"
-    if claude auth status >/dev/null 2>&1; then
-        echo "Claude Code: already authenticated."
-        read -p "Re-authenticate? [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            claude auth login
-        fi
-    else
-        echo "Claude Code: not authenticated."
-        claude auth login
-    fi
-    echo ""
-
-    # Step 2: GitHub CLI auth
-    echo "--- Step 2/5: GitHub CLI authentication ---"
+    # Step 1: GitHub (required)
+    echo "--- Step 1/5: GitHub CLI (required) ---"
     if gh auth status >/dev/null 2>&1; then
         echo "GitHub CLI: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
@@ -80,14 +59,17 @@ if [ "${1:-}" = "setup" ]; then
             gh auth login
         fi
     else
-        echo "GitHub CLI: not authenticated."
+        echo "GitHub CLI: authentication is required."
         gh auth login
+    fi
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "ERROR: GitHub CLI authentication failed or was not completed."
+        exit 1
     fi
     echo ""
 
-    # Step 3: Atlassian CLI auth
-    echo "--- Step 3/5: Atlassian CLI authentication ---"
-    CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
+    # Step 2: Atlassian (required)
+    echo "--- Step 2/5: Atlassian CLI (required) ---"
     jira_site=$(grep -E '^\s*site\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
     jira_email=$(grep -E '^\s*email\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
 
@@ -119,97 +101,111 @@ if [ "${1:-}" = "setup" ]; then
             acli_auth
         fi
     else
-        echo "Atlassian CLI: not authenticated."
+        echo "Atlassian CLI: authentication is required."
         acli_auth
     fi
+    if ! acli jira auth status >/dev/null 2>&1; then
+        echo "ERROR: Atlassian CLI authentication failed or was not completed."
+        exit 1
+    fi
     echo ""
 
-    # Step 4: Clone repository (read repo_url from config.toml)
-    echo "--- Step 4/5: Repository setup ---"
-    CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
-    repo_url=$(grep -E '^\s*repo_url\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
+    # Step 3: Claude Code (optional)
+    echo "--- Step 3/5: Claude Code (optional) ---"
+    read -p "Configure Claude Code (claude auth login)? [Y/s=skip] " -r
+    echo
+    if [[ $REPLY =~ ^[sS]$ ]]; then
+        echo "Skipped Claude setup."
+    else
+        if command -v claude >/dev/null 2>&1; then
+            if claude auth status >/dev/null 2>&1; then
+                echo "Claude Code: already authenticated."
+                read -p "Re-authenticate? [y/N] " -n 1 -r
+                echo
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    claude auth login
+                fi
+            else
+                claude auth login
+            fi
+        else
+            echo "WARN: claude CLI not found on PATH."
+        fi
+    fi
+    echo ""
 
-    if [ -z "$repo_url" ]; then
-        echo "WARNING: No repo_url found in $CONFIG_FILE. Skipping clone."
-        echo "         Add repo_url under [git] in your config.toml."
-    elif [ -d "/workspace/.git" ]; then
-        echo "Repository already cloned at /workspace."
-        read -p "Re-clone from $repo_url? This will delete the existing workspace. [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
+    # Step 4: Cursor Agent (optional)
+    echo "--- Step 4/5: Cursor Agent (optional) ---"
+    read -p "Configure Cursor Agent (agent login)? [Y/s=skip] " -r
+    echo
+    if [[ $REPLY =~ ^[sS]$ ]]; then
+        echo "Skipped Cursor Agent setup."
+    else
+        if command -v agent >/dev/null 2>&1; then
+            agent login
+        else
+            echo "WARN: agent CLI not found on PATH. Install Cursor CLI or set CURSOR_API_KEY in maestro.env."
+        fi
+    fi
+    echo ""
+
+    # Step 5: Repository (optional)
+    echo "--- Step 5/5: Repository (optional) ---"
+    read -p "Clone or refresh repository from config? [Y/s=skip] " -r
+    echo
+    if [[ $REPLY =~ ^[sS]$ ]]; then
+        echo "Skipped repository clone."
+    else
+        repo_url=$(grep -E '^\s*repo_url\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
+
+        if [ -z "$repo_url" ]; then
+            echo "WARNING: No repo_url found in $CONFIG_FILE. Skipping clone."
+            echo "         Add repo_url under [git] in your config.toml."
+        elif [ -d "/workspace/.git" ]; then
+            echo "Repository already cloned at /workspace."
+            read -p "Re-clone from $repo_url? This will delete the existing workspace. [y/N] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
+                gh repo clone "$repo_url" /workspace
+            fi
+        else
+            if [ "$(ls -A /workspace 2>/dev/null)" ]; then
+                echo "Workspace is not empty but has no git repo. Cleaning..."
+                rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
+            fi
+            echo "Cloning $repo_url into /workspace..."
             gh repo clone "$repo_url" /workspace
         fi
-    else
-        # Clean any leftover files before cloning
-        if [ "$(ls -A /workspace 2>/dev/null)" ]; then
-            echo "Workspace is not empty but has no git repo. Cleaning..."
-            rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
-        fi
-        echo "Cloning $repo_url into /workspace..."
-        gh repo clone "$repo_url" /workspace
-    fi
-    git config --global --add safe.directory /workspace
-    echo ""
-
-    # Step 5: Install Claude Code skills
-    echo "--- Step 5/5: Installing Claude Code skills ---"
-    if [ -d "$HOME/.claude/skills" ] && [ "$(ls -A "$HOME/.claude/skills" 2>/dev/null)" ]; then
-        echo "Skills already installed."
-        read -p "Re-install? [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh && bash /tmp/install-skills.sh && rm /tmp/install-skills.sh
-        fi
-    else
-        curl -sL https://raw.githubusercontent.com/morphet81/cheat-sheets/main/install-skills.sh -o /tmp/install-skills.sh && bash /tmp/install-skills.sh && rm /tmp/install-skills.sh
+        git config --global --add safe.directory /workspace
     fi
     echo ""
 
     echo "=== Setup complete ==="
-    echo "Auth and workspace are persisted in Docker volumes."
+    echo "Auth and workspace data are persisted in Docker volumes where configured."
     echo "Start Maestro with: docker compose up"
     exit 0
 fi
 
-# --- Normal mode: start Maestro ---
+# --- Normal mode ---
 
-# Check auth before starting
-auth_ok=true
-
-if ! claude auth status >/dev/null 2>&1; then
-    echo "ERROR: Claude Code is not authenticated."
-    echo "       Run: docker compose run maestro setup"
-    auth_ok=false
+if ! /usr/local/bin/maestro --config "$CONFIG_FILE" preflight; then
+    exit 1
 fi
 
-if ! gh auth status >/dev/null 2>&1; then
-    echo "ERROR: GitHub CLI is not authenticated."
-    echo "       Run: docker compose run maestro setup"
-    auth_ok=false
-fi
-
-if ! acli jira auth status >/dev/null 2>&1; then
-    echo "ERROR: Atlassian CLI is not authenticated."
-    echo "       Run: docker compose run maestro setup"
-    auth_ok=false
+if ! /usr/local/bin/maestro --config "$CONFIG_FILE" docker-hooks startup; then
+    exit 1
 fi
 
 if [ ! -d "/workspace/.git" ]; then
     echo "ERROR: No repository found at /workspace."
-    echo "       Run: docker compose run --rm maestro setup"
-    auth_ok=false
-fi
-
-if [ "$auth_ok" = false ]; then
+    echo "       Run: docker compose run --rm -it maestro setup"
     exit 1
 fi
 
-# Ensure environment is correct for child processes (Claude, acli, gh, etc.)
 export HOME="/home/maestro"
 export USER="maestro"
 
-# Configure git and start Maestro
 git config --global --add safe.directory /workspace
 gh auth setup-git 2>/dev/null || true
 exec /usr/local/bin/maestro "$@"

@@ -1,6 +1,10 @@
 services:
   maestro:
-    build: .
+    build:
+      context: .
+      args:
+        # File in build context; use your own config.toml if it lists [docker] build_commands (e.g. skill installers)
+        MAESTRO_BUILD_CONFIG: config.toml.example
     ports:
       - "8080:8080"
     cap_add:
@@ -12,6 +16,7 @@ services:
       - ./maestro.env:/etc/maestro/env:ro
       # Persistent auth + skills state for maestro user
       - claude-auth:/home/maestro/.claude
+      - cursor-auth:/home/maestro/.cursor
       - gh-auth:/home/maestro/.config/gh
       - acli-auth:/home/maestro/.config/acli
       # Workspace — cloned during setup, persisted across restarts
@@ -21,6 +26,8 @@ services:
       # AWS credentials (optional, for CodeArtifact auth)
       - aws-config:/home/maestro/.aws
     environment:
+      # Must match mounted config path (used by preflight / docker-hooks startup in entrypoint)
+      - MAESTRO_CONFIG=/etc/maestro/config.toml
       # Figma API token (optional, also configurable in config.toml)
       - FIGMA_API_TOKEN=${FIGMA_API_TOKEN:-}
     restart: unless-stopped
@@ -33,6 +40,7 @@ services:
 
 volumes:
   claude-auth:
+  cursor-auth:
   gh-auth:
   acli-auth:
   workspace:

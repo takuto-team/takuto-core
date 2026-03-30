@@ -2,6 +2,7 @@ pub mod actions;
 pub mod claude;
 pub mod config;
 pub mod cursor;
+pub mod docker_hooks;
 pub mod error;
 pub mod git;
 pub mod jira;

@@ -1,7 +1,8 @@
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{Parser, Subcommand, ValueEnum};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -11,28 +12,118 @@ use maestro_core::actions::dry_run::DryRunActions;
 use maestro_core::actions::real::RealActions;
 use maestro_core::actions::traits::ExternalActions;
 use maestro_core::config::Config;
+use maestro_core::docker_hooks;
 use maestro_core::jira::poller::JiraPoller;
 use maestro_core::workflow::engine::WorkflowEngine;
 use maestro_web::server::build_router;
 use maestro_web::state::AppState;
 
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum DockerHookPhase {
+    Build,
+    Startup,
+}
+
+impl DockerHookPhase {
+    fn label(self) -> &'static str {
+        match self {
+            DockerHookPhase::Build => "build",
+            DockerHookPhase::Startup => "startup",
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run shell hooks from [docker] in config (used by Dockerfile and entrypoint).
+    DockerHooks {
+        #[arg(value_enum)]
+        phase: DockerHookPhase,
+    },
+    /// Verify GitHub, Atlassian, and provider-specific auth before starting the server.
+    Preflight,
+}
+
 #[derive(Parser)]
-#[command(name = "maestro", about = "Automated Jira ticket handler using Claude Code")]
+#[command(name = "maestro", about = "Automated Jira ticket handler using Claude Code or Cursor Agent")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Path to the configuration file (also reads MAESTRO_CONFIG env var)
-    #[arg(short, long, default_value = "config.toml", env = "MAESTRO_CONFIG")]
+    #[arg(short, long, default_value = "config.toml", env = "MAESTRO_CONFIG", global = true)]
     config: PathBuf,
 
-    /// Enable dry-run mode (overrides config file)
-    #[arg(long)]
+    /// Enable dry-run mode (overrides config file); only applies to the default server command
+    #[arg(long, global = true)]
     dry_run: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn run_docker_hooks(config_path: &std::path::Path, phase: DockerHookPhase) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config {}: {e}", config_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let cwd = std::path::PathBuf::from(&config.git.repo_path);
+    let commands = match phase {
+        DockerHookPhase::Build => config.docker.build_commands.as_slice(),
+        DockerHookPhase::Startup => config.docker.compose_up_commands.as_slice(),
+    };
+
+    if let Err(e) = docker_hooks::run_hook_commands(commands, &cwd, phase.label()) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+fn run_preflight(config_path: &std::path::Path) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config {}: {e}", config_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(e) = docker_hooks::preflight(&config) {
+        eprintln!("Preflight failed: {e}");
+        return ExitCode::FAILURE;
+    }
+    eprintln!("Preflight OK.");
+    ExitCode::SUCCESS
+}
+
+fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // Load configuration
+    match &cli.command {
+        Some(Commands::DockerHooks { phase }) => run_docker_hooks(&cli.config, *phase),
+        Some(Commands::Preflight) => run_preflight(&cli.config),
+        None => match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => match rt.block_on(run_server(&cli)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("Maestro error: {e}");
+                    ExitCode::FAILURE
+                }
+            },
+            Err(e) => {
+                eprintln!("Failed to start async runtime: {e}");
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = if cli.config.exists() {
         Config::load(&cli.config)?
     } else {
@@ -43,12 +134,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.general.dry_mode = true;
     }
 
-    // Initialize logging
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
-            EnvFilter::from_default_env()
-                .add_directive(config.general.log_level.parse()?),
+            EnvFilter::from_default_env().add_directive(config.general.log_level.parse()?),
         )
         .with_target(true)
         .init();
@@ -64,7 +153,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Arc::new(RwLock::new(config));
 
-    // Select actions implementation based on dry mode
     let repo_path = PathBuf::from(&config.read().await.git.repo_path);
     let actions: Arc<dyn ExternalActions> = if config.read().await.general.dry_mode {
         info!("Running in DRY MODE — no external writes");
@@ -73,14 +161,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(RealActions::new(repo_path))
     };
 
-    // Create workflow engine
     let engine = Arc::new(WorkflowEngine::new(config.clone(), actions.clone()));
 
-    // Create global cancellation token for graceful shutdown
     let cancel_token = CancellationToken::new();
     let poller = JiraPoller::new(config.clone(), engine.clone(), cancel_token.clone());
 
-    // Build web server
     let app_state = AppState {
         engine: engine.clone(),
         config: config.clone(),
@@ -93,7 +178,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!(bind = %bind_addr, "Starting web server");
 
-    // Run poller, web server, and shutdown handler concurrently
     let shutdown_token = cancel_token.clone();
     let shutdown_engine = engine.clone();
 
@@ -112,7 +196,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         _ = async {
-            // Wait for SIGTERM or SIGINT
             let ctrl_c = tokio::signal::ctrl_c();
             #[cfg(unix)]
             {
@@ -136,14 +219,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             info!("Shutting down gracefully...");
 
-            // 1. Cancel the poller (stops accepting new tickets)
             shutdown_token.cancel();
 
-            // 2. Stop all running workflows (cancel processes, unassign tickets, move to To Do)
             info!("Stopping all active workflows...");
             shutdown_engine.stop_all_workflows().await;
 
-            // 3. Give cleanup tasks a grace period to complete Jira transitions
             info!("Waiting for cleanup tasks to complete...");
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 

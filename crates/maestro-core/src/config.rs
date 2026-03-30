@@ -52,7 +52,29 @@ pub struct Config {
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
+    pub docker: DockerConfig,
+    #[serde(default)]
     pub network: NetworkConfig,
+}
+
+/// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockerConfig {
+    /// Shell commands (`sh -c`) executed once while building the image, after tools are installed.
+    #[serde(default)]
+    pub build_commands: Vec<String>,
+    /// Shell commands executed on every `docker compose up` as the maestro user, after auth preflight, before the server.
+    #[serde(default)]
+    pub compose_up_commands: Vec<String>,
+}
+
+impl Default for DockerConfig {
+    fn default() -> Self {
+        Self {
+            build_commands: Vec::new(),
+            compose_up_commands: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +284,7 @@ impl Default for Config {
             web: WebConfig::default(),
             claude: ClaudeConfig::default(),
             agent: AgentConfig::default(),
+            docker: DockerConfig::default(),
             network: NetworkConfig::default(),
         }
     }

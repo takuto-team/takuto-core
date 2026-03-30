@@ -348,6 +348,9 @@
           cursor_cli: document.getElementById('cursorCli').value.trim() || 'agent',
         },
         network: currentConfig ? currentConfig.network : { extra_egress_hosts: [], allow_all_https: false },
+        docker: currentConfig
+          ? currentConfig.docker
+          : { build_commands: [], compose_up_commands: [] },
       };
     }
 

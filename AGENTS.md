@@ -156,6 +156,7 @@ Loaded in `crates/maestro-core/src/config.rs` — sections:
 - **`web`**: `host`, `port`
 - **`claude`**: `skills_path`, `address_ticket_passes`, `step_timeout_secs`, `figma_api_token`, `model`
 - **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`
+- **`docker`**: `build_commands` (image build), `compose_up_commands` (each `docker compose up`)
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**
 
 Runtime path defaults are described in `README.md` / `config.toml.example`.
@@ -174,6 +175,12 @@ Runtime path defaults are described in `README.md` / `config.toml.example`.
 
 ---
 
+## Docker entrypoint and CLI helpers
+
+- **`docker/entrypoint.sh`**: `setup` mode (required: `gh` + `acli`; optional: Claude, Cursor `agent login`, repo clone). Normal mode: **`maestro preflight`**, **`maestro docker-hooks startup`** (`[docker] compose_up_commands`), then **`exec maestro`** with image `CMD` args.
+- **`maestro preflight`**: validates GitHub, Atlassian, and provider-specific auth (`claude auth status` or `agent status`, unless `CURSOR_API_KEY` is set for Cursor).
+- **`maestro docker-hooks build|startup`**: runs `build_commands` or `compose_up_commands` from config as `sh -c` in `git.repo_path` (used by Dockerfile `RUN` and entrypoint).
+
 ## Testing and quality
 
 From repo root: `cargo build`, `cargo test`, `cargo check`.
@@ -182,4 +189,4 @@ From repo root: `cargo build`, `cargo test`, `cargo check`.
 
 ## Maintaining this document
 
-Whenever you change **crate boundaries**, **workflow sequencing**, **Claude flags/prompts**, **REST or WebSocket contracts**, **config fields**, or **Jira/git/PR behavior**, **update this file in the same task** if any section above becomes wrong or incomplete. Small typo-only edits elsewhere do not require updates.
+Whenever you change **crate boundaries**, **workflow sequencing**, **Claude flags/prompts**, **REST or WebSocket contracts**, **config fields**, **Docker entrypoint/setup or `[docker]` hooks**, or **Jira/git/PR behavior**, **update this file in the same task** if any section above becomes wrong or incomplete. Small typo-only edits elsewhere do not require updates.

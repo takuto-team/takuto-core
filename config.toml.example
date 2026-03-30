@@ -45,6 +45,20 @@ provider = "claude"
 # Executable for Cursor Agent (default: `agent` from https://cursor.com/install ). Only used when provider = "cursor".
 cursor_cli = "agent"
 
+[docker]
+# Shell commands (sh -c) run once during `docker compose build`, after tools are installed.
+# Use for per-project setup such as installing Claude Code skills (replaces baked-in image install).
+# The file used at build time is set by compose build arg MAESTRO_BUILD_CONFIG (default: config.toml.example).
+# Example:
+# build_commands = [
+#   "curl -fsSL https://example.com/install-my-skills.sh | bash",
+# ]
+build_commands = []
+
+# Shell commands run on every `docker compose up` as the maestro user, after auth preflight, before the server.
+# Example: sync skills from a volume, run migrations, etc.
+compose_up_commands = []
+
 [network]
 # Additional domains to allow through the egress firewall
 # (e.g., private npm registries, internal APIs)

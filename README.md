@@ -13,7 +13,7 @@ Automated Jira ticket handler that uses Claude Code in headless mode. Picks up t
 - Docker or Podman with Compose
 - GitHub account (for `gh` CLI auth)
 - Jira/Atlassian account (for `acli` CLI auth)
-- Claude Code account (for AI sessions)
+- Claude Code and/or Cursor account (depending on `[agent] provider` in `config.toml`)
 - AWS credentials (only if using CodeArtifact for npm registry)
 
 ## Quick Start
@@ -35,23 +35,37 @@ Edit `maestro.env` with any custom environment variables needed inside the conta
 docker compose build
 ```
 
-### 3. Setup (first time)
+The image runs `[docker] build_commands` from the TOML file selected at build time (compose build arg **`MAESTRO_BUILD_CONFIG`**, default **`config.toml.example`**). Put skill installers or other one-time setup there, or keep the list empty. To use your real `config.toml` for build hooks, ensure it exists in the build context and set in `docker-compose.yml`:
 
-Interactive setup authenticates all services and clones your repository:
-
-```bash
-docker compose run maestro setup
+```yaml
+build:
+  args:
+    MAESTRO_BUILD_CONFIG: config.toml
 ```
 
-This walks through 5 steps:
+### 3. Setup (first time)
 
-1. **Claude Code** — OAuth via browser (copy the URL to your host browser)
-2. **GitHub CLI** — OAuth or device code flow
-3. **Atlassian CLI** — OAuth or API token
-4. **Repository** — Clones the repo URL from `config.toml` into `/workspace`
-5. **Skills** — Installs Claude Code skills for ticket handling
+Interactive setup authenticates services and optionally prepares the workspace:
 
-Auth state persists in Docker volumes across container restarts.
+```bash
+docker compose run --rm -it maestro setup
+```
+
+Use **`-it`** so prompts (GitHub, Atlassian, optional steps) work interactively.
+
+Steps:
+
+1. **GitHub CLI** (required) — OAuth or device code flow
+2. **Atlassian CLI** (required) — OAuth or API token (`site` / `email` in `[jira]` for token mode)
+3. **Claude Code** (optional) — `claude auth login` (skip with `s` if you use Cursor only)
+4. **Cursor Agent** (optional) — `agent login` (skip with `s` if you use Claude only or rely on `CURSOR_API_KEY` in `maestro.env`)
+5. **Repository** (optional) — clone or refresh from `[git] repo_url` into `/workspace` (skip with `s` if you manage the workspace yourself)
+
+Custom Claude skills are **not** installed automatically. Add install commands to **`[docker] build_commands`** and/or **`compose_up_commands`** in `config.toml`, and point **`MAESTRO_BUILD_CONFIG`** at that file when building if hooks should run at image build time.
+
+On every **`docker compose up`**, the entrypoint runs **`maestro preflight`** (GitHub + Atlassian + provider-specific auth), then **`[docker] compose_up_commands`**, then starts the server.
+
+Auth state persists in Docker volumes across container restarts (including `cursor-auth` for Cursor Agent when using interactive login).
 
 ### 4. AWS Credentials (if using CodeArtifact)
 
@@ -152,7 +166,14 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 | `provider` | `"claude"` | `claude` (Claude Code CLI) or `cursor` (Cursor Agent CLI) for implement / review / fix / PM steps |
 | `cursor_cli` | `"agent"` | Executable name or path for Cursor Agent (see [Cursor CLI](https://cursor.com/docs/cli/overview)); only used when `provider = "cursor"` |
 
-For Cursor in a container, install the CLI (`curl … \| bash` from Cursor docs), run `agent login` or set `CURSOR_API_KEY`, and ensure egress allows Cursor’s API hosts if you use a firewall.
+The image includes the Cursor Agent CLI (`agent` in `/usr/local/bin`). Run `docker compose run --rm -it maestro setup` and complete the Cursor step, or set **`CURSOR_API_KEY`** in `maestro.env`. Ensure egress allows Cursor’s API hosts if you use a firewall.
+
+### `[docker]`
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `build_commands` | `[]` | Shell commands (`sh -c`) run **once** during `docker compose build` (config file chosen by build arg `MAESTRO_BUILD_CONFIG`) |
+| `compose_up_commands` | `[]` | Shell commands run on **every** `docker compose up` after auth preflight, before the server |
 
 ### `[network]`
 
@@ -224,6 +245,7 @@ The container uses iptables to restrict outbound traffic. Allowed by default:
 | Volume | Mount Point | Purpose |
 |--------|-------------|---------|
 | `claude-auth` | `/home/maestro/.claude` | Claude Code auth + skills |
+| `cursor-auth` | `/home/maestro/.cursor` | Cursor Agent data (when using interactive `agent login`) |
 | `gh-auth` | `/home/maestro/.config/gh` | GitHub CLI auth |
 | `acli-auth` | `/home/maestro/.config/acli` | Atlassian CLI auth |
 | `workspace` | `/workspace` | Cloned repository |
@@ -264,7 +286,7 @@ If blocked, check egress rules. You may need additional domains in `extra_egress
 
 Auth is stored in Docker volumes. If volumes were deleted, re-run setup:
 ```bash
-docker compose run maestro setup
+docker compose run --rm -it maestro setup
 ```
 
 ### Container name issues with Podman
