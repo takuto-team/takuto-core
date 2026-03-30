@@ -128,9 +128,28 @@ function handleStepStarted(evt) {
   }
 }
 
+function isClaudeJsonNoise(text) {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{')) return false;
+  try {
+    const obj = JSON.parse(trimmed);
+    // Filter out Claude stream-json system/retry/init events
+    if (obj.type === 'system' || obj.type === 'result' || obj.type === 'assistant') return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function handleStepOutput(evt) {
+  const text = evt.output_line || '';
+
+  // Filter out Claude Code stream-json noise
+  if (isClaudeJsonNoise(text)) return;
+
   const ts = ensureTerminalState(evt.ticket_key);
-  ts.lines.push({ text: evt.output_line, stream: evt.stream });
+  ts.lines.push({ text, stream: evt.stream });
 
   if (ts.lines.length > TERMINAL_MAX_LINES) {
     ts.lines.shift();
@@ -143,8 +162,7 @@ function handleStepOutput(evt) {
   const bodyEl = document.getElementById(`terminal-body-${evt.ticket_key}`);
   if (bodyEl) {
     const lineEl = document.createElement('div');
-    lineEl.textContent = evt.output_line;
-    const text = evt.output_line || '';
+    lineEl.textContent = text;
     const isWarn = /\bwarn(ing)?\b/i.test(text) || /\bWARN\b/.test(text);
     if (isWarn) {
       lineEl.className = 'terminal-line-warn';

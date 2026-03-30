@@ -53,9 +53,15 @@ fi
 # GitHub
 allow_host github.com
 allow_host api.github.com
+allow_host raw.githubusercontent.com
+allow_host objects.githubusercontent.com
 
-# Anthropic (Claude API)
+# Anthropic (Claude API + auth)
 allow_host api.anthropic.com
+allow_host claude.ai
+allow_host console.anthropic.com
+allow_host statsig.anthropic.com
+allow_host sentry.io
 
 # ---------------------------------------------------------------------------
 # Package registries (dependency installs)

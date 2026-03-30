@@ -5,7 +5,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use tokio::sync::{RwLock, broadcast};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::actions::traits::ExternalActions;
@@ -812,8 +812,13 @@ async fn run_fix_loop(
         step_log.output.push(format!("Attempt {attempt}/{max_attempts}: {command}"));
 
         let line_tx = spawn_output_relay(event_tx, ticket_key, step_name, log_writer);
+        // Prepend node_modules/.bin to PATH so npm-installed tools are found
+        let cmd_with_path = format!(
+            "export PATH=\"{}/node_modules/.bin:$PATH\" && {command}",
+            worktree_path.display()
+        );
         match crate::process::run_shell_command_streaming(
-            command,
+            &cmd_with_path,
             worktree_path,
             cancel_token.child_token(),
             line_tx,
@@ -986,6 +991,13 @@ fn broadcast_step_started(
     ticket_key: &str,
     step_name: &str,
 ) {
+    let receiver_count = event_tx.receiver_count();
+    info!(
+        ticket = ticket_key,
+        step = step_name,
+        receivers = receiver_count,
+        "Broadcasting step_started"
+    );
     let _ = event_tx.send(WorkflowEvent {
         event_type: "step_started".to_string(),
         workflow_id: String::new(),
@@ -1037,7 +1049,7 @@ fn spawn_output_relay(
                 .await;
 
             // Broadcast to WebSocket
-            let _ = event_tx.send(WorkflowEvent {
+            let result = event_tx.send(WorkflowEvent {
                 event_type: "step_output".to_string(),
                 workflow_id: String::new(),
                 ticket_key: ticket_key.clone(),
@@ -1048,6 +1060,14 @@ fn spawn_output_relay(
                 output_line: Some(line.content),
                 stream: Some(line.stream),
             });
+            match result {
+                Ok(count) => {
+                    info!(receivers = count, step = %step_name, "step_output broadcast sent");
+                }
+                Err(_) => {
+                    warn!(step = %step_name, "step_output broadcast: no receivers");
+                }
+            }
         }
     });
 
