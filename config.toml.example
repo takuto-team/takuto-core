@@ -35,6 +35,8 @@ skills_path = "/home/maestro/.claude/skills"
 address_ticket_passes = 3
 step_timeout_secs = 1800
 figma_api_token = ""
+# Model to use (e.g., "claude-opus-4-6", "claude-sonnet-4-6"). Empty = Claude Code default.
+model = ""
 
 [network]
 # Additional domains to allow through the egress firewall

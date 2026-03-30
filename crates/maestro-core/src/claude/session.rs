@@ -18,6 +18,7 @@ impl ClaudeSession {
         cancel_token: CancellationToken,
         timeout_secs: u64,
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
+        model: Option<&str>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
@@ -27,7 +28,7 @@ impl ClaudeSession {
         let session_id = uuid::Uuid::new_v4().to_string();
         let prompt = format!("/address-ticket {ticket_context}");
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx).await?;
+        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx, model).await?;
 
         Ok(Self {
             session_id,
@@ -40,6 +41,7 @@ impl ClaudeSession {
         cancel_token: CancellationToken,
         timeout_secs: u64,
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
+        model: Option<&str>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
@@ -49,7 +51,7 @@ impl ClaudeSession {
         let session_id = uuid::Uuid::new_v4().to_string();
         let prompt = "/review-changes".to_string();
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx).await?;
+        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx, model).await?;
 
         Ok(Self {
             session_id,
@@ -64,6 +66,7 @@ impl ClaudeSession {
         cancel_token: CancellationToken,
         timeout_secs: u64,
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
+        model: Option<&str>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
@@ -75,7 +78,7 @@ impl ClaudeSession {
             "The following command failed with this output:\n\n```\n{error_output}\n```\n\n{fix_instructions}"
         );
 
-        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx).await?;
+        let output = run_claude_session(worktree, &prompt, cancel_token, timeout_secs, line_tx, model).await?;
 
         Ok(Self {
             session_id,
@@ -90,6 +93,7 @@ async fn run_claude_session(
     cancel_token: CancellationToken,
     timeout_secs: u64,
     line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
+    model: Option<&str>,
 ) -> Result<String> {
     let prompt_preview = &prompt[..prompt.len().min(200)];
     info!(
@@ -98,7 +102,7 @@ async fn run_claude_session(
         "Claude session prompt"
     );
 
-    let args = &[
+    let mut args_vec = vec![
         "--dangerously-skip-permissions",
         "--print",
         "--verbose",
@@ -107,6 +111,18 @@ async fn run_claude_session(
         "--output-format",
         "stream-json",
     ];
+
+    // Add model flag if configured
+    let model_flag;
+    if let Some(model) = model {
+        if !model.is_empty() {
+            model_flag = model.to_string();
+            args_vec.push("--model");
+            args_vec.push(&model_flag);
+        }
+    }
+
+    let args: &[&str] = &args_vec;
     info!(
         program = "claude",
         args = ?args,

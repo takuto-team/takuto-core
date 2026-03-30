@@ -562,6 +562,7 @@ async fn run_workflow_steps(
     let cfg = config.read().await;
     let passes = cfg.claude.address_ticket_passes;
     let timeout = cfg.claude.step_timeout_secs;
+    let claude_model = if cfg.claude.model.is_empty() { None } else { Some(cfg.claude.model.clone()) };
     drop(cfg);
 
     // Create PM agent for plan validation
@@ -602,6 +603,7 @@ async fn run_workflow_steps(
             cancel_token.child_token(),
             timeout,
             Some(address_line_tx),
+            claude_model.as_deref(),
         )
         .await
         {
@@ -670,6 +672,7 @@ async fn run_workflow_steps(
             cancel_token.child_token(),
             timeout,
             Some(review_line_tx),
+            claude_model.as_deref(),
         )
         .await
         {
@@ -712,6 +715,7 @@ async fn run_workflow_steps(
             ticket_key,
             event_tx,
             log_writer,
+            claude_model.as_deref(),
         )
         .await;
 
@@ -740,6 +744,7 @@ async fn run_workflow_steps(
             ticket_key,
             event_tx,
             log_writer,
+            claude_model.as_deref(),
         )
         .await;
 
@@ -770,6 +775,7 @@ async fn run_workflow_steps(
             ticket_key,
             event_tx,
             log_writer,
+            claude_model.as_deref(),
         )
         .await;
 
@@ -858,6 +864,7 @@ async fn run_fix_loop(
     ticket_key: &str,
     event_tx: &broadcast::Sender<WorkflowEvent>,
     log_writer: &Arc<WorkflowLogWriter>,
+    claude_model: Option<&str>,
 ) {
     let mut step_log = StepLog::new(step_name.to_string());
     broadcast_step_started(event_tx, ticket_key, step_name);
@@ -912,6 +919,7 @@ async fn run_fix_loop(
                         cancel_token.child_token(),
                         timeout,
                         Some(fix_line_tx),
+                        claude_model,
                     )
                     .await
                     {

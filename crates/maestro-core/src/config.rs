@@ -100,6 +100,8 @@ pub struct ClaudeConfig {
     pub step_timeout_secs: u64,
     #[serde(default)]
     pub figma_api_token: String,
+    #[serde(default)]
+    pub model: String,
 }
 
 // Default value functions
@@ -212,6 +214,7 @@ impl Default for ClaudeConfig {
             address_ticket_passes: default_address_ticket_passes(),
             step_timeout_secs: default_step_timeout(),
             figma_api_token: String::new(),
+            model: String::new(),
         }
     }
 }
