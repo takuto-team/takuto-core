@@ -205,6 +205,10 @@ if [ "$auth_ok" = false ]; then
     exit 1
 fi
 
+# Ensure environment is correct for child processes (Claude, acli, gh, etc.)
+export HOME="/home/maestro"
+export USER="maestro"
+
 # Configure git and start Maestro
 git config --global --add safe.directory /workspace
 gh auth setup-git 2>/dev/null || true
