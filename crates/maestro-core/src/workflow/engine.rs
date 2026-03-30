@@ -474,13 +474,61 @@ async fn run_workflow_steps(
     step_log.complete(StepStatus::Success);
     add_step_log(workflows, ticket_key, step_log).await;
 
-    // Step 3b: Pre-install (e.g., registry auth)
     let cfg = config.read().await;
     let pre_install_cmd = cfg.commands.pre_install.clone();
     let install_cmd = cfg.commands.install.clone();
     let shell_stream_provider = cfg.agent.provider;
     drop(cfg);
 
+    // Step 3a: mise — install pinned tools before shell hooks (pre_install / install / lint / test).
+    if crate::process::worktree_has_mise_config(&worktree_path) {
+        let mut step_log = StepLog::new("Mise install".to_string());
+        info!("Running mise install (project declares mise tools)");
+        log_writer
+            .write_step("Mise install", "Running: mise install")
+            .await;
+
+        broadcast_step_started(event_tx, ticket_key, "Mise install");
+        let line_tx = spawn_output_relay(
+            event_tx,
+            ticket_key,
+            "Mise install",
+            log_writer,
+            workflows,
+            shell_stream_provider,
+        );
+        match crate::process::run_command_streaming(
+            "mise",
+            &["install"],
+            &worktree_path,
+            cancel_token.child_token(),
+            line_tx,
+        )
+        .await
+        {
+            Ok(output) if output.success() => {
+                step_log.output.push("mise install completed".to_string());
+                step_log.complete(StepStatus::Success);
+                broadcast_step_completed(event_tx, ticket_key, "Mise install");
+            }
+            Ok(output) => {
+                let stderr_tail = output.stderr.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+                let msg = format!("mise install failed (exit code {}):\n{}", output.exit_code, stderr_tail);
+                step_log.fail(msg.clone());
+                add_step_log(workflows, ticket_key, step_log).await;
+                return Err(MaestroError::Git(msg));
+            }
+            Err(e) => {
+                let msg = format!("mise install error: {e}");
+                step_log.fail(msg.clone());
+                add_step_log(workflows, ticket_key, step_log).await;
+                return Err(MaestroError::Git(msg));
+            }
+        }
+        add_step_log(workflows, ticket_key, step_log).await;
+    }
+
+    // Step 3b: Pre-install (e.g., registry auth)
     if !pre_install_cmd.is_empty() {
         let mut step_log = StepLog::new("Pre-install".to_string());
         info!(command = %pre_install_cmd, "Running pre-install command");

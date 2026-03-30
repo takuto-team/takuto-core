@@ -23,6 +23,9 @@ services:
       - workspace:/workspace
       # npm cache — persisted for the maestro user
       - npm-cache:/home/maestro/.npm
+      # mise installs + shims (tool versions from `.mise.toml` / `.tool-versions`)
+      - mise-data:/home/maestro/.local/share/mise
+      - mise-cache:/home/maestro/.cache/mise
       # AWS credentials (optional, for CodeArtifact auth)
       - aws-config:/home/maestro/.aws
     environment:
@@ -45,4 +48,6 @@ volumes:
   acli-auth:
   workspace:
   npm-cache:
+  mise-data:
+  mise-cache:
   aws-config:

@@ -18,10 +18,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20.x (for Claude Code and Playwright)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# mise — version manager for Node, Python, Ruby, etc. (project `.mise.toml` / `.tool-versions`)
+RUN install -dm 755 /etc/apt/keyrings \
+    && curl -fsSL https://mise.jdx.dev/gpg-key.pub -o /etc/apt/keyrings/mise-archive-keyring.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.asc arch=$(dpkg --print-architecture)] https://mise.jdx.dev/deb stable main" \
+       | tee /etc/apt/sources.list.d/mise.list > /dev/null \
+    && apt-get update && apt-get install -y --no-install-recommends mise \
+    && rm -rf /var/lib/apt/lists/* \
+    && mise --version
+
+# Node.js 23+ (official tarball). Cursor Agent runs `node --use-system-ca`, which exists only on Node >= 23.9
+# on Linux; NodeSource 20.x rejects that flag with "bad option: --use-system-ca".
+ARG NODE_VERSION=23.11.0
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "$ARCH" in \
+      amd64) NODE_ARCH=x64 ;; \
+      arm64) NODE_ARCH=arm64 ;; \
+      *) echo "unsupported architecture: $ARCH"; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" \
+      | tar -xz -C /usr/local --strip-components=1; \
+    node --version; npm --version
 
 # Install gh CLI (official apt repository)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -34,7 +52,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Install Claude Code CLI (npm global)
 RUN npm install -g @anthropic-ai/claude-code
 
-# Cursor Agent CLI (for [agent] provider = "cursor"); installs to ~/.local/bin then copy to PATH
+# Cursor Agent CLI (for [agent] provider = "cursor"); copy wrapper to PATH (Node above is already /usr/local/bin/node).
 RUN curl -fsSL https://cursor.com/install | bash \
     && ( [ -x /root/.local/bin/agent ] && install -m 755 /root/.local/bin/agent /usr/local/bin/agent || true )
 
@@ -80,6 +98,27 @@ COPY config.toml.example /etc/maestro/config.toml
 # Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
 RUN groupadd -r maestro && useradd -r -g maestro -m -s /bin/bash maestro
 
+RUN mkdir -p /home/maestro/.local/share/mise/shims \
+    /home/maestro/.cache/mise \
+    /home/maestro/.config/mise \
+    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config
+
+ENV MISE_DATA_DIR=/home/maestro/.local/share/mise
+ENV MISE_CACHE_DIR=/home/maestro/.cache/mise
+ENV MISE_CONFIG_DIR=/home/maestro/.config/mise
+ENV MISE_TRUST_ALL_CONFIGS=1
+ENV MISE_YES=1
+ENV PATH="/home/maestro/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+RUN printf '%s\n' \
+    'export MISE_DATA_DIR=/home/maestro/.local/share/mise' \
+    'export MISE_CACHE_DIR=/home/maestro/.cache/mise' \
+    'export MISE_CONFIG_DIR=/home/maestro/.config/mise' \
+    'export MISE_TRUST_ALL_CONFIGS=1' \
+    'export MISE_YES=1' \
+    'export PATH="$MISE_DATA_DIR/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+    > /etc/profile.d/zz-maestro-mise.sh \
+    && chmod 644 /etc/profile.d/zz-maestro-mise.sh
 
 # Source custom env file on any shell login
 RUN echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /etc/profile.d/maestro-env.sh \

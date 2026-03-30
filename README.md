@@ -53,6 +53,14 @@ docker compose run --rm -it maestro setup
 
 Use **`-it`** so prompts (GitHub, Atlassian, optional steps) work interactively.
 
+**Podman:** the Compose wrapper does not always allocate a TTY the same way as Docker. Pass stdin/tty explicitly, for example:
+
+```bash
+podman compose --podman-run-args="-i -t" run --rm maestro setup
+```
+
+If you use the standalone **`podman-compose`** binary instead, see **`podman-compose(1)`** for the equivalent of **`podman run -i -t`** for interactive **`run`** (flags differ by version).
+
 Steps:
 
 1. **GitHub CLI** (required) — OAuth or device code flow
@@ -288,6 +296,18 @@ Auth is stored in Docker volumes. If volumes were deleted, re-run setup:
 ```bash
 docker compose run --rm -it maestro setup
 ```
+
+### Cursor `agent login`: `bad option: --use-system-ca`
+
+The Cursor CLI runs Node with **`--use-system-ca`**, which only exists on **Node.js ≥ 23.9** (Linux). The Maestro image ships **Node 23** from **nodejs.org** for that reason. **Rebuild** the image (`docker compose build` / `podman compose build`) so you are not on an older layer that used Node 20.
+
+### Cursor `agent login`: `/usr/local/bin/node: No such file or directory`
+
+The `agent` wrapper expects **`node`** next to it on **`PATH`** (typically `/usr/local/bin/node`). The current image installs the official Node tarball into **`/usr/local`**, so this usually means the image is outdated or the binary was removed — **rebuild** the image.
+
+### Project tool versions (`mise`)
+
+The image installs **[mise](https://mise.jdx.dev/)** from the official apt repository. Repositories can pin Node, Python, and other tools with **`.mise.toml`**, **`mise.toml`**, **`.tool-versions`**, or **`.config/mise/config.toml`**. Maestro runs **`mise install`** in the worktree when such a file is present, then runs **`[commands]`** shell steps through **`mise exec`** so those versions apply. Default **Node 23** in **`/usr/local`** remains for the Cursor **`agent`** wrapper; project Node from mise is used inside **`mise exec`** (and via shims on **`PATH`**). Tool installs persist in the **`mise-data`** and **`mise-cache`** volumes.
 
 ### Container name issues with Podman
 

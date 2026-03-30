@@ -97,6 +97,10 @@ File logging: `WorkflowLogWriter` writes under `{repo_path}/logs/<TICKET>.log`.
 
 `crates/maestro-core/src/cursor/session.rs` spawns **`cursor_cli`** (e.g. `agent`) with **print** mode, **`--output-format stream-json`**, **`--stream-partial-output`**, **`--trust`**, **`--force`**, **`--approve-mcps`**, **`--sandbox disabled`**, **`--workspace <worktree>`**, optional **`--resume`**, optional **`--model`**. This matches Cursor’s non-interactive / trusted automation flags from their CLI docs.
 
+The **Docker image** installs **Node.js 23+** from **nodejs.org** (not Node 20): the Cursor `agent` wrapper invokes **`node --use-system-ca`**, which requires **Node ≥ 23.9** on Linux; older Node fails with `bad option: --use-system-ca`.
+
+The image also installs **mise** (apt). **`process::worktree_has_mise_config`** detects **`.mise.toml`**, **`mise.toml`**, **`.tool-versions`**, or **`.config/mise/config.toml`**; the workflow runs **`mise install`** in the worktree, then **`run_shell_command` / `run_shell_command_streaming`** use **`mise exec -- sh -c …`** when that detection matches. **`run_command`** (argv, e.g. **`acli`**) is unchanged.
+
 ### Dashboard streaming
 
 Raw stdout lines are turned into short lines for the web UI via **`workflow/stream_humanize.rs`**: **`humanize_agent_stream_line`** dispatches on provider. Cursor stream-json events include **assistant** text, **`tool_call` started** (e.g. read/write paths), and **result** — so operators still see **live progress** similar to Claude. (Cursor’s docs note **thinking** events are suppressed in print mode; internal chain-of-thought is not shown, but tool use and assistant text are.)
@@ -177,7 +181,7 @@ Runtime path defaults are described in `README.md` / `config.toml.example`.
 
 ## Docker entrypoint and CLI helpers
 
-- **`docker/entrypoint.sh`**: `setup` mode (required: `gh` + `acli`; optional: Claude, Cursor `agent login`, repo clone). Normal mode: **`maestro preflight`**, **`maestro docker-hooks startup`** (`[docker] compose_up_commands`), then **`exec maestro`** with image `CMD` args.
+- **`docker/entrypoint.sh`**: `setup` mode (required: `gh` + `acli`; optional: Claude, Cursor `agent login`, repo clone). Normal mode: **`maestro preflight`**, **`maestro docker-hooks startup`** (`[docker] compose_up_commands`), then **`exec maestro`** with image `CMD` args. Podman Compose often needs **`--podman-run-args="-i -t"`** for interactive setup (see README).
 - **`maestro preflight`**: validates GitHub, Atlassian, and provider-specific auth (`claude auth status` or `agent status`, unless `CURSOR_API_KEY` is set for Cursor).
 - **`maestro docker-hooks build|startup`**: runs `build_commands` or `compose_up_commands` from config as `sh -c` in `git.repo_path` (used by Dockerfile `RUN` and entrypoint).
 

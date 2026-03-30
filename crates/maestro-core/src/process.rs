@@ -9,6 +9,14 @@ use tracing::{debug, warn};
 
 use crate::error::{MaestroError, Result};
 
+/// True when `cwd` appears to declare mise-managed tools (project-local versions).
+pub fn worktree_has_mise_config(cwd: &Path) -> bool {
+    cwd.join(".mise.toml").is_file()
+        || cwd.join("mise.toml").is_file()
+        || cwd.join(".tool-versions").is_file()
+        || cwd.join(".config").join("mise").join("config.toml").is_file()
+}
+
 #[derive(Debug, Clone)]
 pub struct OutputLine {
     pub content: String,
@@ -103,6 +111,30 @@ impl ProcessHandle {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
             .arg(command)
+            .current_dir(cwd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        set_process_group(&mut cmd);
+        let child = cmd.spawn()?;
+
+        Ok(Self {
+            child,
+            stdout_lines: Vec::new(),
+            stderr_lines: Vec::new(),
+            cancel_token,
+        })
+    }
+
+    /// Run `command` via `mise exec` so `.mise.toml` / `.tool-versions` apply.
+    pub async fn spawn_mise_exec_shell(
+        command: &str,
+        cwd: &Path,
+        cancel_token: CancellationToken,
+    ) -> Result<Self> {
+        let mut cmd = Command::new("mise");
+        cmd.args(["exec", "--", "sh", "-c", command])
             .current_dir(cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -310,12 +342,24 @@ impl ProcessHandle {
     }
 }
 
+async fn spawn_shell_in_worktree(
+    command: &str,
+    cwd: &Path,
+    cancel_token: CancellationToken,
+) -> Result<ProcessHandle> {
+    if worktree_has_mise_config(cwd) {
+        ProcessHandle::spawn_mise_exec_shell(command, cwd, cancel_token).await
+    } else {
+        ProcessHandle::spawn_shell(command, cwd, cancel_token).await
+    }
+}
+
 pub async fn run_shell_command(
     command: &str,
     cwd: &Path,
     cancel_token: CancellationToken,
 ) -> Result<CommandOutput> {
-    let handle = ProcessHandle::spawn_shell(command, cwd, cancel_token).await?;
+    let handle = spawn_shell_in_worktree(command, cwd, cancel_token).await?;
     handle.wait_with_output().await
 }
 
@@ -337,7 +381,7 @@ pub async fn run_shell_command_streaming(
     cancel_token: CancellationToken,
     line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
 ) -> Result<CommandOutput> {
-    let handle = ProcessHandle::spawn_shell(command, cwd, cancel_token).await?;
+    let handle = spawn_shell_in_worktree(command, cwd, cancel_token).await?;
     handle.wait_with_streaming(line_tx).await
 }
 
@@ -350,4 +394,36 @@ pub async fn run_command_streaming(
 ) -> Result<CommandOutput> {
     let handle = ProcessHandle::spawn(program, args, cwd, cancel_token).await?;
     handle.wait_with_streaming(line_tx).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn worktree_has_mise_config_mise_toml() {
+        let dir = tempdir().unwrap();
+        let p = dir.path();
+        assert!(!worktree_has_mise_config(p));
+        fs::write(p.join(".mise.toml"), "[tools]\n").unwrap();
+        assert!(worktree_has_mise_config(p));
+    }
+
+    #[test]
+    fn worktree_has_mise_config_tool_versions() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(".tool-versions"), "node 22\n").unwrap();
+        assert!(worktree_has_mise_config(dir.path()));
+    }
+
+    #[test]
+    fn worktree_has_mise_config_nested_config() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".config").join("mise");
+        fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join("config.toml"), "[tools]\n").unwrap();
+        assert!(worktree_has_mise_config(dir.path()));
+    }
 }

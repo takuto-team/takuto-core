@@ -40,6 +40,15 @@ fi
 
 # ─── Everything below runs as the maestro user ───────────────────────────────
 
+export HOME="${HOME:-/home/maestro}"
+export MISE_DATA_DIR="/home/maestro/.local/share/mise"
+export MISE_CACHE_DIR="/home/maestro/.cache/mise"
+export MISE_CONFIG_DIR="/home/maestro/.config/mise"
+export MISE_TRUST_ALL_CONFIGS=1
+export MISE_YES=1
+mkdir -p "$MISE_DATA_DIR/shims" "$MISE_CACHE_DIR" "$MISE_CONFIG_DIR"
+export PATH="$MISE_DATA_DIR/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
 
 # --- Setup mode ---
