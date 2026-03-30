@@ -177,10 +177,8 @@ if [ -d /root/.config/acli ]; then
     cp -rn /root/.config/acli /home/maestro/.config/acli 2>/dev/null || true
     chown -R maestro:maestro /home/maestro/.config
 fi
-if [ -d /root/.npm ]; then
-    cp -rn /root/.npm /home/maestro/.npm 2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.npm
-fi
+# Ensure npm cache volume is owned by maestro
+chown -R maestro:maestro /home/maestro/.npm 2>/dev/null || true
 
 # Switch to non-root user and start Maestro
 # (Claude Code refuses --dangerously-skip-permissions as root)

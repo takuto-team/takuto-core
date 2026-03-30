@@ -16,8 +16,8 @@ services:
       - acli-auth:/root/.config/acli
       # Workspace — cloned during setup, persisted across restarts
       - workspace:/workspace
-      # npm cache — mounted as root, copied to maestro user at startup
-      - npm-cache:/root/.npm
+      # npm cache — persisted for the maestro user
+      - npm-cache:/home/maestro/.npm
     environment:
       # Figma API token (optional, also configurable in config.toml)
       - FIGMA_API_TOKEN=${FIGMA_API_TOKEN:-}
