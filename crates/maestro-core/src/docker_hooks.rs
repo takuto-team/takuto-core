@@ -205,11 +205,22 @@ pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result
             continue;
         }
         n += 1;
-        eprintln!("[maestro docker-hooks:{label}] ({n}/{total}) {cmd_line}");
+        let preview: String = cmd_line.chars().take(100).collect();
+        let dots = if cmd_line.len() > 100 { "…" } else { "" };
+        eprintln!(
+            "[maestro docker-hooks:{label}] ({n}/{total}) cwd={} script={}{} ({} bytes)",
+            cwd.display(),
+            preview,
+            dots,
+            cmd_line.len()
+        );
+        eprintln!("[maestro docker-hooks:{label}] ({n}/{total}) running…");
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/maestro".to_string());
         let status = Command::new("/bin/bash")
             .arg("-c")
             .arg(cmd_line)
             .current_dir(cwd)
+            .env("HOME", &home)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .status()
@@ -221,6 +232,7 @@ pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result
                 "{label} hook command {n} failed with status {status}"
             )));
         }
+        eprintln!("[maestro docker-hooks:{label}] ({n}/{total}) finished successfully.");
     }
     Ok(())
 }

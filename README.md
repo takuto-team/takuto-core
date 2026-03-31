@@ -321,7 +321,7 @@ The Cursor install script puts **`agent`** next to **`index.js`** and a bundled 
 
 ### Project tool versions (`mise`)
 
-The image installs **[mise](https://mise.jdx.dev/)** from the official apt repository. Repositories can pin Node, Python, and other tools with **`.mise.toml`**, **`mise.toml`**, **`.tool-versions`**, or **`.config/mise/config.toml`**. Maestro runs **`mise install`** in the worktree when such a file is present, then runs **`[commands]`** shell steps through **`mise exec`** so those versions apply. Default **Node 23** in **`/usr/local`** remains for the Cursor **`agent`** wrapper; project Node from mise is used inside **`mise exec`** (and via shims on **`PATH`**). Tool installs persist in the **`mise-data`** and **`mise-cache`** volumes.
+The image installs **[mise](https://mise.jdx.dev/)** from the official apt repository, plus **`build-essential`**, **`libssl-dev`**, and related headers so **`mise install`** can compile runtimes such as **Ruby** (ruby-build builds OpenSSL, then Ruby) when no prebuilt binary exists—common on **arm64**. Repositories can pin Node, Python, and other tools with **`.mise.toml`**, **`mise.toml`**, **`.tool-versions`**, or **`.config/mise/config.toml`**. Maestro runs **`mise install`** in the worktree when such a file is present, then runs **`[commands]`** shell steps through **`mise exec`** so those versions apply. Default **Node 23** in **`/usr/local`** remains for the Cursor **`agent`** wrapper; project Node from mise is used inside **`mise exec`** (and via shims on **`PATH`**). Tool installs persist in the **`mise-data`** and **`mise-cache`** volumes.
 
 ### `docker compose up` stalls after “Egress rules applied”
 

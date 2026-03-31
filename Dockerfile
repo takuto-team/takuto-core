@@ -27,6 +27,23 @@ RUN install -dm 755 /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/* \
     && mise --version
 
+# Compiler + headers for mise-installed runtimes built from source (e.g. ruby-build → OpenSSL + Ruby).
+# Without these, `mise install` fails on tools like ruby when no prebuilt binary exists (common on arm64).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    autoconf \
+    bison \
+    build-essential \
+    libffi-dev \
+    libgmp-dev \
+    libreadline-dev \
+    libssl-dev \
+    libyaml-dev \
+    patch \
+    perl \
+    pkg-config \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Node.js 23+ (official tarball). Cursor Agent runs `node --use-system-ca`, which exists only on Node >= 23.9
 # on Linux; NodeSource 20.x rejects that flag with "bad option: --use-system-ca".
 ARG NODE_VERSION=23.11.0
