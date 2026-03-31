@@ -183,7 +183,7 @@ Runtime path defaults are described in `README.md` / `config.toml.example`.
 
 - **`docker/entrypoint.sh`**: `setup` mode (required: `gh` + `acli`; optional: Claude, Cursor `agent login`, repo clone). Normal mode: **`maestro preflight`**, **`maestro docker-hooks startup`** (`[docker] compose_up_commands`), then **`exec maestro`** with image `CMD` args. Podman Compose often needs **`--podman-run-args="-i -t"`** for interactive setup (see README).
 - **`maestro preflight`**: validates GitHub, Atlassian, and provider-specific auth. Cursor: skips **`agent status`** when **`CURSOR_API_KEY`** is set or when **`cli-config.json`** under **`CURSOR_CONFIG_DIR`** looks authenticated; otherwise **`agent status`** with timeout and process-group kill. Compose sets **`CURSOR_CONFIG_DIR=/home/maestro/.cursor`** to align with the **`cursor-auth`** volume.
-- **`maestro docker-hooks build|startup`**: runs `build_commands` or `compose_up_commands` from config as **`bash -c`** in `git.repo_path` (used by Dockerfile `RUN` and entrypoint; **`sh`** on Debian is often dash and lacks `pipefail`).
+- **`maestro docker-hooks build|startup`**: runs `build_commands` or `compose_up_commands` from config as **`bash -c`** in `git.repo_path` (used by Dockerfile `RUN` and entrypoint; **`sh`** on Debian is often dash and lacks `pipefail`). Hook children get **`HOME`**, **`MAESTRO_HOME`** (compose: `/home/maestro`), and **`CURSOR_CONFIG_DIR`** so writes to **`~/.claude`** / **`~/.cursor`** hit named volumes, not **`/.claude`** when **`HOME`** is unset.
 
 ## Testing and quality
 

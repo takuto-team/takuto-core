@@ -31,6 +31,8 @@ services:
     environment:
       # Must match mounted config path (used by preflight / docker-hooks startup in entrypoint)
       - MAESTRO_CONFIG=/etc/maestro/config.toml
+      # Stable home for hook scripts ($HOME can be wrong/empty in some Podman setups; docker-hooks forces this for children)
+      - MAESTRO_HOME=/home/maestro
       # Keep Cursor CLI config/auth on the same path as the cursor-auth volume (default can differ with XDG)
       - CURSOR_CONFIG_DIR=/home/maestro/.cursor
       # Figma API token (optional, also configurable in config.toml)

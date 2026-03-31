@@ -215,14 +215,23 @@ pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result
             cmd_line.len()
         );
         eprintln!("[maestro docker-hooks:{label}] ({n}/{total}) running…");
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/maestro".to_string());
-        let status = Command::new("/bin/bash")
-            .arg("-c")
+        // Prefer MAESTRO_HOME so hooks writing "$HOME/.claude" land on the named volume, not on ephemeral
+        // paths like /.claude when HOME is missing under Podman/rootless.
+        let home = std::env::var("MAESTRO_HOME")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| "/home/maestro".to_string());
+        let cursor_dir = std::env::var("CURSOR_CONFIG_DIR")
+            .unwrap_or_else(|_| format!("{}/.cursor", home.trim_end_matches('/')));
+        let mut cmd = Command::new("/bin/bash");
+        cmd.arg("-c")
             .arg(cmd_line)
             .current_dir(cwd)
             .env("HOME", &home)
+            .env("MAESTRO_HOME", &home)
+            .env("CURSOR_CONFIG_DIR", &cursor_dir)
             .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        let status = cmd
             .status()
             .map_err(|e| {
                 MaestroError::Config(format!("failed to spawn {label} hook {n}: {e}"))

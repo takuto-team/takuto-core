@@ -44,6 +44,7 @@ fi
 # ─── Everything below runs as the maestro user ───────────────────────────────
 
 export HOME="${HOME:-/home/maestro}"
+export MAESTRO_HOME="${MAESTRO_HOME:-/home/maestro}"
 # Match docker-compose cursor-auth volume so `agent login` (setup) and `agent` (runtime) use the same store.
 export CURSOR_CONFIG_DIR="${CURSOR_CONFIG_DIR:-$HOME/.cursor}"
 export MISE_DATA_DIR="/home/maestro/.local/share/mise"

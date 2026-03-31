@@ -270,6 +270,13 @@ The container uses iptables to restrict outbound traffic. Allowed by default:
 | `npm-cache` | `/home/maestro/.npm` | npm download cache |
 | `aws-config` | `/home/maestro/.aws` | AWS credentials (optional) |
 
+**Skills and `compose_up_commands`:** Claude/Cursor skills must be written **inside the container** under **`/home/maestro/.claude`** and **`/home/maestro/.cursor`** (the named volumes above). They do **not** appear in your project folder on the host. If a hook uses **`$HOME/.claude/skills`** but **`HOME`** is empty (seen with some Podman setups), files can end up under **`/.claude/...`** on the writable layer and **disappear** on the next recreate — use **`MAESTRO_HOME`** / absolute paths. Compose sets **`MAESTRO_HOME=/home/maestro`** and **`maestro docker-hooks`** passes **`HOME`**, **`MAESTRO_HOME`**, and **`CURSOR_CONFIG_DIR`** into each hook. Verify after `up`:
+
+```bash
+docker compose exec maestro ls -la /home/maestro/.claude/skills
+docker compose exec maestro ls -la /home/maestro/.cursor/skills
+```
+
 ### Non-root Execution
 
 The container starts as root (for iptables), then switches to the `maestro` user. Claude Code requires non-root execution for `--allow-dangerously-skip-permissions`.
