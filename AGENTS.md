@@ -87,7 +87,7 @@ File logging: `WorkflowLogWriter` writes under `{repo_path}/logs/<TICKET>.log`.
 
 ### Provider selection
 
-`[agent] provider` in config: **`claude`** (default) or **`cursor`**. **`[agent] cursor_cli`** sets the Cursor Agent executable (default **`agent`**). **`[claude] model`** is passed to Claude Code when non-empty. **`[agent] cursor_model`** (default **`Auto`**) sets Cursor Agent `--model`; **`Auto`** (any ASCII case) omits the flag so Cursor chooses the model.
+`[agent] provider` in config: **`claude`** (default) or **`cursor`**. **`[agent] cursor_cli`** sets the Cursor Agent executable (default **`agent`**). **`[claude] model`** is passed to Claude Code when non-empty. **`[agent] cursor_model`** (default **`Auto`**) sets Cursor Agent `--model`; **`Auto`** (any ASCII case) or empty means automatic model selection (passed as `--model Auto`).
 
 ### Claude Code
 
@@ -159,7 +159,7 @@ Loaded in `crates/maestro-core/src/config.rs` — sections:
 - **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`, `lint`, `unit_test`, `e2e_test`
 - **`web`**: `host`, `port`
 - **`claude`**: `skills_path`, `address_ticket_passes`, `step_timeout_secs`, `figma_api_token`, `model`
-- **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`, `cursor_model` (default `Auto`; omit `--model` on the Cursor CLI)
+- **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`, `cursor_model` (default `Auto`; Cursor CLI gets `--model Auto` unless a concrete id is set)
 - **`docker`**: `build_commands` (image build), `compose_up_commands` (each `docker compose up`)
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**
 

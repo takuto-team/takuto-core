@@ -182,7 +182,7 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 |-----|---------|-------------|
 | `provider` | `"claude"` | `claude` (Claude Code CLI) or `cursor` (Cursor Agent CLI) for implement / review / fix / PM steps |
 | `cursor_cli` | `"agent"` | Executable name or path for Cursor Agent (see [Cursor CLI](https://cursor.com/docs/cli/overview)); only used when `provider = "cursor"` |
-| `cursor_model` | `"Auto"` | Cursor Agent `--model`; `Auto` (any case) omits the flag so Cursor picks the model |
+| `cursor_model` | `"Auto"` | Cursor Agent `--model`; `Auto` (any case) or empty uses automatic model selection |
 
 The image includes the Cursor Agent CLI (`agent` in `/usr/local/bin`). Run `docker compose run --rm -it maestro setup` and complete the Cursor step, or set **`CURSOR_API_KEY`** in `maestro.env` (recommended for unattended / non-TTY `docker compose up`). **`docker-compose.yml`** sets **`CURSOR_CONFIG_DIR=/home/maestro/.cursor`** so browser login matches the **`cursor-auth`** volume; without that, tokens can land under **`~/.config/cursor`** and look “missing” on the next start. Ensure egress allows Cursor’s API hosts if you use a firewall.
 

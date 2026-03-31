@@ -112,10 +112,9 @@ Be pragmatic — approve plans that reasonably cover the requirements even if th
                     "--workspace".to_string(),
                     workspace.to_string(),
                 ];
-                if let Some(m) = cursor_model_for_cli(model) {
-                    owned.push("--model".to_string());
-                    owned.push(m.to_string());
-                }
+                let m = cursor_model_for_cli(model);
+                owned.push("--model".to_string());
+                owned.push(m.to_string());
                 let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
                 let handle = ProcessHandle::spawn(&agent_cfg.cursor_cli, &arg_refs, worktree, cancel_token)
                     .await

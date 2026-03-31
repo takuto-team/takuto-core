@@ -22,7 +22,7 @@ pub struct AgentConfig {
     /// Cursor Agent CLI executable (install script usually provides `agent` on PATH).
     #[serde(default = "default_cursor_cli")]
     pub cursor_cli: String,
-    /// Cursor Agent `--model`. Default `"Auto"` omits the flag so Cursor picks the model.
+    /// Cursor Agent `--model`. Default `"Auto"` requests Cursor automatic model selection.
     #[serde(default = "default_cursor_model")]
     pub cursor_model: String,
 }
@@ -35,14 +35,16 @@ fn default_cursor_model() -> String {
     "Auto".to_string()
 }
 
-/// Value to pass to Cursor Agent `--model`, or `None` to omit the flag (automatic model selection).
-/// Empty strings and `"Auto"` (ASCII case-insensitive) mean omit `--model`.
-pub fn cursor_model_for_cli(model: &str) -> Option<&str> {
+/// Normalized value for Cursor Agent `--model`.
+///
+/// Empty strings and `"auto"` (ASCII case-insensitive) become `"Auto"`. Cursor’s CLI does not treat
+/// omitted `--model` the same as Auto in all cases; we always pass `--model` with this value.
+pub fn cursor_model_for_cli(model: &str) -> &str {
     let t = model.trim();
     if t.is_empty() || t.eq_ignore_ascii_case("auto") {
-        None
+        "Auto"
     } else {
-        Some(t)
+        t
     }
 }
 
@@ -501,18 +503,18 @@ step_timeout_secs = 600
     }
 
     #[test]
-    fn cursor_model_for_cli_omits_auto_and_empty() {
-        assert_eq!(cursor_model_for_cli(""), None);
-        assert_eq!(cursor_model_for_cli("   "), None);
-        assert_eq!(cursor_model_for_cli("Auto"), None);
-        assert_eq!(cursor_model_for_cli("auto"), None);
-        assert_eq!(cursor_model_for_cli("AUTO"), None);
+    fn cursor_model_for_cli_normalizes_auto_and_empty() {
+        assert_eq!(cursor_model_for_cli(""), "Auto");
+        assert_eq!(cursor_model_for_cli("   "), "Auto");
+        assert_eq!(cursor_model_for_cli("Auto"), "Auto");
+        assert_eq!(cursor_model_for_cli("auto"), "Auto");
+        assert_eq!(cursor_model_for_cli("AUTO"), "Auto");
     }
 
     #[test]
     fn cursor_model_for_cli_passes_concrete_name() {
-        assert_eq!(cursor_model_for_cli("gpt-4.1"), Some("gpt-4.1"));
-        assert_eq!(cursor_model_for_cli("  sonnet  "), Some("sonnet"));
+        assert_eq!(cursor_model_for_cli("gpt-4.1"), "gpt-4.1");
+        assert_eq!(cursor_model_for_cli("  sonnet  "), "sonnet");
     }
 
     #[test]

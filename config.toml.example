@@ -44,7 +44,7 @@ model = ""
 provider = "claude"
 # Executable for Cursor Agent (default: `agent` from https://cursor.com/install ). Only used when provider = "cursor".
 cursor_cli = "agent"
-# Cursor Agent --model. "Auto" (default) omits the flag so Cursor picks the model; set a concrete id to pin.
+# Cursor Agent --model. "Auto" (default) uses automatic model selection; set a concrete id to pin.
 cursor_model = "Auto"
 
 [docker]

@@ -702,7 +702,7 @@ async fn run_workflow_steps(
                     cancel_token.child_token(),
                     timeout,
                     Some(address_line_tx),
-                    cursor_model_pass,
+                    Some(cursor_model_pass),
                     claude_session_id.as_deref(),
                 )
                 .await
@@ -799,7 +799,7 @@ async fn run_workflow_steps(
                     cancel_token.child_token(),
                     timeout,
                     Some(review_line_tx),
-                    cursor_model_pass,
+                    Some(cursor_model_pass),
                     claude_session_id.as_deref(),
                 )
                 .await
@@ -853,7 +853,7 @@ async fn run_workflow_steps(
             log_writer,
             claude_model.as_deref(),
             claude_session_id.as_deref(),
-            cursor_model_pass,
+            Some(cursor_model_pass),
             fix_ai_stream_provider,
             &fix_cursor_cli,
         )
@@ -886,7 +886,7 @@ async fn run_workflow_steps(
             log_writer,
             claude_model.as_deref(),
             claude_session_id.as_deref(),
-            cursor_model_pass,
+            Some(cursor_model_pass),
             fix_ai_stream_provider,
             &fix_cursor_cli,
         )
@@ -921,7 +921,7 @@ async fn run_workflow_steps(
             log_writer,
             claude_model.as_deref(),
             claude_session_id.as_deref(),
-            cursor_model_pass,
+            Some(cursor_model_pass),
             fix_ai_stream_provider,
             &fix_cursor_cli,
         )
