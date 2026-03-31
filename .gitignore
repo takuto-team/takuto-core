@@ -6,5 +6,8 @@ config.toml
 .env
 maestro.env
 
+# Local issue tracking files
+/issues
+
 # Optional per-developer Claude/Cursor skills merged into container home on start (see README).
 /skills
