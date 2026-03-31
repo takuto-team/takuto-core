@@ -116,6 +116,12 @@
         </div>
         <div class="space-y-4">
           <div>
+            <label for="preInstallCmds" class="block text-sm font-medium text-gray-300 mb-1.5">Pre-install commands</label>
+            <textarea id="preInstallCmds" rows="4" placeholder="One shell command per line (optional)&#10;e.g. aws codeartifact login ..."
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors resize-y min-h-[5rem]"></textarea>
+            <p class="mt-1.5 text-xs text-gray-600">Run in the worktree before install (e.g. registry auth). Leave empty to skip.</p>
+          </div>
+          <div>
             <label for="lintCmd" class="block text-sm font-medium text-gray-300 mb-1.5">Linting Command</label>
             <input type="text" id="lintCmd" placeholder="e.g. npm run lint, cargo clippy"
               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
@@ -249,6 +255,15 @@
     const ITEM_TYPES = ['Task', 'Bug', 'Story', 'Epic', 'Sub-task', 'Spike'];
     let currentConfig = null;
 
+    function normalizePreInstall(raw) {
+      if (Array.isArray(raw)) {
+        return raw.map((s) => String(s).trim()).filter(Boolean);
+      }
+      if (raw == null || raw === '') return [];
+      const t = String(raw).trim();
+      return t ? [t] : [];
+    }
+
     async function loadConfig() {
       try {
         const res = await fetch('/api/config');
@@ -262,6 +277,7 @@
     function populateForm(cfg) {
       document.getElementById('baseBranch').value = cfg.git.base_branch;
       document.getElementById('pollInterval').value = cfg.general.poll_interval_secs;
+      document.getElementById('preInstallCmds').value = normalizePreInstall(cfg.commands.pre_install).join('\n');
       document.getElementById('lintCmd').value = cfg.commands.lint;
       document.getElementById('unitTestCmd').value = cfg.commands.unit_test;
       document.getElementById('e2eTestCmd').value = cfg.commands.e2e_test;
@@ -329,7 +345,10 @@
           repo_url: currentConfig ? currentConfig.git.repo_url : '',
         },
         commands: {
-          pre_install: currentConfig ? currentConfig.commands.pre_install : '',
+          pre_install: document.getElementById('preInstallCmds').value
+            .split('\n')
+            .map((s) => s.trim())
+            .filter(Boolean),
           install: currentConfig ? currentConfig.commands.install : '',
           lint: document.getElementById('lintCmd').value,
           unit_test: document.getElementById('unitTestCmd').value,

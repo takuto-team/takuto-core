@@ -83,7 +83,16 @@ If your project uses a private npm registry (e.g., AWS CodeArtifact), copy your 
 podman run --rm -v maestro_aws-config:/data -v ~/.aws:/src:ro alpine cp -r /src/. /data/
 ```
 
-Then configure the `pre_install` command in `config.toml`:
+Then configure `pre_install` in `config.toml` (an array of shell commands, run in order):
+
+```toml
+[commands]
+pre_install = [
+  "aws codeartifact login --tool npm --repository REPO --domain DOMAIN --domain-owner OWNER_ID",
+]
+```
+
+For a single command you can still use a string (backward compatible):
 
 ```toml
 [commands]
@@ -145,7 +154,7 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `pre_install` | `""` | Command to run before install (e.g., registry auth) |
+| `pre_install` | `[]` | Shell commands to run in order before install (e.g., registry auth); a single string is accepted for backward compatibility |
 | `install` | `""` | Dependency install command (e.g., `"npm ci"`) |
 | `lint` | `""` | Linting command (e.g., `"npm run lint"`) |
 | `unit_test` | `""` | Unit test command (e.g., `"npm test"`) |
@@ -304,6 +313,10 @@ The Cursor CLI runs Node with **`--use-system-ca`**, which only exists on **Node
 ### Cursor `agent login`: `/usr/local/bin/node: No such file or directory`
 
 The `agent` wrapper expects **`node`** next to it on **`PATH`** (typically `/usr/local/bin/node`). The current image installs the official Node tarball into **`/usr/local`**, so this usually means the image is outdated or the binary was removed — **rebuild** the image.
+
+### Cursor `agent login`: `Cannot find module '/usr/local/bin/index.js'`
+
+The Cursor install script puts **`agent`** next to **`index.js`** and a bundled **`node`** under **`~/.local/share/cursor-agent/versions/...`**. Copying only the launcher script to **`/usr/local/bin/agent`** makes it resolve **`index.js`** relative to **`/usr/local/bin`**, where that file does not exist. Current Dockerfiles copy the full **`cursor-agent`** tree to **`/usr/local/share/cursor-agent`** and symlink **`/usr/local/bin/agent`** to the real launcher — **rebuild** the image (`docker compose build` / `podman compose build --no-cache`).
 
 ### Project tool versions (`mise`)
 

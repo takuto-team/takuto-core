@@ -1,6 +1,8 @@
+use std::fmt;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::de::{self, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{MaestroError, Result};
 
@@ -123,10 +125,59 @@ pub struct GitConfig {
     pub repo_path: String,
 }
 
+fn deserialize_pre_install_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct PreInstallVisitor;
+
+    impl<'de> Visitor<'de> for PreInstallVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a string or array of strings")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
+            let t = v.trim();
+            if t.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![t.to_string()])
+            }
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<Self::Value, E> {
+            let t = v.trim();
+            if t.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![t.to_string()])
+            }
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut out = Vec::new();
+            while let Some(s) = seq.next_element::<String>()? {
+                let t = s.trim();
+                if !t.is_empty() {
+                    out.push(t.to_string());
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_any(PreInstallVisitor)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandsConfig {
-    #[serde(default)]
-    pub pre_install: String,
+    #[serde(default, deserialize_with = "deserialize_pre_install_vec")]
+    pub pre_install: Vec<String>,
     #[serde(default)]
     pub install: String,
     #[serde(default)]
@@ -244,7 +295,7 @@ impl Default for GitConfig {
 impl Default for CommandsConfig {
     fn default() -> Self {
         Self {
-            pre_install: String::new(),
+            pre_install: Vec::new(),
             install: String::new(),
             lint: String::new(),
             unit_test: String::new(),
@@ -391,6 +442,7 @@ base_branch = "main"
 repo_path = "/workspace"
 
 [commands]
+pre_install = []
 lint = "npm run lint"
 unit_test = "npm test"
 e2e_test = "npm run test:e2e"
@@ -440,5 +492,70 @@ step_timeout_secs = 600
         let mut config = Config::default();
         config.jira.item_types.clear();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_pre_install_string_compat() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            br#"
+[general]
+poll_interval_secs = 30
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+
+[commands]
+pre_install = "echo one"
+
+[web]
+port = 8080
+
+[claude]
+address_ticket_passes = 3
+step_timeout_secs = 600
+"#,
+        )
+        .unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(config.commands.pre_install, vec!["echo one".to_string()]);
+    }
+
+    #[test]
+    fn test_pre_install_array() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            br#"
+[general]
+poll_interval_secs = 30
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+
+[commands]
+pre_install = ["echo a", "echo b"]
+
+[web]
+port = 8080
+
+[claude]
+address_ticket_passes = 3
+step_timeout_secs = 600
+"#,
+        )
+        .unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(
+            config.commands.pre_install,
+            vec!["echo a".to_string(), "echo b".to_string()]
+        );
     }
 }

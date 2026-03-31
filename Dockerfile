@@ -52,9 +52,15 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Install Claude Code CLI (npm global)
 RUN npm install -g @anthropic-ai/claude-code
 
-# Cursor Agent CLI (for [agent] provider = "cursor"); copy wrapper to PATH (Node above is already /usr/local/bin/node).
+# Cursor Agent CLI (for [agent] provider = "cursor"). The launcher resolves paths with realpath("$0");
+# copying only the script to /usr/local/bin breaks it (looks for index.js next to the copy). Install the
+# full package under /usr/local and symlink agent into PATH.
 RUN curl -fsSL https://cursor.com/install | bash \
-    && ( [ -x /root/.local/bin/agent ] && install -m 755 /root/.local/bin/agent /usr/local/bin/agent || true )
+    && AGENT_REAL="$(readlink -f /root/.local/bin/agent)" \
+    && cp -a /root/.local/share/cursor-agent /usr/local/share/cursor-agent \
+    && ln -sf "/usr/local/share/cursor-agent${AGENT_REAL#/root/.local/share/cursor-agent}" /usr/local/bin/agent \
+    && chmod -R a+rX /usr/local/share/cursor-agent \
+    && test -f "$(dirname "$(readlink -f /usr/local/bin/agent)")/index.js"
 
 # Install Playwright CLI with Chromium
 RUN npx playwright install --with-deps chromium

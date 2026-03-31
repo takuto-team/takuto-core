@@ -8,8 +8,8 @@ flowchart TD
     B --> C[Move ticket to In Progress]
     C --> D[Retrieve ticket details + linked items]
     D --> E[Create git worktree from base branch]
-    E --> F{pre_install configured?}
-    F -->|Yes| G[Run pre_install command<br/>e.g. aws codeartifact login]
+    E --> F{pre_install commands?}
+    F -->|Yes| G[Run each pre_install shell command in order<br/>e.g. aws codeartifact login]
     F -->|No| H[Run install command<br/>e.g. npm ci]
     G --> H
     H --> I[Address Ticket Pass 1/3<br/>Claude Code /address-ticket]

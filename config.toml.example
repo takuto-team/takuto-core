@@ -20,7 +20,8 @@ repo_path = "/workspace"
 
 [commands]
 # Command to run before install (e.g., registry auth: "aws codeartifact login ...")
-pre_install = ""
+# Shell commands run in order before install (e.g. registry auth). Use a TOML array; a single string is still accepted.
+pre_install = []
 install = "npm install"
 lint = "npm run lint"
 unit_test = "npm test"

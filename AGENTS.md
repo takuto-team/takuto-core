@@ -70,7 +70,7 @@ Implemented in `run_workflow_steps` inside `workflow/engine.rs`:
 1. **Assign** ticket (assignee name `"maestro"` in code) and move to **In Progress** (failures may be logged/`[DRY/SKIP]` but workflow can continue).
 2. **Jira details** via `JiraClient` / `get_ticket_details`; populate description, summary, type on `Workflow`.
 3. **Worktree** from `git::worktree::branch_name_for_ticket` and configured `base_branch`.
-4. Optional **`pre_install`** then optional **`install`** shell commands in the worktree (streaming output).
+4. Optional **`pre_install`** (array of shell commands, or one string for backward compatibility) then optional **`install`** in the worktree (streaming output).
 5. **`address_ticket_passes`** iterations (from `[claude] address_ticket_passes`, default `3`): for each pass, the engine runs either **`ClaudeSession`** (Claude Code CLI) or **`CursorSession`** (`cursor/session.rs`, Cursor Agent CLI) based on **`[agent] provider`** (`claude` | `cursor`). Then **`PmAgent::validate_plan`** runs the same provider for a short plan check, then address/review resume the same session via **`--resume`** where supported.
 6. **Lint / unit / e2e** phases run configured commands; on failure, the configured provider’s **fix session** runs up to `general.max_fix_attempts`, with commits between stages as implemented in the engine.
 7. **Create PR** via `create_pr` on the actions trait (title/body/branch/base per implementation).
@@ -97,7 +97,7 @@ File logging: `WorkflowLogWriter` writes under `{repo_path}/logs/<TICKET>.log`.
 
 `crates/maestro-core/src/cursor/session.rs` spawns **`cursor_cli`** (e.g. `agent`) with **print** mode, **`--output-format stream-json`**, **`--stream-partial-output`**, **`--trust`**, **`--force`**, **`--approve-mcps`**, **`--sandbox disabled`**, **`--workspace <worktree>`**, optional **`--resume`**, optional **`--model`**. This matches Cursor’s non-interactive / trusted automation flags from their CLI docs.
 
-The **Docker image** installs **Node.js 23+** from **nodejs.org** (not Node 20): the Cursor `agent` wrapper invokes **`node --use-system-ca`**, which requires **Node ≥ 23.9** on Linux; older Node fails with `bad option: --use-system-ca`.
+The **Docker image** installs **Node.js 23+** from **nodejs.org** (not Node 20): the Cursor **`cursor-agent`** launcher runs its bundled **`node`** with **`--use-system-ca`**, which requires **Node ≥ 23.9** on Linux; older Node fails with `bad option: --use-system-ca`. The image copies the **full** Cursor Agent package under **`/usr/local/share/cursor-agent`** and symlinks **`/usr/local/bin/agent`** to that launcher (copying only the script to **`/usr/local/bin`** breaks **`index.js`** resolution).
 
 The image also installs **mise** (apt). **`process::worktree_has_mise_config`** detects **`.mise.toml`**, **`mise.toml`**, **`.tool-versions`**, or **`.config/mise/config.toml`**; the workflow runs **`mise install`** in the worktree, then **`run_shell_command` / `run_shell_command_streaming`** use **`mise exec -- sh -c …`** when that detection matches. **`run_command`** (argv, e.g. **`acli`**) is unchanged.
 
@@ -156,7 +156,7 @@ Loaded in `crates/maestro-core/src/config.rs` — sections:
 - **`general`**: `dry_mode`, `poll_interval_secs`, `max_concurrent_workflows`, `max_fix_attempts`, `log_level`
 - **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site`, `email`
 - **`git`**: `base_branch`, `repo_url`, `repo_path`
-- **`commands`**: `pre_install`, `install`, `lint`, `unit_test`, `e2e_test`
+- **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`, `lint`, `unit_test`, `e2e_test`
 - **`web`**: `host`, `port`
 - **`claude`**: `skills_path`, `address_ticket_passes`, `step_timeout_secs`, `figma_api_token`, `model`
 - **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`
