@@ -1,4 +1,7 @@
 /target
+.DS_Store
+.claude/
+
 config.toml
 .env
 maestro.env
