@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.6
 # Stage 1: Build
 FROM rust:1.85-bookworm AS builder
 
@@ -106,9 +107,15 @@ RUN npm install -g figma-cli || echo "WARN: figma-cli install failed, Figma feat
 COPY docker/egress-rules.sh /usr/local/bin/egress-rules.sh
 RUN chmod +x /usr/local/bin/egress-rules.sh
 
-# Optional skill sync used by compose_up_commands (see config.toml); avoids fragile multiline hooks in TOML.
-COPY docker/maestro-sync-cheat-sheet-skills.sh /usr/local/bin/maestro-sync-cheat-sheet-skills.sh
-RUN chmod 0755 /usr/local/bin/maestro-sync-cheat-sheet-skills.sh
+# Merge optional ./skills from build context into image (empty if missing or empty dir).
+RUN mkdir -p /opt/maestro/project-skills-baked /opt/maestro/project-skills-host
+RUN --mount=type=bind,source=.,target=/ctx \
+    if [ -d /ctx/skills ] && [ -n "$(ls -A /ctx/skills 2>/dev/null)" ]; then \
+      cp -a /ctx/skills/. /opt/maestro/project-skills-baked/; \
+    fi
+
+COPY docker/merge-project-skills.sh /usr/local/bin/merge-project-skills.sh
+RUN chmod 0755 /usr/local/bin/merge-project-skills.sh
 
 # Copy Maestro binary from builder
 COPY --from=builder /app/target/release/maestro /usr/local/bin/maestro

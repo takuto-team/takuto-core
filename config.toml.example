@@ -48,24 +48,14 @@ cursor_cli = "agent"
 cursor_model = "Auto"
 
 [docker]
-# Shell commands (`bash -c`) run once during `docker compose build`, after tools are installed.
-# Use for per-project setup such as installing Claude Code skills (replaces baked-in image install).
-# The file used at build time is set by compose build arg MAESTRO_BUILD_CONFIG (default: config.toml.example).
-# Example:
-# build_commands run at image build time as root (see compose build arg MAESTRO_BUILD_CONFIG). Use for
-# dependencies your compose_up_commands need (e.g. apt install rsync), not for layout that belongs in compose_up.
+# build_commands: optional `bash -c` steps during image build (see MAESTRO_BUILD_CONFIG in docker-compose).
+# Claude/Cursor skills: use a gitignored ./skills folder at the Maestro repo root; merged on container start (README).
 # build_commands = [
-#   "apt-get update && apt-get install -y --no-install-recommends rsync",
+#   "apt-get update && apt-get install -y --no-install-recommends some-package",
 # ]
 build_commands = []
 
-# compose_up_commands run on every `docker compose up` as the maestro user, after auth preflight, before the server.
-# Avoid long multiline TOML hooks for root-only volume work (bash/sudo parsing issues). Cheat-sheet sync lives in
-# the image as /usr/local/bin/maestro-sync-cheat-sheet-skills.sh and installs to /home/maestro/.claude/skills,
-# /home/maestro/.cursor/skills, and /home/maestro/.cursor/skills-cursor — not /workspace/.cursor.
-# compose_up_commands = [
-#   "if ! sudo -n /usr/bin/bash -c 'true' 2>/dev/null; then echo 'rebuild image (sudoers for bash)' >&2; exit 1; fi; sudo -n /usr/bin/bash /usr/local/bin/maestro-sync-cheat-sheet-skills.sh",
-# ]
+# compose_up_commands: optional; run as maestro after preflight. Skills from ./skills do not require a hook here.
 compose_up_commands = []
 
 [network]

@@ -2,3 +2,6 @@
 config.toml
 .env
 maestro.env
+
+# Optional per-developer Claude/Cursor skills merged into container home on start (see README).
+/skills

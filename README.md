@@ -69,9 +69,9 @@ Steps:
 4. **Cursor Agent** (optional) — `agent login` (skip with `s` if you use Claude only or rely on `CURSOR_API_KEY` in `maestro.env`)
 5. **Repository** (optional) — clone or refresh from `[git] repo_url` into `/workspace` (skip with `s` if you manage the workspace yourself)
 
-Custom Claude skills are **not** installed automatically. Add install commands to **`[docker] build_commands`** and/or **`compose_up_commands`** in `config.toml`, and point **`MAESTRO_BUILD_CONFIG`** at that file when building if hooks should run at image build time.
+Optional **Claude/Cursor skills** from a gitignored **`./skills`** folder at the **Maestro repo root** are merged into the container home volumes on **every** start (see **Project skills** under Docker Volumes). For anything else, add **`[docker] build_commands`** / **`compose_up_commands`** in `config.toml` and point **`MAESTRO_BUILD_CONFIG`** at that file when building.
 
-On every **`docker compose up`**, the entrypoint runs **`maestro preflight`** (GitHub + Atlassian + provider-specific auth), then **`[docker] compose_up_commands`**, then starts the server.
+On every **`docker compose up`**, the entrypoint merges **`./skills`**, runs **`maestro preflight`** (GitHub + Atlassian + provider-specific auth), then **`[docker] compose_up_commands`**, then starts the server.
 
 Auth state persists in Docker volumes across container restarts (including `cursor-auth` for Cursor Agent when using interactive login).
 
@@ -270,14 +270,36 @@ The container uses iptables to restrict outbound traffic. Allowed by default:
 | `npm-cache` | `/home/maestro/.npm` | npm download cache |
 | `aws-config` | `/home/maestro/.aws` | AWS credentials (optional) |
 
-**Skills and `compose_up_commands`:** Claude/Cursor skills must be written **inside the container** under **`/home/maestro/.claude`** and **`/home/maestro/.cursor`** (the named volumes above). They do **not** appear in your project folder on the host. If a hook uses **`$HOME/.claude/skills`** but **`HOME`** is empty (seen with some Podman setups), files can end up under **`/.claude/...`** on the writable layer and **disappear** on the next recreate — use **`MAESTRO_HOME`** / absolute paths. Compose sets **`MAESTRO_HOME=/home/maestro`** and **`maestro docker-hooks`** passes **`HOME`**, **`MAESTRO_HOME`**, and **`CURSOR_CONFIG_DIR`** into each hook. Verify after `up`:
+### Project skills (`./skills`)
+
+Add a **`skills`** directory at the **root of the Maestro project** (same level as `docker-compose.yml`). It is **gitignored** so each developer or CI can use different skill sets without committing them.
+
+- **`docker compose build`:** If **`./skills`** exists and is non-empty in the build context, its contents are **baked** into the image under **`/opt/maestro/project-skills-baked`** (BuildKit `RUN --mount=type=bind`). Requires **BuildKit** (`DOCKER_BUILDKIT=1` for Docker; Podman 4+ supports the same Dockerfile syntax).
+- **`docker compose up`:** Compose bind-mounts **`./skills`** read-only to **`/opt/maestro/project-skills-host`**. If the host path is missing, the engine typically creates an **empty** directory; the merge step is then a no-op for the host layer.
+
+On **each container start** (as **root**, before switching to **`maestro`**), **`merge-project-skills.sh`** copies each **top-level** entry from:
+
+1. **`/opt/maestro/project-skills-baked`** (image), then  
+2. **`/opt/maestro/project-skills-host`** (host **`./skills`**),
+
+into all of:
+
+- **`/home/maestro/.claude/skills`**
+- **`/home/maestro/.cursor/skills`**
+- **`/home/maestro/.cursor/skills-cursor`**
+
+**Precedence:** For a given skill **name**, the **host `./skills`** copy **overwrites** the baked copy. Anything already on the named volumes whose name is **not** in those layers is **left unchanged**. Replacing a name removes the old tree under that name on all three destinations, then copies the project version.
+
+Verify after `up`:
 
 ```bash
 docker compose exec maestro ls -la /home/maestro/.claude/skills
 docker compose exec maestro ls -la /home/maestro/.cursor/skills
 ```
 
-**Do not confuse** **`/workspace/.cursor`** (files from your cloned repository: rules, commands, etc.) with **`/home/maestro/.cursor`** on the **`cursor-auth`** volume. The default cheat-sheet **`compose_up`** hook installs skills under **`/home/maestro/.cursor/skills`** and **`/home/maestro/.cursor/skills-cursor`**, not next to **`/workspace/.cursor/rules`**.
+**Do not confuse** **`/workspace/.cursor`** (files from your **cloned app repo**: rules, commands, etc.) with **`/home/maestro/.cursor`** on the **`cursor-auth`** volume. Project skills land under **`/home/maestro/.cursor/skills`**, not next to **`/workspace/.cursor/rules`**.
+
+**`compose_up_commands`:** Optional extra steps run as **`maestro`** after preflight. If a hook writes under **`~/.claude`**, ensure **`HOME`** / **`MAESTRO_HOME`** are set (Compose sets them; **`maestro docker-hooks`** passes **`HOME`**, **`MAESTRO_HOME`**, **`CURSOR_CONFIG_DIR`**).
 
 ### Non-root Execution
 
