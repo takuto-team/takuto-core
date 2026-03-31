@@ -139,7 +139,7 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 | `project_keys` | `[]` | Jira project keys to poll (e.g., `["PROJ"]`) |
 | `item_types` | `["Task", "Bug"]` | Ticket types to handle |
 | `jql_filter` | `""` | Additional JQL filter |
-| `site` | `""` | Jira site (e.g., `"company.atlassian.net"`) — used for token auth and egress rules |
+| `site` | `""` | Jira site host or base URL (e.g., `"company.atlassian.net"`) — token auth, egress rules, and the Jira link in auto-generated PR bodies (empty → `jira.atlassian.net`) |
 | `email` | `""` | Jira user email — used for token auth |
 
 ### `[git]`
@@ -147,6 +147,7 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 | Key | Default | Description |
 |-----|---------|-------------|
 | `base_branch` | `"main"` | Branch to create worktrees from |
+| `remote` | `"origin"` | Git remote name for fetch, worktree base ref, and push |
 | `repo_url` | `""` | Git repository URL (cloned during setup) |
 | `repo_path` | `"/workspace"` | Path inside container |
 

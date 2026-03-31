@@ -153,12 +153,19 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Arc::new(RwLock::new(config));
 
-    let repo_path = PathBuf::from(&config.read().await.git.repo_path);
-    let actions: Arc<dyn ExternalActions> = if config.read().await.general.dry_mode {
+    let (repo_path, git_remote, dry_mode) = {
+        let c = config.read().await;
+        (
+            PathBuf::from(&c.git.repo_path),
+            c.git.remote.clone(),
+            c.general.dry_mode,
+        )
+    };
+    let actions: Arc<dyn ExternalActions> = if dry_mode {
         info!("Running in DRY MODE — no external writes");
-        Arc::new(DryRunActions::new(repo_path))
+        Arc::new(DryRunActions::new(repo_path, git_remote))
     } else {
-        Arc::new(RealActions::new(repo_path))
+        Arc::new(RealActions::new(repo_path, git_remote))
     };
 
     let engine = Arc::new(WorkflowEngine::new(config.clone(), actions.clone()));

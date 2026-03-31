@@ -73,7 +73,7 @@ Implemented in `run_workflow_steps` inside `workflow/engine.rs`:
 4. Optional **`pre_install`** (array of shell commands, or one string for backward compatibility) then optional **`install`** in the worktree (streaming output).
 5. **`address_ticket_passes`** iterations (from `[claude] address_ticket_passes`, default `3`): for each pass, the engine runs either **`ClaudeSession`** (Claude Code CLI) or **`CursorSession`** (`cursor/session.rs`, Cursor Agent CLI) based on **`[agent] provider`** (`claude` | `cursor`). Then **`PmAgent::validate_plan`** runs the same provider for a short plan check, then address/review resume the same session via **`--resume`** where supported.
 6. **Lint / unit / e2e** phases run configured commands; on failure, the configured provider’s **fix session** runs up to `general.max_fix_attempts`, with commits between stages as implemented in the engine.
-7. **Create PR** via `create_pr` on the actions trait (title/body/branch/base per implementation).
+7. **Create PR** via `create_pr` on the actions trait (title/body/branch/base per implementation). The PR body includes a Jira link built from **`[jira] site`** (`https://{site}/browse/{key}` after normalizing scheme; if `site` is empty, `jira.atlassian.net` is used).
 
 Pause/resume: workflow state wraps prior state in `Paused`; `wait_if_paused` blocks the driver until resumed.
 
@@ -154,8 +154,8 @@ Static files: embedded from `crates/maestro-web/src/assets/` (e.g. `index.html`,
 Loaded in `crates/maestro-core/src/config.rs` — sections:
 
 - **`general`**: `dry_mode`, `poll_interval_secs`, `max_concurrent_workflows`, `max_fix_attempts`, `log_level`
-- **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site`, `email`
-- **`git`**: `base_branch`, `repo_url`, `repo_path`
+- **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site` (auth, egress, and **PR description** Jira URL), `email`
+- **`git`**: `base_branch`, `remote` (fetch / worktree / push; default `origin`), `repo_url`, `repo_path`
 - **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`, `lint`, `unit_test`, `e2e_test`
 - **`web`**: `host`, `port`
 - **`claude`**: `skills_path`, `address_ticket_passes`, `step_timeout_secs`, `figma_api_token`, `model`

@@ -63,6 +63,12 @@
               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
             <p class="mt-1.5 text-xs text-gray-600">Branch that PRs will be created against</p>
           </div>
+          <div>
+            <label for="gitRemote" class="block text-sm font-medium text-gray-300 mb-1.5">Git remote</label>
+            <input type="text" id="gitRemote" placeholder="origin"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600">Remote name for fetch, worktree base ref, and push (e.g. upstream)</p>
+          </div>
         </div>
       </section>
 
@@ -282,6 +288,10 @@
 
     function populateForm(cfg) {
       document.getElementById('baseBranch').value = cfg.git.base_branch;
+      document.getElementById('gitRemote').value =
+        cfg.git.remote != null && String(cfg.git.remote).trim() !== ''
+          ? cfg.git.remote
+          : 'origin';
       document.getElementById('pollInterval').value = cfg.general.poll_interval_secs;
       document.getElementById('preInstallCmds').value = normalizePreInstall(cfg.commands.pre_install).join('\n');
       document.getElementById('lintCmd').value = cfg.commands.lint;
@@ -348,6 +358,7 @@
         },
         git: {
           base_branch: document.getElementById('baseBranch').value,
+          remote: document.getElementById('gitRemote').value.trim() || 'origin',
           repo_path: currentConfig ? currentConfig.git.repo_path : '/workspace',
           repo_url: currentConfig ? currentConfig.git.repo_url : '',
         },

@@ -10,11 +10,15 @@ use crate::process::{self, CommandOutput};
 
 pub struct DryRunActions {
     pub repo_path: PathBuf,
+    git_remote: String,
 }
 
 impl DryRunActions {
-    pub fn new(repo_path: PathBuf) -> Self {
-        Self { repo_path }
+    pub fn new(repo_path: PathBuf, git_remote: String) -> Self {
+        Self {
+            repo_path,
+            git_remote,
+        }
     }
 }
 
@@ -70,10 +74,10 @@ impl ExternalActions for DryRunActions {
             return Ok(worktree_path);
         }
 
-        // Fetch the base branch from origin
-        info!(base = base, "Fetching base branch from origin");
+        let remote = &self.git_remote;
+        info!(base = base, remote = %remote, "Fetching base branch from git remote");
         let fetch_output = process::run_shell_command(
-            &format!("git fetch origin {base}"),
+            &format!("git fetch {remote} {base}"),
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -87,7 +91,7 @@ impl ExternalActions for DryRunActions {
 
         let output = process::run_shell_command(
             &format!(
-                "git worktree add -b {branch} {} origin/{base}",
+                "git worktree add -b {branch} {} {remote}/{base}",
                 worktree_path.display()
             ),
             &self.repo_path,
@@ -140,7 +144,12 @@ impl ExternalActions for DryRunActions {
         branch: &str,
         _base: &str,
     ) -> Result<String> {
-        info!(title = title, branch = branch, "[DRY] Would create pull request");
+        info!(
+            title = title,
+            branch = branch,
+            remote = %self.git_remote,
+            "[DRY] Would push branch to remote and create pull request"
+        );
         Ok(format!("https://dry-run/pr/{branch}"))
     }
 

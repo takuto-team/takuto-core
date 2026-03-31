@@ -9,12 +9,14 @@ log_level = "info"
 project_keys = ["PROJ"]
 item_types = ["Task", "Bug"]
 jql_filter = ""
-# Required for token-based auth (leave empty to use OAuth during setup)
+# Host or https:// URL (token auth, egress, and Jira link in PR body; empty → jira.atlassian.net)
 site = "yourcompany.atlassian.net"
 email = "you@company.com"
 
 [git]
 base_branch = "main"
+# Git remote for fetch, worktree base ref, and push (default: origin)
+remote = "origin"
 repo_url = "https://github.com/org/repo.git"
 repo_path = "/workspace"
 

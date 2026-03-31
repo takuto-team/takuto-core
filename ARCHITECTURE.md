@@ -644,6 +644,7 @@ jql_filter = ""  # optional additional JQL
 
 [git]
 base_branch = "main"
+remote = "origin"
 repo_path = "/workspace"
 
 [commands]

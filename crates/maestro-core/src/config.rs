@@ -140,6 +140,9 @@ pub struct JiraConfig {
 pub struct GitConfig {
     #[serde(default = "default_base_branch")]
     pub base_branch: String,
+    /// Git remote name for fetch, worktree base ref, and push (default `origin`).
+    #[serde(default = "default_git_remote")]
+    pub remote: String,
     #[serde(default)]
     pub repo_url: String,
     #[serde(default = "default_repo_path")]
@@ -254,6 +257,9 @@ fn default_base_branch() -> String {
 fn default_repo_path() -> String {
     "/workspace".to_string()
 }
+fn default_git_remote() -> String {
+    "origin".to_string()
+}
 fn default_host() -> String {
     "0.0.0.0".to_string()
 }
@@ -307,6 +313,7 @@ impl Default for GitConfig {
     fn default() -> Self {
         Self {
             base_branch: default_base_branch(),
+            remote: default_git_remote(),
             repo_url: String::new(),
             repo_path: default_repo_path(),
         }
@@ -431,6 +438,12 @@ impl Config {
             ));
         }
 
+        if self.git.remote.trim().is_empty() {
+            return Err(MaestroError::Config(
+                "git.remote must be a non-empty remote name (e.g. origin)".to_string(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -500,6 +513,7 @@ step_timeout_secs = 600
         assert_eq!(config.general.poll_interval_secs, 60);
         assert_eq!(config.web.port, 8080);
         assert_eq!(config.agent.cursor_model, "Auto");
+        assert_eq!(config.git.remote, "origin");
     }
 
     #[test]
@@ -528,6 +542,13 @@ step_timeout_secs = 600
     fn test_validate_empty_item_types() {
         let mut config = Config::default();
         config.jira.item_types.clear();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_empty_git_remote() {
+        let mut config = Config::default();
+        config.git.remote = "   ".to_string();
         assert!(config.validate().is_err());
     }
 

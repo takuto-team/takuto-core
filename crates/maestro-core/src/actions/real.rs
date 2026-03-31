@@ -10,11 +10,15 @@ use crate::process::{self, CommandOutput};
 
 pub struct RealActions {
     pub repo_path: PathBuf,
+    git_remote: String,
 }
 
 impl RealActions {
-    pub fn new(repo_path: PathBuf) -> Self {
-        Self { repo_path }
+    pub fn new(repo_path: PathBuf, git_remote: String) -> Self {
+        Self {
+            repo_path,
+            git_remote,
+        }
     }
 }
 
@@ -103,10 +107,11 @@ impl ExternalActions for RealActions {
             return Ok(worktree_path);
         }
 
-        // Fetch the base branch from origin to ensure it's available locally
-        info!(base = base, "Fetching base branch from origin");
+        let remote = &self.git_remote;
+        // Fetch the base branch from the configured remote to ensure it's available locally
+        info!(base = base, remote = %remote, "Fetching base branch from git remote");
         let fetch_output = process::run_shell_command(
-            &format!("git fetch origin {base}"),
+            &format!("git fetch {remote} {base}"),
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -118,10 +123,10 @@ impl ExternalActions for RealActions {
             )));
         }
 
-        // Create worktree from origin/<base>
+        // Create worktree from <remote>/<base>
         let output = process::run_shell_command(
             &format!(
-                "git worktree add -b {branch} {} origin/{base}",
+                "git worktree add -b {branch} {} {remote}/{base}",
                 worktree_path.display()
             ),
             &self.repo_path,
@@ -177,9 +182,10 @@ impl ExternalActions for RealActions {
     ) -> Result<String> {
         info!(title = title, branch = branch, base = base, "Creating pull request");
 
+        let remote = &self.git_remote;
         // Push branch first
         let push_output = process::run_shell_command(
-            &format!("git push -u origin {branch}"),
+            &format!("git push -u {remote} {branch}"),
             &self.repo_path,
             CancellationToken::new(),
         )
