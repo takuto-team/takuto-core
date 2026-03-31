@@ -35,12 +35,17 @@ if [ "$(id -u)" = "0" ]; then
         fi
     fi
 
-    exec su - maestro -c "cd /workspace && exec /usr/local/bin/entrypoint.sh $(printf '%q ' "$@")"
+    # Use runuser (not `su -`): login shells can block without a TTY under Podman/Docker, and `su -`
+    # strips the environment (e.g. MAESTRO_CONFIG, FIGMA_API_TOKEN from compose).
+    echo "[maestro] Starting as maestro user (preflight, hooks, server)..."
+    exec runuser -u maestro -- /bin/bash -c "cd /workspace && exec /usr/local/bin/entrypoint.sh $(printf '%q ' "$@")"
 fi
 
 # ─── Everything below runs as the maestro user ───────────────────────────────
 
 export HOME="${HOME:-/home/maestro}"
+# Match docker-compose cursor-auth volume so `agent login` (setup) and `agent` (runtime) use the same store.
+export CURSOR_CONFIG_DIR="${CURSOR_CONFIG_DIR:-$HOME/.cursor}"
 export MISE_DATA_DIR="/home/maestro/.local/share/mise"
 export MISE_CACHE_DIR="/home/maestro/.cache/mise"
 export MISE_CONFIG_DIR="/home/maestro/.config/mise"
@@ -198,10 +203,12 @@ fi
 
 # --- Normal mode ---
 
+echo "[maestro] Running auth preflight..."
 if ! /usr/local/bin/maestro --config "$CONFIG_FILE" preflight; then
     exit 1
 fi
 
+echo "[maestro] Running docker startup hooks (compose_up_commands)..."
 if ! /usr/local/bin/maestro --config "$CONFIG_FILE" docker-hooks startup; then
     exit 1
 fi
@@ -217,4 +224,5 @@ export USER="maestro"
 
 git config --global --add safe.directory /workspace
 gh auth setup-git 2>/dev/null || true
+echo "[maestro] Starting Maestro server..."
 exec /usr/local/bin/maestro "$@"

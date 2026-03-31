@@ -174,7 +174,7 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 | `address_ticket_passes` | `3` | Number of address-ticket + review rounds |
 | `step_timeout_secs` | `1800` | Timeout per Claude session (30 min) |
 | `figma_api_token` | `""` | Figma API token for design references |
-| `model` | `""` | Model override; also used when `[agent] provider = "cursor"` |
+| `model` | `""` | Model override for Claude Code when non-empty |
 
 ### `[agent]`
 
@@ -182,14 +182,15 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 |-----|---------|-------------|
 | `provider` | `"claude"` | `claude` (Claude Code CLI) or `cursor` (Cursor Agent CLI) for implement / review / fix / PM steps |
 | `cursor_cli` | `"agent"` | Executable name or path for Cursor Agent (see [Cursor CLI](https://cursor.com/docs/cli/overview)); only used when `provider = "cursor"` |
+| `cursor_model` | `"Auto"` | Cursor Agent `--model`; `Auto` (any case) omits the flag so Cursor picks the model |
 
-The image includes the Cursor Agent CLI (`agent` in `/usr/local/bin`). Run `docker compose run --rm -it maestro setup` and complete the Cursor step, or set **`CURSOR_API_KEY`** in `maestro.env`. Ensure egress allows Cursor’s API hosts if you use a firewall.
+The image includes the Cursor Agent CLI (`agent` in `/usr/local/bin`). Run `docker compose run --rm -it maestro setup` and complete the Cursor step, or set **`CURSOR_API_KEY`** in `maestro.env` (recommended for unattended / non-TTY `docker compose up`). **`docker-compose.yml`** sets **`CURSOR_CONFIG_DIR=/home/maestro/.cursor`** so browser login matches the **`cursor-auth`** volume; without that, tokens can land under **`~/.config/cursor`** and look “missing” on the next start. Ensure egress allows Cursor’s API hosts if you use a firewall.
 
 ### `[docker]`
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `build_commands` | `[]` | Shell commands (`sh -c`) run **once** during `docker compose build` (config file chosen by build arg `MAESTRO_BUILD_CONFIG`) |
+| `build_commands` | `[]` | Shell commands (`bash -c`) run **once** during `docker compose build` (config file chosen by build arg `MAESTRO_BUILD_CONFIG`) |
 | `compose_up_commands` | `[]` | Shell commands run on **every** `docker compose up` after auth preflight, before the server |
 
 ### `[network]`
@@ -321,6 +322,10 @@ The Cursor install script puts **`agent`** next to **`index.js`** and a bundled 
 ### Project tool versions (`mise`)
 
 The image installs **[mise](https://mise.jdx.dev/)** from the official apt repository. Repositories can pin Node, Python, and other tools with **`.mise.toml`**, **`mise.toml`**, **`.tool-versions`**, or **`.config/mise/config.toml`**. Maestro runs **`mise install`** in the worktree when such a file is present, then runs **`[commands]`** shell steps through **`mise exec`** so those versions apply. Default **Node 23** in **`/usr/local`** remains for the Cursor **`agent`** wrapper; project Node from mise is used inside **`mise exec`** (and via shims on **`PATH`**). Tool installs persist in the **`mise-data`** and **`mise-cache`** volumes.
+
+### `docker compose up` stalls after “Egress rules applied”
+
+The entrypoint then switches to the **`maestro`** user and runs **auth preflight** (`gh`, `acli`, and optionally **`agent status`** or **`claude auth status`**). A hang here is often **`su -`** waiting on a TTY under Podman, or **`agent status`** blocking without a TTY / leaving child processes alive. The image uses **`runuser`** (not a login **`su -`**), preflight logs each step (`[maestro preflight] …`), **`agent status`** has a **45s** timeout and kills the **process group**, and Cursor skips **`agent status`** when **`CURSOR_API_KEY`** is set or when **`cli-config.json`** (under **`CURSOR_CONFIG_DIR`**) already contains token-like fields. Rebuild the image so **`maestro` is current**. If Cursor still says not authenticated inside the container, re-run **`agent login`** once after upgrading (so tokens are written under **`CURSOR_CONFIG_DIR`**) or set **`CURSOR_API_KEY`**. Large **`compose_up_commands`** downloads may take minutes — you should see **`[maestro] Running docker startup hooks...`** before the hook output.
 
 ### Container name issues with Podman
 

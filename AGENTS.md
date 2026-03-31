@@ -87,7 +87,7 @@ File logging: `WorkflowLogWriter` writes under `{repo_path}/logs/<TICKET>.log`.
 
 ### Provider selection
 
-`[agent] provider` in config: **`claude`** (default) or **`cursor`**. **`[agent] cursor_cli`** sets the Cursor Agent executable (default **`agent`**). **`[claude] model`** is passed to both CLIs when non-empty.
+`[agent] provider` in config: **`claude`** (default) or **`cursor`**. **`[agent] cursor_cli`** sets the Cursor Agent executable (default **`agent`**). **`[claude] model`** is passed to Claude Code when non-empty. **`[agent] cursor_model`** (default **`Auto`**) sets Cursor Agent `--model`; **`Auto`** (any ASCII case) omits the flag so Cursor chooses the model.
 
 ### Claude Code
 
@@ -159,7 +159,7 @@ Loaded in `crates/maestro-core/src/config.rs` — sections:
 - **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`, `lint`, `unit_test`, `e2e_test`
 - **`web`**: `host`, `port`
 - **`claude`**: `skills_path`, `address_ticket_passes`, `step_timeout_secs`, `figma_api_token`, `model`
-- **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`
+- **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`, `cursor_model` (default `Auto`; omit `--model` on the Cursor CLI)
 - **`docker`**: `build_commands` (image build), `compose_up_commands` (each `docker compose up`)
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**
 
@@ -182,8 +182,8 @@ Runtime path defaults are described in `README.md` / `config.toml.example`.
 ## Docker entrypoint and CLI helpers
 
 - **`docker/entrypoint.sh`**: `setup` mode (required: `gh` + `acli`; optional: Claude, Cursor `agent login`, repo clone). Normal mode: **`maestro preflight`**, **`maestro docker-hooks startup`** (`[docker] compose_up_commands`), then **`exec maestro`** with image `CMD` args. Podman Compose often needs **`--podman-run-args="-i -t"`** for interactive setup (see README).
-- **`maestro preflight`**: validates GitHub, Atlassian, and provider-specific auth (`claude auth status` or `agent status`, unless `CURSOR_API_KEY` is set for Cursor).
-- **`maestro docker-hooks build|startup`**: runs `build_commands` or `compose_up_commands` from config as `sh -c` in `git.repo_path` (used by Dockerfile `RUN` and entrypoint).
+- **`maestro preflight`**: validates GitHub, Atlassian, and provider-specific auth. Cursor: skips **`agent status`** when **`CURSOR_API_KEY`** is set or when **`cli-config.json`** under **`CURSOR_CONFIG_DIR`** looks authenticated; otherwise **`agent status`** with timeout and process-group kill. Compose sets **`CURSOR_CONFIG_DIR=/home/maestro/.cursor`** to align with the **`cursor-auth`** volume.
+- **`maestro docker-hooks build|startup`**: runs `build_commands` or `compose_up_commands` from config as **`bash -c`** in `git.repo_path` (used by Dockerfile `RUN` and entrypoint; **`sh`** on Debian is often dash and lacks `pipefail`).
 
 ## Testing and quality
 

@@ -166,6 +166,12 @@
               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
             <p class="mt-1.5 text-xs text-gray-600">Only used when provider is Cursor. Default is <code class="text-gray-500">agent</code> (see <a href="https://cursor.com/docs/cli/overview" class="text-blue-400 hover:text-blue-300" target="_blank" rel="noopener">Cursor CLI docs</a>).</p>
           </div>
+          <div>
+            <label for="cursorModel" class="block text-sm font-medium text-gray-300 mb-1.5">Cursor model</label>
+            <input type="text" id="cursorModel" placeholder="Auto"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600">Passed as <code class="text-gray-500">--model</code> to Cursor Agent. <code class="text-gray-500">Auto</code> leaves model selection to Cursor (flag omitted).</p>
+          </div>
         </div>
       </section>
 
@@ -284,6 +290,7 @@
       document.getElementById('figmaToken').value = cfg.claude.figma_api_token;
       document.getElementById('aiProvider').value = (cfg.agent && cfg.agent.provider) ? cfg.agent.provider : 'claude';
       document.getElementById('cursorCli').value = (cfg.agent && cfg.agent.cursor_cli) ? cfg.agent.cursor_cli : 'agent';
+      document.getElementById('cursorModel').value = (cfg.agent && cfg.agent.cursor_model != null && cfg.agent.cursor_model !== '') ? cfg.agent.cursor_model : 'Auto';
       document.getElementById('dryMode').checked = cfg.general.dry_mode;
       document.getElementById('maxConcurrent').value = cfg.general.max_concurrent_workflows;
       document.getElementById('maxFixAttempts').value = cfg.general.max_fix_attempts;
@@ -365,6 +372,10 @@
         agent: {
           provider: document.getElementById('aiProvider').value,
           cursor_cli: document.getElementById('cursorCli').value.trim() || 'agent',
+          cursor_model: (() => {
+            const t = document.getElementById('cursorModel').value.trim();
+            return t || 'Auto';
+          })(),
         },
         network: currentConfig ? currentConfig.network : { extra_egress_hosts: [], allow_all_https: false },
         docker: currentConfig

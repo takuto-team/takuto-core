@@ -22,10 +22,28 @@ pub struct AgentConfig {
     /// Cursor Agent CLI executable (install script usually provides `agent` on PATH).
     #[serde(default = "default_cursor_cli")]
     pub cursor_cli: String,
+    /// Cursor Agent `--model`. Default `"Auto"` omits the flag so Cursor picks the model.
+    #[serde(default = "default_cursor_model")]
+    pub cursor_model: String,
 }
 
 fn default_cursor_cli() -> String {
     "agent".to_string()
+}
+
+fn default_cursor_model() -> String {
+    "Auto".to_string()
+}
+
+/// Value to pass to Cursor Agent `--model`, or `None` to omit the flag (automatic model selection).
+/// Empty strings and `"Auto"` (ASCII case-insensitive) mean omit `--model`.
+pub fn cursor_model_for_cli(model: &str) -> Option<&str> {
+    let t = model.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("auto") {
+        None
+    } else {
+        Some(t)
+    }
 }
 
 impl Default for AgentConfig {
@@ -33,6 +51,7 @@ impl Default for AgentConfig {
         Self {
             provider: AiAgentProvider::default(),
             cursor_cli: default_cursor_cli(),
+            cursor_model: default_cursor_model(),
         }
     }
 }
@@ -62,7 +81,7 @@ pub struct Config {
 /// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockerConfig {
-    /// Shell commands (`sh -c`) executed once while building the image, after tools are installed.
+    /// Shell commands (`bash -c`) executed once while building the image, after tools are installed.
     #[serde(default)]
     pub build_commands: Vec<String>,
     /// Shell commands executed on every `docker compose up` as the maestro user, after auth preflight, before the server.
@@ -478,6 +497,22 @@ step_timeout_secs = 600
         assert!(!config.general.dry_mode);
         assert_eq!(config.general.poll_interval_secs, 60);
         assert_eq!(config.web.port, 8080);
+        assert_eq!(config.agent.cursor_model, "Auto");
+    }
+
+    #[test]
+    fn cursor_model_for_cli_omits_auto_and_empty() {
+        assert_eq!(cursor_model_for_cli(""), None);
+        assert_eq!(cursor_model_for_cli("   "), None);
+        assert_eq!(cursor_model_for_cli("Auto"), None);
+        assert_eq!(cursor_model_for_cli("auto"), None);
+        assert_eq!(cursor_model_for_cli("AUTO"), None);
+    }
+
+    #[test]
+    fn cursor_model_for_cli_passes_concrete_name() {
+        assert_eq!(cursor_model_for_cli("gpt-4.1"), Some("gpt-4.1"));
+        assert_eq!(cursor_model_for_cli("  sonnet  "), Some("sonnet"));
     }
 
     #[test]

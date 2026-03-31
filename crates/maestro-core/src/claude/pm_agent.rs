@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::config::{AgentConfig, AiAgentProvider};
+use crate::config::{cursor_model_for_cli, AgentConfig, AiAgentProvider};
 use crate::error::{MaestroError, Result};
 use crate::process::ProcessHandle;
 
@@ -112,9 +112,9 @@ Be pragmatic — approve plans that reasonably cover the requirements even if th
                     "--workspace".to_string(),
                     workspace.to_string(),
                 ];
-                if !model.trim().is_empty() {
+                if let Some(m) = cursor_model_for_cli(model) {
                     owned.push("--model".to_string());
-                    owned.push(model.to_string());
+                    owned.push(m.to_string());
                 }
                 let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
                 let handle = ProcessHandle::spawn(&agent_cfg.cursor_cli, &arg_refs, worktree, cancel_token)

@@ -112,8 +112,8 @@ if [ -f "$NPMRC" ]; then
         allow_host "$registry_host"
     done
 fi
-# Also check worktree .npmrc files
-for npmrc in $(find /workspace/worktrees -name .npmrc 2>/dev/null); do
+# Also check worktree .npmrc files (bounded depth — unbounded find can stall on huge trees)
+for npmrc in $(find /workspace/worktrees -maxdepth 24 -name .npmrc 2>/dev/null); do
     if [ -f "$npmrc" ]; then
         for registry_host in $(grep -oP 'https?://\K[^/]+' "$npmrc" 2>/dev/null | sort -u); do
             echo "Allowing npm registry host from $npmrc: $registry_host"
