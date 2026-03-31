@@ -52,17 +52,18 @@ cursor_model = "Auto"
 # Use for per-project setup such as installing Claude Code skills (replaces baked-in image install).
 # The file used at build time is set by compose build arg MAESTRO_BUILD_CONFIG (default: config.toml.example).
 # Example:
+# build_commands run at image build time as root (see compose build arg MAESTRO_BUILD_CONFIG). Use for
+# dependencies your compose_up_commands need (e.g. apt install rsync), not for layout that belongs in compose_up.
 # build_commands = [
-#   "curl -fsSL https://example.com/install-my-skills.sh | bash",
+#   "apt-get update && apt-get install -y --no-install-recommends rsync",
 # ]
 build_commands = []
 
-# Shell commands run on every `docker compose up` as the maestro user, after auth preflight, before the server.
-# Prefer absolute paths under /home/maestro/... so skills land on Docker named volumes (claude-auth, cursor-auth),
-# not on the ephemeral container layer. docker-compose sets MAESTRO_HOME and injects it into hook children.
-# Example (skills sync — paths must match volume mounts in docker-compose.yml):
+# compose_up_commands run on every `docker compose up` as the maestro user, after auth preflight, before the server.
+# Avoid long multiline TOML hooks for root-only work (mkdir/rm on volumes): bash can parse them so `rm` runs as
+# maestro → Permission denied. Prefer a script COPY'd in the Dockerfile and one line here, e.g. cheat-sheets sync:
 # compose_up_commands = [
-#   'mkdir -p /home/maestro/.claude/skills /home/maestro/.cursor/skills /home/maestro/.cursor/skills-cursor && cp -a /path/to/skills/. /home/maestro/.claude/skills/',
+#   "if ! sudo -n /usr/bin/bash -c 'true' 2>/dev/null; then echo 'rebuild image (sudoers for bash)' >&2; exit 1; fi; sudo -n /usr/bin/bash /usr/local/bin/maestro-sync-cheat-sheet-skills.sh",
 # ]
 compose_up_commands = []
 

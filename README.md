@@ -334,6 +334,10 @@ The image installs **[mise](https://mise.jdx.dev/)** from the official apt repos
 
 The entrypoint then switches to the **`maestro`** user and runs **auth preflight** (`gh`, `acli`, and optionally **`agent status`** or **`claude auth status`**). A hang here is often **`su -`** waiting on a TTY under Podman, or **`agent status`** blocking without a TTY / leaving child processes alive. The image uses **`runuser`** (not a login **`su -`**), preflight logs each step (`[maestro preflight] …`), **`agent status`** has a **45s** timeout and kills the **process group**, and Cursor skips **`agent status`** when **`CURSOR_API_KEY`** is set or when **`cli-config.json`** (under **`CURSOR_CONFIG_DIR`**) already contains token-like fields. Rebuild the image so **`maestro` is current**. If Cursor still says not authenticated inside the container, re-run **`agent login`** once after upgrading (so tokens are written under **`CURSOR_CONFIG_DIR`**) or set **`CURSOR_API_KEY`**. Large **`compose_up_commands`** downloads may take minutes — you should see **`[maestro] Running docker startup hooks...`** before the hook output.
 
+### Podman on Linux with SELinux
+
+Named volumes can get **MCS labels** that block both **`maestro` and root-in-container** from listing or removing files under **`~/.claude/skills`**, which breaks skill-sync hooks (`rm: Permission denied` even when the sync script logs `uid=0`). **`docker-compose.yml`** sets **`security_opt: [label=disable]`** so the container is not SELinux-confined; Docker Desktop and hosts without SELinux ignore this. If you must keep labeling, relabel the volume from the host (for example bind mounts with **`:z`** / **`:Z`**) instead of removing **`label=disable`**.
+
 ### Container name issues with Podman
 
 Podman-compose may leave orphaned containers. Clean up:

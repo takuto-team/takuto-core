@@ -17,13 +17,22 @@ if [ "$(id -u)" = "0" ]; then
         set +a
     fi
 
-    chown -R maestro:maestro /home/maestro/.claude   2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.config   2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.cursor   2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.local    2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.npm      2>/dev/null || true
-    chown -R maestro:maestro /home/maestro/.aws      2>/dev/null || true
-    chown -R maestro:maestro /workspace              2>/dev/null || true
+    # Named volumes often arrive root-owned; maestro must own auth trees so runtime (and optional
+    # [docker] compose_up_commands) can write there. Skill layout itself is not created here — use config hooks.
+    chown_maestro_tree() {
+        local dir=$1
+        [ -e "$dir" ] || return 0
+        if ! chown -R maestro:maestro "$dir"; then
+            echo "[maestro] WARNING: chown maestro:maestro $dir failed (hooks writing under this path may see Permission denied)" >&2
+        fi
+    }
+    chown_maestro_tree /home/maestro/.claude
+    chown_maestro_tree /home/maestro/.cursor
+    chown_maestro_tree /home/maestro/.config
+    chown_maestro_tree /home/maestro/.local
+    chown_maestro_tree /home/maestro/.npm
+    chown_maestro_tree /home/maestro/.aws
+    chown_maestro_tree /workspace
 
     if [ "${1:-}" != "setup" ]; then
         if iptables -L -n >/dev/null 2>&1; then

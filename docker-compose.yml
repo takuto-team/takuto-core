@@ -9,6 +9,10 @@ services:
       - "8080:8080"
     cap_add:
       - NET_ADMIN
+    # Podman + SELinux: named volumes can end up with MCS categories the process cannot access; then even
+    # root/sudo cannot rm under ~/.claude/skills. Docker Desktop ignores this. See README if you need strict labeling.
+    security_opt:
+      - label=disable
     volumes:
       # Configuration file
       - ./config.toml:/etc/maestro/config.toml:ro

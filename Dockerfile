@@ -106,6 +106,10 @@ RUN npm install -g figma-cli || echo "WARN: figma-cli install failed, Figma feat
 COPY docker/egress-rules.sh /usr/local/bin/egress-rules.sh
 RUN chmod +x /usr/local/bin/egress-rules.sh
 
+# Optional skill sync used by compose_up_commands (see config.toml); avoids fragile multiline hooks in TOML.
+COPY docker/maestro-sync-cheat-sheet-skills.sh /usr/local/bin/maestro-sync-cheat-sheet-skills.sh
+RUN chmod 0755 /usr/local/bin/maestro-sync-cheat-sheet-skills.sh
+
 # Copy Maestro binary from builder
 COPY --from=builder /app/target/release/maestro /usr/local/bin/maestro
 
@@ -120,6 +124,16 @@ COPY config.toml.example /etc/maestro/config.toml
 
 # Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
 RUN groupadd -r maestro && useradd -r -g maestro -m -s /bin/bash maestro
+
+# Startup hooks run as maestro; config may use `sudo /usr/bin/bash` for root-owned volume paths.
+# (Use bash explicitly — `sudo env bash` would match /usr/bin/env and fail the sudoers rule.)
+RUN apt-get update && apt-get install -y --no-install-recommends sudo \
+    && printf '%s\n' \
+       'maestro ALL=(root) NOPASSWD: /usr/bin/bash, /bin/bash, /usr/bin/bash *, /bin/bash *' \
+       > /etc/sudoers.d/maestro-hook-bash \
+    && chmod 0440 /etc/sudoers.d/maestro-hook-bash \
+    && visudo -cf /etc/sudoers.d/maestro-hook-bash \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /home/maestro/.local/share/mise/shims \
     /home/maestro/.cache/mise \
