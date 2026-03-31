@@ -40,3 +40,7 @@ done < <(find "$SK" -mindepth 1 -maxdepth 1 -print0)
 
 chown -R maestro:maestro "${DESTS[@]}"
 echo "[maestro] sync-cheat-sheet-skills: done."
+echo "[maestro] Cheat-sheet skills are on the maestro home volumes (not under /workspace):"
+for D in "${DESTS[@]}"; do
+  echo "[maestro]   $D ($(find "$D" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) top-level entries)"
+done

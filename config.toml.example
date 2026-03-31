@@ -60,8 +60,9 @@ cursor_model = "Auto"
 build_commands = []
 
 # compose_up_commands run on every `docker compose up` as the maestro user, after auth preflight, before the server.
-# Avoid long multiline TOML hooks for root-only work (mkdir/rm on volumes): bash can parse them so `rm` runs as
-# maestro → Permission denied. Prefer a script COPY'd in the Dockerfile and one line here, e.g. cheat-sheets sync:
+# Avoid long multiline TOML hooks for root-only volume work (bash/sudo parsing issues). Cheat-sheet sync lives in
+# the image as /usr/local/bin/maestro-sync-cheat-sheet-skills.sh and installs to /home/maestro/.claude/skills,
+# /home/maestro/.cursor/skills, and /home/maestro/.cursor/skills-cursor — not /workspace/.cursor.
 # compose_up_commands = [
 #   "if ! sudo -n /usr/bin/bash -c 'true' 2>/dev/null; then echo 'rebuild image (sudoers for bash)' >&2; exit 1; fi; sudo -n /usr/bin/bash /usr/local/bin/maestro-sync-cheat-sheet-skills.sh",
 # ]

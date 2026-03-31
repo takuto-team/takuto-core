@@ -277,6 +277,8 @@ docker compose exec maestro ls -la /home/maestro/.claude/skills
 docker compose exec maestro ls -la /home/maestro/.cursor/skills
 ```
 
+**Do not confuse** **`/workspace/.cursor`** (files from your cloned repository: rules, commands, etc.) with **`/home/maestro/.cursor`** on the **`cursor-auth`** volume. The default cheat-sheet **`compose_up`** hook installs skills under **`/home/maestro/.cursor/skills`** and **`/home/maestro/.cursor/skills-cursor`**, not next to **`/workspace/.cursor/rules`**.
+
 ### Non-root Execution
 
 The container starts as root (for iptables), then switches to the `maestro` user. Claude Code requires non-root execution for `--allow-dangerously-skip-permissions`.
