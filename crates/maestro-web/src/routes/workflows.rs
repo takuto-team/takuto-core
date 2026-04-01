@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::Serialize;
 
-use maestro_core::workflow::engine::TerminalLine;
+use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow};
 use maestro_core::workflow::state::WorkflowState;
 use maestro_core::workflow::step::StepLog;
 
@@ -38,6 +38,22 @@ pub struct WorkflowSummary {
     pub steps_log: Vec<StepLog>,
     pub error: Option<String>,
     pub terminal_lines: Vec<TerminalLineDto>,
+    /// **Address PR Comments** is allowed (main flow **Done** and `pr_url` set).
+    pub can_address_pr_comments: bool,
+    /// **Mark as Done** is allowed (workflow state is **Done**).
+    pub can_mark_done: bool,
+}
+
+fn workflow_action_flags(w: &Workflow) -> (bool, bool) {
+    let done = matches!(w.state, WorkflowState::Done);
+    let has_pr = w
+        .pr_url
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    let can_address = done && has_pr;
+    let can_mark = done;
+    (can_address, can_mark)
 }
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
@@ -51,19 +67,24 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
     let workflows = state.engine.workflows.read().await;
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
-        .map(|w| WorkflowSummary {
-            id: w.id.clone(),
-            ticket_key: w.ticket_key.clone(),
-            ticket_summary: w.ticket_summary.clone(),
-            ticket_type: w.ticket_type.clone(),
-            state: w.status_display(),
-            started_at: w.started_at.to_rfc3339(),
-            updated_at: w.updated_at.to_rfc3339(),
-            branch_name: w.branch_name.clone(),
-            pr_url: w.pr_url.clone(),
-            steps_log: w.steps_log.clone(),
-            error: extract_error(&w.state),
-            terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
+        .map(|w| {
+            let (can_address_pr_comments, can_mark_done) = workflow_action_flags(w);
+            WorkflowSummary {
+                id: w.id.clone(),
+                ticket_key: w.ticket_key.clone(),
+                ticket_summary: w.ticket_summary.clone(),
+                ticket_type: w.ticket_type.clone(),
+                state: w.status_display(),
+                started_at: w.started_at.to_rfc3339(),
+                updated_at: w.updated_at.to_rfc3339(),
+                branch_name: w.branch_name.clone(),
+                pr_url: w.pr_url.clone(),
+                steps_log: w.steps_log.clone(),
+                error: extract_error(&w.state),
+                terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
+                can_address_pr_comments,
+                can_mark_done,
+            }
         })
         .collect();
     // Newest first
@@ -79,6 +100,7 @@ pub async fn get_workflow(
     workflows
         .get(&id)
         .map(|w| {
+            let (can_address_pr_comments, can_mark_done) = workflow_action_flags(w);
             Json(WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -92,6 +114,8 @@ pub async fn get_workflow(
                 steps_log: w.steps_log.clone(),
                 error: extract_error(&w.state),
                 terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
+                can_address_pr_comments,
+                can_mark_done,
             })
         })
         .ok_or(StatusCode::NOT_FOUND)
@@ -153,5 +177,31 @@ pub async fn stop_workflow(
         .stop_workflow(&id)
         .await
         .map(|()| StatusCode::OK)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+/// Run the configured **`[[review_agent_steps]]`** sequence in the existing worktree (requires **Done** + PR URL).
+pub async fn address_pr_comments(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .engine
+        .start_pr_review_workflow(&id)
+        .await
+        .map(|()| StatusCode::ACCEPTED)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+/// Jira transition to configured **Done** status and remove worktree; removes the workflow on full success.
+pub async fn mark_work_done(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<MarkDoneOutcome>, (StatusCode, String)> {
+    state
+        .engine
+        .mark_work_done(&id)
+        .await
+        .map(Json)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
 }

@@ -90,6 +90,16 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
     ]
 }
 
+/// Built-in steps for **`[[review_agent_steps]]`** when that list is empty (PR comment loop after main flow is Done).
+pub fn default_review_agent_steps() -> Vec<AgentStepConfig> {
+    vec![AgentStepConfig {
+        name: "Address PR feedback".to_string(),
+        prompt: "Pull request URL: {pr_url}\n\nTicket context:\n{ticket_context}\n\nUse GitHub tooling (e.g. `gh pr view`, `gh api` for review comments) to find unresolved PR feedback. Address each item with code changes, commit, and push updates to the PR branch."
+            .to_string(),
+        repeat: 1,
+    }]
+}
+
 /// Replace `{variable}` placeholders using `vars`. Unknown names are left unchanged.
 pub fn interpolate_agent_prompt(template: &str, vars: &HashMap<String, String>) -> String {
     let mut out = String::with_capacity(template.len() + 64);
@@ -141,6 +151,9 @@ pub struct Config {
     /// Ordered AI prompt steps (`[[agent_steps]]`). Empty → [`default_agent_steps`].
     #[serde(default)]
     pub agent_steps: Vec<AgentStepConfig>,
+    /// PR review loop (`[[review_agent_steps]]`) after main flow is Done. Empty → [`default_review_agent_steps`].
+    #[serde(default)]
+    pub review_agent_steps: Vec<AgentStepConfig>,
 }
 
 /// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
@@ -195,6 +208,9 @@ pub struct JiraConfig {
     pub site: String,
     #[serde(default)]
     pub email: String,
+    /// Status name for **Mark as Done** (Jira transition target). Must match your workflow.
+    #[serde(default = "default_jira_done_status")]
+    pub done_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +297,9 @@ pub struct ClaudeConfig {
     pub skills_path: String,
     #[serde(default = "default_address_ticket_passes")]
     pub address_ticket_passes: u8,
+    /// When **`[[review_agent_steps]]`** is empty, how many times to run the built-in review sequence.
+    #[serde(default = "default_address_ticket_passes")]
+    pub review_address_ticket_passes: u8,
     #[serde(default = "default_step_timeout")]
     pub step_timeout_secs: u64,
     #[serde(default)]
@@ -348,6 +367,10 @@ impl Default for GeneralConfig {
     }
 }
 
+fn default_jira_done_status() -> String {
+    "Done".to_string()
+}
+
 impl Default for JiraConfig {
     fn default() -> Self {
         Self {
@@ -356,6 +379,7 @@ impl Default for JiraConfig {
             jql_filter: String::new(),
             site: String::new(),
             email: String::new(),
+            done_status: default_jira_done_status(),
         }
     }
 }
@@ -394,6 +418,7 @@ impl Default for ClaudeConfig {
         Self {
             skills_path: default_skills_path(),
             address_ticket_passes: default_address_ticket_passes(),
+            review_address_ticket_passes: default_address_ticket_passes(),
             step_timeout_secs: default_step_timeout(),
             figma_api_token: String::new(),
             model: String::new(),
@@ -414,6 +439,7 @@ impl Default for Config {
             docker: DockerConfig::default(),
             network: NetworkConfig::default(),
             agent_steps: Vec::new(),
+            review_agent_steps: Vec::new(),
         }
     }
 }
@@ -435,6 +461,24 @@ impl Config {
             default_agent_steps()
         } else {
             self.agent_steps.clone()
+        }
+    }
+
+    /// When `review_agent_steps` is empty, how many times to run the built-in review sequence.
+    pub fn review_sequence_outer_loops(&self) -> u8 {
+        if self.review_agent_steps.is_empty() {
+            self.claude.review_address_ticket_passes
+        } else {
+            1
+        }
+    }
+
+    /// Steps for the PR-comment workflow (configured or [`default_review_agent_steps`]).
+    pub fn resolved_review_agent_steps(&self) -> Vec<AgentStepConfig> {
+        if self.review_agent_steps.is_empty() {
+            default_review_agent_steps()
+        } else {
+            self.review_agent_steps.clone()
         }
     }
 
@@ -489,6 +533,19 @@ impl Config {
             ));
         }
 
+        if self.claude.review_address_ticket_passes < 1 {
+            return Err(MaestroError::Config(
+                "[claude] review_address_ticket_passes must be at least 1 (built-in [[review_agent_steps]] when that list is empty)"
+                    .to_string(),
+            ));
+        }
+
+        if self.jira.done_status.trim().is_empty() {
+            return Err(MaestroError::Config(
+                "[jira] done_status must be non-empty (Jira transition target for Mark as Done)".to_string(),
+            ));
+        }
+
         for step in &self.agent_steps {
             if step.name.trim().is_empty() {
                 return Err(MaestroError::Config(
@@ -504,6 +561,26 @@ impl Config {
             if step.repeat < 1 {
                 return Err(MaestroError::Config(format!(
                     "Agent step {:?}: repeat must be at least 1",
+                    step.name
+                )));
+            }
+        }
+
+        for step in &self.review_agent_steps {
+            if step.name.trim().is_empty() {
+                return Err(MaestroError::Config(
+                    "Each [[review_agent_steps]] entry must have a non-empty name".to_string(),
+                ));
+            }
+            if step.prompt.trim().is_empty() {
+                return Err(MaestroError::Config(format!(
+                    "Review agent step {:?} must have a non-empty prompt",
+                    step.name
+                )));
+            }
+            if step.repeat < 1 {
+                return Err(MaestroError::Config(format!(
+                    "Review agent step {:?}: repeat must be at least 1",
                     step.name
                 )));
             }
@@ -680,6 +757,24 @@ step_timeout_secs = 600
             repeat: 1,
         });
         assert_eq!(config.agent_sequence_outer_loops(), 1);
+    }
+
+    #[test]
+    fn review_sequence_outer_loops_and_defaults() {
+        let config = Config::default();
+        assert_eq!(config.review_sequence_outer_loops(), 3);
+        let steps = config.resolved_review_agent_steps();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].name, "Address PR feedback");
+        assert!(steps[0].prompt.contains("{pr_url}"));
+
+        let mut custom = Config::default();
+        custom.review_agent_steps.push(AgentStepConfig {
+            name: "R".into(),
+            prompt: "p".into(),
+            repeat: 1,
+        });
+        assert_eq!(custom.review_sequence_outer_loops(), 1);
     }
 
     #[test]

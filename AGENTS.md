@@ -37,7 +37,7 @@ Workspace manifest: root `Cargo.toml` (Rust **2024** edition). Internal crates d
 2. Loads `Config` from file or defaults.
 3. Initializes **JSON** logging via `tracing_subscriber` and `EnvFilter` (including `general.log_level`).
 4. Builds `Arc<RwLock<Config>>` and `Arc<dyn ExternalActions>` from dry mode.
-5. Constructs `WorkflowEngine`, `JiraPoller` with a shared `CancellationToken`, `AppState`, and `build_router`.
+5. Constructs `WorkflowEngine`, `JiraPoller` with a shared `CancellationToken` and **`Arc<AtomicBool>`** polling pause flag (shared with `AppState`), then `build_router`.
 6. Runs poller, Axum server with graceful shutdown on cancel, and signal handler (`SIGINT` / `SIGTERM` on Unix). Shutdown cancels the token, calls `stop_all_workflows`, then waits briefly for cleanup.
 
 ---
@@ -46,7 +46,7 @@ Workspace manifest: root `Cargo.toml` (Rust **2024** edition). Internal crates d
 
 ### State machine
 
-Defined in `crates/maestro-core/src/workflow/state.rs` as `WorkflowState`: `Pending` → `Assigning` → `RetrievingDetails` → `CreatingWorktree` → repeated **`AddressingTicket { pass }`** (`pass` is the **outer cycle** index when the built-in step list is repeated via **`[claude] address_ticket_passes`**) → **`Done`**, plus `Error { .. }`, `Paused { .. }`, `Stopped`. The **`Reviewing`** and **`CreatingPR`** variants remain for **deserialization of older persisted state**. **`WorkflowState::display_name()`** for **`AddressingTicket`** is the generic **`Running agent steps`**; the **dashboard and REST list** use **`Workflow::status_display()`**, which shows the live **`current_step_label`** (e.g. **`Implement ticket (cycle 2/3, run 1/1)`** from configured **`[[agent_steps]]`** names, `repeat`, and outer loops).
+Defined in `crates/maestro-core/src/workflow/state.rs` as `WorkflowState`: `Pending` → `Assigning` → `RetrievingDetails` → `CreatingWorktree` → repeated **`AddressingTicket { pass }`** (`pass` is the **outer cycle** index when the built-in step list is repeated via **`[claude] address_ticket_passes`**) → **`Done`**, plus **`AddressingPrComments { pass }`** for the optional **PR review** agent loop after **Done**, `Error { .. }`, `Paused { .. }`, `Stopped`. The **`Reviewing`** and **`CreatingPR`** variants remain for **deserialization of older persisted state**. **`WorkflowState::display_name()`** for **`AddressingTicket`** is the generic **`Running agent steps`**; for **`AddressingPrComments`** it is **`Addressing PR comments`**. The **dashboard and REST list** use **`Workflow::status_display()`**, which shows the live **`current_step_label`** (e.g. **`[PR review] Address PR feedback (run 1/1)`** or **`Implement ticket (cycle 2/3, run 1/1)`**).
 
 Terminal states: `Done`, `Stopped`, `Error`.
 
@@ -72,9 +72,19 @@ Implemented in `run_workflow_steps` inside `workflow/engine.rs`:
 3. **Worktree** from `git::worktree::branch_name_for_ticket` and configured `base_branch`.
 4. Optional **`pre_install`** (array of shell commands, or one string for backward compatibility) then optional **`install`** in the worktree (streaming output).
 5. **Agent workflow** — If **`[[agent_steps]]`** is empty: use **`config::default_agent_steps`** and repeat the full sequence **`[claude] address_ticket_passes`** times (default `3`). If **`[[agent_steps]]`** is non-empty: use **only** those steps (built-in sequence is not used); **`[claude] address_ticket_passes`** does **not** multiply the custom list — use each step’s **`repeat`** (≥ 1, default 1) to run that step multiple times in sequence (**`--resume`** after the first run). Interpolate **`{ticket_key}`**, **`{ticket_summary}`**, **`{ticket_description}`**, **`{ticket_type}`**, **`{acceptance_criteria}`**, **`{ticket_context}`**; append headless instructions from **`agent_prompt.rs`**. The **first** run of the workflow starts a **new** session; all later runs use **`--resume`**. There is **no** built-in PM / plan-validation pass — add a **custom step** whose **prompt** asks the agent to validate plans or requirements if you want that. Session failure **except** on the **last run of an outer cycle** **aborts**; failure on that last run is **non-fatal** (same as legacy review). Put **`[[agent_steps]]`** at the **TOML root before any `[section]`** when you use it. There is **no** separate lint/unit/e2e command phase — if you want the linter or tests, add agent steps whose **prompts** instruct the tool to run and fix them.
-6. **Finalize** — If any **`steps_log`** entry has **`Failed`**, return **`Err`** (workflow ends in **`Error`**). Otherwise read an optional PR URL via **`workflow::outcome::resolve_pr_url`**: prefer **`.maestro/outcome.toml`** in the worktree (`pr_url = "…"`), else the last agent session output line **`MAESTRO_PR_URL: …`**. Set **`workflow.pr_url`** when found; run **`gh pr edit --add-reviewer <login>`** for the authenticated **`gh`** user (best-effort — GitHub rejects if that user is already the PR author); append a **Workflow complete** step to **`steps_log`**; transition **`Done`**.
+6. **Finalize** — Read an optional PR URL via **`workflow::outcome::resolve_pr_url`**: prefer **`.maestro/outcome.toml`** in the worktree (`pr_url = "…"`), else the last agent session output line **`MAESTRO_PR_URL: …`**. If **no** PR URL is found **and** any **`steps_log`** entry is **`Failed`**, return **`Err`** (workflow ends in **`Error`**). If a PR URL **is** found, **`Failed`** steps in the log (e.g. non-fatal failure on the last agent run of a cycle) do **not** fail the workflow — a warning is logged and the run completes **`Done`**. Set **`workflow.pr_url`** when found; run **`gh pr edit --add-reviewer <login>`** for the authenticated **`gh`** user (best-effort — GitHub rejects if that user is already the PR author); append a **Workflow complete** step to **`steps_log`**; transition **`Done`**.
 
 After the worktree is created, the engine calls **`configure_git_author_from_github`**: **`git config user.name` / `user.email`** in the worktree from **`gh api user`**, using GitHub’s **`{id}+{login}@users.noreply.github.com`** form so commits match the **`gh`** account.
+
+### PR review workflow (after **Done**)
+
+Triggered from the dashboard (**`POST /api/workflows/{ticket_key}/address-pr-comments`**) when the workflow is **`Done`**, **`pr_url`** is set, and the worktree path still exists. **`WorkflowEngine::start_pr_review_workflow`** sets **`AddressingPrComments`**, then **`drive_pr_review_workflow`** runs **`[[review_agent_steps]]`** (or built-in **`default_review_agent_steps`**, repeated **`[claude] review_address_ticket_passes`** times when that list is empty) via the same headless agent integration as the main loop. Prompts support **`{pr_url}`** plus the same placeholders as **`[[agent_steps]]`**. On success the workflow returns **`Done`**; on driver failure, **`Error`**. Step names are prefixed with **`[PR review]`** in **`steps_log`**.
+
+### Mark as Done
+
+**`POST /api/workflows/{ticket_key}/mark-done`** (dashboard **Mark as Done**): transitions Jira to **`[jira] done_status`** (default **`Done`**), then **`remove_worktree`**. Partial failure is returned in JSON (**`MarkDoneOutcome`**); the workflow is **removed from the map** only if **both** succeed. A WebSocket **`workflow_removed`** event is sent when the row is dropped.
+
+Pause/resume/stop apply while **`AddressingPrComments`** is active (**`is_active()`**).
 
 Pause/resume: workflow state wraps prior state in `Paused`; `wait_if_paused` blocks the driver until resumed.
 
@@ -108,7 +118,7 @@ Raw stdout lines are turned into short lines for the web UI via **`workflow/stre
 
 ### Prompts
 
-Templates live in **`[[agent_steps]]`** (`name`, **`prompt`**, **`repeat`**). Default steps use **generic natural-language** prompts (no slash-commands); teams with Claude skills can still put **`/address-ticket`** or **`/review-changes`** in a template. Unknown **`{placeholders}`** are left unchanged.
+Templates live in **`[[agent_steps]]`** (`name`, **`prompt`**, **`repeat`**) and in **`[[review_agent_steps]]`** for the post-**Done** PR loop (same fields). Default steps use **generic natural-language** prompts (no slash-commands); teams with Claude skills can still put **`/address-ticket`** or **`/review-changes`** in a template. Placeholders: **`ticket_key`**, **`ticket_summary`**, **`ticket_description`**, **`ticket_type`**, **`acceptance_criteria`**, **`ticket_context`**, and **`pr_url`** (review workflow). Unknown **`{placeholders}`** are left unchanged.
 
 ---
 
@@ -138,9 +148,14 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | POST | `/api/workflows/{id}/resume` | |
 | POST | `/api/workflows/{id}/stop` | |
 | POST | `/api/workflows/{id}/retry` | |
+| POST | `/api/workflows/{id}/address-pr-comments` | Start PR review agent loop (**`Done`** + **`pr_url`** + worktree) → **`202 Accepted`** |
+| POST | `/api/workflows/{id}/mark-done` | Jira **`done_status`** + remove worktree; JSON **`MarkDoneOutcome`** |
 | GET/PUT | `/api/config` | Read/update TOML-backed config |
+| GET | `/api/polling` | JSON `{ "paused": bool }` — Jira poller pause state |
+| POST | `/api/polling/pause` | Pause Jira polling (no new tickets picked up) |
+| POST | `/api/polling/resume` | Resume Jira polling |
 | GET | `/api/health` | |
-| GET | `/ws` | WebSocket; JSON messages = `WorkflowEvent` (+ step/output fields) |
+| GET | `/ws` | WebSocket; JSON messages = `WorkflowEvent` (+ step/output fields); **`event_type`** may be **`workflow_removed`** when **Mark as Done** drops a workflow |
 
 Static files: embedded from `crates/maestro-web/src/assets/` (e.g. `index.html`, `config.html`).
 
@@ -150,13 +165,13 @@ Static files: embedded from `crates/maestro-web/src/assets/` (e.g. `index.html`,
 
 Loaded in `crates/maestro-core/src/config.rs` — sections:
 
-- **Root (before any `[table]` in TOML)**: optional **`[[agent_steps]]`** (`name`, `prompt`, **`repeat`** default `1`) — replaces built-in steps when any are defined; empty → built-in two-step sequence repeated **`[claude] address_ticket_passes`** times
+- **Root (before any `[table]` in TOML)**: optional **`[[agent_steps]]`** (`name`, `prompt`, **`repeat`** default `1`) — replaces built-in steps when any are defined; empty → built-in two-step sequence repeated **`[claude] address_ticket_passes`** times. Optional **`[[review_agent_steps]]`** — same shape; empty → **`default_review_agent_steps`** repeated **`[claude] review_address_ticket_passes`** times
 - **`general`**: `dry_mode`, `poll_interval_secs`, `max_concurrent_workflows`, `log_level`
-- **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site` (auth, egress; ticket context for prompts), `email`
+- **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site` (auth, egress; ticket context for prompts), `email`, **`done_status`** (Jira transition for **Mark as Done**)
 - **`git`**: `base_branch`, `remote` (fetch / worktree / push; default `origin`), `repo_url`, `repo_path`
 - **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`
 - **`web`**: `host`, `port`
-- **`claude`**: `skills_path`, `address_ticket_passes` (how many times to run the **built-in** step sequence when **`[[agent_steps]]`** is empty), `step_timeout_secs`, `figma_api_token`, `model`
+- **`claude`**: `skills_path`, `address_ticket_passes` (how many times to run the **built-in** main step sequence when **`[[agent_steps]]`** is empty), **`review_address_ticket_passes`** (same for empty **`[[review_agent_steps]]`**), `step_timeout_secs`, `figma_api_token`, `model`
 - **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`, `cursor_model` (default `Auto`; Cursor CLI gets `--model Auto` unless a concrete id is set)
 - **`docker`**: `build_commands` (image build), `compose_up_commands` (each `docker compose up`)
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**
@@ -167,7 +182,7 @@ Runtime path defaults are described in `README.md` / `config.toml.example`.
 
 ## Jira poller
 
-`crates/maestro-core/src/jira/poller.rs`: on an interval, if `project_keys` non-empty, lists **To Do** tickets (via `JiraClient` / `acli`), skips keys that already exist in the workflow map, respects `max_concurrent_workflows`, and calls `start_workflow`. Uses `cancel_token` for shutdown.
+`crates/maestro-core/src/jira/poller.rs`: on an interval, if `project_keys` non-empty, lists **To Do** tickets (via `JiraClient` / `acli`), skips keys that already exist in the workflow map, respects `max_concurrent_workflows`, and calls `start_workflow`. Uses `cancel_token` for shutdown. When the dashboard sets **polling paused** (`AppState.polling_paused`), the poller still waits on the interval but **skips** `poll_once` (including the initial poll on startup if already paused). Not persisted across process restarts.
 
 ---
 

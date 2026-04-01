@@ -127,7 +127,7 @@ Any state → Paused { source_state }
 Any state → Stopped
 ```
 
-The `Reviewing` enum variant is kept for **deserializing older persisted workflows**; new runs use `AddressingTicket` for all agent steps.
+The `Reviewing` enum variant is kept for **deserializing older persisted workflows**; new runs use `AddressingTicket` for main agent steps and **`AddressingPrComments`** for the optional post-**Done** PR review loop.
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +137,7 @@ pub enum WorkflowState {
     RetrievingDetails,
     CreatingWorktree,
     AddressingTicket { pass: u8 },
+    AddressingPrComments { pass: u8 },
     Reviewing,
     CreatingPR,
     Done,
@@ -252,12 +253,18 @@ GET    /api/workflows/:id          # get workflow details + step log
 POST   /api/workflows/:id/pause    # pause workflow
 POST   /api/workflows/:id/resume   # resume workflow
 POST   /api/workflows/:id/stop     # stop workflow
-GET    /api/workflows/:id/report   # get execution report
+POST   /api/workflows/:id/retry  # restart workflow from scratch
+POST   /api/workflows/:id/address-pr-comments  # PR review agent loop (after Done + pr_url)
+POST   /api/workflows/:id/mark-done  # Jira Done + remove worktree (JSON outcome)
 
 GET    /api/config                 # get current config
 PUT    /api/config                 # update config (partial)
 
 GET    /api/health                 # health check
+
+GET    /api/polling                # { "paused": bool }
+POST   /api/polling/pause          # pause Jira poller
+POST   /api/polling/resume         # resume Jira poller
 
 WS     /ws                        # WebSocket for real-time events
 ```
@@ -287,9 +294,14 @@ Events are broadcast via `tokio::sync::broadcast` from the workflow engine to al
 ### Shared Application State
 
 ```rust
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use tokio::sync::RwLock;
+
 pub struct AppState {
     pub engine: Arc<WorkflowEngine>,
     pub config: Arc<RwLock<Config>>,
+    pub polling_paused: Arc<AtomicBool>,
 }
 ```
 
@@ -305,6 +317,7 @@ Vanilla JS + Tailwind CSS, served as embedded static assets.
 
 1. **Dashboard** (`/`)
    - Grid of workflow cards
+   - Header: WebSocket status, **Pause / Resume Jira polling**, link to config
    - Each card shows: ticket key (linked to Jira), current state with visual indicator, elapsed time, error message if any
    - Action buttons: Pause/Resume, Stop
    - Report button opens modal with full execution log

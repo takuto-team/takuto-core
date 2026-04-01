@@ -6,6 +6,7 @@ let ws = null;
 let wsReconnectTimer = null;
 let dryMode = false;
 let initialLoadDone = false;
+let pollingPaused = false;
 const TERMINAL_MAX_LINES = 500;
 
 // --- WebSocket ---
@@ -66,6 +67,14 @@ function updateWsStatus(connected) {
 
 function handleWorkflowEvent(evt) {
   const eventType = evt.event_type;
+
+  if (eventType === 'workflow_removed') {
+    delete workflows[evt.ticket_key];
+    delete terminalState[evt.ticket_key];
+    renderWorkflows();
+    updateCounts(Object.values(workflows));
+    return;
+  }
 
   // Handle terminal-related events — DOM-only updates, no full re-render
   if (eventType === 'step_output') {
@@ -196,6 +205,13 @@ function updateCardState(wf) {
   if (progressBar) progressBar.style.width = `${progress}%`;
 
   // If workflow finished (completed/error/stopped), do a full render to update buttons and terminal visibility
+  if (status.label === 'Running') {
+    const term = document.getElementById(`terminal-body-${wf.ticket_key}`);
+    if (!term) {
+      renderWorkflows();
+      return;
+    }
+  }
   if (['Completed', 'Error', 'Stopped'].includes(status.label)) {
     renderWorkflows();
   }
@@ -224,6 +240,63 @@ async function fetchWorkflowsSilent() {
     renderWorkflows();
   } catch (e) {
     console.error('Failed to fetch workflows:', e);
+  }
+}
+
+async function fetchPollingStatus() {
+  try {
+    const res = await fetch('/api/polling');
+    if (!res.ok) return;
+    const data = await res.json();
+    pollingPaused = !!data.paused;
+    applyPollingUi();
+  } catch (_) {
+    // non-fatal
+  }
+}
+
+function applyPollingUi() {
+  const btn = document.getElementById('pollingToggleBtn');
+  const label = document.getElementById('pollingStatusLabel');
+  if (!btn) return;
+  if (pollingPaused) {
+    btn.textContent = 'Resume polling';
+    btn.className =
+      'text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors bg-amber-500/10 text-amber-300 border-amber-500/25 hover:bg-amber-500/20';
+    if (label) {
+      label.textContent = 'Jira poll: paused';
+      label.className = 'text-xs text-amber-500/80 hidden sm:inline';
+    }
+  } else {
+    btn.textContent = 'Pause polling';
+    btn.className =
+      'text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors bg-gray-800/80 text-gray-300 border-gray-700 hover:bg-gray-800 hover:border-gray-600';
+    if (label) {
+      label.textContent = 'Jira poll: active';
+      label.className = 'text-xs text-emerald-500/80 hidden sm:inline';
+    }
+  }
+}
+
+async function togglePolling() {
+  const btn = document.getElementById('pollingToggleBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const url = pollingPaused ? '/api/polling/resume' : '/api/polling/pause';
+    const res = await fetch(url, { method: 'POST' });
+    if (!res.ok) {
+      const t = await res.text();
+      alert(t || 'Failed to update polling');
+      return;
+    }
+    const data = await res.json();
+    pollingPaused = !!data.paused;
+    applyPollingUi();
+  } catch (e) {
+    console.error(e);
+    alert('Failed to update polling');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -279,6 +352,54 @@ async function stopWorkflow(id) {
   }
 }
 
+async function addressPrComments(id) {
+  try {
+    const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/address-pr-comments`, { method: 'POST' });
+    if (!res.ok) {
+      const t = await res.text();
+      alert(t || 'Failed to start PR review');
+      return;
+    }
+    delete terminalState[id];
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Failed to start PR review:', e);
+    alert('Failed to start PR review');
+  }
+}
+
+async function markWorkflowDone(id) {
+  if (!confirm('Mark this ticket Done in Jira and remove the local worktree? The workflow will leave the dashboard if both succeed.')) return;
+  try {
+    const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/mark-done`, { method: 'POST' });
+    const text = await res.text();
+    if (!res.ok) {
+      alert(text || 'Mark as Done failed');
+      return;
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      alert(text);
+      fetchWorkflowsSilent();
+      return;
+    }
+    const lines = [];
+    if (data.jira_ok) lines.push('Jira: transitioned to Done.');
+    else lines.push(`Jira: failed${data.jira_error ? ` — ${data.jira_error}` : ''}.`);
+    if (data.worktree_ok) lines.push('Worktree: removed (or already absent).');
+    else lines.push(`Worktree: failed${data.worktree_error ? ` — ${data.worktree_error}` : ''}.`);
+    if (data.workflow_removed) lines.push('Workflow removed from the list.');
+    else lines.push('Workflow kept on the dashboard (fix errors and try again if needed).');
+    alert(lines.join('\n'));
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Mark as Done failed:', e);
+    alert('Mark as Done failed');
+  }
+}
+
 async function openReportModal(ticketKey) {
   try {
     const res = await fetch(`/api/workflows/${encodeURIComponent(ticketKey)}`);
@@ -309,6 +430,7 @@ function getStatusInfo(state) {
   if (s.startsWith('error')) return { label: 'Error', color: 'red', icon: 'x' };
   if (s === 'paused') return { label: 'Paused', color: 'yellow', icon: 'pause' };
   if (s === 'stopped') return { label: 'Stopped', color: 'gray', icon: 'stop' };
+  if (s.includes('pr review') || s.includes('addressing pr comments')) return { label: 'Running', color: 'blue', icon: 'pulse' };
   return { label: 'Running', color: 'blue', icon: 'pulse' };
 }
 
@@ -381,6 +503,14 @@ function renderWorkflowCard(w) {
     actions += `
       <button onclick="retryWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">Retry</button>`;
   }
+  if (w.can_address_pr_comments) {
+    actions += `
+      <button onclick="addressPrComments('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-indigo-500/10 text-indigo-300 border border-indigo-500/25 hover:bg-indigo-500/20 transition-colors">Address PR Comments</button>`;
+  }
+  if (w.can_mark_done) {
+    actions += `
+      <button onclick="markWorkflowDone('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 transition-colors">Mark as Done</button>`;
+  }
   actions += `
     <button onclick="openReportModal('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-700/50 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">Report</button>`;
 
@@ -426,7 +556,7 @@ function renderWorkflowCard(w) {
             <div class="progress-bar bg-${status.color}-500 h-1.5 rounded-full transition-all" style="width: ${progress}%"></div>
           </div>
         </div>
-        <div class="flex items-center gap-2">${actions}</div>
+        <div class="flex flex-wrap items-center gap-2">${actions}</div>
         ${terminalHtml}
       </div>
     </div>`;
@@ -570,7 +700,9 @@ function escapeHtml(str) {
 // --- Init ---
 
 async function init() {
-  await Promise.all([fetchWorkflowsSilent(), fetchConfig()]);
+  await Promise.all([fetchWorkflowsSilent(), fetchConfig(), fetchPollingStatus()]);
+  const pollBtn = document.getElementById('pollingToggleBtn');
+  if (pollBtn) pollBtn.addEventListener('click', togglePolling);
   initialLoadDone = true;
   connectWebSocket();
 }

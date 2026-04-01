@@ -33,9 +33,20 @@ pub fn build_router(state: AppState) -> Router {
             "/workflows/{id}/retry",
             post(routes::workflows::retry_workflow),
         )
+        .route(
+            "/workflows/{id}/address-pr-comments",
+            post(routes::workflows::address_pr_comments),
+        )
+        .route(
+            "/workflows/{id}/mark-done",
+            post(routes::workflows::mark_work_done),
+        )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
-        .route("/health", get(health));
+        .route("/health", get(health))
+        .route("/polling", get(routes::polling::get_polling_status))
+        .route("/polling/pause", post(routes::polling::pause_polling))
+        .route("/polling/resume", post(routes::polling::resume_polling));
 
     Router::new()
         .nest("/api", api)

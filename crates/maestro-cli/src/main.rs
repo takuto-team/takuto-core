@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::sync::RwLock;
@@ -171,11 +172,18 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let engine = Arc::new(WorkflowEngine::new(config.clone(), actions.clone()));
 
     let cancel_token = CancellationToken::new();
-    let poller = JiraPoller::new(config.clone(), engine.clone(), cancel_token.clone());
+    let polling_paused = Arc::new(AtomicBool::new(false));
+    let poller = JiraPoller::new(
+        config.clone(),
+        engine.clone(),
+        cancel_token.clone(),
+        polling_paused.clone(),
+    );
 
     let app_state = AppState {
         engine: engine.clone(),
         config: config.clone(),
+        polling_paused,
     };
     let app = build_router(app_state);
 

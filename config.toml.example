@@ -23,6 +23,17 @@
 # repeat = 1
 #
 # Placeholders: ticket_key, ticket_summary, ticket_description, ticket_type, acceptance_criteria, ticket_context
+#
+# --- PR review workflow (optional `[[review_agent_steps]]` at TOML root) ---
+# Runs when the dashboard **Address PR Comments** action is used (main flow must be Done and a PR URL recorded).
+# Same shape as `[[agent_steps]]` (`name`, `prompt`, `repeat`). Extra placeholder: **pr_url**.
+# Omit all `[[review_agent_steps]]`: built-in single-step sequence, repeated
+# `[claude] review_address_ticket_passes` times (default matches address_ticket_passes / 3).
+#
+# [[review_agent_steps]]
+# name = "Fix review comments"
+# prompt = "PR: {pr_url}\n\n{ticket_context}\n\nResolve all unresolved GitHub review comments."
+# repeat = 1
 
 [general]
 dry_mode = false
@@ -33,6 +44,8 @@ log_level = "info"
 [jira]
 project_keys = ["PROJ"]
 item_types = ["Task", "Bug"]
+# Transition name for dashboard **Mark as Done** (must match your Jira workflow)
+done_status = "Done"
 jql_filter = ""
 # Host or https:// URL (token auth, egress, and Jira link in PR body; empty → jira.atlassian.net)
 site = "yourcompany.atlassian.net"
@@ -58,6 +71,8 @@ port = 8080
 [claude]
 skills_path = "/home/maestro/.claude/skills"
 address_ticket_passes = 3
+# Repeats built-in [[review_agent_steps]] when that list is empty
+review_address_ticket_passes = 3
 step_timeout_secs = 1800
 figma_api_token = ""
 # Model to use (e.g., "claude-opus-4-6", "claude-sonnet-4-6"). Empty = Claude Code default.

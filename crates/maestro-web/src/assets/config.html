@@ -107,6 +107,13 @@
             </div>
             <p class="mt-1.5 text-xs text-gray-600">How often to check Jira for new tickets (min: 10s)</p>
           </div>
+
+          <div>
+            <label for="jiraDoneStatus" class="block text-sm font-medium text-gray-300 mb-1.5">Done status name</label>
+            <input type="text" id="jiraDoneStatus" placeholder="Done"
+              class="w-full max-w-xs bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600">Jira transition target for dashboard Mark as Done (must match your workflow)</p>
+          </div>
         </div>
       </section>
 
@@ -148,7 +155,7 @@
               <option value="claude">Claude Code (claude CLI)</option>
               <option value="cursor">Cursor Agent (agent CLI)</option>
             </select>
-            <p class="mt-1.5 text-xs text-gray-600">Runs configurable <code class="text-gray-500">[[agent_steps]]</code> sessions for the selected tool.</p>
+            <p class="mt-1.5 text-xs text-gray-600">Runs configurable <code class="text-gray-500">[[agent_steps]]</code> for the main ticket flow and <code class="text-gray-500">[[review_agent_steps]]</code> for Address PR Comments (edit those arrays in <code class="text-gray-500">config.toml</code>).</p>
           </div>
           <div>
             <label for="cursorCli" class="block text-sm font-medium text-gray-300 mb-1.5">Cursor CLI executable</label>
@@ -219,6 +226,12 @@
             <input type="number" id="maxConcurrent" min="1" max="10"
               class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
           </div>
+          <div>
+            <label for="reviewAddressPasses" class="block text-sm font-medium text-gray-300 mb-1.5">PR review passes</label>
+            <input type="number" id="reviewAddressPasses" min="1" max="20"
+              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600"><code class="text-gray-500">[claude] review_address_ticket_passes</code> — repeats the built-in review sequence when <code class="text-gray-500">[[review_agent_steps]]</code> is empty</p>
+          </div>
         </div>
       </section>
 
@@ -278,6 +291,12 @@
       document.getElementById('cursorModel').value = (cfg.agent && cfg.agent.cursor_model != null && cfg.agent.cursor_model !== '') ? cfg.agent.cursor_model : 'Auto';
       document.getElementById('dryMode').checked = cfg.general.dry_mode;
       document.getElementById('maxConcurrent').value = cfg.general.max_concurrent_workflows;
+      document.getElementById('jiraDoneStatus').value =
+        cfg.jira && cfg.jira.done_status ? cfg.jira.done_status : 'Done';
+      document.getElementById('reviewAddressPasses').value =
+        cfg.claude && cfg.claude.review_address_ticket_passes != null
+          ? cfg.claude.review_address_ticket_passes
+          : 3;
       // Project keys
       const tagContainer = document.getElementById('projectTags');
       tagContainer.innerHTML = '';
@@ -314,8 +333,13 @@
     }
 
     function buildConfigPayload() {
+      const rap = parseInt(document.getElementById('reviewAddressPasses').value, 10);
       return {
         agent_steps: currentConfig && Array.isArray(currentConfig.agent_steps) ? currentConfig.agent_steps : [],
+        review_agent_steps:
+          currentConfig && Array.isArray(currentConfig.review_agent_steps)
+            ? currentConfig.review_agent_steps
+            : [],
         general: {
           dry_mode: document.getElementById('dryMode').checked,
           poll_interval_secs: parseInt(document.getElementById('pollInterval').value, 10),
@@ -328,6 +352,7 @@
           jql_filter: currentConfig ? currentConfig.jira.jql_filter : '',
           site: currentConfig ? currentConfig.jira.site : '',
           email: currentConfig ? currentConfig.jira.email : '',
+          done_status: document.getElementById('jiraDoneStatus').value.trim() || 'Done',
         },
         git: {
           base_branch: document.getElementById('baseBranch').value,
@@ -346,6 +371,7 @@
         claude: {
           skills_path: currentConfig ? currentConfig.claude.skills_path : '/root/.claude/skills',
           address_ticket_passes: currentConfig ? currentConfig.claude.address_ticket_passes : 3,
+          review_address_ticket_passes: Number.isFinite(rap) && rap >= 1 ? rap : 3,
           step_timeout_secs: currentConfig ? currentConfig.claude.step_timeout_secs : 600,
           figma_api_token: document.getElementById('figmaToken').value,
           model: currentConfig ? currentConfig.claude.model : '',

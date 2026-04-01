@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -14,6 +15,8 @@ pub struct JiraPoller {
     pub config: Arc<RwLock<Config>>,
     pub engine: Arc<WorkflowEngine>,
     pub cancel_token: CancellationToken,
+    /// When `true`, the poller sleeps on schedule but does not call Jira or start workflows.
+    pub polling_paused: Arc<AtomicBool>,
 }
 
 impl JiraPoller {
@@ -21,21 +24,27 @@ impl JiraPoller {
         config: Arc<RwLock<Config>>,
         engine: Arc<WorkflowEngine>,
         cancel_token: CancellationToken,
+        polling_paused: Arc<AtomicBool>,
     ) -> Self {
         Self {
             config,
             engine,
             cancel_token,
+            polling_paused,
         }
     }
 
     pub async fn run(&self) {
         info!("Jira poller started");
 
-        // Poll immediately on startup
-        info!("Running initial poll...");
-        if let Err(e) = self.poll_once().await {
-            warn!(error = %e, "Initial Jira poll failed, will retry next interval");
+        // Poll immediately on startup unless paused
+        if self.polling_paused.load(Ordering::Relaxed) {
+            info!("Jira polling is paused, skipping initial poll");
+        } else {
+            info!("Running initial poll...");
+            if let Err(e) = self.poll_once().await {
+                warn!(error = %e, "Initial Jira poll failed, will retry next interval");
+            }
         }
 
         loop {
@@ -50,6 +59,10 @@ impl JiraPoller {
                     return;
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {
+                    if self.polling_paused.load(Ordering::Relaxed) {
+                        info!("Jira polling is paused, skipping poll");
+                        continue;
+                    }
                     if let Err(e) = self.poll_once().await {
                         warn!(error = %e, "Jira poll failed, will retry next interval");
                     }

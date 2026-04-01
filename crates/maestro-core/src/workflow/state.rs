@@ -7,6 +7,8 @@ pub enum WorkflowState {
     RetrievingDetails,
     CreatingWorktree,
     AddressingTicket { pass: u8 },
+    /// Secondary PR-comment workflow after main flow reached Done (uses `[[review_agent_steps]]`).
+    AddressingPrComments { pass: u8 },
     Reviewing,
     CreatingPR,
     Done,
@@ -28,6 +30,7 @@ impl WorkflowState {
             Self::RetrievingDetails => "Retrieving Details".to_string(),
             Self::CreatingWorktree => "Creating Worktree".to_string(),
             Self::AddressingTicket { .. } => "Running agent steps".to_string(),
+            Self::AddressingPrComments { .. } => "Addressing PR comments".to_string(),
             Self::Reviewing => "Reviewing Changes".to_string(),
             Self::CreatingPR => "Creating PR".to_string(),
             Self::Done => "Done".to_string(),

@@ -26,6 +26,11 @@ flowchart TD
 
 Linting, unit tests, E2E, and **opening a PR** are **not** engine steps. Encode them as **agent step prompts** (e.g. run `gh pr create`, print `MAESTRO_PR_URL: …`, or write `.maestro/outcome.toml`). The workflow **stops** when the last agent session exits successfully; Maestro then reads the optional PR URL and transitions to **Done**.
 
+### After Done (dashboard)
+
+- **Address PR Comments** — If a PR URL was recorded, operators can start a **secondary agent workflow** in the same worktree using **`[[review_agent_steps]]`** (same TOML shape as **`[[agent_steps]]`**; prompts may use **`{pr_url}`** plus the usual ticket placeholders). The workflow returns to **Done** when the review sequence finishes (failed steps are logged; inspect the report before re-running).
+- **Mark as Done** — Transitions Jira to **`[jira] done_status`** (default `Done`), then removes the git worktree. Both steps are reported in the UI; the workflow row is removed only if **both** succeed.
+
 ## Controls
 
 ```mermaid
