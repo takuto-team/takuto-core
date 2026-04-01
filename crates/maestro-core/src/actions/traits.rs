@@ -20,6 +20,13 @@ pub trait ExternalActions: Send + Sync {
     async fn create_pr(&self, title: &str, body: &str, branch: &str, base: &str) -> Result<String>;
     async fn commit_changes(&self, cwd: &Path, message: &str) -> Result<()>;
 
+    /// Set `git config user.name` / `user.email` in `cwd` from `gh api user` (GitHub no-reply email).
+    async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()>;
+
+    /// Request the authenticated `gh` user as a reviewer on `pr_url` (`gh pr edit --add-reviewer`).
+    /// Returns `Ok(true)` if `gh` reported success, `Ok(false)` if skipped (e.g. dry mode), `Err` if `gh` failed.
+    async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool>;
+
     // Shell commands (e.g. invoked by other actions or tests)
     async fn run_command(&self, cmd: &str, cwd: &Path) -> Result<CommandOutput>;
 }

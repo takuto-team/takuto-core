@@ -496,6 +496,26 @@ async fn run_workflow_steps(
     step_log.complete(StepStatus::Success);
     add_step_log(workflows, ticket_key, step_log).await;
 
+    match actions
+        .configure_git_author_from_github(&worktree_path)
+        .await
+    {
+        Ok(()) => {
+            info!(
+                ticket = %ticket_key,
+                path = %worktree_path.display(),
+                "Git author aligned with authenticated GitHub CLI user"
+            );
+        }
+        Err(e) => {
+            warn!(
+                ticket = %ticket_key,
+                error = %e,
+                "Could not set worktree git author from `gh`; agent commits may use the wrong identity"
+            );
+        }
+    }
+
     let cfg = config.read().await;
     let pre_install_cmds = cfg.commands.pre_install.clone();
     let install_cmd = cfg.commands.install.clone();
@@ -845,6 +865,33 @@ async fn run_workflow_steps(
         let mut wf = workflows.write().await;
         if let Some(w) = wf.get_mut(ticket_key) {
             w.pr_url = Some(url.clone());
+        }
+        drop(wf);
+        match actions
+            .request_github_self_as_pr_reviewer(&worktree_path, url)
+            .await
+        {
+            Ok(true) => {
+                complete_log.output.push(
+                    "Requested review from the authenticated GitHub user (`gh`)".to_string(),
+                );
+            }
+            Ok(false) => {
+                complete_log.output.push(
+                    "[DRY] Would request review from the authenticated GitHub user (`gh`)".to_string(),
+                );
+            }
+            Err(e) => {
+                warn!(
+                    ticket = %ticket_key,
+                    pr = %url,
+                    error = %e,
+                    "Could not add authenticated user as PR reviewer (e.g. PR author cannot review their own PR)"
+                );
+                complete_log
+                    .output
+                    .push(format!("[SKIP] PR reviewer request: {e}"));
+            }
         }
     } else {
         complete_log.output.push(

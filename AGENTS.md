@@ -72,7 +72,9 @@ Implemented in `run_workflow_steps` inside `workflow/engine.rs`:
 3. **Worktree** from `git::worktree::branch_name_for_ticket` and configured `base_branch`.
 4. Optional **`pre_install`** (array of shell commands, or one string for backward compatibility) then optional **`install`** in the worktree (streaming output).
 5. **Agent workflow** — If **`[[agent_steps]]`** is empty: use **`config::default_agent_steps`** and repeat the full sequence **`[claude] address_ticket_passes`** times (default `3`). If **`[[agent_steps]]`** is non-empty: use **only** those steps (built-in sequence is not used); **`[claude] address_ticket_passes`** does **not** multiply the custom list — use each step’s **`repeat`** (≥ 1, default 1) to run that step multiple times in sequence (**`--resume`** after the first run). Interpolate **`{ticket_key}`**, **`{ticket_summary}`**, **`{ticket_description}`**, **`{ticket_type}`**, **`{acceptance_criteria}`**, **`{ticket_context}`**; append headless instructions from **`agent_prompt.rs`**. The **first** run of the workflow starts a **new** session; all later runs use **`--resume`**. There is **no** built-in PM / plan-validation pass — add a **custom step** whose **prompt** asks the agent to validate plans or requirements if you want that. Session failure **except** on the **last run of an outer cycle** **aborts**; failure on that last run is **non-fatal** (same as legacy review). Put **`[[agent_steps]]`** at the **TOML root before any `[section]`** when you use it. There is **no** separate lint/unit/e2e command phase — if you want the linter or tests, add agent steps whose **prompts** instruct the tool to run and fix them.
-6. **Finalize** — If any **`steps_log`** entry has **`Failed`**, return **`Err`** (workflow ends in **`Error`**). Otherwise read an optional PR URL via **`workflow::outcome::resolve_pr_url`**: prefer **`.maestro/outcome.toml`** in the worktree (`pr_url = "…"`), else the last agent session output line **`MAESTRO_PR_URL: …`**. Set **`workflow.pr_url`** when found; append a **Workflow complete** step to **`steps_log`**; transition **`Done`**.
+6. **Finalize** — If any **`steps_log`** entry has **`Failed`**, return **`Err`** (workflow ends in **`Error`**). Otherwise read an optional PR URL via **`workflow::outcome::resolve_pr_url`**: prefer **`.maestro/outcome.toml`** in the worktree (`pr_url = "…"`), else the last agent session output line **`MAESTRO_PR_URL: …`**. Set **`workflow.pr_url`** when found; run **`gh pr edit --add-reviewer <login>`** for the authenticated **`gh`** user (best-effort — GitHub rejects if that user is already the PR author); append a **Workflow complete** step to **`steps_log`**; transition **`Done`**.
+
+After the worktree is created, the engine calls **`configure_git_author_from_github`**: **`git config user.name` / `user.email`** in the worktree from **`gh api user`**, using GitHub’s **`{id}+{login}@users.noreply.github.com`** form so commits match the **`gh`** account.
 
 Pause/resume: workflow state wraps prior state in `Paused`; `wait_if_paused` blocks the driver until resumed.
 
@@ -115,8 +117,10 @@ Templates live in **`[[agent_steps]]`** (`name`, **`prompt`**, **`repeat`**). De
 `crates/maestro-core/src/actions/traits.rs` — `ExternalActions`:
 
 - Jira: assign to current user (`@me`), transition, unassign, get ticket details (string payload / parsing in client)
-- Git: create/remove worktree, **`create_pr`** (implemented on **`RealActions`/`DryRunActions`** but **not** called by the workflow engine — agents open PRs with **`gh`** or similar), **commit_changes**
+- Git: create/remove worktree, **`create_pr`** (implemented on **`RealActions`/`DryRunActions`** but **not** called by the workflow engine — agents open PRs with **`gh`** or similar), **commit_changes**, **`configure_git_author_from_github`**, **`request_github_self_as_pr_reviewer`**
 - Shell: **run_command**
+
+Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer`**). In **dry mode**, **`request_github_self_as_pr_reviewer`** does not call GitHub (returns skipped); **`configure_git_author_from_github`** still sets local **`git config`** when **`gh`** is available.
 
 `real.rs` and `dry_run.rs` implement this for production vs dry runs.
 

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use super::gh_github::apply_git_identity_from_gh;
 use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
 use crate::process::{self, CommandOutput};
@@ -198,6 +199,23 @@ impl ExternalActions for DryRunActions {
             )));
         }
         Ok(())
+    }
+
+    async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()> {
+        info!(
+            cwd = %cwd.display(),
+            "Aligning git author with gh (dry mode — local git config, executes normally)"
+        );
+        apply_git_identity_from_gh(cwd, CancellationToken::new()).await
+    }
+
+    async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool> {
+        info!(
+            cwd = %cwd.display(),
+            pr = %pr_url,
+            "[DRY] Would request authenticated GitHub user as PR reviewer"
+        );
+        Ok(false)
     }
 
     async fn run_command(&self, cmd: &str, cwd: &Path) -> Result<CommandOutput> {

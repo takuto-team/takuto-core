@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
 use crate::process::{self, CommandOutput};
@@ -272,6 +273,15 @@ impl ExternalActions for RealActions {
             )));
         }
         Ok(())
+    }
+
+    async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()> {
+        apply_git_identity_from_gh(cwd, CancellationToken::new()).await
+    }
+
+    async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool> {
+        gh_request_self_pr_reviewer(cwd, pr_url, CancellationToken::new()).await?;
+        Ok(true)
     }
 
     async fn run_command(&self, cmd: &str, cwd: &Path) -> Result<CommandOutput> {
