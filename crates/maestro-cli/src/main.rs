@@ -169,7 +169,22 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(RealActions::new(repo_path, git_remote))
     };
 
-    let engine = Arc::new(WorkflowEngine::new(config.clone(), actions.clone()));
+    let max_concurrent = config.read().await.general.max_concurrent_workflows as usize;
+    let engine = Arc::new(WorkflowEngine::new(
+        config.clone(),
+        actions.clone(),
+        max_concurrent,
+    ));
+
+    match engine.restore_persisted_workflows().await {
+        Ok(n) if n > 0 => {
+            info!(count = n, "Restored in-progress workflows from previous run");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to restore workflow snapshot (continuing without restore)");
+        }
+    }
 
     let cancel_token = CancellationToken::new();
     let polling_paused = Arc::new(AtomicBool::new(false));
@@ -236,8 +251,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             shutdown_token.cancel();
 
-            info!("Stopping all active workflows...");
-            shutdown_engine.stop_all_workflows().await;
+            info!("Persisting workflows and stopping drivers for resume after restart...");
+            if let Err(e) = shutdown_engine.persist_interrupt_for_restart().await {
+                tracing::warn!(error = %e, "Failed to write workflow snapshot; workflows may not resume cleanly");
+            }
 
             info!("Waiting for cleanup tasks to complete...");
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;

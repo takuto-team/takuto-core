@@ -47,6 +47,15 @@ impl WorkflowState {
     pub fn is_active(&self) -> bool {
         !self.is_terminal() && !matches!(self, Self::Paused { .. } | Self::Error { .. })
     }
+
+    /// Tickets that are not **Done**, **Stopped**, or **Error** reserve capacity against
+    /// `max_concurrent_workflows` for Jira polling (paused workflows count too).
+    pub fn occupies_concurrency_slot(&self) -> bool {
+        !matches!(
+            self,
+            Self::Done | Self::Stopped | Self::Error { .. }
+        )
+    }
 }
 
 impl std::fmt::Display for WorkflowState {

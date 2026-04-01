@@ -37,8 +37,9 @@ Workspace manifest: root `Cargo.toml` (Rust **2024** edition). Internal crates d
 2. Loads `Config` from file or defaults.
 3. Initializes **JSON** logging via `tracing_subscriber` and `EnvFilter` (including `general.log_level`).
 4. Builds `Arc<RwLock<Config>>` and `Arc<dyn ExternalActions>` from dry mode.
-5. Constructs `WorkflowEngine`, `JiraPoller` with a shared `CancellationToken` and **`Arc<AtomicBool>`** polling pause flag (shared with `AppState`), then `build_router`.
-6. Runs poller, Axum server with graceful shutdown on cancel, and signal handler (`SIGINT` / `SIGTERM` on Unix). Shutdown cancels the token, calls `stop_all_workflows`, then waits briefly for cleanup.
+5. Constructs `WorkflowEngine` with **`[general] max_concurrent_workflows`** (drives an internal semaphore for concurrent **mise** / **install** / **agent** sessions). Calls **`restore_persisted_workflows`** so workflows saved on the last graceful shutdown are loaded from **`{git.repo_path}/.maestro/workflow_snapshot.json`** before the poller’s first poll.
+6. Constructs `JiraPoller` with a shared `CancellationToken` and **`Arc<AtomicBool>`** polling pause flag (shared with `AppState`), then `build_router`.
+7. Runs poller, Axum server with graceful shutdown on cancel, and signal handler (`SIGINT` / `SIGTERM` on Unix). On **graceful** shutdown the process cancels the token, **`persist_interrupt_for_restart`** (writes the snapshot for non-terminal workflows and cancels their driver tokens **without** Jira unassign / **`Stopped`**), then waits briefly for cleanup. **`POST …/stop`** and **`stop_all_workflows`** still unassign and move tickets back to **To Do** (explicit stop, not container resume).
 
 ---
 
@@ -59,17 +60,17 @@ Terminal states: `Done`, `Stopped`, `Error`.
 - `Arc<dyn ExternalActions>`
 - `broadcast::Sender<WorkflowEvent>` for real-time updates
 
-Each new ticket gets `WorkflowEngine::start_workflow`, which inserts the workflow and **`tokio::spawn`s `drive_workflow`** so each ticket runs concurrently, subject to `max_concurrent_workflows`.
+Each new ticket gets `WorkflowEngine::start_workflow`, which inserts the workflow and **`tokio::spawn`s `drive_workflow`**. **`max_concurrent_workflows`** is enforced in two ways: the Jira poller only starts new To Do workflows when **`concurrency_slots_in_use`** is less than **`max_concurrent_workflows`** (every workflow that is **not** **`Done`**, **`Stopped`**, or **`Error`** counts — including **Paused**), and a shared semaphore caps how many workflows run **mise**, **install**, or an **agent** step at the same time (permits are taken **after** `wait_if_paused`, so paused workflows do not hold a heavy-work slot).
 
-`Workflow` carries ticket metadata, `steps_log`, branch/worktree paths, `pr_url`, `CancellationToken`, and up to **100** recent `terminal_lines` for UI persistence.
+`Workflow` carries ticket metadata, `steps_log`, branch/worktree paths, `pr_url`, `CancellationToken`, and up to **100** recent `terminal_lines` for UI persistence. **`workflow/snapshot.rs`** defines the JSON snapshot format for graceful shutdown / restart (same **`.maestro/`** tree as **`outcome.toml`**).
 
 ### Main step sequence (simplified)
 
 Implemented in `run_workflow_steps` inside `workflow/engine.rs`:
 
-1. **Assign** ticket to the **currently authenticated Jira user** (`acli` **`@me`**, same as `JiraClient::assign_ticket`) and move to **In Progress** (failures may be logged/`[DRY/SKIP]` but workflow can continue).
-2. **Jira details** via `JiraClient` / `get_ticket_details`; populate description, summary, type on `Workflow`.
-3. **Worktree** from `git::worktree::branch_name_for_ticket` and configured `base_branch`.
+1. **Assign** ticket to the **currently authenticated Jira user** (`acli` **`@me`**, same as `JiraClient::assign_ticket`) and move to **In Progress** (failures may be logged/`[DRY/SKIP]` but workflow can continue). On **resume after restart**, if the workflow already has an on-disk **`worktree_path`**, the engine **skips** re-logging assign/retrieve/create and runs a light Jira sync (`sync_jira_for_resume`) instead, then continues from **`configure_git_author_from_github`**.
+2. **Jira details** via `JiraClient` / `get_ticket_details`; populate description, summary, type on `Workflow` (full step logs on first run; refresh only on resume path above).
+3. **Worktree** from `git::worktree::branch_name_for_ticket` and configured `base_branch` (skipped when resuming with an existing directory).
 4. Optional **`pre_install`** (array of shell commands, or one string for backward compatibility) then optional **`install`** in the worktree (streaming output).
 5. **Agent workflow** — If **`[[agent_steps]]`** is empty: use **`config::default_agent_steps`** and repeat the full sequence **`[claude] address_ticket_passes`** times (default `3`). If **`[[agent_steps]]`** is non-empty: use **only** those steps (built-in sequence is not used); **`[claude] address_ticket_passes`** does **not** multiply the custom list — use each step’s **`repeat`** (≥ 1, default 1) to run that step multiple times in sequence (**`--resume`** after the first run). Interpolate **`{ticket_key}`**, **`{ticket_summary}`**, **`{ticket_description}`**, **`{ticket_type}`**, **`{acceptance_criteria}`**, **`{ticket_context}`**; append headless instructions from **`agent_prompt.rs`**. The **first** run of the workflow starts a **new** session; all later runs use **`--resume`**. There is **no** built-in PM / plan-validation pass — add a **custom step** whose **prompt** asks the agent to validate plans or requirements if you want that. Session failure **except** on the **last run of an outer cycle** **aborts**; failure on that last run is **non-fatal** (same as legacy review). Put **`[[agent_steps]]`** at the **TOML root before any `[section]`** when you use it. There is **no** separate lint/unit/e2e command phase — if you want the linter or tests, add agent steps whose **prompts** instruct the tool to run and fix them.
 6. **Finalize** — Read an optional PR URL via **`workflow::outcome::resolve_pr_url`**: prefer **`.maestro/outcome.toml`** in the worktree (`pr_url = "…"`), else the last agent session output line **`MAESTRO_PR_URL: …`**. If **no** PR URL is found **and** any **`steps_log`** entry is **`Failed`**, return **`Err`** (workflow ends in **`Error`**). If a PR URL **is** found, **`Failed`** steps in the log (e.g. non-fatal failure on the last agent run of a cycle) do **not** fail the workflow — a warning is logged and the run completes **`Done`**. Set **`workflow.pr_url`** when found; run **`gh pr edit --add-reviewer <login>`** for the authenticated **`gh`** user (best-effort — GitHub rejects if that user is already the PR author); append a **Workflow complete** step to **`steps_log`**; transition **`Done`**.
@@ -88,7 +89,7 @@ Pause/resume/stop apply while **`AddressingPrComments`** is active (**`is_active
 
 Pause/resume: workflow state wraps prior state in `Paused`; `wait_if_paused` blocks the driver until resumed.
 
-Stop/shutdown: cancel token kills child processes (`ProcessHandle` uses process groups on Unix); Jira cleanup (unassign / To Do) is triggered from stop paths as implemented.
+Stop (**API** / **`stop_all_workflows`**): cancel token kills child processes (`ProcessHandle` uses process groups on Unix); Jira cleanup (unassign / To Do) runs as today. **Graceful process shutdown** (SIGINT/SIGTERM path in **`maestro-cli`**) uses snapshot persist + cancel so tickets stay **In Progress** for resume.
 
 File logging: `WorkflowLogWriter` writes under `{repo_path}/logs/<TICKET>.log`.
 
@@ -182,7 +183,7 @@ Runtime path defaults are described in `README.md` / `config.toml.example`.
 
 ## Jira poller
 
-`crates/maestro-core/src/jira/poller.rs`: on an interval, if `project_keys` non-empty, lists **To Do** tickets (via `JiraClient` / `acli`), skips keys that already exist in the workflow map, respects `max_concurrent_workflows`, and calls `start_workflow`. Uses `cancel_token` for shutdown. When the dashboard sets **polling paused** (`AppState.polling_paused`), the poller still waits on the interval but **skips** `poll_once` (including the initial poll on startup if already paused). Not persisted across process restarts.
+`crates/maestro-core/src/jira/poller.rs`: on an interval, if `project_keys` non-empty, lists **To Do** tickets (via `JiraClient` / `acli`), skips keys that already exist in the workflow map, and only starts new workflows when **`concurrency_slots_in_use`** is less than **`max_concurrent_workflows`** (so **Paused** and other non-terminal rows reserve capacity — **restored** workflows are in the map before the first poll, so they take priority over new To Do picks). Uses `cancel_token` for shutdown. When the dashboard sets **polling paused** (`AppState.polling_paused`), the poller still waits on the interval but **skips** `poll_once` (including the initial poll on startup if already paused). Polling pause is not persisted across process restarts; workflow snapshot resume is (see **How the binary starts**).
 
 ---
 

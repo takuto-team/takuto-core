@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -22,6 +23,10 @@ use crate::process::OutputLine;
 
 use super::log_writer::WorkflowLogWriter;
 use super::outcome::resolve_pr_url;
+use super::snapshot::{
+    self, PersistedTerminalLine, PersistedWorkflowRecord, read_workflow_snapshot,
+    remove_workflow_snapshot, write_workflow_snapshot,
+};
 use super::state::WorkflowState;
 use super::step::{StepLog, StepStatus};
 use super::stream_humanize::humanize_agent_stream_line;
@@ -131,6 +136,86 @@ impl Workflow {
             _ => self.state.display_name(),
         }
     }
+
+    pub(crate) fn from_persisted_record(rec: PersistedWorkflowRecord) -> Self {
+        Self {
+            id: rec.id,
+            ticket_key: rec.ticket_key,
+            ticket_summary: rec.ticket_summary,
+            ticket_description: rec.ticket_description,
+            ticket_type: rec.ticket_type,
+            state: rec.state,
+            started_at: rec.started_at,
+            updated_at: rec.updated_at,
+            steps_log: rec.steps_log,
+            branch_name: rec.branch_name,
+            worktree_path: rec.worktree_path,
+            pr_url: rec.pr_url,
+            cancel_token: CancellationToken::new(),
+            terminal_lines: rec
+                .terminal_lines
+                .into_iter()
+                .map(|l| TerminalLine {
+                    text: l.text,
+                    stream: l.stream,
+                })
+                .collect(),
+            current_step_label: rec.current_step_label,
+        }
+    }
+}
+
+fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
+    PersistedWorkflowRecord {
+        id: w.id.clone(),
+        ticket_key: w.ticket_key.clone(),
+        ticket_summary: w.ticket_summary.clone(),
+        ticket_description: w.ticket_description.clone(),
+        ticket_type: w.ticket_type.clone(),
+        state: w.state.clone(),
+        started_at: w.started_at,
+        updated_at: w.updated_at,
+        steps_log: w.steps_log.clone(),
+        branch_name: w.branch_name.clone(),
+        worktree_path: w.worktree_path.clone(),
+        pr_url: w.pr_url.clone(),
+        terminal_lines: w
+            .terminal_lines
+            .iter()
+            .map(|l| PersistedTerminalLine {
+                text: l.text.clone(),
+                stream: l.stream.clone(),
+            })
+            .collect(),
+        current_step_label: w.current_step_label.clone(),
+    }
+}
+
+/// PR-review driver needs these when restoring from snapshot.
+fn pr_review_restore_bundle(
+    rec: &PersistedWorkflowRecord,
+) -> Option<(String, PathBuf, String, String, String)> {
+    let in_pr = matches!(rec.state, WorkflowState::AddressingPrComments { .. })
+        || matches!(
+            &rec.state,
+            WorkflowState::Paused { source_state }
+                if matches!(source_state.as_ref(), WorkflowState::AddressingPrComments { .. })
+        );
+    if !in_pr {
+        return None;
+    }
+    let pr = rec.pr_url.as_deref()?.trim();
+    if pr.is_empty() {
+        return None;
+    }
+    let wt = rec.worktree_path.clone()?;
+    Some((
+        pr.to_string(),
+        wt,
+        rec.ticket_summary.clone(),
+        rec.ticket_description.clone(),
+        rec.ticket_type.clone(),
+    ))
 }
 
 pub struct WorkflowEngine {
@@ -138,17 +223,196 @@ pub struct WorkflowEngine {
     pub workflows: Arc<RwLock<HashMap<String, Workflow>>>,
     pub actions: Arc<dyn ExternalActions>,
     pub event_tx: broadcast::Sender<WorkflowEvent>,
+    /// Limits concurrent heavy work (mise/install/agent sessions) across workflows. Paused workflows do not hold a permit.
+    agent_run_semaphore: Arc<Semaphore>,
+    /// When set, workflow drivers that exit with [`MaestroError::Cancelled`] do not move the workflow to Error (graceful container shutdown + snapshot).
+    pub suppress_cancelled_as_error: Arc<AtomicBool>,
 }
 
 impl WorkflowEngine {
-    pub fn new(config: Arc<RwLock<Config>>, actions: Arc<dyn ExternalActions>) -> Self {
+    pub fn new(
+        config: Arc<RwLock<Config>>,
+        actions: Arc<dyn ExternalActions>,
+        max_concurrent_workflows: usize,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
+        let permits = max_concurrent_workflows.max(1);
         Self {
             config,
             workflows: Arc::new(RwLock::new(HashMap::new())),
             actions,
             event_tx,
+            agent_run_semaphore: Arc::new(Semaphore::new(permits)),
+            suppress_cancelled_as_error: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Count workflows that reserve a slot against `max_concurrent_workflows` (includes **Paused**).
+    pub async fn concurrency_slots_in_use(&self) -> usize {
+        self.workflows
+            .read()
+            .await
+            .values()
+            .filter(|w| w.state.occupies_concurrency_slot())
+            .count()
+    }
+
+    /// Write `.maestro/workflow_snapshot.json` and cancel drivers so processes stop, without Jira unassign / **Stopped** (for container restart).
+    pub async fn persist_interrupt_for_restart(&self) -> Result<()> {
+        self.suppress_cancelled_as_error.store(true, Ordering::SeqCst);
+
+        let repo_path = {
+            let c = self.config.read().await;
+            PathBuf::from(&c.git.repo_path)
+        };
+
+        let records: Vec<PersistedWorkflowRecord> = {
+            let map = self.workflows.read().await;
+            let mut v: Vec<_> = map
+                .values()
+                .filter(|w| w.state.occupies_concurrency_slot())
+                .map(workflow_to_persisted_record)
+                .collect();
+            v.sort_by_key(|r| r.started_at);
+            v
+        };
+
+        if records.is_empty() {
+            let _ = remove_workflow_snapshot(&repo_path);
+            return Ok(());
+        }
+
+        write_workflow_snapshot(&repo_path, &records)?;
+        info!(
+            count = records.len(),
+            path = %snapshot::snapshot_path(&repo_path).display(),
+            "Wrote workflow snapshot for resume after restart"
+        );
+
+        let keys: Vec<String> = records.iter().map(|r| r.ticket_key.clone()).collect();
+        for key in keys {
+            let token = {
+                let map = self.workflows.read().await;
+                map.get(&key).map(|w| w.cancel_token.clone())
+            };
+            if let Some(t) = token {
+                t.cancel();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Load snapshot from disk, insert workflows, spawn drivers. Removes the snapshot file on success.
+    pub async fn restore_persisted_workflows(&self) -> Result<usize> {
+        let repo_path = {
+            let c = self.config.read().await;
+            PathBuf::from(&c.git.repo_path)
+        };
+
+        let Some(file) = read_workflow_snapshot(&repo_path)? else {
+            return Ok(0);
+        };
+
+        if file.version != snapshot::SNAPSHOT_VERSION {
+            warn!(
+                version = file.version,
+                expected = snapshot::SNAPSHOT_VERSION,
+                "Ignoring workflow snapshot with unsupported version"
+            );
+            return Ok(0);
+        }
+
+        let mut records = file.workflows;
+        records.sort_by_key(|r| r.started_at);
+
+        let n = records.len();
+        for rec in records {
+            let ticket_key = rec.ticket_key.clone();
+            let pr_bundle = pr_review_restore_bundle(&rec);
+            let wf = Workflow::from_persisted_record(rec);
+            let cancel_token = wf.cancel_token.clone();
+
+            self.workflows
+                .write()
+                .await
+                .insert(ticket_key.clone(), wf);
+
+            let engine_config = self.config.clone();
+            let engine_workflows = self.workflows.clone();
+            let engine_actions = self.actions.clone();
+            let engine_event_tx = self.event_tx.clone();
+            let agent_sem = self.agent_run_semaphore.clone();
+            let suppress = self.suppress_cancelled_as_error.clone();
+
+            if let Some((pr_url, worktree_path, ticket_summary, ticket_description, ticket_type)) =
+                pr_bundle
+            {
+                if !worktree_path.exists() {
+                    warn!(
+                        ticket = %ticket_key,
+                        path = %worktree_path.display(),
+                        "PR review restore: worktree missing, falling back to main workflow driver"
+                    );
+                    tokio::spawn(async move {
+                        drive_workflow(
+                            ticket_key,
+                            engine_config,
+                            engine_workflows,
+                            engine_actions,
+                            engine_event_tx,
+                            cancel_token,
+                            agent_sem,
+                            suppress,
+                        )
+                        .await;
+                    });
+                    continue;
+                }
+
+                tokio::spawn(async move {
+                    drive_pr_review_workflow(
+                        ticket_key,
+                        pr_url,
+                        worktree_path,
+                        ticket_summary,
+                        ticket_description,
+                        ticket_type,
+                        engine_config,
+                        engine_workflows,
+                        engine_actions,
+                        engine_event_tx,
+                        cancel_token,
+                        agent_sem,
+                        suppress,
+                    )
+                    .await;
+                });
+            } else {
+                tokio::spawn(async move {
+                    drive_workflow(
+                        ticket_key,
+                        engine_config,
+                        engine_workflows,
+                        engine_actions,
+                        engine_event_tx,
+                        cancel_token,
+                        agent_sem,
+                        suppress,
+                    )
+                    .await;
+                });
+            }
+        }
+
+        remove_workflow_snapshot(&repo_path)?;
+        info!(
+            count = n,
+            path = %snapshot::snapshot_path(&repo_path).display(),
+            "Restored workflows from snapshot"
+        );
+
+        Ok(n)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<WorkflowEvent> {
@@ -174,6 +438,8 @@ impl WorkflowEngine {
         let engine_workflows = self.workflows.clone();
         let engine_actions = self.actions.clone();
         let engine_event_tx = self.event_tx.clone();
+        let agent_sem = self.agent_run_semaphore.clone();
+        let suppress = self.suppress_cancelled_as_error.clone();
         let ticket = ticket_key.clone();
 
         tokio::spawn(async move {
@@ -184,6 +450,8 @@ impl WorkflowEngine {
                 engine_actions,
                 engine_event_tx,
                 cancel_token,
+                agent_sem,
+                suppress,
             )
             .await;
         });
@@ -431,6 +699,8 @@ impl WorkflowEngine {
         let engine_workflows = self.workflows.clone();
         let engine_actions = self.actions.clone();
         let engine_event_tx = self.event_tx.clone();
+        let agent_sem = self.agent_run_semaphore.clone();
+        let suppress = self.suppress_cancelled_as_error.clone();
         let ticket = ticket_key.to_string();
 
         tokio::spawn(async move {
@@ -446,6 +716,8 @@ impl WorkflowEngine {
                 engine_actions,
                 engine_event_tx,
                 cancel_token,
+                agent_sem,
+                suppress,
             )
             .await;
         });
@@ -535,6 +807,8 @@ async fn drive_workflow(
     actions: Arc<dyn ExternalActions>,
     event_tx: broadcast::Sender<WorkflowEvent>,
     cancel_token: CancellationToken,
+    agent_run_semaphore: Arc<Semaphore>,
+    suppress_cancelled_as_error: Arc<AtomicBool>,
 ) {
     info!(ticket = %ticket_key, "Workflow driver started");
 
@@ -552,10 +826,21 @@ async fn drive_workflow(
         &event_tx,
         &cancel_token,
         &log_writer,
+        &agent_run_semaphore,
     )
     .await;
 
     if let Err(e) = result {
+        if matches!(e, MaestroError::Cancelled)
+            && suppress_cancelled_as_error.load(Ordering::SeqCst)
+        {
+            info!(
+                ticket = %ticket_key,
+                "Workflow driver cancelled during shutdown; state preserved for resume"
+            );
+            return;
+        }
+
         error!(ticket = %ticket_key, error = %e, "Workflow failed");
         log_writer.write(&format!("WORKFLOW FAILED: {e}")).await;
         let mut wf = workflows.write().await;
@@ -595,6 +880,8 @@ async fn drive_pr_review_workflow(
     actions: Arc<dyn ExternalActions>,
     event_tx: broadcast::Sender<WorkflowEvent>,
     cancel_token: CancellationToken,
+    agent_run_semaphore: Arc<Semaphore>,
+    suppress_cancelled_as_error: Arc<AtomicBool>,
 ) {
     info!(ticket = %ticket_key, "PR review workflow driver started");
 
@@ -617,10 +904,21 @@ async fn drive_pr_review_workflow(
         &event_tx,
         &cancel_token,
         &log_writer,
+        &agent_run_semaphore,
     )
     .await;
 
     if let Err(e) = result {
+        if matches!(e, MaestroError::Cancelled)
+            && suppress_cancelled_as_error.load(Ordering::SeqCst)
+        {
+            info!(
+                ticket = %ticket_key,
+                "PR review driver cancelled during shutdown; state preserved for resume"
+            );
+            return;
+        }
+
         error!(ticket = %ticket_key, error = %e, "PR review workflow failed");
         log_writer.write(&format!("PR REVIEW FAILED: {e}")).await;
         let mut wf = workflows.write().await;
@@ -665,6 +963,7 @@ async fn run_agent_step_sequence(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
+    agent_run_semaphore: Arc<Semaphore>,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = None;
@@ -679,6 +978,8 @@ async fn run_agent_step_sequence(
             for r in 1..=step_repeat {
                 check_cancelled(cancel_token)?;
                 wait_if_paused(workflows, ticket_key, cancel_token).await?;
+
+                let _agent_slot = acquire_agent_slot(&agent_run_semaphore).await?;
 
                 let step_label_core = if outer_loops > 1 {
                     format!(
@@ -832,6 +1133,94 @@ async fn run_agent_step_sequence(
     Ok(last_agent_output)
 }
 
+/// Refreshes Jira assignment + ticket fields when resuming with an on-disk worktree (no new `steps_log` rows).
+async fn sync_jira_for_resume(
+    ticket_key: &str,
+    config: &Arc<RwLock<Config>>,
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    actions: &Arc<dyn ExternalActions>,
+    cancel_token: &CancellationToken,
+) -> Result<(PathBuf, crate::jira::client::JiraTicket)> {
+    check_cancelled(cancel_token)?;
+
+    let cfg = config.read().await;
+    let project_keys = cfg.jira.project_keys.clone();
+    drop(cfg);
+
+    if let Err(e) = actions.assign_ticket(ticket_key).await {
+        warn!(
+            ticket = %ticket_key,
+            error = %e,
+            "Resume: assign ticket failed, continuing"
+        );
+    }
+    if let Err(e) = actions.transition_ticket(ticket_key, "In Progress").await {
+        warn!(
+            ticket = %ticket_key,
+            error = %e,
+            "Resume: transition failed, continuing"
+        );
+    }
+
+    let repo_path = {
+        let c = config.read().await;
+        PathBuf::from(&c.git.repo_path)
+    };
+    let jira_client = JiraClient::new(repo_path);
+    let ticket_detail = match jira_client.get_ticket_details(ticket_key, &project_keys).await {
+        Ok(detail) => {
+            let mut wf = workflows.write().await;
+            if let Some(workflow) = wf.get_mut(ticket_key) {
+                workflow.ticket_description = detail.description.clone();
+                workflow.ticket_type = detail.item_type.clone();
+                workflow.ticket_summary = detail.summary.clone();
+                workflow.updated_at = Utc::now();
+            }
+            detail
+        }
+        Err(e) => {
+            warn!(
+                ticket = %ticket_key,
+                error = %e,
+                "Resume: failed to refresh ticket details"
+            );
+            let wf = workflows.read().await;
+            let w = wf
+                .get(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+            crate::jira::client::JiraTicket {
+                key: ticket_key.to_string(),
+                summary: w.ticket_summary.clone(),
+                description: w.ticket_description.clone(),
+                item_type: w.ticket_type.clone(),
+                status: "In Progress".to_string(),
+                linked_items: Vec::new(),
+            }
+        }
+    };
+
+    let worktree_path = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .and_then(|w| w.worktree_path.clone())
+            .filter(|p| p.exists())
+            .ok_or_else(|| {
+                MaestroError::Config(
+                    "Resume: worktree path missing or removed from disk".to_string(),
+                )
+            })?
+    };
+
+    Ok((worktree_path, ticket_detail))
+}
+
+async fn acquire_agent_slot(sem: &Arc<Semaphore>) -> Result<tokio::sync::OwnedSemaphorePermit> {
+    sem.clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| MaestroError::Config("Agent concurrency semaphore closed".to_string()))
+}
+
 async fn run_pr_review_steps(
     ticket_key: &str,
     pr_url: &str,
@@ -845,6 +1234,7 @@ async fn run_pr_review_steps(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
+    agent_run_semaphore: &Arc<Semaphore>,
 ) -> Result<()> {
     let ticket = crate::jira::client::JiraTicket {
         key: ticket_key.to_string(),
@@ -882,8 +1272,8 @@ async fn run_pr_review_steps(
     let steps = cfg.resolved_review_agent_steps();
     drop(cfg);
 
-    check_cancelled(cancel_token)?;
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
+    check_cancelled(cancel_token)?;
 
     let step_log_start = workflows
         .read()
@@ -908,6 +1298,7 @@ async fn run_pr_review_steps(
         event_tx,
         cancel_token,
         log_writer,
+        agent_run_semaphore.clone(),
     )
     .await?;
 
@@ -998,102 +1389,145 @@ async fn run_workflow_steps(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
+    agent_run_semaphore: &Arc<Semaphore>,
 ) -> Result<()> {
-    // Step 1: Assign ticket
-    transition(workflows, event_tx, ticket_key, WorkflowState::Assigning).await;
-    let mut step_log = StepLog::new("Assign Ticket".to_string());
-
-    let cfg = config.read().await;
-    let repo_path = PathBuf::from(&cfg.git.repo_path);
-    let project_keys = cfg.jira.project_keys.clone();
-    drop(cfg);
-
+    wait_if_paused(workflows, ticket_key, cancel_token).await?;
     check_cancelled(cancel_token)?;
 
-    match actions.assign_ticket(ticket_key).await {
-        Ok(()) => {
-            step_log.output.push("Ticket assigned to current Jira user".to_string());
+    let reuse_path = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .and_then(|w| w.worktree_path.clone())
+            .filter(|p| p.exists())
+    };
+
+    let (worktree_path, ticket_detail) = if reuse_path.is_some() {
+        info!(
+            ticket = %ticket_key,
+            "Resuming workflow with existing worktree after restart"
+        );
+        sync_jira_for_resume(
+            ticket_key,
+            config,
+            workflows,
+            actions,
+            cancel_token,
+        )
+        .await?
+    } else {
+        {
+            let mut wf = workflows.write().await;
+            if let Some(w) = wf.get_mut(ticket_key) {
+                w.worktree_path = None;
+                w.branch_name.clear();
+            }
         }
-        Err(e) => {
-            step_log.output.push(format!("[DRY/SKIP] {e}"));
-            warn!(ticket = ticket_key, error = %e, "Failed to assign ticket, continuing");
+
+        // Step 1: Assign ticket
+        transition(workflows, event_tx, ticket_key, WorkflowState::Assigning).await;
+        let mut step_log = StepLog::new("Assign Ticket".to_string());
+
+        let cfg = config.read().await;
+        let repo_path = PathBuf::from(&cfg.git.repo_path);
+        let project_keys = cfg.jira.project_keys.clone();
+        drop(cfg);
+
+        check_cancelled(cancel_token)?;
+
+        match actions.assign_ticket(ticket_key).await {
+            Ok(()) => {
+                step_log
+                    .output
+                    .push("Ticket assigned to current Jira user".to_string());
+            }
+            Err(e) => {
+                step_log.output.push(format!("[DRY/SKIP] {e}"));
+                warn!(ticket = ticket_key, error = %e, "Failed to assign ticket, continuing");
+            }
         }
-    }
 
-    match actions.transition_ticket(ticket_key, "In Progress").await {
-        Ok(()) => {
-            step_log.output.push("Ticket moved to In Progress".to_string());
+        match actions.transition_ticket(ticket_key, "In Progress").await {
+            Ok(()) => {
+                step_log.output.push("Ticket moved to In Progress".to_string());
+            }
+            Err(e) => {
+                step_log.output.push(format!("[DRY/SKIP] {e}"));
+                warn!(ticket = ticket_key, error = %e, "Failed to transition ticket, continuing");
+            }
         }
-        Err(e) => {
-            step_log.output.push(format!("[DRY/SKIP] {e}"));
-            warn!(ticket = ticket_key, error = %e, "Failed to transition ticket, continuing");
-        }
-    }
 
-    step_log.complete(StepStatus::Success);
-    add_step_log(workflows, ticket_key, step_log).await;
+        step_log.complete(StepStatus::Success);
+        add_step_log(workflows, ticket_key, step_log).await;
 
-    // Step 2: Retrieve ticket details
-    transition(workflows, event_tx, ticket_key, WorkflowState::RetrievingDetails).await;
-    let mut step_log = StepLog::new("Retrieve Details".to_string());
+        // Step 2: Retrieve ticket details
+        transition(workflows, event_tx, ticket_key, WorkflowState::RetrievingDetails).await;
+        let mut step_log = StepLog::new("Retrieve Details".to_string());
 
-    check_cancelled(cancel_token)?;
+        check_cancelled(cancel_token)?;
 
-    let jira_client = JiraClient::new(repo_path.clone());
-    let ticket_detail = match jira_client.get_ticket_details(ticket_key, &project_keys).await {
-        Ok(detail) => {
-            step_log.output.push(format!("Retrieved: {}", detail.summary));
+        let jira_client = JiraClient::new(repo_path.clone());
+        let ticket_detail = match jira_client.get_ticket_details(ticket_key, &project_keys).await {
+            Ok(detail) => {
+                step_log.output.push(format!("Retrieved: {}", detail.summary));
+                let mut wf = workflows.write().await;
+                if let Some(workflow) = wf.get_mut(ticket_key) {
+                    workflow.ticket_description = detail.description.clone();
+                    workflow.ticket_type = detail.item_type.clone();
+                    workflow.ticket_summary = detail.summary.clone();
+                }
+                step_log.complete(StepStatus::Success);
+                detail
+            }
+            Err(e) => {
+                warn!(ticket = ticket_key, error = %e, "Failed to retrieve ticket details, using minimal context");
+                step_log.fail(e.to_string());
+                crate::jira::client::JiraTicket {
+                    key: ticket_key.to_string(),
+                    summary: workflows
+                        .read()
+                        .await
+                        .get(ticket_key)
+                        .map(|w| w.ticket_summary.clone())
+                        .unwrap_or_default(),
+                    description: String::new(),
+                    item_type: "Task".to_string(),
+                    status: "In Progress".to_string(),
+                    linked_items: Vec::new(),
+                }
+            }
+        };
+        add_step_log(workflows, ticket_key, step_log).await;
+
+        // Step 3: Create worktree
+        transition(workflows, event_tx, ticket_key, WorkflowState::CreatingWorktree).await;
+        let mut step_log = StepLog::new("Create Worktree".to_string());
+
+        check_cancelled(cancel_token)?;
+
+        let branch_name = git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type);
+        let cfg = config.read().await;
+        let base_branch = cfg.git.base_branch.clone();
+        drop(cfg);
+
+        let worktree_path = actions
+            .create_worktree(&branch_name, &base_branch)
+            .await?;
+
+        {
             let mut wf = workflows.write().await;
             if let Some(workflow) = wf.get_mut(ticket_key) {
-                workflow.ticket_description = detail.description.clone();
-                workflow.ticket_type = detail.item_type.clone();
-                workflow.ticket_summary = detail.summary.clone();
-            }
-            step_log.complete(StepStatus::Success);
-            detail
-        }
-        Err(e) => {
-            warn!(ticket = ticket_key, error = %e, "Failed to retrieve ticket details, using minimal context");
-            step_log.fail(e.to_string());
-            crate::jira::client::JiraTicket {
-                key: ticket_key.to_string(),
-                summary: workflows.read().await.get(ticket_key).map(|w| w.ticket_summary.clone()).unwrap_or_default(),
-                description: String::new(),
-                item_type: "Task".to_string(),
-                status: "In Progress".to_string(),
-                linked_items: Vec::new(),
+                workflow.branch_name = branch_name.clone();
+                workflow.worktree_path = Some(worktree_path.clone());
             }
         }
+
+        step_log.output.push(format!("Branch: {branch_name}"));
+        step_log.output.push(format!("Worktree: {}", worktree_path.display()));
+        step_log.complete(StepStatus::Success);
+        add_step_log(workflows, ticket_key, step_log).await;
+
+        (worktree_path, ticket_detail)
     };
-    add_step_log(workflows, ticket_key, step_log).await;
-
-    // Step 3: Create worktree
-    transition(workflows, event_tx, ticket_key, WorkflowState::CreatingWorktree).await;
-    let mut step_log = StepLog::new("Create Worktree".to_string());
-
-    check_cancelled(cancel_token)?;
-
-    let branch_name = git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type);
-    let cfg = config.read().await;
-    let base_branch = cfg.git.base_branch.clone();
-    drop(cfg);
-
-    let worktree_path = actions
-        .create_worktree(&branch_name, &base_branch)
-        .await?;
-
-    {
-        let mut wf = workflows.write().await;
-        if let Some(workflow) = wf.get_mut(ticket_key) {
-            workflow.branch_name = branch_name.clone();
-            workflow.worktree_path = Some(worktree_path.clone());
-        }
-    }
-
-    step_log.output.push(format!("Branch: {branch_name}"));
-    step_log.output.push(format!("Worktree: {}", worktree_path.display()));
-    step_log.complete(StepStatus::Success);
-    add_step_log(workflows, ticket_key, step_log).await;
 
     match actions
         .configure_git_author_from_github(&worktree_path)
@@ -1123,6 +1557,7 @@ async fn run_workflow_steps(
 
     // Step 3a: mise — install pinned tools before shell hooks (pre_install / install).
     if crate::process::worktree_has_mise_config(&worktree_path) {
+        let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
         let mut step_log = StepLog::new("Mise install".to_string());
         info!("Running mise install (project declares mise tools)");
         log_writer
@@ -1173,6 +1608,7 @@ async fn run_workflow_steps(
     if !pre_install_cmds.is_empty() {
         let total = pre_install_cmds.len();
         for (i, pre_install_cmd) in pre_install_cmds.iter().enumerate() {
+            let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
             let step_name = format!("Pre-install ({}/{})", i + 1, total);
             let mut step_log = StepLog::new(step_name.clone());
             info!(command = %pre_install_cmd, step = i + 1, total, "Running pre-install command");
@@ -1223,6 +1659,7 @@ async fn run_workflow_steps(
     // Step 3c: Install dependencies
 
     if !install_cmd.is_empty() {
+        let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
         let mut step_log = StepLog::new("Install Dependencies".to_string());
         info!(command = %install_cmd, "Installing dependencies in worktree");
         log_writer.write_step("Install Dependencies", &format!("Running: {install_cmd}")).await;
@@ -1308,6 +1745,7 @@ async fn run_workflow_steps(
         event_tx,
         cancel_token,
         log_writer,
+        agent_run_semaphore.clone(),
     )
     .await?;
 

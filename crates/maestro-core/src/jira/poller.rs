@@ -80,7 +80,7 @@ impl JiraPoller {
         }
 
         let max_concurrent = config.general.max_concurrent_workflows as usize;
-        let active_count = self.engine.active_workflow_count().await;
+        let active_count = self.engine.concurrency_slots_in_use().await;
         let dry_mode = config.general.dry_mode;
 
         info!(
