@@ -12,51 +12,19 @@ flowchart TD
     F -->|Yes| G[Run each pre_install shell command in order<br/>e.g. aws codeartifact login]
     F -->|No| H[Run install command<br/>e.g. npm ci]
     G --> H
-    H --> I[Address Ticket Pass 1/3<br/>Claude Code /address-ticket]
-    I --> J[PM Agent validates plan<br/>against ticket requirements]
-    J --> K[Review Changes Pass 1/3<br/>Claude Code /review-changes]
-    K --> L[Address Ticket Pass 2/3]
-    L --> M[PM Agent validates]
-    M --> N[Review Changes Pass 2/3]
-    N --> O[Address Ticket Pass 3/3]
-    O --> P[PM Agent validates]
-    P --> Q[Review Changes Pass 3/3]
-    Q --> R{Lint command configured?}
-    R -->|Yes| S[Run lint]
-    R -->|No| U
-    S --> T{Lint passed?}
-    T -->|No| S1[Claude fixes lint errors]
-    S1 --> S
-    T -->|Yes| S2[Commit lint fixes]
-    S2 --> U{Unit test command configured?}
-    U -->|Yes| V[Run unit tests]
-    U -->|No| X
-    V --> W{Tests passed?}
-    W -->|No| V1[Claude fixes test failures]
-    V1 --> V
-    W -->|Yes| W1[Commit test fixes]
-    W1 --> X{E2E test command configured?}
-    X -->|Yes| Y[Run e2e tests]
-    X -->|No| AA
-    Y --> Z{E2E passed?}
-    Z -->|No| Y1[Claude fixes e2e failures]
-    Y1 --> Y
-    Z -->|Yes| Z1[Commit e2e fixes]
-    Z1 --> AA{Any steps failed?}
-    AA -->|Yes| BB[Workflow Error<br/>Skip PR creation]
-    AA -->|No| CC[Create PR via gh<br/>Conventional commit title<br/>Jira reference in description]
-    CC --> DD[Workflow Done]
+    H --> I[Agent steps: built-in or [[agent_steps]]<br/>Claude Code / Cursor Agent headless sessions]
+    I --> J{Any step log Failed?}
+    J -->|Yes| K[Workflow ends in error]
+    J -->|No| L[Finalize: optional pr_url from<br/>.maestro/outcome.toml or MAESTRO_PR_URL line]
+    L --> M[Workflow Done]
 
     style A fill:#1e3a5f
-    style BB fill:#5f1e1e
-    style DD fill:#1e5f2e
+    style K fill:#5f1e1e
+    style M fill:#1e5f2e
     style I fill:#2d1e5f
-    style L fill:#2d1e5f
-    style O fill:#2d1e5f
-    style S fill:#4a3f1e
-    style V fill:#4a3f1e
-    style Y fill:#4a3f1e
 ```
+
+Linting, unit tests, E2E, and **opening a PR** are **not** engine steps. Encode them as **agent step prompts** (e.g. run `gh pr create`, print `MAESTRO_PR_URL: …`, or write `.maestro/outcome.toml`). The workflow **stops** when the last agent session exits successfully; Maestro then reads the optional PR URL and transitions to **Done**.
 
 ## Controls
 

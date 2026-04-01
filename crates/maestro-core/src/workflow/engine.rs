@@ -9,9 +9,9 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::actions::traits::ExternalActions;
-use crate::claude::pm_agent::{PmAgent, PmVerdict};
+use crate::agent_prompt::headless_instructions_suffix;
 use crate::claude::session::ClaudeSession;
-use crate::config::{cursor_model_for_cli, AiAgentProvider, Config};
+use crate::config::{cursor_model_for_cli, interpolate_agent_prompt, AiAgentProvider, Config};
 use crate::cursor::session::CursorSession;
 use crate::error::{MaestroError, Result};
 use crate::git;
@@ -19,6 +19,7 @@ use crate::jira::client::JiraClient;
 use crate::process::OutputLine;
 
 use super::log_writer::WorkflowLogWriter;
+use super::outcome::resolve_pr_url;
 use super::state::WorkflowState;
 use super::step::{StepLog, StepStatus};
 use super::stream_humanize::humanize_agent_stream_line;
@@ -66,6 +67,8 @@ pub struct Workflow {
     pub cancel_token: CancellationToken,
     /// Recent terminal output lines for persistence across page reloads.
     pub terminal_lines: Vec<TerminalLine>,
+    /// Human-readable agent step label for the dashboard (e.g. `Implement (cycle 2/3, run 1/1)`).
+    pub current_step_label: Option<String>,
 }
 
 impl Workflow {
@@ -86,6 +89,22 @@ impl Workflow {
             pr_url: None,
             cancel_token: CancellationToken::new(),
             terminal_lines: Vec::new(),
+            current_step_label: None,
+        }
+    }
+
+    /// String shown on the dashboard and in WebSocket `workflow_updated` events.
+    pub fn status_display(&self) -> String {
+        match &self.state {
+            WorkflowState::Paused { .. }
+            | WorkflowState::Error { .. }
+            | WorkflowState::Done
+            | WorkflowState::Stopped => self.state.display_name(),
+            WorkflowState::AddressingTicket { .. } => self
+                .current_step_label
+                .clone()
+                .unwrap_or_else(|| "Running agent steps".to_string()),
+            _ => self.state.display_name(),
         }
     }
 }
@@ -206,11 +225,12 @@ impl WorkflowEngine {
             workflow.state = restored;
             workflow.updated_at = Utc::now();
 
+            let state_line = workflow.status_display();
             self.broadcast_event(WorkflowEvent {
                 event_type: "workflow_updated".to_string(),
                 workflow_id: workflow.id.clone(),
                 ticket_key: ticket_key.to_string(),
-                state: workflow.state.display_name(),
+                state: state_line,
                 timestamp: Utc::now(),
                 error: None,
                 step_name: None,
@@ -235,6 +255,7 @@ impl WorkflowEngine {
 
         // Cancel all running processes
         workflow.cancel_token.cancel();
+        workflow.current_step_label = None;
         workflow.state = WorkflowState::Stopped;
         workflow.updated_at = Utc::now();
 
@@ -348,6 +369,7 @@ async fn drive_workflow(
         let mut wf = workflows.write().await;
         if let Some(workflow) = wf.get_mut(&ticket_key) {
             let source = Box::new(workflow.state.clone());
+            workflow.current_step_label = None;
             workflow.state = WorkflowState::Error {
                 source_state: source,
                 message: e.to_string(),
@@ -389,9 +411,9 @@ async fn run_workflow_steps(
 
     check_cancelled(cancel_token)?;
 
-    match actions.assign_ticket(ticket_key, "maestro").await {
+    match actions.assign_ticket(ticket_key).await {
         Ok(()) => {
-            step_log.output.push("Ticket assigned to maestro".to_string());
+            step_log.output.push("Ticket assigned to current Jira user".to_string());
         }
         Err(e) => {
             step_log.output.push(format!("[DRY/SKIP] {e}"));
@@ -480,7 +502,7 @@ async fn run_workflow_steps(
     let shell_stream_provider = cfg.agent.provider;
     drop(cfg);
 
-    // Step 3a: mise — install pinned tools before shell hooks (pre_install / install / lint / test).
+    // Step 3a: mise — install pinned tools before shell hooks (pre_install / install).
     if crate::process::worktree_has_mise_config(&worktree_path) {
         let mut step_log = StepLog::new("Mise install".to_string());
         info!("Running mise install (project declares mise tools)");
@@ -626,320 +648,172 @@ async fn run_workflow_steps(
         add_step_log(workflows, ticket_key, step_log).await;
     }
 
-    // Build ticket context for Claude
+    // Ticket context and interpolation vars for [[agent_steps]] prompts
     let ticket_context = build_ticket_context(&ticket_detail);
+    let acceptance_criteria = extract_acceptance_criteria(&ticket_detail.description);
+    let acceptance_criteria_str = format_acceptance_criteria_block(&acceptance_criteria);
 
-    // Steps 4-9: Address ticket passes (3 rounds of address + review)
+    let mut interp_vars: HashMap<String, String> = HashMap::new();
+    interp_vars.insert("ticket_key".into(), ticket_key.to_string());
+    interp_vars.insert("ticket_summary".into(), ticket_detail.summary.clone());
+    interp_vars.insert("ticket_description".into(), ticket_detail.description.clone());
+    interp_vars.insert("ticket_type".into(), ticket_detail.item_type.clone());
+    interp_vars.insert("acceptance_criteria".into(), acceptance_criteria_str);
+    interp_vars.insert("ticket_context".into(), ticket_context);
+
+    // Steps 4–N: agent_steps (or defaults) × outer loops; each step may repeat (see `repeat` on step)
     let cfg = config.read().await;
-    let passes = cfg.claude.address_ticket_passes;
+    let outer_loops = cfg.agent_sequence_outer_loops();
     let timeout = cfg.claude.step_timeout_secs;
     let claude_model = if cfg.claude.model.is_empty() { None } else { Some(cfg.claude.model.clone()) };
     let cursor_model_buf = cfg.agent.cursor_model.clone();
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
-    let agent_cfg_for_pm = cfg.agent.clone();
-    let model_for_pm = match cfg.agent.provider {
-        AiAgentProvider::Claude => cfg.claude.model.clone(),
-        AiAgentProvider::Cursor => cfg.agent.cursor_model.clone(),
-    };
+    let steps = cfg.resolved_agent_steps();
+    let num_steps = steps.len();
     drop(cfg);
 
-    // Create PM agent for plan validation
-    let acceptance_criteria = extract_acceptance_criteria(&ticket_detail.description);
-    let pm_agent = PmAgent::new(ticket_detail.description.clone(), acceptance_criteria);
-
-    let mut has_critical_failure = false;
-    // Track Claude session ID across passes for --resume (keeps conversation context)
     let mut claude_session_id: Option<String> = None;
+    // Last agent session stdout (used to parse `MAESTRO_PR_URL:` after the final step).
+    let mut last_agent_output: Option<String> = None;
 
-    for pass in 1..=passes {
+    for outer in 1..=outer_loops {
         check_cancelled(cancel_token)?;
-
-        // Wait if paused
         wait_if_paused(workflows, ticket_key, cancel_token).await?;
 
-        // Address ticket
-        transition(
-            workflows,
-            event_tx,
-            ticket_key,
-            WorkflowState::AddressingTicket { pass },
-        )
-        .await;
-        let step_label = format!("Address Ticket (Pass {pass}/{passes})");
-        let mut step_log = StepLog::new(step_label.clone());
-        broadcast_step_started(event_tx, ticket_key, &step_label);
-        log_writer.write_step(&step_label, "Starting").await;
+        for (step_idx, step) in steps.iter().enumerate() {
+            let step_repeat = step.repeat;
+            for r in 1..=step_repeat {
+                check_cancelled(cancel_token)?;
+                wait_if_paused(workflows, ticket_key, cancel_token).await?;
 
-        let address_line_tx = spawn_output_relay(
-            event_tx,
-            ticket_key,
-            &format!("Address Ticket (Pass {pass}/{passes})"),
-            log_writer,
-            workflows,
-            ai_stream_provider,
-        );
-        let address_result = match ai_stream_provider {
-            AiAgentProvider::Claude => {
-                ClaudeSession::start_address_ticket(
-                    &worktree_path,
-                    &ticket_context,
-                    cancel_token.child_token(),
-                    timeout,
-                    Some(address_line_tx),
-                    claude_model.as_deref(),
-                    claude_session_id.as_deref(),
+                let step_label = if outer_loops > 1 {
+                    format!(
+                        "{} (cycle {}/{}, run {}/{})",
+                        step.name, outer, outer_loops, r, step_repeat
+                    )
+                } else {
+                    format!("{} (run {}/{})", step.name, r, step_repeat)
+                };
+
+                transition_to_agent_step(
+                    workflows,
+                    event_tx,
+                    ticket_key,
+                    outer,
+                    &step_label,
                 )
-                .await
-                .map(|s| (s.session_id, s.output))
-            }
-            AiAgentProvider::Cursor => {
-                CursorSession::start_address_ticket(
-                    &cursor_cli,
-                    &worktree_path,
-                    &ticket_context,
-                    cancel_token.child_token(),
-                    timeout,
-                    Some(address_line_tx),
-                    Some(cursor_model_pass),
-                    claude_session_id.as_deref(),
-                )
-                .await
-                .map(|s| (s.session_id, s.output))
-            }
-        };
+                .await;
 
-        match address_result
-        {
-            Ok((session_id, output)) => {
-                info!(session_id = %session_id, pass = pass, "Address ticket session completed");
-                claude_session_id = Some(session_id.clone());
-                step_log.output.push(format!("Session {session_id} completed"));
+                let mut step_log = StepLog::new(step_label.clone());
+                broadcast_step_started(event_tx, ticket_key, &step_label);
+                log_writer.write_step(&step_label, "Starting").await;
 
-                // PM agent validates the session output against ticket requirements
-                match pm_agent
-                    .validate_plan(
-                        &output,
+                let interpolated = interpolate_agent_prompt(&step.prompt, &interp_vars);
+                let headless = headless_instructions_suffix(ai_stream_provider);
+                let full_prompt = format!("{interpolated}\n\n{headless}");
+
+                let resume_id = if outer == 1 && step_idx == 0 && r == 1 {
+                    None
+                } else {
+                    claude_session_id.as_deref()
+                };
+
+                let relay_label = format!(
+                    "{} · step {}/{} · run {}/{}",
+                    step.name,
+                    step_idx + 1,
+                    num_steps,
+                    r,
+                    step_repeat
+                );
+                let line_tx = spawn_output_relay(
+                    event_tx,
+                    ticket_key,
+                    &relay_label,
+                    log_writer,
+                    workflows,
+                    ai_stream_provider,
+                );
+
+                let session_result: Result<(String, String)> = match ai_stream_provider {
+                    AiAgentProvider::Claude => ClaudeSession::run_prompt(
                         &worktree_path,
+                        &full_prompt,
                         cancel_token.child_token(),
-                        &agent_cfg_for_pm,
-                        &model_for_pm,
+                        timeout,
+                        Some(line_tx),
+                        claude_model.as_deref(),
+                        resume_id,
                     )
                     .await
-                {
-                    Ok(PmVerdict::Approved) => {
-                        step_log.output.push("PM agent: APPROVED".to_string());
-                    }
-                    Ok(PmVerdict::Rejected { reasons }) => {
-                        let reasons_str = reasons.join("; ");
-                        step_log.output.push(format!("PM agent: REJECTED — {reasons_str}"));
-                        warn!(pass = pass, reasons = %reasons_str, "PM agent rejected plan");
+                    .map(|s| (s.session_id, s.output)),
+                    AiAgentProvider::Cursor => CursorSession::run_prompt(
+                        &cursor_cli,
+                        &worktree_path,
+                        &full_prompt,
+                        cancel_token.child_token(),
+                        timeout,
+                        Some(line_tx),
+                        Some(cursor_model_pass),
+                        resume_id,
+                    )
+                    .await
+                    .map(|s| (s.session_id, s.output)),
+                };
+
+                let is_last_run_of_outer_cycle =
+                    step_idx + 1 == num_steps && r == step_repeat;
+
+                match session_result {
+                    Ok((session_id, output)) => {
+                        info!(
+                            session_id = %session_id,
+                            outer = outer,
+                            step = %step.name,
+                            run = r,
+                            "Agent step session completed"
+                        );
+                        claude_session_id = Some(session_id.clone());
+                        last_agent_output = Some(output);
+                        step_log
+                            .output
+                            .push(format!("Session {session_id} completed"));
+
+                        step_log.complete(StepStatus::Success);
                     }
                     Err(e) => {
-                        step_log.output.push(format!("PM agent validation failed: {e}"));
-                        warn!(pass = pass, error = %e, "PM agent validation error, continuing");
+                        warn!(
+                            outer = outer,
+                            step = %step.name,
+                            run = r,
+                            error = %e,
+                            "Agent step session failed"
+                        );
+                        step_log.fail(e.to_string());
+                        if !is_last_run_of_outer_cycle {
+                            add_step_log(workflows, ticket_key, step_log).await;
+                            error!(ticket = %ticket_key, "Agent step AI session failed — aborting workflow");
+                            let msg = match ai_stream_provider {
+                                AiAgentProvider::Claude => "Agent step failed — check that Claude Code is authenticated in the container".to_string(),
+                                AiAgentProvider::Cursor => "Agent step failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.cursor_cli".to_string(),
+                            };
+                            return Err(MaestroError::AiAgent(msg));
+                        }
+                        // Last run of this outer cycle: non-fatal (legacy review behavior)
                     }
                 }
 
-                step_log.complete(StepStatus::Success);
+                add_step_log(workflows, ticket_key, step_log).await;
             }
-            Err(e) => {
-                warn!(pass = pass, error = %e, "Address ticket session failed");
-                step_log.fail(e.to_string());
-                has_critical_failure = true;
-            }
-        }
-        add_step_log(workflows, ticket_key, step_log).await;
-
-        if has_critical_failure {
-            error!(ticket = %ticket_key, "Address ticket AI session failed — aborting workflow");
-            let msg = match ai_stream_provider {
-                AiAgentProvider::Claude => "Address ticket session failed — check that Claude Code is authenticated in the container".to_string(),
-                AiAgentProvider::Cursor => "Address ticket session failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.cursor_cli".to_string(),
-            };
-            return Err(MaestroError::AiAgent(msg));
-        }
-
-        check_cancelled(cancel_token)?;
-        wait_if_paused(workflows, ticket_key, cancel_token).await?;
-
-        // Review changes — resume same session for context continuity
-        transition(workflows, event_tx, ticket_key, WorkflowState::Reviewing).await;
-        let review_label = format!("Review Changes (Pass {pass}/{passes})");
-        let mut step_log = StepLog::new(review_label.clone());
-        broadcast_step_started(event_tx, ticket_key, &review_label);
-        log_writer.write_step(&review_label, "Starting").await;
-
-        let review_line_tx = spawn_output_relay(
-            event_tx,
-            ticket_key,
-            &format!("Review Changes (Pass {pass}/{passes})"),
-            log_writer,
-            workflows,
-            ai_stream_provider,
-        );
-        let review_result = match ai_stream_provider {
-            AiAgentProvider::Claude => {
-                ClaudeSession::start_review_changes(
-                    &worktree_path,
-                    cancel_token.child_token(),
-                    timeout,
-                    Some(review_line_tx),
-                    claude_model.as_deref(),
-                    claude_session_id.as_deref(),
-                )
-                .await
-                .map(|s| s.session_id)
-            }
-            AiAgentProvider::Cursor => {
-                CursorSession::start_review_changes(
-                    &cursor_cli,
-                    &worktree_path,
-                    cancel_token.child_token(),
-                    timeout,
-                    Some(review_line_tx),
-                    Some(cursor_model_pass),
-                    claude_session_id.as_deref(),
-                )
-                .await
-                .map(|s| s.session_id)
-            }
-        };
-
-        match review_result
-        {
-            Ok(session_id) => {
-                claude_session_id = Some(session_id.clone());
-                step_log.output.push(format!("Review session {session_id} completed"));
-                step_log.complete(StepStatus::Success);
-            }
-            Err(e) => {
-                warn!(pass = pass, error = %e, "Review changes session failed");
-                step_log.fail(e.to_string());
-                // Review failure is non-fatal, continue to next pass
-            }
-        }
-        add_step_log(workflows, ticket_key, step_log).await;
-    }
-
-    // Step 10: Linting
-    let cfg = config.read().await;
-    let lint_cmd = cfg.commands.lint.clone();
-    let max_fix = cfg.general.max_fix_attempts;
-    let unit_test_cmd = cfg.commands.unit_test.clone();
-    let e2e_test_cmd = cfg.commands.e2e_test.clone();
-    let fix_ai_stream_provider = cfg.agent.provider;
-    let fix_cursor_cli = cfg.agent.cursor_cli.clone();
-    drop(cfg);
-
-    check_cancelled(cancel_token)?;
-    wait_if_paused(workflows, ticket_key, cancel_token).await?;
-
-    if !lint_cmd.is_empty() {
-        transition(workflows, event_tx, ticket_key, WorkflowState::Linting).await;
-        run_fix_loop(
-            "Lint",
-            &lint_cmd,
-            "Fix the following lint errors",
-            &worktree_path,
-            actions,
-            cancel_token,
-            max_fix,
-            timeout,
-            workflows,
-            ticket_key,
-            event_tx,
-            log_writer,
-            claude_model.as_deref(),
-            claude_session_id.as_deref(),
-            Some(cursor_model_pass),
-            fix_ai_stream_provider,
-            &fix_cursor_cli,
-        )
-        .await;
-
-        // Commit after linting
-        if let Err(e) = actions.commit_changes(&worktree_path, "fix: lint fixes").await {
-            warn!(error = %e, "Failed to commit lint fixes");
         }
     }
 
-    // Step 11: Unit tests
+    // Agent sequence finished — no engine-driven PR (open a PR from an agent step if required).
     check_cancelled(cancel_token)?;
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
 
-    if !unit_test_cmd.is_empty() {
-        transition(workflows, event_tx, ticket_key, WorkflowState::UnitTesting).await;
-        run_fix_loop(
-            "Unit Tests",
-            &unit_test_cmd,
-            "Fix the following unit test failures",
-            &worktree_path,
-            actions,
-            cancel_token,
-            max_fix,
-            timeout,
-            workflows,
-            ticket_key,
-            event_tx,
-            log_writer,
-            claude_model.as_deref(),
-            claude_session_id.as_deref(),
-            Some(cursor_model_pass),
-            fix_ai_stream_provider,
-            &fix_cursor_cli,
-        )
-        .await;
-
-        if let Err(e) = actions
-            .commit_changes(&worktree_path, "fix: unit test fixes")
-            .await
-        {
-            warn!(error = %e, "Failed to commit unit test fixes");
-        }
-    }
-
-    // Step 12: E2E tests
-    check_cancelled(cancel_token)?;
-    wait_if_paused(workflows, ticket_key, cancel_token).await?;
-
-    if !e2e_test_cmd.is_empty() {
-        transition(workflows, event_tx, ticket_key, WorkflowState::E2ETesting).await;
-        run_fix_loop(
-            "E2E Tests",
-            &e2e_test_cmd,
-            "Fix the following e2e test failures",
-            &worktree_path,
-            actions,
-            cancel_token,
-            max_fix,
-            timeout,
-            workflows,
-            ticket_key,
-            event_tx,
-            log_writer,
-            claude_model.as_deref(),
-            claude_session_id.as_deref(),
-            Some(cursor_model_pass),
-            fix_ai_stream_provider,
-            &fix_cursor_cli,
-        )
-        .await;
-
-        if let Err(e) = actions
-            .commit_changes(&worktree_path, "fix: e2e test fixes")
-            .await
-        {
-            warn!(error = %e, "Failed to commit e2e test fixes");
-        }
-    }
-
-    // Step 13: Create PR — only if there were no critical failures
-    check_cancelled(cancel_token)?;
-    wait_if_paused(workflows, ticket_key, cancel_token).await?;
-
-    // Check if any steps failed — if so, don't create PR
     {
         let wf = workflows.read().await;
         if let Some(workflow) = wf.get(ticket_key) {
@@ -951,10 +825,10 @@ async fn run_workflow_steps(
                 .collect();
 
             if !failed_steps.is_empty() {
-                let msg = format!("Skipping PR creation — failed steps: {}", failed_steps.join(", "));
+                let msg = format!("Workflow incomplete — failed steps: {}", failed_steps.join(", "));
                 warn!(ticket = %ticket_key, message = %msg);
 
-                let mut step_log = StepLog::new("Create PR".to_string());
+                let mut step_log = StepLog::new("Workflow complete".to_string());
                 step_log.fail(msg.clone());
                 drop(wf);
                 add_step_log(workflows, ticket_key, step_log).await;
@@ -964,173 +838,27 @@ async fn run_workflow_steps(
         }
     }
 
-    transition(workflows, event_tx, ticket_key, WorkflowState::CreatingPR).await;
-    let mut step_log = StepLog::new("Create PR".to_string());
-
-    let jira_site = config.read().await.jira.site.clone();
-
-    let pr_title = git::pr::pr_title(ticket_key, &ticket_detail.summary, &ticket_detail.item_type);
-    let pr_body = build_pr_body(ticket_key, &ticket_detail, workflows, &jira_site).await;
-
-    match actions
-        .create_pr(&pr_title, &pr_body, &branch_name, &base_branch)
-        .await
-    {
-        Ok(pr_url) => {
-            info!(ticket = ticket_key, pr_url = %pr_url, "PR created");
-            step_log.output.push(format!("PR created: {pr_url}"));
-            step_log.complete(StepStatus::Success);
-
-            let mut wf = workflows.write().await;
-            if let Some(workflow) = wf.get_mut(ticket_key) {
-                workflow.pr_url = Some(pr_url);
-            }
+    let pr_url = resolve_pr_url(&worktree_path, last_agent_output.as_deref());
+    let mut complete_log = StepLog::new("Workflow complete".to_string());
+    if let Some(ref url) = pr_url {
+        complete_log.output.push(format!("Recorded PR URL: {url}"));
+        let mut wf = workflows.write().await;
+        if let Some(w) = wf.get_mut(ticket_key) {
+            w.pr_url = Some(url.clone());
         }
-        Err(e) => {
-            warn!(ticket = ticket_key, error = %e, "Failed to create PR");
-            step_log.fail(e.to_string());
-        }
+    } else {
+        complete_log.output.push(
+            "Agent steps finished. No PR URL supplied (optional: .maestro/outcome.toml or MAESTRO_PR_URL: line)."
+                .to_string(),
+        );
     }
-    add_step_log(workflows, ticket_key, step_log).await;
+    complete_log.complete(StepStatus::Success);
+    add_step_log(workflows, ticket_key, complete_log).await;
 
-    // Done
     transition(workflows, event_tx, ticket_key, WorkflowState::Done).await;
     info!(ticket = ticket_key, "Workflow completed successfully");
 
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_fix_loop(
-    step_name: &str,
-    command: &str,
-    fix_instructions: &str,
-    worktree_path: &PathBuf,
-    _actions: &Arc<dyn ExternalActions>,
-    cancel_token: &CancellationToken,
-    max_attempts: u32,
-    timeout: u64,
-    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
-    ticket_key: &str,
-    event_tx: &broadcast::Sender<WorkflowEvent>,
-    log_writer: &Arc<WorkflowLogWriter>,
-    claude_model: Option<&str>,
-    claude_session_id: Option<&str>,
-    cursor_model: Option<&str>,
-    ai_stream_provider: AiAgentProvider,
-    cursor_cli: &str,
-) {
-    let mut step_log = StepLog::new(step_name.to_string());
-    broadcast_step_started(event_tx, ticket_key, step_name);
-    log_writer.write_step(step_name, &format!("Running: {command}")).await;
-
-    for attempt in 1..=max_attempts {
-        check_cancelled_silent(cancel_token);
-
-        info!(step = step_name, attempt = attempt, "Running command");
-        step_log.output.push(format!("Attempt {attempt}/{max_attempts}: {command}"));
-
-        let line_tx = spawn_output_relay(
-            event_tx,
-            ticket_key,
-            step_name,
-            log_writer,
-            workflows,
-            ai_stream_provider,
-        );
-        match crate::process::run_shell_command_streaming(
-            command,
-            worktree_path,
-            cancel_token.child_token(),
-            line_tx,
-        )
-        .await
-        {
-            Ok(output) if output.success() => {
-                info!(step = step_name, "Command passed");
-                step_log.output.push("PASSED".to_string());
-                step_log.complete(StepStatus::Success);
-                broadcast_step_completed(event_tx, ticket_key, step_name);
-                add_step_log(workflows, ticket_key, step_log).await;
-                return;
-            }
-            Ok(output) => {
-                warn!(step = step_name, attempt = attempt, "Command failed");
-                step_log.output.push(format!("FAILED (exit code {})", output.exit_code));
-
-                if attempt < max_attempts {
-                    let error_output = if output.stderr.is_empty() {
-                        &output.stdout
-                    } else {
-                        &output.stderr
-                    };
-
-                    info!(step = step_name, "Spawning AI agent to fix errors");
-                    let fix_line_tx = spawn_output_relay(
-                        event_tx,
-                        ticket_key,
-                        &format!("{step_name} (fix)"),
-                        log_writer,
-                        workflows,
-                        ai_stream_provider,
-                    );
-                    match ai_stream_provider {
-                        AiAgentProvider::Claude => {
-                            match ClaudeSession::start_fix_session(
-                                worktree_path,
-                                error_output,
-                                fix_instructions,
-                                cancel_token.child_token(),
-                                timeout,
-                                Some(fix_line_tx),
-                                claude_model,
-                                claude_session_id,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    step_log.output.push("Fix session completed".to_string());
-                                }
-                                Err(e) => {
-                                    step_log.output.push(format!("Fix session failed: {e}"));
-                                }
-                            }
-                        }
-                        AiAgentProvider::Cursor => {
-                            match CursorSession::start_fix_session(
-                                cursor_cli,
-                                worktree_path,
-                                error_output,
-                                fix_instructions,
-                                cancel_token.child_token(),
-                                timeout,
-                                Some(fix_line_tx),
-                                cursor_model,
-                                claude_session_id,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    step_log.output.push("Fix session completed".to_string());
-                                }
-                                Err(e) => {
-                                    step_log.output.push(format!("Fix session failed: {e}"));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(step = step_name, error = %e, "Command execution error");
-                step_log.output.push(format!("Execution error: {e}"));
-                break;
-            }
-        }
-    }
-
-    step_log.fail(format!("{step_name} failed after {max_attempts} attempts"));
-    add_step_log(workflows, ticket_key, step_log).await;
 }
 
 fn build_ticket_context(ticket: &crate::jira::client::JiraTicket) -> String {
@@ -1165,101 +893,6 @@ fn build_ticket_context(ticket: &crate::jira::client::JiraTicket) -> String {
     }
 
     context
-}
-
-/// Builds `https://…/browse/TICKET` for PR descriptions.
-///
-/// `site` is `[jira] site` (host or `https://host/optional/path`). Empty `site` falls back to
-/// `jira.atlassian.net` for backward compatibility.
-fn jira_ticket_browse_url(site: &str, ticket_key: &str) -> String {
-    let mut s = site.trim();
-    if s.is_empty() {
-        return format!("https://jira.atlassian.net/browse/{ticket_key}");
-    }
-    if let Some(rest) = s.strip_prefix("https://") {
-        s = rest;
-    } else if let Some(rest) = s.strip_prefix("http://") {
-        s = rest;
-    }
-    let s = s.trim().trim_end_matches('/');
-    if s.is_empty() {
-        return format!("https://jira.atlassian.net/browse/{ticket_key}");
-    }
-    format!("https://{s}/browse/{ticket_key}")
-}
-
-async fn build_pr_body(
-    ticket_key: &str,
-    ticket: &crate::jira::client::JiraTicket,
-    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
-    jira_site: &str,
-) -> String {
-    let wf = workflows.read().await;
-    let (step_summary, test_results) = if let Some(workflow) = wf.get(ticket_key) {
-        let summary = workflow
-            .steps_log
-            .iter()
-            .map(|s| {
-                let status = match s.status {
-                    StepStatus::Success => "pass",
-                    StepStatus::Failed => "FAIL",
-                    StepStatus::Skipped => "skip",
-                    StepStatus::Running => "...",
-                };
-                format!("- [{}] {}", status, s.step_name)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Extract test/lint result counts from step logs
-        let mut results = Vec::new();
-        for step in &workflow.steps_log {
-            let name = step.step_name.as_str();
-            if name == "Lint" || name == "Unit Tests" || name == "E2E Tests" {
-                let passed = step.status == StepStatus::Success;
-                let attempts = step
-                    .output
-                    .iter()
-                    .filter(|l| l.starts_with("Attempt "))
-                    .count();
-                let status_str = if passed { "passed" } else { "failed" };
-                results.push(format!("| {name} | {status_str} | {attempts} |"));
-            }
-        }
-
-        let test_section = if results.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "\n## Test Results\n\n| Check | Result | Attempts |\n|-------|--------|----------|\n{}\n",
-                results.join("\n")
-            )
-        };
-
-        (summary, test_section)
-    } else {
-        (String::new(), String::new())
-    };
-
-    let jira_url = jira_ticket_browse_url(jira_site, ticket_key);
-
-    format!(
-        r#"## {summary}
-
-Jira: [{key}]({jira_url})
-
-## Steps
-
-{step_summary}
-{test_results}
----
-_Auto-generated by Maestro_"#,
-        summary = ticket.summary,
-        key = ticket_key,
-        jira_url = jira_url,
-        step_summary = step_summary,
-        test_results = test_results,
-    )
 }
 
 fn broadcast_step_started(
@@ -1373,6 +1006,41 @@ fn spawn_output_relay(
     line_tx
 }
 
+async fn transition_to_agent_step(
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    event_tx: &broadcast::Sender<WorkflowEvent>,
+    ticket_key: &str,
+    pass: u8,
+    step_label: &str,
+) {
+    info!(
+        ticket = %ticket_key,
+        pass,
+        step = %step_label,
+        "Agent step (state + dashboard label)"
+    );
+
+    let mut wf = workflows.write().await;
+    if let Some(workflow) = wf.get_mut(ticket_key) {
+        workflow.state = WorkflowState::AddressingTicket { pass };
+        workflow.current_step_label = Some(step_label.to_string());
+        workflow.updated_at = Utc::now();
+        let display = workflow.status_display();
+        let id = workflow.id.clone();
+        let _ = event_tx.send(WorkflowEvent {
+            event_type: "workflow_updated".to_string(),
+            workflow_id: id,
+            ticket_key: ticket_key.to_string(),
+            state: display,
+            timestamp: Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+        });
+    }
+}
+
 async fn transition(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
@@ -1384,14 +1052,16 @@ async fn transition(
 
     let mut wf = workflows.write().await;
     if let Some(workflow) = wf.get_mut(ticket_key) {
+        workflow.current_step_label = None;
         workflow.state = new_state;
         workflow.updated_at = Utc::now();
+        let display = workflow.status_display();
 
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
             workflow_id: workflow.id.clone(),
             ticket_key: ticket_key.to_string(),
-            state: state_name,
+            state: display,
             timestamp: Utc::now(),
             error: None,
             step_name: None,
@@ -1447,9 +1117,16 @@ fn check_cancelled(cancel_token: &CancellationToken) -> Result<()> {
     }
 }
 
-fn check_cancelled_silent(cancel_token: &CancellationToken) {
-    if cancel_token.is_cancelled() {
-        info!("Workflow cancellation detected");
+fn format_acceptance_criteria_block(criteria: &[String]) -> String {
+    if criteria.is_empty() {
+        "(none extracted from ticket)".to_string()
+    } else {
+        criteria
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("{}. {}", i + 1, s))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -1494,7 +1171,23 @@ fn extract_acceptance_criteria(description: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod jira_browse_url_tests {
-    use super::jira_ticket_browse_url;
+    /// Builds `https://…/browse/TICKET` from `[jira] site` (kept for URL normalization tests).
+    fn jira_ticket_browse_url(site: &str, ticket_key: &str) -> String {
+        let mut s = site.trim();
+        if s.is_empty() {
+            return format!("https://jira.atlassian.net/browse/{ticket_key}");
+        }
+        if let Some(rest) = s.strip_prefix("https://") {
+            s = rest;
+        } else if let Some(rest) = s.strip_prefix("http://") {
+            s = rest;
+        }
+        let s = s.trim().trim_end_matches('/');
+        if s.is_empty() {
+            return format!("https://jira.atlassian.net/browse/{ticket_key}");
+        }
+        format!("https://{s}/browse/{ticket_key}")
+    }
 
     #[test]
     fn empty_site_uses_legacy_atlassian_host() {

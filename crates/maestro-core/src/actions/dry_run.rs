@@ -24,8 +24,8 @@ impl DryRunActions {
 
 #[async_trait]
 impl ExternalActions for DryRunActions {
-    async fn assign_ticket(&self, key: &str, user: &str) -> Result<()> {
-        info!(ticket = key, user = user, "[DRY] Would assign ticket");
+    async fn assign_ticket(&self, key: &str) -> Result<()> {
+        info!(ticket = key, "[DRY] Would assign ticket to current Jira user (acli @me)");
         Ok(())
     }
 

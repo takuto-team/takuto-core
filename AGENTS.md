@@ -8,7 +8,7 @@ This file is the **canonical high-level reference** for what the repository is, 
 
 ## What this project does
 
-**Maestro** is a Rust application that **polls Jira** for work in **To Do**, then for each ticket runs an **automated pipeline**: assign / transition status, **clone work via a git worktree**, run install/lint/tests, drive **Claude Code** in **headless** mode to implement and review changes, optionally loop on failures with fix sessions, and **open a GitHub pull request** via `gh`. A small **web dashboard** lists workflows, streams terminal output over **WebSocket**, and exposes REST endpoints for control and config.
+**Maestro** is a Rust application that **polls Jira** for work in **To Do**, then for each ticket runs an **automated pipeline**: assign / transition status, **clone work via a git worktree**, optional **pre_install** / **install**, then configurable **`[[agent_steps]]`** sessions (Claude Code or Cursor Agent in **headless** mode — implement, review, lint/tests, **open a PR with `gh`**, or any custom sequence). The engine **does not** run a separate PR step: when the last agent session exits successfully, the workflow **finalizes** to **`Done`**. An optional PR URL for the dashboard comes from **`.maestro/outcome.toml`** (`pr_url = "…"`) or a stdout line **`MAESTRO_PR_URL: …`** (see **`agent_prompt`** headless suffix). A small **web dashboard** lists workflows, streams terminal output over **WebSocket**, and exposes REST endpoints for control and config.
 
 **Dry mode** (`[general] dry_mode = true` or CLI `--dry-run`) skips real Jira/GitHub side effects while still running local work (worktrees, commands, Claude) through the `ExternalActions` trait (`RealActions` vs `DryRunActions`).
 
@@ -46,7 +46,7 @@ Workspace manifest: root `Cargo.toml` (Rust **2024** edition). Internal crates d
 
 ### State machine
 
-Defined in `crates/maestro-core/src/workflow/state.rs` as `WorkflowState`: `Pending` → `Assigning` → `RetrievingDetails` → `CreatingWorktree` → repeated **`AddressingTicket { pass }` / `Reviewing`** (see below) → `Linting` → `UnitTesting` → `E2ETesting` → `CreatingPR` → `Done`, plus `Error { .. }`, `Paused { .. }`, `Stopped`.
+Defined in `crates/maestro-core/src/workflow/state.rs` as `WorkflowState`: `Pending` → `Assigning` → `RetrievingDetails` → `CreatingWorktree` → repeated **`AddressingTicket { pass }`** (`pass` is the **outer cycle** index when the built-in step list is repeated via **`[claude] address_ticket_passes`**) → **`Done`**, plus `Error { .. }`, `Paused { .. }`, `Stopped`. The **`Reviewing`** and **`CreatingPR`** variants remain for **deserialization of older persisted state**. **`WorkflowState::display_name()`** for **`AddressingTicket`** is the generic **`Running agent steps`**; the **dashboard and REST list** use **`Workflow::status_display()`**, which shows the live **`current_step_label`** (e.g. **`Implement ticket (cycle 2/3, run 1/1)`** from configured **`[[agent_steps]]`** names, `repeat`, and outer loops).
 
 Terminal states: `Done`, `Stopped`, `Error`.
 
@@ -67,13 +67,12 @@ Each new ticket gets `WorkflowEngine::start_workflow`, which inserts the workflo
 
 Implemented in `run_workflow_steps` inside `workflow/engine.rs`:
 
-1. **Assign** ticket (assignee name `"maestro"` in code) and move to **In Progress** (failures may be logged/`[DRY/SKIP]` but workflow can continue).
+1. **Assign** ticket to the **currently authenticated Jira user** (`acli` **`@me`**, same as `JiraClient::assign_ticket`) and move to **In Progress** (failures may be logged/`[DRY/SKIP]` but workflow can continue).
 2. **Jira details** via `JiraClient` / `get_ticket_details`; populate description, summary, type on `Workflow`.
 3. **Worktree** from `git::worktree::branch_name_for_ticket` and configured `base_branch`.
 4. Optional **`pre_install`** (array of shell commands, or one string for backward compatibility) then optional **`install`** in the worktree (streaming output).
-5. **`address_ticket_passes`** iterations (from `[claude] address_ticket_passes`, default `3`): for each pass, the engine runs either **`ClaudeSession`** (Claude Code CLI) or **`CursorSession`** (`cursor/session.rs`, Cursor Agent CLI) based on **`[agent] provider`** (`claude` | `cursor`). Then **`PmAgent::validate_plan`** runs the same provider for a short plan check, then address/review resume the same session via **`--resume`** where supported.
-6. **Lint / unit / e2e** phases run configured commands; on failure, the configured provider’s **fix session** runs up to `general.max_fix_attempts`, with commits between stages as implemented in the engine.
-7. **Create PR** via `create_pr` on the actions trait (title/body/branch/base per implementation). The PR body includes a Jira link built from **`[jira] site`** (`https://{site}/browse/{key}` after normalizing scheme; if `site` is empty, `jira.atlassian.net` is used).
+5. **Agent workflow** — If **`[[agent_steps]]`** is empty: use **`config::default_agent_steps`** and repeat the full sequence **`[claude] address_ticket_passes`** times (default `3`). If **`[[agent_steps]]`** is non-empty: use **only** those steps (built-in sequence is not used); **`[claude] address_ticket_passes`** does **not** multiply the custom list — use each step’s **`repeat`** (≥ 1, default 1) to run that step multiple times in sequence (**`--resume`** after the first run). Interpolate **`{ticket_key}`**, **`{ticket_summary}`**, **`{ticket_description}`**, **`{ticket_type}`**, **`{acceptance_criteria}`**, **`{ticket_context}`**; append headless instructions from **`agent_prompt.rs`**. The **first** run of the workflow starts a **new** session; all later runs use **`--resume`**. There is **no** built-in PM / plan-validation pass — add a **custom step** whose **prompt** asks the agent to validate plans or requirements if you want that. Session failure **except** on the **last run of an outer cycle** **aborts**; failure on that last run is **non-fatal** (same as legacy review). Put **`[[agent_steps]]`** at the **TOML root before any `[section]`** when you use it. There is **no** separate lint/unit/e2e command phase — if you want the linter or tests, add agent steps whose **prompts** instruct the tool to run and fix them.
+6. **Finalize** — If any **`steps_log`** entry has **`Failed`**, return **`Err`** (workflow ends in **`Error`**). Otherwise read an optional PR URL via **`workflow::outcome::resolve_pr_url`**: prefer **`.maestro/outcome.toml`** in the worktree (`pr_url = "…"`), else the last agent session output line **`MAESTRO_PR_URL: …`**. Set **`workflow.pr_url`** when found; append a **Workflow complete** step to **`steps_log`**; transition **`Done`**.
 
 Pause/resume: workflow state wraps prior state in `Paused`; `wait_if_paused` blocks the driver until resumed.
 
@@ -107,13 +106,7 @@ Raw stdout lines are turned into short lines for the web UI via **`workflow/stre
 
 ### Prompts
 
-- **Claude address**: `/address-ticket` + ticket context + headless instructions.
-- **Claude review**: `/review-changes` + headless instructions.
-- **Cursor address/review**: Natural-language task prompts derived from the same ticket context (no slash-commands); headless instructions included in the prompt.
-
-### PM agent
-
-`crates/maestro-core/src/claude/pm_agent.rs` validates plans using **`claude`** or the **Cursor CLI** depending on **`[agent] provider`**. The workflow logs **APPROVED** / **REJECTED**; rejection does not automatically abort the pipeline (see engine).
+Templates live in **`[[agent_steps]]`** (`name`, **`prompt`**, **`repeat`**). Default steps use **generic natural-language** prompts (no slash-commands); teams with Claude skills can still put **`/address-ticket`** or **`/review-changes`** in a template. Unknown **`{placeholders}`** are left unchanged.
 
 ---
 
@@ -121,8 +114,8 @@ Raw stdout lines are turned into short lines for the web UI via **`workflow/stre
 
 `crates/maestro-core/src/actions/traits.rs` — `ExternalActions`:
 
-- Jira: assign, transition, unassign, get ticket details (string payload / parsing in client)
-- Git: create/remove worktree, create PR, **commit_changes**
+- Jira: assign to current user (`@me`), transition, unassign, get ticket details (string payload / parsing in client)
+- Git: create/remove worktree, **`create_pr`** (implemented on **`RealActions`/`DryRunActions`** but **not** called by the workflow engine — agents open PRs with **`gh`** or similar), **commit_changes**
 - Shell: **run_command**
 
 `real.rs` and `dry_run.rs` implement this for production vs dry runs.
@@ -153,12 +146,13 @@ Static files: embedded from `crates/maestro-web/src/assets/` (e.g. `index.html`,
 
 Loaded in `crates/maestro-core/src/config.rs` — sections:
 
-- **`general`**: `dry_mode`, `poll_interval_secs`, `max_concurrent_workflows`, `max_fix_attempts`, `log_level`
-- **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site` (auth, egress, and **PR description** Jira URL), `email`
+- **Root (before any `[table]` in TOML)**: optional **`[[agent_steps]]`** (`name`, `prompt`, **`repeat`** default `1`) — replaces built-in steps when any are defined; empty → built-in two-step sequence repeated **`[claude] address_ticket_passes`** times
+- **`general`**: `dry_mode`, `poll_interval_secs`, `max_concurrent_workflows`, `log_level`
+- **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site` (auth, egress; ticket context for prompts), `email`
 - **`git`**: `base_branch`, `remote` (fetch / worktree / push; default `origin`), `repo_url`, `repo_path`
-- **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`, `lint`, `unit_test`, `e2e_test`
+- **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`
 - **`web`**: `host`, `port`
-- **`claude`**: `skills_path`, `address_ticket_passes`, `step_timeout_secs`, `figma_api_token`, `model`
+- **`claude`**: `skills_path`, `address_ticket_passes` (how many times to run the **built-in** step sequence when **`[[agent_steps]]`** is empty), `step_timeout_secs`, `figma_api_token`, `model`
 - **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`, `cursor_model` (default `Auto`; Cursor CLI gets `--model Auto` unless a concrete id is set)
 - **`docker`**: `build_commands` (image build), `compose_up_commands` (each `docker compose up`)
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**

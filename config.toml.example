@@ -1,8 +1,33 @@
+# --- AI workflow (optional `[[agent_steps]]` at TOML root) ---
+# Put `[[agent_steps]]` before `[general]` (or any `[table]`), or TOML binds them to the wrong section.
+# Omit all `[[agent_steps]]`: built-in two-step sequence (implement + review), repeated
+# `[claude] address_ticket_passes` times (default 3).
+# With custom `[[agent_steps]]`: your list replaces the built-in steps entirely; `[claude] address_ticket_passes`
+# is ignored for counting — use each step's `repeat` (default 1) to run that step multiple times in a row.
+#
+# [[agent_steps]]
+# name = "Implement ticket"
+# prompt = """
+# Implement {ticket_key}: {ticket_summary}
+#
+# {ticket_description}
+#
+# Acceptance criteria:
+# {acceptance_criteria}
+# """
+# repeat = 1
+#
+# [[agent_steps]]
+# name = "Review changes"
+# prompt = "Review uncommitted changes for correctness and style. Fix issues."
+# repeat = 1
+#
+# Placeholders: ticket_key, ticket_summary, ticket_description, ticket_type, acceptance_criteria, ticket_context
+
 [general]
 dry_mode = false
 poll_interval_secs = 60
 max_concurrent_workflows = 1
-max_fix_attempts = 3
 log_level = "info"
 
 [jira]
@@ -25,9 +50,6 @@ repo_path = "/workspace"
 # Shell commands run in order before install (e.g. registry auth). Use a TOML array; a single string is still accepted.
 pre_install = []
 install = "npm install"
-lint = "npm run lint"
-unit_test = "npm test"
-e2e_test = "npm run test:e2e"
 
 [web]
 host = "0.0.0.0"

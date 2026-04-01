@@ -1,6 +1,6 @@
 # Maestro
 
-Automated Jira ticket handler that uses Claude Code in headless mode. Picks up tickets from Jira, creates branches, implements changes via AI, runs linting/tests, and creates pull requests — all inside an isolated Docker container with a real-time monitoring dashboard.
+Automated Jira ticket handler that drives **Claude Code** or **Cursor Agent** in headless mode. Picks up tickets from Jira, creates branches, runs optional install hooks, runs configurable **`[[agent_steps]]`** prompts (implementation, review, lint/tests, **`gh` PR creation**, or anything else). Maestro does **not** run a built-in PR step: the workflow completes when the agent sequence finishes; optional PR URLs for the dashboard come from **`.maestro/outcome.toml`** or a **`MAESTRO_PR_URL:`** line in agent output (see headless instructions in the engine). All inside an isolated Docker container with a real-time monitoring dashboard.
 
 ## Architecture
 
@@ -116,11 +116,20 @@ Dashboard at **http://localhost:8080**.
 
 ### Dry Mode
 
-Set `dry_mode = true` in `config.toml` to run the full workflow without writing to Jira or GitHub (no ticket assignment, no status changes, no PR creation). Local operations (worktree creation, npm install, Claude sessions, linting, tests) still execute.
+Set `dry_mode = true` in `config.toml` to run the full workflow without Maestro’s **Jira/GitHub trait** side effects (no ticket assignment, no status changes, no `ExternalActions::create_pr` — which the engine does not call anyway). Local operations (worktree creation, npm install, agent sessions) still execute; an agent can still run **`gh`** in the worktree unless you constrain it.
 
 ## Configuration
 
 All configuration is in `config.toml` (see `config.toml.example` for defaults).
+
+### Root-level `[[agent_steps]]` (TOML)
+
+Optional **`[[agent_steps]]`** tables belong at the **root** of the file. In TOML, tables that appear *after* a `[section]` can bind incorrectly — place **`[[agent_steps]]`** **before** `[general]` (see `config.toml.example`).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `[[agent_steps]]` | *(built-in)* | Each entry: `name`, `prompt` (placeholders: `ticket_key`, `ticket_summary`, `ticket_description`, `ticket_type`, `acceptance_criteria`, `ticket_context`), **`repeat`** (default `1` — run this step this many times in a row with session resume). **Any** custom step replaces the entire built-in list; omit all `[[agent_steps]]` for generic built-in prompts |
+| *(no custom steps)* | — | Built-in sequence runs **`[claude] address_ticket_passes`** times (default `3`) |
 
 ### `[general]`
 
@@ -129,7 +138,6 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 | `dry_mode` | `false` | Run without Jira/GitHub writes |
 | `poll_interval_secs` | `60` | Seconds between Jira polls |
 | `max_concurrent_workflows` | `1` | Max parallel ticket workflows |
-| `max_fix_attempts` | `3` | Max retries for lint/test fix loops |
 | `log_level` | `"info"` | Log level: trace, debug, info, warn, error |
 
 ### `[jira]`
@@ -139,7 +147,7 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 | `project_keys` | `[]` | Jira project keys to poll (e.g., `["PROJ"]`) |
 | `item_types` | `["Task", "Bug"]` | Ticket types to handle |
 | `jql_filter` | `""` | Additional JQL filter |
-| `site` | `""` | Jira site host or base URL (e.g., `"company.atlassian.net"`) — token auth, egress rules, and the Jira link in auto-generated PR bodies (empty → `jira.atlassian.net`) |
+| `site` | `""` | Jira site host or base URL (e.g., `"company.atlassian.net"`) — token auth, egress rules, and ticket context for prompts (empty → `jira.atlassian.net` where the code needs a default host) |
 | `email` | `""` | Jira user email — used for token auth |
 
 ### `[git]`
@@ -157,9 +165,6 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 |-----|---------|-------------|
 | `pre_install` | `[]` | Shell commands to run in order before install (e.g., registry auth); a single string is accepted for backward compatibility |
 | `install` | `""` | Dependency install command (e.g., `"npm ci"`) |
-| `lint` | `""` | Linting command (e.g., `"npm run lint"`) |
-| `unit_test` | `""` | Unit test command (e.g., `"npm test"`) |
-| `e2e_test` | `""` | E2E test command (e.g., `"npm run test:e2e"`) |
 
 ### `[web]`
 
@@ -172,7 +177,7 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `address_ticket_passes` | `3` | Number of address-ticket + review rounds |
+| `address_ticket_passes` | `3` | When **`[[agent_steps]]`** is empty: how many times to run the full built-in two-step sequence. Ignored for counting when you define custom **`[[agent_steps]]`** (use per-step **`repeat`** instead) |
 | `step_timeout_secs` | `1800` | Timeout per Claude session (30 min) |
 | `figma_api_token` | `""` | Figma API token for design references |
 | `model` | `""` | Model override for Claude Code when non-empty |
@@ -181,7 +186,7 @@ All configuration is in `config.toml` (see `config.toml.example` for defaults).
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `provider` | `"claude"` | `claude` (Claude Code CLI) or `cursor` (Cursor Agent CLI) for implement / review / fix / PM steps |
+| `provider` | `"claude"` | `claude` (Claude Code CLI) or `cursor` (Cursor Agent CLI) for agent steps and PM validation |
 | `cursor_cli` | `"agent"` | Executable name or path for Cursor Agent (see [Cursor CLI](https://cursor.com/docs/cli/overview)); only used when `provider = "cursor"` |
 | `cursor_model` | `"Auto"` | Cursor Agent `--model`; `Auto` (any case) or empty uses automatic model selection |
 
@@ -209,12 +214,8 @@ For each ticket in "To Do" status:
 3. **Create worktree** on a new branch from the base branch
 4. **Pre-install** (optional) — run registry auth or other setup
 5. **Install dependencies** — e.g., `npm ci`
-6. **Address ticket** (3 passes) — Claude Code implements the ticket using the `/address-ticket` skill
-7. **Review changes** (3 passes) — Claude Code reviews using `/review-changes`
-8. **Lint** — run linting, fix errors via Claude, repeat until clean
-9. **Unit tests** — run tests, fix failures via Claude, repeat until passing
-10. **E2E tests** — run e2e tests, fix failures via Claude, repeat until passing
-11. **Create PR** — conventional commit title, Jira reference in description
+6. **Agent steps** — built-in or custom **`[[agent_steps]]`**: each step is a headless Claude/Cursor session (prompts can include “run `npm run lint` and fix issues”, tests, review, etc.). With no custom steps, the default two-step sequence repeats **`[claude] address_ticket_passes`** times (default `3`).
+7. **Workflow complete** — engine records optional **`pr_url`** from **`.maestro/outcome.toml`** or **`MAESTRO_PR_URL:`**; fails earlier if any logged step **Failed**
 
 On **stop**: kills running sessions, unassigns ticket, moves back to "To Do".
 

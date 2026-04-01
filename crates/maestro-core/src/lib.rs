@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod agent_prompt;
 pub mod claude;
 pub mod config;
 pub mod cursor;

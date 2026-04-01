@@ -315,9 +315,7 @@ function getStatusInfo(state) {
 function getProgressPercent(state) {
   const steps = [
     'Pending', 'Assigning', 'Retrieving', 'Creating Worktree',
-    'Address Ticket - Pass 1', 'Reviewing', 'Address Ticket - Pass 2', 'Reviewing',
-    'Address Ticket - Pass 3', 'Reviewing', 'Running Lint', 'Running Unit', 'Running E2E',
-    'Creating PR', 'Done'
+    'AI agent', 'Reviewing', 'Done'
   ];
   const s = state.toLowerCase();
   for (let i = 0; i < steps.length; i++) {
@@ -326,6 +324,11 @@ function getProgressPercent(state) {
     }
   }
   if (s === 'done') return 100;
+  // Configured agent step labels from the engine, e.g. "Implement (run 1/2)" or "Lint (cycle 2/3, run 1/1)"
+  if (s.includes('(run ') || s.includes('(cycle ') || s.includes('running agent steps')) {
+    const aiIdx = steps.indexOf('AI agent');
+    return Math.round(((aiIdx + 1) / steps.length) * 100);
+  }
   return 10;
 }
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Maestro is a Rust application that automates Jira ticket handling using Claude Code in headless mode. It polls Jira for tickets, orchestrates a multi-step implementation workflow per ticket (branching, coding, reviewing, linting, testing, PR creation), and serves a web dashboard for real-time monitoring and control.
+Maestro is a Rust application that automates Jira ticket handling using **Claude Code** or **Cursor Agent** in headless mode. It polls Jira for tickets, orchestrates a workflow per ticket (branching, install hooks, configurable **`[[agent_steps]]`** sessions, PR creation), and serves a web dashboard for real-time monitoring and control. Lint and test gates are expressed as **agent prompts**, not separate `[commands]` fields.
 
 ---
 
@@ -35,8 +35,7 @@ maestro/
 │   │       │   └── client.rs   # acli wrapper
 │   │       ├── claude/
 │   │       │   ├── mod.rs
-│   │       │   ├── session.rs  # headless session management
-│   │       │   └── pm_agent.rs # PM auto-confirm agent
+│   │       │   └── session.rs  # headless session management
 │   │       ├── git/
 │   │       │   ├── mod.rs
 │   │       │   ├── worktree.rs # worktree creation/cleanup
@@ -119,19 +118,16 @@ Pending
   → Assigning
     → RetrievingDetails
       → CreatingWorktree
-        → AddressingTicket { pass: 1..3 }
-          → Reviewing
-            → AddressingTicket { pass: n+1 }  (if pass < 3)
-            → Linting                          (if pass == 3)
-              → UnitTesting
-                → E2ETesting
-                  → CreatingPR
-                    → Done
+        → AddressingTicket { pass }   (agent steps; pass indexes outer cycles when using built-in sequence)
+          → CreatingPR
+            → Done
 
-Any state → Error { source_state, error }
+Any state → Error { source_state, message }
 Any state → Paused { source_state }
 Any state → Stopped
 ```
+
+The `Reviewing` enum variant is kept for **deserializing older persisted workflows**; new runs use `AddressingTicket` for all agent steps.
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,9 +138,6 @@ pub enum WorkflowState {
     CreatingWorktree,
     AddressingTicket { pass: u8 },
     Reviewing,
-    Linting,
-    UnitTesting,
-    E2ETesting,
     CreatingPR,
     Done,
     Error {
@@ -202,7 +195,7 @@ Steps log their output to `workflow.steps_log` for the report view.
 
 ## Process Management
 
-Claude Code headless sessions and shell commands (lint, test) run as child processes managed through `tokio::process::Command`.
+Claude Code / Cursor Agent headless sessions and other shell hooks (`pre_install`, `install`, etc.) run as child processes managed through `tokio::process::Command`.
 
 ```rust
 pub struct ProcessHandle {
@@ -239,46 +232,7 @@ impl ClaudeSession {
 
 The session uses `--print` mode with `--output-format stream-json` to capture structured output. The JSON stream is parsed line-by-line to extract progress, results, and errors.
 
----
-
-## PM Agent Auto-Confirmation
-
-During the `/address-ticket` skill, Claude Code enters plan mode and waits for confirmation. The PM agent is a separate Claude process that:
-
-1. Reads the ticket description and acceptance criteria from Jira
-2. Receives the plan output from the main Claude session
-3. Validates the plan covers all requirements
-4. Sends confirmation or rejection back
-
-Implementation approach:
-
-```rust
-pub struct PmAgent {
-    ticket_description: String,
-    acceptance_criteria: Vec<String>,
-}
-
-impl PmAgent {
-    pub async fn validate_plan(&self, plan: &str) -> Result<PmVerdict> {
-        // Spawn a separate claude process:
-        // claude --dangerously-skip-permissions --print -p "
-        //   You are a PM validating a development plan.
-        //   Ticket: {description}
-        //   Criteria: {criteria}
-        //   Plan: {plan}
-        //   Respond with APPROVED or REJECTED with reasons.
-        // "
-    }
-}
-```
-
-The PM agent runs as a short-lived process. Its verdict determines whether the main session proceeds or retries with feedback.
-
-### Integration with Claude Code
-
-The main Claude Code session is started with a custom prompt that includes instructions to use `/address-ticket`. The `--output-format stream-json` flag produces newline-delimited JSON events. When a plan event is detected in the stream, the PM agent is spawned to validate it.
-
-For auto-confirming plans, the session is configured with a hook or the PM agent's approval is piped back as stdin to the Claude process. The exact integration depends on Claude Code's plan mode API — if it supports external confirmation via stdin, we pipe the PM verdict; otherwise, we use the `--auto-confirm` flag and rely on the PM agent for post-hoc validation.
+Plan validation or “PM review” behavior is not a separate subprocess: teams add **`[[agent_steps]]`** entries whose **prompts** ask the agent to validate against **`{acceptance_criteria}`** or similar, in the same headless session model as other steps.
 
 ---
 
@@ -314,7 +268,7 @@ WS     /ws                        # WebSocket for real-time events
 {
   "type": "workflow_updated",
   "workflow_id": "PROJ-123",
-  "state": "Linting",
+  "state": "Implement ticket (cycle 1/3, run 1/1)",
   "timestamp": "2026-03-27T10:00:00Z"
 }
 ```
@@ -323,7 +277,7 @@ WS     /ws                        # WebSocket for real-time events
 {
   "type": "workflow_error",
   "workflow_id": "PROJ-123",
-  "error": "Lint command failed after 3 retries",
+  "error": "Agent step failed — check provider auth",
   "timestamp": "2026-03-27T10:01:00Z"
 }
 ```
@@ -588,7 +542,7 @@ Trait-based abstraction that gates all external side effects:
 #[async_trait]
 pub trait ExternalActions: Send + Sync {
     // Jira
-    async fn assign_ticket(&self, key: &str, user: &str) -> Result<()>;
+    async fn assign_ticket(&self, key: &str) -> Result<()>;
     async fn transition_ticket(&self, key: &str, status: &str) -> Result<()>;
     async fn unassign_ticket(&self, key: &str) -> Result<()>;
 
@@ -600,7 +554,6 @@ pub trait ExternalActions: Send + Sync {
     // Claude Code
     async fn start_claude_session(&self, worktree: &Path, prompt: &str) -> Result<ClaudeSession>;
 
-    // Shell commands (lint, test)
     async fn run_command(&self, cmd: &str, cwd: &Path) -> Result<CommandOutput>;
 }
 ```
@@ -615,7 +568,7 @@ Executes all operations against real services. Used in production.
 - **Git worktree**: Created locally (this is safe — no remote effect).
 - **Claude Code sessions**: Run normally (the coding itself is local).
 - **PR creation**: Logged but not executed. Returns a fake PR URL.
-- **Shell commands (lint/test)**: Run normally (local-only).
+- **Other shell hooks**: Run normally when invoked (local-only).
 
 The mode is selected at startup via config:
 
@@ -648,9 +601,8 @@ remote = "origin"
 repo_path = "/workspace"
 
 [commands]
-lint = "npm run lint"
-unit_test = "npm test"
-e2e_test = "npm run test:e2e"
+pre_install = []
+install = "npm ci"
 
 [web]
 host = "0.0.0.0"

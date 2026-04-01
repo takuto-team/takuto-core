@@ -24,10 +24,20 @@ impl RealActions {
 
 #[async_trait]
 impl ExternalActions for RealActions {
-    async fn assign_ticket(&self, key: &str, user: &str) -> Result<()> {
-        info!(ticket = key, user = user, "Assigning ticket");
-        let output = process::run_shell_command(
-            &format!("acli jira workitem assign --key {key} --assignee {user} --yes"),
+    async fn assign_ticket(&self, key: &str) -> Result<()> {
+        info!(ticket = key, "Assigning ticket to current Jira user (acli @me)");
+        let output = process::run_command(
+            "acli",
+            &[
+                "jira",
+                "workitem",
+                "assign",
+                "--key",
+                key,
+                "--assignee",
+                "@me",
+                "--yes",
+            ],
             &self.repo_path,
             CancellationToken::new(),
         )

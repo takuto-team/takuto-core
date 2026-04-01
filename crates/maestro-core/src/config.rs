@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
@@ -58,6 +59,65 @@ impl Default for AgentConfig {
     }
 }
 
+fn default_agent_step_repeat() -> u8 {
+    1
+}
+
+/// One AI agent session in the ticket workflow (`[[agent_steps]]` in TOML).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentStepConfig {
+    pub name: String,
+    pub prompt: String,
+    /// Run this step this many times in sequence (each run after the first uses `--resume`). Default `1`.
+    #[serde(default = "default_agent_step_repeat")]
+    pub repeat: u8,
+}
+
+/// Built-in agent steps when `[[agent_steps]]` is omitted or empty (generic prompts, no slash-commands).
+pub fn default_agent_steps() -> Vec<AgentStepConfig> {
+    vec![
+        AgentStepConfig {
+            name: "Implement ticket".to_string(),
+            prompt: "Implement this Jira ticket following the project's conventions.\n\nTicket context:\n{ticket_context}\n\nAdd or update tests as appropriate.".to_string(),
+            repeat: 1,
+        },
+        AgentStepConfig {
+            name: "Review changes".to_string(),
+            prompt: "Review all uncommitted changes for correctness, security, and code style. Fix any issues."
+                .to_string(),
+            repeat: 1,
+        },
+    ]
+}
+
+/// Replace `{variable}` placeholders using `vars`. Unknown names are left unchanged.
+pub fn interpolate_agent_prompt(template: &str, vars: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(template.len() + 64);
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        if rest.starts_with("{{") {
+            out.push('{');
+            rest = &rest[2..];
+            continue;
+        }
+        let Some(end_rel) = rest.find('}') else {
+            out.push_str(rest);
+            return out;
+        };
+        let key = &rest[1..end_rel];
+        if let Some(val) = vars.get(key) {
+            out.push_str(val);
+        } else {
+            out.push_str(&rest[..=end_rel]);
+        }
+        rest = &rest[end_rel + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -78,6 +138,9 @@ pub struct Config {
     pub docker: DockerConfig,
     #[serde(default)]
     pub network: NetworkConfig,
+    /// Ordered AI prompt steps (`[[agent_steps]]`). Empty → [`default_agent_steps`].
+    #[serde(default)]
+    pub agent_steps: Vec<AgentStepConfig>,
 }
 
 /// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
@@ -116,8 +179,6 @@ pub struct GeneralConfig {
     pub poll_interval_secs: u64,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_workflows: u32,
-    #[serde(default = "default_max_fix_attempts")]
-    pub max_fix_attempts: u32,
     #[serde(default = "default_log_level")]
     pub log_level: String,
 }
@@ -204,12 +265,6 @@ pub struct CommandsConfig {
     pub pre_install: Vec<String>,
     #[serde(default)]
     pub install: String,
-    #[serde(default)]
-    pub lint: String,
-    #[serde(default)]
-    pub unit_test: String,
-    #[serde(default)]
-    pub e2e_test: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,9 +296,6 @@ fn default_poll_interval() -> u64 {
 }
 fn default_max_concurrent() -> u32 {
     1
-}
-fn default_max_fix_attempts() -> u32 {
-    3
 }
 fn default_log_level() -> String {
     "info".to_string()
@@ -291,7 +343,6 @@ impl Default for GeneralConfig {
             dry_mode: false,
             poll_interval_secs: default_poll_interval(),
             max_concurrent_workflows: default_max_concurrent(),
-            max_fix_attempts: default_max_fix_attempts(),
             log_level: default_log_level(),
         }
     }
@@ -325,9 +376,6 @@ impl Default for CommandsConfig {
         Self {
             pre_install: Vec::new(),
             install: String::new(),
-            lint: String::new(),
-            unit_test: String::new(),
-            e2e_test: String::new(),
         }
     }
 }
@@ -365,11 +413,31 @@ impl Default for Config {
             agent: AgentConfig::default(),
             docker: DockerConfig::default(),
             network: NetworkConfig::default(),
+            agent_steps: Vec::new(),
         }
     }
 }
 
 impl Config {
+    /// When `agent_steps` is empty, how many times to run the full built-in sequence (see `[claude] address_ticket_passes`).
+    /// When `agent_steps` is non-empty, this is `1` — use each step's `repeat` only.
+    pub fn agent_sequence_outer_loops(&self) -> u8 {
+        if self.agent_steps.is_empty() {
+            self.claude.address_ticket_passes
+        } else {
+            1
+        }
+    }
+
+    /// Steps to run each outer loop (configured or [`default_agent_steps`]).
+    pub fn resolved_agent_steps(&self) -> Vec<AgentStepConfig> {
+        if self.agent_steps.is_empty() {
+            default_agent_steps()
+        } else {
+            self.agent_steps.clone()
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Err(MaestroError::ConfigNotFound(path.to_path_buf()));
@@ -394,12 +462,6 @@ impl Config {
             ));
         }
 
-        if self.general.max_fix_attempts == 0 {
-            return Err(MaestroError::Config(
-                "max_fix_attempts must be at least 1".to_string(),
-            ));
-        }
-
         for key in &self.jira.project_keys {
             if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
                 return Err(MaestroError::Config(format!(
@@ -420,10 +482,31 @@ impl Config {
             ));
         }
 
-        if self.claude.address_ticket_passes == 0 {
+        if self.claude.address_ticket_passes < 1 {
             return Err(MaestroError::Config(
-                "address_ticket_passes must be at least 1".to_string(),
+                "[claude] address_ticket_passes must be at least 1 (drives how many times the built-in step sequence runs when [[agent_steps]] is empty)"
+                    .to_string(),
             ));
+        }
+
+        for step in &self.agent_steps {
+            if step.name.trim().is_empty() {
+                return Err(MaestroError::Config(
+                    "Each [[agent_steps]] entry must have a non-empty name".to_string(),
+                ));
+            }
+            if step.prompt.trim().is_empty() {
+                return Err(MaestroError::Config(format!(
+                    "Agent step {:?} must have a non-empty prompt",
+                    step.name
+                )));
+            }
+            if step.repeat < 1 {
+                return Err(MaestroError::Config(format!(
+                    "Agent step {:?}: repeat must be at least 1",
+                    step.name
+                )));
+            }
         }
 
         if self.claude.step_timeout_secs == 0 {
@@ -465,7 +548,6 @@ mod tests {
 dry_mode = true
 poll_interval_secs = 30
 max_concurrent_workflows = 2
-max_fix_attempts = 3
 
 [jira]
 project_keys = ["PROJ", "CORE"]
@@ -477,9 +559,6 @@ repo_path = "/workspace"
 
 [commands]
 pre_install = []
-lint = "npm run lint"
-unit_test = "npm test"
-e2e_test = "npm run test:e2e"
 
 [web]
 port = 8080
@@ -553,6 +632,57 @@ step_timeout_secs = 600
     }
 
     #[test]
+    fn interpolate_agent_prompt_substitutes_placeholders() {
+        let mut vars = HashMap::new();
+        vars.insert("ticket_key".into(), "PROJ-1".into());
+        vars.insert("ticket_summary".into(), "Fix login".into());
+        assert_eq!(
+            interpolate_agent_prompt("{ticket_key}: {ticket_summary}", &vars),
+            "PROJ-1: Fix login"
+        );
+    }
+
+    #[test]
+    fn interpolate_agent_prompt_leaves_unknown_braces() {
+        let vars = HashMap::new();
+        assert_eq!(
+            interpolate_agent_prompt("x {unknown} y", &vars),
+            "x {unknown} y"
+        );
+    }
+
+    #[test]
+    fn resolved_agent_steps_default_when_empty() {
+        let config = Config::default();
+        assert_eq!(config.agent_steps.len(), 0);
+        let steps = config.resolved_agent_steps();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].name, "Implement ticket");
+        assert_eq!(steps[0].repeat, 1);
+        assert_eq!(steps[1].name, "Review changes");
+        assert_eq!(steps[1].repeat, 1);
+    }
+
+    #[test]
+    fn agent_sequence_outer_loops_uses_address_ticket_passes_when_no_custom_steps() {
+        let mut config = Config::default();
+        config.claude.address_ticket_passes = 5;
+        assert_eq!(config.agent_sequence_outer_loops(), 5);
+    }
+
+    #[test]
+    fn agent_sequence_outer_loops_is_one_when_custom_steps() {
+        let mut config = Config::default();
+        config.claude.address_ticket_passes = 5;
+        config.agent_steps.push(AgentStepConfig {
+            name: "Only".into(),
+            prompt: "x".into(),
+            repeat: 1,
+        });
+        assert_eq!(config.agent_sequence_outer_loops(), 1);
+    }
+
+    #[test]
     fn test_pre_install_string_compat() {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(
@@ -615,5 +745,50 @@ step_timeout_secs = 600
             config.commands.pre_install,
             vec!["echo a".to_string(), "echo b".to_string()]
         );
+    }
+
+    #[test]
+    fn test_load_agent_steps_toml() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            br#"
+[general]
+poll_interval_secs = 30
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+repo_path = "/workspace"
+
+[commands]
+pre_install = []
+
+[web]
+port = 8080
+
+[claude]
+address_ticket_passes = 3
+step_timeout_secs = 600
+
+[[agent_steps]]
+name = "Plan"
+prompt = "Plan work for {ticket_key}"
+repeat = 2
+
+[[agent_steps]]
+name = "Build"
+prompt = "Implement {ticket_summary}"
+"#,
+        )
+        .unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(config.agent_steps.len(), 2);
+        assert_eq!(config.agent_steps[0].name, "Plan");
+        assert_eq!(config.agent_steps[0].repeat, 2);
+        assert_eq!(config.agent_steps[1].name, "Build");
+        assert_eq!(config.agent_steps[1].repeat, 1);
     }
 }

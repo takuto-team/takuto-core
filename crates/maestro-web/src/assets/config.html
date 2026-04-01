@@ -125,23 +125,7 @@
             <label for="preInstallCmds" class="block text-sm font-medium text-gray-300 mb-1.5">Pre-install commands</label>
             <textarea id="preInstallCmds" rows="4" placeholder="One shell command per line (optional)&#10;e.g. aws codeartifact login ..."
               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors resize-y min-h-[5rem]"></textarea>
-            <p class="mt-1.5 text-xs text-gray-600">Run in the worktree before install (e.g. registry auth). Leave empty to skip.</p>
-          </div>
-          <div>
-            <label for="lintCmd" class="block text-sm font-medium text-gray-300 mb-1.5">Linting Command</label>
-            <input type="text" id="lintCmd" placeholder="e.g. npm run lint, cargo clippy"
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-          </div>
-          <div>
-            <label for="unitTestCmd" class="block text-sm font-medium text-gray-300 mb-1.5">Unit Tests Command</label>
-            <input type="text" id="unitTestCmd" placeholder="e.g. npm test, cargo test"
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-          </div>
-          <div>
-            <label for="e2eTestCmd" class="block text-sm font-medium text-gray-300 mb-1.5">E2E Tests Command</label>
-            <input type="text" id="e2eTestCmd" placeholder="e.g. npm run test:e2e"
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600">Leave empty to skip E2E tests</p>
+            <p class="mt-1.5 text-xs text-gray-600">Run in the worktree before install (e.g. registry auth). Lint/tests are not separate commands — use <code class="text-gray-500">[[agent_steps]]</code> in config.toml to drive the agent (e.g. a step that runs <code class="text-gray-500">npm run lint</code>).</p>
           </div>
         </div>
       </section>
@@ -164,7 +148,7 @@
               <option value="claude">Claude Code (claude CLI)</option>
               <option value="cursor">Cursor Agent (agent CLI)</option>
             </select>
-            <p class="mt-1.5 text-xs text-gray-600">Runs implementation, review, lint/test fix loops, and PM plan checks for the selected tool.</p>
+            <p class="mt-1.5 text-xs text-gray-600">Runs configurable <code class="text-gray-500">[[agent_steps]]</code> sessions for the selected tool.</p>
           </div>
           <div>
             <label for="cursorCli" class="block text-sm font-medium text-gray-300 mb-1.5">Cursor CLI executable</label>
@@ -235,12 +219,6 @@
             <input type="number" id="maxConcurrent" min="1" max="10"
               class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
           </div>
-          <div>
-            <label for="maxFixAttempts" class="block text-sm font-medium text-gray-300 mb-1.5">Max Fix Attempts</label>
-            <input type="number" id="maxFixAttempts" min="1" max="10"
-              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600">Max attempts to fix lint/test failures per step</p>
-          </div>
         </div>
       </section>
 
@@ -294,17 +272,12 @@
           : 'origin';
       document.getElementById('pollInterval').value = cfg.general.poll_interval_secs;
       document.getElementById('preInstallCmds').value = normalizePreInstall(cfg.commands.pre_install).join('\n');
-      document.getElementById('lintCmd').value = cfg.commands.lint;
-      document.getElementById('unitTestCmd').value = cfg.commands.unit_test;
-      document.getElementById('e2eTestCmd').value = cfg.commands.e2e_test;
       document.getElementById('figmaToken').value = cfg.claude.figma_api_token;
       document.getElementById('aiProvider').value = (cfg.agent && cfg.agent.provider) ? cfg.agent.provider : 'claude';
       document.getElementById('cursorCli').value = (cfg.agent && cfg.agent.cursor_cli) ? cfg.agent.cursor_cli : 'agent';
       document.getElementById('cursorModel').value = (cfg.agent && cfg.agent.cursor_model != null && cfg.agent.cursor_model !== '') ? cfg.agent.cursor_model : 'Auto';
       document.getElementById('dryMode').checked = cfg.general.dry_mode;
       document.getElementById('maxConcurrent').value = cfg.general.max_concurrent_workflows;
-      document.getElementById('maxFixAttempts').value = cfg.general.max_fix_attempts;
-
       // Project keys
       const tagContainer = document.getElementById('projectTags');
       tagContainer.innerHTML = '';
@@ -342,11 +315,11 @@
 
     function buildConfigPayload() {
       return {
+        agent_steps: currentConfig && Array.isArray(currentConfig.agent_steps) ? currentConfig.agent_steps : [],
         general: {
           dry_mode: document.getElementById('dryMode').checked,
           poll_interval_secs: parseInt(document.getElementById('pollInterval').value, 10),
           max_concurrent_workflows: parseInt(document.getElementById('maxConcurrent').value, 10),
-          max_fix_attempts: parseInt(document.getElementById('maxFixAttempts').value, 10),
           log_level: currentConfig ? currentConfig.general.log_level : 'info',
         },
         jira: {
@@ -368,9 +341,6 @@
             .map((s) => s.trim())
             .filter(Boolean),
           install: currentConfig ? currentConfig.commands.install : '',
-          lint: document.getElementById('lintCmd').value,
-          unit_test: document.getElementById('unitTestCmd').value,
-          e2e_test: document.getElementById('e2eTestCmd').value,
         },
         web: currentConfig ? currentConfig.web : { host: '0.0.0.0', port: 8080 },
         claude: {

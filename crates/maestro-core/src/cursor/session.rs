@@ -13,10 +13,11 @@ pub struct CursorSession {
 }
 
 impl CursorSession {
-    pub async fn start_address_ticket(
+    /// Run Cursor Agent with the given full prompt (interpolated user text + headless suffix).
+    pub async fn run_prompt(
         cursor_cli: &str,
         worktree: &Path,
-        ticket_context: &str,
+        prompt: &str,
         cancel_token: CancellationToken,
         timeout_secs: u64,
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
@@ -26,103 +27,14 @@ impl CursorSession {
         info!(
             worktree = %worktree.display(),
             resume = ?resume_session_id,
-            "Starting Cursor Agent address-ticket session"
-        );
-
-        let prompt = format!(
-            "You are implementing a Jira ticket in this repository. Follow the project's conventions.\n\n\
-            Ticket context:\n{ticket_context}\n\n\
-            IMPORTANT: Fully automated headless run — no human operator. \
-            Do not ask questions or wait for user input. \
-            Implement the ticket, add or update tests as appropriate, and summarize what you did.\n\n\
-            If the project uses a skill or rule named address-ticket, follow it; otherwise proceed from the ticket context alone."
+            prompt_len = prompt.len(),
+            "Starting Cursor Agent session"
         );
 
         let (session_id, output) = run_cursor_agent_session(
             cursor_cli,
             worktree,
-            &prompt,
-            cancel_token,
-            timeout_secs,
-            line_tx,
-            model,
-            resume_session_id,
-        )
-        .await?;
-
-        Ok(Self {
-            session_id,
-            output,
-        })
-    }
-
-    pub async fn start_review_changes(
-        cursor_cli: &str,
-        worktree: &Path,
-        cancel_token: CancellationToken,
-        timeout_secs: u64,
-        line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
-        model: Option<&str>,
-        resume_session_id: Option<&str>,
-    ) -> Result<Self> {
-        info!(
-            worktree = %worktree.display(),
-            resume = ?resume_session_id,
-            "Starting Cursor Agent review session"
-        );
-
-        let prompt = concat!(
-            "Review all uncommitted and recent changes in this repository for correctness, security, and style. ",
-            "Fix any issues you find. This is a fully automated headless run — do not ask the user questions; ",
-            "apply fixes directly.\n\n",
-            "If the project defines review-changes guidance in docs or rules, follow it."
-        )
-        .to_string();
-
-        let (session_id, output) = run_cursor_agent_session(
-            cursor_cli,
-            worktree,
-            &prompt,
-            cancel_token,
-            timeout_secs,
-            line_tx,
-            model,
-            resume_session_id,
-        )
-        .await?;
-
-        Ok(Self {
-            session_id,
-            output,
-        })
-    }
-
-    pub async fn start_fix_session(
-        cursor_cli: &str,
-        worktree: &Path,
-        error_output: &str,
-        fix_instructions: &str,
-        cancel_token: CancellationToken,
-        timeout_secs: u64,
-        line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
-        model: Option<&str>,
-        resume_session_id: Option<&str>,
-    ) -> Result<Self> {
-        info!(
-            worktree = %worktree.display(),
-            resume = ?resume_session_id,
-            "Starting Cursor Agent fix session"
-        );
-
-        let prompt = format!(
-            "The following command failed with this output:\n\n```\n{error_output}\n```\n\n{fix_instructions}\n\n\
-            This is a fully automated headless run — fix the issues without asking for confirmation."
-        );
-
-        let (session_id, output) = run_cursor_agent_session(
-            cursor_cli,
-            worktree,
-            &prompt,
+            prompt,
             cancel_token,
             timeout_secs,
             line_tx,

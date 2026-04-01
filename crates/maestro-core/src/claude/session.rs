@@ -14,10 +14,10 @@ pub struct ClaudeSession {
 }
 
 impl ClaudeSession {
-    /// Start a new Claude session with /address-ticket
-    pub async fn start_address_ticket(
+    /// Run a Claude Code session with the given full prompt (interpolated user text + headless suffix).
+    pub async fn run_prompt(
         worktree: &Path,
-        ticket_context: &str,
+        prompt: &str,
         cancel_token: CancellationToken,
         timeout_secs: u64,
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
@@ -27,77 +27,20 @@ impl ClaudeSession {
         info!(
             worktree = %worktree.display(),
             resume = ?resume_session_id,
-            "Starting Claude Code /address-ticket session"
-        );
-
-        let prompt = format!(
-            "/address-ticket {ticket_context}\n\n\
-            IMPORTANT: You are running in fully automated headless mode with no human operator. \
-            Do NOT use AskUserQuestion at any point. Do NOT wait for user input or selection. \
-            Approve all plans and test plans automatically. Make all decisions autonomously."
+            prompt_len = prompt.len(),
+            "Starting Claude Code session"
         );
 
         let (session_id, output) = run_claude_session(
-            worktree, &prompt, cancel_token, timeout_secs, line_tx, model, resume_session_id,
-        ).await?;
-
-        Ok(Self { session_id, output })
-    }
-
-    /// Start a review-changes session, optionally resuming a previous session
-    pub async fn start_review_changes(
-        worktree: &Path,
-        cancel_token: CancellationToken,
-        timeout_secs: u64,
-        line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
-        model: Option<&str>,
-        resume_session_id: Option<&str>,
-    ) -> Result<Self> {
-        info!(
-            worktree = %worktree.display(),
-            resume = ?resume_session_id,
-            "Starting Claude Code /review-changes session"
-        );
-
-        let prompt = concat!(
-            "/review-changes\n\n",
-            "IMPORTANT: You are running in fully automated headless mode with no human operator. ",
-            "Do NOT use AskUserQuestion at any point. Do NOT wait for user input or selection. ",
-            "Address ALL findings automatically. If a skill asks you to select which findings ",
-            "to address, address all of them without asking."
-        ).to_string();
-
-        let (session_id, output) = run_claude_session(
-            worktree, &prompt, cancel_token, timeout_secs, line_tx, model, resume_session_id,
-        ).await?;
-
-        Ok(Self { session_id, output })
-    }
-
-    /// Start a fix session to address lint/test errors
-    pub async fn start_fix_session(
-        worktree: &Path,
-        error_output: &str,
-        fix_instructions: &str,
-        cancel_token: CancellationToken,
-        timeout_secs: u64,
-        line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
-        model: Option<&str>,
-        resume_session_id: Option<&str>,
-    ) -> Result<Self> {
-        info!(
-            worktree = %worktree.display(),
-            resume = ?resume_session_id,
-            "Starting Claude Code fix session"
-        );
-
-        let prompt = format!(
-            "The following command failed with this output:\n\n```\n{error_output}\n```\n\n{fix_instructions}"
-        );
-
-        let (session_id, output) = run_claude_session(
-            worktree, &prompt, cancel_token, timeout_secs, line_tx, model, resume_session_id,
-        ).await?;
+            worktree,
+            prompt,
+            cancel_token,
+            timeout_secs,
+            line_tx,
+            model,
+            resume_session_id,
+        )
+        .await?;
 
         Ok(Self { session_id, output })
     }
