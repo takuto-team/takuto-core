@@ -753,6 +753,11 @@ impl WorkflowEngine {
             w.state = WorkflowState::AddressingPrComments { pass: 1 };
             w.current_step_label = Some("Starting PR review".to_string());
             w.updated_at = Utc::now();
+            // New phase must not reuse the main ticket driver's token: `CancellationToken` never
+            // un-cancels, so a prior stop/interrupt/shutdown would make PR review exit instantly at
+            // `check_cancelled` even though the workflow row is back to **Done** and the UI allows
+            // this action.
+            w.cancel_token = CancellationToken::new();
             let display = w.status_display();
             let workflow_id = w.id.clone();
             (
@@ -855,6 +860,9 @@ impl WorkflowEngine {
             w.state = WorkflowState::MergingBaseBranch { pass: 1 };
             w.current_step_label = Some("Starting merge base branch".to_string());
             w.updated_at = Utc::now();
+            // Same as **Address PR Comments** — fresh token so a previously cancelled main driver
+            // token cannot abort merge-base immediately.
+            w.cancel_token = CancellationToken::new();
             let display = w.status_display();
             let workflow_id = w.id.clone();
             (
