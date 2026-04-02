@@ -86,10 +86,10 @@ RUN curl -fsSL https://cursor.com/install | bash \
     && chmod -R a+rX /usr/local/share/cursor-agent \
     && test -f "$(dirname "$(readlink -f /usr/local/bin/agent)")/index.js"
 
-# Install Playwright CLI with Chromium in a shared location accessible to all users
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN npx playwright install --with-deps chromium \
-    && chmod -R a+rX /opt/playwright-browsers
+# Playwright is not baked into this image: isolated workflow workers use the project's @playwright/test
+# version and download Chromium into ~/.cache/ms-playwright (persisted via docker-compose.dind.yml
+# playwright-cache → /shared-auth/playwright-cache). Forcing a mismatched browser revision caused subtle
+# visual snapshot drift vs local/CI.
 
 # Install acli (Atlassian CLI) via official apt repo
 RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \

@@ -371,7 +371,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install tools
 RUN npm install -g @anthropic-ai/claude-code
-RUN npx playwright install --with-deps chromium
+# Playwright browsers: supplied per-repo via playwright-cache volume (see README), not baked in image.
 
 # gh CLI (official apt repo)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -405,7 +405,7 @@ ENTRYPOINT ["/usr/local/bin/maestro"]
 | `gh` | Official apt repository | Native Debian package, no Homebrew needed |
 | `acli` | Direct binary download | Avoids Homebrew dependency |
 | `claude-code` | npm global install | Official distribution method |
-| `playwright` | npx install | Standard Playwright setup |
+| Playwright browsers | per-worktree `playwright install` + `playwright-cache` volume | Matches project lockfile; avoids image/revision skew |
 | `figma-cli` | npm global install | Available on npm |
 | Skills collection | curl install script | As specified in requirements |
 

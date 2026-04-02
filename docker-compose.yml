@@ -40,6 +40,8 @@ services:
       - mise-cache:/home/maestro/.cache/mise
       # AWS credentials (optional, for CodeArtifact auth)
       - aws-config:/home/maestro/.aws
+      # Playwright browser binaries (workers use project lockfile; cache shared across workflows)
+      - playwright-cache:/home/maestro/.cache/ms-playwright
     environment:
       # Must match mounted config path (used by preflight / docker-hooks startup in entrypoint)
       - MAESTRO_CONFIG=/etc/maestro/config.toml
@@ -67,3 +69,4 @@ volumes:
   mise-data:
   mise-cache:
   aws-config:
+  playwright-cache:

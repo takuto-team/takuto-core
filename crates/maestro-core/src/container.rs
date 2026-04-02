@@ -45,12 +45,25 @@ const WORKER_ENV: &[(&str, &str)] = &[
     ("MAESTRO_CONFIG", "/etc/maestro/config.toml"),
     // Persist user-level .npmrc across worker containers (aws codeartifact login writes here)
     ("NPM_CONFIG_USERCONFIG", "/workspace/.maestro/.npmrc"),
-    // Playwright browsers are installed at build time in a shared location
-    ("PLAYWRIGHT_BROWSERS_PATH", "/opt/playwright-browsers"),
+    // Deterministic text rendering in screenshots / snapshots (Playwright, Storybook, etc.)
+    ("TZ", "UTC"),
+    ("LANG", "C.UTF-8"),
+    ("LC_ALL", "C.UTF-8"),
 ];
 
 /// Host environment variables forwarded into the worker when set.
-const PASSTHROUGH_ENV: &[&str] = &["FIGMA_API_TOKEN", "CURSOR_API_KEY"];
+const PASSTHROUGH_ENV: &[&str] = &[
+    "FIGMA_API_TOKEN",
+    "CURSOR_API_KEY",
+    // Optional: force a fixed browser bundle (must match the project's @playwright/test version).
+    "PLAYWRIGHT_BROWSERS_PATH",
+    // Match CI behaviour when needed (some tools tweak output when CI is set).
+    "CI",
+    // Override defaults above when the host sets them.
+    "TZ",
+    "LANG",
+    "LC_ALL",
+];
 
 /// Volume mounts shared between the orchestrator and every worker container.
 const WORKER_VOLUMES: &[&str] = &[
@@ -63,6 +76,8 @@ const WORKER_VOLUMES: &[&str] = &[
     "/shared-auth/mise-data:/home/maestro/.local/share/mise",
     "/shared-auth/mise-cache:/home/maestro/.cache/mise",
     "/shared-auth/aws:/home/maestro/.aws",
+    // Playwright browser cache — must align with the repo's package.json, not a baked image path
+    "/shared-auth/playwright-cache:/home/maestro/.cache/ms-playwright",
     // Config + env for egress rules (extra_egress_hosts, .npmrc registry hosts, allow_all_https)
     "/etc/maestro:/etc/maestro:ro",
 ];

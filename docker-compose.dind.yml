@@ -30,6 +30,7 @@ services:
       - mise-data:/shared-auth/mise-data
       - mise-cache:/shared-auth/mise-cache
       - aws-config:/shared-auth/aws
+      - playwright-cache:/shared-auth/playwright-cache
       # Config — workers need config.toml for egress rules (extra_egress_hosts, allow_all_https)
       - ./config.toml:/etc/maestro/config.toml:ro
       - ./maestro.env:/etc/maestro/env:ro
