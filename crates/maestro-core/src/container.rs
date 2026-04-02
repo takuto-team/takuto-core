@@ -45,6 +45,8 @@ const WORKER_ENV: &[(&str, &str)] = &[
     ("MAESTRO_CONFIG", "/etc/maestro/config.toml"),
     // Persist user-level .npmrc across worker containers (aws codeartifact login writes here)
     ("NPM_CONFIG_USERCONFIG", "/workspace/.maestro/.npmrc"),
+    // Playwright browsers are installed at build time in a shared location
+    ("PLAYWRIGHT_BROWSERS_PATH", "/opt/playwright-browsers"),
 ];
 
 /// Host environment variables forwarded into the worker when set.

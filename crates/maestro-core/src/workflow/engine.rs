@@ -959,6 +959,13 @@ async fn drive_pr_review_workflow(
     }
 }
 
+/// Check whether a step with the given label already succeeded in a prior run.
+fn step_already_succeeded(steps_log: &[StepLog], step_label: &str) -> bool {
+    steps_log
+        .iter()
+        .any(|s| s.step_name == step_label && s.status == StepStatus::Success)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_agent_step_sequence(
     ticket_key: &str,
@@ -978,6 +985,7 @@ async fn run_agent_step_sequence(
     log_writer: &Arc<WorkflowLogWriter>,
     agent_run_semaphore: Arc<Semaphore>,
     container_runner: Option<&ContainerRunner>,
+    prior_steps_log: &[StepLog],
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = None;
@@ -993,8 +1001,6 @@ async fn run_agent_step_sequence(
                 check_cancelled(cancel_token)?;
                 wait_if_paused(workflows, ticket_key, cancel_token).await?;
 
-                let _agent_slot = acquire_agent_slot(&agent_run_semaphore).await?;
-
                 let step_label_core = if outer_loops > 1 {
                     format!(
                         "{} (cycle {}/{}, run {}/{})",
@@ -1007,6 +1013,18 @@ async fn run_agent_step_sequence(
                     AgentRunPhase::Main => step_label_core.clone(),
                     AgentRunPhase::PrReview => format!("[PR review] {step_label_core}"),
                 };
+
+                // Skip steps that already succeeded in a prior run (resume after restart).
+                if step_already_succeeded(prior_steps_log, &step_label) {
+                    info!(ticket = %ticket_key, step = %step_label, "Skipping agent step — succeeded in prior run");
+                    let mut skip_log = StepLog::new(step_label.clone());
+                    skip_log.output.push("Skipped (succeeded in prior run)".to_string());
+                    skip_log.complete(StepStatus::Skipped);
+                    add_step_log(workflows, ticket_key, skip_log).await;
+                    continue;
+                }
+
+                let _agent_slot = acquire_agent_slot(&agent_run_semaphore).await?;
 
                 match phase {
                     AgentRunPhase::Main => {
@@ -1316,6 +1334,13 @@ async fn run_pr_review_steps(
         .map(|w| w.steps_log.len())
         .unwrap_or(0);
 
+    // PR review: use prior steps_log for resume skip (if any).
+    let pr_prior_steps: Vec<StepLog> = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| w.steps_log.clone())
+            .unwrap_or_default()
+    };
     let last_agent_output = run_agent_step_sequence(
         ticket_key,
         worktree_path,
@@ -1334,6 +1359,7 @@ async fn run_pr_review_steps(
         log_writer,
         agent_run_semaphore.clone(),
         container_runner.as_ref(),
+        &pr_prior_steps,
     )
     .await?;
 
@@ -1434,6 +1460,17 @@ async fn run_workflow_steps(
         wf.get(ticket_key)
             .and_then(|w| w.worktree_path.clone())
             .filter(|p| p.exists())
+    };
+    let is_resume = reuse_path.is_some();
+
+    // Capture completed steps from prior run so we can skip them on resume.
+    let prior_steps_log: Vec<StepLog> = if is_resume {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| w.steps_log.clone())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
     };
 
     let (worktree_path, ticket_detail) = if reuse_path.is_some() {
@@ -1615,7 +1652,9 @@ async fn run_workflow_steps(
     drop(cfg);
 
     // Step 3a: mise — install pinned tools before shell hooks (pre_install / install).
-    if crate::process::worktree_has_mise_config(&worktree_path) {
+    if crate::process::worktree_has_mise_config(&worktree_path)
+        && !(is_resume && step_already_succeeded(&prior_steps_log, "Mise install"))
+    {
         let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
         let mut step_log = StepLog::new("Mise install".to_string());
         info!("Running mise install (project declares mise tools)");
@@ -1660,14 +1699,30 @@ async fn run_workflow_steps(
             }
         }
         add_step_log(workflows, ticket_key, step_log).await;
+    } else if is_resume && step_already_succeeded(&prior_steps_log, "Mise install") {
+        info!(ticket = %ticket_key, "Skipping Mise install — succeeded in prior run");
+        let mut skip_log = StepLog::new("Mise install".to_string());
+        skip_log.output.push("Skipped (succeeded in prior run)".to_string());
+        skip_log.complete(StepStatus::Skipped);
+        add_step_log(workflows, ticket_key, skip_log).await;
     }
 
     // Step 3b: Pre-install (e.g., registry auth) — each entry is a separate shell command
     if !pre_install_cmds.is_empty() {
         let total = pre_install_cmds.len();
         for (i, pre_install_cmd) in pre_install_cmds.iter().enumerate() {
-            let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
             let step_name = format!("Pre-install ({}/{})", i + 1, total);
+
+            if is_resume && step_already_succeeded(&prior_steps_log, &step_name) {
+                info!(ticket = %ticket_key, step = %step_name, "Skipping — succeeded in prior run");
+                let mut skip_log = StepLog::new(step_name.clone());
+                skip_log.output.push("Skipped (succeeded in prior run)".to_string());
+                skip_log.complete(StepStatus::Skipped);
+                add_step_log(workflows, ticket_key, skip_log).await;
+                continue;
+            }
+
+            let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
             let mut step_log = StepLog::new(step_name.clone());
             info!(command = %pre_install_cmd, step = i + 1, total, "Running pre-install command");
             log_writer
@@ -1716,7 +1771,9 @@ async fn run_workflow_steps(
 
     // Step 3c: Install dependencies
 
-    if !install_cmd.is_empty() {
+    if !install_cmd.is_empty()
+        && !(is_resume && step_already_succeeded(&prior_steps_log, "Install Dependencies"))
+    {
         let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
         let mut step_log = StepLog::new("Install Dependencies".to_string());
         info!(command = %install_cmd, "Installing dependencies in worktree");
@@ -1760,6 +1817,12 @@ async fn run_workflow_steps(
             }
         }
         add_step_log(workflows, ticket_key, step_log).await;
+    } else if is_resume && step_already_succeeded(&prior_steps_log, "Install Dependencies") {
+        info!(ticket = %ticket_key, "Skipping Install Dependencies — succeeded in prior run");
+        let mut skip_log = StepLog::new("Install Dependencies".to_string());
+        skip_log.output.push("Skipped (succeeded in prior run)".to_string());
+        skip_log.complete(StepStatus::Skipped);
+        add_step_log(workflows, ticket_key, skip_log).await;
     }
 
     // Ticket context and interpolation vars for [[agent_steps]] prompts
@@ -1805,6 +1868,7 @@ async fn run_workflow_steps(
         log_writer,
         agent_run_semaphore.clone(),
         container_runner.as_ref(),
+        &prior_steps_log,
     )
     .await?;
 

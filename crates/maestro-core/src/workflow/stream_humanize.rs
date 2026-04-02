@@ -100,6 +100,28 @@ fn humanize_claude_output(raw: &str) -> Option<String> {
             }
             None
         }
+        "tool_use" | "tool_call" => {
+            let tool_name = value
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if tool_name == "Bash" || tool_name == "bash" {
+                if let Some(cmd) = value
+                    .get("input")
+                    .and_then(|i| i.get("command"))
+                    .and_then(|c| c.as_str())
+                {
+                    info!(command = %cmd, "Agent shell command (Claude)");
+                    let short = if cmd.len() > 120 { &cmd[..120] } else { cmd };
+                    return Some(format!("$ {short}"));
+                }
+            }
+            if !tool_name.is_empty() {
+                Some(format!("Tool: {tool_name}"))
+            } else {
+                Some("Tool call started".to_string())
+            }
+        }
         "content_block_delta" => value
             .get("delta")
             .and_then(|d| d.get("text"))
@@ -185,19 +207,27 @@ fn summarize_cursor_tool_event(value: &Value) -> Option<String> {
     let tc = value.get("tool_call")?;
 
     if subtype == "started" {
+        if let Some(s) = tc.get("shellToolCall") {
+            let cmd = s.get("args")?.get("command")?.as_str()?;
+            let desc = s
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            info!(command = %cmd, description = %desc, "Agent shell command");
+            let short = if cmd.len() > 120 { &cmd[..120] } else { cmd };
+            return Some(format!("$ {short}"));
+        }
         if let Some(r) = tc.get("readToolCall") {
-            let path = r
-                .get("args")?
-                .get("path")?
-                .as_str()?;
+            let path = r.get("args")?.get("path")?.as_str()?;
             return Some(format!("Reading {path}"));
         }
         if let Some(w) = tc.get("writeToolCall") {
-            let path = w
-                .get("args")?
-                .get("path")?
-                .as_str()?;
+            let path = w.get("args")?.get("path")?.as_str()?;
             return Some(format!("Writing {path}"));
+        }
+        if let Some(e) = tc.get("editToolCall") {
+            let path = e.get("args")?.get("file_path")?.as_str()?;
+            return Some(format!("Editing {path}"));
         }
         if let Some(f) = tc.get("function") {
             let name = f.get("name")?.as_str()?;
@@ -207,7 +237,22 @@ fn summarize_cursor_tool_event(value: &Value) -> Option<String> {
     }
 
     if subtype == "completed" {
-        info!("Cursor tool_call completed");
+        // Log shell command results (exit code, truncated output)
+        if let Some(s) = tc.get("shellToolCall") {
+            if let Some(result) = s.get("result") {
+                let (key, r) = if let Some(r) = result.get("success") {
+                    ("success", r)
+                } else if let Some(r) = result.get("failure") {
+                    ("failure", r)
+                } else {
+                    return None;
+                };
+                let cmd = r.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                let exit_code = r.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
+                info!(command = %cmd, exit_code = exit_code, result = %key, "Agent shell command completed");
+                return None;
+            }
+        }
         return None;
     }
 

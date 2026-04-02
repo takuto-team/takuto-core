@@ -86,8 +86,10 @@ RUN curl -fsSL https://cursor.com/install | bash \
     && chmod -R a+rX /usr/local/share/cursor-agent \
     && test -f "$(dirname "$(readlink -f /usr/local/bin/agent)")/index.js"
 
-# Install Playwright CLI with Chromium
-RUN npx playwright install --with-deps chromium
+# Install Playwright CLI with Chromium in a shared location accessible to all users
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN npx playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/playwright-browsers
 
 # Install acli (Atlassian CLI) via official apt repo
 RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
