@@ -178,7 +178,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     match engine.restore_persisted_workflows().await {
         Ok(n) if n > 0 => {
-            info!(count = n, "Restored in-progress workflows from previous run");
+            info!(
+                count = n,
+                "Restored workflow snapshot from previous run (includes Done rows left idle for dashboard actions)"
+            );
         }
         Ok(_) => {}
         Err(e) => {

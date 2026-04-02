@@ -90,6 +90,19 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
     ]
 }
 
+/// Built-in steps for **`[[merge_base_agent_steps]]`** when that list is empty.
+pub fn default_merge_base_agent_steps() -> Vec<AgentStepConfig> {
+    vec![AgentStepConfig {
+        name: "Merge base branch".to_string(),
+        prompt: "Fetch the latest base branch (`{base_branch}`) from remote and merge it into the current branch.\n\
+            Resolve any conflicts — prefer the current branch's changes for new code, but keep the base branch's \
+            changes for configuration and dependency files unless they conflict with this ticket's work.\n\
+            Run lint and tests after the merge. Commit the merge and push."
+            .to_string(),
+        repeat: 1,
+    }]
+}
+
 /// Built-in steps for **`[[review_agent_steps]]`** when that list is empty (PR comment loop after main flow is Done).
 pub fn default_review_agent_steps() -> Vec<AgentStepConfig> {
     vec![AgentStepConfig {
@@ -154,6 +167,9 @@ pub struct Config {
     /// PR review loop (`[[review_agent_steps]]`) after main flow is Done. Empty → [`default_review_agent_steps`].
     #[serde(default)]
     pub review_agent_steps: Vec<AgentStepConfig>,
+    /// Merge base branch loop (`[[merge_base_agent_steps]]`) after main flow is Done. Empty → [`default_merge_base_agent_steps`].
+    #[serde(default)]
+    pub merge_base_agent_steps: Vec<AgentStepConfig>,
 }
 
 /// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
@@ -444,6 +460,7 @@ impl Default for Config {
             network: NetworkConfig::default(),
             agent_steps: Vec::new(),
             review_agent_steps: Vec::new(),
+            merge_base_agent_steps: Vec::new(),
         }
     }
 }
@@ -483,6 +500,15 @@ impl Config {
             default_review_agent_steps()
         } else {
             self.review_agent_steps.clone()
+        }
+    }
+
+    /// Steps for the merge-base-branch workflow (configured or [`default_merge_base_agent_steps`]).
+    pub fn resolved_merge_base_agent_steps(&self) -> Vec<AgentStepConfig> {
+        if self.merge_base_agent_steps.is_empty() {
+            default_merge_base_agent_steps()
+        } else {
+            self.merge_base_agent_steps.clone()
         }
     }
 
@@ -585,6 +611,26 @@ impl Config {
             if step.repeat < 1 {
                 return Err(MaestroError::Config(format!(
                     "Review agent step {:?}: repeat must be at least 1",
+                    step.name
+                )));
+            }
+        }
+
+        for step in &self.merge_base_agent_steps {
+            if step.name.trim().is_empty() {
+                return Err(MaestroError::Config(
+                    "Each [[merge_base_agent_steps]] entry must have a non-empty name".to_string(),
+                ));
+            }
+            if step.prompt.trim().is_empty() {
+                return Err(MaestroError::Config(format!(
+                    "Merge base agent step {:?} must have a non-empty prompt",
+                    step.name
+                )));
+            }
+            if step.repeat < 1 {
+                return Err(MaestroError::Config(format!(
+                    "Merge base agent step {:?}: repeat must be at least 1",
                     step.name
                 )));
             }

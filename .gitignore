@@ -2,6 +2,9 @@
 .DS_Store
 .claude/
 
+# Local workflow snapshot / Maestro runtime under configured repo_path (not for version control)
+.maestro/
+
 config.toml
 .env
 maestro.env

@@ -40,20 +40,27 @@ pub struct WorkflowSummary {
     pub terminal_lines: Vec<TerminalLineDto>,
     /// **Address PR Comments** is allowed (main flow **Done** and `pr_url` set).
     pub can_address_pr_comments: bool,
+    /// **Merge base branch** is allowed (main flow **Done**, `pr_url` set, worktree exists).
+    pub can_merge_base: bool,
     /// **Mark as Done** is allowed (workflow state is **Done**).
     pub can_mark_done: bool,
 }
 
-fn workflow_action_flags(w: &Workflow) -> (bool, bool) {
+fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
     let done = matches!(w.state, WorkflowState::Done);
     let has_pr = w
         .pr_url
         .as_deref()
         .map(str::trim)
         .is_some_and(|s| !s.is_empty());
+    let has_worktree = w
+        .worktree_path
+        .as_ref()
+        .is_some_and(|p| p.exists());
     let can_address = done && has_pr;
+    let can_merge_base = done && has_pr && has_worktree;
     let can_mark = done;
-    (can_address, can_mark)
+    (can_address, can_merge_base, can_mark)
 }
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
@@ -68,7 +75,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
         .map(|w| {
-            let (can_address_pr_comments, can_mark_done) = workflow_action_flags(w);
+            let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -83,6 +90,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 error: extract_error(&w.state),
                 terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
                 can_address_pr_comments,
+                can_merge_base,
                 can_mark_done,
             }
         })
@@ -100,7 +108,7 @@ pub async fn get_workflow(
     workflows
         .get(&id)
         .map(|w| {
-            let (can_address_pr_comments, can_mark_done) = workflow_action_flags(w);
+            let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
             Json(WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -115,6 +123,7 @@ pub async fn get_workflow(
                 error: extract_error(&w.state),
                 terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
                 can_address_pr_comments,
+                can_merge_base,
                 can_mark_done,
             })
         })
@@ -188,6 +197,19 @@ pub async fn address_pr_comments(
     state
         .engine
         .start_pr_review_workflow(&id)
+        .await
+        .map(|()| StatusCode::ACCEPTED)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+/// Run the configured **`[[merge_base_agent_steps]]`** sequence in the existing worktree (requires **Done** + PR URL).
+pub async fn merge_base_branch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .engine
+        .start_merge_base_workflow(&id)
         .await
         .map(|()| StatusCode::ACCEPTED)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))

@@ -62,7 +62,7 @@ Terminal states: `Done`, `Stopped`, `Error`.
 
 Each new ticket gets `WorkflowEngine::start_workflow`, which inserts the workflow and **`tokio::spawn`s `drive_workflow`**. **`max_concurrent_workflows`** is enforced in two ways: the Jira poller only starts new To Do workflows when **`concurrency_slots_in_use`** is less than **`max_concurrent_workflows`** (every workflow that is **not** **`Done`**, **`Stopped`**, or **`Error`** counts — including **Paused**), and a shared semaphore caps how many workflows run **mise**, **install**, or an **agent** step at the same time (permits are taken **after** `wait_if_paused`, so paused workflows do not hold a heavy-work slot).
 
-`Workflow` carries ticket metadata, `steps_log`, branch/worktree paths, `pr_url`, `CancellationToken`, and up to **100** recent `terminal_lines` for UI persistence. **`workflow/snapshot.rs`** defines the JSON snapshot format for graceful shutdown / restart (same **`.maestro/`** tree as **`outcome.toml`**).
+`Workflow` carries ticket metadata, `steps_log`, branch/worktree paths, `pr_url`, `CancellationToken`, and up to **100** recent `terminal_lines` for UI persistence. **`workflow/snapshot.rs`** defines the JSON snapshot format for graceful shutdown / restart (same **`.maestro/`** tree as **`outcome.toml`**). For a **manual** snapshot to bring back a **Done** workflow (Address PR / Merge base / Mark as Done), set **`state`** to **`Done`** in JSON (serde also accepts lowercase **`done`**), include a non-empty **`pr_url`**, and an existing **`worktree_path`** (absolute path inside the container). On restore, **`AddressingPrComments`** and **`MergingBaseBranch`** rows resume their respective secondary drivers; **`Done`** rows are inserted with **no** main driver.
 
 ### Main step sequence (simplified)
 
@@ -150,6 +150,7 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | POST | `/api/workflows/{id}/stop` | |
 | POST | `/api/workflows/{id}/retry` | |
 | POST | `/api/workflows/{id}/address-pr-comments` | Start PR review agent loop (**`Done`** + **`pr_url`** + worktree) → **`202 Accepted`** |
+| POST | `/api/workflows/{id}/merge-base-branch` | Start merge-base-branch agent loop (**`Done`** + **`pr_url`** + worktree) → **`202 Accepted`** |
 | POST | `/api/workflows/{id}/mark-done` | Jira **`done_status`** + remove worktree; JSON **`MarkDoneOutcome`** |
 | GET/PUT | `/api/config` | Read/update TOML-backed config |
 | GET | `/api/polling` | JSON `{ "paused": bool }` — Jira poller pause state |
@@ -166,7 +167,7 @@ Static files: embedded from `crates/maestro-web/src/assets/` (e.g. `index.html`,
 
 Loaded in `crates/maestro-core/src/config.rs` — sections:
 
-- **Root (before any `[table]` in TOML)**: optional **`[[agent_steps]]`** (`name`, `prompt`, **`repeat`** default `1`) — replaces built-in steps when any are defined; empty → built-in two-step sequence repeated **`[claude] address_ticket_passes`** times. Optional **`[[review_agent_steps]]`** — same shape; empty → **`default_review_agent_steps`** repeated **`[claude] review_address_ticket_passes`** times
+- **Root (before any `[table]` in TOML)**: optional **`[[agent_steps]]`** (`name`, `prompt`, **`repeat`** default `1`) — replaces built-in steps when any are defined; empty → built-in two-step sequence repeated **`[claude] address_ticket_passes`** times. Optional **`[[review_agent_steps]]`** — same shape; empty → **`default_review_agent_steps`** repeated **`[claude] review_address_ticket_passes`** times. Optional **`[[merge_base_agent_steps]]`** — same shape; empty → built-in prompt that fetches/merges/tests/pushes using **`{base_branch}`** placeholder
 - **`general`**: `dry_mode`, `poll_interval_secs`, `max_concurrent_workflows`, `log_level`, `worker_image` (Docker image for isolated workflow containers; empty = auto-detect from running Maestro container)
 - **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site` (auth, egress; ticket context for prompts), `email`, **`done_status`** (Jira transition for **Mark as Done**)
 - **`git`**: `base_branch`, `remote` (fetch / worktree / push; default `origin`), `repo_url`, `repo_path`

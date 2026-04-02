@@ -97,6 +97,13 @@ function handleWorkflowEvent(evt) {
     if (evt.error) {
       wf.error = evt.error;
     }
+    // Terminal states: re-fetch full workflow to get pr_url and action flags
+    // (WebSocket events don't carry pr_url or can_* fields)
+    const terminalStates = ['done', 'error', 'stopped'];
+    if (terminalStates.includes(wf.state.toLowerCase())) {
+      fetchWorkflowsSilent();
+      return;
+    }
     // Update just this card, not the entire grid
     updateCardState(wf);
     updateCounts(Object.values(workflows));
@@ -368,6 +375,22 @@ async function addressPrComments(id) {
   }
 }
 
+async function mergeBaseBranch(id) {
+  try {
+    const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/merge-base-branch`, { method: 'POST' });
+    if (!res.ok) {
+      const t = await res.text();
+      alert(t || 'Failed to start merge base branch');
+      return;
+    }
+    delete terminalState[id];
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Failed to start merge base branch:', e);
+    alert('Failed to start merge base branch');
+  }
+}
+
 async function markWorkflowDone(id) {
   if (!confirm('Mark this ticket Done in Jira and remove the local worktree? The workflow will leave the dashboard if both succeed.')) return;
   try {
@@ -430,7 +453,7 @@ function getStatusInfo(state) {
   if (s.startsWith('error')) return { label: 'Error', color: 'red', icon: 'x' };
   if (s === 'paused') return { label: 'Paused', color: 'yellow', icon: 'pause' };
   if (s === 'stopped') return { label: 'Stopped', color: 'gray', icon: 'stop' };
-  if (s.includes('pr review') || s.includes('addressing pr comments')) return { label: 'Running', color: 'blue', icon: 'pulse' };
+  if (s.includes('pr review') || s.includes('addressing pr comments') || s.includes('merging base branch')) return { label: 'Running', color: 'blue', icon: 'pulse' };
   return { label: 'Running', color: 'blue', icon: 'pulse' };
 }
 
@@ -506,6 +529,10 @@ function renderWorkflowCard(w) {
   if (w.can_address_pr_comments) {
     actions += `
       <button onclick="addressPrComments('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-indigo-500/10 text-indigo-300 border border-indigo-500/25 hover:bg-indigo-500/20 transition-colors">Address PR Comments</button>`;
+  }
+  if (w.can_merge_base) {
+    actions += `
+      <button onclick="mergeBaseBranch('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/25 hover:bg-amber-500/20 transition-colors">Merge Base Branch</button>`;
   }
   if (w.can_mark_done) {
     actions += `
