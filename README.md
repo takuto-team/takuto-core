@@ -16,6 +16,14 @@ Automated Jira ticket handler that drives **Claude Code** or **Cursor Agent** in
 - Claude Code and/or Cursor account (depending on `[agent] provider` in `config.toml`)
 - AWS credentials (only if using CodeArtifact for npm registry)
 
+**Podman on macOS:** the default Podman machine has 2 CPUs and 4GB RAM, which is too low — agent workflows (linting, tests) will OOM. Increase before first use:
+
+```bash
+podman machine stop
+podman machine set --memory 12288 --cpus 4
+podman machine start
+```
+
 ## Quick Start
 
 ### 1. Configure
