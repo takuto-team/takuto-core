@@ -34,6 +34,27 @@
 # name = "Fix review comments"
 # prompt = "PR: {pr_url}\n\n{ticket_context}\n\nResolve all unresolved GitHub review comments."
 # repeat = 1
+#
+# --- Merge base branch workflow (optional `[[merge_base_agent_steps]]` at TOML root) ---
+# Runs when the dashboard **Merge base branch** action is used (main flow must be Done, PR URL set, worktree present).
+# Same shape as `[[agent_steps]]` / `[[review_agent_steps]]` (`name`, `prompt`, `repeat`).
+# Placeholders: **pr_url**, **base_branch** (from `[git] base_branch`), plus ticket_key, ticket_summary,
+# ticket_description, ticket_type, acceptance_criteria, ticket_context.
+# Omit all `[[merge_base_agent_steps]]`: built-in single step that fetches/merges/tests/pushes against `{base_branch}`.
+# The merge-base driver runs one outer pass over your step list; use each step's `repeat` to run a step multiple times
+# in sequence (with `--resume` after the first run), same as custom `[[agent_steps]]`.
+
+# [[merge_base_agent_steps]]
+# name = "Merge base branch"
+# prompt = """
+# PR: {pr_url}
+#
+# Fetch `{base_branch}`, merge it into this branch, resolve conflicts, run tests, commit, and push.
+#
+# Ticket context:
+# {ticket_context}
+# """
+# repeat = 1
 
 [general]
 dry_mode = false
