@@ -23,11 +23,14 @@ Automated Jira ticket handler that drives **Claude Code** or **Cursor Agent** in
 ```bash
 cp config.toml.example config.toml
 cp maestro.env.example maestro.env
+cp .env.example .env   # optional — Compose reads `.env` for FIGMA_API_TOKEN, COMPOSE_FILE, etc.
 ```
 
 Edit `config.toml` with your project settings (see [Configuration](#configuration) below).
 
 Edit `maestro.env` with any custom environment variables needed inside the container (e.g., API keys, custom base URLs).
+
+Edit `.env` if you use **Compose-only** variables (see **`.env.example`**) such as **`FIGMA_API_TOKEN`**.
 
 ### 2. Build
 
@@ -113,6 +116,22 @@ docker compose up
 ```
 
 Dashboard at **http://localhost:8080**.
+
+### Docker-in-Docker sidecar (optional)
+
+To run **`docker`** inside Maestro (for example nested **`docker run`**, `docker compose up`, or Playwright containers), merge the DinD sidecar Compose file. This runs a real Docker daemon in a sidecar container; Maestro connects via `DOCKER_HOST=tcp://dind:2375` automatically. Works on **all platforms** (macOS Podman, macOS Docker Desktop, Linux).
+
+> **`podman-compose` (Python) caveat**: `podman-compose` does **not** read `COMPOSE_FILE` from **`.env`**. You must pass **`-f`** flags explicitly:
+> ```bash
+> podman compose -f docker-compose.yml -f docker-compose.dind.yml up -d
+> ```
+> `docker compose` (Go plugin) reads `COMPOSE_FILE` from `.env` as expected.
+
+The image installs Debian’s **`docker.io`** package for the **`docker`** CLI (no in-container daemon). The DinD sidecar provides the daemon.
+
+**Security:** the DinD sidecar runs **`--privileged`** but is isolated to its own container — Maestro itself gains no extra privileges. The `workspace` volume is shared so paths resolve identically between both containers.
+
+**After changing compose files**, recreate containers: `podman compose -f docker-compose.yml -f docker-compose.dind.yml up -d --force-recreate`.
 
 ### Dry Mode
 

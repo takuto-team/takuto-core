@@ -11,9 +11,15 @@ RUN cargo build --release
 # Stage 2: Runtime
 FROM debian:bookworm-slim AS runtime
 
+# Match host UID for rootless Podman API sockets (often mode 0600 — only the user matters). Set in compose `.env` and rebuild.
+# Do not force the primary GID to match the host: macOS "staff" is often GID 20, which is `dialout` on Debian and already exists.
+ARG MAESTRO_UID=999
+
+# docker.io — Debian provides the `docker` CLI (bookworm has no `docker-cli` package in default repos).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    docker.io \
     git \
     jq \
     iptables \
@@ -129,8 +135,10 @@ RUN mkdir -p /workspace \
 # Copy default runtime config
 COPY config.toml.example /etc/maestro/config.toml
 
-# Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
-RUN groupadd -r maestro && useradd -r -g maestro -m -s /bin/bash maestro
+# Create non-root user (Claude Code refuses --dangerously-skip-permissions as root).
+# Default UID 999; override MAESTRO_UID via compose for host engine sockets. Group `maestro` gets the next free GID.
+RUN groupadd maestro \
+    && useradd -u "${MAESTRO_UID}" -g maestro -m -s /bin/bash maestro
 
 # Startup hooks run as maestro; config may use `sudo /usr/bin/bash` for root-owned volume paths.
 # (Use bash explicitly — `sudo env bash` would match /usr/bin/env and fail the sudoers rule.)

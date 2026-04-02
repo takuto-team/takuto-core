@@ -1,10 +1,16 @@
+# Optional container engine (nested `docker run`, Playwright image, etc.):
+# Merge docker-compose.dind.yml for a DinD sidecar (works on all platforms).
+# See .env.example and README.
 services:
   maestro:
+    container_name: maestro
     build:
       context: .
       args:
         # File in build context; use your own config.toml if it lists [docker] build_commands (e.g. skill installers)
         MAESTRO_BUILD_CONFIG: config.toml.example
+        # Match host UID for rootless Podman Docker API sockets (0600). Omit for default 999. Do not mirror host GID (often clashes with Debian).
+        MAESTRO_UID: ${MAESTRO_UID:-999}
     ports:
       - "8080:8080"
     cap_add:

@@ -71,6 +71,18 @@ export PATH="$MISE_DATA_DIR/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/
 
 CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
 
+# Optional host engine socket — warn early when the mount exists but this user cannot use it.
+if [ -e /var/run/docker.sock ]; then
+    if [ ! -S /var/run/docker.sock ]; then
+        echo "[maestro] WARNING: /var/run/docker.sock exists but is not a Unix socket (wrong host bind path?)" >&2
+    elif [ ! -r /var/run/docker.sock ] || [ ! -w /var/run/docker.sock ]; then
+        echo "[maestro] WARNING: /var/run/docker.sock is not readable/writable as uid=$(id -u) gid=$(id -g)." >&2
+        echo "[maestro]          If you use rootless Podman, its socket is often 0600 — rebuild with MAESTRO_UID = host id -u" >&2
+        echo "[maestro]          (see README \"Host container socket\"; host id -g is not used — it often conflicts with Debian)." >&2
+        echo "[maestro]          Consider using the DinD sidecar instead (docker-compose.dind.yml) — see README." >&2
+    fi
+fi
+
 # --- Setup mode ---
 if [ "${1:-}" = "setup" ]; then
     echo "=== Maestro Setup ==="
@@ -221,6 +233,24 @@ fi
 echo "[maestro] Running auth preflight..."
 if ! /usr/local/bin/maestro --config "$CONFIG_FILE" preflight; then
     exit 1
+fi
+
+# When using a DinD sidecar (DOCKER_HOST=tcp://...), wait for the daemon.
+# Compose depends_on + healthcheck handles most of this, but a brief poll
+# avoids a race if compose_up_commands fire before the health check passes.
+if [ -n "${DOCKER_HOST:-}" ] && [[ "$DOCKER_HOST" == tcp://* ]]; then
+    echo "[maestro] Waiting for Docker daemon at $DOCKER_HOST..."
+    for i in $(seq 1 30); do
+        if docker info >/dev/null 2>&1; then
+            echo "[maestro] Docker daemon is ready."
+            break
+        fi
+        if [ "$i" = 30 ]; then
+            echo "[maestro] WARNING: Docker daemon at $DOCKER_HOST not reachable after 30s." >&2
+            echo "[maestro]          compose_up_commands that need docker may fail." >&2
+        fi
+        sleep 1
+    done
 fi
 
 echo "[maestro] Running docker startup hooks (compose_up_commands)..."

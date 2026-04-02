@@ -1,0 +1,39 @@
+# Docker-in-Docker sidecar — use when Maestro needs `docker` / `docker compose`
+# inside the container (e.g. compose_up_commands, Playwright containers).
+#
+# Recommended for macOS (Podman or Docker Desktop).
+# Works on all platforms — no host socket mount required.
+#
+# Merge with: COMPOSE_FILE=docker-compose.yml:docker-compose.dind.yml
+#
+# The sidecar runs a real Docker daemon. Maestro connects via DOCKER_HOST over
+# the internal compose network (no TLS — traffic never leaves the bridge).
+# The `workspace` volume is shared so paths like /workspace/project/... resolve
+# identically for both the Maestro CLI and the DinD daemon.
+
+services:
+  dind:
+    container_name: maestro-dind
+    image: docker:27-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - workspace:/workspace
+      - dind-storage:/var/lib/docker
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  maestro:
+    environment:
+      - DOCKER_HOST=tcp://dind:2375
+    depends_on:
+      dind:
+        condition: service_healthy
+
+volumes:
+  dind-storage:
