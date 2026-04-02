@@ -3,6 +3,7 @@ use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::container::ContainerRunner;
 use crate::error::{MaestroError, Result};
 use crate::process::{OutputLine, ProcessHandle};
 use crate::workflow::stream_humanize::extract_session_id_from_ndjson;
@@ -23,6 +24,7 @@ impl ClaudeSession {
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
         model: Option<&str>,
         resume_session_id: Option<&str>,
+        container_runner: Option<&ContainerRunner>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
@@ -39,6 +41,7 @@ impl ClaudeSession {
             line_tx,
             model,
             resume_session_id,
+            container_runner,
         )
         .await?;
 
@@ -56,6 +59,7 @@ async fn run_claude_session(
     line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
     model: Option<&str>,
     resume_session_id: Option<&str>,
+    container_runner: Option<&ContainerRunner>,
 ) -> Result<(String, String)> {
     let prompt_preview = &prompt[..prompt.len().min(200)];
     info!(
@@ -99,12 +103,18 @@ async fn run_claude_session(
         args = ?args,
         worktree = %worktree.display(),
         timeout_secs = timeout_secs,
+        container = container_runner.is_some(),
         "Spawning Claude Code process"
     );
 
-    let handle = ProcessHandle::spawn("claude", args, worktree, cancel_token)
-        .await
-        .map_err(|e| MaestroError::Claude(format!("Failed to spawn Claude Code: {e}")))?;
+    let handle = if let Some(runner) = container_runner {
+        let (prog, docker_args) = runner.wrap_command("claude", args);
+        let docker_arg_refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
+        ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
+    } else {
+        ProcessHandle::spawn("claude", args, worktree, cancel_token).await
+    }
+    .map_err(|e| MaestroError::Claude(format!("Failed to spawn Claude Code: {e}")))?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await

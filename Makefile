@@ -18,6 +18,11 @@
 # Both work identically with explicit -f flags.
 COMPOSE := $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose")
 
+# podman-compose needs --podman-run-args BEFORE -f for interactive commands.
+# Detect the native podman-compose binary for those cases.
+PODMAN_COMPOSE_BIN := $(shell command -v podman-compose 2>/dev/null)
+IS_PODMAN := $(shell command -v podman >/dev/null 2>&1 && echo 1 || echo 0)
+
 # Set DIND=0 to run without the Docker-in-Docker sidecar.
 DIND ?= 1
 COMPOSE_FILES := -f docker-compose.yml
@@ -25,19 +30,29 @@ ifeq ($(DIND),1)
 COMPOSE_FILES += -f docker-compose.dind.yml
 endif
 
-.PHONY: build up down setup logs logs-maestro ps exec restart
+# Resolve the actual image name for the maestro service (compose may prefix with project name).
+MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
+
+.PHONY: build up down setup logs logs-maestro ps exec restart load-worker
 
 build:
 	$(COMPOSE) $(COMPOSE_FILES) build
 
 up:
 	$(COMPOSE) $(COMPOSE_FILES) up -d
+ifeq ($(DIND),1)
+	@$(MAKE) --no-print-directory load-worker
+endif
 
 down:
 	$(COMPOSE) $(COMPOSE_FILES) down
 
 setup:
+ifeq ($(IS_PODMAN),1)
+	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it" $(COMPOSE_FILES) run --rm maestro setup
+else
 	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro setup
+endif
 
 logs:
 	$(COMPOSE) $(COMPOSE_FILES) logs -f
@@ -49,6 +64,23 @@ ps:
 	$(COMPOSE) $(COMPOSE_FILES) ps
 
 exec:
+ifeq ($(IS_PODMAN),1)
+	podman exec -u maestro -it maestro bash
+else
 	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
+endif
+
+load-worker:
+	@IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep maestro_maestro | head -1); \
+	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run make build first." >&2; exit 1; fi; \
+	echo "Waiting for DinD to be ready..."; \
+	for i in $$(seq 1 30); do \
+		if podman exec maestro-dind docker info >/dev/null 2>&1; then break; fi; \
+		sleep 1; \
+	done; \
+	echo "Loading $$IMAGE into DinD..."; \
+	podman save "$$IMAGE" | podman exec -i maestro-dind docker load; \
+	echo "Tagging as maestro:latest on DinD..."; \
+	podman exec maestro-dind docker tag "$$IMAGE" maestro:latest
 
 restart: down up

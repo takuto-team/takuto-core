@@ -15,6 +15,7 @@ use crate::claude::session::ClaudeSession;
 use crate::config::{
     cursor_model_for_cli, interpolate_agent_prompt, AgentStepConfig, AiAgentProvider, Config,
 };
+use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
 use crate::error::{MaestroError, Result};
 use crate::git;
@@ -290,6 +291,9 @@ impl WorkflowEngine {
         );
 
         let keys: Vec<String> = records.iter().map(|r| r.ticket_key.clone()).collect();
+        for key in &keys {
+            ContainerRunner::cleanup_for_ticket(key).await;
+        }
         for key in keys {
             let token = {
                 let map = self.workflows.read().await;
@@ -758,6 +762,9 @@ impl WorkflowEngine {
             warn!(ticket = %ticket_key, error = %e, "Jira transition to Done failed");
         }
 
+        // Clean up any worker containers for this workflow
+        ContainerRunner::cleanup_for_ticket(ticket_key).await;
+
         let mut worktree_ok = true;
         let mut worktree_error = None;
         if let Some(ref path) = worktree_path {
@@ -829,6 +836,9 @@ async fn drive_workflow(
         &agent_run_semaphore,
     )
     .await;
+
+    // Always clean up worker containers regardless of success/failure
+    ContainerRunner::cleanup_for_ticket(&ticket_key).await;
 
     if let Err(e) = result {
         if matches!(e, MaestroError::Cancelled)
@@ -908,6 +918,9 @@ async fn drive_pr_review_workflow(
     )
     .await;
 
+    // Always clean up worker containers regardless of success/failure
+    ContainerRunner::cleanup_for_ticket(&ticket_key).await;
+
     if let Err(e) = result {
         if matches!(e, MaestroError::Cancelled)
             && suppress_cancelled_as_error.load(Ordering::SeqCst)
@@ -964,6 +977,7 @@ async fn run_agent_step_sequence(
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
     agent_run_semaphore: Arc<Semaphore>,
+    container_runner: Option<&ContainerRunner>,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = None;
@@ -1067,6 +1081,7 @@ async fn run_agent_step_sequence(
                         Some(line_tx),
                         claude_model,
                         resume_id,
+                        container_runner,
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),
@@ -1079,6 +1094,7 @@ async fn run_agent_step_sequence(
                         Some(line_tx),
                         Some(cursor_model_pass),
                         resume_id,
+                        container_runner,
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),
@@ -1257,6 +1273,24 @@ async fn run_pr_review_steps(
     interp_vars.insert("ticket_context".into(), ticket_context);
     interp_vars.insert("pr_url".into(), pr_url.to_string());
 
+    // Construct container runner for PR review isolation
+    let container_runner = if ContainerRunner::is_available() {
+        let cfg = config.read().await;
+        let image = if cfg.general.worker_image.is_empty() {
+            drop(cfg);
+            ContainerRunner::discover_worker_image()
+                .await
+                .unwrap_or_else(|| "maestro:latest".to_string())
+        } else {
+            let img = cfg.general.worker_image.clone();
+            drop(cfg);
+            img
+        };
+        Some(ContainerRunner::new(ticket_key, worktree_path, &image))
+    } else {
+        None
+    };
+
     let cfg = config.read().await;
     let outer_loops = cfg.review_sequence_outer_loops();
     let timeout = cfg.claude.step_timeout_secs;
@@ -1299,6 +1333,7 @@ async fn run_pr_review_steps(
         cancel_token,
         log_writer,
         agent_run_semaphore.clone(),
+        container_runner.as_ref(),
     )
     .await?;
 
@@ -1549,6 +1584,30 @@ async fn run_workflow_steps(
         }
     }
 
+    // Construct container runner for workflow isolation when DinD is available
+    let container_runner = if ContainerRunner::is_available() {
+        let cfg = config.read().await;
+        let image = if cfg.general.worker_image.is_empty() {
+            drop(cfg);
+            ContainerRunner::discover_worker_image()
+                .await
+                .unwrap_or_else(|| "maestro:latest".to_string())
+        } else {
+            let img = cfg.general.worker_image.clone();
+            drop(cfg);
+            img
+        };
+        // Ensure shared .maestro dir exists for cross-container state (e.g. NPM_CONFIG_USERCONFIG)
+        let maestro_shared = PathBuf::from("/workspace/.maestro");
+        if !maestro_shared.exists() {
+            let _ = std::fs::create_dir_all(&maestro_shared);
+        }
+        info!(ticket = %ticket_key, image = %image, "Container isolation enabled for workflow");
+        Some(ContainerRunner::new(ticket_key, &worktree_path, &image))
+    } else {
+        None
+    };
+
     let cfg = config.read().await;
     let pre_install_cmds = cfg.commands.pre_install.clone();
     let install_cmd = cfg.commands.install.clone();
@@ -1573,15 +1632,14 @@ async fn run_workflow_steps(
             workflows,
             shell_stream_provider,
         );
-        match crate::process::run_command_streaming(
-            "mise",
-            &["install"],
-            &worktree_path,
-            cancel_token.child_token(),
-            line_tx,
-        )
-        .await
-        {
+        let mise_result = if let Some(ref runner) = container_runner {
+            let (prog, docker_args) = runner.wrap_command("mise", &["install"]);
+            let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
+            crate::process::run_command_streaming(&prog, &refs, &worktree_path, cancel_token.child_token(), line_tx).await
+        } else {
+            crate::process::run_command_streaming("mise", &["install"], &worktree_path, cancel_token.child_token(), line_tx).await
+        };
+        match mise_result {
             Ok(output) if output.success() => {
                 step_log.output.push("mise install completed".to_string());
                 step_log.complete(StepStatus::Success);
@@ -1625,14 +1683,14 @@ async fn run_workflow_steps(
                 workflows,
                 shell_stream_provider,
             );
-            match crate::process::run_shell_command_streaming(
-                pre_install_cmd,
-                &worktree_path,
-                cancel_token.child_token(),
-                line_tx,
-            )
-            .await
-            {
+            let pre_result = if let Some(ref runner) = container_runner {
+                let (prog, docker_args) = runner.wrap_shell_command(pre_install_cmd);
+                let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
+                crate::process::run_command_streaming(&prog, &refs, &worktree_path, cancel_token.child_token(), line_tx).await
+            } else {
+                crate::process::run_shell_command_streaming(pre_install_cmd, &worktree_path, cancel_token.child_token(), line_tx).await
+            };
+            match pre_result {
                 Ok(output) if output.success() => {
                     step_log.output.push(format!("{step_name} completed"));
                     step_log.complete(StepStatus::Success);
@@ -1673,14 +1731,14 @@ async fn run_workflow_steps(
             workflows,
             shell_stream_provider,
         );
-        match crate::process::run_shell_command_streaming(
-            &install_cmd,
-            &worktree_path,
-            cancel_token.child_token(),
-            line_tx,
-        )
-        .await
-        {
+        let install_result = if let Some(ref runner) = container_runner {
+            let (prog, docker_args) = runner.wrap_shell_command(&install_cmd);
+            let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
+            crate::process::run_command_streaming(&prog, &refs, &worktree_path, cancel_token.child_token(), line_tx).await
+        } else {
+            crate::process::run_shell_command_streaming(&install_cmd, &worktree_path, cancel_token.child_token(), line_tx).await
+        };
+        match install_result {
             Ok(output) if output.success() => {
                 step_log.output.push("Dependencies installed".to_string());
                 step_log.complete(StepStatus::Success);
@@ -1746,6 +1804,7 @@ async fn run_workflow_steps(
         cancel_token,
         log_writer,
         agent_run_semaphore.clone(),
+        container_runner.as_ref(),
     )
     .await?;
 

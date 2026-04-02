@@ -194,6 +194,9 @@ pub struct GeneralConfig {
     pub max_concurrent_workflows: u32,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Docker image for workflow worker containers. Empty = auto-detect from running Maestro container.
+    #[serde(default)]
+    pub worker_image: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,6 +366,7 @@ impl Default for GeneralConfig {
             poll_interval_secs: default_poll_interval(),
             max_concurrent_workflows: default_max_concurrent(),
             log_level: default_log_level(),
+            worker_image: String::new(),
         }
     }
 }

@@ -115,23 +115,20 @@ if [ "${1:-}" = "setup" ]; then
     jira_email=$(grep -E '^\s*email\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
 
     acli_auth() {
-        echo "Choose authentication method:"
-        echo "  1) OAuth (browser-based)"
-        echo "  2) API token"
-        read -p "Choice [1/2]: " -n 1 -r
-        echo
-        if [[ $REPLY == "2" ]]; then
-            if [ -z "$jira_site" ] || [ -z "$jira_email" ]; then
-                echo "ERROR: Token auth requires 'site' and 'email' in [jira] config."
-                echo "       Add them to config.toml and re-run setup."
-                return 1
-            fi
-            read -sp "Paste your Atlassian API token: " api_token
-            echo
-            echo "$api_token" | acli jira auth login --site "$jira_site" --email "$jira_email" --token
-        else
-            acli jira auth login --web
+        if [ -z "$jira_site" ] || [ -z "$jira_email" ]; then
+            echo "ERROR: 'site' and 'email' must be set in [jira] config."
+            echo "       Add them to config.toml and re-run setup."
+            return 1
         fi
+        echo "Authenticate with an Atlassian API token."
+        echo "  Site:  $jira_site"
+        echo "  Email: $jira_email"
+        echo ""
+        echo "Generate a token at: https://id.atlassian.com/manage-profile/security/api-tokens"
+        echo ""
+        read -sp "Paste your Atlassian API token: " api_token
+        echo
+        echo "$api_token" | acli jira auth login --site "$jira_site" --email "$jira_email" --token
     }
 
     if acli jira auth status >/dev/null 2>&1; then
@@ -251,6 +248,14 @@ if [ -n "${DOCKER_HOST:-}" ] && [[ "$DOCKER_HOST" == tcp://* ]]; then
         fi
         sleep 1
     done
+
+    # After daemon is ready, check worker image
+    WORKER_IMAGE="${MAESTRO_WORKER_IMAGE:-maestro:latest}"
+    if ! docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
+        echo "[maestro] WARNING: Worker image '$WORKER_IMAGE' not found on DinD." >&2
+        echo "[maestro]          Workflow isolation requires the worker image. Run: make load-worker" >&2
+        echo "[maestro]          Falling back to local execution." >&2
+    fi
 fi
 
 echo "[maestro] Running docker startup hooks (compose_up_commands)..."

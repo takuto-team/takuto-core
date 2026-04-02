@@ -129,6 +129,14 @@ To run **`docker`** inside Maestro (for example nested **`docker run`**, `docker
 
 The image installs Debian’s **`docker.io`** package for the **`docker`** CLI (no in-container daemon). The DinD sidecar provides the daemon.
 
+**Workflow isolation:** when DinD is available, Maestro automatically runs each workflow’s install and agent steps in **ephemeral Docker containers** via the DinD daemon. This prevents port conflicts and filesystem side-effects between concurrent workflows. After `make up`, load the Maestro image into DinD so worker containers can start:
+
+```bash
+make load-worker
+```
+
+If the worker image is not loaded, the entrypoint logs a warning and falls back to local execution (no isolation).
+
 **Security:** the DinD sidecar runs **`--privileged`** but is isolated to its own container — Maestro itself gains no extra privileges. The `workspace` volume is shared so paths resolve identically between both containers.
 
 **After changing compose files**, recreate containers: `podman compose -f docker-compose.yml -f docker-compose.dind.yml up -d --force-recreate`.
@@ -158,6 +166,7 @@ Optional **`[[agent_steps]]`** tables belong at the **root** of the file. In TOM
 | `poll_interval_secs` | `60` | Seconds between Jira polls |
 | `max_concurrent_workflows` | `1` | Max parallel ticket workflows |
 | `log_level` | `"info"` | Log level: trace, debug, info, warn, error |
+| `worker_image` | `""` | Docker image for isolated workflow containers; empty = auto-detect from running Maestro container |
 
 ### `[jira]`
 

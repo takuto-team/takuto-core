@@ -2,6 +2,7 @@ pub mod actions;
 pub mod agent_prompt;
 pub mod claude;
 pub mod config;
+pub mod container;
 pub mod cursor;
 pub mod docker_hooks;
 pub mod error;

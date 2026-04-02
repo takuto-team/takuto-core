@@ -40,6 +40,8 @@ dry_mode = false
 poll_interval_secs = 60
 max_concurrent_workflows = 1
 log_level = "info"
+# Docker image for isolated workflow containers. Default: auto-detected from this Maestro instance.
+# worker_image = "maestro:latest"
 
 [jira]
 project_keys = ["PROJ"]

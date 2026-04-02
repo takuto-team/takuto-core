@@ -3,6 +3,7 @@ use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::container::ContainerRunner;
 use crate::error::{MaestroError, Result};
 use crate::process::{OutputLine, ProcessHandle};
 use crate::workflow::stream_humanize::extract_session_id_from_ndjson;
@@ -23,6 +24,7 @@ impl CursorSession {
         line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
         model: Option<&str>,
         resume_session_id: Option<&str>,
+        container_runner: Option<&ContainerRunner>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
@@ -40,6 +42,7 @@ impl CursorSession {
             line_tx,
             model,
             resume_session_id,
+            container_runner,
         )
         .await?;
 
@@ -59,6 +62,7 @@ async fn run_cursor_agent_session(
     line_tx: Option<tokio::sync::mpsc::UnboundedSender<OutputLine>>,
     model: Option<&str>,
     resume_session_id: Option<&str>,
+    container_runner: Option<&ContainerRunner>,
 ) -> Result<(String, String)> {
     let workspace = worktree.to_str().ok_or_else(|| {
         MaestroError::AiAgent("Worktree path is not valid UTF-8".to_string())
@@ -98,12 +102,18 @@ async fn run_cursor_agent_session(
         args_len = arg_refs.len(),
         worktree = %worktree.display(),
         timeout_secs = timeout_secs,
+        container = container_runner.is_some(),
         "Spawning Cursor Agent CLI"
     );
 
-    let handle = ProcessHandle::spawn(cursor_cli, &arg_refs, worktree, cancel_token)
-        .await
-        .map_err(|e| MaestroError::AiAgent(format!("Failed to spawn Cursor Agent: {e}")))?;
+    let handle = if let Some(runner) = container_runner {
+        let (prog, docker_args) = runner.wrap_command(cursor_cli, &arg_refs);
+        let docker_arg_refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
+        ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
+    } else {
+        ProcessHandle::spawn(cursor_cli, &arg_refs, worktree, cancel_token).await
+    }
+    .map_err(|e| MaestroError::AiAgent(format!("Failed to spawn Cursor Agent: {e}")))?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await
