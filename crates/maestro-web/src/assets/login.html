@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maestro — Sign in</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' };
+  </script>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-sm">
+    <div class="text-center mb-8">
+      <h1 class="text-2xl font-semibold tracking-tight">Maestro</h1>
+      <p class="text-sm text-gray-500 mt-1">Dashboard sign in</p>
+    </div>
+    <form id="loginForm" class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
+      <div>
+        <label for="username" class="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" required
+          class="w-full rounded-lg bg-gray-950 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50" />
+      </div>
+      <div>
+        <label for="password" class="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required
+          class="w-full rounded-lg bg-gray-950 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50" />
+      </div>
+      <p id="loginError" class="text-sm text-red-400 hidden"></p>
+      <button type="submit"
+        class="w-full rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium py-2.5 transition-colors">
+        Sign in
+      </button>
+    </form>
+    <div class="mt-6 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 text-xs text-amber-200/90 text-left leading-relaxed">
+      <strong class="text-amber-100">Same URL every time.</strong>
+      <code class="text-amber-200/70">localhost</code> and <code class="text-amber-200/70">127.0.0.1</code> are different sites for cookies.
+      If you sign in on one and open the dashboard on the other, you will look logged out. Pick one hostname and stick to it (and use that host in bookmarks).
+    </div>
+    <p class="text-center text-xs text-gray-600 mt-4">
+      Credentials: <code class="text-gray-500">[web] dashboard_username</code> and
+      <code class="text-gray-500">dashboard_password</code> in config.
+      Check <code class="text-gray-500">GET /api/auth/status</code> for <code class="text-gray-500">dashboard_auth_enabled</code> if login always fails.
+    </p>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const returnTo = params.get('return') || '/';
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = document.getElementById('loginError');
+      errEl.classList.add('hidden');
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (res.status === 204) {
+          window.location.href = returnTo.startsWith('/') ? returnTo : '/';
+          return;
+        }
+        if (res.status === 400) {
+          const t = await res.text();
+          errEl.textContent = t || 'Login is not configured on this server.';
+          errEl.classList.remove('hidden');
+          return;
+        }
+        errEl.textContent = 'Invalid username or password.';
+        errEl.classList.remove('hidden');
+      } catch (err) {
+        errEl.textContent = 'Network error: ' + err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  </script>
+</body>
+</html>

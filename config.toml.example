@@ -100,6 +100,10 @@ install = "npm install"
 [web]
 host = "0.0.0.0"
 port = 8080
+# Dashboard sign-in at /login.html when both are non-empty (HttpOnly session cookie). Leave "" to disable auth.
+# GET /api/config never returns dashboard_password. Use strong unique values in production.
+dashboard_username = ""
+dashboard_password = ""
 
 [claude]
 skills_path = "/home/maestro/.claude/skills"

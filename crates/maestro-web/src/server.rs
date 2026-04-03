@@ -1,11 +1,13 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{StatusCode, Uri, header};
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use rust_embed::Embed;
 use tower_http::cors::CorsLayer;
 
+use crate::auth::dashboard_auth_middleware;
 use crate::routes;
 use crate::state::AppState;
 
@@ -14,7 +16,13 @@ use crate::state::AppState;
 struct Assets;
 
 pub fn build_router(state: AppState) -> Router {
-    let api = Router::new()
+    let api_public = Router::new()
+        .route("/health", get(health))
+        .route("/auth/status", get(routes::auth::auth_status))
+        .route("/auth/login", post(routes::auth::login))
+        .route("/auth/logout", post(routes::auth::logout));
+
+    let api_protected = Router::new()
         .route("/workflows", get(routes::workflows::list_workflows))
         .route("/workflows/{id}", get(routes::workflows::get_workflow))
         .route(
@@ -51,10 +59,17 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
-        .route("/health", get(health))
         .route("/polling", get(routes::polling::get_polling_status))
         .route("/polling/pause", post(routes::polling::pause_polling))
-        .route("/polling/resume", post(routes::polling::resume_polling));
+        .route("/polling/resume", post(routes::polling::resume_polling))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            dashboard_auth_middleware,
+        ));
+
+    let api = Router::new()
+        .merge(api_public)
+        .merge(api_protected);
 
     Router::new()
         .nest("/api", api)
@@ -86,11 +101,14 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
             let mime = mime_guess::from_path(asset_path)
                 .first_or_octet_stream()
                 .to_string();
-            Response::builder()
+            let mut res = Response::builder()
                 .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime)
-                .body(Body::from(content.data.to_vec()))
-                .unwrap()
+                .header(header::CONTENT_TYPE, mime);
+            // Avoid stale dashboard JS/HTML after upgrades (embedded assets otherwise get heuristic browser cache).
+            if asset_path.ends_with(".html") || asset_path.ends_with(".js") {
+                res = res.header(header::CACHE_CONTROL, "no-store");
+            }
+            res.body(Body::from(content.data.to_vec())).unwrap()
         }
         None => Response::builder()
             .status(StatusCode::NOT_FOUND)

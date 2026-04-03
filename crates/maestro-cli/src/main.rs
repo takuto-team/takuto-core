@@ -154,6 +154,20 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Arc::new(RwLock::new(config));
 
+    {
+        let c = config.read().await;
+        if c.web.dashboard_auth_enabled() {
+            info!(
+                user = %c.web.dashboard_username.trim(),
+                "Dashboard auth ON — open /login.html to sign in; use the same hostname always (localhost vs 127.0.0.1 are different cookie sites)"
+            );
+        } else {
+            info!(
+                "Dashboard auth OFF — set non-empty [web] dashboard_username and dashboard_password (or use the Configuration page) to require login"
+            );
+        }
+    }
+
     let (repo_path, git_remote, dry_mode) = {
         let c = config.read().await;
         (

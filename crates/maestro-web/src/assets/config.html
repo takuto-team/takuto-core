@@ -202,6 +202,36 @@
 
       <div class="border-t border-gray-800/60"></div>
 
+      <!-- Section: Web & dashboard login -->
+      <section>
+        <div class="flex items-center gap-2 mb-5">
+          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Web &amp; dashboard login</h2>
+        </div>
+        <p class="text-xs text-gray-500 mb-4 leading-relaxed">
+          Login is required only when <strong>both</strong> username and password are set. You will be redirected to <code class="text-gray-400">/login.html</code>.
+          The password field is never filled from the server; leave it blank when saving to keep your current password.
+        </p>
+        <div class="space-y-4">
+          <div>
+            <label for="dashboardUsername" class="block text-sm font-medium text-gray-300 mb-1.5">Dashboard username</label>
+            <input type="text" id="dashboardUsername" autocomplete="username"
+              class="w-full max-w-md bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors"
+              placeholder="Empty = no dashboard login" />
+          </div>
+          <div>
+            <label for="dashboardPassword" class="block text-sm font-medium text-gray-300 mb-1.5">Dashboard password</label>
+            <input type="password" id="dashboardPassword" autocomplete="new-password"
+              class="w-full max-w-md bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors"
+              placeholder="Set to enable login; leave blank to keep unchanged on save" />
+          </div>
+        </div>
+      </section>
+
+      <div class="border-t border-gray-800/60"></div>
+
       <!-- Section: Advanced -->
       <section>
         <div class="flex items-center gap-2 mb-5">
@@ -265,6 +295,16 @@
     const ITEM_TYPES = ['Task', 'Bug', 'Story', 'Epic', 'Sub-task', 'Spike'];
     let currentConfig = null;
 
+    async function dashboardFetch(input, init = {}) {
+      const headers = new Headers(init.headers ?? undefined);
+      const res = await fetch(input, { ...init, credentials: 'same-origin', headers });
+      if (res.status === 401) {
+        const ret = encodeURIComponent(location.pathname + location.search);
+        window.location.href = '/login.html?return=' + ret;
+      }
+      return res;
+    }
+
     function normalizePreInstall(raw) {
       if (Array.isArray(raw)) {
         return raw.map((s) => String(s).trim()).filter(Boolean);
@@ -276,7 +316,8 @@
 
     async function loadConfig() {
       try {
-        const res = await fetch('/api/config');
+        const res = await dashboardFetch('/api/config');
+        if (!res.ok) return;
         currentConfig = await res.json();
         populateForm(currentConfig);
       } catch (e) {
@@ -306,6 +347,13 @@
         cfg.claude && cfg.claude.review_address_ticket_passes != null
           ? cfg.claude.review_address_ticket_passes
           : 3;
+      const du = document.getElementById('dashboardUsername');
+      if (du) {
+        du.value =
+          cfg.web && cfg.web.dashboard_username != null ? String(cfg.web.dashboard_username) : '';
+      }
+      const dp = document.getElementById('dashboardPassword');
+      if (dp) dp.value = '';
       // Project keys
       const tagContainer = document.getElementById('projectTags');
       tagContainer.innerHTML = '';
@@ -395,7 +443,16 @@
             .filter(Boolean),
           install: currentConfig ? currentConfig.commands.install : '',
         },
-        web: currentConfig ? currentConfig.web : { host: '0.0.0.0', port: 8080 },
+        web: (() => {
+          const base = currentConfig && currentConfig.web
+            ? { ...currentConfig.web }
+            : { host: '0.0.0.0', port: 8080, dashboard_username: '', dashboard_password: '' };
+          const u = document.getElementById('dashboardUsername');
+          const p = document.getElementById('dashboardPassword');
+          if (u) base.dashboard_username = u.value.trim();
+          if (p) base.dashboard_password = p.value;
+          return base;
+        })(),
         claude: {
           skills_path: currentConfig ? currentConfig.claude.skills_path : '/root/.claude/skills',
           address_ticket_passes: currentConfig ? currentConfig.claude.address_ticket_passes : 3,
@@ -442,7 +499,7 @@
       e.preventDefault();
       const status = document.getElementById('saveStatus');
       try {
-        const res = await fetch('/api/config', {
+        const res = await dashboardFetch('/api/config', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(buildConfigPayload()),

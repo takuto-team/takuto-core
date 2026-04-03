@@ -1,14 +1,24 @@
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use tracing::{info, warn};
 
+use crate::auth::session_authorized;
 use crate::state::AppState;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    let web = {
+        let cfg = state.config.read().await;
+        cfg.web.clone()
+    };
+    if web.dashboard_auth_enabled() && !session_authorized(&headers, &web) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     info!("WebSocket upgrade requested");
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }

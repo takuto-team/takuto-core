@@ -146,6 +146,8 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 
 ## Web API and UI
 
+**Authentication:** When **`[web] dashboard_username`** and **`dashboard_password`** are both set, every route below except **`GET /api/health`**, **`GET /api/auth/status`**, **`POST /api/auth/login`**, and **`POST /api/auth/logout`** requires a valid **HttpOnly session cookie** issued by **`POST /api/auth/login`** (JSON **`{ "username", "password" }`**). The browser sends the cookie automatically on same-origin **`fetch`** (use **`credentials: 'same-origin'`**) and on **WebSocket** **`/ws`**. Sign in at **`/login.html`**. **`GET /api/config`** never returns the password; **`PUT /api/config`** with an **empty** **`web.dashboard_password`** **preserves** the existing password when **`dashboard_username`** is still non-empty (so the config UI cannot clear the secret by omission). **Cookies are host-scoped:** **`http://localhost:8080`** and **`http://127.0.0.1:8080`** do **not** share the session cookie — use one hostname consistently (otherwise you will appear logged out or get **`401`** after a successful login).
+
 `crates/maestro-web/src/server.rs` mounts:
 
 | Method | Path | Notes |
@@ -164,10 +166,13 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | GET | `/api/polling` | JSON `{ "paused": bool }` — Jira poller pause state |
 | POST | `/api/polling/pause` | Pause Jira polling (no new tickets picked up) |
 | POST | `/api/polling/resume` | Resume Jira polling |
-| GET | `/api/health` | |
-| GET | `/ws` | WebSocket; JSON messages = `WorkflowEvent` (+ step/output fields); **`event_type`** may be **`workflow_removed`** when **Mark as Done** or **Delete** drops a workflow |
+| GET | `/api/health` | **Unauthenticated** (for load balancers / probes) when dashboard auth is enabled |
+| GET | `/api/auth/status` | JSON **`{ "dashboard_auth_enabled": bool }`** — whether login is required (public) |
+| POST | `/api/auth/login` | JSON credentials → **`204`** + session cookie (public when auth enabled) |
+| POST | `/api/auth/logout` | Clears session cookie (**`204`**) |
+| GET | `/ws` | WebSocket; JSON messages = `WorkflowEvent` (+ step/output fields); **`event_type`** may be **`workflow_removed`** when **Mark as Done** or **Delete** drops a workflow; session cookie when dashboard auth is enabled |
 
-Static files: embedded from `crates/maestro-web/src/assets/` (e.g. `index.html`, `config.html`).
+Static files: embedded from `crates/maestro-web/src/assets/` (e.g. `index.html`, `config.html`, `login.html`). The **Configuration** page includes **Web & dashboard login** fields for **`[web] dashboard_username`** / **`dashboard_password`** (both must be non-empty in the saved config for `/login.html` to be required).
 
 ---
 
@@ -180,13 +185,13 @@ Loaded in `crates/maestro-core/src/config.rs` — sections:
 - **`jira`**: `project_keys`, `item_types`, `jql_filter`, `site` (auth, egress; ticket context for prompts), `email`, **`done_status`** (Jira transition for **Mark as Done**)
 - **`git`**: `base_branch`, `remote` (fetch / worktree / push; default `origin`), `repo_url`, `repo_path`
 - **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`
-- **`web`**: `host`, `port`
+- **`web`**: `host`, `port`, **`dashboard_username`** / **`dashboard_password`** (optional pair — username + password for dashboard login; both empty = no auth)
 - **`claude`**: `skills_path`, `address_ticket_passes` (how many times to run the **built-in** main step sequence when **`[[agent_steps]]`** is empty), **`review_address_ticket_passes`** (same for empty **`[[review_agent_steps]]`**), `step_timeout_secs`, `figma_api_token`, `model`
 - **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`, `cursor_model` (default `Auto`; Cursor CLI gets `--model Auto` unless a concrete id is set)
 - **`docker`**: `build_commands` (image build), `compose_up_commands` (each `docker compose up`)
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**
 
-Runtime path defaults are described in `README.md` / `config.toml.example`. **`PUT /api/config`** replaces the in-memory **`Config`** from JSON and does **not** re-read **`*_workflow_steps_file`** paths from disk (use inline **`agent_steps`** / **`review_agent_steps`** / **`merge_base_agent_steps`** in the payload, or restart after editing files on disk).
+Runtime path defaults are described in `README.md` / `config.toml.example`. **`PUT /api/config`** replaces the in-memory **`Config`** from JSON and does **not** re-read **`*_workflow_steps_file`** paths from disk (use inline **`agent_steps`** / **`review_agent_steps`** / **`merge_base_agent_steps`** in the payload, or restart after editing files on disk). If **`dashboard_password`** was already set, a PUT body with **empty** **`web.dashboard_password`** keeps the previous password when **`dashboard_username`** is still set (see **Web API and UI** above).
 
 ---
 

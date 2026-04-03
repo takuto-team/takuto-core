@@ -341,6 +341,18 @@ pub struct WebConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// When **both** `dashboard_username` and `dashboard_password` are set, the dashboard API and WebSocket require a signed session cookie (see `POST /api/auth/login`). Password is never returned by `GET /api/config`.
+    #[serde(default)]
+    pub dashboard_username: String,
+    #[serde(default)]
+    pub dashboard_password: String,
+}
+
+impl WebConfig {
+    /// `true` when username (trimmed) and password are both non-empty.
+    pub fn dashboard_auth_enabled(&self) -> bool {
+        !self.dashboard_username.trim().is_empty() && !self.dashboard_password.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -477,6 +489,8 @@ impl Default for WebConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            dashboard_username: String::new(),
+            dashboard_password: String::new(),
         }
     }
 }
@@ -679,6 +693,29 @@ impl Config {
             ));
         }
 
+        let du = self.web.dashboard_username.trim();
+        let dp = self.web.dashboard_password.as_str();
+        let has_u = !du.is_empty();
+        let has_p = !dp.is_empty();
+        if has_u != has_p {
+            return Err(MaestroError::Config(
+                "[web] set both dashboard_username and dashboard_password, or leave both empty (no dashboard auth)"
+                    .to_string(),
+            ));
+        }
+        const MAX_DASHBOARD_USER_LEN: usize = 256;
+        const MAX_DASHBOARD_PASSWORD_LEN: usize = 4096;
+        if du.len() > MAX_DASHBOARD_USER_LEN {
+            return Err(MaestroError::Config(format!(
+                "[web] dashboard_username exceeds {MAX_DASHBOARD_USER_LEN} bytes (trimmed)"
+            )));
+        }
+        if dp.len() > MAX_DASHBOARD_PASSWORD_LEN {
+            return Err(MaestroError::Config(format!(
+                "[web] dashboard_password exceeds {MAX_DASHBOARD_PASSWORD_LEN} bytes"
+            )));
+        }
+
         if self.claude.address_ticket_passes < 1 {
             return Err(MaestroError::Config(
                 "[claude] address_ticket_passes must be at least 1 (drives how many times the built-in step sequence runs when [[agent_steps]] is empty)"
@@ -784,6 +821,13 @@ impl Config {
         toml::to_string_pretty(self)
             .map_err(|e| MaestroError::Config(format!("Failed to serialize config: {e}")))
     }
+
+    /// Copy for JSON API responses: strips dashboard password (never expose via `GET /api/config`).
+    pub fn redacted_for_api_clone(&self) -> Self {
+        let mut c = self.clone();
+        c.web.dashboard_password.clear();
+        c
+    }
 }
 
 #[cfg(test)]
@@ -841,6 +885,7 @@ step_timeout_secs = 600
         assert!(!config.general.dry_mode);
         assert_eq!(config.general.poll_interval_secs, 60);
         assert_eq!(config.web.port, 8080);
+        assert!(!config.web.dashboard_auth_enabled());
         assert_eq!(config.agent.cursor_model, "Auto");
         assert_eq!(config.git.remote, "origin");
     }

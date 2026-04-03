@@ -32,6 +32,8 @@ async-trait = "0.1"
 # Web
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = "0.10"
+# Pin transitive `cookie` → `time`: 0.3.46+ MSRV is Rust 1.88; Docker uses `rust:1.85-bookworm`.
+time = "=0.3.45"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 rust-embed = "8"

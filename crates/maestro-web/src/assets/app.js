@@ -11,10 +11,22 @@ let initialLoadDone = false;
 let pollingPaused = false;
 const TERMINAL_MAX_LINES = 500;
 
+/** Same-origin cookie session from `POST /api/auth/login`; redirect to sign-in on 401. */
+async function dashboardFetch(input, init = {}) {
+  const headers = new Headers(init.headers ?? undefined);
+  const res = await fetch(input, { ...init, credentials: 'same-origin', headers });
+  if (res.status === 401) {
+    const ret = encodeURIComponent(location.pathname + location.search);
+    window.location.href = '/login.html?return=' + ret;
+  }
+  return res;
+}
+
 // --- WebSocket ---
 
 function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // Session cookie is sent automatically on same-origin WebSocket upgrade.
   ws = new WebSocket(`${proto}//${location.host}/ws`);
 
   ws.onopen = () => {
@@ -250,7 +262,8 @@ function ingestWorkflowList(list) {
 // Silent fetch — doesn't cause a visual flash
 async function fetchWorkflowsSilent() {
   try {
-    const res = await fetch('/api/workflows');
+    const res = await dashboardFetch('/api/workflows');
+    if (!res.ok) return;
     const list = await res.json();
     ingestWorkflowList(list);
     list.forEach(w => {
@@ -272,7 +285,7 @@ async function fetchWorkflowsSilent() {
 
 async function fetchPollingStatus() {
   try {
-    const res = await fetch('/api/polling');
+    const res = await dashboardFetch('/api/polling');
     if (!res.ok) return;
     const data = await res.json();
     pollingPaused = !!data.paused;
@@ -289,7 +302,7 @@ function applyPollingUi() {
   if (pollingPaused) {
     btn.textContent = 'Resume polling';
     btn.className =
-      'text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors bg-amber-500/10 text-amber-300 border-amber-500/25 hover:bg-amber-500/20';
+      'dashboard-header-btn bg-amber-500/10 text-amber-300 border-amber-500/25 hover:bg-amber-500/20';
     if (label) {
       label.textContent = 'Jira poll: paused';
       label.className = 'text-xs text-amber-500/80 hidden sm:inline';
@@ -297,7 +310,7 @@ function applyPollingUi() {
   } else {
     btn.textContent = 'Pause polling';
     btn.className =
-      'text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors bg-gray-800/80 text-gray-300 border-gray-700 hover:bg-gray-800 hover:border-gray-600';
+      'dashboard-header-btn bg-gray-800/80 text-gray-300 border-gray-700 hover:bg-gray-800 hover:border-gray-600';
     if (label) {
       label.textContent = 'Jira poll: active';
       label.className = 'text-xs text-emerald-500/80 hidden sm:inline';
@@ -310,7 +323,7 @@ async function togglePolling() {
   if (btn) btn.disabled = true;
   try {
     const url = pollingPaused ? '/api/polling/resume' : '/api/polling/pause';
-    const res = await fetch(url, { method: 'POST' });
+    const res = await dashboardFetch(url, { method: 'POST' });
     if (!res.ok) {
       const t = await res.text();
       alert(t || 'Failed to update polling');
@@ -329,7 +342,7 @@ async function togglePolling() {
 
 async function fetchConfig() {
   try {
-    const res = await fetch('/api/config');
+    const res = await dashboardFetch('/api/config');
     const cfg = await res.json();
     dryMode = cfg.general.dry_mode;
     const banner = document.getElementById('dryBanner');
@@ -343,7 +356,7 @@ async function fetchConfig() {
 
 async function pauseWorkflow(id) {
   try {
-    await fetch(`/api/workflows/${encodeURIComponent(id)}/pause`, { method: 'POST' });
+    await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/pause`, { method: 'POST' });
     // State update comes via WebSocket, no need to refetch
   } catch (e) {
     console.error('Failed to pause workflow:', e);
@@ -352,7 +365,7 @@ async function pauseWorkflow(id) {
 
 async function resumeWorkflow(id) {
   try {
-    await fetch(`/api/workflows/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+    await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/resume`, { method: 'POST' });
   } catch (e) {
     console.error('Failed to resume workflow:', e);
   }
@@ -360,7 +373,7 @@ async function resumeWorkflow(id) {
 
 async function retryWorkflow(id) {
   try {
-    await fetch(`/api/workflows/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+    await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/retry`, { method: 'POST' });
     // Clear terminal state for this workflow
     delete terminalState[id];
     // Fetch fresh state since the workflow was replaced
@@ -373,7 +386,7 @@ async function retryWorkflow(id) {
 async function stopWorkflow(id) {
   if (!confirm('Are you sure you want to stop this workflow? The ticket will be unassigned.')) return;
   try {
-    await fetch(`/api/workflows/${encodeURIComponent(id)}/stop`, { method: 'POST' });
+    await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/stop`, { method: 'POST' });
   } catch (e) {
     console.error('Failed to stop workflow:', e);
   }
@@ -381,7 +394,7 @@ async function stopWorkflow(id) {
 
 async function addressPrComments(id) {
   try {
-    const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/address-pr-comments`, { method: 'POST' });
+    const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/address-pr-comments`, { method: 'POST' });
     if (!res.ok) {
       const t = await res.text();
       alert(t || 'Failed to start PR review');
@@ -397,7 +410,7 @@ async function addressPrComments(id) {
 
 async function mergeBaseBranch(id) {
   try {
-    const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/merge-base-branch`, { method: 'POST' });
+    const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/merge-base-branch`, { method: 'POST' });
     if (!res.ok) {
       const t = await res.text();
       alert(t || 'Failed to start merge base branch');
@@ -414,7 +427,7 @@ async function mergeBaseBranch(id) {
 async function deleteWorkflow(id) {
   if (!confirm('Remove this workflow from the dashboard? The Jira ticket will not be updated. The local worktree will be removed if it still exists.')) return;
   try {
-    const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/delete`, { method: 'POST' });
+    const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/delete`, { method: 'POST' });
     if (!res.ok) {
       const t = await res.text();
       alert(t || 'Delete failed');
@@ -431,7 +444,7 @@ async function deleteWorkflow(id) {
 async function markWorkflowDone(id) {
   if (!confirm('Mark this ticket Done in Jira and remove the local worktree? The workflow will leave the dashboard if both succeed.')) return;
   try {
-    const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/mark-done`, { method: 'POST' });
+    const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/mark-done`, { method: 'POST' });
     const text = await res.text();
     if (!res.ok) {
       alert(text || 'Mark as Done failed');
@@ -462,7 +475,7 @@ async function markWorkflowDone(id) {
 
 async function openReportModal(ticketKey) {
   try {
-    const res = await fetch(`/api/workflows/${encodeURIComponent(ticketKey)}`);
+    const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(ticketKey)}`);
     if (!res.ok) return;
     const w = await res.json();
     renderReport(w);
@@ -552,35 +565,35 @@ function renderWorkflowCard(w) {
   let actions = '';
   if (status.label === 'Running') {
     actions = `
-      <button onclick="pauseWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-colors">Pause</button>
-      <button onclick="stopWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">Stop</button>`;
+      <button onclick="pauseWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-yellow-500/10 text-yellow-400 border-yellow-500/20 hover:bg-yellow-500/20">Pause</button>
+      <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
   } else if (status.label === 'Paused') {
     actions = `
-      <button onclick="resumeWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 transition-colors">Resume</button>
-      <button onclick="stopWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">Stop</button>`;
+      <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20">Resume</button>
+      <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
   }
   if (['Error', 'Stopped', 'Completed'].includes(status.label)) {
     actions += `
-      <button onclick="retryWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">Retry</button>`;
+      <button onclick="retryWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-blue-500/10 text-blue-400 border-blue-500/20 hover:bg-blue-500/20">Retry</button>`;
   }
   if (w.can_address_pr_comments) {
     actions += `
-      <button onclick="addressPrComments('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-indigo-500/10 text-indigo-300 border border-indigo-500/25 hover:bg-indigo-500/20 transition-colors">Address PR Comments</button>`;
+      <button onclick="addressPrComments('${w.ticket_key}')" class="workflow-action-btn bg-indigo-500/10 text-indigo-300 border-indigo-500/25 hover:bg-indigo-500/20">Address PR Comments</button>`;
   }
   if (w.can_merge_base) {
     actions += `
-      <button onclick="mergeBaseBranch('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/25 hover:bg-amber-500/20 transition-colors">Merge Base Branch</button>`;
+      <button onclick="mergeBaseBranch('${w.ticket_key}')" class="workflow-action-btn bg-amber-500/10 text-amber-400 border-amber-500/25 hover:bg-amber-500/20">Merge Base Branch</button>`;
   }
   if (w.can_mark_done) {
     actions += `
-      <button onclick="markWorkflowDone('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 transition-colors">Mark as Done</button>`;
+      <button onclick="markWorkflowDone('${w.ticket_key}')" class="workflow-action-btn bg-emerald-500/10 text-emerald-400 border-emerald-500/25 hover:bg-emerald-500/20">Mark as Done</button>`;
   }
   if (w.can_delete) {
     actions += `
-      <button onclick="deleteWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-600/30 text-gray-300 border border-gray-600/50 hover:bg-gray-600/45 transition-colors">Delete</button>`;
+      <button onclick="deleteWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-gray-600/30 text-gray-300 border-gray-600/50 hover:bg-gray-600/45">Delete</button>`;
   }
   actions += `
-    <button onclick="openReportModal('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-700/50 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">Report</button>`;
+    <button onclick="openReportModal('${w.ticket_key}')" class="workflow-action-btn bg-gray-700/50 text-gray-300 border-gray-700 hover:bg-gray-700">Report</button>`;
 
   // Terminal panel for active workflows
   let terminalHtml = '';
@@ -628,7 +641,7 @@ function renderWorkflowCard(w) {
             <div class="progress-bar bg-${status.color}-500 h-1.5 rounded-full transition-all" style="width: ${progress}%"></div>
           </div>
         </div>
-        <div class="flex-shrink-0 flex flex-wrap items-center gap-2">${actions}</div>
+        <div class="workflow-actions-row flex-shrink-0 flex flex-wrap gap-2">${actions}</div>
         ${terminalSlot}
       </div>
     </div>`;
@@ -765,9 +778,18 @@ function escapeHtml(str) {
 // --- Init ---
 
 async function init() {
-  await Promise.all([fetchWorkflowsSilent(), fetchConfig(), fetchPollingStatus()]);
+  // Run workflow fetch first so a single 401 redirects to login before parallel calls.
+  await fetchWorkflowsSilent();
+  await Promise.all([fetchConfig(), fetchPollingStatus()]);
   const pollBtn = document.getElementById('pollingToggleBtn');
   if (pollBtn) pollBtn.addEventListener('click', togglePolling);
+  const logoutBtn = document.getElementById('logoutBtn');
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', async () => {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+      window.location.href = '/login.html';
+    });
+  }
   initialLoadDone = true;
   connectWebSocket();
 }

@@ -3,10 +3,14 @@
 FROM rust:1.85-bookworm AS builder
 
 WORKDIR /app
+# Without this, Cargo hides progress in non-TTY Docker builds — looks hung for many minutes.
+ENV CARGO_TERM_PROGRESS_WHEN=always
+
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
-RUN cargo build --release
+RUN echo "=== cargo build --release (first build often takes 10–20+ minutes) ===" && \
+    cargo build --release
 
 # Stage 2: Runtime
 FROM debian:bookworm-slim AS runtime
