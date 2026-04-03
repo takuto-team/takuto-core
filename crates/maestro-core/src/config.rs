@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -61,6 +61,27 @@ impl Default for AgentConfig {
 
 fn default_agent_step_repeat() -> u8 {
     1
+}
+
+/// Ticket pipeline steps loaded from a standalone TOML file (`[[agent_steps]]` only).
+#[derive(Debug, Deserialize)]
+struct TicketWorkflowStepsFile {
+    #[serde(default)]
+    agent_steps: Vec<AgentStepConfig>,
+}
+
+/// PR review steps loaded from a standalone TOML file (`[[review_agent_steps]]` only).
+#[derive(Debug, Deserialize)]
+struct ReviewWorkflowStepsFile {
+    #[serde(default)]
+    review_agent_steps: Vec<AgentStepConfig>,
+}
+
+/// Merge-base steps loaded from a standalone TOML file (`[[merge_base_agent_steps]]` only).
+#[derive(Debug, Deserialize)]
+struct MergeBaseWorkflowStepsFile {
+    #[serde(default)]
+    merge_base_agent_steps: Vec<AgentStepConfig>,
 }
 
 /// One AI agent session in the ticket workflow (`[[agent_steps]]` in TOML).
@@ -208,11 +229,23 @@ pub struct GeneralConfig {
     pub poll_interval_secs: u64,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_workflows: u32,
+    /// Max workflows that count as **active** for Jira polling (state is not **Done**). `0` means use **`max_concurrent_workflows`**.
+    #[serde(default)]
+    pub max_active_workflows: u32,
     #[serde(default = "default_log_level")]
     pub log_level: String,
     /// Docker image for workflow worker containers. Empty = auto-detect from running Maestro container.
     #[serde(default)]
     pub worker_image: String,
+    /// Load **`[[agent_steps]]`** from this file (relative to the main config directory, or absolute). Empty = use inline **`agent_steps`** in `config.toml`.
+    #[serde(default)]
+    pub ticket_workflow_steps_file: String,
+    /// Load **`[[review_agent_steps]]`** from this file. Empty = use inline **`review_agent_steps`** in `config.toml`.
+    #[serde(default)]
+    pub review_workflow_steps_file: String,
+    /// Load **`[[merge_base_agent_steps]]`** from this file. Empty = use inline **`merge_base_agent_steps`** in `config.toml`.
+    #[serde(default)]
+    pub merge_base_workflow_steps_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -375,14 +408,29 @@ impl Default for NetworkConfig {
     }
 }
 
+impl GeneralConfig {
+    /// Effective cap on **active** workflows (not **Done**) for the Jira poller. **`max_active_workflows == 0`** mirrors **`max_concurrent_workflows`**.
+    pub fn effective_max_active_workflows(&self) -> u32 {
+        if self.max_active_workflows == 0 {
+            self.max_concurrent_workflows
+        } else {
+            self.max_active_workflows
+        }
+    }
+}
+
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             dry_mode: false,
             poll_interval_secs: default_poll_interval(),
             max_concurrent_workflows: default_max_concurrent(),
+            max_active_workflows: 0,
             log_level: default_log_level(),
             worker_image: String::new(),
+            ticket_workflow_steps_file: String::new(),
+            review_workflow_steps_file: String::new(),
+            merge_base_workflow_steps_file: String::new(),
         }
     }
 }
@@ -465,7 +513,73 @@ impl Default for Config {
     }
 }
 
+fn resolve_config_relative_path(config_file_dir: &Path, rel: &str) -> PathBuf {
+    let t = rel.trim();
+    if t.is_empty() {
+        return PathBuf::new();
+    }
+    let p = PathBuf::from(t);
+    if p.is_absolute() {
+        p
+    } else {
+        config_file_dir.join(p)
+    }
+}
+
 impl Config {
+    /// After deserializing `config.toml`, replace step lists from optional per-workflow TOML files.
+    pub fn apply_workflow_step_files(&mut self, config_file_dir: &Path) -> Result<()> {
+        if !self.general.ticket_workflow_steps_file.trim().is_empty() {
+            let p = resolve_config_relative_path(
+                config_file_dir,
+                &self.general.ticket_workflow_steps_file,
+            );
+            if !p.is_file() {
+                return Err(MaestroError::Config(format!(
+                    "[general] ticket_workflow_steps_file is not a file: {}",
+                    p.display()
+                )));
+            }
+            let raw = std::fs::read_to_string(&p)?;
+            let file: TicketWorkflowStepsFile = toml::from_str(&raw)?;
+            self.agent_steps = file.agent_steps;
+        }
+
+        if !self.general.review_workflow_steps_file.trim().is_empty() {
+            let p = resolve_config_relative_path(
+                config_file_dir,
+                &self.general.review_workflow_steps_file,
+            );
+            if !p.is_file() {
+                return Err(MaestroError::Config(format!(
+                    "[general] review_workflow_steps_file is not a file: {}",
+                    p.display()
+                )));
+            }
+            let raw = std::fs::read_to_string(&p)?;
+            let file: ReviewWorkflowStepsFile = toml::from_str(&raw)?;
+            self.review_agent_steps = file.review_agent_steps;
+        }
+
+        if !self.general.merge_base_workflow_steps_file.trim().is_empty() {
+            let p = resolve_config_relative_path(
+                config_file_dir,
+                &self.general.merge_base_workflow_steps_file,
+            );
+            if !p.is_file() {
+                return Err(MaestroError::Config(format!(
+                    "[general] merge_base_workflow_steps_file is not a file: {}",
+                    p.display()
+                )));
+            }
+            let raw = std::fs::read_to_string(&p)?;
+            let file: MergeBaseWorkflowStepsFile = toml::from_str(&raw)?;
+            self.merge_base_agent_steps = file.merge_base_agent_steps;
+        }
+
+        Ok(())
+    }
+
     /// When `agent_steps` is empty, how many times to run the full built-in sequence (see `[claude] address_ticket_passes`).
     /// When `agent_steps` is non-empty, this is `1` — use each step's `repeat` only.
     pub fn agent_sequence_outer_loops(&self) -> u8 {
@@ -518,7 +632,9 @@ impl Config {
         }
 
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        config.apply_workflow_step_files(base)?;
         config.validate()?;
         Ok(config)
     }
@@ -533,6 +649,13 @@ impl Config {
         if self.general.max_concurrent_workflows == 0 {
             return Err(MaestroError::Config(
                 "max_concurrent_workflows must be at least 1".to_string(),
+            ));
+        }
+
+        if self.general.effective_max_active_workflows() < 1 {
+            return Err(MaestroError::Config(
+                "max_active_workflows must be at least 1 when set, or leave 0 to use max_concurrent_workflows"
+                    .to_string(),
             ));
         }
 
@@ -935,5 +1058,57 @@ prompt = "Implement {ticket_summary}"
         assert_eq!(config.agent_steps[0].repeat, 2);
         assert_eq!(config.agent_steps[1].name, "Build");
         assert_eq!(config.agent_steps[1].repeat, 1);
+    }
+
+    #[test]
+    fn test_load_ticket_steps_from_external_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let steps_path = dir.path().join("ticket-steps.toml");
+        std::fs::write(
+            &steps_path,
+            br#"[[agent_steps]]
+name = "From file"
+prompt = "Do {ticket_key}"
+repeat = 1
+"#,
+        )
+        .unwrap();
+
+        let main_path = dir.path().join("config.toml");
+        std::fs::write(
+            &main_path,
+            format!(
+                r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 1
+ticket_workflow_steps_file = "{}"
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+repo_path = "/workspace"
+
+[commands]
+pre_install = []
+
+[web]
+port = 8080
+
+[claude]
+address_ticket_passes = 3
+step_timeout_secs = 600
+"#,
+                steps_path.file_name().unwrap().to_str().unwrap()
+            ),
+        )
+        .unwrap();
+
+        let config = Config::load(&main_path).unwrap();
+        assert_eq!(config.agent_steps.len(), 1);
+        assert_eq!(config.agent_steps[0].name, "From file");
     }
 }

@@ -59,8 +59,18 @@
 [general]
 dry_mode = false
 poll_interval_secs = 60
+# Concurrent install / agent sessions (semaphore across workflows).
 max_concurrent_workflows = 1
+# Max workflows that are not **Done** (paused, stopped, error, in-progress all count). Jira poller
+# will not start new tickets while at this limit. Use **0** to mirror max_concurrent_workflows.
+max_active_workflows = 0
 log_level = "info"
+# Optional: load step lists from standalone TOML files (paths relative to this config file's directory).
+# See repository **workflows/** for examples. When set, inline [[agent_steps]] / [[review_agent_steps]] /
+# [[merge_base_agent_steps]] in this file are ignored for that workflow type.
+# ticket_workflow_steps_file = "workflows/ticket.toml"
+# review_workflow_steps_file = "workflows/review.toml"
+# merge_base_workflow_steps_file = "workflows/merge_base.toml"
 # Docker image for isolated workflow containers. Default: auto-detected from this Maestro instance.
 # worker_image = "maestro:latest"
 

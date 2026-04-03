@@ -45,6 +45,10 @@ pub fn build_router(state: AppState) -> Router {
             "/workflows/{id}/mark-done",
             post(routes::workflows::mark_work_done),
         )
+        .route(
+            "/workflows/{id}/delete",
+            post(routes::workflows::delete_workflow),
+        )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
         .route("/health", get(health))

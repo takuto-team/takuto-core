@@ -1,0 +1,74 @@
+# Main Jira ticket pipeline — loaded via [general] ticket_workflow_steps_file in config.toml
+
+[[agent_steps]]
+name = "Implement ticket"
+prompt = """
+/address-ticket
+"""
+repeat = 1
+
+[[agent_steps]]
+name = "Review Changes"
+prompt = """
+/review-changes
+
+For each finding: re-examine it in the context of the surrounding code and confirm it is a genuine issue, not a false positive or a stylistic preference.
+Address all confirmed findings. For anything you choose to skip, explicitly state what it is and why it does not warrant a change. 
+When done, list what was fixed and what was intentionally left as-is.
+Do not create a PR.
+"""
+repeat = 3
+
+[[agent_steps]]
+name = "Commit changes"
+prompt = """
+Review all uncommitted changes and organize them into logical, meaningful commits.
+For each commit: stage only the relevant files, write a concise conventional commit message (e.g. feat:, fix:, refactor:, chore:), and commit.
+Do not squash unrelated changes into a single commit.
+When done, print a summary of the commits made.
+Do not create a PR.
+"""
+repeat = 1
+
+[[agent_steps]]
+name = "Linting and test"
+prompt = """
+Run npm run lint and fix all reported issues — do not disable rules or add ignore comments unless a rule is genuinely inapplicable, and if so, 
+leave an inline comment explaining why. Re-run lint and confirm it exits clean with zero errors and zero warnings before moving on. 
+Then run npm run test:coverage and review the coverage report. For any uncovered lines, write targeted tests that cover the missing branches
+and edge cases — do not write vacuous tests that hit lines without asserting meaningful behaviour. Re-run coverage after each batch of new tests 
+to confirm the gap is closed. Do not stop until npm run lint reports zero errors and zero warnings AND npm run test:coverage reports 100% 
+coverage across all metrics (lines, branches, functions, statements). If either check regresses at any point, fix it before continuing.
+Once both checks pass cleanly, stage all changes and commit with a message of test: 100% coverage, zero lint warnings.
+Do not create a PR.
+"""
+repeat = 1
+
+[[agent_steps]]
+name = "Update Snapshots"
+prompt = """
+Run `npm run test:visual:update:docker` then commit updated Snapshots.
+Do not create a PR.
+"""
+repeat = 1
+
+[[agent_steps]]
+name = "Run e2e tests"
+prompt = """
+Run `npm run test:e2e`
+
+If any e2e test fails, first check whether the application code on this branch has intentional changes that require the test to be updated — if so, 
+update the test to reflect the new expected behaviour. If the failure is not explained by an intentional change, fix the application code instead. 
+Never update a test to force it to pass if the underlying code is broken. Re-run the full e2e suite after every fix cycle. Repeat until all e2e tests pass.
+If tests are still failing after 10 consecutive run/fix attempts, stop and report: which tests are still failing, what was attempted each round, and your
+assessment of why the issue is not resolving.
+Do not create a PR.
+"""
+repeat = 1
+
+[[agent_steps]]
+name = "Create PR"
+prompt = """
+/create-pr --no-draft
+"""
+repeat = 1

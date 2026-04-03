@@ -411,6 +411,23 @@ async function mergeBaseBranch(id) {
   }
 }
 
+async function deleteWorkflow(id) {
+  if (!confirm('Remove this workflow from the dashboard? The Jira ticket will not be updated. The local worktree will be removed if it still exists.')) return;
+  try {
+    const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/delete`, { method: 'POST' });
+    if (!res.ok) {
+      const t = await res.text();
+      alert(t || 'Delete failed');
+      return;
+    }
+    delete terminalState[id];
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Failed to delete workflow:', e);
+    alert('Failed to delete workflow');
+  }
+}
+
 async function markWorkflowDone(id) {
   if (!confirm('Mark this ticket Done in Jira and remove the local worktree? The workflow will leave the dashboard if both succeed.')) return;
   try {
@@ -557,6 +574,10 @@ function renderWorkflowCard(w) {
   if (w.can_mark_done) {
     actions += `
       <button onclick="markWorkflowDone('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 transition-colors">Mark as Done</button>`;
+  }
+  if (w.can_delete) {
+    actions += `
+      <button onclick="deleteWorkflow('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-600/30 text-gray-300 border border-gray-600/50 hover:bg-gray-600/45 transition-colors">Delete</button>`;
   }
   actions += `
     <button onclick="openReportModal('${w.ticket_key}')" class="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-700/50 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">Report</button>`;

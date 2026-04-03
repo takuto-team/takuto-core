@@ -1,0 +1,10 @@
+# Merge base branch — loaded via [general] merge_base_workflow_steps_file in config.toml
+
+[[merge_base_agent_steps]]
+name = "Merge base branch"
+prompt = """
+/merge-base-branch
+
+Then push with --no-verify option
+"""
+repeat = 1

@@ -222,9 +222,16 @@
             </label>
           </div>
           <div>
-            <label for="maxConcurrent" class="block text-sm font-medium text-gray-300 mb-1.5">Max Concurrent Workflows</label>
-            <input type="number" id="maxConcurrent" min="1" max="10"
+            <label for="maxConcurrent" class="block text-sm font-medium text-gray-300 mb-1.5">Max concurrent heavy steps</label>
+            <input type="number" id="maxConcurrent" min="1" max="50"
               class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600">Semaphore for concurrent install / agent sessions across workflows (see <code class="text-gray-500">max_concurrent_workflows</code> in config)</p>
+          </div>
+          <div>
+            <label for="maxActive" class="block text-sm font-medium text-gray-300 mb-1.5">Max active workflows</label>
+            <input type="number" id="maxActive" min="0" max="100"
+              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600"><code class="text-gray-500">0</code> = same as max concurrent. Counts workflows whose state is not <strong>Done</strong> (paused, stopped, error, and in-progress all count until deleted or completed).</p>
           </div>
           <div>
             <label for="reviewAddressPasses" class="block text-sm font-medium text-gray-300 mb-1.5">PR review passes</label>
@@ -291,6 +298,8 @@
       document.getElementById('cursorModel').value = (cfg.agent && cfg.agent.cursor_model != null && cfg.agent.cursor_model !== '') ? cfg.agent.cursor_model : 'Auto';
       document.getElementById('dryMode').checked = cfg.general.dry_mode;
       document.getElementById('maxConcurrent').value = cfg.general.max_concurrent_workflows;
+      document.getElementById('maxActive').value =
+        cfg.general.max_active_workflows != null ? cfg.general.max_active_workflows : 0;
       document.getElementById('jiraDoneStatus').value =
         cfg.jira && cfg.jira.done_status ? cfg.jira.done_status : 'Done';
       document.getElementById('reviewAddressPasses').value =
@@ -334,17 +343,36 @@
 
     function buildConfigPayload() {
       const rap = parseInt(document.getElementById('reviewAddressPasses').value, 10);
+      const maxAct = parseInt(document.getElementById('maxActive').value, 10);
       return {
         agent_steps: currentConfig && Array.isArray(currentConfig.agent_steps) ? currentConfig.agent_steps : [],
         review_agent_steps:
           currentConfig && Array.isArray(currentConfig.review_agent_steps)
             ? currentConfig.review_agent_steps
             : [],
+        merge_base_agent_steps:
+          currentConfig && Array.isArray(currentConfig.merge_base_agent_steps)
+            ? currentConfig.merge_base_agent_steps
+            : [],
         general: {
           dry_mode: document.getElementById('dryMode').checked,
           poll_interval_secs: parseInt(document.getElementById('pollInterval').value, 10),
           max_concurrent_workflows: parseInt(document.getElementById('maxConcurrent').value, 10),
+          max_active_workflows: Number.isFinite(maxAct) && maxAct >= 0 ? maxAct : 0,
           log_level: currentConfig ? currentConfig.general.log_level : 'info',
+          worker_image: currentConfig && currentConfig.general.worker_image != null ? currentConfig.general.worker_image : '',
+          ticket_workflow_steps_file:
+            currentConfig && currentConfig.general.ticket_workflow_steps_file != null
+              ? currentConfig.general.ticket_workflow_steps_file
+              : '',
+          review_workflow_steps_file:
+            currentConfig && currentConfig.general.review_workflow_steps_file != null
+              ? currentConfig.general.review_workflow_steps_file
+              : '',
+          merge_base_workflow_steps_file:
+            currentConfig && currentConfig.general.merge_base_workflow_steps_file != null
+              ? currentConfig.general.merge_base_workflow_steps_file
+              : '',
         },
         jira: {
           project_keys: getProjectKeys(),

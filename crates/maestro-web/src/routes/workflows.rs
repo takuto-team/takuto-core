@@ -44,6 +44,8 @@ pub struct WorkflowSummary {
     pub can_merge_base: bool,
     /// **Mark as Done** is allowed (workflow state is **Done**).
     pub can_mark_done: bool,
+    /// **Delete** is allowed when the workflow is not **running** (`WorkflowState::is_active` is false).
+    pub can_delete: bool,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -92,6 +94,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 can_address_pr_comments,
                 can_merge_base,
                 can_mark_done,
+                can_delete: !w.state.is_active(),
             }
         })
         .collect();
@@ -125,6 +128,7 @@ pub async fn get_workflow(
                 can_address_pr_comments,
                 can_merge_base,
                 can_mark_done,
+                can_delete: !w.state.is_active(),
             })
         })
         .ok_or(StatusCode::NOT_FOUND)
@@ -225,5 +229,18 @@ pub async fn mark_work_done(
         .mark_work_done(&id)
         .await
         .map(Json)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+/// Remove workflow from the map (not **running**), best-effort worktree cleanup, no Jira changes.
+pub async fn delete_workflow(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .engine
+        .delete_workflow(&id)
+        .await
+        .map(|()| StatusCode::OK)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
 }

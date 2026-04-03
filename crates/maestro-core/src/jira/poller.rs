@@ -79,29 +79,29 @@ impl JiraPoller {
             return Ok(());
         }
 
-        let max_concurrent = config.general.max_concurrent_workflows as usize;
-        let active_count = self.engine.concurrency_slots_in_use().await;
+        let max_active = config.general.effective_max_active_workflows() as usize;
+        let active_count = self.engine.non_done_workflow_count().await;
         let dry_mode = config.general.dry_mode;
 
         info!(
             projects = ?config.jira.project_keys,
             item_types = ?config.jira.item_types,
             dry_mode = dry_mode,
-            active_workflows = active_count,
-            max_concurrent = max_concurrent,
+            active_non_done_workflows = active_count,
+            max_active_workflows = max_active,
             "Polling Jira for tickets"
         );
 
-        if active_count >= max_concurrent {
+        if active_count >= max_active {
             info!(
                 active = active_count,
-                max = max_concurrent,
-                "At max concurrent workflows, skipping poll"
+                max = max_active,
+                "At max active workflows (non-Done), skipping poll"
             );
             return Ok(());
         }
 
-        let slots_available = max_concurrent - active_count;
+        let slots_available = max_active - active_count;
         let repo_path = PathBuf::from(&config.git.repo_path);
         let project_keys = config.jira.project_keys.clone();
         let item_types = config.jira.item_types.clone();

@@ -284,6 +284,96 @@ impl WorkflowEngine {
             .count()
     }
 
+    /// Count workflows that are still **active** for `max_active_workflows` (state is not **Done**).
+    pub async fn non_done_workflow_count(&self) -> usize {
+        self.workflows
+            .read()
+            .await
+            .values()
+            .filter(|w| !matches!(w.state, WorkflowState::Done))
+            .count()
+    }
+
+    /// Rewrite `.maestro/workflow_snapshot.json` from the current in-memory map (best-effort).
+    async fn sync_workflow_snapshot_from_map(&self) -> Result<()> {
+        let repo_path = {
+            let c = self.config.read().await;
+            PathBuf::from(&c.git.repo_path)
+        };
+
+        let records: Vec<PersistedWorkflowRecord> = {
+            let map = self.workflows.read().await;
+            let mut v: Vec<_> = map
+                .values()
+                .filter(|w| !matches!(w.state, WorkflowState::Stopped | WorkflowState::Error { .. }))
+                .map(workflow_to_persisted_record)
+                .collect();
+            v.sort_by_key(|r| r.started_at);
+            v
+        };
+
+        if records.is_empty() {
+            let _ = remove_workflow_snapshot(&repo_path);
+        } else {
+            write_workflow_snapshot(&repo_path, &records)?;
+        }
+        Ok(())
+    }
+
+    /// Remove a workflow from the dashboard when it is not **running** (see [`WorkflowState::is_active`]).
+    /// Best-effort worktree removal; no Jira transitions. Cancels the driver token if a paused task is still attached.
+    pub async fn delete_workflow(&self, ticket_key: &str) -> Result<()> {
+        let (worktree_path, cancel_token) = {
+            let map = self.workflows.read().await;
+            let w = map
+                .get(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+            if w.state.is_active() {
+                return Err(MaestroError::Config(format!(
+                    "Cannot delete workflow while it is running (current: {})",
+                    w.state
+                )));
+            }
+            (w.worktree_path.clone(), w.cancel_token.clone())
+        };
+
+        cancel_token.cancel();
+        ContainerRunner::cleanup_for_ticket(ticket_key).await;
+
+        if let Some(ref path) = worktree_path {
+            if path.exists() {
+                if let Err(e) = self.actions.remove_worktree(path).await {
+                    warn!(
+                        ticket = %ticket_key,
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to remove worktree on delete (workflow row still removed)"
+                    );
+                }
+            }
+        }
+
+        self.workflows.write().await.remove(ticket_key);
+
+        if let Err(e) = self.sync_workflow_snapshot_from_map().await {
+            warn!(ticket = %ticket_key, error = %e, "Failed to sync workflow snapshot after delete");
+        }
+
+        self.broadcast_event(WorkflowEvent {
+            event_type: "workflow_removed".to_string(),
+            workflow_id: String::new(),
+            ticket_key: ticket_key.to_string(),
+            state: String::new(),
+            timestamp: Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+        });
+
+        Ok(())
+    }
+
     /// Write `.maestro/workflow_snapshot.json` and cancel drivers so processes stop, without Jira unassign / **Stopped** (for container restart).
     pub async fn persist_interrupt_for_restart(&self) -> Result<()> {
         self.suppress_cancelled_as_error.store(true, Ordering::SeqCst);
