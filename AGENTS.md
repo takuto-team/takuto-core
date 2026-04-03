@@ -145,7 +145,7 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/workflows` | List summaries (includes `id` = workflow UUID and `ticket_key`) |
+| GET | `/api/workflows` | List summaries (includes `id` = workflow UUID and `ticket_key`); sorted by **`started_at`** ascending (oldest first, same stable order as the dashboard grid) |
 | GET | `/api/workflows/{id}` | **Path segment is the map key: Jira ticket key**, not the UUID `id` field |
 | POST | `/api/workflows/{id}/pause` | Same: ticket key |
 | POST | `/api/workflows/{id}/resume` | |

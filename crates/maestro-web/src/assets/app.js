@@ -598,11 +598,14 @@ function renderWorkflows() {
   const empty = document.getElementById('emptyState');
   const list = Object.values(workflows);
 
+  // Stable order: by `started_at` ascending (oldest card first, newest / just-started last).
+  // Do not sort by status — pausing/stopping/resuming must not move cards.
   list.sort((a, b) => {
-    const order = { Running: 0, Paused: 1, Error: 2, Completed: 3, Stopped: 4 };
-    const sa = getStatusInfo(a.state).label;
-    const sb = getStatusInfo(b.state).label;
-    return (order[sa] ?? 5) - (order[sb] ?? 5);
+    const ta = a.started_at || '';
+    const tb = b.started_at || '';
+    const c = ta.localeCompare(tb);
+    if (c !== 0) return c;
+    return (a.ticket_key || '').localeCompare(b.ticket_key || '');
   });
 
   if (list.length === 0) {

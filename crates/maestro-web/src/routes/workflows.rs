@@ -95,8 +95,8 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
             }
         })
         .collect();
-    // Newest first
-    summaries.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    // Oldest first — matches dashboard stable card order (new workflows last).
+    summaries.sort_by(|a, b| a.started_at.cmp(&b.started_at));
     Json(summaries)
 }
 
