@@ -556,18 +556,22 @@ function renderWorkflowCard(w) {
       }).join('');
     }
     terminalHtml = `
-      <div class="terminal-panel">
+      <div class="terminal-panel workflow-card-terminal">
         <div class="terminal-header${headerCompletedClass}">
           <span id="terminal-step-${w.ticket_key}">${escapeHtml(stepDisplay)}</span>
         </div>
-        <div class="terminal-body" id="terminal-body-${w.ticket_key}">${linesHtml}</div>
+        <div class="terminal-body workflow-card-terminal-body" id="terminal-body-${w.ticket_key}">${linesHtml}</div>
       </div>`;
   }
 
+  const terminalSlot = terminalHtml
+    ? `<div class="flex flex-1 min-h-0 flex-col">${terminalHtml}</div>`
+    : '<div class="flex-1 min-h-0" aria-hidden="true"></div>';
+
   return `
-    <div id="card-${w.ticket_key}" class="bg-gray-900 border ${borderClass} rounded-xl overflow-hidden transition-colors ${opacityClass}">
-      <div class="p-5">
-        <div class="flex items-start justify-between mb-3">
+    <div id="card-${w.ticket_key}" class="workflow-card bg-gray-900 border ${borderClass} rounded-xl overflow-hidden transition-colors ${opacityClass} h-[600px] flex flex-col">
+      <div class="flex flex-col flex-1 min-h-0 p-5 gap-4">
+        <div class="flex-shrink-0 flex items-start justify-between">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
               <span class="font-mono text-sm text-${status.color}-400 font-medium">${w.ticket_key}</span>
@@ -576,15 +580,15 @@ function renderWorkflowCard(w) {
             <h3 class="text-sm font-medium text-gray-200 truncate">${escapeHtml(w.ticket_summary)}</h3>
           </div>
         </div>
-        <div class="bg-gray-800/50 rounded-lg px-3 py-2.5 mb-4">
+        <div class="flex-shrink-0 bg-gray-800/50 rounded-lg px-3 py-2.5">
           <div class="text-xs text-gray-500 mb-1">${stepLabel}</div>
           <div id="step-display-${w.ticket_key}" class="text-sm font-mono text-gray-300">${escapeHtml(stateDisplay)}</div>
           <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
             <div class="progress-bar bg-${status.color}-500 h-1.5 rounded-full transition-all" style="width: ${progress}%"></div>
           </div>
         </div>
-        <div class="flex flex-wrap items-center gap-2">${actions}</div>
-        ${terminalHtml}
+        <div class="flex-shrink-0 flex flex-wrap items-center gap-2">${actions}</div>
+        ${terminalSlot}
       </div>
     </div>`;
 }
