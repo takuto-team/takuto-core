@@ -1,0 +1,17 @@
+# Example: main Jira ticket pipeline (`[[agent_steps]]`).
+# Copy to `ticket.toml` (gitignored) and set in config.toml:
+#   [general]
+#   ticket_workflow_steps_file = "workflows/ticket.toml"
+#
+# Placeholders: ticket_key, ticket_summary, ticket_description, ticket_type,
+# acceptance_criteria, ticket_context
+
+[[agent_steps]]
+name = "Implement ticket"
+prompt = "Implement this Jira ticket following the project's conventions.\n\nTicket context:\n{ticket_context}\n\nAdd or update tests as appropriate."
+repeat = 1
+
+[[agent_steps]]
+name = "Review changes"
+prompt = "Review all uncommitted changes for correctness, security, and code style. Fix any issues."
+repeat = 1

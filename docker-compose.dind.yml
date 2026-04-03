@@ -33,6 +33,7 @@ services:
       - playwright-cache:/shared-auth/playwright-cache
       # Config — workers need config.toml for egress rules (extra_egress_hosts, allow_all_https)
       - ./config.toml:/etc/maestro/config.toml:ro
+      - ./workflows:/etc/maestro/workflows:ro
       - ./maestro.env:/etc/maestro/env:ro
     healthcheck:
       test: ["CMD", "docker", "info"]

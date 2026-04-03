@@ -22,6 +22,9 @@ services:
     volumes:
       # Configuration file
       - ./config.toml:/etc/maestro/config.toml:ro
+      # External workflow steps: copy workflows/*.example.toml → workflows/ticket.toml (etc.) on the host;
+      # config paths are relative to /etc/maestro/ (next to mounted config.toml).
+      - ./workflows:/etc/maestro/workflows:ro
       # Optional gitignored ./skills — merged into ~/.claude/skills and ~/.cursor/skills* on start (overrides same name on volumes).
       - ./skills:/opt/maestro/project-skills-host:ro
       # Custom environment variables (optional)

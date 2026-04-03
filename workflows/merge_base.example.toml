@@ -1,0 +1,11 @@
+# Example: merge base branch workflow (`[[merge_base_agent_steps]]`).
+# Copy to `merge_base.toml` (gitignored) and set:
+#   [general]
+#   merge_base_workflow_steps_file = "workflows/merge_base.toml"
+#
+# Placeholders: base_branch, pr_url, ticket_key, ticket_summary, etc.
+
+[[merge_base_agent_steps]]
+name = "Merge base branch"
+prompt = "Fetch the latest base branch (`{base_branch}`) from remote and merge it into the current branch.\nResolve any conflicts — prefer the current branch's changes for new code, but keep the base branch's changes for configuration and dependency files unless they conflict with this ticket's work.\nRun lint and tests after the merge. Commit the merge and push."
+repeat = 1

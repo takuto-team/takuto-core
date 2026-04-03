@@ -66,8 +66,8 @@ max_concurrent_workflows = 1
 max_active_workflows = 0
 log_level = "info"
 # Optional: load step lists from standalone TOML files (paths relative to this config file's directory).
-# See repository **workflows/** for examples. When set, inline [[agent_steps]] / [[review_agent_steps]] /
-# [[merge_base_agent_steps]] in this file are ignored for that workflow type.
+# Copy **workflows/*.example.toml** → **workflows/ticket.toml** (etc.); real **workflows/*.toml** are gitignored.
+# When set, inline [[agent_steps]] / [[review_agent_steps]] / [[merge_base_agent_steps]] in this file are ignored.
 # ticket_workflow_steps_file = "workflows/ticket.toml"
 # review_workflow_steps_file = "workflows/review.toml"
 # merge_base_workflow_steps_file = "workflows/merge_base.toml"

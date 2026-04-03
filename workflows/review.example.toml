@@ -1,0 +1,11 @@
+# Example: PR review loop after main flow is Done (`[[review_agent_steps]]`).
+# Copy to `review.toml` (gitignored) and set:
+#   [general]
+#   review_workflow_steps_file = "workflows/review.toml"
+#
+# Placeholders: pr_url, plus the same ticket fields as ticket steps.
+
+[[review_agent_steps]]
+name = "Address PR feedback"
+prompt = "Pull request URL: {pr_url}\n\nTicket context:\n{ticket_context}\n\nUse GitHub tooling (e.g. `gh pr view`, `gh api` for review comments) to find unresolved PR feedback. Address each item with code changes, commit, and push updates to the PR branch."
+repeat = 1
