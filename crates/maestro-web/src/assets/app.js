@@ -1,6 +1,8 @@
 // Maestro Dashboard Application
 
 let workflows = {};
+/** @type {string[]} Stable grid order (ticket keys). New workflows append at end; pause/stop/refetch must not reshuffle. */
+let workflowOrderKeys = [];
 let terminalState = {}; // { [ticket_key]: { stepName: string, lines: OutputLine[], completed: bool } }
 let ws = null;
 let wsReconnectTimer = null;
@@ -71,6 +73,7 @@ function handleWorkflowEvent(evt) {
   if (eventType === 'workflow_removed') {
     delete workflows[evt.ticket_key];
     delete terminalState[evt.ticket_key];
+    workflowOrderKeys = workflowOrderKeys.filter(k => k !== evt.ticket_key);
     renderWorkflows();
     updateCounts(Object.values(workflows));
     return;
@@ -226,14 +229,31 @@ function updateCardState(wf) {
 
 // --- API ---
 
+/** Merge API list into `workflows` and update `workflowOrderKeys` without re-sorting existing cards. */
+function ingestWorkflowList(list) {
+  const next = {};
+  for (const w of list) {
+    next[w.ticket_key] = w;
+  }
+  const keysInApi = new Set(list.map(w => w.ticket_key));
+  workflowOrderKeys = workflowOrderKeys.filter(k => keysInApi.has(k));
+  const inOrder = new Set(workflowOrderKeys);
+  for (const w of list) {
+    if (!inOrder.has(w.ticket_key)) {
+      workflowOrderKeys.push(w.ticket_key);
+      inOrder.add(w.ticket_key);
+    }
+  }
+  workflows = next;
+}
+
 // Silent fetch — doesn't cause a visual flash
 async function fetchWorkflowsSilent() {
   try {
     const res = await fetch('/api/workflows');
     const list = await res.json();
-    workflows = {};
+    ingestWorkflowList(list);
     list.forEach(w => {
-      workflows[w.ticket_key] = w;
       // Populate terminal state from API data if not already set by WebSocket.
       // This ensures terminal output is visible on page load/reload.
       if (w.terminal_lines && w.terminal_lines.length > 0 && !terminalState[w.ticket_key]) {
@@ -565,12 +585,12 @@ function renderWorkflowCard(w) {
   }
 
   const terminalSlot = terminalHtml
-    ? `<div class="flex flex-1 min-h-0 flex-col">${terminalHtml}</div>`
-    : '<div class="flex-1 min-h-0" aria-hidden="true"></div>';
+    ? `<div class="workflow-card-terminal-slot">${terminalHtml}</div>`
+    : '<div class="workflow-card-terminal-placeholder" aria-hidden="true"></div>';
 
   return `
-    <div id="card-${w.ticket_key}" class="workflow-card bg-gray-900 border ${borderClass} rounded-xl overflow-hidden transition-colors ${opacityClass} h-[600px] flex flex-col">
-      <div class="flex flex-col flex-1 min-h-0 p-5 gap-4">
+    <div id="card-${w.ticket_key}" class="workflow-card bg-gray-900 border ${borderClass} rounded-xl overflow-hidden transition-colors ${opacityClass}">
+      <div class="workflow-card-body">
         <div class="flex-shrink-0 flex items-start justify-between">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
@@ -596,17 +616,7 @@ function renderWorkflowCard(w) {
 function renderWorkflows() {
   const grid = document.getElementById('workflowGrid');
   const empty = document.getElementById('emptyState');
-  const list = Object.values(workflows);
-
-  // Stable order: by `started_at` ascending (oldest card first, newest / just-started last).
-  // Do not sort by status — pausing/stopping/resuming must not move cards.
-  list.sort((a, b) => {
-    const ta = a.started_at || '';
-    const tb = b.started_at || '';
-    const c = ta.localeCompare(tb);
-    if (c !== 0) return c;
-    return (a.ticket_key || '').localeCompare(b.ticket_key || '');
-  });
+  const list = workflowOrderKeys.map(k => workflows[k]).filter(w => w != null);
 
   if (list.length === 0) {
     grid.innerHTML = '';

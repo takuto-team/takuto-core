@@ -119,6 +119,8 @@ The image also installs **mise** (apt). **`process::worktree_has_mise_config`** 
 
 Raw stdout lines are turned into short lines for the web UI via **`workflow/stream_humanize.rs`**: **`humanize_agent_stream_line`** dispatches on provider. Cursor stream-json events include **assistant** text, **`tool_call` started** (e.g. read/write paths), and **result** — so operators still see **live progress** similar to Claude. (Cursor’s docs note **thinking** events are suppressed in print mode; internal chain-of-thought is not shown, but tool use and assistant text are.)
 
+The **index** dashboard (`crates/maestro-web/src/assets/app.js`, **`styles.css`**) renders each workflow card at a **fixed height** (600px in CSS so layout does not depend on Tailwind JIT seeing dynamically injected class names). The grid keeps a **stable ticket order** across refetches and full re-renders (pause/stop/complete): keys are **not** re-sorted by state; **new** workflows **append** at the end when they first appear in **`GET /api/workflows`**.
+
 ### Prompts
 
 Templates live in **`[[agent_steps]]`** (`name`, **`prompt`**, **`repeat`**) and in **`[[review_agent_steps]]`** for the post-**Done** PR loop (same fields). Default steps use **generic natural-language** prompts (no slash-commands); teams with Claude skills can still put **`/address-ticket`** or **`/review-changes`** in a template. Placeholders: **`ticket_key`**, **`ticket_summary`**, **`ticket_description`**, **`ticket_type`**, **`acceptance_criteria`**, **`ticket_context`**, and **`pr_url`** (review workflow). Unknown **`{placeholders}`** are left unchanged.
@@ -145,7 +147,7 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/workflows` | List summaries (includes `id` = workflow UUID and `ticket_key`); sorted by **`started_at`** ascending (oldest first, same stable order as the dashboard grid) |
+| GET | `/api/workflows` | List summaries (includes `id` = workflow UUID and `ticket_key`); sorted by **`started_at`** ascending (oldest first — matches **first-load** dashboard order; the UI then **preserves** that order on updates and only **appends** new keys) |
 | GET | `/api/workflows/{id}` | **Path segment is the map key: Jira ticket key**, not the UUID `id` field |
 | POST | `/api/workflows/{id}/pause` | Same: ticket key |
 | POST | `/api/workflows/{id}/resume` | |
