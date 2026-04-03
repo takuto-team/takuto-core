@@ -61,8 +61,8 @@ dry_mode = false
 poll_interval_secs = 60
 # Concurrent install / agent sessions (semaphore across workflows).
 max_concurrent_workflows = 1
-# Max workflows that are not **Done** (paused, stopped, error, in-progress all count). Jira poller
-# will not start new tickets while at this limit. Use **0** to mirror max_concurrent_workflows.
+# Max workflows still listed on the dashboard (every visible row, including **Done**, paused, stopped, error).
+# Jira poller will not start new tickets while at this limit. Use **0** to mirror max_concurrent_workflows.
 max_active_workflows = 0
 log_level = "info"
 # Optional: load step lists from standalone TOML files (paths relative to this config file's directory).

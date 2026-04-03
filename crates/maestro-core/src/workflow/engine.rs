@@ -284,14 +284,9 @@ impl WorkflowEngine {
             .count()
     }
 
-    /// Count workflows that are still **active** for `max_active_workflows` (state is not **Done**).
-    pub async fn non_done_workflow_count(&self) -> usize {
-        self.workflows
-            .read()
-            .await
-            .values()
-            .filter(|w| !matches!(w.state, WorkflowState::Done))
-            .count()
+    /// Count workflows still on the dashboard (every row in the map), including **Done**, **Paused**, **Stopped**, **Error**, and in-progress — until **Mark as Done** or **Delete** removes the row.
+    pub async fn dashboard_workflow_count(&self) -> usize {
+        self.workflows.read().await.len()
     }
 
     /// Rewrite `.maestro/workflow_snapshot.json` from the current in-memory map (best-effort).

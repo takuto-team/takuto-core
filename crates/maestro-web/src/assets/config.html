@@ -231,7 +231,7 @@
             <label for="maxActive" class="block text-sm font-medium text-gray-300 mb-1.5">Max active workflows</label>
             <input type="number" id="maxActive" min="0" max="100"
               class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600"><code class="text-gray-500">0</code> = same as max concurrent. Counts workflows whose state is not <strong>Done</strong> (paused, stopped, error, and in-progress all count until deleted or completed).</p>
+            <p class="mt-1.5 text-xs text-gray-600"><code class="text-gray-500">0</code> = same as max concurrent. Counts every row still on the dashboard (including <strong>Done</strong>, paused, stopped, and error) until <strong>Mark as Done</strong> or <strong>Delete</strong> removes it.</p>
           </div>
           <div>
             <label for="reviewAddressPasses" class="block text-sm font-medium text-gray-300 mb-1.5">PR review passes</label>

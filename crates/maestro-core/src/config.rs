@@ -229,7 +229,7 @@ pub struct GeneralConfig {
     pub poll_interval_secs: u64,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_workflows: u32,
-    /// Max workflows that count as **active** for Jira polling (state is not **Done**). `0` means use **`max_concurrent_workflows`**.
+    /// Max **visible** workflows on the dashboard (rows still in the map: **Done**, paused, stopped, error, in-progress all count). `0` means use **`max_concurrent_workflows`**.
     #[serde(default)]
     pub max_active_workflows: u32,
     #[serde(default = "default_log_level")]
@@ -409,7 +409,7 @@ impl Default for NetworkConfig {
 }
 
 impl GeneralConfig {
-    /// Effective cap on **active** workflows (not **Done**) for the Jira poller. **`max_active_workflows == 0`** mirrors **`max_concurrent_workflows`**.
+    /// Effective cap on **visible** dashboard workflows for the Jira poller. **`max_active_workflows == 0`** mirrors **`max_concurrent_workflows`**.
     pub fn effective_max_active_workflows(&self) -> u32 {
         if self.max_active_workflows == 0 {
             self.max_concurrent_workflows
