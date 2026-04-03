@@ -1340,6 +1340,7 @@ async fn run_merge_base_steps(
         agent_run_semaphore.clone(),
         container_runner.as_ref(),
         &prior_steps,
+        false,
     )
     .await?;
 
@@ -1356,6 +1357,8 @@ async fn run_merge_base_steps(
     Ok(())
 }
 
+/// `apply_prior_success_skip`: enabled for the main **AddressingTicket** flow (resume after restart);
+/// disabled for **PR review** and **merge-base** so each dashboard action runs the full step list.
 #[allow(clippy::too_many_arguments)]
 async fn run_agent_step_sequence(
     ticket_key: &str,
@@ -1376,6 +1379,9 @@ async fn run_agent_step_sequence(
     agent_run_semaphore: Arc<Semaphore>,
     container_runner: Option<&ContainerRunner>,
     prior_steps_log: &[StepLog],
+    // If true (main ticket flow): skip agent steps already Success in prior_steps_log (restart resume).
+    // If false (PR review / merge-base): always run — dashboard may trigger the flow repeatedly.
+    apply_prior_success_skip: bool,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = None;
@@ -1405,8 +1411,10 @@ async fn run_agent_step_sequence(
                     AgentRunPhase::MergeBase => format!("[Merge base] {step_label_core}"),
                 };
 
-                // Skip steps that already succeeded in a prior run (resume after restart).
-                if step_already_succeeded(prior_steps_log, &step_label) {
+                // Skip steps that already succeeded in a prior run (main flow only — resume after restart).
+                if apply_prior_success_skip
+                    && step_already_succeeded(prior_steps_log, &step_label)
+                {
                     info!(ticket = %ticket_key, step = %step_label, "Skipping agent step — succeeded in prior run");
                     let mut skip_log = StepLog::new(step_label.clone());
                     skip_log.output.push("Skipped (succeeded in prior run)".to_string());
@@ -1743,7 +1751,8 @@ async fn run_pr_review_steps(
         .map(|w| w.steps_log.len())
         .unwrap_or(0);
 
-    // PR review: use prior steps_log for resume skip (if any).
+    // PR review: do not skip steps that succeeded on an earlier dashboard run — operators may re-run
+    // **Address PR comments** arbitrarily. (`prior_steps_log` is still passed for a uniform API; skips are off.)
     let pr_prior_steps: Vec<StepLog> = {
         let wf = workflows.read().await;
         wf.get(ticket_key)
@@ -1769,6 +1778,7 @@ async fn run_pr_review_steps(
         agent_run_semaphore.clone(),
         container_runner.as_ref(),
         &pr_prior_steps,
+        false,
     )
     .await?;
 
@@ -2293,6 +2303,7 @@ async fn run_workflow_steps(
         agent_run_semaphore.clone(),
         container_runner.as_ref(),
         &prior_steps_log,
+        true,
     )
     .await?;
 
