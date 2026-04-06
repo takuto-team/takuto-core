@@ -544,9 +544,18 @@ function statusBadgeHtml(status) {
   return `<span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-${color}-500/15 text-${color}-400 border border-${color}-500/20">${iconSvg} ${label}</span>`;
 }
 
+/** Non-empty trimmed PR URL from API, or empty string. */
+function workflowPrUrl(w) {
+  const u = w.pr_url;
+  if (typeof u !== 'string') return '';
+  const t = u.trim();
+  return t || '';
+}
+
 function renderWorkflowCard(w) {
   const status = getStatusInfo(w.state);
   const progress = getProgressPercent(w.state);
+  const prUrl = workflowPrUrl(w);
   const borderClass = status.color === 'red' ? 'border-red-500/30 hover:border-red-500/40' :
                       status.color === 'yellow' ? 'border-yellow-500/30 hover:border-yellow-500/40' :
                       'border-gray-800 hover:border-gray-700';
@@ -622,10 +631,14 @@ function renderWorkflowCard(w) {
     ? `<div class="workflow-card-terminal-slot">${terminalHtml}</div>`
     : '<div class="workflow-card-terminal-placeholder" aria-hidden="true"></div>';
 
+  const showPrHtml = prUrl
+    ? `<a href="${escapeAttr(prUrl)}" target="_blank" rel="noopener noreferrer" class="workflow-show-pr-btn">Show PR</a>`
+    : '';
+
   return `
     <div id="card-${w.ticket_key}" class="workflow-card bg-gray-900 border ${borderClass} rounded-xl overflow-hidden transition-colors ${opacityClass}">
       <div class="workflow-card-body">
-        <div class="flex-shrink-0 flex items-start justify-between">
+        <div class="flex-shrink-0 flex items-start justify-between gap-3">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
               <span class="font-mono text-sm text-${status.color}-400 font-medium">${w.ticket_key}</span>
@@ -633,6 +646,7 @@ function renderWorkflowCard(w) {
             </div>
             <h3 class="text-sm font-medium text-gray-200 truncate">${escapeHtml(w.ticket_summary)}</h3>
           </div>
+          ${showPrHtml ? `<div class="workflow-card-header-actions flex-shrink-0 pt-0.5">${showPrHtml}</div>` : ''}
         </div>
         <div class="flex-shrink-0 bg-gray-800/50 rounded-lg px-3 py-2.5">
           <div class="text-xs text-gray-500 mb-1">${stepLabel}</div>
@@ -773,6 +787,15 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+/** Escape for double-quoted HTML attributes (e.g. `href`). */
+function escapeAttr(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;');
 }
 
 // --- Init ---
