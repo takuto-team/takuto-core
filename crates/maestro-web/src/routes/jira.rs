@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::Serialize;
 
-use maestro_core::jira::client::JiraClient;
+use maestro_core::jira::client::{JiraClient, TicketDescriptionPreview};
 
 use crate::state::AppState;
 
@@ -47,4 +47,38 @@ pub async fn list_todo_tickets_manual(
         .collect();
 
     Ok(Json(rows))
+}
+
+/// **Summary** and **description** for the manual-start detail modal (`description_markdown`: plain string or ADF → Markdown).
+pub async fn get_ticket_preview(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> Result<Json<TicketDescriptionPreview>, (StatusCode, String)> {
+    let config = state.config.read().await;
+    if config.jira.project_keys.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "No Jira project keys configured".to_string(),
+        ));
+    }
+    let repo_path = PathBuf::from(&config.git.repo_path);
+    let project_keys = config.jira.project_keys.clone();
+    let acli_extras = config.jira.acli_extra_argv_prefixes();
+    drop(config);
+
+    let client = JiraClient::new(repo_path, acli_extras);
+    let preview = client
+        .get_ticket_description_preview(&key, &project_keys)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            let code = if msg.contains("not in configured") {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
+            (code, msg)
+        })?;
+
+    Ok(Json(preview))
 }

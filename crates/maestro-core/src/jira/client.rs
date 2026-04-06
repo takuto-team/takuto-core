@@ -25,6 +25,14 @@ pub struct LinkedItem {
     pub link_type: String,
 }
 
+/// Dashboard manual-start detail modal: Jira description as Markdown (ADF converted when needed).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketDescriptionPreview {
+    pub key: String,
+    pub summary: String,
+    pub description_markdown: String,
+}
+
 pub struct JiraClient {
     pub repo_path: std::path::PathBuf,
     acli_extra_prefixes: Vec<Vec<String>>,
@@ -179,6 +187,66 @@ impl JiraClient {
         dedupe_tickets_preserve_order(&mut tickets);
         tickets.retain(|t| !t.item_type.eq_ignore_ascii_case("Epic"));
         Ok(tickets)
+    }
+
+    /// Fetch **summary** and **description** for the manual-start preview modal (no linked issues).
+    pub async fn get_ticket_description_preview(
+        &self,
+        key: &str,
+        project_keys: &[String],
+    ) -> Result<TicketDescriptionPreview> {
+        let project = key.split('-').next().unwrap_or("").trim();
+        if project.is_empty() || !project_keys.iter().any(|p| p.trim() == project) {
+            return Err(MaestroError::Jira(format!(
+                "Ticket {key} is not in configured project_keys"
+            )));
+        }
+
+        let output = self
+            .acli(&[
+                "jira",
+                "workitem",
+                "view",
+                key,
+                "--json",
+                "--fields",
+                "key,summary,description",
+            ])
+            .await?;
+
+        if !output.success() {
+            return Err(MaestroError::Jira(format!(
+                "Failed to load ticket {key}: {}",
+                output.stderr
+            )));
+        }
+
+        let value: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|e| {
+            MaestroError::Jira(format!("Failed to parse ticket JSON for {key}: {e}"))
+        })?;
+
+        let fields = value.get("fields").unwrap_or(&value);
+        let k = value
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or(key)
+            .to_string();
+        let summary = fields
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let desc_val = fields
+            .get("description")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let description_markdown = super::adf_markdown::jira_description_to_markdown(&desc_val);
+
+        Ok(TicketDescriptionPreview {
+            key: k,
+            summary,
+            description_markdown,
+        })
     }
 
     pub async fn get_ticket_details(

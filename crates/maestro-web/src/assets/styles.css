@@ -323,3 +323,118 @@ body { font-family: 'Inter', sans-serif; }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* Stacked ticket preview: 1280px max or viewport minus 12px horizontal margin */
+.manual-ticket-detail-panel {
+  width: min(1280px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  box-sizing: border-box;
+}
+
+.manual-ticket-detail-prose {
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: rgb(209, 213, 219);
+  word-wrap: break-word;
+}
+.manual-ticket-detail-prose h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: rgb(243, 244, 246);
+  margin: 1.25rem 0 0.5rem;
+}
+.manual-ticket-detail-prose h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: rgb(243, 244, 246);
+  margin: 1.1rem 0 0.45rem;
+}
+.manual-ticket-detail-prose h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: rgb(229, 231, 235);
+  margin: 1rem 0 0.4rem;
+}
+.manual-ticket-detail-prose h4,
+.manual-ticket-detail-prose h5,
+.manual-ticket-detail-prose h6 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: rgb(229, 231, 235);
+  margin: 0.85rem 0 0.35rem;
+}
+.manual-ticket-detail-prose p {
+  margin: 0.5rem 0;
+}
+.manual-ticket-detail-prose ul,
+.manual-ticket-detail-prose ol {
+  margin: 0.5rem 0;
+  padding-left: 1.35rem;
+}
+.manual-ticket-detail-prose li {
+  margin: 0.25rem 0;
+}
+.manual-ticket-detail-prose a {
+  color: rgb(96, 165, 250);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.manual-ticket-detail-prose a:hover {
+  color: rgb(147, 197, 253);
+}
+.manual-ticket-detail-prose code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.88em;
+  background: rgba(55, 65, 81, 0.65);
+  padding: 0.12rem 0.35rem;
+  border-radius: 0.25rem;
+}
+.manual-ticket-detail-prose pre {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8125rem;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  margin: 0.65rem 0;
+}
+.manual-ticket-detail-prose pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.manual-ticket-detail-prose blockquote {
+  margin: 0.65rem 0;
+  padding-left: 0.85rem;
+  border-left: 3px solid rgb(75, 85, 99);
+  color: rgb(156, 163, 175);
+}
+.manual-ticket-detail-prose hr {
+  border: none;
+  border-top: 1px solid rgb(55, 65, 81);
+  margin: 1rem 0;
+}
+.manual-ticket-detail-prose table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.65rem 0;
+  font-size: 0.875rem;
+}
+.manual-ticket-detail-prose th,
+.manual-ticket-detail-prose td {
+  border: 1px solid rgb(55, 65, 81);
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+}
+.manual-ticket-detail-prose th {
+  background: rgba(31, 41, 55, 0.8);
+  font-weight: 600;
+}
+.manual-ticket-detail-fallback {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}

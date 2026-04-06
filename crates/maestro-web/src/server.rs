@@ -65,6 +65,10 @@ pub fn build_router(state: AppState) -> Router {
             "/jira/todo-tickets-manual",
             get(routes::jira::list_todo_tickets_manual),
         )
+        .route(
+            "/jira/tickets/{key}/preview",
+            get(routes::jira::get_ticket_preview),
+        )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
         .route("/polling", get(routes::polling::get_polling_status))
@@ -110,9 +114,12 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
             let mut res = Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime);
-            // Avoid stale dashboard JS/HTML after upgrades (embedded assets otherwise get heuristic browser cache).
-            if asset_path.ends_with(".html") || asset_path.ends_with(".js") {
-                res = res.header(header::CACHE_CONTROL, "no-store");
+            // Avoid stale dashboard JS/HTML/CSS after upgrades (embedded assets otherwise get heuristic browser cache).
+            if asset_path.ends_with(".html")
+                || asset_path.ends_with(".js")
+                || asset_path.ends_with(".css")
+            {
+                res = res.header(header::CACHE_CONTROL, "no-store, max-age=0");
             }
             res.body(Body::from(content.data.to_vec())).unwrap()
         }

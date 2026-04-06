@@ -12,6 +12,8 @@ let pollingPaused = false;
 /** `0` = unlimited. From `[general] max_concurrent_manual_workflows`. */
 let maxConcurrentManual = 0;
 let jiraProjectsConfigured = false;
+/** Set when the ticket detail modal is open; used by **Start** to run the workflow. */
+let pendingManualTicketSelection = null;
 const TERMINAL_MAX_LINES = 500;
 
 /** Same-origin cookie session from `POST /api/auth/login`; redirect to sign-in on 401. */
@@ -409,9 +411,128 @@ function renderAddWorkflowCell() {
     </div>`;
 }
 
+function closeManualTicketDetailModal() {
+  const modal = document.getElementById('manualTicketDetailModal');
+  if (modal) modal.classList.add('hidden');
+  pendingManualTicketSelection = null;
+}
+
 function closeManualWorkflowModal() {
+  closeManualTicketDetailModal();
   const modal = document.getElementById('manualWorkflowModal');
   if (modal) modal.classList.add('hidden');
+}
+
+function renderMarkdownToSafeHtml(markdown) {
+  const md = markdown == null ? '' : String(markdown);
+  if (!md.trim()) {
+    return '';
+  }
+  try {
+    const parseFn =
+      typeof marked !== 'undefined' && marked && typeof marked.parse === 'function'
+        ? marked.parse.bind(marked)
+        : null;
+    const purifyFn =
+      typeof DOMPurify !== 'undefined' && DOMPurify && typeof DOMPurify.sanitize === 'function'
+        ? DOMPurify.sanitize.bind(DOMPurify)
+        : null;
+    if (!parseFn || !purifyFn) {
+      return `<pre class="manual-ticket-detail-fallback px-5 py-4">${escapeHtml(md)}</pre>`;
+    }
+    const raw = parseFn(md, { breaks: true });
+    return purifyFn(raw, { USE_PROFILES: { html: true } });
+  } catch (e) {
+    console.error('Markdown render failed', e);
+    return `<pre class="manual-ticket-detail-fallback px-5 py-4">${escapeHtml(md)}</pre>`;
+  }
+}
+
+async function openManualTicketDetailModal(ticketKey, listSummary) {
+  const modal = document.getElementById('manualTicketDetailModal');
+  const body = document.getElementById('manualTicketDetailBody');
+  const keyEl = document.getElementById('manualTicketDetailKey');
+  const summaryEl = document.getElementById('manualTicketDetailSummary');
+  if (!modal || !body || !keyEl || !summaryEl) {
+    console.error(
+      '[Maestro] Ticket detail modal elements missing (is index.html outdated?). Expected #manualTicketDetailModal, #manualTicketDetailBody, #manualTicketDetailKey, #manualTicketDetailSummary.'
+    );
+    return;
+  }
+
+  pendingManualTicketSelection = {
+    key: ticketKey,
+    summary: typeof listSummary === 'string' && listSummary.trim() ? listSummary.trim() : ticketKey,
+  };
+  keyEl.textContent = ticketKey;
+  summaryEl.textContent = pendingManualTicketSelection.summary;
+  body.innerHTML = `
+    <div class="manual-workflow-loading px-5 py-8">
+      <div class="manual-workflow-spinner" role="status" aria-label="Loading"></div>
+      <span>Loading description…</span>
+    </div>`;
+  modal.classList.remove('hidden');
+
+  try {
+    const res = await dashboardFetch(
+      `/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`
+    );
+    const text = await res.text();
+    if (!res.ok) {
+      body.innerHTML = `<p class="text-sm text-red-400 px-5 py-6">${escapeHtml(text || res.statusText || 'Failed to load ticket')}</p>`;
+      return;
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      body.innerHTML = '<p class="text-sm text-red-400 px-5 py-6">Invalid response from server</p>';
+      return;
+    }
+    const sum = typeof data.summary === 'string' ? data.summary : pendingManualTicketSelection.summary;
+    summaryEl.textContent = sum || ticketKey;
+    pendingManualTicketSelection.summary = sum || ticketKey;
+
+    const md = typeof data.description_markdown === 'string' ? data.description_markdown : '';
+    const html = renderMarkdownToSafeHtml(md);
+    if (!html) {
+      body.innerHTML =
+        '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+    } else {
+      body.innerHTML = `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`;
+    }
+  } catch (e) {
+    console.error(e);
+    body.innerHTML = '<p class="text-sm text-red-400 px-5 py-6">Could not load ticket</p>';
+  }
+}
+
+async function confirmManualWorkflowStart() {
+  const p = pendingManualTicketSelection;
+  if (!p) return;
+  const ticketKey = p.key;
+  const ticketSummary = p.summary;
+  closeManualWorkflowModal();
+  await startManualWorkflowRequest(ticketKey, ticketSummary);
+}
+
+async function startManualWorkflowRequest(ticketKey, ticketSummary) {
+  try {
+    const res = await dashboardFetch('/api/workflows/start-manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket_key: ticketKey, ticket_summary: ticketSummary }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      alert(errText || 'Failed to start workflow');
+      return;
+    }
+    await fetchWorkflowsSilent();
+  } catch (e) {
+    console.error(e);
+    alert('Failed to start workflow');
+  }
 }
 
 async function openManualWorkflowModal() {
@@ -457,6 +578,8 @@ async function openManualWorkflowModal() {
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'manual-workflow-row';
+      row.dataset.ticketKey = key;
+      row.dataset.ticketSummary = summary || key;
       const kEl = document.createElement('div');
       kEl.className = 'manual-workflow-row-key';
       kEl.textContent = key;
@@ -465,35 +588,12 @@ async function openManualWorkflowModal() {
       sEl.textContent = summary || key;
       row.appendChild(kEl);
       row.appendChild(sEl);
-      row.addEventListener('click', () => {
-        void selectManualTicket(key, summary || key);
-      });
       listEl.appendChild(row);
     }
     body.appendChild(listEl);
   } catch (e) {
     console.error(e);
     body.innerHTML = '<p class="text-sm text-red-400 px-2 py-6 text-center">Could not load tickets</p>';
-  }
-}
-
-async function selectManualTicket(ticketKey, ticketSummary) {
-  closeManualWorkflowModal();
-  try {
-    const res = await dashboardFetch('/api/workflows/start-manual', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticket_key: ticketKey, ticket_summary: ticketSummary }),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      alert(errText || 'Failed to start workflow');
-      return;
-    }
-    await fetchWorkflowsSilent();
-  } catch (e) {
-    console.error(e);
-    alert('Failed to start workflow');
   }
 }
 
@@ -637,7 +737,12 @@ function closeReportModal() {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeReportModal();
-    closeManualWorkflowModal();
+    const detail = document.getElementById('manualTicketDetailModal');
+    if (detail && !detail.classList.contains('hidden')) {
+      closeManualTicketDetailModal();
+    } else {
+      closeManualWorkflowModal();
+    }
   }
 });
 
@@ -952,9 +1057,27 @@ function escapeAttr(str) {
     .replace(/</g, '&lt;');
 }
 
+/** One delegated click handler on `#manualWorkflowModalBody` (rows use `data-ticket-key`). */
+function setupManualWorkflowListDelegation() {
+  const body = document.getElementById('manualWorkflowModalBody');
+  if (!body || body.dataset.manualListDelegation === '1') return;
+  body.dataset.manualListDelegation = '1';
+  body.addEventListener('click', ev => {
+    const row = ev.target.closest('button.manual-workflow-row');
+    if (!row || !body.contains(row)) return;
+    const key = row.dataset.ticketKey;
+    if (!key) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const summary = row.dataset.ticketSummary || key;
+    void openManualTicketDetailModal(key, summary);
+  });
+}
+
 // --- Init ---
 
 async function init() {
+  setupManualWorkflowListDelegation();
   // Run workflow fetch first so a single 401 redirects to login before parallel calls.
   await fetchWorkflowsSilent();
   await Promise.all([fetchConfig(), fetchPollingStatus()]);
@@ -972,5 +1095,12 @@ async function init() {
   initialLoadDone = true;
   connectWebSocket();
 }
+
+// Ensure inline `onclick="…"` in index.html and older browsers always resolve handlers.
+window.closeManualTicketDetailModal = closeManualTicketDetailModal;
+window.closeManualWorkflowModal = closeManualWorkflowModal;
+window.openManualWorkflowModal = openManualWorkflowModal;
+window.openManualTicketDetailModal = openManualTicketDetailModal;
+window.confirmManualWorkflowStart = confirmManualWorkflowStart;
 
 init();
