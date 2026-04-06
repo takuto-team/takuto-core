@@ -46,10 +46,7 @@ impl CursorSession {
         )
         .await?;
 
-        Ok(Self {
-            session_id,
-            output,
-        })
+        Ok(Self { session_id, output })
     }
 }
 
@@ -64,9 +61,9 @@ async fn run_cursor_agent_session(
     resume_session_id: Option<&str>,
     container_runner: Option<&ContainerRunner>,
 ) -> Result<(String, String)> {
-    let workspace = worktree.to_str().ok_or_else(|| {
-        MaestroError::AiAgent("Worktree path is not valid UTF-8".to_string())
-    })?;
+    let workspace = worktree
+        .to_str()
+        .ok_or_else(|| MaestroError::AiAgent("Worktree path is not valid UTF-8".to_string()))?;
 
     let mut owned: Vec<String> = vec![
         "-p".to_string(),

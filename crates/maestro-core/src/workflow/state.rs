@@ -6,11 +6,17 @@ pub enum WorkflowState {
     Assigning,
     RetrievingDetails,
     CreatingWorktree,
-    AddressingTicket { pass: u8 },
+    AddressingTicket {
+        pass: u8,
+    },
     /// Secondary PR-comment workflow after main flow reached Done (uses `[[review_agent_steps]]`).
-    AddressingPrComments { pass: u8 },
+    AddressingPrComments {
+        pass: u8,
+    },
     /// Merge base branch workflow after main flow reached Done (uses `[[merge_base_agent_steps]]`).
-    MergingBaseBranch { pass: u8 },
+    MergingBaseBranch {
+        pass: u8,
+    },
     Reviewing,
     CreatingPR,
     /// Manual `workflow_snapshot.json` edits often use lowercase — accept both.
@@ -56,10 +62,7 @@ impl WorkflowState {
     /// Tickets that are not **Done**, **Stopped**, or **Error** reserve capacity against
     /// `max_concurrent_workflows` for Jira polling (paused workflows count too).
     pub fn occupies_concurrency_slot(&self) -> bool {
-        !matches!(
-            self,
-            Self::Done | Self::Stopped | Self::Error { .. }
-        )
+        !matches!(self, Self::Done | Self::Stopped | Self::Error { .. })
     }
 }
 
@@ -81,11 +84,7 @@ mod tests {
 
     #[test]
     fn addressing_ticket_deserializes_externally_tagged() {
-        let s: WorkflowState =
-            serde_json::from_str(r#"{"AddressingTicket":{"pass":1}}"#).unwrap();
-        assert!(matches!(
-            s,
-            WorkflowState::AddressingTicket { pass: 1 }
-        ));
+        let s: WorkflowState = serde_json::from_str(r#"{"AddressingTicket":{"pass":1}}"#).unwrap();
+        assert!(matches!(s, WorkflowState::AddressingTicket { pass: 1 }));
     }
 }

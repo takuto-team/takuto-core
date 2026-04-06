@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use super::acli;
 use crate::error::{MaestroError, Result};
-use crate::process::{self, CommandOutput};
+use crate::process::CommandOutput;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JiraTicket {
@@ -26,17 +27,27 @@ pub struct LinkedItem {
 
 pub struct JiraClient {
     pub repo_path: std::path::PathBuf,
+    acli_extra_prefixes: Vec<Vec<String>>,
 }
 
 impl JiraClient {
-    pub fn new(repo_path: std::path::PathBuf) -> Self {
-        Self { repo_path }
+    pub fn new(repo_path: std::path::PathBuf, acli_extra_prefixes: Vec<Vec<String>>) -> Self {
+        Self {
+            repo_path,
+            acli_extra_prefixes,
+        }
     }
 
-    /// Run an acli command with explicit args (no shell interpretation).
+    /// Run an allowlisted `acli` command with explicit args (no shell interpretation).
     async fn acli(&self, args: &[&str]) -> Result<CommandOutput> {
         info!(args = ?args, "Running acli command");
-        let output = process::run_command("acli", args, &self.repo_path, CancellationToken::new()).await?;
+        let output = acli::run_acli_checked(
+            args,
+            &self.acli_extra_prefixes,
+            &self.repo_path,
+            CancellationToken::new(),
+        )
+        .await?;
         if !output.success() {
             info!(
                 exit_code = output.exit_code,
@@ -44,10 +55,7 @@ impl JiraClient {
                 "acli command failed"
             );
         } else {
-            debug!(
-                stdout_len = output.stdout.len(),
-                "acli command succeeded"
-            );
+            debug!(stdout_len = output.stdout.len(), "acli command succeeded");
         }
         Ok(output)
     }
@@ -71,12 +79,18 @@ impl JiraClient {
                     "Searching for tickets"
                 );
 
-                let output = self.acli(&[
-                    "jira", "workitem", "search",
-                    "--jql", &jql,
-                    "--json",
-                    "--limit", "50",
-                ]).await?;
+                let search_args = vec![
+                    "jira".to_string(),
+                    "workitem".to_string(),
+                    "search".to_string(),
+                    "--jql".to_string(),
+                    jql.clone(),
+                    "--json".to_string(),
+                    "--limit".to_string(),
+                    "50".to_string(),
+                ];
+                let refs: Vec<&str> = search_args.iter().map(|s| s.as_str()).collect();
+                let output = self.acli(&refs).await?;
 
                 if !output.success() {
                     warn!(
@@ -110,11 +124,17 @@ impl JiraClient {
         project_keys: &[String],
     ) -> Result<JiraTicket> {
         info!(ticket = key, "Retrieving ticket details");
-        let output = self.acli(&[
-            "jira", "workitem", "view", key,
-            "--json",
-            "--fields", "key,issuetype,summary,status,assignee,description",
-        ]).await?;
+        let output = self
+            .acli(&[
+                "jira",
+                "workitem",
+                "view",
+                key,
+                "--json",
+                "--fields",
+                "key,issuetype,summary,status,assignee,description",
+            ])
+            .await?;
 
         if !output.success() {
             return Err(MaestroError::Jira(format!(
@@ -147,12 +167,18 @@ impl JiraClient {
 
     pub async fn assign_ticket(&self, key: &str) -> Result<()> {
         info!(ticket = key, "Assigning ticket to self");
-        let output = self.acli(&[
-            "jira", "workitem", "assign",
-            "--key", key,
-            "--assignee", "@me",
-            "--yes",
-        ]).await?;
+        let output = self
+            .acli(&[
+                "jira",
+                "workitem",
+                "assign",
+                "--key",
+                key,
+                "--assignee",
+                "@me",
+                "--yes",
+            ])
+            .await?;
 
         if !output.success() {
             return Err(MaestroError::Jira(format!(
@@ -165,12 +191,17 @@ impl JiraClient {
 
     pub async fn unassign_ticket(&self, key: &str) -> Result<()> {
         info!(ticket = key, "Unassigning ticket");
-        let output = self.acli(&[
-            "jira", "workitem", "assign",
-            "--key", key,
-            "--remove-assignee",
-            "--yes",
-        ]).await?;
+        let output = self
+            .acli(&[
+                "jira",
+                "workitem",
+                "assign",
+                "--key",
+                key,
+                "--remove-assignee",
+                "--yes",
+            ])
+            .await?;
 
         if !output.success() {
             return Err(MaestroError::Jira(format!(
@@ -183,12 +214,18 @@ impl JiraClient {
 
     pub async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
         info!(ticket = key, status = status, "Transitioning ticket");
-        let output = self.acli(&[
-            "jira", "workitem", "transition",
-            "--key", key,
-            "--status", status,
-            "--yes",
-        ]).await?;
+        let output = self
+            .acli(&[
+                "jira",
+                "workitem",
+                "transition",
+                "--key",
+                key,
+                "--status",
+                status,
+                "--yes",
+            ])
+            .await?;
 
         if !output.success() {
             return Err(MaestroError::Jira(format!(
@@ -200,11 +237,17 @@ impl JiraClient {
     }
 
     async fn get_linked_item(&self, key: &str, link_type: &str) -> Result<LinkedItem> {
-        let output = self.acli(&[
-            "jira", "workitem", "view", key,
-            "--json",
-            "--fields", "key,issuetype,summary,status,description",
-        ]).await?;
+        let output = self
+            .acli(&[
+                "jira",
+                "workitem",
+                "view",
+                key,
+                "--json",
+                "--fields",
+                "key,issuetype,summary,status,description",
+            ])
+            .await?;
 
         if !output.success() {
             return Err(MaestroError::Jira(format!(
@@ -221,9 +264,8 @@ impl JiraClient {
 
 fn parse_ticket_list(json_str: &str, default_type: &str) -> Result<Vec<JiraTicket>> {
     // acli returns a JSON array of work items directly
-    let issues: Vec<serde_json::Value> = serde_json::from_str(json_str).map_err(|e| {
-        MaestroError::Jira(format!("Failed to parse ticket list JSON: {e}"))
-    })?;
+    let issues: Vec<serde_json::Value> = serde_json::from_str(json_str)
+        .map_err(|e| MaestroError::Jira(format!("Failed to parse ticket list JSON: {e}")))?;
 
     let mut tickets = Vec::new();
     for issue in &issues {
@@ -263,9 +305,8 @@ fn parse_ticket_list(json_str: &str, default_type: &str) -> Result<Vec<JiraTicke
 }
 
 fn parse_ticket_detail(json_str: &str) -> Result<JiraTicket> {
-    let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
-        MaestroError::Jira(format!("Failed to parse ticket detail JSON: {e}"))
-    })?;
+    let value: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| MaestroError::Jira(format!("Failed to parse ticket detail JSON: {e}")))?;
 
     let fields = value.get("fields").unwrap_or(&value);
 
@@ -319,7 +360,10 @@ fn extract_description_text(fields: &serde_json::Value) -> String {
             }
             // Add newline after paragraph-level nodes
             if let Some(node_type) = node.get("type").and_then(|v| v.as_str()) {
-                if matches!(node_type, "paragraph" | "heading" | "bulletList" | "orderedList") {
+                if matches!(
+                    node_type,
+                    "paragraph" | "heading" | "bulletList" | "orderedList"
+                ) {
                     buf.push('\n');
                 }
             }
@@ -383,9 +427,8 @@ fn extract_linked_keys(json_str: &str) -> Vec<(String, String)> {
 }
 
 fn parse_linked_item(json_str: &str) -> Result<LinkedItem> {
-    let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
-        MaestroError::Jira(format!("Failed to parse linked item JSON: {e}"))
-    })?;
+    let value: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| MaestroError::Jira(format!("Failed to parse linked item JSON: {e}")))?;
 
     let fields = value.get("fields").unwrap_or(&value);
 

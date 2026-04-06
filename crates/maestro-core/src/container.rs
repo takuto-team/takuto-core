@@ -242,7 +242,11 @@ async fn remove_containers_matching(sanitized_key: &str) {
             if ids.is_empty() {
                 return;
             }
-            info!(count = ids.len(), key = sanitized_key, "Removing worker containers");
+            info!(
+                count = ids.len(),
+                key = sanitized_key,
+                "Removing worker containers"
+            );
             let mut rm_args: Vec<&str> = vec!["rm", "-f"];
             rm_args.extend(ids.iter());
             let _ = tokio::process::Command::new("docker")
@@ -268,7 +272,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn runner() -> ContainerRunner {
-        ContainerRunner::new("PROJ-42", &PathBuf::from("/workspace/proj-42"), "maestro:latest")
+        ContainerRunner::new(
+            "PROJ-42",
+            &PathBuf::from("/workspace/proj-42"),
+            "maestro:latest",
+        )
     }
 
     #[test]
@@ -299,14 +307,12 @@ mod tests {
     /// Helper: check if an `-e KEY=VALUE` pair is present.
     fn has_env(args: &[String], key: &str, value: &str) -> bool {
         let needle = format!("{key}={value}");
-        args.windows(2)
-            .any(|w| w[0] == "-e" && w[1] == needle)
+        args.windows(2).any(|w| w[0] == "-e" && w[1] == needle)
     }
 
     /// Helper: check if a `-v SRC:DST` pair is present.
     fn has_volume(args: &[String], mount: &str) -> bool {
-        args.windows(2)
-            .any(|w| w[0] == "-v" && w[1] == mount)
+        args.windows(2).any(|w| w[0] == "-v" && w[1] == mount)
     }
 
     #[test]
@@ -319,7 +325,10 @@ mod tests {
         assert_eq!(args[1], "--rm");
 
         // Container name
-        assert_eq!(flag_value(&args, "--name"), Some("maestro-worker-proj-42-0"));
+        assert_eq!(
+            flag_value(&args, "--name"),
+            Some("maestro-worker-proj-42-0")
+        );
 
         // NET_ADMIN
         assert!(args.contains(&"--cap-add=NET_ADMIN".to_string()));
@@ -331,8 +340,14 @@ mod tests {
 
         // Volume mounts
         assert!(has_volume(&args, "/workspace:/workspace"));
-        assert!(has_volume(&args, "/shared-auth/claude:/home/maestro/.claude"));
-        assert!(has_volume(&args, "/shared-auth/gh:/home/maestro/.config/gh"));
+        assert!(has_volume(
+            &args,
+            "/shared-auth/claude:/home/maestro/.claude"
+        ));
+        assert!(has_volume(
+            &args,
+            "/shared-auth/gh:/home/maestro/.config/gh"
+        ));
 
         // Working directory
         assert_eq!(flag_value(&args, "-w"), Some("/workspace/proj-42"));
@@ -379,8 +394,14 @@ mod tests {
         let (_, args1) = r.wrap_command("echo", &["a"]);
         let (_, args2) = r.wrap_shell_command("echo b");
 
-        assert_eq!(flag_value(&args1, "--name"), Some("maestro-worker-proj-42-0"));
-        assert_eq!(flag_value(&args2, "--name"), Some("maestro-worker-proj-42-1"));
+        assert_eq!(
+            flag_value(&args1, "--name"),
+            Some("maestro-worker-proj-42-0")
+        );
+        assert_eq!(
+            flag_value(&args2, "--name"),
+            Some("maestro-worker-proj-42-1")
+        );
     }
 
     #[test]
@@ -389,10 +410,7 @@ mod tests {
         let (_, args) = r.wrap_command("true", &[]);
 
         for (k, v) in WORKER_ENV {
-            assert!(
-                has_env(&args, k, v),
-                "Missing env var {k}={v}"
-            );
+            assert!(has_env(&args, k, v), "Missing env var {k}={v}");
         }
     }
 
@@ -402,10 +420,7 @@ mod tests {
         let (_, args) = r.wrap_command("true", &[]);
 
         for mount in WORKER_VOLUMES {
-            assert!(
-                has_volume(&args, mount),
-                "Missing volume mount {mount}"
-            );
+            assert!(has_volume(&args, mount), "Missing volume mount {mount}");
         }
     }
 }

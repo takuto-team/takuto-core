@@ -7,18 +7,25 @@ use tracing::info;
 use super::gh_github::apply_git_identity_from_gh;
 use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
+use crate::jira::acli;
 use crate::process::{self, CommandOutput};
 
 pub struct DryRunActions {
     pub repo_path: PathBuf,
     git_remote: String,
+    acli_extra_prefixes: Vec<Vec<String>>,
 }
 
 impl DryRunActions {
-    pub fn new(repo_path: PathBuf, git_remote: String) -> Self {
+    pub fn new(
+        repo_path: PathBuf,
+        git_remote: String,
+        acli_extra_prefixes: Vec<Vec<String>>,
+    ) -> Self {
         Self {
             repo_path,
             git_remote,
+            acli_extra_prefixes,
         }
     }
 }
@@ -26,12 +33,19 @@ impl DryRunActions {
 #[async_trait]
 impl ExternalActions for DryRunActions {
     async fn assign_ticket(&self, key: &str) -> Result<()> {
-        info!(ticket = key, "[DRY] Would assign ticket to current Jira user (acli @me)");
+        info!(
+            ticket = key,
+            "[DRY] Would assign ticket to current Jira user (acli @me)"
+        );
         Ok(())
     }
 
     async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
-        info!(ticket = key, status = status, "[DRY] Would transition ticket");
+        info!(
+            ticket = key,
+            status = status,
+            "[DRY] Would transition ticket"
+        );
         Ok(())
     }
 
@@ -41,9 +55,21 @@ impl ExternalActions for DryRunActions {
     }
 
     async fn get_ticket_details(&self, key: &str) -> Result<String> {
-        info!(ticket = key, "Retrieving ticket details (dry mode — read-only, executes normally)");
-        let output = process::run_shell_command(
-            &format!("acli jira workitem view {key} --json --fields 'key,issuetype,summary,status,assignee,description'"),
+        info!(
+            ticket = key,
+            "Retrieving ticket details (dry mode — read-only, executes normally)"
+        );
+        let output = acli::run_acli_checked(
+            &[
+                "jira",
+                "workitem",
+                "view",
+                key,
+                "--json",
+                "--fields",
+                "key,issuetype,summary,status,assignee,description",
+            ],
+            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -58,7 +84,10 @@ impl ExternalActions for DryRunActions {
     }
 
     async fn create_worktree(&self, branch: &str, base: &str) -> Result<PathBuf> {
-        let worktree_path = self.repo_path.join("worktrees").join(branch.replace('/', "-"));
+        let worktree_path = self
+            .repo_path
+            .join("worktrees")
+            .join(branch.replace('/', "-"));
         info!(
             branch = branch,
             base = base,
@@ -161,12 +190,8 @@ impl ExternalActions for DryRunActions {
             "Committing changes (dry mode — local operation, executes normally)"
         );
 
-        let add_output = process::run_shell_command(
-            "git add -A",
-            cwd,
-            CancellationToken::new(),
-        )
-        .await?;
+        let add_output =
+            process::run_shell_command("git add -A", cwd, CancellationToken::new()).await?;
         if !add_output.success() {
             return Err(MaestroError::Git(format!(
                 "Failed to stage changes: {}",
@@ -174,12 +199,9 @@ impl ExternalActions for DryRunActions {
             )));
         }
 
-        let status_output = process::run_shell_command(
-            "git diff --cached --quiet",
-            cwd,
-            CancellationToken::new(),
-        )
-        .await?;
+        let status_output =
+            process::run_shell_command("git diff --cached --quiet", cwd, CancellationToken::new())
+                .await?;
         if status_output.success() {
             info!("No changes to commit");
             return Ok(());

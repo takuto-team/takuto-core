@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::Serialize;
 
 use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow};
@@ -55,10 +55,7 @@ fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
         .as_deref()
         .map(str::trim)
         .is_some_and(|s| !s.is_empty());
-    let has_worktree = w
-        .worktree_path
-        .as_ref()
-        .is_some_and(|p| p.exists());
+    let has_worktree = w.worktree_path.as_ref().is_some_and(|p| p.exists());
     let can_address = done && has_pr;
     let can_merge_base = done && has_pr && has_worktree;
     let can_mark = done;

@@ -188,10 +188,8 @@ fn parse_stream_json_output(raw: &str) -> String {
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown");
                         if subtype == "api_retry" {
-                            let attempt = value
-                                .get("attempt")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
+                            let attempt =
+                                value.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0);
                             let error = value
                                 .get("error")
                                 .and_then(|v| v.as_str())
@@ -202,18 +200,12 @@ fn parse_stream_json_output(raw: &str) -> String {
                                 "Claude API retry detected in output"
                             );
                         } else {
-                            info!(
-                                subtype = subtype,
-                                "Claude stream event: system/{}", subtype
-                            );
+                            info!(subtype = subtype, "Claude stream event: system/{}", subtype);
                         }
                     }
                     "result" => {
                         if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
-                            info!(
-                                result_len = result.len(),
-                                "Claude stream: result received"
-                            );
+                            info!(result_len = result.len(), "Claude stream: result received");
                             result_parts.push(result.to_string());
                         }
                         if let Some(usage) = value.get("usage") {

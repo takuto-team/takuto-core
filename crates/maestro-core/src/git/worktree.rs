@@ -23,9 +23,6 @@ mod tests {
 
     #[test]
     fn test_branch_name_story() {
-        assert_eq!(
-            branch_name_for_ticket("CORE-789", "Story"),
-            "feat/core-789"
-        );
+        assert_eq!(branch_name_for_ticket("CORE-789", "Story"), "feat/core-789");
     }
 }

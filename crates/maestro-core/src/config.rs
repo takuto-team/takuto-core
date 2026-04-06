@@ -248,6 +248,19 @@ pub struct GeneralConfig {
     pub merge_base_workflow_steps_file: String,
 }
 
+/// How linked Jira issues are included in `{ticket_context}` for agent prompts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkedItemsPromptMode {
+    /// Key, summary, status, link type, and description (subject to byte caps).
+    #[default]
+    Full,
+    /// Key, summary, status, and link type only (descriptions omitted).
+    SummaryOnly,
+    /// Linked issues are not included in the context string.
+    Omit,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JiraConfig {
     #[serde(default)]
@@ -263,6 +276,18 @@ pub struct JiraConfig {
     /// Status name for **Mark as Done** (Jira transition target). Must match your workflow.
     #[serde(default = "default_jira_done_status")]
     pub done_status: String,
+    /// How linked issues appear in agent prompts (`{ticket_context}`).
+    #[serde(default)]
+    pub linked_items_in_prompt: LinkedItemsPromptMode,
+    /// Max UTF-8 bytes for the primary ticket description in prompts (`0` = unlimited).
+    #[serde(default)]
+    pub ticket_context_max_description_bytes: usize,
+    /// Max UTF-8 bytes per linked issue description when mode is `full` (`0` = unlimited).
+    #[serde(default)]
+    pub linked_issue_description_max_bytes: usize,
+    /// Advanced: extra `acli` argv prefix lines (whitespace-separated tokens per line) allowed beyond Maestro's built-in Jira read/assign/transition list.
+    #[serde(default)]
+    pub acli_allowed_extra_prefixes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,7 +303,9 @@ pub struct GitConfig {
     pub repo_path: String,
 }
 
-fn deserialize_pre_install_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+fn deserialize_pre_install_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -361,9 +388,6 @@ pub struct ClaudeConfig {
     pub skills_path: String,
     #[serde(default = "default_address_ticket_passes")]
     pub address_ticket_passes: u8,
-    /// When **`[[review_agent_steps]]`** is empty, how many times to run the built-in review sequence.
-    #[serde(default = "default_address_ticket_passes")]
-    pub review_address_ticket_passes: u8,
     #[serde(default = "default_step_timeout")]
     pub step_timeout_secs: u64,
     #[serde(default)]
@@ -460,7 +484,18 @@ impl Default for JiraConfig {
             site: String::new(),
             email: String::new(),
             done_status: default_jira_done_status(),
+            linked_items_in_prompt: LinkedItemsPromptMode::default(),
+            ticket_context_max_description_bytes: 0,
+            linked_issue_description_max_bytes: 0,
+            acli_allowed_extra_prefixes: Vec::new(),
         }
+    }
+}
+
+impl JiraConfig {
+    /// Parsed `[jira] acli_allowed_extra_prefixes` for argv allowlist checks.
+    pub fn acli_extra_argv_prefixes(&self) -> Vec<Vec<String>> {
+        crate::jira::acli::parse_acli_extra_prefixes(&self.acli_allowed_extra_prefixes)
     }
 }
 
@@ -500,7 +535,6 @@ impl Default for ClaudeConfig {
         Self {
             skills_path: default_skills_path(),
             address_ticket_passes: default_address_ticket_passes(),
-            review_address_ticket_passes: default_address_ticket_passes(),
             step_timeout_secs: default_step_timeout(),
             figma_api_token: String::new(),
             model: String::new(),
@@ -575,7 +609,12 @@ impl Config {
             self.review_agent_steps = file.review_agent_steps;
         }
 
-        if !self.general.merge_base_workflow_steps_file.trim().is_empty() {
+        if !self
+            .general
+            .merge_base_workflow_steps_file
+            .trim()
+            .is_empty()
+        {
             let p = resolve_config_relative_path(
                 config_file_dir,
                 &self.general.merge_base_workflow_steps_file,
@@ -613,13 +652,9 @@ impl Config {
         }
     }
 
-    /// When `review_agent_steps` is empty, how many times to run the built-in review sequence.
+    /// When `review_agent_steps` is empty, the built-in review sequence runs once per **Address PR comments** run (use per-step `repeat` in `[[review_agent_steps]]` for more).
     pub fn review_sequence_outer_loops(&self) -> u8 {
-        if self.review_agent_steps.is_empty() {
-            self.claude.review_address_ticket_passes
-        } else {
-            1
-        }
+        1
     }
 
     /// Steps for the PR-comment workflow (configured or [`default_review_agent_steps`]).
@@ -723,16 +758,10 @@ impl Config {
             ));
         }
 
-        if self.claude.review_address_ticket_passes < 1 {
-            return Err(MaestroError::Config(
-                "[claude] review_address_ticket_passes must be at least 1 (built-in [[review_agent_steps]] when that list is empty)"
-                    .to_string(),
-            ));
-        }
-
         if self.jira.done_status.trim().is_empty() {
             return Err(MaestroError::Config(
-                "[jira] done_status must be non-empty (Jira transition target for Mark as Done)".to_string(),
+                "[jira] done_status must be non-empty (Jira transition target for Mark as Done)"
+                    .to_string(),
             ));
         }
 
@@ -802,7 +831,8 @@ impl Config {
             ));
         }
 
-        if self.agent.provider == AiAgentProvider::Cursor && self.agent.cursor_cli.trim().is_empty() {
+        if self.agent.provider == AiAgentProvider::Cursor && self.agent.cursor_cli.trim().is_empty()
+        {
             return Err(MaestroError::Config(
                 "agent.cursor_cli must be set when agent.provider is \"cursor\"".to_string(),
             ));
@@ -827,6 +857,95 @@ impl Config {
         let mut c = self.clone();
         c.web.dashboard_password.clear();
         c
+    }
+}
+
+/// Dashboard `PUT /api/config` body: only these top-level keys are accepted (`deny_unknown_fields`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeDashboardConfigPatch {
+    #[serde(default)]
+    pub web: Option<WebLoginPatch>,
+    #[serde(default)]
+    pub general: Option<GeneralConcurrencyPatch>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebLoginPatch {
+    #[serde(default)]
+    pub dashboard_username: Option<String>,
+    #[serde(default)]
+    pub dashboard_password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneralConcurrencyPatch {
+    #[serde(default)]
+    pub max_concurrent_workflows: Option<u32>,
+    #[serde(default)]
+    pub max_active_workflows: Option<u32>,
+}
+
+impl Config {
+    /// Merge runtime-editable fields from the dashboard. Returns an error if the patch is empty
+    /// or leaves the config invalid.
+    pub fn apply_runtime_dashboard_patch(
+        &mut self,
+        patch: RuntimeDashboardConfigPatch,
+    ) -> Result<()> {
+        let mut applied = false;
+
+        if let Some(ref w) = patch.web {
+            let touched = w.dashboard_username.is_some() || w.dashboard_password.is_some();
+            if !touched {
+                return Err(MaestroError::Config(
+                    "\"web\" patch must include dashboard_username and/or dashboard_password"
+                        .into(),
+                ));
+            }
+            applied = true;
+            if let Some(ref u) = w.dashboard_username {
+                self.web.dashboard_username = u.clone();
+            }
+            if let Some(ref p) = w.dashboard_password {
+                if p.is_empty()
+                    && !self.web.dashboard_username.trim().is_empty()
+                    && !self.web.dashboard_password.is_empty()
+                {
+                    // preserve existing secret when UI omits password
+                } else {
+                    self.web.dashboard_password = p.clone();
+                }
+            }
+        }
+
+        if let Some(ref g) = patch.general {
+            let touched = g.max_concurrent_workflows.is_some() || g.max_active_workflows.is_some();
+            if !touched {
+                return Err(MaestroError::Config(
+                    "\"general\" patch must include max_concurrent_workflows and/or max_active_workflows"
+                        .into(),
+                ));
+            }
+            applied = true;
+            if let Some(mc) = g.max_concurrent_workflows {
+                self.general.max_concurrent_workflows = mc;
+            }
+            if let Some(ma) = g.max_active_workflows {
+                self.general.max_active_workflows = ma;
+            }
+        }
+
+        if !applied {
+            return Err(MaestroError::Config(
+                "empty runtime patch: include \"web\" and/or \"general\" with at least one field"
+                    .into(),
+            ));
+        }
+
+        self.validate()
     }
 }
 
@@ -980,7 +1099,7 @@ step_timeout_secs = 600
     #[test]
     fn review_sequence_outer_loops_and_defaults() {
         let config = Config::default();
-        assert_eq!(config.review_sequence_outer_loops(), 3);
+        assert_eq!(config.review_sequence_outer_loops(), 1);
         let steps = config.resolved_review_agent_steps();
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].name, "Address PR feedback");
@@ -1155,5 +1274,39 @@ step_timeout_secs = 600
         let config = Config::load(&main_path).unwrap();
         assert_eq!(config.agent_steps.len(), 1);
         assert_eq!(config.agent_steps[0].name, "From file");
+    }
+
+    #[test]
+    fn runtime_patch_json_unknown_top_level_field_fails() {
+        let err =
+            serde_json::from_str::<RuntimeDashboardConfigPatch>(r#"{"jira":{}}"#).unwrap_err();
+        let s = err.to_string();
+        assert!(
+            s.contains("unknown field") || s.contains("Unknown field"),
+            "unexpected serde error: {s}"
+        );
+    }
+
+    #[test]
+    fn runtime_patch_merge_general_only() {
+        let mut c = Config::default();
+        let patch: RuntimeDashboardConfigPatch =
+            serde_json::from_str(r#"{"general":{"max_concurrent_workflows":7}}"#).unwrap();
+        c.apply_runtime_dashboard_patch(patch).unwrap();
+        assert_eq!(c.general.max_concurrent_workflows, 7);
+    }
+
+    #[test]
+    fn runtime_patch_empty_top_level_errors() {
+        let mut c = Config::default();
+        let patch: RuntimeDashboardConfigPatch = serde_json::from_str("{}").unwrap();
+        assert!(c.apply_runtime_dashboard_patch(patch).is_err());
+    }
+
+    #[test]
+    fn runtime_patch_web_empty_subobject_errors() {
+        let mut c = Config::default();
+        let patch: RuntimeDashboardConfigPatch = serde_json::from_str(r#"{"web":{}}"#).unwrap();
+        assert!(c.apply_runtime_dashboard_patch(patch).is_err());
     }
 }

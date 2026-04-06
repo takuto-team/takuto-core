@@ -101,10 +101,7 @@ fn humanize_claude_output(raw: &str) -> Option<String> {
             None
         }
         "tool_use" | "tool_call" => {
-            let tool_name = value
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let tool_name = value.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if tool_name == "Bash" || tool_name == "bash" {
                 if let Some(cmd) = value
                     .get("input")
@@ -209,10 +206,7 @@ fn summarize_cursor_tool_event(value: &Value) -> Option<String> {
     if subtype == "started" {
         if let Some(s) = tc.get("shellToolCall") {
             let cmd = s.get("args")?.get("command")?.as_str()?;
-            let desc = s
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let desc = s.get("description").and_then(|v| v.as_str()).unwrap_or("");
             info!(command = %cmd, description = %desc, "Agent shell command");
             let short = if cmd.len() > 120 { &cmd[..120] } else { cmd };
             return Some(format!("$ {short}"));

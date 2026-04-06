@@ -1,13 +1,13 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use axum_extra::extract::cookie::{CookieJar, SameSite};
-use cookie::time::Duration;
 use cookie::Cookie;
+use cookie::time::Duration;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{credentials_match, sign_session, SESSION_COOKIE_NAME, SESSION_TTL_SECS};
+use crate::auth::{SESSION_COOKIE_NAME, SESSION_TTL_SECS, credentials_match, sign_session};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]

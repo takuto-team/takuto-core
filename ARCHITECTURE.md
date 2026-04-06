@@ -258,7 +258,7 @@ POST   /api/workflows/:id/address-pr-comments  # PR review agent loop (after Don
 POST   /api/workflows/:id/mark-done  # Jira Done + remove worktree (JSON outcome)
 
 GET    /api/config                 # get current config
-PUT    /api/config                 # update config (partial)
+PUT    /api/config                 # strict runtime patch only (web login + concurrency); 400 on other keys
 
 GET    /api/health                 # health check
 
@@ -325,7 +325,7 @@ Vanilla JS + Tailwind CSS, served as embedded static assets.
 
 2. **Configuration** (`/config`)
    - Form with all configurable fields
-   - Save button sends `PUT /api/config`
+   - Save sends strict `PUT /api/config` JSON patch (dashboard login + max concurrent / max active only)
    - Validates before submit
 
 3. **Report Modal**

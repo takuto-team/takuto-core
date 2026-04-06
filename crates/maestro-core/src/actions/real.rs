@@ -7,18 +7,25 @@ use tracing::info;
 use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
+use crate::jira::acli;
 use crate::process::{self, CommandOutput};
 
 pub struct RealActions {
     pub repo_path: PathBuf,
     git_remote: String,
+    acli_extra_prefixes: Vec<Vec<String>>,
 }
 
 impl RealActions {
-    pub fn new(repo_path: PathBuf, git_remote: String) -> Self {
+    pub fn new(
+        repo_path: PathBuf,
+        git_remote: String,
+        acli_extra_prefixes: Vec<Vec<String>>,
+    ) -> Self {
         Self {
             repo_path,
             git_remote,
+            acli_extra_prefixes,
         }
     }
 }
@@ -26,9 +33,11 @@ impl RealActions {
 #[async_trait]
 impl ExternalActions for RealActions {
     async fn assign_ticket(&self, key: &str) -> Result<()> {
-        info!(ticket = key, "Assigning ticket to current Jira user (acli @me)");
-        let output = process::run_command(
-            "acli",
+        info!(
+            ticket = key,
+            "Assigning ticket to current Jira user (acli @me)"
+        );
+        let output = acli::run_acli_checked(
             &[
                 "jira",
                 "workitem",
@@ -39,6 +48,7 @@ impl ExternalActions for RealActions {
                 "@me",
                 "--yes",
             ],
+            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -71,8 +81,17 @@ impl ExternalActions for RealActions {
 
     async fn unassign_ticket(&self, key: &str) -> Result<()> {
         info!(ticket = key, "Unassigning ticket");
-        let output = process::run_shell_command(
-            &format!("acli jira workitem assign --key {key} --remove-assignee --yes"),
+        let output = acli::run_acli_checked(
+            &[
+                "jira",
+                "workitem",
+                "assign",
+                "--key",
+                key,
+                "--remove-assignee",
+                "--yes",
+            ],
+            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -88,8 +107,17 @@ impl ExternalActions for RealActions {
 
     async fn get_ticket_details(&self, key: &str) -> Result<String> {
         info!(ticket = key, "Retrieving ticket details");
-        let output = process::run_shell_command(
-            &format!("acli jira workitem view {key} --json --fields 'key,issuetype,summary,status,assignee,description'"),
+        let output = acli::run_acli_checked(
+            &[
+                "jira",
+                "workitem",
+                "view",
+                key,
+                "--json",
+                "--fields",
+                "key,issuetype,summary,status,assignee,description",
+            ],
+            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -104,7 +132,10 @@ impl ExternalActions for RealActions {
     }
 
     async fn create_worktree(&self, branch: &str, base: &str) -> Result<PathBuf> {
-        let worktree_path = self.repo_path.join("worktrees").join(branch.replace('/', "-"));
+        let worktree_path = self
+            .repo_path
+            .join("worktrees")
+            .join(branch.replace('/', "-"));
         info!(branch = branch, base = base, path = %worktree_path.display(), "Creating git worktree");
 
         // Create worktrees directory if it doesn't exist
@@ -148,10 +179,7 @@ impl ExternalActions for RealActions {
         if !output.success() {
             // Branch might already exist, try without -b
             let output2 = process::run_shell_command(
-                &format!(
-                    "git worktree add {} {branch}",
-                    worktree_path.display()
-                ),
+                &format!("git worktree add {} {branch}", worktree_path.display()),
                 &self.repo_path,
                 CancellationToken::new(),
             )
@@ -184,14 +212,13 @@ impl ExternalActions for RealActions {
         Ok(())
     }
 
-    async fn create_pr(
-        &self,
-        title: &str,
-        body: &str,
-        branch: &str,
-        base: &str,
-    ) -> Result<String> {
-        info!(title = title, branch = branch, base = base, "Creating pull request");
+    async fn create_pr(&self, title: &str, body: &str, branch: &str, base: &str) -> Result<String> {
+        info!(
+            title = title,
+            branch = branch,
+            base = base,
+            "Creating pull request"
+        );
 
         let remote = &self.git_remote;
         // Push branch first
@@ -233,12 +260,8 @@ impl ExternalActions for RealActions {
         info!(cwd = %cwd.display(), message = message, "Committing changes");
 
         // Stage all changes
-        let add_output = process::run_shell_command(
-            "git add -A",
-            cwd,
-            CancellationToken::new(),
-        )
-        .await?;
+        let add_output =
+            process::run_shell_command("git add -A", cwd, CancellationToken::new()).await?;
         if !add_output.success() {
             return Err(MaestroError::Git(format!(
                 "Failed to stage changes: {}",
@@ -247,12 +270,9 @@ impl ExternalActions for RealActions {
         }
 
         // Check if there's anything to commit
-        let status_output = process::run_shell_command(
-            "git diff --cached --quiet",
-            cwd,
-            CancellationToken::new(),
-        )
-        .await?;
+        let status_output =
+            process::run_shell_command("git diff --cached --quiet", cwd, CancellationToken::new())
+                .await?;
         if status_output.success() {
             info!("No changes to commit");
             return Ok(());

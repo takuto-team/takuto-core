@@ -66,7 +66,9 @@ pub fn write_workflow_snapshot(
     Ok(())
 }
 
-pub fn read_workflow_snapshot(repo_path: &Path) -> crate::error::Result<Option<WorkflowSnapshotFile>> {
+pub fn read_workflow_snapshot(
+    repo_path: &Path,
+) -> crate::error::Result<Option<WorkflowSnapshotFile>> {
     let path = snapshot_path(repo_path);
     if !path.exists() {
         return Ok(None);

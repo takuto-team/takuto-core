@@ -14,7 +14,11 @@ pub fn worktree_has_mise_config(cwd: &Path) -> bool {
     cwd.join(".mise.toml").is_file()
         || cwd.join("mise.toml").is_file()
         || cwd.join(".tool-versions").is_file()
-        || cwd.join(".config").join("mise").join("config.toml").is_file()
+        || cwd
+            .join(".config")
+            .join("mise")
+            .join("config.toml")
+            .is_file()
 }
 
 #[derive(Debug, Clone)]
@@ -152,16 +156,8 @@ impl ProcessHandle {
     }
 
     pub async fn wait_with_output(mut self) -> Result<CommandOutput> {
-        let stdout = self
-            .child
-            .stdout
-            .take()
-            .expect("stdout was already taken");
-        let stderr = self
-            .child
-            .stderr
-            .take()
-            .expect("stderr was already taken");
+        let stdout = self.child.stdout.take().expect("stdout was already taken");
+        let stderr = self.child.stderr.take().expect("stderr was already taken");
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
@@ -221,16 +217,8 @@ impl ProcessHandle {
         mut self,
         line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
     ) -> Result<CommandOutput> {
-        let stdout = self
-            .child
-            .stdout
-            .take()
-            .expect("stdout was already taken");
-        let stderr = self
-            .child
-            .stderr
-            .take()
-            .expect("stderr was already taken");
+        let stdout = self.child.stdout.take().expect("stdout was already taken");
+        let stderr = self.child.stderr.take().expect("stderr was already taken");
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
@@ -298,10 +286,7 @@ impl ProcessHandle {
         })
     }
 
-    pub async fn wait_with_timeout(
-        self,
-        timeout_secs: u64,
-    ) -> Result<CommandOutput> {
+    pub async fn wait_with_timeout(self, timeout_secs: u64) -> Result<CommandOutput> {
         // Capture the child PID before self is consumed, so we can kill the
         // process group from the timeout branch.
         #[cfg(unix)]

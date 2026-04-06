@@ -106,7 +106,9 @@ pub fn verify_session_cookie(raw: &str, web: &WebConfig) -> bool {
         return false;
     }
     let expected_user = web.dashboard_username.trim();
-    Sha256::digest(expected_user.as_bytes()).ct_eq(&Sha256::digest(claims.sub.as_bytes())).into()
+    Sha256::digest(expected_user.as_bytes())
+        .ct_eq(&Sha256::digest(claims.sub.as_bytes()))
+        .into()
 }
 
 pub fn session_cookie_from_headers(headers: &HeaderMap) -> Option<&str> {
@@ -127,8 +129,7 @@ pub fn session_authorized(headers: &HeaderMap, web: &WebConfig) -> bool {
     if !web.dashboard_auth_enabled() {
         return true;
     }
-    session_cookie_from_headers(headers)
-        .is_some_and(|raw| verify_session_cookie(raw, web))
+    session_cookie_from_headers(headers).is_some_and(|raw| verify_session_cookie(raw, web))
 }
 
 pub async fn dashboard_auth_middleware(

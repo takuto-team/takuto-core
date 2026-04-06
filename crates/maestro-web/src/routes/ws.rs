@@ -26,7 +26,10 @@ pub async fn ws_handler(
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut rx = state.engine.subscribe();
     let receiver_count = state.engine.event_tx.receiver_count();
-    info!(receivers = receiver_count, "WebSocket client connected, subscribed to events");
+    info!(
+        receivers = receiver_count,
+        "WebSocket client connected, subscribed to events"
+    );
 
     loop {
         tokio::select! {

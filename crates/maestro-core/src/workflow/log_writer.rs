@@ -56,6 +56,7 @@ impl WorkflowLogWriter {
     }
 
     pub async fn write_output(&self, step_name: &str, stream: &str, line: &str) {
-        self.write(&format!("[{step_name}] [{stream}] {line}")).await;
+        self.write(&format!("[{step_name}] [{stream}] {line}"))
+            .await;
     }
 }

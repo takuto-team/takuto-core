@@ -233,9 +233,7 @@ pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result
             .stderr(Stdio::inherit());
         let status = cmd
             .status()
-            .map_err(|e| {
-                MaestroError::Config(format!("failed to spawn {label} hook {n}: {e}"))
-            })?;
+            .map_err(|e| MaestroError::Config(format!("failed to spawn {label} hook {n}: {e}")))?;
         if !status.success() {
             return Err(MaestroError::Config(format!(
                 "{label} hook command {n} failed with status {status}"
@@ -256,9 +254,7 @@ fn auth_cmd_ok(program: &str, args: &[&str]) -> bool {
     };
 
     let mut cmd = Command::new(program);
-    cmd.args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
     configure_auth_command_unix(&mut cmd);
 
     let mut child = match cmd.spawn() {
@@ -323,15 +319,15 @@ pub fn preflight(config: &Config) -> Result<()> {
                 .map(|v| !v.trim().is_empty())
                 .unwrap_or(false);
             if has_api_key {
-                eprintln!("[maestro preflight] Cursor: CURSOR_API_KEY is set; skipping agent status probe.");
+                eprintln!(
+                    "[maestro preflight] Cursor: CURSOR_API_KEY is set; skipping agent status probe."
+                );
             } else if cursor_agent_auth_likely_on_disk() {
                 eprintln!(
                     "[maestro preflight] Cursor: found on-disk CLI data (tokens/config tree); skipping agent status (unreliable without a TTY)."
                 );
             } else {
-                eprintln!(
-                    "[maestro preflight] Cursor: checking {cli} status (45s timeout)…"
-                );
+                eprintln!("[maestro preflight] Cursor: checking {cli} status (45s timeout)…");
                 if !auth_cmd_ok(cli, &["status"]) {
                     return Err(MaestroError::Config(format!(
                         "Cursor Agent ({cli}) is not logged in and CURSOR_API_KEY is not set. Run: docker compose run --rm -it maestro setup (Cursor step) or set CURSOR_API_KEY in maestro.env. If you already logged in, exec into the container and check: ls -la \"$CURSOR_CONFIG_DIR\" and ~/.config/Cursor — the cursor-auth volume must be the same compose project as setup, and CURSOR_CONFIG_DIR should be /home/maestro/.cursor (see docker-compose.yml)."
@@ -357,8 +353,10 @@ mod cursor_preflight_tests {
         let d = tempdir().unwrap();
         let p = d.path().join("cli-config.json");
         let mut f = std::fs::File::create(&p).unwrap();
-        f.write_all(br#"{"session":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#)
-            .unwrap();
+        f.write_all(
+            br#"{"session":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        )
+        .unwrap();
         assert!(json_config_suggests_auth(&p));
     }
 
@@ -366,11 +364,7 @@ mod cursor_preflight_tests {
     fn tree_populated_finds_nested_vscdb() {
         let d = tempdir().unwrap();
         std::fs::create_dir_all(d.path().join("User/globalStorage")).unwrap();
-        std::fs::write(
-            d.path().join("User/globalStorage/state.vscdb"),
-            [0u8; 64],
-        )
-        .unwrap();
+        std::fs::write(d.path().join("User/globalStorage/state.vscdb"), [0u8; 64]).unwrap();
         assert!(cursor_data_tree_looks_populated(d.path()));
     }
 }

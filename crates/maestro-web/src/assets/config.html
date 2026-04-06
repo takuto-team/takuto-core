@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Maestro - Configuration</title>
+  <title>Maestro - Runtime settings</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -21,7 +21,6 @@
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
 
-  <!-- Header -->
   <header class="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
     <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex items-center justify-between h-16">
@@ -34,265 +33,76 @@
           </a>
         </div>
         <div class="flex items-center gap-2">
-          <svg class="w-7 h-7 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-          </svg>
           <h1 class="text-xl font-semibold tracking-tight">Maestro</h1>
-          <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">Config</span>
+          <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">Runtime settings</span>
         </div>
       </div>
     </div>
   </header>
 
-  <!-- Main content -->
-  <main class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <main class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <section class="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-100/90 leading-relaxed">
+      <p class="font-medium text-amber-200 mb-1">Security note</p>
+      <p>Jira ticket text is passed to AI agents and is an <strong>untrusted</strong> prompt surface (prompt injection). Use Jira permissions, branch protection, and code review. Maestro also allowlists <code class="text-amber-300/90">acli</code> commands to Jira read / assign / transition unless you add <code class="text-amber-300/90">[jira] acli_allowed_extra_prefixes</code> in <code class="text-amber-300/90">config.toml</code>.</p>
+      <p class="mt-2">Only the settings below can be changed from this page. Everything else (Jira projects, git, <code class="text-amber-300/90">[[agent_steps]]</code>, install commands, models, …) must be edited in <code class="text-amber-300/90">config.toml</code> on the server, then <strong>restart Maestro</strong>.</p>
+    </section>
+
+    <section>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Full config (read-only)</h2>
+      <p class="text-xs text-gray-500 mb-2">Redacted snapshot from <code class="text-gray-400">GET /api/config</code>. Not saved from this page.</p>
+      <pre id="configSnapshot" class="text-xs font-mono bg-gray-900 border border-gray-800 rounded-lg p-4 overflow-x-auto max-h-64 overflow-y-auto text-gray-400 whitespace-pre-wrap break-words"></pre>
+    </section>
+
     <form id="configForm" class="space-y-8">
-
-      <!-- Section: Repository -->
       <section>
-        <div class="flex items-center gap-2 mb-5">
-          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-          </svg>
-          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Repository</h2>
-        </div>
-        <div class="space-y-4">
-          <div>
-            <label for="baseBranch" class="block text-sm font-medium text-gray-300 mb-1.5">Base Branch</label>
-            <input type="text" id="baseBranch" placeholder="e.g. main, develop"
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600">Branch that PRs will be created against</p>
-          </div>
-          <div>
-            <label for="gitRemote" class="block text-sm font-medium text-gray-300 mb-1.5">Git remote</label>
-            <input type="text" id="gitRemote" placeholder="origin"
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600">Remote name for fetch, worktree base ref, and push (e.g. upstream)</p>
-          </div>
-        </div>
-      </section>
-
-      <div class="border-t border-gray-800/60"></div>
-
-      <!-- Section: Jira -->
-      <section>
-        <div class="flex items-center gap-2 mb-5">
-          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-          </svg>
-          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Jira Integration</h2>
-        </div>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-gray-300 mb-1.5">Project Keys</label>
-            <div class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 focus-within:ring-2 focus-within:ring-blue-500/40 focus-within:border-blue-500/60 transition-colors">
-              <div id="projectTags" class="flex flex-wrap gap-1.5 mb-1"></div>
-              <input type="text" id="projectKeyInput" placeholder="Type a project key and press Enter"
-                class="w-full bg-transparent text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none py-1" />
-            </div>
-            <p class="mt-1.5 text-xs text-gray-600">Jira project keys to monitor for new tickets</p>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-gray-300 mb-2.5">Item Types to Handle</label>
-            <div id="itemTypesContainer" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
-          </div>
-
-          <div>
-            <label for="pollInterval" class="block text-sm font-medium text-gray-300 mb-1.5">Poll Interval</label>
-            <div class="flex items-center gap-2">
-              <input type="number" id="pollInterval" min="10" max="3600"
-                class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-              <span class="text-sm text-gray-500">seconds</span>
-            </div>
-            <p class="mt-1.5 text-xs text-gray-600">How often to check Jira for new tickets (min: 10s)</p>
-          </div>
-
-          <div>
-            <label for="jiraDoneStatus" class="block text-sm font-medium text-gray-300 mb-1.5">Done status name</label>
-            <input type="text" id="jiraDoneStatus" placeholder="Done"
-              class="w-full max-w-xs bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600">Jira transition target for dashboard Mark as Done (must match your workflow)</p>
-          </div>
-        </div>
-      </section>
-
-      <div class="border-t border-gray-800/60"></div>
-
-      <!-- Section: Commands -->
-      <section>
-        <div class="flex items-center gap-2 mb-5">
-          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
-          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Commands</h2>
-        </div>
-        <div class="space-y-4">
-          <div>
-            <label for="preInstallCmds" class="block text-sm font-medium text-gray-300 mb-1.5">Pre-install commands</label>
-            <textarea id="preInstallCmds" rows="4" placeholder="One shell command per line (optional)&#10;e.g. aws codeartifact login ..."
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors resize-y min-h-[5rem]"></textarea>
-            <p class="mt-1.5 text-xs text-gray-600">Run in the worktree before install (e.g. registry auth). Lint/tests are not separate commands — use <code class="text-gray-500">[[agent_steps]]</code> in config.toml to drive the agent (e.g. a step that runs <code class="text-gray-500">npm run lint</code>).</p>
-          </div>
-        </div>
-      </section>
-
-      <div class="border-t border-gray-800/60"></div>
-
-      <!-- Section: AI coding agent -->
-      <section>
-        <div class="flex items-center gap-2 mb-5">
-          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-          </svg>
-          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">AI coding agent</h2>
-        </div>
-        <div class="space-y-4">
-          <div>
-            <label for="aiProvider" class="block text-sm font-medium text-gray-300 mb-1.5">Provider</label>
-            <select id="aiProvider"
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors">
-              <option value="claude">Claude Code (claude CLI)</option>
-              <option value="cursor">Cursor Agent (agent CLI)</option>
-            </select>
-            <p class="mt-1.5 text-xs text-gray-600">Runs configurable <code class="text-gray-500">[[agent_steps]]</code> for the main ticket flow and <code class="text-gray-500">[[review_agent_steps]]</code> for Address PR Comments (edit those arrays in <code class="text-gray-500">config.toml</code>).</p>
-          </div>
-          <div>
-            <label for="cursorCli" class="block text-sm font-medium text-gray-300 mb-1.5">Cursor CLI executable</label>
-            <input type="text" id="cursorCli" placeholder="agent"
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600">Only used when provider is Cursor. Default is <code class="text-gray-500">agent</code> (see <a href="https://cursor.com/docs/cli/overview" class="text-blue-400 hover:text-blue-300" target="_blank" rel="noopener">Cursor CLI docs</a>).</p>
-          </div>
-          <div>
-            <label for="cursorModel" class="block text-sm font-medium text-gray-300 mb-1.5">Cursor model</label>
-            <input type="text" id="cursorModel" placeholder="Auto"
-              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600">Passed as <code class="text-gray-500">--model</code> to Cursor Agent. <code class="text-gray-500">Auto</code> leaves model selection to Cursor (flag omitted).</p>
-          </div>
-        </div>
-      </section>
-
-      <div class="border-t border-gray-800/60"></div>
-
-      <!-- Section: Integrations -->
-      <section>
-        <div class="flex items-center gap-2 mb-5">
-          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-          </svg>
-          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Integrations</h2>
-        </div>
-        <div class="space-y-4">
-          <div>
-            <label for="figmaToken" class="block text-sm font-medium text-gray-300 mb-1.5">Figma API Token</label>
-            <div class="relative">
-              <input type="password" id="figmaToken" placeholder="figd_..."
-                class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 pr-10 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-              <button type="button" onclick="togglePassword(this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors">
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-              </button>
-            </div>
-            <p class="mt-1.5 text-xs text-gray-600">Used to fetch design specs from Figma for UI tickets</p>
-          </div>
-        </div>
-      </section>
-
-      <div class="border-t border-gray-800/60"></div>
-
-      <!-- Section: Web & dashboard login -->
-      <section>
-        <div class="flex items-center gap-2 mb-5">
-          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
-          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Web &amp; dashboard login</h2>
-        </div>
-        <p class="text-xs text-gray-500 mb-4 leading-relaxed">
-          Login is required only when <strong>both</strong> username and password are set. You will be redirected to <code class="text-gray-400">/login.html</code>.
-          The password field is never filled from the server; leave it blank when saving to keep your current password.
-        </p>
-        <div class="space-y-4">
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Web &amp; dashboard login</h2>
+        <p class="text-xs text-gray-500 mb-4">Leave password blank when saving to keep the current password. Both empty disables dashboard login.</p>
+        <div class="space-y-4 max-w-md">
           <div>
             <label for="dashboardUsername" class="block text-sm font-medium text-gray-300 mb-1.5">Dashboard username</label>
             <input type="text" id="dashboardUsername" autocomplete="username"
-              class="w-full max-w-md bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors"
-              placeholder="Empty = no dashboard login" />
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
           </div>
           <div>
-            <label for="dashboardPassword" class="block text-sm font-medium text-gray-300 mb-1.5">Dashboard password</label>
+            <label for="dashboardPassword" class="block text-sm font-medium text-gray-300 mb-1.5">New password</label>
             <input type="password" id="dashboardPassword" autocomplete="new-password"
-              class="w-full max-w-md bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors"
-              placeholder="Set to enable login; leave blank to keep unchanged on save" />
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors"
+              placeholder="Leave blank to keep unchanged" />
           </div>
         </div>
       </section>
 
       <div class="border-t border-gray-800/60"></div>
 
-      <!-- Section: Advanced -->
       <section>
-        <div class="flex items-center gap-2 mb-5">
-          <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-          </svg>
-          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Advanced</h2>
-        </div>
-        <div class="space-y-5">
-          <div class="flex items-center justify-between bg-gray-900 border border-gray-700 rounded-lg px-4 py-3.5">
-            <div>
-              <div class="text-sm font-medium text-gray-300">Dry Mode</div>
-              <div class="text-xs text-gray-500 mt-0.5">Process tickets without creating branches or PRs</div>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" id="dryMode" />
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Concurrency</h2>
+        <div class="space-y-4 max-w-md">
           <div>
             <label for="maxConcurrent" class="block text-sm font-medium text-gray-300 mb-1.5">Max concurrent heavy steps</label>
             <input type="number" id="maxConcurrent" min="1" max="50"
-              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600">Semaphore for concurrent install / agent sessions across workflows (see <code class="text-gray-500">max_concurrent_workflows</code> in config)</p>
+              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600">Maps to <code class="text-gray-500">[general] max_concurrent_workflows</code> (install / agent semaphore).</p>
           </div>
           <div>
             <label for="maxActive" class="block text-sm font-medium text-gray-300 mb-1.5">Max active workflows</label>
             <input type="number" id="maxActive" min="0" max="100"
-              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600"><code class="text-gray-500">0</code> = same as max concurrent. Counts every row still on the dashboard (including <strong>Done</strong>, paused, stopped, and error) until <strong>Mark as Done</strong> or <strong>Delete</strong> removes it.</p>
-          </div>
-          <div>
-            <label for="reviewAddressPasses" class="block text-sm font-medium text-gray-300 mb-1.5">PR review passes</label>
-            <input type="number" id="reviewAddressPasses" min="1" max="20"
-              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
-            <p class="mt-1.5 text-xs text-gray-600"><code class="text-gray-500">[claude] review_address_ticket_passes</code> — repeats the built-in review sequence when <code class="text-gray-500">[[review_agent_steps]]</code> is empty</p>
+              class="w-32 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition-colors" />
+            <p class="mt-1.5 text-xs text-gray-600"><code class="text-gray-500">0</code> = same as max concurrent. Counts dashboard rows until Mark as Done / Delete.</p>
           </div>
         </div>
       </section>
 
-      <div class="border-t border-gray-800/60"></div>
-
-      <!-- Save buttons -->
       <div class="flex items-center justify-between pt-2 pb-8">
-        <div id="saveStatus" class="text-sm text-green-400 opacity-0 transition-opacity">
-          Configuration saved successfully
-        </div>
+        <div id="saveStatus" class="text-sm text-green-400 opacity-0 transition-opacity"></div>
         <button type="submit"
           class="inline-flex items-center gap-2 text-sm font-medium px-6 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:ring-offset-2 focus:ring-offset-gray-950 transition-colors">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-          Save Configuration
+          Save runtime settings
         </button>
       </div>
-
     </form>
   </main>
 
   <script>
-    const ITEM_TYPES = ['Task', 'Bug', 'Story', 'Epic', 'Sub-task', 'Spike'];
     let currentConfig = null;
 
     async function dashboardFetch(input, init = {}) {
@@ -305,13 +115,26 @@
       return res;
     }
 
-    function normalizePreInstall(raw) {
-      if (Array.isArray(raw)) {
-        return raw.map((s) => String(s).trim()).filter(Boolean);
+    function buildRuntimePatchPayload() {
+      const mc = parseInt(document.getElementById('maxConcurrent').value, 10);
+      const ma = parseInt(document.getElementById('maxActive').value, 10);
+      const u = document.getElementById('dashboardUsername').value.trim();
+      const pw = document.getElementById('dashboardPassword').value;
+      const payload = {
+        general: {
+          max_concurrent_workflows: Number.isFinite(mc) && mc >= 1 ? mc : 1,
+          max_active_workflows: Number.isFinite(ma) && ma >= 0 ? ma : 0,
+        },
+        web: {
+          dashboard_username: u,
+        },
+      };
+      if (pw.length > 0) {
+        payload.web.dashboard_password = pw;
+      } else if (!u) {
+        payload.web.dashboard_password = '';
       }
-      if (raw == null || raw === '') return [];
-      const t = String(raw).trim();
-      return t ? [t] : [];
+      return payload;
     }
 
     async function loadConfig() {
@@ -319,182 +142,20 @@
         const res = await dashboardFetch('/api/config');
         if (!res.ok) return;
         currentConfig = await res.json();
-        populateForm(currentConfig);
+        document.getElementById('configSnapshot').textContent = JSON.stringify(currentConfig, null, 2);
+        document.getElementById('dashboardUsername').value =
+          currentConfig.web && currentConfig.web.dashboard_username != null
+            ? String(currentConfig.web.dashboard_username)
+            : '';
+        document.getElementById('dashboardPassword').value = '';
+        document.getElementById('maxConcurrent').value = currentConfig.general.max_concurrent_workflows;
+        document.getElementById('maxActive').value =
+          currentConfig.general.max_active_workflows != null ? currentConfig.general.max_active_workflows : 0;
       } catch (e) {
         console.error('Failed to load config:', e);
       }
     }
 
-    function populateForm(cfg) {
-      document.getElementById('baseBranch').value = cfg.git.base_branch;
-      document.getElementById('gitRemote').value =
-        cfg.git.remote != null && String(cfg.git.remote).trim() !== ''
-          ? cfg.git.remote
-          : 'origin';
-      document.getElementById('pollInterval').value = cfg.general.poll_interval_secs;
-      document.getElementById('preInstallCmds').value = normalizePreInstall(cfg.commands.pre_install).join('\n');
-      document.getElementById('figmaToken').value = cfg.claude.figma_api_token;
-      document.getElementById('aiProvider').value = (cfg.agent && cfg.agent.provider) ? cfg.agent.provider : 'claude';
-      document.getElementById('cursorCli').value = (cfg.agent && cfg.agent.cursor_cli) ? cfg.agent.cursor_cli : 'agent';
-      document.getElementById('cursorModel').value = (cfg.agent && cfg.agent.cursor_model != null && cfg.agent.cursor_model !== '') ? cfg.agent.cursor_model : 'Auto';
-      document.getElementById('dryMode').checked = cfg.general.dry_mode;
-      document.getElementById('maxConcurrent').value = cfg.general.max_concurrent_workflows;
-      document.getElementById('maxActive').value =
-        cfg.general.max_active_workflows != null ? cfg.general.max_active_workflows : 0;
-      document.getElementById('jiraDoneStatus').value =
-        cfg.jira && cfg.jira.done_status ? cfg.jira.done_status : 'Done';
-      document.getElementById('reviewAddressPasses').value =
-        cfg.claude && cfg.claude.review_address_ticket_passes != null
-          ? cfg.claude.review_address_ticket_passes
-          : 3;
-      const du = document.getElementById('dashboardUsername');
-      if (du) {
-        du.value =
-          cfg.web && cfg.web.dashboard_username != null ? String(cfg.web.dashboard_username) : '';
-      }
-      const dp = document.getElementById('dashboardPassword');
-      if (dp) dp.value = '';
-      // Project keys
-      const tagContainer = document.getElementById('projectTags');
-      tagContainer.innerHTML = '';
-      cfg.jira.project_keys.forEach(key => addTag(key));
-
-      // Item types
-      const container = document.getElementById('itemTypesContainer');
-      container.innerHTML = '';
-      ITEM_TYPES.forEach(type => {
-        const checked = cfg.jira.item_types.includes(type) ? 'checked' : '';
-        container.innerHTML += `
-          <label class="flex items-center gap-2.5 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 cursor-pointer hover:border-gray-600 transition-colors has-[:checked]:border-blue-500/40 has-[:checked]:bg-blue-500/5">
-            <input type="checkbox" value="${type}" ${checked} class="item-type-cb w-4 h-4 rounded border-gray-600 text-blue-500 bg-gray-800 focus:ring-blue-500/40 focus:ring-offset-0" />
-            <span class="text-sm text-gray-300">${type}</span>
-          </label>`;
-      });
-    }
-
-    function addTag(value) {
-      const tagContainer = document.getElementById('projectTags');
-      const tag = document.createElement('span');
-      tag.className = 'tag text-xs font-mono bg-blue-500/15 text-blue-400 border border-blue-500/20 px-2 py-1 rounded-md inline-flex items-center gap-1';
-      tag.innerHTML = `${value} <span class="cursor-pointer opacity-60 hover:opacity-100" onclick="this.parentElement.remove()">&times;</span>`;
-      tagContainer.appendChild(tag);
-    }
-
-    function getProjectKeys() {
-      return Array.from(document.querySelectorAll('#projectTags .tag'))
-        .map(t => t.textContent.trim().replace('\u00d7', '').trim());
-    }
-
-    function getItemTypes() {
-      return Array.from(document.querySelectorAll('.item-type-cb:checked')).map(cb => cb.value);
-    }
-
-    function buildConfigPayload() {
-      const rap = parseInt(document.getElementById('reviewAddressPasses').value, 10);
-      const maxAct = parseInt(document.getElementById('maxActive').value, 10);
-      return {
-        agent_steps: currentConfig && Array.isArray(currentConfig.agent_steps) ? currentConfig.agent_steps : [],
-        review_agent_steps:
-          currentConfig && Array.isArray(currentConfig.review_agent_steps)
-            ? currentConfig.review_agent_steps
-            : [],
-        merge_base_agent_steps:
-          currentConfig && Array.isArray(currentConfig.merge_base_agent_steps)
-            ? currentConfig.merge_base_agent_steps
-            : [],
-        general: {
-          dry_mode: document.getElementById('dryMode').checked,
-          poll_interval_secs: parseInt(document.getElementById('pollInterval').value, 10),
-          max_concurrent_workflows: parseInt(document.getElementById('maxConcurrent').value, 10),
-          max_active_workflows: Number.isFinite(maxAct) && maxAct >= 0 ? maxAct : 0,
-          log_level: currentConfig ? currentConfig.general.log_level : 'info',
-          worker_image: currentConfig && currentConfig.general.worker_image != null ? currentConfig.general.worker_image : '',
-          ticket_workflow_steps_file:
-            currentConfig && currentConfig.general.ticket_workflow_steps_file != null
-              ? currentConfig.general.ticket_workflow_steps_file
-              : '',
-          review_workflow_steps_file:
-            currentConfig && currentConfig.general.review_workflow_steps_file != null
-              ? currentConfig.general.review_workflow_steps_file
-              : '',
-          merge_base_workflow_steps_file:
-            currentConfig && currentConfig.general.merge_base_workflow_steps_file != null
-              ? currentConfig.general.merge_base_workflow_steps_file
-              : '',
-        },
-        jira: {
-          project_keys: getProjectKeys(),
-          item_types: getItemTypes(),
-          jql_filter: currentConfig ? currentConfig.jira.jql_filter : '',
-          site: currentConfig ? currentConfig.jira.site : '',
-          email: currentConfig ? currentConfig.jira.email : '',
-          done_status: document.getElementById('jiraDoneStatus').value.trim() || 'Done',
-        },
-        git: {
-          base_branch: document.getElementById('baseBranch').value,
-          remote: document.getElementById('gitRemote').value.trim() || 'origin',
-          repo_path: currentConfig ? currentConfig.git.repo_path : '/workspace',
-          repo_url: currentConfig ? currentConfig.git.repo_url : '',
-        },
-        commands: {
-          pre_install: document.getElementById('preInstallCmds').value
-            .split('\n')
-            .map((s) => s.trim())
-            .filter(Boolean),
-          install: currentConfig ? currentConfig.commands.install : '',
-        },
-        web: (() => {
-          const base = currentConfig && currentConfig.web
-            ? { ...currentConfig.web }
-            : { host: '0.0.0.0', port: 8080, dashboard_username: '', dashboard_password: '' };
-          const u = document.getElementById('dashboardUsername');
-          const p = document.getElementById('dashboardPassword');
-          if (u) base.dashboard_username = u.value.trim();
-          if (p) base.dashboard_password = p.value;
-          return base;
-        })(),
-        claude: {
-          skills_path: currentConfig ? currentConfig.claude.skills_path : '/root/.claude/skills',
-          address_ticket_passes: currentConfig ? currentConfig.claude.address_ticket_passes : 3,
-          review_address_ticket_passes: Number.isFinite(rap) && rap >= 1 ? rap : 3,
-          step_timeout_secs: currentConfig ? currentConfig.claude.step_timeout_secs : 600,
-          figma_api_token: document.getElementById('figmaToken').value,
-          model: currentConfig ? currentConfig.claude.model : '',
-        },
-        agent: {
-          provider: document.getElementById('aiProvider').value,
-          cursor_cli: document.getElementById('cursorCli').value.trim() || 'agent',
-          cursor_model: (() => {
-            const t = document.getElementById('cursorModel').value.trim();
-            return t || 'Auto';
-          })(),
-        },
-        network: currentConfig ? currentConfig.network : { extra_egress_hosts: [], allow_all_https: false },
-        docker: currentConfig
-          ? currentConfig.docker
-          : { build_commands: [], compose_up_commands: [] },
-      };
-    }
-
-    // Tag input
-    document.getElementById('projectKeyInput').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ',') {
-        e.preventDefault();
-        const value = e.target.value.trim().toUpperCase().replace(',', '');
-        if (value && !getProjectKeys().includes(value)) {
-          addTag(value);
-        }
-        e.target.value = '';
-      }
-    });
-
-    // Toggle password visibility
-    function togglePassword(btn) {
-      const input = btn.previousElementSibling;
-      input.type = input.type === 'password' ? 'text' : 'password';
-    }
-
-    // Save form
     document.getElementById('configForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const status = document.getElementById('saveStatus');
@@ -502,29 +163,28 @@
         const res = await dashboardFetch('/api/config', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildConfigPayload()),
+          body: JSON.stringify(buildRuntimePatchPayload()),
         });
         if (res.ok) {
           currentConfig = await res.json();
-          status.textContent = 'Configuration saved successfully';
-          status.className = 'text-sm text-green-400 transition-opacity';
+          document.getElementById('configSnapshot').textContent = JSON.stringify(currentConfig, null, 2);
+          status.textContent = 'Saved.';
+          status.className = 'text-sm text-green-400 transition-opacity max-w-xl';
         } else {
           const err = await res.text();
           status.textContent = 'Error: ' + err;
           status.className = 'text-sm text-red-400 transition-opacity';
         }
         status.style.opacity = '1';
-        setTimeout(() => { status.style.opacity = '0'; }, 4000);
+        setTimeout(() => { status.style.opacity = '0'; }, 6000);
       } catch (err) {
-        status.textContent = 'Failed to save: ' + err.message;
+        status.textContent = 'Failed: ' + err.message;
         status.className = 'text-sm text-red-400 transition-opacity';
         status.style.opacity = '1';
-        setTimeout(() => { status.style.opacity = '0'; }, 4000);
       }
     });
 
     loadConfig();
   </script>
-
 </body>
 </html>

@@ -17,7 +17,10 @@ struct GhUser {
 }
 
 /// Returns `(display_name, noreply_email)` for git commits, matching the logged-in `gh` account.
-pub async fn github_commit_identity(cwd: &Path, cancel: CancellationToken) -> Result<(String, String)> {
+pub async fn github_commit_identity(
+    cwd: &Path,
+    cancel: CancellationToken,
+) -> Result<(String, String)> {
     let u = fetch_gh_user(cwd, cancel).await?;
     let display_name = u
         .name
@@ -38,9 +41,8 @@ async fn fetch_gh_user(cwd: &Path, cancel: CancellationToken) -> Result<GhUser> 
             out.stderr.trim()
         )));
     }
-    let u: GhUser = serde_json::from_str(out.stdout.trim()).map_err(|e| {
-        MaestroError::Git(format!("failed to parse gh api user JSON: {e}"))
-    })?;
+    let u: GhUser = serde_json::from_str(out.stdout.trim())
+        .map_err(|e| MaestroError::Git(format!("failed to parse gh api user JSON: {e}")))?;
     if u.login.is_empty() {
         return Err(MaestroError::Git(
             "gh api user returned an empty login".into(),

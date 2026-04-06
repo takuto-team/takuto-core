@@ -67,9 +67,7 @@ pub fn build_router(state: AppState) -> Router {
             dashboard_auth_middleware,
         ));
 
-    let api = Router::new()
-        .merge(api_public)
-        .merge(api_protected);
+    let api = Router::new().merge(api_public).merge(api_protected);
 
     Router::new()
         .nest("/api", api)

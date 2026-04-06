@@ -46,13 +46,22 @@ enum Commands {
 }
 
 #[derive(Parser)]
-#[command(name = "maestro", about = "Automated Jira ticket handler using Claude Code or Cursor Agent")]
+#[command(
+    name = "maestro",
+    about = "Automated Jira ticket handler using Claude Code or Cursor Agent"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
     /// Path to the configuration file (also reads MAESTRO_CONFIG env var)
-    #[arg(short, long, default_value = "config.toml", env = "MAESTRO_CONFIG", global = true)]
+    #[arg(
+        short,
+        long,
+        default_value = "config.toml",
+        env = "MAESTRO_CONFIG",
+        global = true
+    )]
     config: PathBuf,
 
     /// Enable dry-run mode (overrides config file); only applies to the default server command
@@ -168,19 +177,20 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let (repo_path, git_remote, dry_mode) = {
+    let (repo_path, git_remote, dry_mode, acli_extras) = {
         let c = config.read().await;
         (
             PathBuf::from(&c.git.repo_path),
             c.git.remote.clone(),
             c.general.dry_mode,
+            c.jira.acli_extra_argv_prefixes(),
         )
     };
     let actions: Arc<dyn ExternalActions> = if dry_mode {
         info!("Running in DRY MODE — no external writes");
-        Arc::new(DryRunActions::new(repo_path, git_remote))
+        Arc::new(DryRunActions::new(repo_path, git_remote, acli_extras))
     } else {
-        Arc::new(RealActions::new(repo_path, git_remote))
+        Arc::new(RealActions::new(repo_path, git_remote, acli_extras))
     };
 
     let max_concurrent = config.read().await.general.max_concurrent_workflows as usize;
