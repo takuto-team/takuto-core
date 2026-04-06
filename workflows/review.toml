@@ -5,7 +5,7 @@ name = "Fix review comments"
 prompt = """
 /address-pr-comments
 
-Then push with --no-verify option if not done already
+Make sure all changes are staged then push with --no-verify option
 """
 repeat = 1
 
@@ -19,5 +19,7 @@ and edge cases — do not write vacuous tests that hit lines without asserting m
 to confirm the gap is closed. Do not stop until npm run lint reports zero errors and zero warnings AND npm run test:coverage reports 100% 
 coverage across all metrics (lines, branches, functions, statements). If either check regresses at any point, fix it before continuing.
 Once both checks pass cleanly, stage all changes and commit with a message of test: 100% coverage, zero lint warnings.
+
+Make sure all changes are staged then push with --no-verify option
 """
 repeat = 1

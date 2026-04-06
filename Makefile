@@ -36,6 +36,7 @@ MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.
 .PHONY: build up down setup logs logs-maestro ps exec restart load-worker
 
 build:
+	@mkdir -p skills
 	$(COMPOSE) $(COMPOSE_FILES) build
 
 up:

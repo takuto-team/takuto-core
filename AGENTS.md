@@ -152,7 +152,7 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/workflows` | List summaries (includes `id` = workflow UUID, `ticket_key`, **`pr_url`**, action flags such as **`can_delete`**, etc.); sorted by **`started_at`** ascending (oldest first — matches **first-load** dashboard order; the UI then **preserves** that order on updates and only **appends** new keys). Dashboard **Show PR** uses **`pr_url`** when set. |
+| GET | `/api/workflows` | List summaries (includes `id` = workflow UUID, `ticket_key`, **`pr_url`**, **`progress_percent`** (0–100, step-based from config + `steps_log`), action flags such as **`can_delete`**, etc.); sorted by **`started_at`** ascending (oldest first — matches **first-load** dashboard order; the UI then **preserves** that order on updates and only **appends** new keys). Dashboard **Show PR** uses **`pr_url`** when set. |
 | GET | `/api/workflows/{id}` | **Path segment is the map key: Jira ticket key**, not the UUID `id` field |
 | POST | `/api/workflows/{id}/pause` | Same: ticket key |
 | POST | `/api/workflows/{id}/resume` | |
@@ -170,7 +170,7 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | GET | `/api/auth/status` | JSON **`{ "dashboard_auth_enabled": bool }`** — whether login is required (public) |
 | POST | `/api/auth/login` | JSON credentials → **`204`** + session cookie (public when auth enabled) |
 | POST | `/api/auth/logout` | Clears session cookie (**`204`**) |
-| GET | `/ws` | WebSocket; JSON messages = `WorkflowEvent` (+ step/output fields); **`event_type`** may be **`workflow_removed`** when **Mark as Done** or **Delete** drops a workflow; session cookie when dashboard auth is enabled |
+| GET | `/ws` | WebSocket; JSON messages = `WorkflowEvent` (+ step/output fields); optional **`progress_percent`** on **`workflow_updated`** and **`step_completed`**; **`event_type`** may be **`workflow_removed`** when **Mark as Done** or **Delete** drops a workflow; session cookie when dashboard auth is enabled |
 
 Static files: embedded from `crates/maestro-web/src/assets/` (e.g. `index.html`, `config.html`, `login.html`). **`config.html`** is **runtime settings** only (dashboard login + the two concurrency caps); it shows a read-only JSON snapshot of the rest. **`PUT /api/config`** from the UI sends only that patch.
 

@@ -320,9 +320,9 @@ The container uses iptables to restrict outbound traffic. Allowed by default:
 
 ### Project skills (`./skills`)
 
-Add a **`skills`** directory at the **root of the Maestro project** (same level as `docker-compose.yml`). It is **gitignored** so each developer or CI can use different skill sets without committing them.
+Add a **`skills`** directory at the **root of the Maestro project** (same level as `docker-compose.yml`). Everything under it is **gitignored** except **`skills/.gitkeep`**, which keeps the directory in the repo so image builds can bind-mount **`./skills`** alone (see Dockerfile). Put your real skills only on disk locally.
 
-- **`docker compose build`:** If **`./skills`** exists and is non-empty in the build context, its contents are **baked** into the image under **`/opt/maestro/project-skills-baked`** (BuildKit `RUN --mount=type=bind`). Requires **BuildKit** (`DOCKER_BUILDKIT=1` for Docker; Podman 4+ supports the same Dockerfile syntax).
+- **`docker compose build`:** If **`./skills`** is non-empty, its contents are **baked** into the image under **`/opt/maestro/project-skills-baked`** via BuildKit **`RUN --mount=type=bind,source=skills`** (only that folder — not the whole repo, so BuildKit does not walk **`target/`** or **`.git/`** on your machine). Requires **BuildKit** (`DOCKER_BUILDKIT=1` for Docker; Podman 4+ supports the same Dockerfile syntax). **`make build`** runs **`mkdir -p skills`** first if you removed the directory.
 - **`docker compose up`:** Compose bind-mounts **`./skills`** read-only to **`/opt/maestro/project-skills-host`**. If the host path is missing, the engine typically creates an **empty** directory; the merge step is then a no-op for the host layer.
 
 On **each container start** (as **root**, before switching to **`maestro`**), **`merge-project-skills.sh`** copies each **top-level** entry from:

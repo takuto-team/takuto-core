@@ -12,8 +12,9 @@ maestro.env
 # Local issue tracking files
 /issues
 
-# Optional per-developer Claude/Cursor skills merged into container home on start (see README).
-/skills
+# Optional per-developer Claude/Cursor skills (see README). Track only `.gitkeep` so `docker compose build` can bind-mount `./skills` without walking the whole repo.
+/skills/*
+!/skills/.gitkeep
 
 # Default workflow step files are tracked; other paths under workflows/ stay local.
 /workflows/*

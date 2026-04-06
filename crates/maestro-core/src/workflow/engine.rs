@@ -76,6 +76,9 @@ pub struct WorkflowEvent {
     pub output_line: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
+    /// Step-based dashboard progress (0–100); set on `workflow_updated` and `step_completed` when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<u8>,
 }
 
 pub struct Workflow {
@@ -369,6 +372,7 @@ impl WorkflowEngine {
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: None,
         });
 
         Ok(())
@@ -683,6 +687,7 @@ impl WorkflowEngine {
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: None,
         });
 
         Ok(())
@@ -710,6 +715,7 @@ impl WorkflowEngine {
                 step_name: None,
                 output_line: None,
                 stream: None,
+                progress_percent: None,
             });
 
             Ok(())
@@ -756,6 +762,7 @@ impl WorkflowEngine {
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: None,
         });
 
         Ok(())
@@ -878,6 +885,7 @@ impl WorkflowEngine {
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: None,
         });
 
         let engine_config = self.config.clone();
@@ -983,6 +991,7 @@ impl WorkflowEngine {
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: None,
         });
 
         let engine_config = self.config.clone();
@@ -1076,6 +1085,7 @@ impl WorkflowEngine {
                 step_name: None,
                 output_line: None,
                 stream: None,
+                progress_percent: None,
             });
         }
 
@@ -1088,8 +1098,20 @@ impl WorkflowEngine {
         })
     }
 
-    pub fn broadcast_event(&self, event: WorkflowEvent) {
-        let _ = self.event_tx.send(event);
+    pub fn broadcast_event(&self, mut event: WorkflowEvent) {
+        if event.event_type != "workflow_updated" {
+            let _ = self.event_tx.send(event);
+            return;
+        }
+        let workflows = Arc::clone(&self.workflows);
+        let config = Arc::clone(&self.config);
+        let ticket_key = event.ticket_key.clone();
+        let tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            event.progress_percent =
+                progress_percent_for_ticket(&workflows, &config, &ticket_key).await;
+            let _ = tx.send(event);
+        });
     }
 }
 
@@ -1160,6 +1182,7 @@ async fn drive_workflow(
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: None,
         });
     }
 }
@@ -1241,6 +1264,7 @@ async fn drive_pr_review_workflow(
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: None,
         });
     }
 }
@@ -1329,6 +1353,7 @@ async fn drive_merge_base_workflow(
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: None,
         });
     }
 }
@@ -1439,6 +1464,7 @@ async fn run_merge_base_steps(
         container_runner.as_ref(),
         &prior_steps,
         false,
+        config,
     )
     .await?;
 
@@ -1449,7 +1475,7 @@ async fn run_merge_base_steps(
     complete_log.complete(StepStatus::Success);
     add_step_log(workflows, ticket_key, complete_log).await;
 
-    transition(workflows, event_tx, ticket_key, WorkflowState::Done).await;
+    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config).await;
     info!(ticket = %ticket_key, "Merge base branch workflow completed");
 
     Ok(())
@@ -1480,6 +1506,7 @@ async fn run_agent_step_sequence(
     // If true (main ticket flow): skip agent steps already Success in prior_steps_log (restart resume).
     // If false (PR review / merge-base): always run — dashboard may trigger the flow repeatedly.
     apply_prior_success_skip: bool,
+    config: &Arc<RwLock<Config>>,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = None;
@@ -1519,6 +1546,14 @@ async fn run_agent_step_sequence(
                         .push("Skipped (succeeded in prior run)".to_string());
                     skip_log.complete(StepStatus::Skipped);
                     add_step_log(workflows, ticket_key, skip_log).await;
+                    broadcast_step_completed(
+                        event_tx,
+                        ticket_key,
+                        &step_label,
+                        workflows,
+                        config,
+                    )
+                    .await;
                     continue;
                 }
 
@@ -1532,6 +1567,7 @@ async fn run_agent_step_sequence(
                             ticket_key,
                             outer,
                             &step_label,
+                            config,
                         )
                         .await;
                     }
@@ -1542,6 +1578,7 @@ async fn run_agent_step_sequence(
                             ticket_key,
                             outer,
                             &step_label,
+                            config,
                         )
                         .await;
                     }
@@ -1552,6 +1589,7 @@ async fn run_agent_step_sequence(
                             ticket_key,
                             outer,
                             &step_label,
+                            config,
                         )
                         .await;
                     }
@@ -1675,6 +1713,14 @@ async fn run_agent_step_sequence(
                 }
 
                 add_step_log(workflows, ticket_key, step_log).await;
+                broadcast_step_completed(
+                    event_tx,
+                    ticket_key,
+                    &step_label,
+                    workflows,
+                    config,
+                )
+                .await;
             }
         }
     }
@@ -1888,6 +1934,7 @@ async fn run_pr_review_steps(
         container_runner.as_ref(),
         &pr_prior_steps,
         false,
+        config,
     )
     .await?;
 
@@ -1965,7 +2012,7 @@ async fn run_pr_review_steps(
     complete_log.complete(StepStatus::Success);
     add_step_log(workflows, ticket_key, complete_log).await;
 
-    transition(workflows, event_tx, ticket_key, WorkflowState::Done).await;
+    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config).await;
     info!(ticket = %ticket_key, "PR review workflow completed");
 
     Ok(())
@@ -2033,7 +2080,14 @@ async fn run_workflow_steps(
         }
 
         // Step 1: Assign ticket
-        transition(workflows, event_tx, ticket_key, WorkflowState::Assigning).await;
+        transition(
+            workflows,
+            event_tx,
+            ticket_key,
+            WorkflowState::Assigning,
+            config,
+        )
+        .await;
         let mut step_log = StepLog::new("Assign Ticket".to_string());
 
         let cfg = config.read().await;
@@ -2076,6 +2130,7 @@ async fn run_workflow_steps(
             event_tx,
             ticket_key,
             WorkflowState::RetrievingDetails,
+            config,
         )
         .await;
         let mut step_log = StepLog::new("Retrieve Details".to_string());
@@ -2130,6 +2185,7 @@ async fn run_workflow_steps(
             event_tx,
             ticket_key,
             WorkflowState::CreatingWorktree,
+            config,
         )
         .await;
         let mut step_log = StepLog::new("Create Worktree".to_string());
@@ -2257,7 +2313,15 @@ async fn run_workflow_steps(
             Ok(output) if output.success() => {
                 step_log.output.push("mise install completed".to_string());
                 step_log.complete(StepStatus::Success);
-                broadcast_step_completed(event_tx, ticket_key, "Mise install");
+                add_step_log(workflows, ticket_key, step_log).await;
+                broadcast_step_completed(
+                    event_tx,
+                    ticket_key,
+                    "Mise install",
+                    workflows,
+                    config,
+                )
+                .await;
             }
             Ok(output) => {
                 let stderr_tail = output
@@ -2285,7 +2349,6 @@ async fn run_workflow_steps(
                 return Err(MaestroError::Git(msg));
             }
         }
-        add_step_log(workflows, ticket_key, step_log).await;
     } else if is_resume && step_already_succeeded(&prior_steps_log, "Mise install") {
         info!(ticket = %ticket_key, "Skipping Mise install — succeeded in prior run");
         let mut skip_log = StepLog::new("Mise install".to_string());
@@ -2294,6 +2357,14 @@ async fn run_workflow_steps(
             .push("Skipped (succeeded in prior run)".to_string());
         skip_log.complete(StepStatus::Skipped);
         add_step_log(workflows, ticket_key, skip_log).await;
+        broadcast_step_completed(
+            event_tx,
+            ticket_key,
+            "Mise install",
+            workflows,
+            config,
+        )
+        .await;
     }
 
     // Step 3b: Pre-install (e.g., registry auth) — each entry is a separate shell command
@@ -2310,6 +2381,14 @@ async fn run_workflow_steps(
                     .push("Skipped (succeeded in prior run)".to_string());
                 skip_log.complete(StepStatus::Skipped);
                 add_step_log(workflows, ticket_key, skip_log).await;
+                broadcast_step_completed(
+                    event_tx,
+                    ticket_key,
+                    &step_name,
+                    workflows,
+                    config,
+                )
+                .await;
                 continue;
             }
 
@@ -2353,7 +2432,15 @@ async fn run_workflow_steps(
                 Ok(output) if output.success() => {
                     step_log.output.push(format!("{step_name} completed"));
                     step_log.complete(StepStatus::Success);
-                    broadcast_step_completed(event_tx, ticket_key, &step_name);
+                    add_step_log(workflows, ticket_key, step_log).await;
+                    broadcast_step_completed(
+                        event_tx,
+                        ticket_key,
+                        &step_name,
+                        workflows,
+                        config,
+                    )
+                    .await;
                 }
                 Ok(output) => {
                     let stderr_tail = output
@@ -2381,7 +2468,6 @@ async fn run_workflow_steps(
                     return Err(MaestroError::Git(msg));
                 }
             }
-            add_step_log(workflows, ticket_key, step_log).await;
         }
     }
 
@@ -2430,7 +2516,15 @@ async fn run_workflow_steps(
             Ok(output) if output.success() => {
                 step_log.output.push("Dependencies installed".to_string());
                 step_log.complete(StepStatus::Success);
-                broadcast_step_completed(event_tx, ticket_key, "Install Dependencies");
+                add_step_log(workflows, ticket_key, step_log).await;
+                broadcast_step_completed(
+                    event_tx,
+                    ticket_key,
+                    "Install Dependencies",
+                    workflows,
+                    config,
+                )
+                .await;
             }
             Ok(output) => {
                 let stderr_tail = output
@@ -2468,7 +2562,6 @@ async fn run_workflow_steps(
                 return Err(MaestroError::Git(msg));
             }
         }
-        add_step_log(workflows, ticket_key, step_log).await;
     } else if is_resume && step_already_succeeded(&prior_steps_log, "Install Dependencies") {
         info!(ticket = %ticket_key, "Skipping Install Dependencies — succeeded in prior run");
         let mut skip_log = StepLog::new("Install Dependencies".to_string());
@@ -2477,6 +2570,14 @@ async fn run_workflow_steps(
             .push("Skipped (succeeded in prior run)".to_string());
         skip_log.complete(StepStatus::Skipped);
         add_step_log(workflows, ticket_key, skip_log).await;
+        broadcast_step_completed(
+            event_tx,
+            ticket_key,
+            "Install Dependencies",
+            workflows,
+            config,
+        )
+        .await;
     }
 
     // Ticket context and interpolation vars for [[agent_steps]] prompts
@@ -2535,6 +2636,7 @@ async fn run_workflow_steps(
         container_runner.as_ref(),
         &prior_steps_log,
         true,
+        config,
     )
     .await?;
 
@@ -2635,7 +2737,7 @@ async fn run_workflow_steps(
     complete_log.complete(StepStatus::Success);
     add_step_log(workflows, ticket_key, complete_log).await;
 
-    transition(workflows, event_tx, ticket_key, WorkflowState::Done).await;
+    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config).await;
     info!(ticket = ticket_key, "Workflow completed successfully");
 
     Ok(())
@@ -2739,14 +2841,18 @@ fn broadcast_step_started(
         step_name: Some(step_name.to_string()),
         output_line: None,
         stream: None,
+        progress_percent: None,
     });
 }
 
-fn broadcast_step_completed(
+async fn broadcast_step_completed(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     ticket_key: &str,
     step_name: &str,
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    config: &Arc<RwLock<Config>>,
 ) {
+    let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
     let _ = event_tx.send(WorkflowEvent {
         event_type: "step_completed".to_string(),
         workflow_id: String::new(),
@@ -2757,6 +2863,7 @@ fn broadcast_step_completed(
         step_name: Some(step_name.to_string()),
         output_line: None,
         stream: None,
+        progress_percent: pct,
     });
 }
 
@@ -2812,6 +2919,7 @@ fn spawn_output_relay(
                     step_name: Some(step_name.clone()),
                     output_line: Some(display_text),
                     stream: Some(line.stream),
+                    progress_percent: None,
                 });
                 match result {
                     Ok(count) => {
@@ -2828,12 +2936,24 @@ fn spawn_output_relay(
     line_tx
 }
 
+async fn progress_percent_for_ticket(
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    config: &Arc<RwLock<Config>>,
+    ticket_key: &str,
+) -> Option<u8> {
+    let cfg = config.read().await;
+    let wf = workflows.read().await;
+    wf.get(ticket_key)
+        .map(|w| super::dashboard_progress::workflow_progress_percent(w, &cfg))
+}
+
 async fn transition_to_agent_step(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
     ticket_key: &str,
     pass: u8,
     step_label: &str,
+    config: &Arc<RwLock<Config>>,
 ) {
     info!(
         ticket = %ticket_key,
@@ -2842,13 +2962,19 @@ async fn transition_to_agent_step(
         "Agent step (state + dashboard label)"
     );
 
-    let mut wf = workflows.write().await;
-    if let Some(workflow) = wf.get_mut(ticket_key) {
-        workflow.state = WorkflowState::AddressingTicket { pass };
-        workflow.current_step_label = Some(step_label.to_string());
-        workflow.updated_at = Utc::now();
-        let display = workflow.status_display();
-        let id = workflow.id.clone();
+    let updated = {
+        let mut wf = workflows.write().await;
+        if let Some(workflow) = wf.get_mut(ticket_key) {
+            workflow.state = WorkflowState::AddressingTicket { pass };
+            workflow.current_step_label = Some(step_label.to_string());
+            workflow.updated_at = Utc::now();
+            Some((workflow.id.clone(), workflow.status_display()))
+        } else {
+            None
+        }
+    };
+    if let Some((id, display)) = updated {
+        let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
             workflow_id: id,
@@ -2859,6 +2985,7 @@ async fn transition_to_agent_step(
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: pct,
         });
     }
 }
@@ -2869,6 +2996,7 @@ async fn transition_to_pr_review_step(
     ticket_key: &str,
     pass: u8,
     step_label: &str,
+    config: &Arc<RwLock<Config>>,
 ) {
     info!(
         ticket = %ticket_key,
@@ -2877,13 +3005,19 @@ async fn transition_to_pr_review_step(
         "PR review agent step (state + dashboard label)"
     );
 
-    let mut wf = workflows.write().await;
-    if let Some(workflow) = wf.get_mut(ticket_key) {
-        workflow.state = WorkflowState::AddressingPrComments { pass };
-        workflow.current_step_label = Some(step_label.to_string());
-        workflow.updated_at = Utc::now();
-        let display = workflow.status_display();
-        let id = workflow.id.clone();
+    let updated = {
+        let mut wf = workflows.write().await;
+        if let Some(workflow) = wf.get_mut(ticket_key) {
+            workflow.state = WorkflowState::AddressingPrComments { pass };
+            workflow.current_step_label = Some(step_label.to_string());
+            workflow.updated_at = Utc::now();
+            Some((workflow.id.clone(), workflow.status_display()))
+        } else {
+            None
+        }
+    };
+    if let Some((id, display)) = updated {
+        let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
             workflow_id: id,
@@ -2894,6 +3028,7 @@ async fn transition_to_pr_review_step(
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: pct,
         });
     }
 }
@@ -2904,6 +3039,7 @@ async fn transition_to_merge_base_step(
     ticket_key: &str,
     pass: u8,
     step_label: &str,
+    config: &Arc<RwLock<Config>>,
 ) {
     info!(
         ticket = %ticket_key,
@@ -2912,13 +3048,19 @@ async fn transition_to_merge_base_step(
         "Merge base branch agent step (state + dashboard label)"
     );
 
-    let mut wf = workflows.write().await;
-    if let Some(workflow) = wf.get_mut(ticket_key) {
-        workflow.state = WorkflowState::MergingBaseBranch { pass };
-        workflow.current_step_label = Some(step_label.to_string());
-        workflow.updated_at = Utc::now();
-        let display = workflow.status_display();
-        let id = workflow.id.clone();
+    let updated = {
+        let mut wf = workflows.write().await;
+        if let Some(workflow) = wf.get_mut(ticket_key) {
+            workflow.state = WorkflowState::MergingBaseBranch { pass };
+            workflow.current_step_label = Some(step_label.to_string());
+            workflow.updated_at = Utc::now();
+            Some((workflow.id.clone(), workflow.status_display()))
+        } else {
+            None
+        }
+    };
+    if let Some((id, display)) = updated {
+        let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
             workflow_id: id,
@@ -2929,6 +3071,7 @@ async fn transition_to_merge_base_step(
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: pct,
         });
     }
 }
@@ -2938,20 +3081,27 @@ async fn transition(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     ticket_key: &str,
     new_state: WorkflowState,
+    config: &Arc<RwLock<Config>>,
 ) {
     let state_name = new_state.display_name();
     info!(ticket = ticket_key, state = %state_name, "Transitioning workflow");
 
-    let mut wf = workflows.write().await;
-    if let Some(workflow) = wf.get_mut(ticket_key) {
-        workflow.current_step_label = None;
-        workflow.state = new_state;
-        workflow.updated_at = Utc::now();
-        let display = workflow.status_display();
-
+    let updated = {
+        let mut wf = workflows.write().await;
+        if let Some(workflow) = wf.get_mut(ticket_key) {
+            workflow.current_step_label = None;
+            workflow.state = new_state;
+            workflow.updated_at = Utc::now();
+            Some((workflow.id.clone(), workflow.status_display()))
+        } else {
+            None
+        }
+    };
+    if let Some((id, display)) = updated {
+        let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
-            workflow_id: workflow.id.clone(),
+            workflow_id: id,
             ticket_key: ticket_key.to_string(),
             state: display,
             timestamp: Utc::now(),
@@ -2959,6 +3109,7 @@ async fn transition(
             step_name: None,
             output_line: None,
             stream: None,
+            progress_percent: pct,
         });
     }
 }

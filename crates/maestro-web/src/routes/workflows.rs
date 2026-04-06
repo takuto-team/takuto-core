@@ -3,6 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::Serialize;
 
+use maestro_core::workflow::dashboard_progress;
 use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow};
 use maestro_core::workflow::state::WorkflowState;
 use maestro_core::workflow::step::StepLog;
@@ -46,6 +47,8 @@ pub struct WorkflowSummary {
     pub can_mark_done: bool,
     /// **Delete** is allowed when the workflow is not **running** (`WorkflowState::is_active` is false).
     pub can_delete: bool,
+    /// Step-based progress 0–100 (see `dashboard_progress` in maestro-core).
+    pub progress_percent: u8,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -70,6 +73,7 @@ fn extract_error(state: &WorkflowState) -> Option<String> {
 }
 
 pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowSummary>> {
+    let cfg = state.config.read().await;
     let workflows = state.engine.workflows.read().await;
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
@@ -92,6 +96,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 can_merge_base,
                 can_mark_done,
                 can_delete: !w.state.is_active(),
+                progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
             }
         })
         .collect();
@@ -104,6 +109,7 @@ pub async fn get_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<WorkflowSummary>, StatusCode> {
+    let cfg = state.config.read().await;
     let workflows = state.engine.workflows.read().await;
     workflows
         .get(&id)
@@ -126,6 +132,7 @@ pub async fn get_workflow(
                 can_merge_base,
                 can_mark_done,
                 can_delete: !w.state.is_active(),
+                progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
             })
         })
         .ok_or(StatusCode::NOT_FOUND)

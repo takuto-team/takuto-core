@@ -109,6 +109,9 @@ function handleWorkflowEvent(evt) {
   const wf = Object.values(workflows).find(w => w.ticket_key === evt.ticket_key);
   if (wf) {
     wf.state = evt.state;
+    if (typeof evt.progress_percent === 'number' && Number.isFinite(evt.progress_percent)) {
+      wf.progress_percent = evt.progress_percent;
+    }
     if (evt.error) {
       wf.error = evt.error;
     }
@@ -200,6 +203,12 @@ function handleStepCompleted(evt) {
     headerEl.textContent = `${evt.step_name} -- completed`;
     headerEl.closest('.terminal-header').classList.add('completed');
   }
+
+  const wf = workflows[evt.ticket_key];
+  if (wf && typeof evt.progress_percent === 'number' && Number.isFinite(evt.progress_percent)) {
+    wf.progress_percent = evt.progress_percent;
+    updateCardState(wf);
+  }
 }
 
 // Update a single card's state indicators without re-rendering the whole grid
@@ -222,7 +231,7 @@ function updateCardState(wf) {
   if (stepEl) stepEl.textContent = wf.state;
 
   // Update progress bar
-  const progress = getProgressPercent(wf.state);
+  const progress = cardProgressPercent(wf);
   const progressBar = card.querySelector('.progress-bar');
   if (progressBar) progressBar.style.width = `${progress}%`;
 
@@ -507,7 +516,15 @@ function getStatusInfo(state) {
   return { label: 'Running', color: 'blue', icon: 'pulse' };
 }
 
-function getProgressPercent(state) {
+/** Prefer server `progress_percent`; rough heuristic if missing (older clients / events). */
+function cardProgressPercent(w) {
+  if (typeof w.progress_percent === 'number' && Number.isFinite(w.progress_percent)) {
+    return Math.max(0, Math.min(100, Math.round(w.progress_percent)));
+  }
+  return getProgressPercentFallback(w.state);
+}
+
+function getProgressPercentFallback(state) {
   const steps = [
     'Pending', 'Assigning', 'Retrieving', 'Creating Worktree',
     'AI agent', 'Reviewing', 'Done'
@@ -519,7 +536,6 @@ function getProgressPercent(state) {
     }
   }
   if (s === 'done') return 100;
-  // Configured agent step labels from the engine, e.g. "Implement (run 1/2)" or "Lint (cycle 2/3, run 1/1)"
   if (s.includes('(run ') || s.includes('(cycle ') || s.includes('running agent steps')) {
     const aiIdx = steps.indexOf('AI agent');
     return Math.round(((aiIdx + 1) / steps.length) * 100);
@@ -554,7 +570,7 @@ function workflowPrUrl(w) {
 
 function renderWorkflowCard(w) {
   const status = getStatusInfo(w.state);
-  const progress = getProgressPercent(w.state);
+  const progress = cardProgressPercent(w);
   const prUrl = workflowPrUrl(w);
   const borderClass = status.color === 'red' ? 'border-red-500/30 hover:border-red-500/40' :
                       status.color === 'yellow' ? 'border-yellow-500/30 hover:border-yellow-500/40' :
