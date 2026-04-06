@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use maestro_core::workflow::dashboard_progress;
 use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow};
@@ -49,6 +49,10 @@ pub struct WorkflowSummary {
     pub can_delete: bool,
     /// Step-based progress 0–100 (see `dashboard_progress` in maestro-core).
     pub progress_percent: u8,
+    /// Started via dashboard **+** manual picker.
+    pub started_manually: bool,
+    /// Counts against **`[general] max_concurrent_manual_workflows`** (manual start and not Done/Stopped/Error).
+    pub counts_toward_manual_cap: bool,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -65,6 +69,11 @@ fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
     (can_address, can_merge_base, can_mark)
 }
 
+fn manual_cap_fields(w: &Workflow) -> (bool, bool) {
+    let toward = w.started_manually && w.state.occupies_concurrency_slot();
+    (w.started_manually, toward)
+}
+
 fn extract_error(state: &WorkflowState) -> Option<String> {
     match state {
         WorkflowState::Error { message, .. } => Some(message.clone()),
@@ -79,6 +88,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
         .values()
         .map(|w| {
             let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
+            let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -97,6 +107,8 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 can_mark_done,
                 can_delete: !w.state.is_active(),
                 progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
+                started_manually,
+                counts_toward_manual_cap,
             }
         })
         .collect();
@@ -115,6 +127,7 @@ pub async fn get_workflow(
         .get(&id)
         .map(|w| {
             let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
+            let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
             Json(WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -133,6 +146,8 @@ pub async fn get_workflow(
                 can_mark_done,
                 can_delete: !w.state.is_active(),
                 progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
+                started_manually,
+                counts_toward_manual_cap,
             })
         })
         .ok_or(StatusCode::NOT_FOUND)
@@ -247,4 +262,79 @@ pub async fn delete_workflow(
         .await
         .map(|()| StatusCode::OK)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+#[derive(Deserialize)]
+pub struct StartManualWorkflowBody {
+    pub ticket_key: String,
+    pub ticket_summary: String,
+}
+
+#[derive(Serialize)]
+pub struct StartManualWorkflowResponse {
+    pub workflow_id: String,
+    pub ticket_key: String,
+}
+
+/// Start a ticket workflow from the dashboard (same pipeline as the poller). Respects **`[general] max_concurrent_manual_workflows`**.
+pub async fn start_manual_workflow(
+    State(state): State<AppState>,
+    Json(body): Json<StartManualWorkflowBody>,
+) -> Result<Json<StartManualWorkflowResponse>, (StatusCode, String)> {
+    let ticket_key = body.ticket_key.trim().to_string();
+    if ticket_key.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "ticket_key is required".into()));
+    }
+    let ticket_summary = {
+        let s = body.ticket_summary.trim();
+        if s.is_empty() {
+            ticket_key.clone()
+        } else {
+            s.to_string()
+        }
+    };
+
+    let max_manual = {
+        let cfg = state.config.read().await;
+        if cfg.jira.project_keys.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "No Jira project keys configured".into(),
+            ));
+        }
+        cfg.general.max_concurrent_manual_workflows
+    };
+
+    {
+        let map = state.engine.workflows.read().await;
+        if map.contains_key(&ticket_key) {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("A workflow already exists for {ticket_key}"),
+            ));
+        }
+    }
+
+    if max_manual > 0 {
+        let n = state.engine.manual_workflows_toward_cap_count().await;
+        if n >= max_manual as usize {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "Maximum concurrent manual workflows ({max_manual}) reached; complete, stop, or delete a manual workflow first"
+                ),
+            ));
+        }
+    }
+
+    let workflow_id = state
+        .engine
+        .start_workflow(ticket_key.clone(), ticket_summary, true)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(StartManualWorkflowResponse {
+        workflow_id,
+        ticket_key,
+    }))
 }

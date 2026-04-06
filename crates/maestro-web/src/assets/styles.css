@@ -220,3 +220,106 @@ body { font-family: 'Inter', sans-serif; }
 .terminal-line-warn {
   color: #d29922;
 }
+
+/* Manual workflow: full-width grid cell, short row (cards remain 600px tall). */
+.workflow-add-cell {
+  grid-column: 1 / -1;
+}
+@media (min-width: 1280px) {
+  .workflow-add-cell {
+    grid-column: auto;
+  }
+}
+.workflow-add-btn {
+  box-sizing: border-box;
+  width: 100%;
+  height: 60px;
+  min-height: 60px;
+  max-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  border: 1px dashed rgba(75, 85, 99, 0.85);
+  background: rgba(17, 24, 39, 0.6);
+  color: rgb(156, 163, 175);
+  font-size: 1.75rem;
+  font-weight: 300;
+  line-height: 1;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.workflow-add-btn:hover:not(:disabled) {
+  color: rgb(96, 165, 250);
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(30, 58, 138, 0.15);
+}
+.workflow-add-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.manual-workflow-modal-panel {
+  width: 800px;
+  max-width: min(800px, calc(100vw - 2rem));
+  height: calc(100vh - 2rem);
+  max-height: calc(100vh - 2rem);
+}
+
+.manual-workflow-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  min-height: 12rem;
+  color: rgb(156, 163, 175);
+  font-size: 0.875rem;
+}
+.manual-workflow-spinner {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 9999px;
+  border: 3px solid rgba(55, 65, 81, 0.9);
+  border-top-color: rgb(59, 130, 246);
+  animation: manual-wf-spin 0.75s linear infinite;
+}
+@keyframes manual-wf-spin {
+  to { transform: rotate(360deg); }
+}
+
+.manual-workflow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.manual-workflow-row {
+  width: 100%;
+  text-align: left;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.65rem;
+  border: 1px solid rgba(55, 65, 81, 0.9);
+  background: rgba(31, 41, 55, 0.45);
+  color: rgb(229, 231, 235);
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.manual-workflow-row:hover {
+  background: rgba(55, 65, 81, 0.55);
+  border-color: rgba(96, 165, 250, 0.35);
+}
+.manual-workflow-row-key {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.975rem;
+  font-weight: 500;
+  color: rgb(96, 165, 250);
+  margin-bottom: 0.2rem;
+}
+.manual-workflow-row-summary {
+  font-size: 0.975rem;
+  color: rgb(209, 213, 219);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

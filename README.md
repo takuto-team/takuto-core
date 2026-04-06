@@ -192,7 +192,7 @@ Optional **`[[agent_steps]]`** tables belong at the **root** of the file. In TOM
 |-----|---------|-------------|
 | `project_keys` | `[]` | Jira project keys to poll (e.g., `["PROJ"]`) |
 | `item_types` | `["Task", "Bug"]` | Ticket types to handle |
-| `jql_filter` | `""` | Additional JQL filter |
+| `jql_filter` | `""` | Extra JQL **AND**-merged into the dashboard manual-start ticket search (and can mirror your board filter); does not affect the poller’s **`item_types`** queries |
 | `site` | `""` | Jira site host or base URL (e.g., `"company.atlassian.net"`) — token auth, egress rules, and ticket context for prompts (empty → `jira.atlassian.net` where the code needs a default host) |
 | `email` | `""` | Jira user email — used for token auth |
 

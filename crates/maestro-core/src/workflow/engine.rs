@@ -99,10 +99,12 @@ pub struct Workflow {
     pub terminal_lines: Vec<TerminalLine>,
     /// Human-readable agent step label for the dashboard (e.g. `Implement (cycle 2/3, run 1/1)`).
     pub current_step_label: Option<String>,
+    /// Started from the dashboard **+** picker (counts toward **`[general] max_concurrent_manual_workflows`**).
+    pub started_manually: bool,
 }
 
 impl Workflow {
-    pub fn new(ticket_key: String, ticket_summary: String) -> Self {
+    pub fn new(ticket_key: String, ticket_summary: String, started_manually: bool) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
@@ -120,6 +122,7 @@ impl Workflow {
             cancel_token: CancellationToken::new(),
             terminal_lines: Vec::new(),
             current_step_label: None,
+            started_manually,
         }
     }
 
@@ -166,6 +169,7 @@ impl Workflow {
                 })
                 .collect(),
             current_step_label: rec.current_step_label,
+            started_manually: rec.started_manually,
         }
     }
 }
@@ -193,6 +197,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
             })
             .collect(),
         current_step_label: w.current_step_label.clone(),
+        started_manually: w.started_manually,
     }
 }
 
@@ -609,8 +614,9 @@ impl WorkflowEngine {
         &self,
         ticket_key: String,
         ticket_summary: String,
+        started_manually: bool,
     ) -> Result<String> {
-        let workflow = Workflow::new(ticket_key.clone(), ticket_summary);
+        let workflow = Workflow::new(ticket_key.clone(), ticket_summary, started_manually);
         let id = workflow.id.clone();
         let cancel_token = workflow.cancel_token.clone();
 
@@ -789,8 +795,18 @@ impl WorkflowEngine {
         self.workflows.write().await.remove(ticket_key);
 
         // Start a fresh one
-        self.start_workflow(ticket_key.to_string(), ticket_summary)
+        self.start_workflow(ticket_key.to_string(), ticket_summary, false)
             .await
+    }
+
+    /// Manual dashboard starts with **`started_manually`** that are not **Done** / **Stopped** / **Error**.
+    pub async fn manual_workflows_toward_cap_count(&self) -> usize {
+        self.workflows
+            .read()
+            .await
+            .values()
+            .filter(|w| w.started_manually && w.state.occupies_concurrency_slot())
+            .count()
     }
 
     pub async fn stop_all_workflows(&self) {

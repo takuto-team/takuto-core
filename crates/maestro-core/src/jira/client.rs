@@ -118,6 +118,69 @@ impl JiraClient {
         Ok(all_tickets)
     }
 
+    /// **To Do** issues in the given projects for the dashboard manual-start picker: **excludes Epics**, **`ORDER BY rank ASC`**
+    /// (backlog/board order). Ignores **`[jira] item_types`**. When **`jql_filter`** is non-empty, it is **`AND`**-combined so
+    /// results can match the same scope as a Jira board filter (paste the board’s JQL fragment there, without duplicating
+    /// `project` / `status` if possible).
+    pub async fn list_todo_tickets_by_rank(
+        &self,
+        project_keys: &[String],
+        jql_filter: &str,
+    ) -> Result<Vec<JiraTicket>> {
+        if project_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let core = if project_keys.len() == 1 {
+            format!(
+                r#"project = {} AND status = "To Do" AND issuetype != Epic"#,
+                project_keys[0].trim()
+            )
+        } else {
+            let projects = project_keys
+                .iter()
+                .map(|k| k.trim())
+                .filter(|k| !k.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(r#"project in ({projects}) AND status = "To Do" AND issuetype != Epic"#)
+        };
+
+        let extra = jql_filter.trim();
+        let jql = if extra.is_empty() {
+            format!("{core} ORDER BY rank ASC")
+        } else {
+            format!("({core}) AND ({extra}) ORDER BY rank ASC")
+        };
+
+        info!(jql = %jql, "Searching for To Do tickets (board-style, by rank)");
+
+        let search_args = vec![
+            "jira".to_string(),
+            "workitem".to_string(),
+            "search".to_string(),
+            "--jql".to_string(),
+            jql,
+            "--json".to_string(),
+            "--limit".to_string(),
+            "200".to_string(),
+        ];
+        let refs: Vec<&str> = search_args.iter().map(|s| s.as_str()).collect();
+        let output = self.acli(&refs).await?;
+
+        if !output.success() {
+            return Err(MaestroError::Jira(format!(
+                "Failed to list To Do tickets: {}",
+                output.stderr
+            )));
+        }
+
+        let mut tickets = parse_ticket_list(&output.stdout, "Issue")?;
+        dedupe_tickets_preserve_order(&mut tickets);
+        tickets.retain(|t| !t.item_type.eq_ignore_ascii_case("Epic"));
+        Ok(tickets)
+    }
+
     pub async fn get_ticket_details(
         &self,
         key: &str,
@@ -302,6 +365,11 @@ fn parse_ticket_list(json_str: &str, default_type: &str) -> Result<Vec<JiraTicke
     }
 
     Ok(tickets)
+}
+
+fn dedupe_tickets_preserve_order(tickets: &mut Vec<JiraTicket>) {
+    let mut seen = std::collections::HashSet::new();
+    tickets.retain(|t| seen.insert(t.key.clone()));
 }
 
 fn parse_ticket_detail(json_str: &str) -> Result<JiraTicket> {

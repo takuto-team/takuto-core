@@ -57,6 +57,14 @@ pub fn build_router(state: AppState) -> Router {
             "/workflows/{id}/delete",
             post(routes::workflows::delete_workflow),
         )
+        .route(
+            "/workflows/start-manual",
+            post(routes::workflows::start_manual_workflow),
+        )
+        .route(
+            "/jira/todo-tickets-manual",
+            get(routes::jira::list_todo_tickets_manual),
+        )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
         .route("/polling", get(routes::polling::get_polling_status))

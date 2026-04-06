@@ -235,6 +235,9 @@ pub struct GeneralConfig {
     /// Max **visible** workflows on the dashboard (rows still in the map: **Done**, paused, stopped, error, in-progress all count). `0` means use **`max_concurrent_workflows`**.
     #[serde(default)]
     pub max_active_workflows: u32,
+    /// Max **manual** dashboard-started ticket workflows that still **occupy a slot** (not **Done**, **Stopped**, or **Error**). `0` means no limit.
+    #[serde(default)]
+    pub max_concurrent_manual_workflows: u32,
     #[serde(default = "default_log_level")]
     pub log_level: String,
     /// Docker image for workflow worker containers. Empty = auto-detect from running Maestro container.
@@ -466,6 +469,7 @@ impl Default for GeneralConfig {
             pause_jira_polling_on_startup: false,
             max_concurrent_workflows: default_max_concurrent(),
             max_active_workflows: 0,
+            max_concurrent_manual_workflows: 0,
             log_level: default_log_level(),
             worker_image: String::new(),
             ticket_workflow_steps_file: String::new(),

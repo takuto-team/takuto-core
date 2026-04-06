@@ -35,6 +35,9 @@ pub struct PersistedWorkflowRecord {
     pub pr_url: Option<String>,
     pub terminal_lines: Vec<PersistedTerminalLine>,
     pub current_step_label: Option<String>,
+    /// Dashboard **Start workflow** (manual); poller-started workflows omit this field (deserializes as `false`).
+    #[serde(default)]
+    pub started_manually: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

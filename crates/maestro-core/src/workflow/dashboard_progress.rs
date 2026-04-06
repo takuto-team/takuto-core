@@ -130,6 +130,7 @@ mod tests {
             cancel_token: CancellationToken::new(),
             terminal_lines: Vec::new(),
             current_step_label: None,
+            started_manually: false,
         }
     }
 

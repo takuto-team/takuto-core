@@ -9,6 +9,9 @@ let wsReconnectTimer = null;
 let dryMode = false;
 let initialLoadDone = false;
 let pollingPaused = false;
+/** `0` = unlimited. From `[general] max_concurrent_manual_workflows`. */
+let maxConcurrentManual = 0;
+let jiraProjectsConfigured = false;
 const TERMINAL_MAX_LINES = 500;
 
 /** Same-origin cookie session from `POST /api/auth/login`; redirect to sign-in on 401. */
@@ -254,7 +257,11 @@ function updateCardState(wf) {
 function ingestWorkflowList(list) {
   const next = {};
   for (const w of list) {
-    next[w.ticket_key] = w;
+    next[w.ticket_key] = {
+      ...w,
+      started_manually: !!w.started_manually,
+      counts_toward_manual_cap: !!w.counts_toward_manual_cap,
+    };
   }
   const keysInApi = new Set(list.map(w => w.ticket_key));
   workflowOrderKeys = workflowOrderKeys.filter(k => keysInApi.has(k));
@@ -354,12 +361,139 @@ async function fetchConfig() {
     const res = await dashboardFetch('/api/config');
     const cfg = await res.json();
     dryMode = cfg.general.dry_mode;
+    maxConcurrentManual =
+      typeof cfg.general.max_concurrent_manual_workflows === 'number' &&
+      Number.isFinite(cfg.general.max_concurrent_manual_workflows)
+        ? Math.max(0, Math.floor(cfg.general.max_concurrent_manual_workflows))
+        : 0;
+    jiraProjectsConfigured =
+      Array.isArray(cfg.jira?.project_keys) && cfg.jira.project_keys.length > 0;
     const banner = document.getElementById('dryBanner');
     if (banner) {
       banner.classList.toggle('hidden', !dryMode);
     }
   } catch (e) {
     // ignore
+  }
+}
+
+function manualSlotsUsed() {
+  return Object.values(workflows).filter(w => w.counts_toward_manual_cap).length;
+}
+
+function isAddWorkflowDisabled() {
+  if (!jiraProjectsConfigured) return true;
+  if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) return true;
+  return false;
+}
+
+function addWorkflowTitle() {
+  if (!jiraProjectsConfigured) return 'Configure [jira] project_keys to enable manual starts';
+  if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
+    return `Manual workflow limit reached (${maxConcurrentManual})`;
+  }
+  return 'Start workflow for a To Do ticket';
+}
+
+function renderAddWorkflowCell() {
+  if (!jiraProjectsConfigured) return '';
+  const dis = isAddWorkflowDisabled();
+  return `
+    <div class="workflow-add-cell">
+      <button type="button"
+        onclick="openManualWorkflowModal()"
+        class="workflow-add-btn"
+        ${dis ? 'disabled' : ''}
+        title="${escapeAttr(addWorkflowTitle())}"
+        aria-label="Start workflow for a To Do ticket">+</button>
+    </div>`;
+}
+
+function closeManualWorkflowModal() {
+  const modal = document.getElementById('manualWorkflowModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function openManualWorkflowModal() {
+  if (isAddWorkflowDisabled()) return;
+  const modal = document.getElementById('manualWorkflowModal');
+  const body = document.getElementById('manualWorkflowModalBody');
+  if (!modal || !body) return;
+  modal.classList.remove('hidden');
+  body.innerHTML = `
+    <div class="manual-workflow-loading">
+      <div class="manual-workflow-spinner" role="status" aria-label="Loading"></div>
+      <span>Loading tickets from Jira…</span>
+    </div>`;
+  try {
+    const res = await dashboardFetch('/api/jira/todo-tickets-manual');
+    const text = await res.text();
+    if (!res.ok) {
+      body.innerHTML = `<p class="text-sm text-red-400 px-2 py-6 text-center">${escapeHtml(text || res.statusText || 'Failed to load tickets')}</p>`;
+      return;
+    }
+    let tickets;
+    try {
+      tickets = JSON.parse(text);
+    } catch {
+      body.innerHTML = '<p class="text-sm text-red-400 px-2 py-6 text-center">Invalid response from server</p>';
+      return;
+    }
+    const existingKeys = new Set(Object.keys(workflows));
+    const available = Array.isArray(tickets)
+      ? tickets.filter(t => typeof t.key === 'string' && t.key && !existingKeys.has(t.key))
+      : [];
+    if (available.length === 0) {
+      body.innerHTML =
+        '<p class="text-sm text-gray-500 px-2 py-8 text-center">No available To Do tickets (all listed tickets already have a workflow on the dashboard, or Jira returned none).</p>';
+      return;
+    }
+    body.innerHTML = '';
+    const listEl = document.createElement('div');
+    listEl.className = 'manual-workflow-list';
+    for (const t of available) {
+      const key = t.key;
+      const summary = typeof t.summary === 'string' ? t.summary : '';
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'manual-workflow-row';
+      const kEl = document.createElement('div');
+      kEl.className = 'manual-workflow-row-key';
+      kEl.textContent = key;
+      const sEl = document.createElement('div');
+      sEl.className = 'manual-workflow-row-summary';
+      sEl.textContent = summary || key;
+      row.appendChild(kEl);
+      row.appendChild(sEl);
+      row.addEventListener('click', () => {
+        void selectManualTicket(key, summary || key);
+      });
+      listEl.appendChild(row);
+    }
+    body.appendChild(listEl);
+  } catch (e) {
+    console.error(e);
+    body.innerHTML = '<p class="text-sm text-red-400 px-2 py-6 text-center">Could not load tickets</p>';
+  }
+}
+
+async function selectManualTicket(ticketKey, ticketSummary) {
+  closeManualWorkflowModal();
+  try {
+    const res = await dashboardFetch('/api/workflows/start-manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket_key: ticketKey, ticket_summary: ticketSummary }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      alert(errText || 'Failed to start workflow');
+      return;
+    }
+    await fetchWorkflowsSilent();
+  } catch (e) {
+    console.error(e);
+    alert('Failed to start workflow');
   }
 }
 
@@ -501,7 +635,10 @@ function closeReportModal() {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeReportModal();
+  if (e.key === 'Escape') {
+    closeReportModal();
+    closeManualWorkflowModal();
+  }
 });
 
 // --- Rendering ---
@@ -681,13 +818,14 @@ function renderWorkflows() {
   const grid = document.getElementById('workflowGrid');
   const empty = document.getElementById('emptyState');
   const list = workflowOrderKeys.map(k => workflows[k]).filter(w => w != null);
+  const addCell = renderAddWorkflowCell();
 
   if (list.length === 0) {
-    grid.innerHTML = '';
     empty.classList.remove('hidden');
+    grid.innerHTML = addCell;
   } else {
     empty.classList.add('hidden');
-    grid.innerHTML = list.map(renderWorkflowCard).join('');
+    grid.innerHTML = list.map(renderWorkflowCard).join('') + addCell;
 
     // Restore scroll position on terminal bodies after re-render
     list.forEach(w => {
@@ -820,6 +958,8 @@ async function init() {
   // Run workflow fetch first so a single 401 redirects to login before parallel calls.
   await fetchWorkflowsSilent();
   await Promise.all([fetchConfig(), fetchPollingStatus()]);
+  // Config supplies Jira keys + manual cap for the **+** tile (first render had no config yet).
+  renderWorkflows();
   const pollBtn = document.getElementById('pollingToggleBtn');
   if (pollBtn) pollBtn.addEventListener('click', togglePolling);
   const logoutBtn = document.getElementById('logoutBtn');
