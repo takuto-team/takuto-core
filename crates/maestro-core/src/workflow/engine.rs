@@ -79,6 +79,9 @@ pub struct WorkflowEvent {
     /// Step-based dashboard progress (0–100); set on `workflow_updated` and `step_completed` when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress_percent: Option<u8>,
+    /// Estimated `steps_log` row total for this phase (same basis as the segmented dashboard bar).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_steps_total: Option<u32>,
 }
 
 pub struct Workflow {
@@ -378,6 +381,7 @@ impl WorkflowEngine {
             output_line: None,
             stream: None,
             progress_percent: None,
+            progress_steps_total: None,
         });
 
         Ok(())
@@ -694,6 +698,7 @@ impl WorkflowEngine {
             output_line: None,
             stream: None,
             progress_percent: None,
+            progress_steps_total: None,
         });
 
         Ok(())
@@ -722,6 +727,7 @@ impl WorkflowEngine {
                 output_line: None,
                 stream: None,
                 progress_percent: None,
+                progress_steps_total: None,
             });
 
             Ok(())
@@ -769,6 +775,7 @@ impl WorkflowEngine {
             output_line: None,
             stream: None,
             progress_percent: None,
+            progress_steps_total: None,
         });
 
         Ok(())
@@ -902,6 +909,7 @@ impl WorkflowEngine {
             output_line: None,
             stream: None,
             progress_percent: None,
+            progress_steps_total: None,
         });
 
         let engine_config = self.config.clone();
@@ -1008,6 +1016,7 @@ impl WorkflowEngine {
             output_line: None,
             stream: None,
             progress_percent: None,
+            progress_steps_total: None,
         });
 
         let engine_config = self.config.clone();
@@ -1102,6 +1111,7 @@ impl WorkflowEngine {
                 output_line: None,
                 stream: None,
                 progress_percent: None,
+                progress_steps_total: None,
             });
         }
 
@@ -1124,8 +1134,12 @@ impl WorkflowEngine {
         let ticket_key = event.ticket_key.clone();
         let tx = self.event_tx.clone();
         tokio::spawn(async move {
-            event.progress_percent =
-                progress_percent_for_ticket(&workflows, &config, &ticket_key).await;
+            if let Some((pct, total)) =
+                progress_dashboard_fields_for_ticket(&workflows, &config, &ticket_key).await
+            {
+                event.progress_percent = Some(pct);
+                event.progress_steps_total = Some(total);
+            }
             let _ = tx.send(event);
         });
     }
@@ -1199,6 +1213,7 @@ async fn drive_workflow(
             output_line: None,
             stream: None,
             progress_percent: None,
+            progress_steps_total: None,
         });
     }
 }
@@ -1281,6 +1296,7 @@ async fn drive_pr_review_workflow(
             output_line: None,
             stream: None,
             progress_percent: None,
+            progress_steps_total: None,
         });
     }
 }
@@ -1370,6 +1386,7 @@ async fn drive_merge_base_workflow(
             output_line: None,
             stream: None,
             progress_percent: None,
+            progress_steps_total: None,
         });
     }
 }
@@ -2858,6 +2875,7 @@ fn broadcast_step_started(
         output_line: None,
         stream: None,
         progress_percent: None,
+        progress_steps_total: None,
     });
 }
 
@@ -2868,7 +2886,7 @@ async fn broadcast_step_completed(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     config: &Arc<RwLock<Config>>,
 ) {
-    let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
+    let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
     let _ = event_tx.send(WorkflowEvent {
         event_type: "step_completed".to_string(),
         workflow_id: String::new(),
@@ -2879,7 +2897,8 @@ async fn broadcast_step_completed(
         step_name: Some(step_name.to_string()),
         output_line: None,
         stream: None,
-        progress_percent: pct,
+        progress_percent: dash.map(|(p, _)| p),
+        progress_steps_total: dash.map(|(_, t)| t),
     });
 }
 
@@ -2936,6 +2955,7 @@ fn spawn_output_relay(
                     output_line: Some(display_text),
                     stream: Some(line.stream),
                     progress_percent: None,
+                    progress_steps_total: None,
                 });
                 match result {
                     Ok(count) => {
@@ -2952,15 +2972,19 @@ fn spawn_output_relay(
     line_tx
 }
 
-async fn progress_percent_for_ticket(
+async fn progress_dashboard_fields_for_ticket(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     config: &Arc<RwLock<Config>>,
     ticket_key: &str,
-) -> Option<u8> {
+) -> Option<(u8, u32)> {
     let cfg = config.read().await;
     let wf = workflows.read().await;
-    wf.get(ticket_key)
-        .map(|w| super::dashboard_progress::workflow_progress_percent(w, &cfg))
+    wf.get(ticket_key).map(|w| {
+        (
+            super::dashboard_progress::workflow_progress_percent(w, &cfg),
+            super::dashboard_progress::estimated_step_total(w, &cfg),
+        )
+    })
 }
 
 async fn transition_to_agent_step(
@@ -2990,7 +3014,7 @@ async fn transition_to_agent_step(
         }
     };
     if let Some((id, display)) = updated {
-        let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
+        let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
             workflow_id: id,
@@ -3001,7 +3025,8 @@ async fn transition_to_agent_step(
             step_name: None,
             output_line: None,
             stream: None,
-            progress_percent: pct,
+            progress_percent: dash.map(|(p, _)| p),
+            progress_steps_total: dash.map(|(_, t)| t),
         });
     }
 }
@@ -3033,7 +3058,7 @@ async fn transition_to_pr_review_step(
         }
     };
     if let Some((id, display)) = updated {
-        let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
+        let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
             workflow_id: id,
@@ -3044,7 +3069,8 @@ async fn transition_to_pr_review_step(
             step_name: None,
             output_line: None,
             stream: None,
-            progress_percent: pct,
+            progress_percent: dash.map(|(p, _)| p),
+            progress_steps_total: dash.map(|(_, t)| t),
         });
     }
 }
@@ -3076,7 +3102,7 @@ async fn transition_to_merge_base_step(
         }
     };
     if let Some((id, display)) = updated {
-        let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
+        let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
             workflow_id: id,
@@ -3087,7 +3113,8 @@ async fn transition_to_merge_base_step(
             step_name: None,
             output_line: None,
             stream: None,
-            progress_percent: pct,
+            progress_percent: dash.map(|(p, _)| p),
+            progress_steps_total: dash.map(|(_, t)| t),
         });
     }
 }
@@ -3114,7 +3141,7 @@ async fn transition(
         }
     };
     if let Some((id, display)) = updated {
-        let pct = progress_percent_for_ticket(workflows, config, ticket_key).await;
+        let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
             workflow_id: id,
@@ -3125,7 +3152,8 @@ async fn transition(
             step_name: None,
             output_line: None,
             stream: None,
-            progress_percent: pct,
+            progress_percent: dash.map(|(p, _)| p),
+            progress_steps_total: dash.map(|(_, t)| t),
         });
     }
 }

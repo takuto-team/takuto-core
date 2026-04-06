@@ -33,6 +33,16 @@ pub fn workflow_progress_percent(w: &Workflow, cfg: &Config) -> u8 {
     p.min(100) as u8
 }
 
+/// Filled segment count for a discrete progress bar: rounds `progress_percent` (0–100) to the nearest step out of `total`.
+pub fn workflow_progress_filled_segments(progress_percent: u8, total: u32) -> u32 {
+    if total == 0 {
+        return 0;
+    }
+    let p = progress_percent as u32;
+    let filled = (p.saturating_mul(total) + 50) / 100;
+    filled.min(total)
+}
+
 fn in_flight_partial_credit(w: &Workflow) -> bool {
     match &w.state {
         WorkflowState::Done
@@ -147,5 +157,13 @@ mod tests {
         let w = wf_with(WorkflowState::Done, vec![], None);
         let cfg = Config::default();
         assert_eq!(workflow_progress_percent(&w, &cfg), 100);
+    }
+
+    #[test]
+    fn filled_segments_rounds_percent() {
+        assert_eq!(workflow_progress_filled_segments(0, 10), 0);
+        assert_eq!(workflow_progress_filled_segments(100, 10), 10);
+        assert_eq!(workflow_progress_filled_segments(74, 10), 7);
+        assert_eq!(workflow_progress_filled_segments(75, 10), 8);
     }
 }

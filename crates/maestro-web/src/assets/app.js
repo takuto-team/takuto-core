@@ -117,6 +117,9 @@ function handleWorkflowEvent(evt) {
     if (typeof evt.progress_percent === 'number' && Number.isFinite(evt.progress_percent)) {
       wf.progress_percent = evt.progress_percent;
     }
+    if (typeof evt.progress_steps_total === 'number' && Number.isFinite(evt.progress_steps_total)) {
+      wf.progress_steps_total = Math.max(0, Math.floor(evt.progress_steps_total));
+    }
     if (evt.error) {
       wf.error = evt.error;
     }
@@ -163,7 +166,8 @@ function handleStepStarted(evt) {
   // Also update the current step display on the card
   const stepEl = document.getElementById(`step-display-${evt.ticket_key}`);
   if (stepEl) {
-    stepEl.textContent = evt.step_name;
+    const wf = workflows[evt.ticket_key];
+    stepEl.textContent = wf ? formatStepLineWithProgress(wf, evt.step_name) : evt.step_name;
   }
 }
 
@@ -210,8 +214,13 @@ function handleStepCompleted(evt) {
   }
 
   const wf = workflows[evt.ticket_key];
-  if (wf && typeof evt.progress_percent === 'number' && Number.isFinite(evt.progress_percent)) {
-    wf.progress_percent = evt.progress_percent;
+  if (wf) {
+    if (typeof evt.progress_percent === 'number' && Number.isFinite(evt.progress_percent)) {
+      wf.progress_percent = evt.progress_percent;
+    }
+    if (typeof evt.progress_steps_total === 'number' && Number.isFinite(evt.progress_steps_total)) {
+      wf.progress_steps_total = Math.max(0, Math.floor(evt.progress_steps_total));
+    }
     updateCardState(wf);
   }
 }
@@ -233,12 +242,13 @@ function updateCardState(wf) {
 
   // Update step display
   const stepEl = document.getElementById(`step-display-${wf.ticket_key}`);
-  if (stepEl) stepEl.textContent = wf.state;
+  if (stepEl) stepEl.textContent = formatStepLineWithProgress(wf, wf.state);
 
-  // Update progress bar
-  const progress = cardProgressPercent(wf);
-  const progressBar = card.querySelector('.progress-bar');
-  if (progressBar) progressBar.style.width = `${progress}%`;
+  // Update progress bar (segmented or legacy fill)
+  const progressSlot = card.querySelector('.workflow-progress-slot');
+  if (progressSlot) {
+    progressSlot.innerHTML = progressBarInnerHtml(wf, status);
+  }
 
   // If workflow finished (completed/error/stopped), do a full render to update buttons and terminal visibility
   if (status.label === 'Running') {
@@ -785,6 +795,47 @@ function getProgressPercentFallback(state) {
   return 10;
 }
 
+/** From API `progress_steps_total`; `0` if unknown (use legacy single fill bar). */
+function workflowProgressStepsTotal(w) {
+  const t = w.progress_steps_total;
+  if (typeof t === 'number' && Number.isFinite(t) && t > 0) {
+    return Math.floor(t);
+  }
+  return 0;
+}
+
+/** Matches maestro-core `workflow_progress_filled_segments` (half-up rounding). */
+function workflowProgressFilledTotal(w) {
+  const total = workflowProgressStepsTotal(w);
+  const pct = cardProgressPercent(w);
+  if (total <= 0) return { filled: 0, total: 0 };
+  const filled = Math.min(total, Math.round((pct * total) / 100));
+  return { filled, total };
+}
+
+function formatStepLineWithProgress(w, baseText) {
+  const text = baseText == null ? '' : String(baseText);
+  const { filled, total } = workflowProgressFilledTotal(w);
+  if (total <= 0) return text;
+  return `${text} (${filled}/${total})`;
+}
+
+function progressBarInnerHtml(w, status) {
+  const { filled, total } = workflowProgressFilledTotal(w);
+  if (total <= 0) {
+    const progress = cardProgressPercent(w);
+    return `<div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+            <div class="progress-bar bg-${status.color}-500 h-1.5 rounded-full transition-all" style="width: ${progress}%"></div>
+          </div>`;
+  }
+  let segs = '';
+  for (let i = 0; i < total; i++) {
+    const on = i < filled;
+    segs += `<div class="workflow-progress-seg${on ? ` workflow-progress-seg-filled bg-${status.color}-500` : ' bg-gray-600'}"></div>`;
+  }
+  return `<div class="workflow-progress-track" role="group" aria-label="Workflow progress ${filled} of ${total} steps completed">${segs}</div>`;
+}
+
 function statusBadgeHtml(status) {
   const { label, color, icon } = status;
   let iconSvg = '';
@@ -812,7 +863,6 @@ function workflowPrUrl(w) {
 
 function renderWorkflowCard(w) {
   const status = getStatusInfo(w.state);
-  const progress = cardProgressPercent(w);
   const prUrl = workflowPrUrl(w);
   const borderClass = status.color === 'red' ? 'border-red-500/30 hover:border-red-500/40' :
                       status.color === 'yellow' ? 'border-yellow-500/30 hover:border-yellow-500/40' :
@@ -828,6 +878,7 @@ function renderWorkflowCard(w) {
   let stateDisplay = w.state;
   if (status.label === 'Completed') stateDisplay = 'All steps passed';
   if (status.label === 'Error' && w.state.startsWith('Error:')) stateDisplay = w.state.replace('Error: ', '');
+  const stateDisplayWithProgress = formatStepLineWithProgress(w, stateDisplay);
 
   let actions = '';
   if (status.label === 'Running') {
@@ -908,10 +959,8 @@ function renderWorkflowCard(w) {
         </div>
         <div class="flex-shrink-0 bg-gray-800/50 rounded-lg px-3 py-2.5">
           <div class="text-xs text-gray-500 mb-1">${stepLabel}</div>
-          <div id="step-display-${w.ticket_key}" class="text-sm font-mono text-gray-300">${escapeHtml(stateDisplay)}</div>
-          <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5">
-            <div class="progress-bar bg-${status.color}-500 h-1.5 rounded-full transition-all" style="width: ${progress}%"></div>
-          </div>
+          <div id="step-display-${w.ticket_key}" class="text-sm font-mono text-gray-300">${escapeHtml(stateDisplayWithProgress)}</div>
+          <div class="workflow-progress-slot mt-2 w-full">${progressBarInnerHtml(w, status)}</div>
         </div>
         <div class="workflow-actions-row flex-shrink-0 flex flex-wrap gap-2">${actions}</div>
         ${terminalSlot}

@@ -49,6 +49,8 @@ pub struct WorkflowSummary {
     pub can_delete: bool,
     /// Step-based progress 0–100 (see `dashboard_progress` in maestro-core).
     pub progress_percent: u8,
+    /// Estimated step count for the current phase (discrete progress segments / `N` in `k/N`).
+    pub progress_steps_total: u32,
     /// Started via dashboard **+** manual picker.
     pub started_manually: bool,
     /// Counts against **`[general] max_concurrent_manual_workflows`** (manual start and not Done/Stopped/Error).
@@ -107,6 +109,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 can_mark_done,
                 can_delete: !w.state.is_active(),
                 progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
+                progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
                 started_manually,
                 counts_toward_manual_cap,
             }
@@ -146,6 +149,7 @@ pub async fn get_workflow(
                 can_mark_done,
                 can_delete: !w.state.is_active(),
                 progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
+                progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
                 started_manually,
                 counts_toward_manual_cap,
             })
