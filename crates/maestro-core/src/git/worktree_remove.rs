@@ -72,6 +72,37 @@ pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Resu
     )))
 }
 
+/// Remove a leftover worktree directory before `git worktree add` for a **new** workflow.
+///
+/// If the dashboard row was removed but disk cleanup failed (or the tree was never registered),
+/// reusing the path would keep another ticket’s files while Jira prompts match the new key.
+pub async fn clear_worktree_path_for_recreate(repo_path: &Path, worktree_path: &Path) -> Result<()> {
+    if !worktree_path.exists() {
+        return Ok(());
+    }
+    info!(
+        path = %worktree_path.display(),
+        "Existing worktree path on disk — clearing so this workflow gets a fresh tree from base"
+    );
+    match remove_git_worktree(repo_path, worktree_path).await {
+        Ok(()) => Ok(()),
+        Err(git_err) => {
+            warn!(
+                error = %git_err,
+                path = %worktree_path.display(),
+                "git worktree remove failed (unregistered or corrupt tree); removing directory from disk"
+            );
+            tokio::fs::remove_dir_all(worktree_path).await.map_err(|io_err| {
+                MaestroError::Git(format!(
+                    "Could not remove stale worktree directory {}: {} (after git error: {git_err})",
+                    worktree_path.display(),
+                    io_err
+                ))
+            })
+        }
+    }
+}
+
 async fn git_worktree_remove(
     repo_path: &Path,
     path_str: &str,

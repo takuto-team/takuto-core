@@ -12,8 +12,12 @@ let pollingPaused = false;
 /** `0` = unlimited. From `[general] max_concurrent_manual_workflows`. */
 let maxConcurrentManual = 0;
 let jiraProjectsConfigured = false;
+/** `[jira] site` from config (fallback if workflow payload omits `jira_browse_url`). */
+let jiraSite = '';
 /** Set when the ticket detail modal is open; used by **Start** to run the workflow. */
 let pendingManualTicketSelection = null;
+/** Bumps on each detail open so slower Jira preview responses cannot overwrite a newer selection. */
+let manualTicketPreviewSeq = 0;
 const TERMINAL_MAX_LINES = 500;
 
 /** Same-origin cookie session from `POST /api/auth/login`; redirect to sign-in on 401. */
@@ -380,6 +384,7 @@ async function fetchConfig() {
         : 0;
     jiraProjectsConfigured =
       Array.isArray(cfg.jira?.project_keys) && cfg.jira.project_keys.length > 0;
+    jiraSite = typeof cfg.jira?.site === 'string' ? cfg.jira.site : '';
     const banner = document.getElementById('dryBanner');
     if (banner) {
       banner.classList.toggle('hidden', !dryMode);
@@ -421,10 +426,90 @@ function renderAddWorkflowCell() {
     </div>`;
 }
 
+function setManualTicketDetailStartVisible(visible) {
+  const btn = document.getElementById('manualTicketDetailStartBtn');
+  if (!btn) return;
+  if (visible) btn.classList.remove('hidden');
+  else btn.classList.add('hidden');
+}
+
 function closeManualTicketDetailModal() {
   const modal = document.getElementById('manualTicketDetailModal');
   if (modal) modal.classList.add('hidden');
   pendingManualTicketSelection = null;
+  setManualTicketDetailStartVisible(true);
+}
+
+/** Matches server `jira::ticket_browse_url` when `jira_browse_url` is missing from the API. */
+function jiraBrowseUrlFallback(site, ticketKey) {
+  let s = String(site || '').trim();
+  if (!s) return `https://jira.atlassian.net/browse/${encodeURIComponent(ticketKey)}`;
+  if (s.startsWith('https://')) s = s.slice(8);
+  else if (s.startsWith('http://')) s = s.slice(7);
+  s = s.trim().replace(/\/$/, '');
+  if (!s) return `https://jira.atlassian.net/browse/${encodeURIComponent(ticketKey)}`;
+  return `https://${s}/browse/${encodeURIComponent(ticketKey)}`;
+}
+
+function workflowJiraBrowseUrl(w) {
+  const u = w.jira_browse_url;
+  if (typeof u === 'string' && u.trim()) return u.trim();
+  return jiraBrowseUrlFallback(jiraSite, w.ticket_key);
+}
+
+/**
+ * @param {string} ticketKey
+ * @param {string} summaryHint
+ * @param {number} seq
+ * @param {boolean} syncPending — update `pendingManualTicketSelection.summary` from Jira when set
+ */
+async function runTicketDescriptionPreviewLoad(ticketKey, summaryHint, seq, syncPending) {
+  const body = document.getElementById('manualTicketDetailBody');
+  const summaryEl = document.getElementById('manualTicketDetailSummary');
+  if (!body || !summaryEl) return;
+
+  try {
+    const res = await dashboardFetch(
+      `/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`
+    );
+    const text = await res.text();
+    if (seq !== manualTicketPreviewSeq) return;
+    if (!res.ok) {
+      body.innerHTML = `<p class="text-sm text-red-400 px-5 py-6">${escapeHtml(text || res.statusText || 'Failed to load ticket')}</p>`;
+      return;
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      if (seq !== manualTicketPreviewSeq) return;
+      body.innerHTML = '<p class="text-sm text-red-400 px-5 py-6">Invalid response from server</p>';
+      return;
+    }
+    if (seq !== manualTicketPreviewSeq) return;
+    const hint = typeof summaryHint === 'string' && summaryHint.trim() ? summaryHint.trim() : ticketKey;
+    const sum = typeof data.summary === 'string' ? data.summary : hint;
+    summaryEl.textContent = sum || ticketKey;
+    if (
+      syncPending &&
+      pendingManualTicketSelection &&
+      pendingManualTicketSelection.key === ticketKey
+    ) {
+      pendingManualTicketSelection.summary = sum || ticketKey;
+    }
+
+    const md = typeof data.description_markdown === 'string' ? data.description_markdown : '';
+    const html = renderMarkdownToSafeHtml(md);
+    if (!html) {
+      body.innerHTML = '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+    } else {
+      body.innerHTML = `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`;
+    }
+  } catch (e) {
+    if (seq !== manualTicketPreviewSeq) return;
+    console.error(e);
+    body.innerHTML = '<p class="text-sm text-red-400 px-5 py-6">Could not load ticket</p>';
+  }
 }
 
 function closeManualWorkflowModal() {
@@ -470,6 +555,8 @@ async function openManualTicketDetailModal(ticketKey, listSummary) {
     return;
   }
 
+  setManualTicketDetailStartVisible(true);
+  const seq = ++manualTicketPreviewSeq;
   pendingManualTicketSelection = {
     key: ticketKey,
     summary: typeof listSummary === 'string' && listSummary.trim() ? listSummary.trim() : ticketKey,
@@ -483,38 +570,40 @@ async function openManualTicketDetailModal(ticketKey, listSummary) {
     </div>`;
   modal.classList.remove('hidden');
 
-  try {
-    const res = await dashboardFetch(
-      `/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`
-    );
-    const text = await res.text();
-    if (!res.ok) {
-      body.innerHTML = `<p class="text-sm text-red-400 px-5 py-6">${escapeHtml(text || res.statusText || 'Failed to load ticket')}</p>`;
-      return;
-    }
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      body.innerHTML = '<p class="text-sm text-red-400 px-5 py-6">Invalid response from server</p>';
-      return;
-    }
-    const sum = typeof data.summary === 'string' ? data.summary : pendingManualTicketSelection.summary;
-    summaryEl.textContent = sum || ticketKey;
-    pendingManualTicketSelection.summary = sum || ticketKey;
+  await runTicketDescriptionPreviewLoad(
+    ticketKey,
+    pendingManualTicketSelection.summary,
+    seq,
+    true
+  );
+}
 
-    const md = typeof data.description_markdown === 'string' ? data.description_markdown : '';
-    const html = renderMarkdownToSafeHtml(md);
-    if (!html) {
-      body.innerHTML =
-        '<p class="text-gray-500 italic px-5 py-6">No description</p>';
-    } else {
-      body.innerHTML = `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`;
-    }
-  } catch (e) {
-    console.error(e);
-    body.innerHTML = '<p class="text-sm text-red-400 px-5 py-6">Could not load ticket</p>';
+/** Workflow card: same description modal as manual start, without **Start**. */
+async function openWorkflowTicketDescriptionModal(ticketKey, listSummary) {
+  const modal = document.getElementById('manualTicketDetailModal');
+  const body = document.getElementById('manualTicketDetailBody');
+  const keyEl = document.getElementById('manualTicketDetailKey');
+  const summaryEl = document.getElementById('manualTicketDetailSummary');
+  if (!modal || !body || !keyEl || !summaryEl) {
+    console.error('[Maestro] Ticket detail modal elements missing.');
+    return;
   }
+
+  pendingManualTicketSelection = null;
+  setManualTicketDetailStartVisible(false);
+  const seq = ++manualTicketPreviewSeq;
+  const sumHint =
+    typeof listSummary === 'string' && listSummary.trim() ? listSummary.trim() : ticketKey;
+  keyEl.textContent = ticketKey;
+  summaryEl.textContent = sumHint;
+  body.innerHTML = `
+    <div class="manual-workflow-loading px-5 py-8">
+      <div class="manual-workflow-spinner" role="status" aria-label="Loading"></div>
+      <span>Loading description…</span>
+    </div>`;
+  modal.classList.remove('hidden');
+
+  await runTicketDescriptionPreviewLoad(ticketKey, sumHint, seq, false);
 }
 
 async function confirmManualWorkflowStart() {
@@ -637,7 +726,14 @@ async function retryWorkflow(id) {
 }
 
 async function stopWorkflow(id) {
-  if (!confirm('Are you sure you want to stop this workflow? The ticket will be unassigned.')) return;
+  const ok = await showDashboardConfirm({
+    title: 'Stop workflow',
+    message:
+      'Are you sure you want to stop this workflow? The ticket will be unassigned and moved back to To Do.',
+    confirmLabel: 'Stop',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/stop`, { method: 'POST' });
   } catch (e) {
@@ -678,7 +774,15 @@ async function mergeBaseBranch(id) {
 }
 
 async function deleteWorkflow(id) {
-  if (!confirm('Remove this workflow from the dashboard? The Jira ticket will not be updated. The local worktree will be removed if it still exists.')) return;
+  const ok = await showDashboardConfirm({
+    title: 'Delete workflow',
+    message:
+      'Remove this workflow from the dashboard? The Jira ticket will not be updated. The local worktree and branch will be removed if they still exist.',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
+  setWorkflowCardLoading(id, true, 'Deleting…');
   try {
     const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/delete`, { method: 'POST' });
     if (!res.ok) {
@@ -691,11 +795,21 @@ async function deleteWorkflow(id) {
   } catch (e) {
     console.error('Failed to delete workflow:', e);
     alert('Failed to delete workflow');
+  } finally {
+    setWorkflowCardLoading(id, false);
   }
 }
 
 async function markWorkflowDone(id) {
-  if (!confirm('Mark this ticket Done in Jira and remove the local worktree? The workflow will leave the dashboard if both succeed.')) return;
+  const ok = await showDashboardConfirm({
+    title: 'Mark as Done',
+    message:
+      'Mark this ticket Done in Jira and remove the local worktree? The workflow will leave the dashboard only if both steps succeed.',
+    confirmLabel: 'Mark as Done',
+    danger: false,
+  });
+  if (!ok) return;
+  setWorkflowCardLoading(id, true, 'Marking as Done…');
   try {
     const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/mark-done`, { method: 'POST' });
     const text = await res.text();
@@ -723,6 +837,8 @@ async function markWorkflowDone(id) {
   } catch (e) {
     console.error('Mark as Done failed:', e);
     alert('Mark as Done failed');
+  } finally {
+    setWorkflowCardLoading(id, false);
   }
 }
 
@@ -744,15 +860,102 @@ function closeReportModal() {
   document.body.style.overflow = '';
 }
 
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    closeReportModal();
-    const detail = document.getElementById('manualTicketDetailModal');
-    if (detail && !detail.classList.contains('hidden')) {
-      closeManualTicketDetailModal();
+function dashboardConfirmModalOpen() {
+  const m = document.getElementById('dashboardConfirmModal');
+  return !!(m && !m.classList.contains('hidden'));
+}
+
+let dashboardConfirmResolver = null;
+
+function closeDashboardConfirmModal(result) {
+  const modal = document.getElementById('dashboardConfirmModal');
+  if (modal) modal.classList.add('hidden');
+  const report = document.getElementById('reportModal');
+  if (!report || report.classList.contains('hidden')) {
+    document.body.style.overflow = '';
+  }
+  const fn = dashboardConfirmResolver;
+  dashboardConfirmResolver = null;
+  if (fn) fn(!!result);
+}
+
+/**
+ * @param {{ title: string, message: string, confirmLabel?: string, cancelLabel?: string, danger?: boolean }} opts
+ * @returns {Promise<boolean>}
+ */
+function showDashboardConfirm(opts) {
+  const modal = document.getElementById('dashboardConfirmModal');
+  const titleEl = document.getElementById('dashboardConfirmTitle');
+  const msgEl = document.getElementById('dashboardConfirmMessage');
+  const okBtn = document.getElementById('dashboardConfirmOk');
+  const cancelBtn = document.getElementById('dashboardConfirmCancel');
+  if (!modal || !titleEl || !msgEl || !okBtn || !cancelBtn) {
+    return Promise.resolve(false);
+  }
+  if (dashboardConfirmModalOpen()) {
+    return Promise.resolve(false);
+  }
+  return new Promise(resolve => {
+    dashboardConfirmResolver = resolve;
+    titleEl.textContent = opts.title || 'Confirm';
+    msgEl.textContent = opts.message || '';
+    okBtn.textContent = opts.confirmLabel || 'Confirm';
+    cancelBtn.textContent = opts.cancelLabel || 'Cancel';
+    if (opts.danger) {
+      okBtn.className =
+        'dashboard-header-btn min-w-[5.5rem] bg-red-600/90 text-white border-red-500 hover:bg-red-600';
     } else {
-      closeManualWorkflowModal();
+      okBtn.className =
+        'dashboard-header-btn min-w-[5.5rem] bg-blue-600/90 text-white border-blue-500 hover:bg-blue-600';
     }
+    document.body.style.overflow = 'hidden';
+    modal.classList.remove('hidden');
+    okBtn.focus();
+  });
+}
+
+function setupDashboardConfirmModal() {
+  const modal = document.getElementById('dashboardConfirmModal');
+  const backdrop = document.getElementById('dashboardConfirmBackdrop');
+  const okBtn = document.getElementById('dashboardConfirmOk');
+  const cancelBtn = document.getElementById('dashboardConfirmCancel');
+  if (!modal || modal.dataset.bound === '1') return;
+  modal.dataset.bound = '1';
+  if (backdrop) {
+    backdrop.addEventListener('click', () => closeDashboardConfirmModal(false));
+  }
+  okBtn.addEventListener('click', () => closeDashboardConfirmModal(true));
+  cancelBtn.addEventListener('click', () => closeDashboardConfirmModal(false));
+}
+
+/** Dark overlay + spinner on a workflow card while a long action runs. */
+function setWorkflowCardLoading(ticketKey, visible, message) {
+  const overlay = document.getElementById(`card-overlay-${ticketKey}`);
+  if (!overlay) return;
+  const label = overlay.querySelector('.workflow-card-loading-text');
+  if (label && message != null && String(message).trim()) {
+    label.textContent = String(message).trim();
+  }
+  if (visible) {
+    overlay.removeAttribute('hidden');
+  } else {
+    overlay.setAttribute('hidden', '');
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (dashboardConfirmModalOpen()) {
+    e.preventDefault();
+    closeDashboardConfirmModal(false);
+    return;
+  }
+  closeReportModal();
+  const detail = document.getElementById('manualTicketDetailModal');
+  if (detail && !detail.classList.contains('hidden')) {
+    closeManualTicketDetailModal();
+  } else {
+    closeManualWorkflowModal();
   }
 });
 
@@ -880,13 +1083,17 @@ function renderWorkflowCard(w) {
   if (status.label === 'Error' && w.state.startsWith('Error:')) stateDisplay = w.state.replace('Error: ', '');
   const stateDisplayWithProgress = formatStepLineWithProgress(w, stateDisplay);
 
-  let actions = '';
+  const jiraBrowse = workflowJiraBrowseUrl(w);
+  const jiraLinkActions = `
+      <button type="button" onclick="window.open('${escapeAttr(jiraBrowse)}', '_blank', 'noopener,noreferrer')" class="workflow-action-btn bg-sky-500/10 text-sky-300 border-sky-500/25 hover:bg-sky-500/20">Go to ticket</button>
+      <button type="button" onclick="void openWorkflowTicketDescriptionModal(${JSON.stringify(w.ticket_key)}, ${JSON.stringify(w.ticket_summary)})" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Show description</button>`;
+  let actions = jiraLinkActions;
   if (status.label === 'Running') {
-    actions = `
+    actions += `
       <button onclick="pauseWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-yellow-500/10 text-yellow-400 border-yellow-500/20 hover:bg-yellow-500/20">Pause</button>
       <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
   } else if (status.label === 'Paused') {
-    actions = `
+    actions += `
       <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20">Resume</button>
       <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
   }
@@ -946,16 +1153,20 @@ function renderWorkflowCard(w) {
 
   return `
     <div id="card-${w.ticket_key}" class="workflow-card bg-gray-900 border ${borderClass} rounded-xl overflow-hidden transition-colors ${opacityClass}">
+      <div id="card-overlay-${w.ticket_key}" class="workflow-card-loading-overlay" hidden>
+        <div class="manual-workflow-spinner" role="status" aria-label="Loading"></div>
+        <span class="workflow-card-loading-text">Working…</span>
+      </div>
       <div class="workflow-card-body">
-        <div class="flex-shrink-0 flex items-start justify-between gap-3">
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-1">
-              <span class="font-mono text-sm text-${status.color}-400 font-medium">${w.ticket_key}</span>
+        <div class="flex-shrink-0 flex flex-col gap-1.5 min-w-0">
+          <div class="workflow-card-header-top flex items-center justify-between gap-3 min-w-0">
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <span class="font-mono text-sm text-${status.color}-400 font-medium leading-tight">${w.ticket_key}</span>
               <span class="status-badge">${statusBadgeHtml(status)}</span>
             </div>
-            <h3 class="text-sm font-medium text-gray-200 truncate">${escapeHtml(w.ticket_summary)}</h3>
+            ${showPrHtml ? `<div class="workflow-card-header-actions flex-shrink-0">${showPrHtml}</div>` : ''}
           </div>
-          ${showPrHtml ? `<div class="workflow-card-header-actions flex-shrink-0 pt-0.5">${showPrHtml}</div>` : ''}
+          <h3 class="text-sm font-medium text-gray-200 truncate leading-snug">${escapeHtml(w.ticket_summary)}</h3>
         </div>
         <div class="flex-shrink-0 bg-gray-800/50 rounded-lg px-3 py-2.5">
           <div class="text-xs text-gray-500 mb-1">${stepLabel}</div>
@@ -1126,6 +1337,7 @@ function setupManualWorkflowListDelegation() {
 // --- Init ---
 
 async function init() {
+  setupDashboardConfirmModal();
   setupManualWorkflowListDelegation();
   // Run workflow fetch first so a single 401 redirects to login before parallel calls.
   await fetchWorkflowsSilent();
@@ -1150,6 +1362,7 @@ window.closeManualTicketDetailModal = closeManualTicketDetailModal;
 window.closeManualWorkflowModal = closeManualWorkflowModal;
 window.openManualWorkflowModal = openManualWorkflowModal;
 window.openManualTicketDetailModal = openManualTicketDetailModal;
+window.openWorkflowTicketDescriptionModal = openWorkflowTicketDescriptionModal;
 window.confirmManualWorkflowStart = confirmManualWorkflowStart;
 
 init();

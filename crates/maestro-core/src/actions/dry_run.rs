@@ -100,10 +100,7 @@ impl ExternalActions for DryRunActions {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        if worktree_path.exists() {
-            info!(path = %worktree_path.display(), "Worktree already exists, reusing");
-            return Ok(worktree_path);
-        }
+        worktree_remove::clear_worktree_path_for_recreate(&self.repo_path, &worktree_path).await?;
 
         let remote = &self.git_remote;
         info!(base = base, remote = %remote, "Fetching base branch from git remote");
@@ -154,6 +151,38 @@ impl ExternalActions for DryRunActions {
             "Removing git worktree (dry mode — local operation, executes normally)"
         );
         worktree_remove::remove_git_worktree(&self.repo_path, path).await
+    }
+
+    async fn delete_local_branch(&self, branch: &str) -> Result<()> {
+        let branch = branch.trim();
+        if branch.is_empty() {
+            return Ok(());
+        }
+        info!(
+            branch = %branch,
+            "Deleting local git branch (dry mode — local operation, executes normally)"
+        );
+        let output = process::run_command(
+            "git",
+            &["branch", "-D", branch],
+            &self.repo_path,
+            CancellationToken::new(),
+        )
+        .await?;
+        if output.success() {
+            return Ok(());
+        }
+        let stderr = output.stderr.to_lowercase();
+        if stderr.contains("not found")
+            || stderr.contains("no branch named")
+            || stderr.contains("invalid branch name")
+        {
+            return Ok(());
+        }
+        Err(MaestroError::Git(format!(
+            "Failed to delete branch {branch}: {}",
+            output.stderr
+        )))
     }
 
     async fn create_pr(

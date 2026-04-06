@@ -331,10 +331,25 @@ impl WorkflowEngine {
         Ok(())
     }
 
+    async fn best_effort_git_worktree_prune(&self) {
+        let repo_path = {
+            let c = self.config.read().await;
+            PathBuf::from(&c.git.repo_path)
+        };
+        match self.actions.run_command("git worktree prune", &repo_path).await {
+            Ok(o) if o.success() => {}
+            Ok(o) => warn!(
+                stderr = %o.stderr,
+                "git worktree prune finished with non-zero status"
+            ),
+            Err(e) => warn!(error = %e, "git worktree prune failed"),
+        }
+    }
+
     /// Remove a workflow from the dashboard when it is not **running** (see [`WorkflowState::is_active`]).
     /// Best-effort worktree removal; no Jira transitions. Cancels the driver token if a paused task is still attached.
     pub async fn delete_workflow(&self, ticket_key: &str) -> Result<()> {
-        let (worktree_path, cancel_token) = {
+        let (worktree_path, cancel_token, branch_name) = {
             let map = self.workflows.read().await;
             let w = map
                 .get(ticket_key)
@@ -345,7 +360,11 @@ impl WorkflowEngine {
                     w.state
                 )));
             }
-            (w.worktree_path.clone(), w.cancel_token.clone())
+            (
+                w.worktree_path.clone(),
+                w.cancel_token.clone(),
+                w.branch_name.clone(),
+            )
         };
 
         cancel_token.cancel();
@@ -363,6 +382,19 @@ impl WorkflowEngine {
                 }
             }
         }
+
+        if !branch_name.trim().is_empty() {
+            if let Err(e) = self.actions.delete_local_branch(&branch_name).await {
+                warn!(
+                    ticket = %ticket_key,
+                    branch = %branch_name,
+                    error = %e,
+                    "Failed to delete local branch on delete (best-effort)"
+                );
+            }
+        }
+
+        self.best_effort_git_worktree_prune().await;
 
         self.workflows.write().await.remove(ticket_key);
 
@@ -740,34 +772,38 @@ impl WorkflowEngine {
     }
 
     pub async fn stop_workflow(&self, ticket_key: &str) -> Result<()> {
-        let mut workflows = self.workflows.write().await;
-        let workflow = workflows
-            .get_mut(ticket_key)
-            .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+        let (ticket_key_owned, workflow_id) = {
+            let mut workflows = self.workflows.write().await;
+            let workflow = workflows
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
 
-        // Cancel all running processes
-        workflow.cancel_token.cancel();
-        workflow.current_step_label = None;
-        workflow.state = WorkflowState::Stopped;
-        workflow.updated_at = Utc::now();
+            workflow.cancel_token.cancel();
+            workflow.current_step_label = None;
+            workflow.state = WorkflowState::Stopped;
+            workflow.updated_at = Utc::now();
 
-        let ticket_key_owned = ticket_key.to_string();
+            (ticket_key.to_string(), workflow.id.clone())
+        };
+
+        ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
+
         let actions = self.actions.clone();
+        let ticket_for_jira = ticket_key_owned.clone();
 
-        // Unassign ticket and move back to To Do (fire and forget)
         tokio::spawn(async move {
-            if let Err(e) = actions.unassign_ticket(&ticket_key_owned).await {
-                warn!(error = %e, ticket = %ticket_key_owned, "Failed to unassign ticket on stop");
+            if let Err(e) = actions.unassign_ticket(&ticket_for_jira).await {
+                warn!(error = %e, ticket = %ticket_for_jira, "Failed to unassign ticket on stop");
             }
-            if let Err(e) = actions.transition_ticket(&ticket_key_owned, "To Do").await {
-                warn!(error = %e, ticket = %ticket_key_owned, "Failed to transition ticket back to To Do on stop");
+            if let Err(e) = actions.transition_ticket(&ticket_for_jira, "To Do").await {
+                warn!(error = %e, ticket = %ticket_for_jira, "Failed to transition ticket back to To Do on stop");
             }
         });
 
         self.broadcast_event(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
-            workflow_id: workflow.id.clone(),
-            ticket_key: ticket_key.to_string(),
+            workflow_id,
+            ticket_key: ticket_key_owned,
             state: "Stopped".to_string(),
             timestamp: Utc::now(),
             error: None,
@@ -1056,7 +1092,7 @@ impl WorkflowEngine {
             c.jira.done_status.clone()
         };
 
-        let worktree_path = {
+        let (worktree_path, branch_name) = {
             let wf = self.workflows.read().await;
             let w = wf
                 .get(ticket_key)
@@ -1067,7 +1103,7 @@ impl WorkflowEngine {
                     w.state
                 )));
             }
-            w.worktree_path.clone()
+            (w.worktree_path.clone(), w.branch_name.clone())
         };
 
         let mut jira_ok = true;
@@ -1095,6 +1131,21 @@ impl WorkflowEngine {
                     warn!(ticket = %ticket_key, path = %path.display(), error = %e, "Failed to remove worktree");
                 }
             }
+        }
+
+        if worktree_ok && !branch_name.trim().is_empty() {
+            if let Err(e) = self.actions.delete_local_branch(&branch_name).await {
+                warn!(
+                    ticket = %ticket_key,
+                    branch = %branch_name,
+                    error = %e,
+                    "Failed to delete local branch after mark-done (best-effort)"
+                );
+            }
+        }
+
+        if worktree_ok {
+            self.best_effort_git_worktree_prune().await;
         }
 
         let workflow_removed = jira_ok && worktree_ok;
@@ -1189,6 +1240,30 @@ async fn drive_workflow(
             return;
         }
 
+        if matches!(e, MaestroError::Cancelled) {
+            let snapshot = {
+                let wf = workflows.read().await;
+                wf.get(&ticket_key).map(|w| w.state.clone())
+            };
+            match snapshot {
+                None => {
+                    info!(
+                        ticket = %ticket_key,
+                        "Workflow driver cancelled; row no longer in map"
+                    );
+                    return;
+                }
+                Some(WorkflowState::Stopped) => {
+                    info!(
+                        ticket = %ticket_key,
+                        "Workflow driver cancelled; left in Stopped (operator stop)"
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         error!(ticket = %ticket_key, error = %e, "Workflow failed");
         log_writer.write(&format!("WORKFLOW FAILED: {e}")).await;
         let mut wf = workflows.write().await;
@@ -1270,6 +1345,30 @@ async fn drive_pr_review_workflow(
                 "PR review driver cancelled during shutdown; state preserved for resume"
             );
             return;
+        }
+
+        if matches!(e, MaestroError::Cancelled) {
+            let snapshot = {
+                let wf = workflows.read().await;
+                wf.get(&ticket_key).map(|w| w.state.clone())
+            };
+            match snapshot {
+                None => {
+                    info!(
+                        ticket = %ticket_key,
+                        "PR review driver cancelled; row no longer in map"
+                    );
+                    return;
+                }
+                Some(WorkflowState::Stopped) => {
+                    info!(
+                        ticket = %ticket_key,
+                        "PR review driver cancelled; left in Stopped (operator stop)"
+                    );
+                    return;
+                }
+                _ => {}
+            }
         }
 
         error!(ticket = %ticket_key, error = %e, "PR review workflow failed");
@@ -1360,6 +1459,30 @@ async fn drive_merge_base_workflow(
                 "Merge base driver cancelled during shutdown; state preserved for resume"
             );
             return;
+        }
+
+        if matches!(e, MaestroError::Cancelled) {
+            let snapshot = {
+                let wf = workflows.read().await;
+                wf.get(&ticket_key).map(|w| w.state.clone())
+            };
+            match snapshot {
+                None => {
+                    info!(
+                        ticket = %ticket_key,
+                        "Merge base driver cancelled; row no longer in map"
+                    );
+                    return;
+                }
+                Some(WorkflowState::Stopped) => {
+                    info!(
+                        ticket = %ticket_key,
+                        "Merge base driver cancelled; left in Stopped (operator stop)"
+                    );
+                    return;
+                }
+                _ => {}
+            }
         }
 
         error!(ticket = %ticket_key, error = %e, "Merge base branch workflow failed");
@@ -1590,7 +1713,7 @@ async fn run_agent_step_sequence(
                     continue;
                 }
 
-                let _agent_slot = acquire_agent_slot(&agent_run_semaphore).await?;
+                let _agent_slot = acquire_agent_slot(&agent_run_semaphore, cancel_token).await?;
 
                 match phase {
                     AgentRunPhase::Main => {
@@ -1849,11 +1972,15 @@ async fn sync_jira_for_resume(
     Ok((worktree_path, ticket_detail))
 }
 
-async fn acquire_agent_slot(sem: &Arc<Semaphore>) -> Result<tokio::sync::OwnedSemaphorePermit> {
-    sem.clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| MaestroError::Config("Agent concurrency semaphore closed".to_string()))
+async fn acquire_agent_slot(
+    sem: &Arc<Semaphore>,
+    cancel_token: &CancellationToken,
+) -> Result<tokio::sync::OwnedSemaphorePermit> {
+    tokio::select! {
+        _ = cancel_token.cancelled() => Err(MaestroError::Cancelled),
+        permit = sem.clone().acquire_owned() => permit
+            .map_err(|_| MaestroError::Config("Agent concurrency semaphore closed".to_string())),
+    }
 }
 
 async fn run_pr_review_steps(
@@ -2305,7 +2432,7 @@ async fn run_workflow_steps(
     if crate::process::worktree_has_mise_config(&worktree_path)
         && !(is_resume && step_already_succeeded(&prior_steps_log, "Mise install"))
     {
-        let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
+        let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
         let mut step_log = StepLog::new("Mise install".to_string());
         info!("Running mise install (project declares mise tools)");
         log_writer
@@ -2425,7 +2552,7 @@ async fn run_workflow_steps(
                 continue;
             }
 
-            let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
+            let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
             let mut step_log = StepLog::new(step_name.clone());
             info!(command = %pre_install_cmd, step = i + 1, total, "Running pre-install command");
             log_writer
@@ -2509,7 +2636,7 @@ async fn run_workflow_steps(
     if !install_cmd.is_empty()
         && !(is_resume && step_already_succeeded(&prior_steps_log, "Install Dependencies"))
     {
-        let _shell_slot = acquire_agent_slot(agent_run_semaphore).await?;
+        let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
         let mut step_log = StepLog::new("Install Dependencies".to_string());
         info!(command = %install_cmd, "Installing dependencies in worktree");
         log_writer
@@ -3256,59 +3383,3 @@ fn extract_acceptance_criteria(description: &str) -> Vec<String> {
     criteria
 }
 
-#[cfg(test)]
-mod jira_browse_url_tests {
-    /// Builds `https://…/browse/TICKET` from `[jira] site` (kept for URL normalization tests).
-    fn jira_ticket_browse_url(site: &str, ticket_key: &str) -> String {
-        let mut s = site.trim();
-        if s.is_empty() {
-            return format!("https://jira.atlassian.net/browse/{ticket_key}");
-        }
-        if let Some(rest) = s.strip_prefix("https://") {
-            s = rest;
-        } else if let Some(rest) = s.strip_prefix("http://") {
-            s = rest;
-        }
-        let s = s.trim().trim_end_matches('/');
-        if s.is_empty() {
-            return format!("https://jira.atlassian.net/browse/{ticket_key}");
-        }
-        format!("https://{s}/browse/{ticket_key}")
-    }
-
-    #[test]
-    fn empty_site_uses_legacy_atlassian_host() {
-        assert_eq!(
-            jira_ticket_browse_url("", "PROJ-1"),
-            "https://jira.atlassian.net/browse/PROJ-1"
-        );
-        assert_eq!(
-            jira_ticket_browse_url("   ", "PROJ-1"),
-            "https://jira.atlassian.net/browse/PROJ-1"
-        );
-    }
-
-    #[test]
-    fn host_only_site() {
-        assert_eq!(
-            jira_ticket_browse_url("acme.atlassian.net", "CORE-42"),
-            "https://acme.atlassian.net/browse/CORE-42"
-        );
-    }
-
-    #[test]
-    fn site_with_https_prefix_and_trailing_slash() {
-        assert_eq!(
-            jira_ticket_browse_url("https://acme.atlassian.net/", "X-9"),
-            "https://acme.atlassian.net/browse/X-9"
-        );
-    }
-
-    #[test]
-    fn site_with_context_path() {
-        assert_eq!(
-            jira_ticket_browse_url("https://jira.corp.example.com/jira", "BUG-1"),
-            "https://jira.corp.example.com/jira/browse/BUG-1"
-        );
-    }
-}

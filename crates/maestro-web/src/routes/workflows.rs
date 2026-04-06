@@ -3,6 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
+use maestro_core::jira::ticket_browse_url;
 use maestro_core::workflow::dashboard_progress;
 use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow};
 use maestro_core::workflow::state::WorkflowState;
@@ -55,6 +56,8 @@ pub struct WorkflowSummary {
     pub started_manually: bool,
     /// Counts against **`[general] max_concurrent_manual_workflows`** (manual start and not Done/Stopped/Error).
     pub counts_toward_manual_cap: bool,
+    /// Jira **browse** URL from **`[jira] site`** + **`ticket_key`** (dashboard **Go to ticket**).
+    pub jira_browse_url: String,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -112,6 +115,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
                 started_manually,
                 counts_toward_manual_cap,
+                jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
             }
         })
         .collect();
@@ -152,6 +156,7 @@ pub async fn get_workflow(
                 progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
                 started_manually,
                 counts_toward_manual_cap,
+                jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
             })
         })
         .ok_or(StatusCode::NOT_FOUND)
@@ -202,6 +207,7 @@ pub async fn retry_workflow(
 /// Stop a workflow. Delegates to WorkflowEngine::stop_workflow which:
 /// - Cancels the CancellationToken (killing running processes)
 /// - Sets Stopped state
+/// - Force-removes worker containers for this ticket (`ContainerRunner::cleanup_for_ticket`)
 /// - Spawns a fire-and-forget task to unassign the Jira ticket and move it back to "To Do"
 /// - Broadcasts a WebSocket event
 pub async fn stop_workflow(
