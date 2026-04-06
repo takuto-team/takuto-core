@@ -10,6 +10,7 @@ use maestro_core::workflow::engine::WorkflowEngine;
 pub struct AppState {
     pub engine: Arc<WorkflowEngine>,
     pub config: Arc<RwLock<Config>>,
-    /// Shared with `JiraPoller`: when `true`, poller skips `poll_once` (dashboard pause/resume).
+    /// Shared with `JiraPoller`: when `true`, poller skips `poll_once` (dashboard pause/resume or
+    /// `[general] pause_jira_polling_on_startup` in `config.toml` at startup).
     pub polling_paused: Arc<AtomicBool>,
 }

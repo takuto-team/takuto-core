@@ -171,6 +171,10 @@ impl ContainerRunner {
     pub fn wrap_command(&self, program: &str, args: &[&str]) -> (String, Vec<String>) {
         let name = self.next_container_name();
         let mut docker_args = self.base_docker_args(&name, None);
+        // Without `--user`, `docker run` defaults to root and writes root-owned files on the
+        // bind-mounted repo/worktree; the Maestro process (user `maestro`) cannot remove them later.
+        docker_args.push("--user".into());
+        docker_args.push("maestro:maestro".into());
         docker_args.push(self.image.clone());
         docker_args.push(program.into());
         for a in args {
@@ -355,15 +359,18 @@ mod tests {
         // Entrypoint is empty (bypass image entrypoint)
         assert_eq!(flag_value(&args, "--entrypoint"), Some(""));
 
-        // Image + command at the tail
+        assert_eq!(flag_value(&args, "--user"), Some("maestro:maestro"));
+
+        // After --entrypoint "" comes: --user maestro:maestro, image, program, args...
         let entrypoint_idx = args.iter().position(|a| a == "--entrypoint").unwrap();
-        // After --entrypoint "" comes: image, program, args...
         let tail = &args[entrypoint_idx + 2..];
-        assert_eq!(tail[0], "maestro:latest");
-        assert_eq!(tail[1], "claude");
-        assert_eq!(tail[2], "--print");
-        assert_eq!(tail[3], "-p");
-        assert_eq!(tail[4], "hello");
+        assert_eq!(tail[0], "--user");
+        assert_eq!(tail[1], "maestro:maestro");
+        assert_eq!(tail[2], "maestro:latest");
+        assert_eq!(tail[3], "claude");
+        assert_eq!(tail[4], "--print");
+        assert_eq!(tail[5], "-p");
+        assert_eq!(tail[6], "hello");
     }
 
     #[test]

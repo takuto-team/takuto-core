@@ -214,7 +214,13 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let cancel_token = CancellationToken::new();
-    let polling_paused = Arc::new(AtomicBool::new(false));
+    let start_polling_paused = config.read().await.general.pause_jira_polling_on_startup;
+    let polling_paused = Arc::new(AtomicBool::new(start_polling_paused));
+    if start_polling_paused {
+        info!(
+            "Jira polling starts paused ([general] pause_jira_polling_on_startup = true); use the dashboard Resume polling control or POST /api/polling/resume to pick up new To Do tickets"
+        );
+    }
     let poller = JiraPoller::new(
         config.clone(),
         engine.clone(),

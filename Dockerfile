@@ -4,13 +4,22 @@ FROM rust:1.85-bookworm AS builder
 
 WORKDIR /app
 # Without this, Cargo hides progress in non-TTY Docker builds — looks hung for many minutes.
+# `when = always` requires an explicit `width` (Cargo 1.8x+).
 ENV CARGO_TERM_PROGRESS_WHEN=always
+ENV CARGO_TERM_PROGRESS_WIDTH=80
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
-RUN echo "=== cargo build --release (first build often takes 10–20+ minutes) ===" && \
-    cargo build --release
+# BuildKit cache mounts: persist downloaded crates + `target/` between `docker compose build` runs.
+# Copy the binary to `/out` so it exists in the image layer (the mounted `/app/target` is not part of the layer).
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    mkdir -p /out \
+    && echo "=== cargo build --release (first build often takes 10–20+ minutes; rebuilds reuse BuildKit cache) ===" \
+    && cargo build --release \
+    && cp /app/target/release/maestro /out/maestro
 
 # Stage 2: Runtime
 FROM debian:bookworm-slim AS runtime
@@ -129,8 +138,8 @@ RUN --mount=type=bind,source=.,target=/ctx \
 COPY docker/merge-project-skills.sh /usr/local/bin/merge-project-skills.sh
 RUN chmod 0755 /usr/local/bin/merge-project-skills.sh
 
-# Copy Maestro binary from builder
-COPY --from=builder /app/target/release/maestro /usr/local/bin/maestro
+# Copy Maestro binary from builder (see builder stage: binary staged under `/out` for cache-friendly builds)
+COPY --from=builder /out/maestro /usr/local/bin/maestro
 
 # Optional: TOML file in build context used only for [docker] build_commands (default: example with empty hooks)
 ARG MAESTRO_BUILD_CONFIG=config.toml.example

@@ -227,6 +227,9 @@ pub struct GeneralConfig {
     pub dry_mode: bool,
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
+    /// When **`true`**, Jira polling starts in the same **paused** state as **Pause polling** on the dashboard (no **`poll_once`** until **Resume polling** or **`POST /api/polling/resume`**). Not persisted when toggled at runtime; restart re-reads this flag from **`config.toml`**.
+    #[serde(default)]
+    pub pause_jira_polling_on_startup: bool,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_workflows: u32,
     /// Max **visible** workflows on the dashboard (rows still in the map: **Done**, paused, stopped, error, in-progress all count). `0` means use **`max_concurrent_workflows`**.
@@ -460,6 +463,7 @@ impl Default for GeneralConfig {
         Self {
             dry_mode: false,
             poll_interval_secs: default_poll_interval(),
+            pause_jira_polling_on_startup: false,
             max_concurrent_workflows: default_max_concurrent(),
             max_active_workflows: 0,
             log_level: default_log_level(),
@@ -959,6 +963,7 @@ mod tests {
         r#"
 [general]
 dry_mode = true
+pause_jira_polling_on_startup = true
 poll_interval_secs = 30
 max_concurrent_workflows = 2
 
@@ -988,6 +993,7 @@ step_timeout_secs = 600
         f.write_all(valid_config_toml().as_bytes()).unwrap();
         let config = Config::load(f.path()).unwrap();
         assert!(config.general.dry_mode);
+        assert!(config.general.pause_jira_polling_on_startup);
         assert_eq!(config.general.poll_interval_secs, 30);
         assert_eq!(config.jira.project_keys, vec!["PROJ", "CORE"]);
     }
@@ -1002,6 +1008,7 @@ step_timeout_secs = 600
     fn test_defaults() {
         let config = Config::default();
         assert!(!config.general.dry_mode);
+        assert!(!config.general.pause_jira_polling_on_startup);
         assert_eq!(config.general.poll_interval_secs, 60);
         assert_eq!(config.web.port, 8080);
         assert!(!config.web.dashboard_auth_enabled());

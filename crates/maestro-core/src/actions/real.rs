@@ -7,6 +7,7 @@ use tracing::info;
 use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
+use crate::git::worktree_remove;
 use crate::jira::acli;
 use crate::process::{self, CommandOutput};
 
@@ -196,20 +197,7 @@ impl ExternalActions for RealActions {
     }
 
     async fn remove_worktree(&self, path: &Path) -> Result<()> {
-        info!(path = %path.display(), "Removing git worktree");
-        let output = process::run_shell_command(
-            &format!("git worktree remove {}", path.display()),
-            &self.repo_path,
-            CancellationToken::new(),
-        )
-        .await?;
-        if !output.success() {
-            return Err(MaestroError::Git(format!(
-                "Failed to remove worktree: {}",
-                output.stderr
-            )));
-        }
-        Ok(())
+        worktree_remove::remove_git_worktree(&self.repo_path, path).await
     }
 
     async fn create_pr(&self, title: &str, body: &str, branch: &str, base: &str) -> Result<String> {
