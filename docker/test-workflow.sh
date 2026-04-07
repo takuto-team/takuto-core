@@ -164,11 +164,26 @@ fi
 echo "  Workflow step 1/2: say-hello skill with args"
 
 # Read SKILL.md, strip frontmatter, substitute args (replicates Maestro skill_resolve logic)
-SKILL_CONTENT=$(sed '1{/^---$/d}' "$HOME/.claude/skills/say-hello/SKILL.md" | sed '1,/^---$/d')
-SKILL_CONTENT=$(echo "$SKILL_CONTENT" | sed 's/\$ARGUMENTS/John Doe Cold/g; s/\$1/John Doe/g; s/\$2/Cold/g')
+SKILL_RAW=$(sed '1{/^---$/d}' "$HOME/.claude/skills/say-hello/SKILL.md" | sed '1,/^---$/d')
+SKILL_CONTENT=$(echo "$SKILL_RAW" | sed 's/\$ARGUMENTS/John Doe Cold/g; s/\$1/John Doe/g; s/\$2/Cold/g')
+
+echo ""
+echo "  ── Skill interpolation detail ──"
+echo "  Skill source:  $HOME/.claude/skills/say-hello/SKILL.md"
+echo "  Args:          \$1=John Doe  \$2=Cold"
+echo "  Raw body (frontmatter stripped):"
+echo "$SKILL_RAW" | sed 's/^/    | /'
+echo "  After arg substitution:"
+echo "$SKILL_CONTENT" | sed 's/^/    | /'
+echo "  ─────────────────────────────────"
+echo ""
 
 if [ "$agent_provider" = "claude" ]; then
-    echo "  Running: claude --system-prompt <skill> -p 'Follow the instructions in the system prompt.'"
+    SYSTEM_PROMPT_LEN=${#SKILL_CONTENT}
+    echo "  CLI: claude --dangerously-skip-permissions --print --verbose \\"
+    echo "         --system-prompt <${SYSTEM_PROMPT_LEN} chars> \\"
+    echo "         -p 'Follow the instructions in the system prompt.' \\"
+    echo "         --output-format stream-json ${model_flag:+$model_flag }-d $WORKTREE_PATH"
     # shellcheck disable=SC2086
     STEP1_OUTPUT=$(claude --dangerously-skip-permissions --print --verbose \
         -p "Follow the instructions in the system prompt." \
@@ -181,15 +196,22 @@ if [ "$agent_provider" = "claude" ]; then
     SESSION_ID=$(echo "$STEP1_OUTPUT" | grep '"subtype":"init"' | head -1 | sed 's/.*"session_id":"\([^"]*\)".*/\1/' || true)
     # Extract result text
     STEP1_RESULT=$(echo "$STEP1_OUTPUT" | grep '"type":"result"' | head -1 | sed 's/.*"result":"\([^"]*\)".*/\1/' || true)
-    echo "  Step 1 result: $STEP1_RESULT"
+
+    echo ""
+    echo "  ── Step 1 output ──"
+    echo "  Session ID: ${SESSION_ID:-(not found)}"
+    echo "  Result:     ${STEP1_RESULT:-(empty)}"
+    echo "  ────────────────────"
 
     if [ -z "$SESSION_ID" ]; then
         step_fail "Could not extract session ID from step 1"
     else
-        echo "  Session ID: $SESSION_ID"
-
         # --- Workflow step 2: prompt "say goodbye" ---
+        echo ""
         echo "  Workflow step 2/2: say goodbye (prompt only, resume session)"
+        echo "  CLI: claude --dangerously-skip-permissions --print --verbose \\"
+        echo "         -p 'Say goodbye.' --resume $SESSION_ID \\"
+        echo "         --output-format stream-json ${model_flag:+$model_flag }-d $WORKTREE_PATH"
         # shellcheck disable=SC2086
         STEP2_OUTPUT=$(claude --dangerously-skip-permissions --print --verbose \
             -p "Say goodbye." \
@@ -199,7 +221,11 @@ if [ "$agent_provider" = "claude" ]; then
             -d "$WORKTREE_PATH" 2>&1) || true
 
         STEP2_RESULT=$(echo "$STEP2_OUTPUT" | grep '"type":"result"' | head -1 | sed 's/.*"result":"\([^"]*\)".*/\1/' || true)
-        echo "  Step 2 result: $STEP2_RESULT"
+
+        echo ""
+        echo "  ── Step 2 output ──"
+        echo "  Result: ${STEP2_RESULT:-(empty)}"
+        echo "  ────────────────────"
 
         # Verify both steps produced output
         if [ -n "$STEP1_RESULT" ] && [ -n "$STEP2_RESULT" ]; then
