@@ -1187,7 +1187,7 @@ function renderWorkflows() {
 
   if (list.length === 0) {
     empty.classList.remove('hidden');
-    grid.innerHTML = addCell;
+    grid.innerHTML = '';
   } else {
     empty.classList.add('hidden');
     grid.innerHTML = list.map(renderWorkflowCard).join('') + addCell;
