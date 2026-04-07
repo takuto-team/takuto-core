@@ -209,5 +209,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
 RUN chmod +x /usr/local/bin/worker-entrypoint.sh
 
+COPY docker/test-workflow.sh /usr/local/bin/test-workflow.sh
+RUN chmod +x /usr/local/bin/test-workflow.sh
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["--config", "/etc/maestro/config.toml"]

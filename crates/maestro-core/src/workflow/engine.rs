@@ -1591,6 +1591,8 @@ async fn run_merge_base_steps(
     let steps = cfg.resolved_merge_base_agent_steps();
     drop(cfg);
 
+    let skill_paths = build_skill_search_paths(worktree_path, ai_stream_provider);
+
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
     check_cancelled(cancel_token)?;
 
@@ -1621,6 +1623,7 @@ async fn run_merge_base_steps(
         &prior_steps,
         false,
         config,
+        &skill_paths,
     )
     .await?;
 
@@ -1635,6 +1638,23 @@ async fn run_merge_base_steps(
     info!(ticket = %ticket_key, "Merge base branch workflow completed");
 
     Ok(())
+}
+
+/// Build skill search paths: worktree project-level, then user-level (provider-dependent).
+fn build_skill_search_paths(worktree_path: &Path, provider: AiAgentProvider) -> Vec<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("MAESTRO_HOME"))
+        .unwrap_or_else(|_| "/home/maestro".to_string());
+    let mut paths = vec![worktree_path.join(".claude/skills")];
+    match provider {
+        AiAgentProvider::Claude => {
+            paths.push(PathBuf::from(&home).join(".claude/skills"));
+        }
+        AiAgentProvider::Cursor => {
+            paths.push(PathBuf::from(&home).join(".cursor/skills"));
+        }
+    }
+    paths
 }
 
 /// `apply_prior_success_skip`: enabled for the main **AddressingTicket** flow (resume after restart);
@@ -1663,6 +1683,7 @@ async fn run_agent_step_sequence(
     // If false (PR review / merge-base): always run — dashboard may trigger the flow repeatedly.
     apply_prior_success_skip: bool,
     config: &Arc<RwLock<Config>>,
+    skill_search_paths: &[PathBuf],
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = None;
@@ -1755,7 +1776,8 @@ async fn run_agent_step_sequence(
                 broadcast_step_started(event_tx, ticket_key, &step_label);
                 log_writer.write_step(&step_label, "Starting").await;
 
-                let interpolated = interpolate_agent_prompt(&step.prompt, interp_vars);
+                let skill_resolved = crate::skill_resolve::resolve_skill_invocations(&step.prompt, skill_search_paths).await;
+                let interpolated = interpolate_agent_prompt(&skill_resolved, interp_vars);
                 let headless = headless_instructions_suffix(ai_stream_provider);
                 let full_prompt = format!("{interpolated}\n\n{headless}");
 
@@ -2056,6 +2078,8 @@ async fn run_pr_review_steps(
     let steps = cfg.resolved_review_agent_steps();
     drop(cfg);
 
+    let skill_paths = build_skill_search_paths(worktree_path, ai_stream_provider);
+
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
     check_cancelled(cancel_token)?;
 
@@ -2095,6 +2119,7 @@ async fn run_pr_review_steps(
         &pr_prior_steps,
         false,
         config,
+        &skill_paths,
     )
     .await?;
 
@@ -2776,6 +2801,8 @@ async fn run_workflow_steps(
     let steps = cfg.resolved_agent_steps();
     drop(cfg);
 
+    let skill_paths = build_skill_search_paths(&worktree_path, ai_stream_provider);
+
     let last_agent_output = run_agent_step_sequence(
         ticket_key,
         &worktree_path,
@@ -2797,6 +2824,7 @@ async fn run_workflow_steps(
         &prior_steps_log,
         true,
         config,
+        &skill_paths,
     )
     .await?;
 

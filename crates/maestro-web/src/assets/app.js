@@ -1086,7 +1086,7 @@ function renderWorkflowCard(w) {
   const jiraBrowse = workflowJiraBrowseUrl(w);
   const jiraLinkActions = `
       <button type="button" onclick="window.open('${escapeAttr(jiraBrowse)}', '_blank', 'noopener,noreferrer')" class="workflow-action-btn bg-sky-500/10 text-sky-300 border-sky-500/25 hover:bg-sky-500/20">Go to ticket</button>
-      <button type="button" onclick="void openWorkflowTicketDescriptionModal(${JSON.stringify(w.ticket_key)}, ${JSON.stringify(w.ticket_summary)})" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Show description</button>`;
+      <button type="button" onclick="void openWorkflowTicketDescriptionModal(${escapeAttr(JSON.stringify(w.ticket_key))}, ${escapeAttr(JSON.stringify(w.ticket_summary))})" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Show description</button>`;
   let actions = jiraLinkActions;
   if (status.label === 'Running') {
     actions += `

@@ -8,6 +8,7 @@
 #   make up            — start Maestro + DinD sidecar
 #   make down          — stop and remove containers
 #   make setup         — interactive first-time auth setup
+#   make test          — smoke test: auth, worktree, agent hello, cleanup
 #   make logs          — tail all container logs
 #   make logs-maestro  — tail only the Maestro container
 #   make ps            — show running containers
@@ -33,7 +34,7 @@ endif
 # Resolve the actual image name for the maestro service (compose may prefix with project name).
 MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
 
-.PHONY: build up down setup logs logs-maestro ps exec restart load-worker
+.PHONY: build up down setup test logs logs-maestro ps exec restart load-worker
 
 build:
 	@mkdir -p skills
@@ -53,6 +54,13 @@ ifeq ($(IS_PODMAN),1)
 	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it --network=host" $(COMPOSE_FILES) run --rm maestro setup
 else
 	$(COMPOSE) $(COMPOSE_FILES) run --rm -it --network=host maestro setup
+endif
+
+test:
+ifeq ($(IS_PODMAN),1)
+	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it" $(COMPOSE_FILES) run --rm maestro test-workflow
+else
+	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro test-workflow
 endif
 
 logs:

@@ -9,4 +9,5 @@ pub mod error;
 pub mod git;
 pub mod jira;
 pub mod process;
+pub mod skill_resolve;
 pub mod workflow;

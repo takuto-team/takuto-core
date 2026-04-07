@@ -3,6 +3,21 @@ use std::sync::OnceLock;
 
 use tracing::{info, warn};
 
+/// Shell-escape a string for safe inclusion in `sh -c "..."`.
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    // If the string is safe (alphanumeric, common flags), return as-is.
+    if s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'/' || b == b'.' || b == b'=' || b == b':')
+    {
+        return s.to_string();
+    }
+    // Wrap in single quotes, escaping embedded single quotes.
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Sanitize a ticket key for use in container names (lowercase, replace non-alphanumeric with `-`).
 fn sanitize_ticket_key(key: &str) -> String {
     key.chars()
@@ -169,8 +184,9 @@ impl ContainerRunner {
 
     /// Wrap a direct command (`program` + `args`) into a `docker run` invocation.
     ///
-    /// Uses `--entrypoint ""` so the container runs the program directly (bypassing
-    /// the Maestro image entrypoint).
+    /// Uses `sh -c` so we can restore `.claude.json` from backup before exec-ing
+    /// the actual program (the file lives outside the shared volume and is missing
+    /// in fresh worker containers).
     pub fn wrap_command(&self, program: &str, args: &[&str]) -> (String, Vec<String>) {
         let name = self.next_container_name();
         let mut docker_args = self.base_docker_args(&name, None);
@@ -179,10 +195,19 @@ impl ContainerRunner {
         docker_args.push("--user".into());
         docker_args.push("maestro:maestro".into());
         docker_args.push(self.image.clone());
-        docker_args.push(program.into());
+
+        // Build a shell command that restores .claude.json then exec's the program.
+        let mut shell_parts: Vec<String> = Vec::new();
+        shell_parts.push(shell_escape(program));
         for a in args {
-            docker_args.push((*a).into());
+            shell_parts.push(shell_escape(a));
         }
+        let restore = r#"if [ ! -f "$HOME/.claude.json" ]; then b=$(ls -t "$HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1); [ -n "$b" ] && cp "$b" "$HOME/.claude.json"; fi"#;
+        let cmd = format!("{restore}; exec {}", shell_parts.join(" "));
+        docker_args.push("sh".into());
+        docker_args.push("-c".into());
+        docker_args.push(cmd);
+
         ("docker".into(), docker_args)
     }
 
@@ -364,16 +389,16 @@ mod tests {
 
         assert_eq!(flag_value(&args, "--user"), Some("maestro:maestro"));
 
-        // After --entrypoint "" comes: --user maestro:maestro, image, program, args...
+        // After --entrypoint "" comes: --user maestro:maestro, image, sh, -c, "restore; exec ..."
         let entrypoint_idx = args.iter().position(|a| a == "--entrypoint").unwrap();
         let tail = &args[entrypoint_idx + 2..];
         assert_eq!(tail[0], "--user");
         assert_eq!(tail[1], "maestro:maestro");
         assert_eq!(tail[2], "maestro:latest");
-        assert_eq!(tail[3], "claude");
-        assert_eq!(tail[4], "--print");
-        assert_eq!(tail[5], "-p");
-        assert_eq!(tail[6], "hello");
+        assert_eq!(tail[3], "sh");
+        assert_eq!(tail[4], "-c");
+        // The shell command restores .claude.json then execs the original program
+        assert!(tail[5].contains("exec claude --print -p hello"), "sh -c body: {}", tail[5]);
     }
 
     #[test]

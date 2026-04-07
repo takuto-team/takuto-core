@@ -39,7 +39,7 @@ if [ "$(id -u)" = "0" ]; then
         echo "[maestro] WARNING: merge-project-skills.sh failed" >&2
     fi
 
-    if [ "${1:-}" != "setup" ]; then
+    if [ "${1:-}" != "setup" ] && [ "${1:-}" != "test-workflow" ]; then
         if iptables -L -n >/dev/null 2>&1; then
             echo "NET_ADMIN capability detected, applying egress rules..."
             /usr/local/bin/egress-rules.sh
@@ -69,6 +69,15 @@ export MISE_YES=1
 mkdir -p "$MISE_DATA_DIR/shims" "$MISE_CACHE_DIR" "$MISE_CONFIG_DIR"
 export PATH="$MISE_DATA_DIR/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# Restore .claude.json from backup if missing (volume can lose it on unclean shutdown)
+if [ ! -f "$HOME/.claude.json" ]; then
+    backup=$(ls -t "$HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1)
+    if [ -n "$backup" ]; then
+        cp "$backup" "$HOME/.claude.json"
+        echo "[maestro] Restored .claude.json from backup"
+    fi
+fi
+
 CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
 
 # Optional host engine socket — warn early when the mount exists but this user cannot use it.
@@ -81,6 +90,11 @@ if [ -e /var/run/docker.sock ]; then
         echo "[maestro]          (see README \"Host container socket\"; host id -g is not used — it often conflicts with Debian)." >&2
         echo "[maestro]          Consider using the DinD sidecar instead (docker-compose.dind.yml) — see README." >&2
     fi
+fi
+
+# --- Test workflow mode ---
+if [ "${1:-}" = "test-workflow" ]; then
+    exec /usr/local/bin/test-workflow.sh
 fi
 
 # --- Setup mode ---
