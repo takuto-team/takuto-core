@@ -1688,7 +1688,7 @@ async fn run_agent_step_sequence(
     // If false (PR review / merge-base): always run — dashboard may trigger the flow repeatedly.
     apply_prior_success_skip: bool,
     config: &Arc<RwLock<Config>>,
-    _skill_search_paths: &[PathBuf],
+    skill_search_paths: &[PathBuf],
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = None;
@@ -1781,7 +1781,46 @@ async fn run_agent_step_sequence(
                 broadcast_step_started(event_tx, ticket_key, &step_label);
                 log_writer.write_step(&step_label, "Starting").await;
 
-                let interpolated = interpolate_agent_prompt(&step.prompt, interp_vars);
+                // Build system prompt from step skills (Claude --bare only).
+                let system_prompt = if ai_stream_provider == AiAgentProvider::Claude
+                    && !step.skills.is_empty()
+                {
+                    crate::skill_resolve::build_system_prompt(
+                        &step.skills,
+                        skill_search_paths,
+                    )
+                    .await
+                } else {
+                    None
+                };
+
+                // For Cursor: prepend /skill invocations to the prompt (native support).
+                let step_prompt = if ai_stream_provider == AiAgentProvider::Cursor
+                    && !step.skills.is_empty()
+                {
+                    let invocations =
+                        crate::skill_resolve::build_cursor_skill_invocations(&step.skills);
+                    if step.prompt.is_empty() {
+                        invocations
+                    } else {
+                        format!("{invocations}\n\n{}", step.prompt)
+                    }
+                } else {
+                    step.prompt.clone()
+                };
+
+                // When Claude has skills as system prompt but no task prompt,
+                // direct it to follow the system prompt instructions.
+                let effective_prompt = if ai_stream_provider == AiAgentProvider::Claude
+                    && step_prompt.trim().is_empty()
+                    && system_prompt.is_some()
+                {
+                    "Follow the instructions in the system prompt.".to_string()
+                } else {
+                    step_prompt.clone()
+                };
+
+                let interpolated = interpolate_agent_prompt(&effective_prompt, interp_vars);
                 let headless = headless_instructions_suffix(ai_stream_provider);
                 let full_prompt = format!("{interpolated}\n\n{headless}");
 
@@ -1836,6 +1875,7 @@ async fn run_agent_step_sequence(
                         claude_model,
                         resume_id,
                         container_runner,
+                        system_prompt.as_deref(),
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),

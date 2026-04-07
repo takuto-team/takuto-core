@@ -92,6 +92,15 @@ struct MergeBaseWorkflowStepsFile {
     merge_base_agent_steps: Vec<AgentStepConfig>,
 }
 
+/// A skill reference in a workflow step — resolved at runtime into a `--system-prompt` (Claude)
+/// or a `/skill args` invocation (Cursor).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillRef {
+    pub name: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
 /// One AI agent session in the ticket workflow (`[[agent_steps]]` in TOML).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentStepConfig {
@@ -100,6 +109,9 @@ pub struct AgentStepConfig {
     /// Run this step this many times in sequence (each run after the first uses `--resume`). Default `1`.
     #[serde(default = "default_agent_step_repeat")]
     pub repeat: u8,
+    /// Optional skills to load for this step.
+    #[serde(default)]
+    pub skills: Vec<SkillRef>,
 }
 
 /// Built-in agent steps when `[[agent_steps]]` is omitted or empty (generic prompts, no slash-commands).
@@ -109,12 +121,14 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
             name: "Implement ticket".to_string(),
             prompt: "Implement this Jira ticket following the project's conventions.\n\nTicket context:\n{ticket_context}\n\nAdd or update tests as appropriate.".to_string(),
             repeat: 1,
+            skills: Vec::new(),
         },
         AgentStepConfig {
             name: "Review changes".to_string(),
             prompt: "Review all uncommitted changes for correctness, security, and code style. Fix any issues."
                 .to_string(),
             repeat: 1,
+            skills: Vec::new(),
         },
     ]
 }
@@ -129,6 +143,7 @@ pub fn default_merge_base_agent_steps() -> Vec<AgentStepConfig> {
             Run lint and tests after the merge. Commit the merge and push."
             .to_string(),
         repeat: 1,
+        skills: Vec::new(),
     }]
 }
 
@@ -139,6 +154,7 @@ pub fn default_review_agent_steps() -> Vec<AgentStepConfig> {
         prompt: "Pull request URL: {pr_url}\n\nTicket context:\n{ticket_context}\n\nUse GitHub tooling (e.g. `gh pr view`, `gh api` for review comments) to find unresolved PR feedback. Address each item with code changes, commit, and push updates to the PR branch."
             .to_string(),
         repeat: 1,
+        skills: Vec::new(),
     }]
 }
 
@@ -744,9 +760,9 @@ impl Config {
                     "Each [[agent_steps]] entry must have a non-empty name".to_string(),
                 ));
             }
-            if step.prompt.trim().is_empty() {
+            if step.prompt.trim().is_empty() && step.skills.is_empty() {
                 return Err(MaestroError::Config(format!(
-                    "Agent step {:?} must have a non-empty prompt",
+                    "Agent step {:?} must have a non-empty prompt or at least one skill",
                     step.name
                 )));
             }
@@ -764,9 +780,9 @@ impl Config {
                     "Each [[review_agent_steps]] entry must have a non-empty name".to_string(),
                 ));
             }
-            if step.prompt.trim().is_empty() {
+            if step.prompt.trim().is_empty() && step.skills.is_empty() {
                 return Err(MaestroError::Config(format!(
-                    "Review agent step {:?} must have a non-empty prompt",
+                    "Review agent step {:?} must have a non-empty prompt or at least one skill",
                     step.name
                 )));
             }
@@ -784,9 +800,9 @@ impl Config {
                     "Each [[merge_base_agent_steps]] entry must have a non-empty name".to_string(),
                 ));
             }
-            if step.prompt.trim().is_empty() {
+            if step.prompt.trim().is_empty() && step.skills.is_empty() {
                 return Err(MaestroError::Config(format!(
-                    "Merge base agent step {:?} must have a non-empty prompt",
+                    "Merge base agent step {:?} must have a non-empty prompt or at least one skill",
                     step.name
                 )));
             }
@@ -1062,6 +1078,7 @@ step_timeout_secs = 600
             name: "Only".into(),
             prompt: "x".into(),
             repeat: 1,
+            skills: Vec::new(),
         });
         assert_eq!(custom.agent_sequence_outer_loops(), 1);
     }
@@ -1080,6 +1097,7 @@ step_timeout_secs = 600
             name: "R".into(),
             prompt: "p".into(),
             repeat: 1,
+            skills: Vec::new(),
         });
         assert_eq!(custom.review_sequence_outer_loops(), 1);
     }

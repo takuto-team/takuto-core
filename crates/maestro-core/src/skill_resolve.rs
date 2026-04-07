@@ -1,75 +1,22 @@
-//! Resolve `/skill-name args` invocations in workflow prompts by reading SKILL.md files.
+//! Skill resolution for workflow steps.
 //!
 //! Skills are directories containing a `SKILL.md` with optional YAML frontmatter.
-//! The engine replaces each invocation line with the skill body, appending
-//! `ARGUMENTS: <args>` when arguments are present.
+//!
+//! For **Claude** (`--bare` mode): skills are read, args substituted, and the result
+//! is passed via `--system-prompt`.  Claude Code's `--print` mode does not support
+//! native `/skill` invocations, so Maestro handles skill content injection.
+//!
+//! For **Cursor**: skills work natively in interactive sessions, so we build
+//! `/skill-name arg1 arg2` invocation lines to prepend to the prompt.
 
 use std::path::PathBuf;
 
 use tracing::warn;
 
-/// Resolve all `/skill-name [args]` lines in `prompt`.
-///
-/// Each line whose trimmed form starts with `/` followed by a lowercase skill name
-/// (`[a-z][a-z0-9-]*`) is looked up under `search_paths` as `<dir>/<name>/SKILL.md`.
-/// First match wins. Unresolved invocations are left as-is with a warning.
-pub async fn resolve_skill_invocations(prompt: &str, search_paths: &[PathBuf]) -> String {
-    let mut out_lines: Vec<String> = Vec::new();
-
-    for line in prompt.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix('/') {
-            if let Some((name, args)) = parse_skill_invocation(rest) {
-                if let Some(body) = find_and_read_skill(&name, search_paths).await {
-                    if args.is_empty() {
-                        out_lines.push(body);
-                    } else {
-                        out_lines.push(format!("{body}\n\nARGUMENTS: {args}"));
-                    }
-                    continue;
-                }
-                warn!(skill = %name, "Skill not found in search paths — leaving invocation as-is");
-            }
-        }
-        out_lines.push(line.to_string());
-    }
-
-    out_lines.join("\n")
-}
-
-/// Parse `rest` (after the leading `/`) into `(skill_name, args)`.
-/// Skill names: `[a-z][a-z0-9-]*` (lowercase, hyphens allowed, no underscores).
-fn parse_skill_invocation(rest: &str) -> Option<(String, String)> {
-    let mut chars = rest.chars().peekable();
-
-    // First char must be lowercase letter.
-    let first = chars.peek()?;
-    if !first.is_ascii_lowercase() {
-        return None;
-    }
-
-    let mut name = String::new();
-    for ch in chars.by_ref() {
-        if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' {
-            name.push(ch);
-        } else if ch.is_ascii_whitespace() {
-            break;
-        } else {
-            // Invalid character for a skill name (e.g. uppercase, underscore, dot).
-            return None;
-        }
-    }
-
-    if name.is_empty() {
-        return None;
-    }
-
-    let args: String = chars.collect::<String>().trim().to_string();
-    Some((name, args))
-}
+use crate::config::SkillRef;
 
 /// Search for `<name>/SKILL.md` in the given directories. Return the body (frontmatter stripped).
-async fn find_and_read_skill(name: &str, search_paths: &[PathBuf]) -> Option<String> {
+pub async fn find_and_read_skill(name: &str, search_paths: &[PathBuf]) -> Option<String> {
     for dir in search_paths {
         let path = dir.join(name).join("SKILL.md");
         if let Ok(content) = tokio::fs::read_to_string(&path).await {
@@ -80,20 +27,79 @@ async fn find_and_read_skill(name: &str, search_paths: &[PathBuf]) -> Option<Str
 }
 
 /// Strip YAML frontmatter (between first `---` and second `---`) from the content.
-fn strip_frontmatter(content: &str) -> String {
+pub fn strip_frontmatter(content: &str) -> String {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
         return content.to_string();
     }
-    // Find end of frontmatter (second `---`).
     let after_first = &trimmed[3..];
     if let Some(end) = after_first.find("\n---") {
-        let body = &after_first[end + 4..]; // skip the "\n---"
+        let body = &after_first[end + 4..];
         body.trim_start_matches('\n').to_string()
     } else {
-        // Malformed frontmatter — return as-is.
         content.to_string()
     }
+}
+
+/// Substitute skill arguments into the body text.
+///
+/// Replaces `$ARGUMENTS` with all args joined by space, and `$1`, `$2`, … with
+/// positional values.
+pub fn substitute_skill_args(body: &str, args: &[String]) -> String {
+    let joined = args.join(" ");
+    let mut result = body.replace("$ARGUMENTS", &joined);
+    for (i, arg) in args.iter().enumerate() {
+        result = result.replace(&format!("${}", i + 1), arg);
+    }
+    result
+}
+
+/// Build a `--system-prompt` value for Claude from the step's skill references.
+///
+/// Reads each skill's SKILL.md, strips frontmatter, substitutes arguments, and
+/// concatenates them.  Returns `None` if no skills are configured or none are found.
+pub async fn build_system_prompt(
+    skills: &[SkillRef],
+    search_paths: &[PathBuf],
+) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    for skill in skills {
+        if let Some(body) = find_and_read_skill(&skill.name, search_paths).await {
+            let substituted = if skill.args.is_empty() {
+                body
+            } else {
+                substitute_skill_args(&body, &skill.args)
+            };
+            parts.push(substituted);
+        } else {
+            warn!(skill = %skill.name, "Skill not found in search paths — skipping");
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n---\n\n"))
+    }
+}
+
+/// Build `/skill-name arg1 arg2` invocation lines for Cursor (native skill support).
+pub fn build_cursor_skill_invocations(skills: &[SkillRef]) -> String {
+    skills
+        .iter()
+        .map(|s| {
+            if s.args.is_empty() {
+                format!("/{}", s.name)
+            } else {
+                format!("/{} {}", s.name, s.args.join(" "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -111,32 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_skill_name_and_args() {
-        assert_eq!(
-            parse_skill_invocation("caveman ultra"),
-            Some(("caveman".into(), "ultra".into()))
-        );
-        assert_eq!(
-            parse_skill_invocation("create-pr --no-draft"),
-            Some(("create-pr".into(), "--no-draft".into()))
-        );
-        assert_eq!(
-            parse_skill_invocation("review-changes"),
-            Some(("review-changes".into(), String::new()))
-        );
-    }
-
-    #[test]
-    fn parse_rejects_invalid() {
-        // Uppercase
-        assert_eq!(parse_skill_invocation("Caveman"), None);
-        // Starts with digit
-        assert_eq!(parse_skill_invocation("1skill"), None);
-        // Path-like
-        assert_eq!(parse_skill_invocation("foo/bar"), None);
-    }
-
-    #[test]
     fn strip_frontmatter_removes_yaml() {
         let input = "---\nname: test\ndescription: hello\n---\n\n# Body\n\nContent here.";
         assert_eq!(strip_frontmatter(input), "# Body\n\nContent here.");
@@ -148,82 +128,87 @@ mod tests {
         assert_eq!(strip_frontmatter(input), input);
     }
 
+    #[test]
+    fn substitute_args_positional() {
+        let body = "Fix issue $1 with priority $2.\n\nAll args: $ARGUMENTS";
+        let args = vec!["NERO-202".into(), "high".into()];
+        let result = substitute_skill_args(body, &args);
+        assert_eq!(
+            result,
+            "Fix issue NERO-202 with priority high.\n\nAll args: NERO-202 high"
+        );
+    }
+
+    #[test]
+    fn substitute_args_empty() {
+        let body = "No args here.";
+        let result = substitute_skill_args(body, &[]);
+        assert_eq!(result, "No args here.");
+    }
+
     #[tokio::test]
-    async fn resolve_replaces_skill_invocation() {
+    async fn build_system_prompt_single_skill() {
         let tmp = TempDir::new().unwrap();
         write_skill(
             tmp.path(),
             "caveman",
-            "---\nname: caveman\ndescription: compress\n---\n\n# Caveman Mode\n\nTalk like caveman.",
+            "---\nname: caveman\n---\n\n# Caveman Mode\n\nTalk like caveman.",
         );
         let paths = vec![tmp.path().to_path_buf()];
+        let skills = vec![SkillRef {
+            name: "caveman".into(),
+            args: vec!["ultra".into()],
+        }];
 
-        let result = resolve_skill_invocations("/caveman ultra", &paths).await;
-        assert!(result.contains("# Caveman Mode"));
-        assert!(result.contains("Talk like caveman."));
-        assert!(result.contains("ARGUMENTS: ultra"));
-        assert!(!result.contains("/caveman"));
+        let result = build_system_prompt(&skills, &paths).await;
+        assert!(result.is_some());
+        let content = result.unwrap();
+        assert!(content.contains("# Caveman Mode"));
+        assert!(!content.contains("---\nname"));
     }
 
     #[tokio::test]
-    async fn resolve_no_args() {
-        let tmp = TempDir::new().unwrap();
-        write_skill(
-            tmp.path(),
-            "cleanup",
-            "---\nname: cleanup\n---\n\n# Cleanup\n\nRun cleanup.",
-        );
-        let paths = vec![tmp.path().to_path_buf()];
-
-        let result = resolve_skill_invocations("/cleanup", &paths).await;
-        assert!(result.contains("# Cleanup"));
-        assert!(!result.contains("ARGUMENTS"));
-    }
-
-    #[tokio::test]
-    async fn resolve_mixed_prompt() {
-        let tmp = TempDir::new().unwrap();
-        write_skill(
-            tmp.path(),
-            "review-changes",
-            "---\nname: review-changes\n---\n\n# Review\n\nReview all changes.",
-        );
-        let paths = vec![tmp.path().to_path_buf()];
-
-        let prompt = "/review-changes\n\nFix all confirmed findings.\nDo not create a PR.";
-        let result = resolve_skill_invocations(prompt, &paths).await;
-        assert!(result.contains("# Review"));
-        assert!(result.contains("Fix all confirmed findings."));
-        assert!(result.contains("Do not create a PR."));
-    }
-
-    #[tokio::test]
-    async fn resolve_unknown_skill_left_as_is() {
+    async fn build_system_prompt_missing_skill() {
         let paths = vec![PathBuf::from("/nonexistent")];
-        let prompt = "/unknown-skill args here";
-        let result = resolve_skill_invocations(prompt, &paths).await;
-        assert_eq!(result, prompt);
+        let skills = vec![SkillRef {
+            name: "unknown".into(),
+            args: Vec::new(),
+        }];
+
+        let result = build_system_prompt(&skills, &paths).await;
+        assert!(result.is_none());
     }
 
     #[tokio::test]
-    async fn resolve_search_order_first_wins() {
-        let dir1 = TempDir::new().unwrap();
-        let dir2 = TempDir::new().unwrap();
-        write_skill(dir1.path(), "test-skill", "---\nname: test-skill\n---\n\nFrom dir1.");
-        write_skill(dir2.path(), "test-skill", "---\nname: test-skill\n---\n\nFrom dir2.");
-        let paths = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()];
+    async fn build_system_prompt_multiple_skills() {
+        let tmp = TempDir::new().unwrap();
+        write_skill(tmp.path(), "skill-a", "---\nname: a\n---\n\nContent A.");
+        write_skill(tmp.path(), "skill-b", "---\nname: b\n---\n\nContent B.");
+        let paths = vec![tmp.path().to_path_buf()];
+        let skills = vec![
+            SkillRef { name: "skill-a".into(), args: Vec::new() },
+            SkillRef { name: "skill-b".into(), args: Vec::new() },
+        ];
 
-        let result = resolve_skill_invocations("/test-skill", &paths).await;
-        assert!(result.contains("From dir1."));
-        assert!(!result.contains("From dir2."));
+        let result = build_system_prompt(&skills, &paths).await.unwrap();
+        assert!(result.contains("Content A."));
+        assert!(result.contains("---"));
+        assert!(result.contains("Content B."));
+    }
+
+    #[test]
+    fn cursor_skill_invocations() {
+        let skills = vec![
+            SkillRef { name: "caveman".into(), args: vec!["ultra".into()] },
+            SkillRef { name: "address-ticket".into(), args: Vec::new() },
+        ];
+        let result = build_cursor_skill_invocations(&skills);
+        assert_eq!(result, "/caveman ultra\n/address-ticket");
     }
 
     #[tokio::test]
-    async fn resolve_preserves_non_skill_slashes() {
-        let paths = vec![PathBuf::from("/nonexistent")];
-        // Paths, URLs, etc. should not be treated as skill invocations
-        let prompt = "Run /usr/bin/test and check https://example.com/path";
-        let result = resolve_skill_invocations(prompt, &paths).await;
-        assert_eq!(result, prompt);
+    async fn build_system_prompt_empty_skills() {
+        let result = build_system_prompt(&[], &[]).await;
+        assert!(result.is_none());
     }
 }

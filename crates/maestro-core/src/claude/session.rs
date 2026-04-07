@@ -16,6 +16,8 @@ pub struct ClaudeSession {
 
 impl ClaudeSession {
     /// Run a Claude Code session with the given full prompt (interpolated user text + headless suffix).
+    ///
+    /// `system_prompt` — optional skill content injected via `--system-prompt` (Claude `--bare` mode).
     pub async fn run_prompt(
         worktree: &Path,
         prompt: &str,
@@ -25,11 +27,13 @@ impl ClaudeSession {
         model: Option<&str>,
         resume_session_id: Option<&str>,
         container_runner: Option<&ContainerRunner>,
+        system_prompt: Option<&str>,
     ) -> Result<Self> {
         info!(
             worktree = %worktree.display(),
             resume = ?resume_session_id,
             prompt_len = prompt.len(),
+            system_prompt_len = system_prompt.map(|s| s.len()).unwrap_or(0),
             "Starting Claude Code session"
         );
 
@@ -42,6 +46,7 @@ impl ClaudeSession {
             model,
             resume_session_id,
             container_runner,
+            system_prompt,
         )
         .await?;
 
@@ -60,6 +65,7 @@ async fn run_claude_session(
     model: Option<&str>,
     resume_session_id: Option<&str>,
     container_runner: Option<&ContainerRunner>,
+    system_prompt: Option<&str>,
 ) -> Result<(String, String)> {
     let prompt_preview = &prompt[..prompt.len().min(200)];
     info!(
@@ -78,6 +84,13 @@ async fn run_claude_session(
         "--output-format",
         "stream-json",
     ];
+
+    // Inject skill content as system prompt (skills are resolved by Maestro,
+    // not by Claude Code — --bare disables native skill discovery).
+    if let Some(sp) = system_prompt {
+        args_vec.push("--system-prompt");
+        args_vec.push(sp);
+    }
 
     // Resume a previous session to keep conversation context
     let resume_flag;
