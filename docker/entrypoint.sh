@@ -28,6 +28,7 @@ if [ "$(id -u)" = "0" ]; then
     }
     chown_maestro_tree /home/maestro/.claude
     chown_maestro_tree /home/maestro/.cursor
+    chown_maestro_tree /home/maestro/.agents
     chown_maestro_tree /home/maestro/.config
     chown_maestro_tree /home/maestro/.local
     chown_maestro_tree /home/maestro/.npm

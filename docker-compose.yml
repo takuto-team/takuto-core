@@ -32,6 +32,7 @@ services:
       # Persistent auth + skills state for maestro user
       - claude-auth:/home/maestro/.claude
       - cursor-auth:/home/maestro/.cursor
+      - agents-data:/home/maestro/.agents
       - gh-auth:/home/maestro/.config/gh
       - acli-auth:/home/maestro/.config/acli
       # Workspace — cloned during setup, persisted across restarts
@@ -65,6 +66,7 @@ services:
 volumes:
   claude-auth:
   cursor-auth:
+  agents-data:
   gh-auth:
   acli-auth:
   workspace:

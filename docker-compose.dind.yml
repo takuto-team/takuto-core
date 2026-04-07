@@ -24,6 +24,7 @@ services:
       # Auth volumes — workers bind-mount from /shared-auth/* into standard home paths
       - claude-auth:/shared-auth/claude
       - cursor-auth:/shared-auth/cursor
+      - agents-data:/shared-auth/agents
       - gh-auth:/shared-auth/gh
       - acli-auth:/shared-auth/acli
       - npm-cache:/shared-auth/npm

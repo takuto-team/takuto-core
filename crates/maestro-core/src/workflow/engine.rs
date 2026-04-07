@@ -1688,7 +1688,7 @@ async fn run_agent_step_sequence(
     // If false (PR review / merge-base): always run — dashboard may trigger the flow repeatedly.
     apply_prior_success_skip: bool,
     config: &Arc<RwLock<Config>>,
-    skill_search_paths: &[PathBuf],
+    _skill_search_paths: &[PathBuf],
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = None;
@@ -1781,8 +1781,7 @@ async fn run_agent_step_sequence(
                 broadcast_step_started(event_tx, ticket_key, &step_label);
                 log_writer.write_step(&step_label, "Starting").await;
 
-                let skill_resolved = crate::skill_resolve::resolve_skill_invocations(&step.prompt, skill_search_paths).await;
-                let interpolated = interpolate_agent_prompt(&skill_resolved, interp_vars);
+                let interpolated = interpolate_agent_prompt(&step.prompt, interp_vars);
                 let headless = headless_instructions_suffix(ai_stream_provider);
                 let full_prompt = format!("{interpolated}\n\n{headless}");
 

@@ -93,6 +93,9 @@ const WORKER_VOLUMES: &[&str] = &[
     "/workspace:/workspace",
     "/shared-auth/claude:/home/maestro/.claude",
     "/shared-auth/cursor:/home/maestro/.cursor",
+    // npx skills add -g stores actual files in .agents/skills/; .claude/skills/ and
+    // .cursor/skills/ contain symlinks pointing there, so this must be shared.
+    "/shared-auth/agents:/home/maestro/.agents",
     "/shared-auth/gh:/home/maestro/.config/gh",
     "/shared-auth/acli:/home/maestro/.config/acli",
     "/shared-auth/npm:/home/maestro/.npm",
