@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::{info, warn};
 
@@ -41,6 +43,9 @@ pub struct ContainerRunner {
 }
 
 static DOCKER_AVAILABLE: OnceLock<bool> = OnceLock::new();
+/// Throttle DinD image pruning to at most once every 5 minutes.
+static LAST_IMAGE_PRUNE: AtomicU64 = AtomicU64::new(0);
+const IMAGE_PRUNE_INTERVAL_SECS: u64 = 300;
 
 /// Fixed environment variables injected into every worker container.
 const WORKER_ENV: &[(&str, &str)] = &[
@@ -230,10 +235,12 @@ impl ContainerRunner {
         remove_containers_matching(&sanitized).await;
     }
 
+
     /// Force-remove all worker containers for a given ticket key (no instance needed).
     pub async fn cleanup_for_ticket(ticket_key: &str) {
         let sanitized = sanitize_ticket_key(ticket_key);
         remove_containers_matching(&sanitized).await;
+        prune_dangling_images().await;
     }
 
     /// Auto-detect the worker image by inspecting the running Maestro container.
@@ -295,6 +302,43 @@ async fn remove_containers_matching(sanitized_key: &str) {
         Err(e) => {
             warn!(error = %e, "Failed to list worker containers for cleanup");
         }
+    }
+}
+
+/// Prune dangling DinD images (throttled to once per 5 minutes).
+///
+/// Runs `docker image prune -f` to remove dangling image layers that accumulate
+/// from rebuilding `maestro:latest`. This is safe because dangling images have no
+/// tags and are not referenced by any running container. The `maestro:latest`
+/// image itself is always tagged and will never be removed.
+async fn prune_dangling_images() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let last = LAST_IMAGE_PRUNE.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < IMAGE_PRUNE_INTERVAL_SECS {
+        return; // throttled
+    }
+    LAST_IMAGE_PRUNE.store(now, Ordering::Relaxed);
+
+    let output = tokio::process::Command::new("docker")
+        .args(["image", "prune", "-f"])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if !stdout.trim().is_empty() {
+                info!("Pruned dangling DinD images: {}", stdout.trim());
+            }
+        }
+        Ok(out) => warn!(
+            stderr = %String::from_utf8_lossy(&out.stderr),
+            "docker image prune failed"
+        ),
+        Err(e) => warn!(error = %e, "Failed to run docker image prune"),
     }
 }
 
