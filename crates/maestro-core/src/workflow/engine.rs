@@ -2450,6 +2450,7 @@ async fn run_workflow_steps(
     let cfg = config.read().await;
     let pre_install_cmds = cfg.commands.pre_install.clone();
     let install_cmd = cfg.commands.install.clone();
+    let pre_workflow_cmds = cfg.commands.pre_workflow.clone();
     let shell_stream_provider = cfg.agent.provider;
     drop(cfg);
 
@@ -2763,6 +2764,110 @@ async fn run_workflow_steps(
             config,
         )
         .await;
+    }
+
+    // Step 3d: Pre-workflow commands (e.g., environment setup before agent steps)
+    if !pre_workflow_cmds.is_empty() {
+        let total = pre_workflow_cmds.len();
+        for (i, pre_workflow_cmd) in pre_workflow_cmds.iter().enumerate() {
+            let step_name = format!("Pre-workflow ({}/{})", i + 1, total);
+
+            if is_resume && step_already_succeeded(&prior_steps_log, &step_name) {
+                info!(ticket = %ticket_key, step = %step_name, "Skipping — succeeded in prior run");
+                let mut skip_log = StepLog::new(step_name.clone());
+                skip_log
+                    .output
+                    .push("Skipped (succeeded in prior run)".to_string());
+                skip_log.complete(StepStatus::Skipped);
+                add_step_log(workflows, ticket_key, skip_log).await;
+                broadcast_step_completed(
+                    event_tx,
+                    ticket_key,
+                    &step_name,
+                    workflows,
+                    config,
+                )
+                .await;
+                continue;
+            }
+
+            let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
+            let mut step_log = StepLog::new(step_name.clone());
+            info!(command = %pre_workflow_cmd, step = i + 1, total, "Running pre-workflow command");
+            log_writer
+                .write_step(&step_name, &format!("Running: {pre_workflow_cmd}"))
+                .await;
+
+            broadcast_step_started(event_tx, ticket_key, &step_name);
+            let line_tx = spawn_output_relay(
+                event_tx,
+                ticket_key,
+                &step_name,
+                log_writer,
+                workflows,
+                shell_stream_provider,
+            );
+            let pre_result = if let Some(ref runner) = container_runner {
+                let (prog, docker_args) = runner.wrap_shell_command(pre_workflow_cmd);
+                let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
+                crate::process::run_command_streaming(
+                    &prog,
+                    &refs,
+                    &worktree_path,
+                    cancel_token.child_token(),
+                    line_tx,
+                )
+                .await
+            } else {
+                crate::process::run_shell_command_streaming(
+                    pre_workflow_cmd,
+                    &worktree_path,
+                    cancel_token.child_token(),
+                    line_tx,
+                )
+                .await
+            };
+            match pre_result {
+                Ok(output) if output.success() => {
+                    step_log.output.push(format!("{step_name} completed"));
+                    step_log.complete(StepStatus::Success);
+                    add_step_log(workflows, ticket_key, step_log).await;
+                    broadcast_step_completed(
+                        event_tx,
+                        ticket_key,
+                        &step_name,
+                        workflows,
+                        config,
+                    )
+                    .await;
+                }
+                Ok(output) => {
+                    let stderr_tail = output
+                        .stderr
+                        .lines()
+                        .rev()
+                        .take(20)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let msg = format!(
+                        "{step_name} failed (exit code {}):\n{}",
+                        output.exit_code, stderr_tail
+                    );
+                    step_log.fail(msg.clone());
+                    add_step_log(workflows, ticket_key, step_log).await;
+                    return Err(MaestroError::Git(msg));
+                }
+                Err(e) => {
+                    let msg = format!("{step_name} error: {e}");
+                    step_log.fail(msg.clone());
+                    add_step_log(workflows, ticket_key, step_log).await;
+                    return Err(MaestroError::Git(msg));
+                }
+            }
+        }
     }
 
     // Ticket context and interpolation vars for [[agent_steps]] prompts

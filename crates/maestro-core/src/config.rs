@@ -372,6 +372,9 @@ pub struct CommandsConfig {
     pub pre_install: Vec<String>,
     #[serde(default)]
     pub install: String,
+    /// Shell commands executed before each workflow starts (after worktree creation, before agent steps).
+    #[serde(default, deserialize_with = "deserialize_pre_install_vec")]
+    pub pre_workflow: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,6 +512,7 @@ impl Default for CommandsConfig {
         Self {
             pre_install: Vec::new(),
             install: String::new(),
+            pre_workflow: Vec::new(),
         }
     }
 }

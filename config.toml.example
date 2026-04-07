@@ -103,6 +103,8 @@ repo_path = "/workspace"
 # Shell commands run in order before install (e.g. registry auth). Use a TOML array; a single string is still accepted.
 pre_install = []
 install = "npm install"
+# Commands to run before each workflow starts (after worktree creation, before agent steps).
+# pre_workflow = []
 
 [web]
 host = "0.0.0.0"

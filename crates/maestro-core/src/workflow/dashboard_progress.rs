@@ -60,8 +60,22 @@ fn in_flight_partial_credit(w: &Workflow) -> bool {
     }
 }
 
-/// Expected number of `steps_log` rows for the current phase (main ticket, optional PR / merge-base subflows).
+/// Expected number of `steps_log` rows for the current phase.
+///
+/// When the workflow is in a **subflow** (`AddressingPrComments` / `MergingBaseBranch`),
+/// return only that subflow's step count — not the main ticket total.
 pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
+    match &w.state {
+        WorkflowState::AddressingPrComments { .. } => {
+            return pr_subflow_steps(cfg).max(1);
+        }
+        WorkflowState::MergingBaseBranch { .. } => {
+            return merge_base_subflow_steps(cfg).max(1);
+        }
+        _ => {}
+    }
+
+    // Main ticket pipeline
     let mut t: u32 = 3; // Assign Ticket, Retrieve Details, Create Worktree
 
     let path_for_mise = w
@@ -85,30 +99,21 @@ pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
     // "Workflow complete" row after agent sequence
     t += 1;
 
-    match &w.state {
-        WorkflowState::AddressingPrComments { .. } => {
-            t += pr_subflow_extra_steps(cfg);
-        }
-        WorkflowState::MergingBaseBranch { .. } => {
-            t += merge_base_subflow_extra_steps(cfg);
-        }
-        _ => {}
-    }
-
     t.max(1)
 }
 
-fn pr_subflow_extra_steps(cfg: &Config) -> u32 {
+fn pr_subflow_steps(cfg: &Config) -> u32 {
     let steps = cfg.resolved_review_agent_steps();
     let loops = cfg.review_sequence_outer_loops() as u32;
     let per: u32 = steps.iter().map(|s| s.repeat as u32).sum();
-    // Optional "PR review summary" + "PR review complete"
+    // Agent steps + "PR review summary" + "PR review complete"
     loops.saturating_mul(per.max(1)) + 2
 }
 
-fn merge_base_subflow_extra_steps(cfg: &Config) -> u32 {
+fn merge_base_subflow_steps(cfg: &Config) -> u32 {
     let steps = cfg.resolved_merge_base_agent_steps();
     let per: u32 = steps.iter().map(|s| s.repeat as u32).sum();
+    // Agent steps + "Merge base branch complete"
     per.max(1) + 1
 }
 
