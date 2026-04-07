@@ -67,9 +67,31 @@ async fn run_claude_session(
     container_runner: Option<&ContainerRunner>,
     system_prompt: Option<&str>,
 ) -> Result<(String, String)> {
-    let prompt_preview = &prompt[..prompt.len().min(200)];
+    // --system-prompt is ignored on --resume (the resumed session keeps its original
+    // system prompt). When resuming with skill content, inject it into the -p prompt
+    // instead so Claude actually sees the instructions.
+    let effective_prompt;
+    let effective_system_prompt;
+    match (system_prompt, resume_session_id) {
+        (Some(sp), Some(_)) => {
+            effective_prompt = format!(
+                "## Instructions for this step\n\n{sp}\n\n---\n\n{prompt}"
+            );
+            effective_system_prompt = None;
+        }
+        (Some(sp), None) => {
+            effective_prompt = prompt.to_string();
+            effective_system_prompt = Some(sp);
+        }
+        _ => {
+            effective_prompt = prompt.to_string();
+            effective_system_prompt = None;
+        }
+    }
+
+    let prompt_preview = &effective_prompt[..effective_prompt.len().min(200)];
     info!(
-        prompt_len = prompt.len(),
+        prompt_len = effective_prompt.len(),
         prompt_preview = %prompt_preview,
         resume = ?resume_session_id,
         "Claude session prompt"
@@ -80,14 +102,13 @@ async fn run_claude_session(
         "--print",
         "--verbose",
         "-p",
-        prompt,
+        &effective_prompt,
         "--output-format",
         "stream-json",
     ];
 
-    // Inject skill content as system prompt (skills are resolved by Maestro,
-    // not by Claude Code — --bare disables native skill discovery).
-    if let Some(sp) = system_prompt {
+    // Only pass --system-prompt on fresh sessions (it's ignored on --resume).
+    if let Some(sp) = effective_system_prompt {
         args_vec.push("--system-prompt");
         args_vec.push(sp);
     }
