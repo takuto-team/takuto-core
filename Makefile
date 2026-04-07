@@ -34,7 +34,7 @@ endif
 # Resolve the actual image name for the maestro service (compose may prefix with project name).
 MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
 
-.PHONY: build up down setup test logs logs-maestro ps exec restart load-worker
+.PHONY: build up down setup test logs logs-maestro ps exec restart load-worker clean-dind
 
 build:
 	@mkdir -p skills
@@ -91,5 +91,10 @@ load-worker:
 	podman save "$$IMAGE" | podman exec -i maestro-dind docker load; \
 	echo "Tagging as maestro:latest on DinD..."; \
 	podman exec maestro-dind docker tag "$$IMAGE" maestro:latest
+
+clean-dind:
+	@echo "Cleaning up DinD dangling images and volumes..."; \
+	podman exec maestro-dind docker system prune -f || true; \
+	echo "DinD cleanup complete. Run 'make load-worker' to reload maestro:latest if needed."
 
 restart: down up
