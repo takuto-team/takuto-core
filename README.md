@@ -174,7 +174,7 @@ Optional **`[[agent_steps]]`** tables belong at the **root** of the file. In TOM
 | Key | Default | Description |
 |-----|---------|-------------|
 | `[[agent_steps]]` | *(built-in)* | Each entry: `name`, `prompt` (placeholders: `ticket_key`, `ticket_summary`, `ticket_description`, `ticket_type`, `acceptance_criteria`, `ticket_context`), **`repeat`** (default `1` — run this step this many times in a row with session resume). **Any** custom step replaces the entire built-in list; omit all `[[agent_steps]]` for generic built-in prompts |
-| *(no custom steps)* | — | Built-in sequence runs **`[claude] address_ticket_passes`** times (default `3`) |
+| *(no custom steps)* | — | Built-in two-step sequence (implement + review) runs once |
 
 ### `[general]`
 
@@ -219,15 +219,6 @@ Optional **`[[agent_steps]]`** tables belong at the **root** of the file. In TOM
 | `host` | `"0.0.0.0"` | Web server bind address |
 | `port` | `8080` | Web server port |
 
-### `[claude]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `address_ticket_passes` | `3` | When **`[[agent_steps]]`** is empty: how many times to run the full built-in two-step sequence. Ignored for counting when you define custom **`[[agent_steps]]`** (use per-step **`repeat`** instead) |
-| `step_timeout_secs` | `1800` | Timeout per Claude session (30 min) |
-| `figma_api_token` | `""` | Figma API token for design references |
-| `model` | `""` | Model override for Claude Code when non-empty |
-
 ### `[agent]`
 
 | Key | Default | Description |
@@ -235,6 +226,8 @@ Optional **`[[agent_steps]]`** tables belong at the **root** of the file. In TOM
 | `provider` | `"claude"` | `claude` (Claude Code CLI) or `cursor` (Cursor Agent CLI) for agent steps and PM validation |
 | `cursor_cli` | `"agent"` | Executable name or path for Cursor Agent (see [Cursor CLI](https://cursor.com/docs/cli/overview)); only used when `provider = "cursor"` |
 | `cursor_model` | `"Auto"` | Cursor Agent `--model`; `Auto` (any case) or empty uses automatic model selection |
+| `step_timeout_secs` | `1800` | Timeout per agent session in seconds (30 min), applies to all providers |
+| `model` | `""` | Model override (e.g. `"claude-opus-4-6"`). Empty = provider default |
 
 The image includes the Cursor Agent CLI (`agent` in `/usr/local/bin`). Run `docker compose run --rm -it maestro setup` and complete the Cursor step, or set **`CURSOR_API_KEY`** in `maestro.env` (recommended for unattended / non-TTY `docker compose up`). **`docker-compose.yml`** sets **`CURSOR_CONFIG_DIR=/home/maestro/.cursor`** so browser login matches the **`cursor-auth`** volume; without that, tokens can land under **`~/.config/cursor`** and look “missing” on the next start. Ensure egress allows Cursor’s API hosts if you use a firewall.
 
@@ -260,7 +253,7 @@ For each ticket in "To Do" status:
 3. **Create worktree** on a new branch from the base branch
 4. **Pre-install** (optional) — run registry auth or other setup
 5. **Install dependencies** — e.g., `npm ci`
-6. **Agent steps** — built-in or custom **`[[agent_steps]]`**: each step is a headless Claude/Cursor session (prompts can include “run `npm run lint` and fix issues”, tests, review, etc.). With no custom steps, the default two-step sequence repeats **`[claude] address_ticket_passes`** times (default `3`).
+6. **Agent steps** — built-in or custom **`[[agent_steps]]`**: each step is a headless Claude/Cursor session (prompts can include “run `npm run lint` and fix issues”, tests, review, etc.). With no custom steps, the built-in two-step sequence (implement + review) runs once.
 7. **Workflow complete** — engine records optional **`pr_url`** from **`.maestro/outcome.toml`** or **`MAESTRO_PR_URL:`**; fails earlier if any logged step **Failed**
 
 On **stop**: kills running sessions, unassigns ticket, moves back to "To Do".

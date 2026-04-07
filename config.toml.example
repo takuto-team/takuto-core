@@ -1,9 +1,8 @@
 # --- AI workflow (optional `[[agent_steps]]` at TOML root) ---
 # Put `[[agent_steps]]` before `[general]` (or any `[table]`), or TOML binds them to the wrong section.
-# Omit all `[[agent_steps]]`: built-in two-step sequence (implement + review), repeated
-# `[claude] address_ticket_passes` times (default 3).
-# With custom `[[agent_steps]]`: your list replaces the built-in steps entirely; `[claude] address_ticket_passes`
-# is ignored for counting — use each step's `repeat` (default 1) to run that step multiple times in a row.
+# Omit all `[[agent_steps]]`: built-in two-step sequence (implement + review), run once.
+# With custom `[[agent_steps]]`: your list replaces the built-in steps entirely.
+# Use each step's `repeat` (default 1) to run that step multiple times in a row.
 #
 # [[agent_steps]]
 # name = "Implement ticket"
@@ -113,14 +112,6 @@ port = 8080
 dashboard_username = ""
 dashboard_password = ""
 
-[claude]
-skills_path = "/home/maestro/.claude/skills"
-address_ticket_passes = 3
-step_timeout_secs = 1800
-figma_api_token = ""
-# Model to use (e.g., "claude-opus-4-6", "claude-sonnet-4-6"). Empty = Claude Code default.
-model = ""
-
 [agent]
 # AI tool for implement / review / fix steps: "claude" (Claude Code CLI) or "cursor" (Cursor Agent CLI).
 provider = "claude"
@@ -128,6 +119,10 @@ provider = "claude"
 cursor_cli = "agent"
 # Cursor Agent --model. "Auto" (default) uses automatic model selection; set a concrete id to pin.
 cursor_model = "Auto"
+# Timeout per agent session in seconds (applies to all providers).
+step_timeout_secs = 1800
+# Model override (e.g., "claude-opus-4-6", "claude-sonnet-4-6"). Empty = provider default.
+model = ""
 
 [docker]
 # build_commands: optional `bash -c` steps during image build (see MAESTRO_BUILD_CONFIG in docker-compose).

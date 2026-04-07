@@ -85,13 +85,17 @@ fi
 
 # --- Setup mode ---
 if [ "${1:-}" = "setup" ]; then
+    # Read [agent] provider from config (default: claude).
+    agent_provider=$(grep -E '^\s*provider\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d ' ' || true)
+    agent_provider="${agent_provider:-claude}"
+
     echo "=== Maestro Setup ==="
-    echo "Required: GitHub CLI + Atlassian CLI. Optional: Claude Code, Cursor Agent, repository clone."
+    echo "Required: GitHub CLI + Atlassian CLI + agent provider ($agent_provider). Optional: repository clone."
     echo "Optional: add a gitignored ./skills folder at the Maestro repo root (merged on start); other tools via [docker] build_commands / compose_up_commands in config.toml."
     echo ""
 
-    # Step 1: GitHub (required)
-    echo "--- Step 1/5: GitHub CLI (required) ---"
+    # Step 1: GitHub (required — uses browser OAuth via --network=host)
+    echo "--- Step 1/4: GitHub CLI (required) ---"
     if gh auth status >/dev/null 2>&1; then
         echo "GitHub CLI: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
@@ -109,8 +113,8 @@ if [ "${1:-}" = "setup" ]; then
     fi
     echo ""
 
-    # Step 2: Atlassian (required)
-    echo "--- Step 2/5: Atlassian CLI (required) ---"
+    # Step 2: Atlassian (required — manual API token, no port needed)
+    echo "--- Step 2/4: Atlassian CLI (required) ---"
     jira_site=$(grep -E '^\s*site\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
     jira_email=$(grep -E '^\s*email\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
 
@@ -148,47 +152,49 @@ if [ "${1:-}" = "setup" ]; then
     fi
     echo ""
 
-    # Step 3: Claude Code (optional)
-    echo "--- Step 3/5: Claude Code (optional) ---"
-    read -p "Configure Claude Code (claude auth login)? [Y/s=skip] " -r
-    echo
-    if [[ $REPLY =~ ^[sS]$ ]]; then
-        echo "Skipped Claude setup."
-    else
-        if command -v claude >/dev/null 2>&1; then
-            if claude auth status >/dev/null 2>&1; then
-                echo "Claude Code: already authenticated."
-                read -p "Re-authenticate? [y/N] " -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    claude auth login
-                fi
-            else
+    # Step 3: Agent provider auth (required — determined by [agent] provider in config)
+    echo "--- Step 3/4: Agent provider — $agent_provider (required) ---"
+    if [ "$agent_provider" = "claude" ]; then
+        if ! command -v claude >/dev/null 2>&1; then
+            echo "ERROR: claude CLI not found on PATH."
+            exit 1
+        fi
+        if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "Claude Code: CLAUDE_CODE_OAUTH_TOKEN is set in environment, skipping interactive login."
+        elif claude auth status >/dev/null 2>&1; then
+            echo "Claude Code: already authenticated."
+            read -p "Re-authenticate? [y/N] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
                 claude auth login
             fi
         else
-            echo "WARN: claude CLI not found on PATH."
+            echo "Claude Code: authentication is required (browser OAuth via --network=host)."
+            claude auth login
         fi
-    fi
-    echo ""
-
-    # Step 4: Cursor Agent (optional)
-    echo "--- Step 4/5: Cursor Agent (optional) ---"
-    read -p "Configure Cursor Agent (agent login)? [Y/s=skip] " -r
-    echo
-    if [[ $REPLY =~ ^[sS]$ ]]; then
-        echo "Skipped Cursor Agent setup."
-    else
-        if command -v agent >/dev/null 2>&1; then
-            agent login
+        if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && ! claude auth status >/dev/null 2>&1; then
+            echo "ERROR: Claude Code authentication failed or was not completed."
+            exit 1
+        fi
+    elif [ "$agent_provider" = "cursor" ]; then
+        if ! command -v agent >/dev/null 2>&1; then
+            echo "ERROR: Cursor Agent CLI (agent) not found on PATH."
+            echo "       Install Cursor CLI or set CURSOR_API_KEY in maestro.env."
+            exit 1
+        fi
+        if [ -n "${CURSOR_API_KEY:-}" ]; then
+            echo "Cursor Agent: CURSOR_API_KEY is set in environment, skipping interactive login."
         else
-            echo "WARN: agent CLI not found on PATH. Install Cursor CLI or set CURSOR_API_KEY in maestro.env."
+            echo "Cursor Agent: authentication is required (browser OAuth via --network=host)."
+            agent login
         fi
+    else
+        echo "WARNING: Unknown agent provider '$agent_provider'. Skipping agent auth."
     fi
     echo ""
 
-    # Step 5: Repository (optional)
-    echo "--- Step 5/5: Repository (optional) ---"
+    # Step 4: Repository (optional)
+    echo "--- Step 4/4: Repository (optional) ---"
     read -p "Clone or refresh repository from config? [Y/s=skip] " -r
     echo
     if [[ $REPLY =~ ^[sS]$ ]]; then

@@ -1,6 +1,13 @@
 # Main Jira ticket pipeline — loaded via [general] ticket_workflow_steps_file in config.toml
 
 [[agent_steps]]
+name = "Enable Caveman"
+prompt = """
+/caveman ultra
+"""
+repeat = 1
+
+[[agent_steps]]
 name = "Implement ticket"
 prompt = """
 /address-ticket
@@ -17,7 +24,7 @@ Address all confirmed findings. For anything you choose to skip, explicitly stat
 When done, list what was fixed and what was intentionally left as-is.
 Do not create a PR.
 """
-repeat = 3
+repeat = 2
 
 [[agent_steps]]
 name = "Commit changes"

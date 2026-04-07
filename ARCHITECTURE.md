@@ -621,9 +621,7 @@ install = "npm ci"
 host = "0.0.0.0"
 port = 8080
 
-[claude]
-skills_path = "/root/.claude/skills"
-address_ticket_passes = 3
+[agent]
 step_timeout_secs = 600
 ```
 

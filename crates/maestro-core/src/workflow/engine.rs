@@ -1578,11 +1578,11 @@ async fn run_merge_base_steps(
     };
 
     let cfg = config.read().await;
-    let timeout = cfg.claude.step_timeout_secs;
-    let claude_model = if cfg.claude.model.is_empty() {
+    let timeout = cfg.agent.step_timeout_secs;
+    let claude_model = if cfg.agent.model.is_empty() {
         None
     } else {
-        Some(cfg.claude.model.clone())
+        Some(cfg.agent.model.clone())
     };
     let cursor_model_buf = cfg.agent.cursor_model.clone();
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
@@ -2043,11 +2043,11 @@ async fn run_pr_review_steps(
 
     let cfg = config.read().await;
     let outer_loops = cfg.review_sequence_outer_loops();
-    let timeout = cfg.claude.step_timeout_secs;
-    let claude_model = if cfg.claude.model.is_empty() {
+    let timeout = cfg.agent.step_timeout_secs;
+    let claude_model = if cfg.agent.model.is_empty() {
         None
     } else {
-        Some(cfg.claude.model.clone())
+        Some(cfg.agent.model.clone())
     };
     let cursor_model_buf = cfg.agent.cursor_model.clone();
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
@@ -2763,11 +2763,11 @@ async fn run_workflow_steps(
     // Steps 4–N: agent_steps (or defaults) × outer loops; each step may repeat (see `repeat` on step)
     let cfg = config.read().await;
     let outer_loops = cfg.agent_sequence_outer_loops();
-    let timeout = cfg.claude.step_timeout_secs;
-    let claude_model = if cfg.claude.model.is_empty() {
+    let timeout = cfg.agent.step_timeout_secs;
+    let claude_model = if cfg.agent.model.is_empty() {
         None
     } else {
-        Some(cfg.claude.model.clone())
+        Some(cfg.agent.model.clone())
     };
     let cursor_model_buf = cfg.agent.cursor_model.clone();
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);

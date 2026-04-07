@@ -50,9 +50,9 @@ down:
 
 setup:
 ifeq ($(IS_PODMAN),1)
-	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it" $(COMPOSE_FILES) run --rm maestro setup
+	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it --network=host" $(COMPOSE_FILES) run --rm maestro setup
 else
-	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro setup
+	$(COMPOSE) $(COMPOSE_FILES) run --rm -it --network=host maestro setup
 endif
 
 logs:

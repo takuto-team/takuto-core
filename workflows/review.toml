@@ -1,5 +1,12 @@
 # PR review loop (Address PR Comments) — loaded via [general] review_workflow_steps_file in config.toml
 
+[[agent_steps]]
+name = "Enable Caveman"
+prompt = """
+/caveman ultra
+"""
+repeat = 1
+
 [[review_agent_steps]]
 name = "Fix review comments"
 prompt = """

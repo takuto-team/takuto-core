@@ -26,6 +26,12 @@ pub struct AgentConfig {
     /// Cursor Agent `--model`. Default `"Auto"` requests Cursor automatic model selection.
     #[serde(default = "default_cursor_model")]
     pub cursor_model: String,
+    /// Timeout per agent session (applies to all providers).
+    #[serde(default = "default_step_timeout")]
+    pub step_timeout_secs: u64,
+    /// Model override (e.g. `"claude-opus-4-6"`). Empty = provider default.
+    #[serde(default)]
+    pub model: String,
 }
 
 fn default_cursor_cli() -> String {
@@ -55,6 +61,8 @@ impl Default for AgentConfig {
             provider: AiAgentProvider::default(),
             cursor_cli: default_cursor_cli(),
             cursor_model: default_cursor_model(),
+            step_timeout_secs: default_step_timeout(),
+            model: String::new(),
         }
     }
 }
@@ -174,8 +182,6 @@ pub struct Config {
     pub commands: CommandsConfig,
     #[serde(default)]
     pub web: WebConfig,
-    #[serde(default)]
-    pub claude: ClaudeConfig,
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
@@ -388,20 +394,6 @@ impl WebConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClaudeConfig {
-    #[serde(default = "default_skills_path")]
-    pub skills_path: String,
-    #[serde(default = "default_address_ticket_passes")]
-    pub address_ticket_passes: u8,
-    #[serde(default = "default_step_timeout")]
-    pub step_timeout_secs: u64,
-    #[serde(default)]
-    pub figma_api_token: String,
-    #[serde(default)]
-    pub model: String,
-}
-
 // Default value functions
 
 fn default_poll_interval() -> u64 {
@@ -430,12 +422,6 @@ fn default_host() -> String {
 }
 fn default_port() -> u16 {
     8080
-}
-fn default_skills_path() -> String {
-    "/root/.claude/skills".to_string()
-}
-fn default_address_ticket_passes() -> u8 {
-    3
 }
 fn default_step_timeout() -> u64 {
     1800
@@ -538,18 +524,6 @@ impl Default for WebConfig {
     }
 }
 
-impl Default for ClaudeConfig {
-    fn default() -> Self {
-        Self {
-            skills_path: default_skills_path(),
-            address_ticket_passes: default_address_ticket_passes(),
-            step_timeout_secs: default_step_timeout(),
-            figma_api_token: String::new(),
-            model: String::new(),
-        }
-    }
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -558,7 +532,6 @@ impl Default for Config {
             git: GitConfig::default(),
             commands: CommandsConfig::default(),
             web: WebConfig::default(),
-            claude: ClaudeConfig::default(),
             agent: AgentConfig::default(),
             docker: DockerConfig::default(),
             network: NetworkConfig::default(),
@@ -641,14 +614,9 @@ impl Config {
         Ok(())
     }
 
-    /// When `agent_steps` is empty, how many times to run the full built-in sequence (see `[claude] address_ticket_passes`).
-    /// When `agent_steps` is non-empty, this is `1` — use each step's `repeat` only.
+    /// Outer loop count for the agent step sequence. Always `1` — use each step's `repeat` for multiple runs.
     pub fn agent_sequence_outer_loops(&self) -> u8 {
-        if self.agent_steps.is_empty() {
-            self.claude.address_ticket_passes
-        } else {
-            1
-        }
+        1
     }
 
     /// Steps to run each outer loop (configured or [`default_agent_steps`]).
@@ -759,13 +727,6 @@ impl Config {
             )));
         }
 
-        if self.claude.address_ticket_passes < 1 {
-            return Err(MaestroError::Config(
-                "[claude] address_ticket_passes must be at least 1 (drives how many times the built-in step sequence runs when [[agent_steps]] is empty)"
-                    .to_string(),
-            ));
-        }
-
         if self.jira.done_status.trim().is_empty() {
             return Err(MaestroError::Config(
                 "[jira] done_status must be non-empty (Jira transition target for Mark as Done)"
@@ -833,7 +794,7 @@ impl Config {
             }
         }
 
-        if self.claude.step_timeout_secs == 0 {
+        if self.agent.step_timeout_secs == 0 {
             return Err(MaestroError::Config(
                 "step_timeout_secs must be at least 1".to_string(),
             ));
@@ -985,8 +946,7 @@ pre_install = []
 [web]
 port = 8080
 
-[claude]
-address_ticket_passes = 3
+[agent]
 step_timeout_secs = 600
 "#
     }
@@ -1089,22 +1049,17 @@ step_timeout_secs = 600
     }
 
     #[test]
-    fn agent_sequence_outer_loops_uses_address_ticket_passes_when_no_custom_steps() {
-        let mut config = Config::default();
-        config.claude.address_ticket_passes = 5;
-        assert_eq!(config.agent_sequence_outer_loops(), 5);
-    }
+    fn agent_sequence_outer_loops_is_always_one() {
+        let config = Config::default();
+        assert_eq!(config.agent_sequence_outer_loops(), 1);
 
-    #[test]
-    fn agent_sequence_outer_loops_is_one_when_custom_steps() {
-        let mut config = Config::default();
-        config.claude.address_ticket_passes = 5;
-        config.agent_steps.push(AgentStepConfig {
+        let mut custom = Config::default();
+        custom.agent_steps.push(AgentStepConfig {
             name: "Only".into(),
             prompt: "x".into(),
             repeat: 1,
         });
-        assert_eq!(config.agent_sequence_outer_loops(), 1);
+        assert_eq!(custom.agent_sequence_outer_loops(), 1);
     }
 
     #[test]
@@ -1146,8 +1101,7 @@ pre_install = "echo one"
 [web]
 port = 8080
 
-[claude]
-address_ticket_passes = 3
+[agent]
 step_timeout_secs = 600
 "#,
         )
@@ -1177,8 +1131,7 @@ pre_install = ["echo a", "echo b"]
 [web]
 port = 8080
 
-[claude]
-address_ticket_passes = 3
+[agent]
 step_timeout_secs = 600
 "#,
         )
@@ -1212,8 +1165,7 @@ pre_install = []
 [web]
 port = 8080
 
-[claude]
-address_ticket_passes = 3
+[agent]
 step_timeout_secs = 600
 
 [[agent_steps]]
@@ -1273,8 +1225,7 @@ pre_install = []
 [web]
 port = 8080
 
-[claude]
-address_ticket_passes = 3
+[agent]
 step_timeout_secs = 600
 "#,
                 steps_path.file_name().unwrap().to_str().unwrap()

@@ -1,5 +1,12 @@
 # Merge base branch — loaded via [general] merge_base_workflow_steps_file in config.toml
 
+[[agent_steps]]
+name = "Enable Caveman"
+prompt = """
+/caveman ultra
+"""
+repeat = 1
+
 [[merge_base_agent_steps]]
 name = "Merge base branch"
 prompt = """
