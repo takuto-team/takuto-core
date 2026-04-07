@@ -53,6 +53,9 @@ const WORKER_ENV: &[(&str, &str)] = &[
 
 /// Host environment variables forwarded into the worker when set.
 const PASSTHROUGH_ENV: &[&str] = &[
+    // Claude Code auth (token + optional base URL override)
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
     "FIGMA_API_TOKEN",
     "CURSOR_API_KEY",
     // Optional: force a fixed browser bundle (must match the project's @playwright/test version).
