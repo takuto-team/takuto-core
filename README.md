@@ -155,6 +155,8 @@ If the worker image is not loaded, the entrypoint logs a warning and falls back 
 
 **Security:** the DinD sidecar runs **`--privileged`** but is isolated to its own container — Maestro itself gains no extra privileges. The `workspace` volume is shared so paths resolve identically between both containers.
 
+**Disk space management:** the DinD sidecar runs a background cleanup daemon that periodically prunes dangling images, unused volumes, and old stopped containers (default: every 1 hour). This prevents the DinD filesystem from filling up during sustained operation. To adjust the cleanup interval, set the **`CLEANUP_INTERVAL_SECS`** environment variable in the **`dind`** service (e.g., `CLEANUP_INTERVAL_SECS: "1800"` for 30 minutes). The cleanup preserves images that are in use, so long-running workflows are not disrupted.
+
 **Playwright / visual regression tests:** isolated workers use the **same Chromium revision as your repo’s `@playwright/test`** (downloaded into a persisted **`playwright-cache`** volume under `~/.cache/ms-playwright`), not a separate browser bundled in the Maestro image — that mismatch used to cause subtle pixel drift vs `npm run …` on your laptop or CI. Workers also default to **`TZ=UTC`** and **`LANG`/`LC_ALL=C.UTF-8`** for more stable screenshots. Remaining differences vs macOS (font rasterization, subpixel AA) can still appear if baselines were captured on macOS while Maestro runs Linux; prefer generating baselines in the same environment as CI (often Linux), or set **`[general] worker_image`** to an image that matches your visual-test stack.
 
 **After changing compose files**, recreate containers: `podman compose -f docker-compose.yml -f docker-compose.dind.yml up -d --force-recreate`.
