@@ -243,10 +243,32 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let shutdown_token = cancel_token.clone();
     let shutdown_engine = engine.clone();
+    let snapshot_engine = engine.clone();
+    let snapshot_cancel = cancel_token.clone();
+
+    // Periodic workflow snapshot syncer (every minute)
+    let snapshot_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Err(e) = snapshot_engine.sync_workflow_snapshot().await {
+                        tracing::warn!(error = %e, "Failed to sync workflow snapshot (continuing)");
+                    }
+                }
+                _ = snapshot_cancel.cancelled() => {
+                    break;
+                }
+            }
+        }
+    });
 
     tokio::select! {
         _ = poller.run() => {
             info!("Jira poller stopped");
+        }
+        _ = snapshot_task => {
+            info!("Workflow snapshot syncer stopped");
         }
         result = async {
             let listener = tokio::net::TcpListener::bind(&bind_addr).await?;

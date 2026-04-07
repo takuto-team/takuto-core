@@ -300,6 +300,11 @@ impl WorkflowEngine {
         self.workflows.read().await.len()
     }
 
+    /// Periodic snapshot sync during normal operation (called by background task).
+    pub async fn sync_workflow_snapshot(&self) -> Result<()> {
+        self.sync_workflow_snapshot_from_map().await
+    }
+
     /// Rewrite `.maestro/workflow_snapshot.json` from the current in-memory map (best-effort).
     async fn sync_workflow_snapshot_from_map(&self) -> Result<()> {
         let repo_path = {
