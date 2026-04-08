@@ -8,7 +8,7 @@ repeat = 1
 
 [[agent_steps]]
 name = "Implement ticket"
-prompt = ""
+prompt = "Follow the instructions in the system prompt. Do not create a PR."
 skills = [{ name = "address-ticket" }]
 repeat = 1
 
