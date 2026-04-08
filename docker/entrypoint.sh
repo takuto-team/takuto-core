@@ -303,5 +303,8 @@ export USER="maestro"
 
 git config --global --add safe.directory /workspace
 gh auth setup-git 2>/dev/null || true
+# Rewrite SSH GitHub URLs to HTTPS so the gh credential helper handles auth.
+# Without this, git-over-SSH fails because no SSH keys are persisted across restarts.
+git config --global url."https://github.com/".insteadOf "git@github.com:" 2>/dev/null || true
 echo "[maestro] Starting Maestro server..."
 exec /usr/local/bin/maestro "$@"
