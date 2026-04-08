@@ -135,7 +135,7 @@ echo "  Creating worktree at $WORKTREE_PATH on branch $TEST_BRANCH..."
 git worktree add -b "$TEST_BRANCH" "$WORKTREE_PATH" "$git_remote/$base_branch" --quiet
 step_ok "Create worktree"
 
-# Step 3: Run test workflow with skill interpolation
+# Step 3: Native skill invocation test (no interpolation — Claude uses Skill tool directly)
 step_start "Run workflow ($agent_provider)"
 
 # Create say-hello skill for both providers
@@ -153,6 +153,12 @@ echo "$SKILL_BODY" > "$HOME/.claude/skills/say-hello/SKILL.md"
 echo "$SKILL_BODY" > "$HOME/.cursor/skills/say-hello/SKILL.md"
 echo "  Created say-hello skill for claude and cursor"
 
+echo ""
+echo "  ── Skill detail ──"
+echo "  Location: $HOME/.claude/skills/say-hello/SKILL.md"
+cat "$HOME/.claude/skills/say-hello/SKILL.md" | sed 's/^/    | /'
+echo "  ────────────────────"
+
 # Read model from config
 model_flag=""
 model=$(grep -E '^\s*model\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | head -1 || true)
@@ -160,53 +166,37 @@ if [ -n "$model" ]; then
     model_flag="--model $model"
 fi
 
-# --- Workflow step 1: /say-hello "John Doe" "Cold" ---
-echo "  Workflow step 1/2: say-hello skill with args"
-
-# Read SKILL.md, strip frontmatter, substitute args (replicates Maestro skill_resolve logic)
-SKILL_RAW=$(sed '1{/^---$/d}' "$HOME/.claude/skills/say-hello/SKILL.md" | sed '1,/^---$/d')
-SKILL_CONTENT=$(echo "$SKILL_RAW" | sed 's/\$ARGUMENTS/John Doe Cold/g; s/\$1/John Doe/g; s/\$2/Cold/g')
-
-echo ""
-echo "  ── Skill interpolation detail ──"
-echo "  Skill source:  $HOME/.claude/skills/say-hello/SKILL.md"
-echo "  Args:          \$1=John Doe  \$2=Cold"
-echo "  Raw body (frontmatter stripped):"
-echo "$SKILL_RAW" | sed 's/^/    | /'
-echo "  After arg substitution:"
-echo "$SKILL_CONTENT" | sed 's/^/    | /'
-echo "  ─────────────────────────────────"
-echo ""
-
 if [ "$agent_provider" = "claude" ]; then
-    SYSTEM_PROMPT_LEN=${#SKILL_CONTENT}
+    # --- Workflow step 1: native /say-hello skill invocation ---
+    echo ""
+    echo "  Workflow step 1/2: /say-hello via native Skill tool (no interpolation)"
     echo "  CLI: claude --dangerously-skip-permissions --print --verbose \\"
-    echo "         --system-prompt <${SYSTEM_PROMPT_LEN} chars> \\"
-    echo "         -p 'Follow the instructions in the system prompt.' \\"
+    echo "         -p '/say-hello \"John Doe\" \"Cold\"' \\"
     echo "         --output-format stream-json ${model_flag:+$model_flag }-d $WORKTREE_PATH"
     # shellcheck disable=SC2086
     STEP1_OUTPUT=$(claude --dangerously-skip-permissions --print --verbose \
-        -p "Follow the instructions in the system prompt." \
-        --system-prompt "$SKILL_CONTENT" \
+        -p '/say-hello "John Doe" "Cold"' \
         --output-format stream-json \
         $model_flag \
         -d "$WORKTREE_PATH" 2>&1) || true
 
-    # Extract session ID from init event
     SESSION_ID=$(echo "$STEP1_OUTPUT" | grep '"subtype":"init"' | head -1 | sed 's/.*"session_id":"\([^"]*\)".*/\1/' || true)
-    # Extract result text
     STEP1_RESULT=$(echo "$STEP1_OUTPUT" | grep '"type":"result"' | head -1 | sed 's/.*"result":"\([^"]*\)".*/\1/' || true)
+
+    # Check if Skill tool was used
+    SKILL_USED=$(echo "$STEP1_OUTPUT" | grep -c '"name":"Skill"' || true)
 
     echo ""
     echo "  ── Step 1 output ──"
-    echo "  Session ID: ${SESSION_ID:-(not found)}"
-    echo "  Result:     ${STEP1_RESULT:-(empty)}"
+    echo "  Session ID:     ${SESSION_ID:-(not found)}"
+    echo "  Skill tool used: ${SKILL_USED} time(s)"
+    echo "  Result:          ${STEP1_RESULT:-(empty)}"
     echo "  ────────────────────"
 
     if [ -z "$SESSION_ID" ]; then
         step_fail "Could not extract session ID from step 1"
     else
-        # --- Workflow step 2: prompt "say goodbye" ---
+        # --- Workflow step 2: plain prompt, resume session ---
         echo ""
         echo "  Workflow step 2/2: say goodbye (prompt only, resume session)"
         echo "  CLI: claude --dangerously-skip-permissions --print --verbose \\"
@@ -227,9 +217,8 @@ if [ "$agent_provider" = "claude" ]; then
         echo "  Result: ${STEP2_RESULT:-(empty)}"
         echo "  ────────────────────"
 
-        # Verify both steps produced output
         if [ -n "$STEP1_RESULT" ] && [ -n "$STEP2_RESULT" ]; then
-            step_ok "Workflow completed (2 steps, skill + prompt)"
+            step_ok "Workflow completed (2 steps: native skill + prompt)"
         else
             step_fail "One or both workflow steps produced no output"
         fi
@@ -239,12 +228,12 @@ elif [ "$agent_provider" = "cursor" ]; then
     cursor_cli=$(grep -E '^\s*cursor_cli\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | head -1 || true)
     cursor_cli="${cursor_cli:-agent}"
 
-    # Cursor: skills are invoked natively via /skill-name args
-    echo "  Running: $cursor_cli --print -p '/say-hello John Doe Cold'"
+    echo ""
+    echo "  Workflow step 1/2: /say-hello native invocation"
     if "$cursor_cli" --print -p '/say-hello "John Doe" "Cold"' -d "$WORKTREE_PATH" 2>&1; then
         echo "  Workflow step 2/2: say goodbye"
         if "$cursor_cli" --print -p "Say goodbye." -d "$WORKTREE_PATH" 2>&1; then
-            step_ok "Workflow completed (2 steps, skill + prompt)"
+            step_ok "Workflow completed (2 steps: native skill + prompt)"
         else
             step_fail "Step 2 (say goodbye) failed"
         fi
