@@ -13,6 +13,7 @@ use crate::state::AppState;
 pub struct TodoTicketRow {
     pub key: String,
     pub summary: String,
+    pub item_type: String,
 }
 
 /// All **To Do** issues for configured projects (every issue type), backlog order — for the manual-start picker.
@@ -43,6 +44,7 @@ pub async fn list_todo_tickets_manual(
         .map(|t| TodoTicketRow {
             key: t.key,
             summary: t.summary,
+            item_type: t.item_type,
         })
         .collect();
 

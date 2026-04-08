@@ -669,6 +669,39 @@ async function openManualWorkflowModal() {
       return;
     }
     body.innerHTML = '';
+
+    // Build type filter bar if more than one issue type
+    const types = [...new Set(available.map(t => t.item_type || '').filter(Boolean))];
+    if (types.length > 1) {
+      const filterBar = document.createElement('div');
+      filterBar.className = 'flex gap-2 flex-wrap px-1 pb-3';
+      const makeBtn = (label, active) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        btn.dataset.typeFilter = label;
+        btn.className = active
+          ? 'text-xs px-3 py-1 rounded-full border bg-blue-500/20 text-blue-300 border-blue-500/40'
+          : 'text-xs px-3 py-1 rounded-full border bg-gray-800/50 text-gray-400 border-gray-700 hover:bg-gray-700/50';
+        btn.onclick = () => {
+          const isAll = label === 'All';
+          filterBar.querySelectorAll('button').forEach(b => {
+            const on = b.dataset.typeFilter === label;
+            b.className = on
+              ? 'text-xs px-3 py-1 rounded-full border bg-blue-500/20 text-blue-300 border-blue-500/40'
+              : 'text-xs px-3 py-1 rounded-full border bg-gray-800/50 text-gray-400 border-gray-700 hover:bg-gray-700/50';
+          });
+          listEl.querySelectorAll('.manual-workflow-row').forEach(row => {
+            row.style.display = isAll || row.dataset.ticketType === label ? '' : 'none';
+          });
+        };
+        return btn;
+      };
+      filterBar.appendChild(makeBtn('All', true));
+      types.forEach(t => filterBar.appendChild(makeBtn(t, false)));
+      body.appendChild(filterBar);
+    }
+
     const listEl = document.createElement('div');
     listEl.className = 'manual-workflow-list';
     for (const t of available) {
@@ -679,6 +712,7 @@ async function openManualWorkflowModal() {
       row.className = 'manual-workflow-row';
       row.dataset.ticketKey = key;
       row.dataset.ticketSummary = summary || key;
+      row.dataset.ticketType = t.item_type || '';
       const kEl = document.createElement('div');
       kEl.className = 'manual-workflow-row-key';
       kEl.textContent = key;
