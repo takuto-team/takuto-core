@@ -1824,10 +1824,14 @@ async fn run_agent_step_sequence(
                 let headless = headless_instructions_suffix(ai_stream_provider);
                 let full_prompt = format!("{interpolated}\n\n{headless}");
 
-                let resume_id = if outer == 1 && step_idx == 0 && r == 1 {
-                    None
-                } else {
+                let resume_id = if r > 1 {
+                    // Repeat runs within the same step always resume
                     claude_session_id.as_deref()
+                } else if step.resume_previous {
+                    // Explicitly opted in to resuming the prior step's session
+                    claude_session_id.as_deref()
+                } else {
+                    None
                 };
 
                 let relay_label = match phase {

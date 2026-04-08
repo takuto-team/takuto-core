@@ -112,6 +112,11 @@ pub struct AgentStepConfig {
     /// Optional skills to load for this step.
     #[serde(default)]
     pub skills: Vec<SkillRef>,
+    /// Resume the previous step's Claude Code session instead of starting fresh.
+    /// When `true`, the step continues with full conversation history from the prior step.
+    /// Default `false` — each step gets a clean session.
+    #[serde(default)]
+    pub resume_previous: bool,
 }
 
 /// Built-in agent steps when `[[agent_steps]]` is omitted or empty (generic prompts, no slash-commands).
@@ -122,6 +127,7 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
             prompt: "Implement this Jira ticket following the project's conventions.\n\nTicket context:\n{ticket_context}\n\nAdd or update tests as appropriate.".to_string(),
             repeat: 1,
             skills: Vec::new(),
+            resume_previous: false,
         },
         AgentStepConfig {
             name: "Review changes".to_string(),
@@ -129,6 +135,7 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
                 .to_string(),
             repeat: 1,
             skills: Vec::new(),
+            resume_previous: false,
         },
     ]
 }
@@ -144,6 +151,7 @@ pub fn default_merge_base_agent_steps() -> Vec<AgentStepConfig> {
             .to_string(),
         repeat: 1,
         skills: Vec::new(),
+        resume_previous: false,
     }]
 }
 
@@ -155,6 +163,7 @@ pub fn default_review_agent_steps() -> Vec<AgentStepConfig> {
             .to_string(),
         repeat: 1,
         skills: Vec::new(),
+        resume_previous: false,
     }]
 }
 
@@ -1112,6 +1121,7 @@ step_timeout_secs = 600
             prompt: "x".into(),
             repeat: 1,
             skills: Vec::new(),
+            resume_previous: false,
         });
         assert_eq!(custom.agent_sequence_outer_loops(), 1);
     }
@@ -1131,6 +1141,7 @@ step_timeout_secs = 600
             prompt: "p".into(),
             repeat: 1,
             skills: Vec::new(),
+            resume_previous: false,
         });
         assert_eq!(custom.review_sequence_outer_loops(), 1);
     }
