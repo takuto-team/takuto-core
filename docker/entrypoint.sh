@@ -165,6 +165,14 @@ if [ "${1:-}" = "setup" ]; then
         echo "ERROR: Atlassian CLI authentication failed or was not completed."
         exit 1
     fi
+    # Sync Jira credentials to global auth so `acli auth status` (without
+    # product qualifier) also reports authenticated.  Many skills check the
+    # global status; without this copy the check fails even though Jira auth
+    # is perfectly valid.
+    acli_cfg_dir="${HOME}/.config/acli"
+    if [ -f "${acli_cfg_dir}/jira_config.yaml" ]; then
+        cp "${acli_cfg_dir}/jira_config.yaml" "${acli_cfg_dir}/global_auth_config.yaml"
+    fi
     echo ""
 
     # Step 3: Agent provider auth (required — determined by [agent] provider in config)

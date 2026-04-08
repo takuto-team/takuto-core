@@ -12,6 +12,7 @@
 #   make logs          — tail all container logs
 #   make logs-maestro  — tail only the Maestro container
 #   make ps            — show running containers
+#   make bash          — open a shell inside Maestro as the maestro user
 #   make exec          — open a shell inside Maestro as the maestro user
 #   make restart       — down + up
 
@@ -34,7 +35,7 @@ endif
 # Resolve the actual image name for the maestro service (compose may prefix with project name).
 MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
 
-.PHONY: build up down setup test logs logs-maestro ps exec restart load-worker clean-dind
+.PHONY: build up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind
 
 build:
 	@mkdir -p skills
@@ -51,9 +52,9 @@ down:
 
 setup:
 ifeq ($(IS_PODMAN),1)
-	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it --network=host" $(COMPOSE_FILES) run --rm maestro setup
+	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it" -f docker-compose.yml run --rm maestro setup
 else
-	$(COMPOSE) $(COMPOSE_FILES) run --rm -it --network=host maestro setup
+	docker compose -f docker-compose.yml run --rm -it maestro setup
 endif
 
 test:
@@ -71,6 +72,13 @@ logs-maestro:
 
 ps:
 	$(COMPOSE) $(COMPOSE_FILES) ps
+
+bash:
+ifeq ($(IS_PODMAN),1)
+	podman exec -u maestro -it maestro bash
+else
+	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
+endif
 
 exec:
 ifeq ($(IS_PODMAN),1)
