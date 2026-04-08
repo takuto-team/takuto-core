@@ -35,6 +35,7 @@ services:
       - mise-cache:/shared-auth/mise-cache
       - aws-config:/shared-auth/aws
       - playwright-cache:/shared-auth/playwright-cache
+      - vscode-data:/shared-auth/vscode
       # Config — workers need config.toml for egress rules (extra_egress_hosts, allow_all_https)
       - ./config.toml:/etc/maestro/config.toml:ro
       - ./workflows:/etc/maestro/workflows:ro
@@ -55,3 +56,4 @@ services:
 
 volumes:
   dind-storage:
+  vscode-data:

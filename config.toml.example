@@ -143,6 +143,29 @@ compose_up_commands = []
 # port from the DinD range (9100-9120); mappings are shown on the workflow card.
 # ports = [3000, 5173, 6006]
 
+# VS Code color theme
+# theme = "One Dark Pro"
+
+# Extensions to pre-install (marketplace IDs)
+# extensions = [
+#   "esbenp.prettier-vscode",
+#   "dbaeumer.vscode-eslint",
+#   "eamodio.gitlens",
+#   "bradlc.vscode-tailwindcss",
+#   "ms-python.python",
+# ]
+
+# VS Code settings (any valid setting key = value)
+# [editor.settings]
+# "editor.fontSize" = 14
+# "editor.tabSize" = 2
+# "editor.formatOnSave" = true
+# "editor.minimap.enabled" = false
+# "editor.wordWrap" = "on"
+# "terminal.integrated.fontSize" = 13
+# "files.autoSave" = "afterDelay"
+# "editor.bracketPairColorization.enabled" = true
+
 [network]
 # Additional domains to allow through the egress firewall
 # (e.g., private npm registries, internal APIs)

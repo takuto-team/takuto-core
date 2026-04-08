@@ -104,6 +104,8 @@ const WORKER_VOLUMES: &[&str] = &[
     "/shared-auth/aws:/home/maestro/.aws",
     // Playwright browser cache — must align with the repo's package.json, not a baked image path
     "/shared-auth/playwright-cache:/home/maestro/.cache/ms-playwright",
+    // openvscode-server data (extensions, settings, state)
+    "/shared-auth/vscode:/home/maestro/.openvscode-server",
     // Config + env for egress rules (extra_egress_hosts, .npmrc registry hosts, allow_all_https)
     "/etc/maestro:/etc/maestro:ro",
 ];
@@ -273,6 +275,27 @@ impl ContainerRunner {
 // Editor container management
 // ---------------------------------------------------------------------------
 
+/// Convert a TOML value to a serde_json value for VS Code settings.json.
+fn toml_value_to_json(val: &toml::Value) -> serde_json::Value {
+    match val {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(i) => serde_json::json!(*i),
+        toml::Value::Float(f) => serde_json::json!(*f),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        toml::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(toml_value_to_json).collect())
+        }
+        toml::Value::Table(tbl) => {
+            let map: serde_json::Map<String, serde_json::Value> = tbl
+                .iter()
+                .map(|(k, v)| (k.clone(), toml_value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+        toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
+    }
+}
+
 /// Port range reserved for editor instances (VS Code + app ports) on the DinD host.
 const EDITOR_PORT_MIN: u16 = 9100;
 const EDITOR_PORT_MAX: u16 = 9120;
@@ -345,6 +368,9 @@ pub async fn start_editor(
     worktree_path: &Path,
     image: &str,
     app_ports: &[u16],
+    theme: &str,
+    extensions: &[String],
+    settings: &std::collections::HashMap<String, toml::Value>,
 ) -> std::result::Result<EditorInfo, String> {
     let name = editor_container_name(ticket_key);
 
@@ -417,11 +443,42 @@ pub async fn start_editor(
     // Image
     args.push(image.into());
 
-    // Shell command: source env then launch openvscode-server
+    // Build settings.json content from theme + settings map
     let folder = worktree_path.to_string_lossy();
-    let cmd = format!(
-        r#"[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; exec openvscode-server --port {vscode_port} --host 0.0.0.0 --without-connection-token"#,
-    );
+    let mut settings_json = serde_json::Map::new();
+    if !theme.is_empty() {
+        settings_json.insert(
+            "workbench.colorTheme".into(),
+            serde_json::Value::String(theme.to_string()),
+        );
+    }
+    for (key, val) in settings {
+        settings_json.insert(key.clone(), toml_value_to_json(val));
+    }
+
+    // Build shell script: source env, write settings, install extensions, launch
+    let mut script_parts: Vec<String> = Vec::new();
+    script_parts.push("[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a".into());
+
+    if !settings_json.is_empty() {
+        let json_str = serde_json::to_string(&settings_json).unwrap_or_default();
+        let escaped = json_str.replace('\'', "'\\''");
+        script_parts.push(format!(
+            "mkdir -p ~/.openvscode-server/data/Machine && echo '{}' > ~/.openvscode-server/data/Machine/settings.json",
+            escaped
+        ));
+    }
+
+    for ext in extensions {
+        let escaped = shell_escape(ext);
+        script_parts.push(format!("openvscode-server --install-extension {escaped} --force 2>/dev/null || true"));
+    }
+
+    script_parts.push(format!(
+        "exec openvscode-server --port {vscode_port} --host 0.0.0.0 --without-connection-token"
+    ));
+
+    let cmd = script_parts.join("; ");
     args.push("sh".into());
     args.push("-c".into());
     args.push(cmd);

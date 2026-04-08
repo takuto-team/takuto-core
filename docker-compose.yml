@@ -75,3 +75,4 @@ volumes:
   mise-cache:
   aws-config:
   playwright-cache:
+  vscode-data:

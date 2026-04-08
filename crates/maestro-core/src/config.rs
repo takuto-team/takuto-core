@@ -244,11 +244,26 @@ pub struct EditorConfig {
     /// Each port is mapped to a host port from the DinD range (9100–9120).
     #[serde(default)]
     pub ports: Vec<u16>,
+    /// VS Code color theme (e.g. `"One Dark Pro"`, `"GitHub Dark"`).
+    #[serde(default)]
+    pub theme: String,
+    /// Extension marketplace IDs to pre-install (e.g. `["esbenp.prettier-vscode"]`).
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    /// Arbitrary VS Code settings written to `settings.json`.
+    /// Keys are VS Code setting paths (e.g. `"editor.fontSize" = 14`).
+    #[serde(default)]
+    pub settings: std::collections::HashMap<String, toml::Value>,
 }
 
 impl Default for EditorConfig {
     fn default() -> Self {
-        Self { ports: Vec::new() }
+        Self {
+            ports: Vec::new(),
+            theme: String::new(),
+            extensions: Vec::new(),
+            settings: std::collections::HashMap::new(),
+        }
     }
 }
 

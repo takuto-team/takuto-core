@@ -401,6 +401,9 @@ pub async fn open_editor(
         .clone();
     let ticket_key = w.ticket_key.clone();
     let app_ports = cfg.editor.ports.clone();
+    let theme = cfg.editor.theme.clone();
+    let extensions = cfg.editor.extensions.clone();
+    let settings = cfg.editor.settings.clone();
     drop(workflows);
     drop(cfg);
 
@@ -408,7 +411,10 @@ pub async fn open_editor(
         .await
         .unwrap_or_else(|| "maestro:latest".to_string());
 
-    let info = container::start_editor(&ticket_key, &worktree, &image, &app_ports)
+    let info = container::start_editor(
+        &ticket_key, &worktree, &image, &app_ports,
+        &theme, &extensions, &settings,
+    )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
