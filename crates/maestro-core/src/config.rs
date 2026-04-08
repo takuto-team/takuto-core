@@ -204,6 +204,8 @@ pub struct Config {
     pub docker: DockerConfig,
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub editor: EditorConfig,
     /// Ordered AI prompt steps (`[[agent_steps]]`). Empty → [`default_agent_steps`].
     #[serde(default)]
     pub agent_steps: Vec<AgentStepConfig>,
@@ -232,6 +234,21 @@ impl Default for DockerConfig {
             build_commands: Vec::new(),
             compose_up_commands: Vec::new(),
         }
+    }
+}
+
+/// Browser-based VS Code editor launched from the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorConfig {
+    /// Application ports to expose in the editor container (e.g. `[3000, 5173]`).
+    /// Each port is mapped to a host port from the DinD range (9100–9120).
+    #[serde(default)]
+    pub ports: Vec<u16>,
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        Self { ports: Vec::new() }
     }
 }
 
@@ -555,6 +572,7 @@ impl Default for Config {
             agent: AgentConfig::default(),
             docker: DockerConfig::default(),
             network: NetworkConfig::default(),
+            editor: EditorConfig::default(),
             agent_steps: Vec::new(),
             review_agent_steps: Vec::new(),
             merge_base_agent_steps: Vec::new(),

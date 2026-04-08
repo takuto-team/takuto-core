@@ -834,6 +834,35 @@ async function deleteWorkflow(id) {
   }
 }
 
+async function openEditor(id) {
+  setWorkflowCardLoading(id, true, 'Starting editor…');
+  try {
+    const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/open-editor`, { method: 'POST' });
+    if (!res.ok) {
+      const t = await res.text();
+      alert(t || 'Failed to start editor');
+      return;
+    }
+    const data = await res.json();
+    if (data.url) window.open(data.url, '_blank');
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Failed to open editor:', e);
+    alert('Failed to open editor');
+  } finally {
+    setWorkflowCardLoading(id, false);
+  }
+}
+
+async function closeEditor(id) {
+  try {
+    await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/close-editor`, { method: 'POST' });
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Failed to close editor:', e);
+  }
+}
+
 async function markWorkflowDone(id) {
   const ok = await showDashboardConfirm({
     title: 'Mark as Done',
@@ -1150,6 +1179,21 @@ function renderWorkflowCard(w) {
   if (w.can_delete) {
     actions += `
       <button onclick="deleteWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-gray-600/30 text-gray-300 border-gray-600/50 hover:bg-gray-600/45">Delete</button>`;
+  }
+  if (w.can_open_editor) {
+    if (w.editor_url) {
+      actions += `
+        <a href="${escapeHtml(w.editor_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20 inline-flex items-center gap-1">Editor &#x2197;</a>
+        <button onclick="closeEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Close editor</button>`;
+    } else {
+      actions += `
+        <button onclick="openEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Open editor</button>`;
+    }
+  }
+  // Port mappings display
+  if (w.editor_port_mappings && w.editor_port_mappings.length > 0) {
+    const mappings = w.editor_port_mappings.map(([cp, hp]) => `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-violet-400 hover:text-violet-300">localhost:${hp}</a></span>`).join(' ');
+    actions += `<div class="flex gap-3 items-center mt-1">${mappings}</div>`;
   }
   actions += `
     <button onclick="openReportModal('${w.ticket_key}')" class="workflow-action-btn bg-gray-700/50 text-gray-300 border-gray-700 hover:bg-gray-700">Report</button>`;

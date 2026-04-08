@@ -269,6 +269,282 @@ impl ContainerRunner {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Editor container management
+// ---------------------------------------------------------------------------
+
+/// Port range reserved for editor instances (VS Code + app ports) on the DinD host.
+const EDITOR_PORT_MIN: u16 = 9100;
+const EDITOR_PORT_MAX: u16 = 9120;
+
+/// Information about a running editor container.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EditorInfo {
+    /// URL to open in the browser (e.g. `http://localhost:9100/?folder=...`).
+    pub url: String,
+    /// VS Code port on the host.
+    pub vscode_port: u16,
+    /// `(container_port, host_port)` pairs for user-configured application ports.
+    pub port_mappings: Vec<(u16, u16)>,
+}
+
+/// Return the deterministic editor container name for a ticket.
+fn editor_container_name(ticket_key: &str) -> String {
+    format!("maestro-editor-{}", sanitize_ticket_key(ticket_key))
+}
+
+/// List host ports already claimed by any `maestro-editor-*` container.
+async fn used_editor_ports() -> Vec<u16> {
+    let output = tokio::process::Command::new("docker")
+        .args(["ps", "--filter", "name=maestro-editor-", "--format", "{{.Ports}}"])
+        .output()
+        .await;
+
+    let Ok(out) = output else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut ports = Vec::new();
+    // Format: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->3000/tcp"
+    for segment in stdout.split(|c: char| c == ',' || c == '\n') {
+        let segment = segment.trim();
+        // Extract host port from "0.0.0.0:PORT->"
+        if let Some(arrow) = segment.find("->") {
+            if let Some(colon) = segment[..arrow].rfind(':') {
+                if let Ok(p) = segment[colon + 1..arrow].parse::<u16>() {
+                    ports.push(p);
+                }
+            }
+        }
+    }
+    ports
+}
+
+/// Allocate `count` free host ports from the editor range.
+async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
+    let used = used_editor_ports().await;
+    let mut free = Vec::new();
+    for p in EDITOR_PORT_MIN..=EDITOR_PORT_MAX {
+        if !used.contains(&p) {
+            free.push(p);
+            if free.len() == count {
+                return Some(free);
+            }
+        }
+    }
+    None // not enough free ports
+}
+
+/// Start a browser VS Code editor container for a workflow.
+///
+/// Returns [`EditorInfo`] with the URL and port mappings on success.
+pub async fn start_editor(
+    ticket_key: &str,
+    worktree_path: &Path,
+    image: &str,
+    app_ports: &[u16],
+) -> std::result::Result<EditorInfo, String> {
+    let name = editor_container_name(ticket_key);
+
+    // Check if already running
+    if let Some(info) = get_editor_info(ticket_key).await {
+        return Ok(info);
+    }
+
+    // Allocate ports: 1 for VS Code + N for app ports
+    let needed = 1 + app_ports.len();
+    let ports = allocate_editor_ports(needed).await.ok_or_else(|| {
+        format!("No free editor ports available (need {needed}, range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
+    })?;
+
+    let vscode_port = ports[0];
+    let mut port_mappings = Vec::new();
+
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "-d".into(),
+        "--name".into(),
+        name.clone(),
+        "--cap-add=NET_ADMIN".into(),
+    ];
+
+    // Environment
+    for (k, v) in WORKER_ENV {
+        args.push("-e".into());
+        args.push(format!("{k}={v}"));
+    }
+    for key in PASSTHROUGH_ENV {
+        if let Ok(val) = std::env::var(key) {
+            if !val.is_empty() {
+                args.push("-e".into());
+                args.push(format!("{key}={val}"));
+            }
+        }
+    }
+
+    // Volumes
+    for v in WORKER_VOLUMES {
+        args.push("-v".into());
+        args.push((*v).into());
+    }
+
+    // Port mappings: VS Code
+    args.push("-p".into());
+    args.push(format!("{vscode_port}:{vscode_port}"));
+
+    // Port mappings: app ports
+    for (i, &app_port) in app_ports.iter().enumerate() {
+        let host_port = ports[1 + i];
+        args.push("-p".into());
+        args.push(format!("{host_port}:{app_port}"));
+        port_mappings.push((app_port, host_port));
+    }
+
+    // Working directory
+    args.push("-w".into());
+    args.push(worktree_path.to_string_lossy().into_owned());
+
+    // User
+    args.push("--user".into());
+    args.push("maestro:maestro".into());
+
+    // Entrypoint override
+    args.push("--entrypoint".into());
+    args.push("".into());
+
+    // Image
+    args.push(image.into());
+
+    // Shell command: source env then launch openvscode-server
+    let folder = worktree_path.to_string_lossy();
+    let cmd = format!(
+        r#"[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; exec openvscode-server --port {vscode_port} --host 0.0.0.0 --without-connection-token"#,
+    );
+    args.push("sh".into());
+    args.push("-c".into());
+    args.push(cmd);
+
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    info!(
+        name = %name,
+        vscode_port = vscode_port,
+        app_ports = ?port_mappings,
+        "Starting editor container"
+    );
+
+    let output = tokio::process::Command::new("docker")
+        .args(&arg_refs)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to start editor container: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("docker run failed: {stderr}"));
+    }
+
+    let url = format!("http://localhost:{vscode_port}/?folder={folder}");
+    info!(url = %url, "Editor container started");
+
+    Ok(EditorInfo {
+        url,
+        vscode_port,
+        port_mappings,
+    })
+}
+
+/// Stop and remove an editor container for a workflow.
+pub async fn stop_editor(ticket_key: &str) {
+    let name = editor_container_name(ticket_key);
+    let _ = tokio::process::Command::new("docker")
+        .args(["rm", "-f", &name])
+        .output()
+        .await;
+    info!(name = %name, "Editor container stopped");
+}
+
+/// Check if an editor container is running and return its info.
+pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
+    let name = editor_container_name(ticket_key);
+
+    let output = tokio::process::Command::new("docker")
+        .args(["inspect", &name, "--format", "{{.State.Running}} {{range .HostConfig.PortBindings}}{{range .}}{{.HostPort}} {{end}}{{end}} {{json .Config.Labels}}"])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    // Simpler approach: get ports via docker port
+    let port_output = tokio::process::Command::new("docker")
+        .args(["port", &name])
+        .output()
+        .await
+        .ok()?;
+
+    if !port_output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&port_output.stdout);
+    let mut vscode_port: Option<u16> = None;
+    let mut port_mappings = Vec::new();
+
+    // Format: "9100/tcp -> 0.0.0.0:9100\n3000/tcp -> 0.0.0.0:9101"
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split("->").collect();
+        if parts.len() != 2 {
+            continue;
+        }
+        let container_part = parts[0].trim(); // "9100/tcp"
+        let host_part = parts[1].trim(); // "0.0.0.0:9100"
+
+        let container_port: u16 = container_part
+            .split('/')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let host_port: u16 = host_part
+            .rsplit(':')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        if container_port == 0 || host_port == 0 {
+            continue;
+        }
+
+        // The first port in the editor range is the VS Code port
+        if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&container_port) {
+            vscode_port = Some(host_port);
+        } else {
+            port_mappings.push((container_port, host_port));
+        }
+    }
+
+    let vscode_port = vscode_port?;
+
+    // Get the working directory to reconstruct the folder URL
+    let wd_output = tokio::process::Command::new("docker")
+        .args(["inspect", &name, "--format", "{{.Config.WorkingDir}}"])
+        .output()
+        .await
+        .ok()?;
+
+    let folder = String::from_utf8_lossy(&wd_output.stdout).trim().to_string();
+    let url = format!("http://localhost:{vscode_port}/?folder={folder}");
+
+    Some(EditorInfo {
+        url,
+        vscode_port,
+        port_mappings,
+    })
+}
+
 /// List and force-remove containers whose name matches the prefix.
 async fn remove_containers_matching(sanitized_key: &str) {
     let filter = format!("name=maestro-worker-{sanitized_key}-");

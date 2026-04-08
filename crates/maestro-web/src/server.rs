@@ -58,6 +58,14 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::delete_workflow),
         )
         .route(
+            "/workflows/{id}/open-editor",
+            post(routes::workflows::open_editor),
+        )
+        .route(
+            "/workflows/{id}/close-editor",
+            post(routes::workflows::close_editor),
+        )
+        .route(
             "/workflows/start-manual",
             post(routes::workflows::start_manual_workflow),
         )

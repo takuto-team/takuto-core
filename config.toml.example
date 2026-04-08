@@ -137,6 +137,12 @@ build_commands = []
 # compose_up_commands: optional; run as maestro after preflight. Skills from ./skills do not require a hook here.
 compose_up_commands = []
 
+[editor]
+# Application ports to expose when opening VS Code editor from the dashboard
+# (e.g. dev server, Storybook). Each port in the container is mapped to a host
+# port from the DinD range (9100-9120); mappings are shown on the workflow card.
+# ports = [3000, 5173, 6006]
+
 [network]
 # Additional domains to allow through the egress firewall
 # (e.g., private npm registries, internal APIs)

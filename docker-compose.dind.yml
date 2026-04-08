@@ -16,6 +16,9 @@ services:
     container_name: maestro-dind
     image: docker:27-dind
     privileged: true
+    ports:
+      # Editor port range: 9100 for VS Code, 9101–9120 for user app ports
+      - "9100-9120:9100-9120"
     environment:
       DOCKER_TLS_CERTDIR: ""
     volumes:

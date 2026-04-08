@@ -167,6 +167,8 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | POST | `/api/workflows/{id}/merge-base-branch` | Start merge-base-branch agent loop (**`Done`** + **`pr_url`** + worktree) → **`202 Accepted`** |
 | POST | `/api/workflows/{id}/mark-done` | Jira **`done_status`** + remove worktree; JSON **`MarkDoneOutcome`** |
 | POST | `/api/workflows/{id}/delete` | Remove workflow when not **running**; no Jira change; **`workflow_removed`** on success |
+| POST | `/api/workflows/{id}/open-editor` | Start an **openvscode-server** container (browser VS Code) for the workflow's worktree. Returns JSON **`{ "url", "vscode_port", "port_mappings" }`**. Requires: not active, worktree exists, Docker available. App ports from **`[editor] ports`** are mapped to DinD host range 9100–9120. |
+| POST | `/api/workflows/{id}/close-editor` | Stop and remove the editor container for a workflow |
 | GET/PUT | `/api/config` | **`GET`** returns redacted in-memory config. **`PUT`** accepts **only** a strict JSON patch (`deny_unknown_fields`): **`web.dashboard_username`**, **`web.dashboard_password`** (omit key or send empty string with non-empty username to **preserve** existing password), **`general.max_concurrent_workflows`**, **`general.max_active_workflows`**. Any other key → **400**. All other settings require editing **`config.toml`** and restarting. |
 | GET | `/api/polling` | JSON `{ "paused": bool }` — Jira poller pause state |
 | POST | `/api/polling/pause` | Pause Jira polling (no new tickets picked up) |
@@ -194,6 +196,7 @@ Loaded in `crates/maestro-core/src/config.rs` — sections:
 - **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`, `cursor_model` (default `Auto`; Cursor CLI gets `--model Auto` unless a concrete id is set), `step_timeout_secs` (timeout per agent session, all providers), `model` (override, e.g. `"claude-opus-4-6"`; empty = provider default)
 - **`docker`**: `build_commands` (image build), `compose_up_commands` (each `docker compose up`)
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**
+- **`editor`**: `ports` (`Vec<u16>`) — application ports to expose in the browser VS Code editor container (e.g. `[3000, 5173]`). Each port is mapped to a host port from the DinD range 9100–9120. Port mappings are shown on the dashboard workflow card when an editor is running.
 
 Runtime path defaults are described in `README.md` / `config.toml.example`. Dashboard **`PUT /api/config`** only merges the runtime patch (see table above). Workflow step files and all other fields: edit **`config.toml`** on disk and restart. **`{ticket_context}`** is built with explicit **UNTRUSTED_JIRA** framing and optional size limits — Jira text remains an untrusted prompt surface; use Jira permissions and human PR review.
 

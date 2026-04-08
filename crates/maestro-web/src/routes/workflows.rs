@@ -3,6 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
+use maestro_core::container::{self, ContainerRunner};
 use maestro_core::jira::ticket_browse_url;
 use maestro_core::workflow::dashboard_progress;
 use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow};
@@ -58,6 +59,12 @@ pub struct WorkflowSummary {
     pub counts_toward_manual_cap: bool,
     /// Jira **browse** URL from **`[jira] site`** + **`ticket_key`** (dashboard **Go to ticket**).
     pub jira_browse_url: String,
+    /// **Open editor** is allowed (workflow not active, worktree exists, Docker available).
+    pub can_open_editor: bool,
+    /// Set when an editor container is already running for this workflow.
+    pub editor_url: Option<String>,
+    /// `(container_port, host_port)` pairs for user-configured application ports.
+    pub editor_port_mappings: Vec<(u16, u16)>,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -77,6 +84,12 @@ fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
 fn manual_cap_fields(w: &Workflow) -> (bool, bool) {
     let toward = w.started_manually && w.state.occupies_concurrency_slot();
     (w.started_manually, toward)
+}
+
+fn can_open_editor(w: &Workflow) -> bool {
+    !w.state.is_active()
+        && w.worktree_path.as_ref().is_some_and(|p| p.exists())
+        && ContainerRunner::is_available()
 }
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
@@ -116,6 +129,9 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 started_manually,
                 counts_toward_manual_cap,
                 jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
+                can_open_editor: can_open_editor(w),
+                editor_url: None,
+                editor_port_mappings: Vec::new(),
             }
         })
         .collect();
@@ -130,36 +146,36 @@ pub async fn get_workflow(
 ) -> Result<Json<WorkflowSummary>, StatusCode> {
     let cfg = state.config.read().await;
     let workflows = state.engine.workflows.read().await;
-    workflows
-        .get(&id)
-        .map(|w| {
-            let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
-            let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
-            Json(WorkflowSummary {
-                id: w.id.clone(),
-                ticket_key: w.ticket_key.clone(),
-                ticket_summary: w.ticket_summary.clone(),
-                ticket_type: w.ticket_type.clone(),
-                state: w.status_display(),
-                started_at: w.started_at.to_rfc3339(),
-                updated_at: w.updated_at.to_rfc3339(),
-                branch_name: w.branch_name.clone(),
-                pr_url: w.pr_url.clone(),
-                steps_log: w.steps_log.clone(),
-                error: extract_error(&w.state),
-                terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
-                can_address_pr_comments,
-                can_merge_base,
-                can_mark_done,
-                can_delete: !w.state.is_active(),
-                progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
-                progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
-                started_manually,
-                counts_toward_manual_cap,
-                jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
-            })
-        })
-        .ok_or(StatusCode::NOT_FOUND)
+    let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
+    let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
+    let editor_info = container::get_editor_info(&w.ticket_key).await;
+    Ok(Json(WorkflowSummary {
+        id: w.id.clone(),
+        ticket_key: w.ticket_key.clone(),
+        ticket_summary: w.ticket_summary.clone(),
+        ticket_type: w.ticket_type.clone(),
+        state: w.status_display(),
+        started_at: w.started_at.to_rfc3339(),
+        updated_at: w.updated_at.to_rfc3339(),
+        branch_name: w.branch_name.clone(),
+        pr_url: w.pr_url.clone(),
+        steps_log: w.steps_log.clone(),
+        error: extract_error(&w.state),
+        terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
+        can_address_pr_comments,
+        can_merge_base,
+        can_mark_done,
+        can_delete: !w.state.is_active(),
+        progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
+        progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
+        started_manually,
+        counts_toward_manual_cap,
+        jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
+        can_open_editor: can_open_editor(w),
+        editor_url: editor_info.as_ref().map(|e| e.url.clone()),
+        editor_port_mappings: editor_info.map(|e| e.port_mappings).unwrap_or_default(),
+    }))
 }
 
 /// Pause a running workflow. Delegates to WorkflowEngine::pause_workflow
@@ -347,4 +363,67 @@ pub async fn start_manual_workflow(
         workflow_id,
         ticket_key,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Editor (openvscode-server) endpoints
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct OpenEditorResponse {
+    pub url: String,
+    pub vscode_port: u16,
+    pub port_mappings: Vec<(u16, u16)>,
+}
+
+/// Start a browser VS Code editor container for a workflow.
+pub async fn open_editor(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<OpenEditorResponse>, (StatusCode, String)> {
+    let cfg = state.config.read().await;
+    let workflows = state.engine.workflows.read().await;
+    let w = workflows
+        .get(&id)
+        .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
+
+    if !can_open_editor(w) {
+        return Err((
+            StatusCode::CONFLICT,
+            "Cannot open editor: workflow is active, worktree missing, or Docker unavailable".into(),
+        ));
+    }
+
+    let worktree = w
+        .worktree_path
+        .as_ref()
+        .ok_or((StatusCode::CONFLICT, "No worktree path".into()))?
+        .clone();
+    let ticket_key = w.ticket_key.clone();
+    let app_ports = cfg.editor.ports.clone();
+    drop(workflows);
+    drop(cfg);
+
+    let image = ContainerRunner::discover_worker_image()
+        .await
+        .unwrap_or_else(|| "maestro:latest".to_string());
+
+    let info = container::start_editor(&ticket_key, &worktree, &image, &app_ports)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(OpenEditorResponse {
+        url: info.url,
+        vscode_port: info.vscode_port,
+        port_mappings: info.port_mappings,
+    }))
+}
+
+/// Stop and remove the editor container for a workflow.
+pub async fn close_editor(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+) -> StatusCode {
+    container::stop_editor(&id).await;
+    StatusCode::OK
 }
