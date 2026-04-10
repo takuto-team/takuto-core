@@ -727,28 +727,43 @@ impl WorkflowEngine {
     }
 
     pub async fn pause_workflow(&self, ticket_key: &str) -> Result<()> {
-        let mut workflows = self.workflows.write().await;
-        let workflow = workflows
-            .get_mut(ticket_key)
-            .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+        let (ticket_key_owned, workflow_id) = {
+            let mut workflows = self.workflows.write().await;
+            let workflow = workflows
+                .get_mut(ticket_key)
+                .ok_or_else(|| {
+                    MaestroError::Config(format!("Workflow not found: {ticket_key}"))
+                })?;
 
-        if !workflow.state.is_active() {
-            return Err(MaestroError::Config(format!(
-                "Cannot pause workflow in state: {}",
-                workflow.state
-            )));
-        }
+            if !workflow.state.is_active() {
+                return Err(MaestroError::Config(format!(
+                    "Cannot pause workflow in state: {}",
+                    workflow.state
+                )));
+            }
 
-        let source = Box::new(workflow.state.clone());
-        workflow.state = WorkflowState::Paused {
-            source_state: source,
+            // Cancel the current driver token so the running agent process is killed immediately.
+            workflow.cancel_token.cancel();
+
+            let source = Box::new(workflow.state.clone());
+            workflow.state = WorkflowState::Paused {
+                source_state: source,
+            };
+            workflow.updated_at = Utc::now();
+
+            // Replace the cancel token with a fresh one for the resumed driver.
+            workflow.cancel_token = CancellationToken::new();
+
+            (ticket_key.to_string(), workflow.id.clone())
         };
-        workflow.updated_at = Utc::now();
+
+        // Force-remove any worker containers for this ticket.
+        ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
 
         self.broadcast_event(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
-            workflow_id: workflow.id.clone(),
-            ticket_key: ticket_key.to_string(),
+            workflow_id,
+            ticket_key: ticket_key_owned,
             state: "Paused".to_string(),
             timestamp: Utc::now(),
             error: None,
@@ -763,38 +778,67 @@ impl WorkflowEngine {
     }
 
     pub async fn resume_workflow(&self, ticket_key: &str) -> Result<()> {
-        let mut workflows = self.workflows.write().await;
-        let workflow = workflows
-            .get_mut(ticket_key)
-            .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+        let cancel_token = {
+            let mut workflows = self.workflows.write().await;
+            let workflow = workflows
+                .get_mut(ticket_key)
+                .ok_or_else(|| {
+                    MaestroError::Config(format!("Workflow not found: {ticket_key}"))
+                })?;
 
-        if let WorkflowState::Paused { source_state } = &workflow.state {
-            let restored = *source_state.clone();
-            workflow.state = restored;
-            workflow.updated_at = Utc::now();
+            if let WorkflowState::Paused { source_state } = &workflow.state {
+                let restored = *source_state.clone();
+                workflow.state = restored;
+                workflow.updated_at = Utc::now();
 
-            let state_line = workflow.status_display();
-            self.broadcast_event(WorkflowEvent {
-                event_type: "workflow_updated".to_string(),
-                workflow_id: workflow.id.clone(),
-                ticket_key: ticket_key.to_string(),
-                state: state_line,
-                timestamp: Utc::now(),
-                error: None,
-                step_name: None,
-                output_line: None,
-                stream: None,
-                progress_percent: None,
-                progress_steps_total: None,
-            });
+                let state_line = workflow.status_display();
+                self.broadcast_event(WorkflowEvent {
+                    event_type: "workflow_updated".to_string(),
+                    workflow_id: workflow.id.clone(),
+                    ticket_key: ticket_key.to_string(),
+                    state: state_line,
+                    timestamp: Utc::now(),
+                    error: None,
+                    step_name: None,
+                    output_line: None,
+                    stream: None,
+                    progress_percent: None,
+                    progress_steps_total: None,
+                });
 
-            Ok(())
-        } else {
-            Err(MaestroError::Config(format!(
-                "Cannot resume workflow in state: {}",
-                workflow.state
-            )))
-        }
+                workflow.cancel_token.clone()
+            } else {
+                return Err(MaestroError::Config(format!(
+                    "Cannot resume workflow in state: {}",
+                    workflow.state
+                )));
+            }
+        };
+
+        // Spawn a fresh driver that picks up from the persisted steps_log (session resume).
+        let engine_config = self.config.clone();
+        let engine_workflows = self.workflows.clone();
+        let engine_actions = self.actions.clone();
+        let engine_event_tx = self.event_tx.clone();
+        let agent_sem = self.agent_run_semaphore.clone();
+        let suppress = self.suppress_cancelled_as_error.clone();
+        let ticket = ticket_key.to_string();
+
+        tokio::spawn(async move {
+            drive_workflow(
+                ticket,
+                engine_config,
+                engine_workflows,
+                engine_actions,
+                engine_event_tx,
+                cancel_token,
+                agent_sem,
+                suppress,
+            )
+            .await;
+        });
+
+        Ok(())
     }
 
     pub async fn stop_workflow(&self, ticket_key: &str) -> Result<()> {
@@ -1294,6 +1338,13 @@ async fn drive_workflow(
                     info!(
                         ticket = %ticket_key,
                         "Workflow driver cancelled; left in Stopped (operator stop)"
+                    );
+                    return;
+                }
+                Some(WorkflowState::Paused { .. }) => {
+                    info!(
+                        ticket = %ticket_key,
+                        "Workflow driver cancelled; left in Paused (operator pause — resume will spawn a new driver)"
                     );
                     return;
                 }
