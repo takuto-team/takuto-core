@@ -107,6 +107,8 @@ pub struct Workflow {
     /// `true` when Jira (acli) was available at workflow creation time.
     /// When `false`, the workflow skips all Jira operations and those steps are not counted in progress.
     pub jira_available: bool,
+    /// Last Claude/Cursor session ID for `--resume` across container restarts.
+    pub last_session_id: Option<String>,
 }
 
 impl Workflow {
@@ -135,6 +137,7 @@ impl Workflow {
             current_step_label: None,
             started_manually,
             jira_available,
+            last_session_id: None,
         }
     }
 
@@ -191,6 +194,7 @@ impl Workflow {
             current_step_label: rec.current_step_label,
             started_manually: rec.started_manually,
             jira_available: rec.jira_available,
+            last_session_id: rec.last_session_id,
         }
     }
 }
@@ -220,6 +224,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
         current_step_label: w.current_step_label.clone(),
         started_manually: w.started_manually,
         jira_available: w.jira_available,
+        last_session_id: w.last_session_id.clone(),
     }
 }
 
@@ -338,16 +343,7 @@ impl WorkflowEngine {
 
         let records: Vec<PersistedWorkflowRecord> = {
             let map = self.workflows.read().await;
-            let mut v: Vec<_> = map
-                .values()
-                .filter(|w| {
-                    !matches!(
-                        w.state,
-                        WorkflowState::Stopped | WorkflowState::Error { .. }
-                    )
-                })
-                .map(workflow_to_persisted_record)
-                .collect();
+            let mut v: Vec<_> = map.values().map(workflow_to_persisted_record).collect();
             v.sort_by_key(|r| r.started_at);
             v
         };
@@ -460,18 +456,8 @@ impl WorkflowEngine {
 
         let records: Vec<PersistedWorkflowRecord> = {
             let map = self.workflows.read().await;
-            let mut v: Vec<_> = map
-                .values()
-                // Persist Done workflows too — they need dashboard actions (Address PR, Merge Base, Mark Done).
-                // Only drop Stopped and Error on restart.
-                .filter(|w| {
-                    !matches!(
-                        w.state,
-                        WorkflowState::Stopped | WorkflowState::Error { .. }
-                    )
-                })
-                .map(workflow_to_persisted_record)
-                .collect();
+            // Persist ALL workflows — they remain on the dashboard until explicitly deleted or marked done.
+            let mut v: Vec<_> = map.values().map(workflow_to_persisted_record).collect();
             v.sort_by_key(|r| r.started_at);
             v
         };
@@ -532,17 +518,23 @@ impl WorkflowEngine {
         for rec in records {
             let ticket_key = rec.ticket_key.clone();
             let is_done = matches!(rec.state, WorkflowState::Done);
+            let is_terminal = is_done
+                || matches!(
+                    rec.state,
+                    WorkflowState::Stopped | WorkflowState::Error { .. }
+                );
             let pr_bundle = pr_review_restore_bundle(&rec);
             let merge_bundle = merge_base_restore_bundle(&rec);
+            let state_display = rec.state.to_string();
             let wf = Workflow::from_persisted_record(rec);
             let cancel_token = wf.cancel_token.clone();
 
             self.workflows.write().await.insert(ticket_key.clone(), wf);
 
-            // Done workflows are restored for dashboard visibility (Mark Done, Address PR, Merge Base)
-            // but don't need a driver — they're idle until the user clicks an action.
-            if is_done {
-                info!(ticket = %ticket_key, "Restored Done workflow (no driver needed)");
+            // Terminal workflows (Done, Stopped, Error) are restored for dashboard visibility
+            // but don't need a driver — they're idle until the user clicks an action (retry, delete, etc.).
+            if is_terminal {
+                info!(ticket = %ticket_key, state = %state_display, "Restored terminal workflow (no driver)");
                 continue;
             }
 
@@ -1678,6 +1670,8 @@ async fn run_merge_base_steps(
         false,
         config,
         &skill_paths,
+        None,
+        false,
     )
     .await?;
 
@@ -1713,6 +1707,12 @@ fn build_skill_search_paths(worktree_path: &Path, provider: AiAgentProvider) -> 
 
 /// `apply_prior_success_skip`: enabled for the main **AddressingTicket** flow (resume after restart);
 /// disabled for **PR review** and **merge-base** so each dashboard action runs the full step list.
+///
+/// `initial_session_id`: when restoring from a snapshot, the last Claude/Cursor session ID so the
+/// first re-executed step can use `--resume` instead of starting a fresh conversation.
+///
+/// `is_snapshot_resume`: when `true`, the first step that actually runs (not skipped) will use
+/// `--resume` with a "continue where you left off" prompt instead of the step's original prompt.
 #[allow(clippy::too_many_arguments)]
 async fn run_agent_step_sequence(
     ticket_key: &str,
@@ -1738,10 +1738,13 @@ async fn run_agent_step_sequence(
     apply_prior_success_skip: bool,
     config: &Arc<RwLock<Config>>,
     skill_search_paths: &[PathBuf],
+    initial_session_id: Option<String>,
+    is_snapshot_resume: bool,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
-    let mut claude_session_id: Option<String> = None;
+    let mut claude_session_id: Option<String> = initial_session_id;
     let mut last_agent_output: Option<String> = None;
+    let mut snapshot_resume_pending = is_snapshot_resume && claude_session_id.is_some();
 
     for outer in 1..=outer_loops {
         check_cancelled(cancel_token)?;
@@ -1869,19 +1872,29 @@ async fn run_agent_step_sequence(
                     step_prompt.clone()
                 };
 
-                let interpolated = interpolate_agent_prompt(&effective_prompt, interp_vars);
-                let headless = headless_instructions_suffix(ai_stream_provider);
-                let full_prompt = format!("{interpolated}\n\n{headless}");
-
-                let resume_id = if r > 1 {
+                // Determine whether to resume a prior session and what prompt to use.
+                let (final_effective_prompt, resume_id) = if r > 1 {
                     // Repeat runs within the same step always resume
-                    claude_session_id.as_deref()
+                    (effective_prompt, claude_session_id.as_deref())
                 } else if step.resume_previous {
                     // Explicitly opted in to resuming the prior step's session
-                    claude_session_id.as_deref()
+                    (effective_prompt, claude_session_id.as_deref())
+                } else if snapshot_resume_pending {
+                    // Resuming after container restart — the prior session has the full
+                    // conversation context; just ask the agent to continue.
+                    snapshot_resume_pending = false;
+                    (
+                        "Resume what you were doing before the session was closed.".to_string(),
+                        claude_session_id.as_deref(),
+                    )
                 } else {
-                    None
+                    (effective_prompt, None)
                 };
+
+                let interpolated =
+                    interpolate_agent_prompt(&final_effective_prompt, interp_vars);
+                let headless = headless_instructions_suffix(ai_stream_provider);
+                let full_prompt = format!("{interpolated}\n\n{headless}");
 
                 let relay_label = match phase {
                     AgentRunPhase::Main => format!(
@@ -1960,6 +1973,13 @@ async fn run_agent_step_sequence(
                         );
                         claude_session_id = Some(session_id.clone());
                         last_agent_output = Some(output);
+                        // Persist session ID on the workflow for snapshot resume.
+                        {
+                            let mut wf = workflows.write().await;
+                            if let Some(w) = wf.get_mut(ticket_key) {
+                                w.last_session_id = Some(session_id.clone());
+                            }
+                        }
                         step_log
                             .output
                             .push(format!("Session {session_id} completed"));
@@ -2250,6 +2270,8 @@ async fn run_pr_review_steps(
         false,
         config,
         &skill_paths,
+        None,
+        false,
     )
     .await?;
 
@@ -3075,6 +3097,13 @@ async fn run_workflow_steps(
 
     let skill_paths = build_skill_search_paths(&worktree_path, ai_stream_provider);
 
+    let resume_session = if is_resume {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).and_then(|w| w.last_session_id.clone())
+    } else {
+        None
+    };
+
     let last_agent_output = run_agent_step_sequence(
         ticket_key,
         &worktree_path,
@@ -3097,6 +3126,8 @@ async fn run_workflow_steps(
         true,
         config,
         &skill_paths,
+        resume_session,
+        is_resume,
     )
     .await?;
 

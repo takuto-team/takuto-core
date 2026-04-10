@@ -42,6 +42,9 @@ pub struct PersistedWorkflowRecord {
     /// and deserialize as `true` (backward-compatible default).
     #[serde(default = "default_jira_available")]
     pub jira_available: bool,
+    /// Last Claude/Cursor session ID for `--resume` across restarts.
+    #[serde(default)]
+    pub last_session_id: Option<String>,
 }
 
 fn default_jira_available() -> bool {

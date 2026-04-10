@@ -162,6 +162,7 @@ mod tests {
             current_step_label: None,
             started_manually: false,
             jira_available: true,
+            last_session_id: None,
         }
     }
 
