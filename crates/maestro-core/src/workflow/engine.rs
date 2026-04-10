@@ -1771,23 +1771,10 @@ async fn run_agent_step_sequence(
                 };
 
                 // Skip steps that already succeeded in a prior run (main flow only — resume after restart).
+                // The original Success entry is already in steps_log from the snapshot — don't add a duplicate.
                 if apply_prior_success_skip && step_already_succeeded(prior_steps_log, &step_label)
                 {
                     info!(ticket = %ticket_key, step = %step_label, "Skipping agent step — succeeded in prior run");
-                    let mut skip_log = StepLog::new(step_label.clone());
-                    skip_log
-                        .output
-                        .push("Skipped (succeeded in prior run)".to_string());
-                    skip_log.complete(StepStatus::Skipped);
-                    add_step_log(workflows, ticket_key, skip_log).await;
-                    broadcast_step_completed(
-                        event_tx,
-                        ticket_key,
-                        &step_label,
-                        workflows,
-                        config,
-                    )
-                    .await;
                     continue;
                 }
 
@@ -2717,20 +2704,6 @@ async fn run_workflow_steps(
         }
     } else if is_resume && step_already_succeeded(&prior_steps_log, "Mise install") {
         info!(ticket = %ticket_key, "Skipping Mise install — succeeded in prior run");
-        let mut skip_log = StepLog::new("Mise install".to_string());
-        skip_log
-            .output
-            .push("Skipped (succeeded in prior run)".to_string());
-        skip_log.complete(StepStatus::Skipped);
-        add_step_log(workflows, ticket_key, skip_log).await;
-        broadcast_step_completed(
-            event_tx,
-            ticket_key,
-            "Mise install",
-            workflows,
-            config,
-        )
-        .await;
     }
 
     // Step 3b: Pre-install (e.g., registry auth) — each entry is a separate shell command
@@ -2741,20 +2714,6 @@ async fn run_workflow_steps(
 
             if is_resume && step_already_succeeded(&prior_steps_log, &step_name) {
                 info!(ticket = %ticket_key, step = %step_name, "Skipping — succeeded in prior run");
-                let mut skip_log = StepLog::new(step_name.clone());
-                skip_log
-                    .output
-                    .push("Skipped (succeeded in prior run)".to_string());
-                skip_log.complete(StepStatus::Skipped);
-                add_step_log(workflows, ticket_key, skip_log).await;
-                broadcast_step_completed(
-                    event_tx,
-                    ticket_key,
-                    &step_name,
-                    workflows,
-                    config,
-                )
-                .await;
                 continue;
             }
 
@@ -2930,20 +2889,6 @@ async fn run_workflow_steps(
         }
     } else if is_resume && step_already_succeeded(&prior_steps_log, "Install Dependencies") {
         info!(ticket = %ticket_key, "Skipping Install Dependencies — succeeded in prior run");
-        let mut skip_log = StepLog::new("Install Dependencies".to_string());
-        skip_log
-            .output
-            .push("Skipped (succeeded in prior run)".to_string());
-        skip_log.complete(StepStatus::Skipped);
-        add_step_log(workflows, ticket_key, skip_log).await;
-        broadcast_step_completed(
-            event_tx,
-            ticket_key,
-            "Install Dependencies",
-            workflows,
-            config,
-        )
-        .await;
     }
 
     // Step 3d: Pre-workflow commands (e.g., environment setup before agent steps)
@@ -2954,20 +2899,6 @@ async fn run_workflow_steps(
 
             if is_resume && step_already_succeeded(&prior_steps_log, &step_name) {
                 info!(ticket = %ticket_key, step = %step_name, "Skipping — succeeded in prior run");
-                let mut skip_log = StepLog::new(step_name.clone());
-                skip_log
-                    .output
-                    .push("Skipped (succeeded in prior run)".to_string());
-                skip_log.complete(StepStatus::Skipped);
-                add_step_log(workflows, ticket_key, skip_log).await;
-                broadcast_step_completed(
-                    event_tx,
-                    ticket_key,
-                    &step_name,
-                    workflows,
-                    config,
-                )
-                .await;
                 continue;
             }
 
