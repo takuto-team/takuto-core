@@ -169,10 +169,15 @@ function handleStepStarted(evt) {
     bodyEl.innerHTML = '';
   }
 
+  // Update local workflow state so subsequent updateCardState calls don't overwrite with a stale label.
+  const wf = workflows[evt.ticket_key];
+  if (wf) {
+    wf.state = evt.step_name;
+  }
+
   // Also update the current step display on the card
   const stepEl = document.getElementById(`step-display-${evt.ticket_key}`);
   if (stepEl) {
-    const wf = workflows[evt.ticket_key];
     stepEl.textContent = wf ? formatStepLineWithProgress(wf, evt.step_name) : evt.step_name;
   }
 }

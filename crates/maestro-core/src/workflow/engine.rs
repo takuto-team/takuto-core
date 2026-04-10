@@ -158,6 +158,14 @@ impl Workflow {
     }
 
     pub(crate) fn from_persisted_record(rec: PersistedWorkflowRecord) -> Self {
+        // Drop "Running" entries from the snapshot — they represent steps that were interrupted
+        // by a graceful shutdown and will be re-executed on resume. Keeping them would create
+        // duplicate entries (old Running + new Success/Failed) and inflate the progress count.
+        let steps_log: Vec<StepLog> = rec
+            .steps_log
+            .into_iter()
+            .filter(|s| s.status != StepStatus::Running)
+            .collect();
         Self {
             id: rec.id,
             ticket_key: rec.ticket_key,
@@ -167,7 +175,7 @@ impl Workflow {
             state: rec.state,
             started_at: rec.started_at,
             updated_at: rec.updated_at,
-            steps_log: rec.steps_log,
+            steps_log,
             branch_name: rec.branch_name,
             worktree_path: rec.worktree_path,
             pr_url: rec.pr_url,
