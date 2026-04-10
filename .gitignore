@@ -19,9 +19,6 @@ maestro.env
 # Default workflow step files are tracked; other paths under workflows/ stay local.
 /workflows/*
 !/workflows/*.example.toml
-!/workflows/ticket.toml
-!/workflows/review.toml
-!/workflows/merge_base.toml
 
 # Working files
 SECURITY_ASSESSMENT_APPLICATION.md
