@@ -101,6 +101,19 @@ pub struct SkillRef {
     pub args: Vec<String>,
 }
 
+/// Controls when an agent step is eligible to run based on ticketing system availability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StepAvailability {
+    /// Run regardless of ticketing system status (default when omitted).
+    #[default]
+    Always,
+    /// Run only when acli (Jira) is authenticated.
+    Ticketing,
+    /// Run only when acli (Jira) is **not** authenticated (manual description mode).
+    NoTicketing,
+}
+
 /// One AI agent session in the ticket workflow (`[[agent_steps]]` in TOML).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentStepConfig {
@@ -117,6 +130,21 @@ pub struct AgentStepConfig {
     /// Default `false` — each step gets a clean session.
     #[serde(default)]
     pub resume_previous: bool,
+    /// When this step is eligible to run: `"always"` (default), `"ticketing"` (only when Jira/acli
+    /// is authenticated), or `"no_ticketing"` (only when Jira is **not** available).
+    #[serde(default)]
+    pub when: StepAvailability,
+}
+
+impl AgentStepConfig {
+    /// Returns `true` if this step should run given the current ticketing system availability.
+    pub fn available_for(&self, jira_available: bool) -> bool {
+        match self.when {
+            StepAvailability::Always => true,
+            StepAvailability::Ticketing => jira_available,
+            StepAvailability::NoTicketing => !jira_available,
+        }
+    }
 }
 
 /// Built-in agent steps when `[[agent_steps]]` is omitted or empty (generic prompts, no slash-commands).
@@ -128,6 +156,7 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
             repeat: 1,
             skills: Vec::new(),
             resume_previous: false,
+            when: StepAvailability::Always,
         },
         AgentStepConfig {
             name: "Review changes".to_string(),
@@ -136,6 +165,7 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
             repeat: 1,
             skills: Vec::new(),
             resume_previous: false,
+            when: StepAvailability::Always,
         },
     ]
 }
@@ -152,6 +182,7 @@ pub fn default_merge_base_agent_steps() -> Vec<AgentStepConfig> {
         repeat: 1,
         skills: Vec::new(),
         resume_previous: false,
+        when: StepAvailability::Always,
     }]
 }
 
@@ -164,6 +195,7 @@ pub fn default_review_agent_steps() -> Vec<AgentStepConfig> {
         repeat: 1,
         skills: Vec::new(),
         resume_previous: false,
+        when: StepAvailability::Always,
     }]
 }
 
@@ -1122,6 +1154,7 @@ step_timeout_secs = 600
             repeat: 1,
             skills: Vec::new(),
             resume_previous: false,
+            when: StepAvailability::Always,
         });
         assert_eq!(custom.agent_sequence_outer_loops(), 1);
     }
@@ -1142,6 +1175,7 @@ step_timeout_secs = 600
             repeat: 1,
             skills: Vec::new(),
             resume_previous: false,
+            when: StepAvailability::Always,
         });
         assert_eq!(custom.review_sequence_outer_loops(), 1);
     }

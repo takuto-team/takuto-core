@@ -32,6 +32,7 @@ pub struct WorkflowSummary {
     pub id: String,
     pub ticket_key: String,
     pub ticket_summary: String,
+    pub ticket_description: String,
     pub ticket_type: String,
     pub state: String,
     pub started_at: String,
@@ -65,6 +66,8 @@ pub struct WorkflowSummary {
     pub editor_url: Option<String>,
     /// `(container_port, host_port)` pairs for user-configured application ports.
     pub editor_port_mappings: Vec<(u16, u16)>,
+    /// `true` when Jira (acli) was available when this workflow was created.
+    pub jira_available: bool,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -111,6 +114,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
                 ticket_summary: w.ticket_summary.clone(),
+                ticket_description: w.ticket_description.clone(),
                 ticket_type: w.ticket_type.clone(),
                 state: w.status_display(),
                 started_at: w.started_at.to_rfc3339(),
@@ -132,6 +136,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 can_open_editor: can_open_editor(w),
                 editor_url: None,
                 editor_port_mappings: Vec::new(),
+                jira_available: w.jira_available,
             }
         })
         .collect();
@@ -154,6 +159,7 @@ pub async fn get_workflow(
         id: w.id.clone(),
         ticket_key: w.ticket_key.clone(),
         ticket_summary: w.ticket_summary.clone(),
+        ticket_description: w.ticket_description.clone(),
         ticket_type: w.ticket_type.clone(),
         state: w.status_display(),
         started_at: w.started_at.to_rfc3339(),
@@ -175,6 +181,7 @@ pub async fn get_workflow(
         can_open_editor: can_open_editor(w),
         editor_url: editor_info.as_ref().map(|e| e.url.clone()),
         editor_port_mappings: editor_info.map(|e| e.port_mappings).unwrap_or_default(),
+        jira_available: w.jira_available,
     }))
 }
 
@@ -294,6 +301,9 @@ pub async fn delete_workflow(
 pub struct StartManualWorkflowBody {
     pub ticket_key: String,
     pub ticket_summary: String,
+    /// Optional ticket description (used when Jira is unavailable and the user pastes the description).
+    #[serde(default)]
+    pub ticket_description: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -303,18 +313,32 @@ pub struct StartManualWorkflowResponse {
 }
 
 /// Start a ticket workflow from the dashboard (same pipeline as the poller). Respects **`[general] max_concurrent_manual_workflows`**.
+///
+/// When Jira is unavailable (`jira_available = false`), `ticket_key` may be empty — a synthetic
+/// `MANUAL-{timestamp}` key is generated. The `ticket_description` field is stored on the workflow
+/// so the agent prompt can use it.
 pub async fn start_manual_workflow(
     State(state): State<AppState>,
     Json(body): Json<StartManualWorkflowBody>,
 ) -> Result<Json<StartManualWorkflowResponse>, (StatusCode, String)> {
-    let ticket_key = body.ticket_key.trim().to_string();
-    if ticket_key.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "ticket_key is required".into()));
-    }
+    let jira_on = state.jira_available.load(std::sync::atomic::Ordering::Relaxed);
+
+    let ticket_key = {
+        let k = body.ticket_key.trim().to_string();
+        if k.is_empty() {
+            if jira_on {
+                return Err((StatusCode::BAD_REQUEST, "ticket_key is required".into()));
+            }
+            // Auto-generate a synthetic key when Jira is unavailable.
+            format!("MANUAL-{}", chrono::Utc::now().timestamp_millis())
+        } else {
+            k
+        }
+    };
     let ticket_summary = {
         let s = body.ticket_summary.trim();
         if s.is_empty() {
-            ticket_key.clone()
+            if jira_on { ticket_key.clone() } else { "Manual workflow".to_string() }
         } else {
             s.to_string()
         }
@@ -322,7 +346,7 @@ pub async fn start_manual_workflow(
 
     let max_manual = {
         let cfg = state.config.read().await;
-        if cfg.jira.project_keys.is_empty() {
+        if jira_on && cfg.jira.project_keys.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
                 "No Jira project keys configured".into(),
@@ -353,9 +377,16 @@ pub async fn start_manual_workflow(
         }
     }
 
+    let description = body
+        .ticket_description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
     let workflow_id = state
         .engine
-        .start_workflow(ticket_key.clone(), ticket_summary, true)
+        .start_workflow(ticket_key.clone(), ticket_summary, true, description)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

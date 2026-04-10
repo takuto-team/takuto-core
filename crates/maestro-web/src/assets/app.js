@@ -14,6 +14,8 @@ let maxConcurrentManual = 0;
 let jiraProjectsConfigured = false;
 /** `[jira] site` from config (fallback if workflow payload omits `jira_browse_url`). */
 let jiraSite = '';
+/** `true` when acli (Jira) is authenticated — from `GET /api/config`. */
+let jiraAvailable = true;
 /** Set when the ticket detail modal is open; used by **Start** to run the workflow. */
 let pendingManualTicketSelection = null;
 /** Bumps on each detail open so slower Jira preview responses cannot overwrite a newer selection. */
@@ -331,6 +333,13 @@ function applyPollingUi() {
   const btn = document.getElementById('pollingToggleBtn');
   const label = document.getElementById('pollingStatusLabel');
   if (!btn) return;
+  // When Jira is not available, hide polling controls entirely.
+  const pollingContainer = btn.closest('.border-l');
+  if (!jiraAvailable) {
+    if (pollingContainer) pollingContainer.style.display = 'none';
+    return;
+  }
+  if (pollingContainer) pollingContainer.style.display = '';
   if (pollingPaused) {
     btn.textContent = 'Resume polling';
     btn.className =
@@ -385,10 +394,16 @@ async function fetchConfig() {
     jiraProjectsConfigured =
       Array.isArray(cfg.jira?.project_keys) && cfg.jira.project_keys.length > 0;
     jiraSite = typeof cfg.jira?.site === 'string' ? cfg.jira.site : '';
+    jiraAvailable = cfg.jira_available !== false;
     const banner = document.getElementById('dryBanner');
     if (banner) {
       banner.classList.toggle('hidden', !dryMode);
     }
+    const noJiraBanner = document.getElementById('noJiraBanner');
+    if (noJiraBanner) {
+      noJiraBanner.classList.toggle('hidden', jiraAvailable);
+    }
+    applyPollingUi();
   } catch (e) {
     // ignore
   }
@@ -399,12 +414,18 @@ function manualSlotsUsed() {
 }
 
 function isAddWorkflowDisabled() {
-  if (!jiraProjectsConfigured) return true;
+  if (jiraAvailable && !jiraProjectsConfigured) return true;
   if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) return true;
   return false;
 }
 
 function addWorkflowTitle() {
+  if (!jiraAvailable) {
+    if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
+      return `Manual workflow limit reached (${maxConcurrentManual})`;
+    }
+    return 'Paste a description to start a workflow';
+  }
   if (!jiraProjectsConfigured) return 'Configure [jira] project_keys to enable manual starts';
   if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
     return `Manual workflow limit reached (${maxConcurrentManual})`;
@@ -413,7 +434,7 @@ function addWorkflowTitle() {
 }
 
 function renderAddWorkflowCell() {
-  if (!jiraProjectsConfigured) return '';
+  if (jiraAvailable && !jiraProjectsConfigured) return '';
   const dis = isAddWorkflowDisabled();
   return `
     <div class="workflow-add-cell">
@@ -591,6 +612,23 @@ async function openWorkflowTicketDescriptionModal(ticketKey, listSummary) {
 
   pendingManualTicketSelection = null;
   setManualTicketDetailStartVisible(false);
+
+  // For non-Jira workflows, show the description from in-memory workflow data
+  // instead of fetching from the Jira preview endpoint.
+  const wf = workflows[ticketKey];
+  if (wf && wf.jira_available === false && wf.ticket_description) {
+    const sumHint =
+      typeof listSummary === 'string' && listSummary.trim() ? listSummary.trim() : ticketKey;
+    keyEl.textContent = ticketKey;
+    summaryEl.textContent = sumHint;
+    const rendered = typeof marked !== 'undefined'
+      ? DOMPurify.sanitize(marked.parse(wf.ticket_description))
+      : `<pre class="whitespace-pre-wrap text-sm text-gray-300 px-5 py-4">${escapeHtml(wf.ticket_description)}</pre>`;
+    body.innerHTML = `<div class="ticket-detail-prose px-5 py-4">${rendered}</div>`;
+    modal.classList.remove('hidden');
+    return;
+  }
+
   const seq = ++manualTicketPreviewSeq;
   const sumHint =
     typeof listSummary === 'string' && listSummary.trim() ? listSummary.trim() : ticketKey;
@@ -636,6 +674,10 @@ async function startManualWorkflowRequest(ticketKey, ticketSummary) {
 
 async function openManualWorkflowModal() {
   if (isAddWorkflowDisabled()) return;
+  if (!jiraAvailable) {
+    openPasteDescriptionModal();
+    return;
+  }
   const modal = document.getElementById('manualWorkflowModal');
   const body = document.getElementById('manualWorkflowModalBody');
   if (!modal || !body) return;
@@ -1147,8 +1189,10 @@ function renderWorkflowCard(w) {
   const stateDisplayWithProgress = formatStepLineWithProgress(w, stateDisplay);
 
   const jiraBrowse = workflowJiraBrowseUrl(w);
-  const jiraLinkActions = `
-      <button type="button" onclick="window.open('${escapeAttr(jiraBrowse)}', '_blank', 'noopener,noreferrer')" class="workflow-action-btn bg-sky-500/10 text-sky-300 border-sky-500/25 hover:bg-sky-500/20">Go to ticket</button>
+  const isNoJiraWorkflow = w.jira_available === false;
+  const goToTicketBtn = isNoJiraWorkflow ? '' : `
+      <button type="button" onclick="window.open('${escapeAttr(jiraBrowse)}', '_blank', 'noopener,noreferrer')" class="workflow-action-btn bg-sky-500/10 text-sky-300 border-sky-500/25 hover:bg-sky-500/20">Go to ticket</button>`;
+  const jiraLinkActions = `${goToTicketBtn}
       <button type="button" onclick="void openWorkflowTicketDescriptionModal(${escapeAttr(JSON.stringify(w.ticket_key))}, ${escapeAttr(JSON.stringify(w.ticket_summary))})" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Show description</button>`;
   let actions = jiraLinkActions;
   if (status.label === 'Running') {
@@ -1265,6 +1309,11 @@ function renderWorkflows() {
 
   if (list.length === 0) {
     empty.classList.remove('hidden');
+    // Update empty state text for no-Jira mode.
+    const emptyText = empty.querySelector('p');
+    if (emptyText && !jiraAvailable) {
+      emptyText.textContent = 'No workflows yet. Click the button below to paste a ticket description and start a workflow.';
+    }
     grid.innerHTML = '';
   } else {
     empty.classList.add('hidden');
@@ -1414,6 +1463,65 @@ function setupManualWorkflowListDelegation() {
 
 // --- Init ---
 
+// ---------------------------------------------------------------------------
+// Paste-description modal (no-Jira manual workflow entry)
+// ---------------------------------------------------------------------------
+
+/** Slugify a workflow name into a valid branch/key segment (lowercase, hyphens, no leading/trailing dash). */
+function slugifyWorkflowName(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function openPasteDescriptionModal() {
+  const modal = document.getElementById('pasteDescriptionModal');
+  if (!modal) return;
+  const nameInput = document.getElementById('pasteDescName');
+  const bodyTextarea = document.getElementById('pasteDescBody');
+  if (nameInput) nameInput.value = '';
+  if (bodyTextarea) bodyTextarea.value = '';
+  modal.classList.remove('hidden');
+  if (nameInput) nameInput.focus();
+}
+
+function closePasteDescriptionModal() {
+  const modal = document.getElementById('pasteDescriptionModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function submitPasteDescription() {
+  const nameInput = document.getElementById('pasteDescName');
+  const bodyTextarea = document.getElementById('pasteDescBody');
+  const rawName = (nameInput ? nameInput.value : '').trim();
+  const description = (bodyTextarea ? bodyTextarea.value : '').trim();
+  if (!rawName) return;
+  const slug = slugifyWorkflowName(rawName);
+  if (!slug) return;
+  closePasteDescriptionModal();
+  try {
+    const res = await dashboardFetch('/api/workflows/start-manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticket_key: slug,
+        ticket_summary: rawName,
+        ticket_description: description || '',
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('Failed to start workflow:', errText);
+      return;
+    }
+    await fetchWorkflowsSilent();
+    renderWorkflows();
+  } catch (e) {
+    console.error('Failed to start workflow', e);
+  }
+}
+
 async function init() {
   setupDashboardConfirmModal();
   setupManualWorkflowListDelegation();
@@ -1431,6 +1539,22 @@ async function init() {
       window.location.href = '/login.html';
     });
   }
+  // Show the no-Jira alert dialog on page load when acli is not authenticated.
+  if (!jiraAvailable) {
+    const alertModal = document.getElementById('noJiraAlertModal');
+    if (alertModal) {
+      alertModal.classList.remove('hidden');
+      const okBtn = document.getElementById('noJiraAlertOk');
+      if (okBtn) {
+        okBtn.addEventListener('click', () => alertModal.classList.add('hidden'));
+      }
+      // Also close on backdrop click.
+      const backdrop = alertModal.querySelector('.absolute');
+      if (backdrop) {
+        backdrop.addEventListener('click', () => alertModal.classList.add('hidden'));
+      }
+    }
+  }
   initialLoadDone = true;
   connectWebSocket();
 }
@@ -1442,5 +1566,7 @@ window.openManualWorkflowModal = openManualWorkflowModal;
 window.openManualTicketDetailModal = openManualTicketDetailModal;
 window.openWorkflowTicketDescriptionModal = openWorkflowTicketDescriptionModal;
 window.confirmManualWorkflowStart = confirmManualWorkflowStart;
+window.closePasteDescriptionModal = closePasteDescriptionModal;
+window.submitPasteDescription = submitPasteDescription;
 
 init();

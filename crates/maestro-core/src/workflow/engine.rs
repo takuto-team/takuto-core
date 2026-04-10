@@ -104,10 +104,18 @@ pub struct Workflow {
     pub current_step_label: Option<String>,
     /// Started from the dashboard **+** picker (counts toward **`[general] max_concurrent_manual_workflows`**).
     pub started_manually: bool,
+    /// `true` when Jira (acli) was available at workflow creation time.
+    /// When `false`, the workflow skips all Jira operations and those steps are not counted in progress.
+    pub jira_available: bool,
 }
 
 impl Workflow {
-    pub fn new(ticket_key: String, ticket_summary: String, started_manually: bool) -> Self {
+    pub fn new(
+        ticket_key: String,
+        ticket_summary: String,
+        started_manually: bool,
+        jira_available: bool,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
@@ -126,6 +134,7 @@ impl Workflow {
             terminal_lines: Vec::new(),
             current_step_label: None,
             started_manually,
+            jira_available,
         }
     }
 
@@ -173,6 +182,7 @@ impl Workflow {
                 .collect(),
             current_step_label: rec.current_step_label,
             started_manually: rec.started_manually,
+            jira_available: rec.jira_available,
         }
     }
 }
@@ -201,6 +211,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
             .collect(),
         current_step_label: w.current_step_label.clone(),
         started_manually: w.started_manually,
+        jira_available: w.jira_available,
     }
 }
 
@@ -265,6 +276,9 @@ pub struct WorkflowEngine {
     agent_run_semaphore: Arc<Semaphore>,
     /// When set, workflow drivers that exit with [`MaestroError::Cancelled`] do not move the workflow to Error (graceful container shutdown + snapshot).
     pub suppress_cancelled_as_error: Arc<AtomicBool>,
+    /// `true` when acli (Atlassian CLI) is authenticated. When `false`, workflows skip all Jira
+    /// operations (assign, transition, retrieve details) and the poller is not started.
+    pub jira_available: Arc<AtomicBool>,
 }
 
 impl WorkflowEngine {
@@ -272,6 +286,7 @@ impl WorkflowEngine {
         config: Arc<RwLock<Config>>,
         actions: Arc<dyn ExternalActions>,
         max_concurrent_workflows: usize,
+        jira_available: Arc<AtomicBool>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         let permits = max_concurrent_workflows.max(1);
@@ -282,6 +297,7 @@ impl WorkflowEngine {
             event_tx,
             agent_run_semaphore: Arc::new(Semaphore::new(permits)),
             suppress_cancelled_as_error: Arc::new(AtomicBool::new(false)),
+            jira_available,
         }
     }
 
@@ -656,8 +672,13 @@ impl WorkflowEngine {
         ticket_key: String,
         ticket_summary: String,
         started_manually: bool,
+        ticket_description: Option<String>,
     ) -> Result<String> {
-        let workflow = Workflow::new(ticket_key.clone(), ticket_summary, started_manually);
+        let jira = self.jira_available.load(Ordering::Relaxed);
+        let mut workflow = Workflow::new(ticket_key.clone(), ticket_summary, started_manually, jira);
+        if let Some(desc) = ticket_description {
+            workflow.ticket_description = desc;
+        }
         let id = workflow.id.clone();
         let cancel_token = workflow.cancel_token.clone();
 
@@ -793,17 +814,19 @@ impl WorkflowEngine {
 
         ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
 
-        let actions = self.actions.clone();
-        let ticket_for_jira = ticket_key_owned.clone();
+        if self.jira_available.load(Ordering::Relaxed) {
+            let actions = self.actions.clone();
+            let ticket_for_jira = ticket_key_owned.clone();
 
-        tokio::spawn(async move {
-            if let Err(e) = actions.unassign_ticket(&ticket_for_jira).await {
-                warn!(error = %e, ticket = %ticket_for_jira, "Failed to unassign ticket on stop");
-            }
-            if let Err(e) = actions.transition_ticket(&ticket_for_jira, "To Do").await {
-                warn!(error = %e, ticket = %ticket_for_jira, "Failed to transition ticket back to To Do on stop");
-            }
-        });
+            tokio::spawn(async move {
+                if let Err(e) = actions.unassign_ticket(&ticket_for_jira).await {
+                    warn!(error = %e, ticket = %ticket_for_jira, "Failed to unassign ticket on stop");
+                }
+                if let Err(e) = actions.transition_ticket(&ticket_for_jira, "To Do").await {
+                    warn!(error = %e, ticket = %ticket_for_jira, "Failed to transition ticket back to To Do on stop");
+                }
+            });
+        }
 
         self.broadcast_event(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
@@ -823,7 +846,7 @@ impl WorkflowEngine {
     }
 
     pub async fn retry_workflow(&self, ticket_key: &str) -> Result<String> {
-        let (ticket_summary,) = {
+        let (ticket_summary, ticket_description) = {
             let workflows = self.workflows.read().await;
             let workflow = workflows
                 .get(ticket_key)
@@ -836,14 +859,21 @@ impl WorkflowEngine {
                 )));
             }
 
-            (workflow.ticket_summary.clone(),)
+            (
+                workflow.ticket_summary.clone(),
+                if workflow.ticket_description.is_empty() {
+                    None
+                } else {
+                    Some(workflow.ticket_description.clone())
+                },
+            )
         };
 
         // Remove the old workflow
         self.workflows.write().await.remove(ticket_key);
 
-        // Start a fresh one
-        self.start_workflow(ticket_key.to_string(), ticket_summary, false)
+        // Start a fresh one (preserves description for manual/no-Jira workflows)
+        self.start_workflow(ticket_key.to_string(), ticket_summary, false, ticket_description)
             .await
     }
 
@@ -1113,14 +1143,16 @@ impl WorkflowEngine {
 
         let mut jira_ok = true;
         let mut jira_error = None;
-        if let Err(e) = self
-            .actions
-            .transition_ticket(ticket_key, done_status.trim())
-            .await
-        {
-            jira_ok = false;
-            jira_error = Some(e.to_string());
-            warn!(ticket = %ticket_key, error = %e, "Jira transition to Done failed");
+        if self.jira_available.load(Ordering::Relaxed) {
+            if let Err(e) = self
+                .actions
+                .transition_ticket(ticket_key, done_status.trim())
+                .await
+            {
+                jira_ok = false;
+                jira_error = Some(e.to_string());
+                warn!(ticket = %ticket_key, error = %e, "Jira transition to Done failed");
+            }
         }
 
         // Clean up any worker containers for this workflow
@@ -1559,6 +1591,7 @@ async fn run_merge_base_steps(
     interp_vars.insert("ticket_key".into(), ticket_key.to_string());
     interp_vars.insert("ticket_summary".into(), ticket_summary.to_string());
     interp_vars.insert("ticket_description".into(), ticket_description.to_string());
+    interp_vars.insert("description".into(), ticket_description.to_string());
     interp_vars.insert("ticket_type".into(), ticket_type.to_string());
     interp_vars.insert("acceptance_criteria".into(), acceptance_criteria_str);
     interp_vars.insert("ticket_context".into(), ticket_context);
@@ -1593,7 +1626,15 @@ async fn run_merge_base_steps(
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
-    let steps = cfg.resolved_merge_base_agent_steps();
+    let jira_avail = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
+    };
+    let steps: Vec<_> = cfg
+        .resolved_merge_base_agent_steps()
+        .into_iter()
+        .filter(|s| s.available_for(jira_avail))
+        .collect();
     drop(cfg);
 
     let skill_paths = build_skill_search_paths(worktree_path, ai_stream_provider);
@@ -1964,66 +2005,90 @@ async fn sync_jira_for_resume(
 ) -> Result<(PathBuf, crate::jira::client::JiraTicket)> {
     check_cancelled(cancel_token)?;
 
-    let cfg = config.read().await;
-    let project_keys = cfg.jira.project_keys.clone();
-    drop(cfg);
-
-    if let Err(e) = actions.assign_ticket(ticket_key).await {
-        warn!(
-            ticket = %ticket_key,
-            error = %e,
-            "Resume: assign ticket failed, continuing"
-        );
-    }
-    if let Err(e) = actions.transition_ticket(ticket_key, "In Progress").await {
-        warn!(
-            ticket = %ticket_key,
-            error = %e,
-            "Resume: transition failed, continuing"
-        );
-    }
-
-    let repo_path = {
-        let c = config.read().await;
-        PathBuf::from(&c.git.repo_path)
+    // Check if Jira is available for this workflow.
+    let jira_available = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
     };
-    let acli_extras = {
-        let c = config.read().await;
-        c.jira.acli_extra_argv_prefixes()
-    };
-    let jira_client = JiraClient::new(repo_path, acli_extras);
-    let ticket_detail = match jira_client
-        .get_ticket_details(ticket_key, &project_keys)
-        .await
-    {
-        Ok(detail) => {
-            let mut wf = workflows.write().await;
-            if let Some(workflow) = wf.get_mut(ticket_key) {
-                workflow.ticket_description = detail.description.clone();
-                workflow.ticket_type = detail.item_type.clone();
-                workflow.ticket_summary = detail.summary.clone();
-                workflow.updated_at = Utc::now();
-            }
-            detail
-        }
-        Err(e) => {
+
+    let ticket_detail = if jira_available {
+        let cfg = config.read().await;
+        let project_keys = cfg.jira.project_keys.clone();
+        drop(cfg);
+
+        if let Err(e) = actions.assign_ticket(ticket_key).await {
             warn!(
                 ticket = %ticket_key,
                 error = %e,
-                "Resume: failed to refresh ticket details"
+                "Resume: assign ticket failed, continuing"
             );
-            let wf = workflows.read().await;
-            let w = wf
-                .get(ticket_key)
-                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
-            crate::jira::client::JiraTicket {
-                key: ticket_key.to_string(),
-                summary: w.ticket_summary.clone(),
-                description: w.ticket_description.clone(),
-                item_type: w.ticket_type.clone(),
-                status: "In Progress".to_string(),
-                linked_items: Vec::new(),
+        }
+        if let Err(e) = actions.transition_ticket(ticket_key, "In Progress").await {
+            warn!(
+                ticket = %ticket_key,
+                error = %e,
+                "Resume: transition failed, continuing"
+            );
+        }
+
+        let repo_path = {
+            let c = config.read().await;
+            PathBuf::from(&c.git.repo_path)
+        };
+        let acli_extras = {
+            let c = config.read().await;
+            c.jira.acli_extra_argv_prefixes()
+        };
+        let jira_client = JiraClient::new(repo_path, acli_extras);
+        match jira_client
+            .get_ticket_details(ticket_key, &project_keys)
+            .await
+        {
+            Ok(detail) => {
+                let mut wf = workflows.write().await;
+                if let Some(workflow) = wf.get_mut(ticket_key) {
+                    workflow.ticket_description = detail.description.clone();
+                    workflow.ticket_type = detail.item_type.clone();
+                    workflow.ticket_summary = detail.summary.clone();
+                    workflow.updated_at = Utc::now();
+                }
+                detail
             }
+            Err(e) => {
+                warn!(
+                    ticket = %ticket_key,
+                    error = %e,
+                    "Resume: failed to refresh ticket details"
+                );
+                let wf = workflows.read().await;
+                let w = wf
+                    .get(ticket_key)
+                    .ok_or_else(|| {
+                        MaestroError::Config(format!("Workflow not found: {ticket_key}"))
+                    })?;
+                crate::jira::client::JiraTicket {
+                    key: ticket_key.to_string(),
+                    summary: w.ticket_summary.clone(),
+                    description: w.ticket_description.clone(),
+                    item_type: w.ticket_type.clone(),
+                    status: "In Progress".to_string(),
+                    linked_items: Vec::new(),
+                }
+            }
+        }
+    } else {
+        // No Jira — use in-memory data.
+        let wf = workflows.read().await;
+        let w = wf
+            .get(ticket_key)
+            .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+        crate::jira::client::JiraTicket {
+            key: ticket_key.to_string(),
+            summary: w.ticket_summary.clone(),
+            description: w.ticket_description.clone(),
+            item_type: w.ticket_type.clone(),
+            status: "In Progress".to_string(),
+            linked_items: Vec::new(),
         }
     };
 
@@ -2088,6 +2153,7 @@ async fn run_pr_review_steps(
     interp_vars.insert("ticket_key".into(), ticket_key.to_string());
     interp_vars.insert("ticket_summary".into(), ticket_summary.to_string());
     interp_vars.insert("ticket_description".into(), ticket_description.to_string());
+    interp_vars.insert("description".into(), ticket_description.to_string());
     interp_vars.insert("ticket_type".into(), ticket_type.to_string());
     interp_vars.insert("acceptance_criteria".into(), acceptance_criteria_str);
     interp_vars.insert("ticket_context".into(), ticket_context);
@@ -2123,7 +2189,15 @@ async fn run_pr_review_steps(
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
-    let steps = cfg.resolved_review_agent_steps();
+    let jira_avail = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
+    };
+    let steps: Vec<_> = cfg
+        .resolved_review_agent_steps()
+        .into_iter()
+        .filter(|s| s.available_for(jira_avail))
+        .collect();
     drop(cfg);
 
     let skill_paths = build_skill_search_paths(worktree_path, ai_stream_provider);
@@ -2312,105 +2386,133 @@ async fn run_workflow_steps(
             }
         }
 
-        // Step 1: Assign ticket
-        transition(
-            workflows,
-            event_tx,
-            ticket_key,
-            WorkflowState::Assigning,
-            config,
-        )
-        .await;
-        let mut step_log = StepLog::new("Assign Ticket".to_string());
+        // Check whether Jira is available for this workflow (set at creation time).
+        let jira_available = {
+            let wf = workflows.read().await;
+            wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
+        };
 
         let cfg = config.read().await;
         let repo_path = PathBuf::from(&cfg.git.repo_path);
         let project_keys = cfg.jira.project_keys.clone();
         drop(cfg);
 
-        check_cancelled(cancel_token)?;
+        // When Jira is available: run Assign + Retrieve steps.
+        // When not: skip both and construct ticket detail from in-memory workflow data.
+        let ticket_detail = if jira_available {
+            // Step 1: Assign ticket
+            transition(
+                workflows,
+                event_tx,
+                ticket_key,
+                WorkflowState::Assigning,
+                config,
+            )
+            .await;
+            let mut step_log = StepLog::new("Assign Ticket".to_string());
 
-        match actions.assign_ticket(ticket_key).await {
-            Ok(()) => {
-                step_log
-                    .output
-                    .push("Ticket assigned to current Jira user".to_string());
-            }
-            Err(e) => {
-                step_log.output.push(format!("[DRY/SKIP] {e}"));
-                warn!(ticket = ticket_key, error = %e, "Failed to assign ticket, continuing");
-            }
-        }
+            check_cancelled(cancel_token)?;
 
-        match actions.transition_ticket(ticket_key, "In Progress").await {
-            Ok(()) => {
-                step_log
-                    .output
-                    .push("Ticket moved to In Progress".to_string());
-            }
-            Err(e) => {
-                step_log.output.push(format!("[DRY/SKIP] {e}"));
-                warn!(ticket = ticket_key, error = %e, "Failed to transition ticket, continuing");
-            }
-        }
-
-        step_log.complete(StepStatus::Success);
-        add_step_log(workflows, ticket_key, step_log).await;
-
-        // Step 2: Retrieve ticket details
-        transition(
-            workflows,
-            event_tx,
-            ticket_key,
-            WorkflowState::RetrievingDetails,
-            config,
-        )
-        .await;
-        let mut step_log = StepLog::new("Retrieve Details".to_string());
-
-        check_cancelled(cancel_token)?;
-
-        let acli_extras = {
-            let c = config.read().await;
-            c.jira.acli_extra_argv_prefixes()
-        };
-        let jira_client = JiraClient::new(repo_path.clone(), acli_extras);
-        let ticket_detail = match jira_client
-            .get_ticket_details(ticket_key, &project_keys)
-            .await
-        {
-            Ok(detail) => {
-                step_log
-                    .output
-                    .push(format!("Retrieved: {}", detail.summary));
-                let mut wf = workflows.write().await;
-                if let Some(workflow) = wf.get_mut(ticket_key) {
-                    workflow.ticket_description = detail.description.clone();
-                    workflow.ticket_type = detail.item_type.clone();
-                    workflow.ticket_summary = detail.summary.clone();
+            match actions.assign_ticket(ticket_key).await {
+                Ok(()) => {
+                    step_log
+                        .output
+                        .push("Ticket assigned to current Jira user".to_string());
                 }
-                step_log.complete(StepStatus::Success);
-                detail
-            }
-            Err(e) => {
-                warn!(ticket = ticket_key, error = %e, "Failed to retrieve ticket details, using minimal context");
-                step_log.fail(e.to_string());
-                crate::jira::client::JiraTicket {
-                    key: ticket_key.to_string(),
-                    summary: workflows
-                        .read()
-                        .await
-                        .get(ticket_key)
-                        .map(|w| w.ticket_summary.clone())
-                        .unwrap_or_default(),
-                    description: String::new(),
-                    item_type: "Task".to_string(),
-                    status: "In Progress".to_string(),
-                    linked_items: Vec::new(),
+                Err(e) => {
+                    step_log.output.push(format!("[DRY/SKIP] {e}"));
+                    warn!(ticket = ticket_key, error = %e, "Failed to assign ticket, continuing");
                 }
             }
+
+            match actions.transition_ticket(ticket_key, "In Progress").await {
+                Ok(()) => {
+                    step_log
+                        .output
+                        .push("Ticket moved to In Progress".to_string());
+                }
+                Err(e) => {
+                    step_log.output.push(format!("[DRY/SKIP] {e}"));
+                    warn!(ticket = ticket_key, error = %e, "Failed to transition ticket, continuing");
+                }
+            }
+
+            step_log.complete(StepStatus::Success);
+            add_step_log(workflows, ticket_key, step_log).await;
+
+            // Step 2: Retrieve ticket details
+            transition(
+                workflows,
+                event_tx,
+                ticket_key,
+                WorkflowState::RetrievingDetails,
+                config,
+            )
+            .await;
+            let mut step_log = StepLog::new("Retrieve Details".to_string());
+
+            check_cancelled(cancel_token)?;
+
+            let acli_extras = {
+                let c = config.read().await;
+                c.jira.acli_extra_argv_prefixes()
+            };
+            let jira_client = JiraClient::new(repo_path.clone(), acli_extras);
+            let detail = match jira_client
+                .get_ticket_details(ticket_key, &project_keys)
+                .await
+            {
+                Ok(detail) => {
+                    step_log
+                        .output
+                        .push(format!("Retrieved: {}", detail.summary));
+                    let mut wf = workflows.write().await;
+                    if let Some(workflow) = wf.get_mut(ticket_key) {
+                        workflow.ticket_description = detail.description.clone();
+                        workflow.ticket_type = detail.item_type.clone();
+                        workflow.ticket_summary = detail.summary.clone();
+                    }
+                    step_log.complete(StepStatus::Success);
+                    detail
+                }
+                Err(e) => {
+                    warn!(ticket = ticket_key, error = %e, "Failed to retrieve ticket details, using minimal context");
+                    step_log.fail(e.to_string());
+                    crate::jira::client::JiraTicket {
+                        key: ticket_key.to_string(),
+                        summary: workflows
+                            .read()
+                            .await
+                            .get(ticket_key)
+                            .map(|w| w.ticket_summary.clone())
+                            .unwrap_or_default(),
+                        description: String::new(),
+                        item_type: "Task".to_string(),
+                        status: "In Progress".to_string(),
+                        linked_items: Vec::new(),
+                    }
+                }
+            };
+            add_step_log(workflows, ticket_key, step_log).await;
+            detail
+        } else {
+            // No Jira — skip Assign and Retrieve steps entirely (they don't count in progress).
+            info!(ticket = %ticket_key, "Jira unavailable — skipping Assign and Retrieve steps");
+            let wf = workflows.read().await;
+            let (summary, description, item_type) = wf
+                .get(ticket_key)
+                .map(|w| (w.ticket_summary.clone(), w.ticket_description.clone(), w.ticket_type.clone()))
+                .unwrap_or_default();
+            drop(wf);
+            crate::jira::client::JiraTicket {
+                key: ticket_key.to_string(),
+                summary,
+                description,
+                item_type: if item_type.is_empty() { "Task".to_string() } else { item_type },
+                status: "In Progress".to_string(),
+                linked_items: Vec::new(),
+            }
         };
-        add_step_log(workflows, ticket_key, step_log).await;
 
         // Step 3: Create worktree
         transition(
@@ -2934,6 +3036,7 @@ async fn run_workflow_steps(
         "ticket_description".into(),
         ticket_detail.description.clone(),
     );
+    interp_vars.insert("description".into(), ticket_detail.description.clone());
     interp_vars.insert("ticket_type".into(), ticket_detail.item_type.clone());
     interp_vars.insert("acceptance_criteria".into(), acceptance_criteria_str);
     interp_vars.insert("ticket_context".into(), ticket_context);
@@ -2951,7 +3054,15 @@ async fn run_workflow_steps(
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
-    let steps = cfg.resolved_agent_steps();
+    let jira_avail = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
+    };
+    let steps: Vec<_> = cfg
+        .resolved_agent_steps()
+        .into_iter()
+        .filter(|s| s.available_for(jira_avail))
+        .collect();
     drop(cfg);
 
     let skill_paths = build_skill_search_paths(&worktree_path, ai_stream_provider);

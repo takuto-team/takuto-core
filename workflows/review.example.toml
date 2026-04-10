@@ -3,7 +3,8 @@
 #   [general]
 #   review_workflow_steps_file = "workflows/review.toml"
 #
-# Placeholders: pr_url, plus the same ticket fields as ticket steps.
+# Placeholders: pr_url, description (alias for ticket_description), plus the same ticket fields as ticket steps.
+# Optional `when`: "always" (default), "ticketing", "no_ticketing".
 
 [[review_agent_steps]]
 name = "Address PR feedback"

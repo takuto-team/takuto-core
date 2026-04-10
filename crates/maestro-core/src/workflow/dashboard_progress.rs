@@ -65,18 +65,21 @@ fn in_flight_partial_credit(w: &Workflow) -> bool {
 /// When the workflow is in a **subflow** (`AddressingPrComments` / `MergingBaseBranch`),
 /// return only that subflow's step count — not the main ticket total.
 pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
+    let jira = w.jira_available;
     match &w.state {
         WorkflowState::AddressingPrComments { .. } => {
-            return pr_subflow_steps(cfg).max(1);
+            return pr_subflow_steps(cfg, jira).max(1);
         }
         WorkflowState::MergingBaseBranch { .. } => {
-            return merge_base_subflow_steps(cfg).max(1);
+            return merge_base_subflow_steps(cfg, jira).max(1);
         }
         _ => {}
     }
 
     // Main ticket pipeline
-    let mut t: u32 = 3; // Assign Ticket, Retrieve Details, Create Worktree
+    // When Jira is available: 3 steps (Assign + Retrieve + Worktree).
+    // When not: 1 step (Worktree only — Assign and Retrieve are skipped entirely).
+    let mut t: u32 = if jira { 3 } else { 1 };
 
     let path_for_mise = w
         .worktree_path
@@ -91,7 +94,11 @@ pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
         t += 1;
     }
 
-    let steps = cfg.resolved_agent_steps();
+    let steps: Vec<_> = cfg
+        .resolved_agent_steps()
+        .into_iter()
+        .filter(|s| s.available_for(jira))
+        .collect();
     let loops = cfg.agent_sequence_outer_loops() as u32;
     let per_loop: u32 = steps.iter().map(|s| s.repeat as u32).sum();
     t += loops.saturating_mul(per_loop.max(1));
@@ -102,16 +109,24 @@ pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
     t.max(1)
 }
 
-fn pr_subflow_steps(cfg: &Config) -> u32 {
-    let steps = cfg.resolved_review_agent_steps();
+fn pr_subflow_steps(cfg: &Config, jira_available: bool) -> u32 {
+    let steps: Vec<_> = cfg
+        .resolved_review_agent_steps()
+        .into_iter()
+        .filter(|s| s.available_for(jira_available))
+        .collect();
     let loops = cfg.review_sequence_outer_loops() as u32;
     let per: u32 = steps.iter().map(|s| s.repeat as u32).sum();
     // Agent steps + "PR review summary" + "PR review complete"
     loops.saturating_mul(per.max(1)) + 2
 }
 
-fn merge_base_subflow_steps(cfg: &Config) -> u32 {
-    let steps = cfg.resolved_merge_base_agent_steps();
+fn merge_base_subflow_steps(cfg: &Config, jira_available: bool) -> u32 {
+    let steps: Vec<_> = cfg
+        .resolved_merge_base_agent_steps()
+        .into_iter()
+        .filter(|s| s.available_for(jira_available))
+        .collect();
     let per: u32 = steps.iter().map(|s| s.repeat as u32).sum();
     // Agent steps + "Merge base branch complete"
     per.max(1) + 1
@@ -146,6 +161,7 @@ mod tests {
             terminal_lines: Vec::new(),
             current_step_label: None,
             started_manually: false,
+            jira_available: true,
         }
     }
 

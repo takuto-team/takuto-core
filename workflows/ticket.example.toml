@@ -3,15 +3,44 @@
 #   [general]
 #   ticket_workflow_steps_file = "workflows/ticket.toml"
 #
-# Placeholders: ticket_key, ticket_summary, ticket_description, ticket_type,
-# acceptance_criteria, ticket_context
+# Placeholders: ticket_key, ticket_summary, ticket_description, description,
+# ticket_type, acceptance_criteria, ticket_context
+#
+# `when` controls step eligibility: "always" (default), "ticketing" (only when
+# Jira/acli is authenticated), "no_ticketing" (only when Jira is unavailable).
+# Steps whose `when` does not match the current mode are skipped entirely and
+# do not count toward the progress bar.
+
+# --- Runs in any mode (default) -----------------------------------------------
 
 [[agent_steps]]
 name = "Implement ticket"
 prompt = "Implement this Jira ticket following the project's conventions.\n\nTicket context:\n{ticket_context}\n\nAdd or update tests as appropriate."
 repeat = 1
+# when = "always"  # default — can be omitted
 
 [[agent_steps]]
 name = "Review changes"
 prompt = "Review all uncommitted changes for correctness, security, and code style. Fix any issues."
 repeat = 1
+
+# --- Ticketing-only step (skipped when Jira is not connected) -----------------
+
+# [[agent_steps]]
+# name = "Update Jira ticket"
+# prompt = "Update the Jira ticket {ticket_key} with a summary of what was implemented."
+# when = "ticketing"
+
+# --- No-ticketing-only step (skipped when Jira IS connected) ------------------
+
+# [[agent_steps]]
+# name = "Implement from description"
+# prompt = """
+# Implement the following feature described by the user.
+#
+# Description:
+# {description}
+#
+# Follow the project's conventions. Add or update tests as appropriate.
+# """
+# when = "no_ticketing"

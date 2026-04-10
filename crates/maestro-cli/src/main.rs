@@ -100,12 +100,22 @@ fn run_preflight(config_path: &std::path::Path) -> ExitCode {
         }
     };
 
-    if let Err(e) = docker_hooks::preflight(&config) {
-        eprintln!("Preflight failed: {e}");
-        return ExitCode::FAILURE;
+    match docker_hooks::preflight(&config) {
+        Err(e) => {
+            eprintln!("Preflight failed: {e}");
+            ExitCode::FAILURE
+        }
+        Ok(result) => {
+            if !result.acli_ok {
+                eprintln!(
+                    "Preflight OK (warning: acli not authenticated — Jira integration disabled)."
+                );
+            } else {
+                eprintln!("Preflight OK.");
+            }
+            ExitCode::SUCCESS
+        }
     }
-    eprintln!("Preflight OK.");
-    ExitCode::SUCCESS
 }
 
 fn main() -> ExitCode {
@@ -193,11 +203,19 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(RealActions::new(repo_path, git_remote, acli_extras))
     };
 
+    let acli_ok = docker_hooks::check_acli_auth();
+    let jira_available = Arc::new(AtomicBool::new(acli_ok));
+    if !acli_ok {
+        info!("Atlassian CLI (acli) is not authenticated — Jira integration disabled. \
+               No auto-polling; workflows skip Jira operations; manual description entry only.");
+    }
+
     let max_concurrent = config.read().await.general.max_concurrent_workflows as usize;
     let engine = Arc::new(WorkflowEngine::new(
         config.clone(),
         actions.clone(),
         max_concurrent,
+        jira_available.clone(),
     ));
 
     match engine.restore_persisted_workflows().await {
@@ -232,6 +250,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         engine: engine.clone(),
         config: config.clone(),
         polling_paused,
+        jira_available: jira_available.clone(),
     };
     let app = build_router(app_state);
 
@@ -264,7 +283,14 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     tokio::select! {
-        _ = poller.run() => {
+        _ = async {
+            if acli_ok {
+                poller.run().await;
+            } else {
+                // No Jira integration — poller stays idle forever.
+                std::future::pending::<()>().await;
+            }
+        } => {
             info!("Jira poller stopped");
         }
         _ = snapshot_task => {

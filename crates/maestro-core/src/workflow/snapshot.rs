@@ -38,6 +38,14 @@ pub struct PersistedWorkflowRecord {
     /// Dashboard **Start workflow** (manual); poller-started workflows omit this field (deserializes as `false`).
     #[serde(default)]
     pub started_manually: bool,
+    /// `true` when Jira (acli) was available at workflow creation. Older snapshots omit this field
+    /// and deserialize as `true` (backward-compatible default).
+    #[serde(default = "default_jira_available")]
+    pub jira_available: bool,
+}
+
+fn default_jira_available() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

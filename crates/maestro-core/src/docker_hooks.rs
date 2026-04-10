@@ -280,8 +280,25 @@ fn auth_cmd_ok(program: &str, args: &[&str]) -> bool {
     }
 }
 
+/// Result of the preflight check. Hard failures (gh, provider) are still returned as `Err`.
+/// Soft-fail items (acli) are captured here.
+pub struct PreflightResult {
+    /// `true` when `acli jira auth status` succeeded.
+    pub acli_ok: bool,
+}
+
+/// Check whether acli (Atlassian CLI) is currently authenticated.
+/// This is a standalone helper so callers (e.g. the server startup) can probe acli without
+/// running the full preflight sequence.
+pub fn check_acli_auth() -> bool {
+    auth_cmd_ok("acli", &["jira", "auth", "status"])
+}
+
 /// Verify required CLIs for the configured AI provider. Used before `docker compose up`.
-pub fn preflight(config: &Config) -> Result<()> {
+///
+/// GitHub and AI-provider auth remain hard errors; acli auth is a soft-fail
+/// (the app can run without Jira integration).
+pub fn preflight(config: &Config) -> Result<PreflightResult> {
     eprintln!("[maestro preflight] Checking GitHub CLI (gh)…");
     if !auth_cmd_ok("gh", &["auth", "status"]) {
         return Err(MaestroError::Config(
@@ -291,11 +308,12 @@ pub fn preflight(config: &Config) -> Result<()> {
     }
 
     eprintln!("[maestro preflight] Checking Atlassian CLI (acli)…");
-    if !auth_cmd_ok("acli", &["jira", "auth", "status"]) {
-        return Err(MaestroError::Config(
-            "Atlassian CLI (acli) is not authenticated. Run: docker compose run --rm -it maestro setup"
-                .to_string(),
-        ));
+    let acli_ok = check_acli_auth();
+    if !acli_ok {
+        eprintln!(
+            "[maestro preflight] WARNING: Atlassian CLI (acli) is not authenticated. \
+             The app will start without Jira integration (no auto-polling, manual description entry only)."
+        );
     }
 
     match config.agent.provider {
@@ -338,7 +356,7 @@ pub fn preflight(config: &Config) -> Result<()> {
     }
 
     eprintln!("[maestro preflight] OK.");
-    Ok(())
+    Ok(PreflightResult { acli_ok })
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@ Automated Jira ticket handler that drives **Claude Code** or **Cursor Agent** in
 
 - Docker or Podman with Compose
 - GitHub account (for `gh` CLI auth)
-- Jira/Atlassian account (for `acli` CLI auth)
+- Jira/Atlassian account (optional — for `acli` CLI auth; without it Maestro runs in **no-Jira mode**: no auto-polling, manual workflow entry via pasted descriptions)
 - Claude Code and/or Cursor account (depending on `[agent] provider` in `config.toml`)
 - AWS credentials (only if using CodeArtifact for npm registry)
 
@@ -83,14 +83,14 @@ If you use the standalone **`podman-compose`** binary instead, see **`podman-com
 Steps:
 
 1. **GitHub CLI** (required) — OAuth or device code flow
-2. **Atlassian CLI** (required) — OAuth or API token (`site` / `email` in `[jira]` for token mode)
+2. **Atlassian CLI** (optional) — OAuth or API token (`site` / `email` in `[jira]` for token mode). If skipped or auth fails, Maestro runs in **no-Jira mode** (manual workflow entry only, no auto-polling)
 3. **Claude Code** (optional) — `claude auth login` (skip with `s` if you use Cursor only)
 4. **Cursor Agent** (optional) — `agent login` (skip with `s` if you use Claude only or rely on `CURSOR_API_KEY` in `maestro.env`)
 5. **Repository** (optional) — clone or refresh from `[git] repo_url` into `/workspace` (skip with `s` if you manage the workspace yourself)
 
 Optional **Claude/Cursor skills** from a gitignored **`./skills`** folder at the **Maestro repo root** are merged into the container home volumes on **every** start (see **Project skills** under Docker Volumes). For anything else, add **`[docker] build_commands`** / **`compose_up_commands`** in `config.toml` and point **`MAESTRO_BUILD_CONFIG`** at that file when building.
 
-On every **`docker compose up`**, the entrypoint merges **`./skills`**, runs **`maestro preflight`** (GitHub + Atlassian + provider-specific auth), then **`[docker] compose_up_commands`**, then starts the server.
+On every **`docker compose up`**, the entrypoint merges **`./skills`**, runs **`maestro preflight`** (GitHub + provider-specific auth required; Atlassian auth is a soft-fail — the server starts in no-Jira mode if acli is not authenticated), then **`[docker] compose_up_commands`**, then starts the server.
 
 Auth state persists in Docker volumes across container restarts (including `cursor-auth` for Cursor Agent when using interactive login).
 
@@ -189,7 +189,7 @@ Optional **`[[agent_steps]]`** tables belong at the **root** of the file. In TOM
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `[[agent_steps]]` | *(built-in)* | Each entry: `name`, `prompt` (placeholders: `ticket_key`, `ticket_summary`, `ticket_description`, `ticket_type`, `acceptance_criteria`, `ticket_context`), **`repeat`** (default `1` — run this step this many times in a row with session resume). **Any** custom step replaces the entire built-in list; omit all `[[agent_steps]]` for generic built-in prompts |
+| `[[agent_steps]]` | *(built-in)* | Each entry: `name`, `prompt` (placeholders: `ticket_key`, `ticket_summary`, `ticket_description`, `description` (alias), `ticket_type`, `acceptance_criteria`, `ticket_context`), **`repeat`** (default `1` — run this step this many times in a row with session resume), **`when`** (`always` / `ticketing` / `no_ticketing`, default `always` — controls whether the step runs based on Jira availability), optional **`skills`** array, optional **`resume_previous`**. **Any** custom step replaces the entire built-in list; omit all `[[agent_steps]]` for generic built-in prompts |
 | *(no custom steps)* | — | Built-in two-step sequence (implement + review) runs once |
 
 ### `[general]`
@@ -262,17 +262,17 @@ The image includes the Cursor Agent CLI (`agent` in `/usr/local/bin`). Run `dock
 
 ## Workflow
 
-For each ticket in "To Do" status:
+For each ticket in “To Do” status (or each manual entry in no-Jira mode):
 
-1. **Assign** ticket to the logged-in user, move to "In Progress"
-2. **Retrieve** ticket details and linked items from Jira
+1. **Assign** ticket to the logged-in user, move to “In Progress” *(skipped in no-Jira mode)*
+2. **Retrieve** ticket details and linked items from Jira *(skipped in no-Jira mode — uses the user-provided description instead)*
 3. **Create worktree** on a new branch from the base branch
 4. **Pre-install** (optional) — run registry auth or other setup
 5. **Install dependencies** — e.g., `npm ci`
-6. **Agent steps** — built-in or custom **`[[agent_steps]]`**: each step is a headless Claude/Cursor session (prompts can include “run `npm run lint` and fix issues”, tests, review, etc.). With no custom steps, the built-in two-step sequence (implement + review) runs once.
+6. **Agent steps** — built-in or custom **`[[agent_steps]]`**: each step is a headless Claude/Cursor session (prompts can include “run `npm run lint` and fix issues”, tests, review, etc.). With no custom steps, the built-in two-step sequence (implement + review) runs once. Steps with `when = “ticketing”` are skipped in no-Jira mode; steps with `when = “no_ticketing”` run only in no-Jira mode.
 7. **Workflow complete** — engine records optional **`pr_url`** from **`.maestro/outcome.toml`** or **`MAESTRO_PR_URL:`**; fails earlier if any logged step **Failed**
 
-On **stop**: kills running sessions, unassigns ticket, moves back to "To Do".
+On **stop**: kills running sessions, unassigns ticket, moves back to “To Do” *(Jira operations skipped in no-Jira mode)*.
 
 ## Dashboard
 
@@ -283,6 +283,7 @@ The web dashboard at `http://localhost:8080` provides:
 - **Controls** — Pause, Resume, Stop, Retry buttons
 - **Report modal** — detailed step-by-step execution report
 - **Configuration page** — at `/config.html`
+- **No-Jira mode UI** — when acli is not authenticated: an amber warning banner, a one-time alert dialog, polling controls hidden, and the **+** button opens a paste-description modal (workflow name + description) instead of the Jira ticket picker
 
 Terminal output persists across page reloads (last 100 lines served via API).
 

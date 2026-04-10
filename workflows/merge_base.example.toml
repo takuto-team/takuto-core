@@ -3,7 +3,8 @@
 #   [general]
 #   merge_base_workflow_steps_file = "workflows/merge_base.toml"
 #
-# Placeholders: base_branch, pr_url, ticket_key, ticket_summary, etc.
+# Placeholders: base_branch, pr_url, ticket_key, ticket_summary, description (alias for ticket_description), etc.
+# Optional `when`: "always" (default), "ticketing", "no_ticketing".
 
 [[merge_base_agent_steps]]
 name = "Merge base branch"

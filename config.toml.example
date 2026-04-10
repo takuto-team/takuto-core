@@ -9,23 +9,27 @@
 # prompt = """
 # Implement {ticket_key}: {ticket_summary}
 #
-# {ticket_description}
+# {description}
 #
 # Acceptance criteria:
 # {acceptance_criteria}
 # """
 # repeat = 1
+# # when = "always"    # "always" (default), "ticketing" (Jira only), "no_ticketing" (no-Jira only)
+# # skills = [{ name = "address-ticket" }]
+# # resume_previous = false
 #
 # [[agent_steps]]
 # name = "Review changes"
 # prompt = "Review uncommitted changes for correctness and style. Fix issues."
 # repeat = 1
 #
-# Placeholders: ticket_key, ticket_summary, ticket_description, ticket_type, acceptance_criteria, ticket_context
+# Placeholders: ticket_key, ticket_summary, ticket_description, description (alias),
+# ticket_type, acceptance_criteria, ticket_context
 #
 # --- PR review workflow (optional `[[review_agent_steps]]` at TOML root) ---
 # Runs when the dashboard **Address PR Comments** action is used (main flow must be Done and a PR URL recorded).
-# Same shape as `[[agent_steps]]` (`name`, `prompt`, `repeat`). Extra placeholder: **pr_url**.
+# Same shape as `[[agent_steps]]` (`name`, `prompt`, `repeat`, `when`, `skills`, `resume_previous`). Extra placeholder: **pr_url**.
 # Omit all `[[review_agent_steps]]`: built-in single-step sequence once per **Address PR comments** run; use each step's `repeat` for multiple runs.
 #
 # [[review_agent_steps]]
@@ -35,9 +39,9 @@
 #
 # --- Merge base branch workflow (optional `[[merge_base_agent_steps]]` at TOML root) ---
 # Runs when the dashboard **Merge base branch** action is used (main flow must be Done, PR URL set, worktree present).
-# Same shape as `[[agent_steps]]` / `[[review_agent_steps]]` (`name`, `prompt`, `repeat`).
+# Same shape as `[[agent_steps]]` / `[[review_agent_steps]]` (`name`, `prompt`, `repeat`, `when`, `skills`, `resume_previous`).
 # Placeholders: **pr_url**, **base_branch** (from `[git] base_branch`), plus ticket_key, ticket_summary,
-# ticket_description, ticket_type, acceptance_criteria, ticket_context.
+# ticket_description, description (alias), ticket_type, acceptance_criteria, ticket_context.
 # Omit all `[[merge_base_agent_steps]]`: built-in single step that fetches/merges/tests/pushes against `{base_branch}`.
 # The merge-base driver runs one outer pass over your step list; use each step's `repeat` to run a step multiple times
 # in sequence (with `--resume` after the first run), same as custom `[[agent_steps]]`.

@@ -320,6 +320,13 @@ body { font-family: 'Inter', sans-serif; }
   max-height: calc(100vh - 2rem);
 }
 
+.paste-description-modal-panel {
+  width: 1000px;
+  max-width: min(1000px, calc(100vw - 2rem));
+  height: calc(100vh - 2rem);
+  max-height: calc(100vh - 2rem);
+}
+
 .manual-workflow-loading {
   display: flex;
   flex-direction: column;
