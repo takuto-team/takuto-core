@@ -569,9 +569,16 @@ pub async fn start_terminal(ticket_key: &str, port: u16) -> std::result::Result<
         }
     }
 
-    // Launch ttyd with a wrapper that sources the maestro env file so Claude auth
-    // tokens and other env vars from maestro.env are available in the terminal session.
-    let shell_cmd = "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; exec bash";
+    // Launch ttyd with a wrapper that:
+    // 1. Sources the maestro env file (Claude auth tokens, API keys, etc.)
+    // 2. Creates a minimal Claude Code config if missing (skips first-run wizard)
+    let shell_cmd = concat!(
+        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; ",
+        "if [ ! -f \"$HOME/.claude/settings.json\" ]; then ",
+        "mkdir -p \"$HOME/.claude\" && echo '{}' > \"$HOME/.claude/settings.json\"; ",
+        "fi; ",
+        "exec bash",
+    );
     let output = tokio::process::Command::new("docker")
         .args([
             "exec", "-d", &name, "ttyd", "-p",
