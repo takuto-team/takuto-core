@@ -547,6 +547,57 @@ pub async fn stop_editor(ticket_key: &str) {
     info!(name = %name, "Editor container stopped");
 }
 
+/// Start a web-based terminal (ttyd) inside the running editor container on `port`.
+/// Returns the URL on success.
+pub async fn start_terminal(ticket_key: &str, port: u16) -> std::result::Result<String, String> {
+    let name = editor_container_name(ticket_key);
+
+    // Check the editor container is actually running.
+    if get_editor_info(ticket_key).await.is_none() {
+        return Err("Editor container is not running — open the editor first.".into());
+    }
+
+    // Check if ttyd is already running inside the container.
+    let check = tokio::process::Command::new("docker")
+        .args(["exec", &name, "pgrep", "-x", "ttyd"])
+        .output()
+        .await;
+    if let Ok(out) = &check {
+        if out.status.success() {
+            // Already running — return URL with the given port.
+            return Ok(format!("http://localhost:{port}"));
+        }
+    }
+
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "exec", "-d", &name, "ttyd", "-p",
+            &port.to_string(), "-W", "-t", "fontSize=14",
+            "bash",
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to start ttyd: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ttyd start failed: {stderr}"));
+    }
+
+    let url = format!("http://localhost:{port}");
+    info!(ticket = %ticket_key, url = %url, "Web terminal started");
+    Ok(url)
+}
+
+/// Kill the ttyd process inside the editor container.
+pub async fn stop_terminal(ticket_key: &str) {
+    let name = editor_container_name(ticket_key);
+    let _ = tokio::process::Command::new("docker")
+        .args(["exec", &name, "pkill", "-x", "ttyd"])
+        .output()
+        .await;
+}
+
 /// Check if an editor container is running and return its info.
 pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
     let name = editor_container_name(ticket_key);

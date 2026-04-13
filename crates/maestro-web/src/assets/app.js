@@ -992,6 +992,23 @@ async function openEditor(id) {
   }
 }
 
+async function openTerminal(id) {
+  try {
+    const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/open-terminal`, { method: 'POST' });
+    if (!res.ok) {
+      const t = await res.text();
+      alert(t || 'Failed to start terminal');
+      return;
+    }
+    const data = await res.json();
+    if (data.url) window.open(data.url, '_blank');
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Failed to open terminal:', e);
+    alert('Failed to open terminal');
+  }
+}
+
 async function closeEditor(id) {
   try {
     await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/close-editor`, { method: 'POST' });
@@ -1327,7 +1344,15 @@ function renderWorkflowCard(w) {
   if (w.can_open_editor) {
     if (w.editor_url) {
       actions += `
-        <a href="${escapeHtml(w.editor_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20 inline-flex items-center gap-1">Editor &#x2197;</a>
+        <a href="${escapeHtml(w.editor_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20 inline-flex items-center gap-1">Editor &#x2197;</a>`;
+      if (w.terminal_url) {
+        actions += `
+          <a href="${escapeHtml(w.terminal_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20 inline-flex items-center gap-1">Terminal &#x2197;</a>`;
+      } else {
+        actions += `
+          <button onclick="openTerminal('${w.ticket_key}')" class="workflow-action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20">Open terminal</button>`;
+      }
+      actions += `
         <button onclick="closeEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Close editor</button>`;
     } else {
       actions += `

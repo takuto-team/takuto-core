@@ -70,6 +70,14 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::close_editor),
         )
         .route(
+            "/workflows/{id}/open-terminal",
+            post(routes::workflows::open_terminal),
+        )
+        .route(
+            "/workflows/{id}/close-terminal",
+            post(routes::workflows::close_terminal),
+        )
+        .route(
             "/workflows/start-manual",
             post(routes::workflows::start_manual_workflow),
         )

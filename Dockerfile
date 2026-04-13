@@ -60,6 +60,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
+# ttyd — lightweight web-based terminal (used by the dashboard "Open terminal" button)
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in amd64) TTYD_ARCH=x86_64 ;; arm64) TTYD_ARCH=aarch64 ;; *) echo "Unsupported arch: $ARCH" && exit 1 ;; esac \
+    && curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd \
+    && chmod +x /usr/local/bin/ttyd
+
 # mise — version manager for Node, Python, Ruby, etc. (project `.mise.toml` / `.tool-versions`)
 RUN install -dm 755 /etc/apt/keyrings \
     && curl -fsSL https://mise.jdx.dev/gpg-key.pub -o /etc/apt/keyrings/mise-archive-keyring.asc \

@@ -70,6 +70,8 @@ pub struct WorkflowSummary {
     pub jira_available: bool,
     /// **Resume from error** is allowed (Error or Stopped, worktree exists on disk).
     pub can_resume_from_error: bool,
+    /// Set when a web terminal (ttyd) is running for this workflow's editor container.
+    pub terminal_url: Option<String>,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -145,6 +147,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 editor_port_mappings: Vec::new(),
                 jira_available: w.jira_available,
                 can_resume_from_error: can_resume_from_error(w),
+                terminal_url: None,
             }
         })
         .collect();
@@ -191,6 +194,12 @@ pub async fn get_workflow(
         editor_port_mappings: editor_info.map(|e| e.port_mappings).unwrap_or_default(),
         jira_available: w.jira_available,
         can_resume_from_error: can_resume_from_error(w),
+        terminal_url: state
+            .terminal_ports
+            .read()
+            .await
+            .get(&w.ticket_key)
+            .map(|port| format!("http://localhost:{port}")),
     }))
 }
 
@@ -518,8 +527,62 @@ pub async fn close_editor(
     if let Some(token) = state.editor_scanners.write().await.remove(&id) {
         token.cancel();
     }
-    // Clean up dynamic forward tracking.
+    // Clean up dynamic forward tracking and terminal state.
     state.dynamic_forwards.write().await.remove(&id);
+    state.terminal_ports.write().await.remove(&id);
     container::stop_editor(&id).await;
+    StatusCode::OK
+}
+
+#[derive(Serialize)]
+pub struct OpenTerminalResponse {
+    pub url: String,
+}
+
+/// Start a web terminal (ttyd) inside the running editor container.
+pub async fn open_terminal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<OpenTerminalResponse>, (StatusCode, String)> {
+    // Reuse existing terminal if already started.
+    if let Some(&port) = state.terminal_ports.read().await.get(&id) {
+        return Ok(Json(OpenTerminalResponse {
+            url: format!("http://localhost:{port}"),
+        }));
+    }
+
+    // Need a spare port. Get editor info to find available spares.
+    let info = container::get_editor_info(&id)
+        .await
+        .ok_or((StatusCode::CONFLICT, "Editor container is not running — open the editor first.".into()))?;
+
+    // Pick a spare port not already used by the port scanner's socat or another terminal.
+    let used_by_terminals: Vec<u16> = state.terminal_ports.read().await.values().copied().collect();
+    let port = info
+        .spare_ports
+        .iter()
+        .copied()
+        .find(|p| !used_by_terminals.contains(p))
+        .ok_or((
+            StatusCode::CONFLICT,
+            "No spare ports available for terminal.".into(),
+        ))?;
+
+    let url = container::start_terminal(&id, port)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    state.terminal_ports.write().await.insert(id, port);
+
+    Ok(Json(OpenTerminalResponse { url }))
+}
+
+/// Stop the web terminal for a workflow's editor container.
+pub async fn close_terminal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> StatusCode {
+    state.terminal_ports.write().await.remove(&id);
+    container::stop_terminal(&id).await;
     StatusCode::OK
 }
