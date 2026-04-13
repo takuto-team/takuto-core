@@ -921,6 +921,100 @@ impl WorkflowEngine {
             .await
     }
 
+    /// Resume a failed or stopped workflow from the last failed step, reusing the existing
+    /// worktree, branch, and succeeded steps. Behaves like the restart-resume path but triggered
+    /// by a user click instead of a container restart.
+    pub async fn resume_from_error(&self, ticket_key: &str) -> Result<()> {
+        {
+            let mut workflows = self.workflows.write().await;
+            let workflow = workflows
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+
+            // Must be Error or Stopped.
+            let restored_state = match &workflow.state {
+                WorkflowState::Error { source_state, .. } => *source_state.clone(),
+                WorkflowState::Stopped => WorkflowState::AddressingTicket { pass: 1 },
+                other => {
+                    return Err(MaestroError::Config(format!(
+                        "Cannot resume workflow in state: {} (must be Error or Stopped)",
+                        other
+                    )));
+                }
+            };
+
+            // Worktree must still exist on disk — otherwise there's nothing to resume from.
+            if !workflow
+                .worktree_path
+                .as_ref()
+                .is_some_and(|p| p.exists())
+            {
+                return Err(MaestroError::Config(
+                    "Cannot resume: worktree no longer exists on disk. Use 'Retry from 0' instead."
+                        .to_string(),
+                ));
+            }
+
+            // Strip Running and Failed entries — they represent interrupted or failed steps
+            // that will be re-executed. Keep Success and Skipped so the driver skips them.
+            workflow
+                .steps_log
+                .retain(|s| s.status == StepStatus::Success || s.status == StepStatus::Skipped);
+
+            workflow.state = restored_state;
+            workflow.cancel_token = CancellationToken::new();
+            workflow.current_step_label = None;
+            workflow.updated_at = Utc::now();
+        }
+
+        // Read values needed to spawn the driver outside the lock.
+        let cancel_token = {
+            let workflows = self.workflows.read().await;
+            workflows
+                .get(ticket_key)
+                .map(|w| w.cancel_token.clone())
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?
+        };
+
+        let engine_config = self.config.clone();
+        let engine_workflows = self.workflows.clone();
+        let engine_actions = self.actions.clone();
+        let engine_event_tx = self.event_tx.clone();
+        let agent_sem = self.agent_run_semaphore.clone();
+        let suppress = self.suppress_cancelled_as_error.clone();
+        let key = ticket_key.to_string();
+
+        tokio::spawn(async move {
+            drive_workflow(
+                key,
+                engine_config,
+                engine_workflows,
+                engine_actions,
+                engine_event_tx,
+                cancel_token,
+                agent_sem,
+                suppress,
+            )
+            .await;
+        });
+
+        let _ = self.event_tx.send(WorkflowEvent {
+            event_type: "workflow_updated".to_string(),
+            workflow_id: String::new(),
+            ticket_key: ticket_key.to_string(),
+            state: "Resuming".to_string(),
+            timestamp: Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+            progress_percent: None,
+            progress_steps_total: None,
+        });
+
+        Ok(())
+    }
+
     /// Manual dashboard starts with **`started_manually`** that are not **Done** / **Stopped** / **Error**.
     pub async fn manual_workflows_toward_cap_count(&self) -> usize {
         self.workflows

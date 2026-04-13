@@ -42,6 +42,10 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::retry_workflow),
         )
         .route(
+            "/workflows/{id}/resume-from-error",
+            post(routes::workflows::resume_from_error),
+        )
+        .route(
             "/workflows/{id}/address-pr-comments",
             post(routes::workflows::address_pr_comments),
         )

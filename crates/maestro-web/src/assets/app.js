@@ -806,6 +806,16 @@ async function retryWorkflow(id) {
   }
 }
 
+async function resumeFromError(id) {
+  try {
+    await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/resume-from-error`, { method: 'POST' });
+    delete terminalState[id];
+    fetchWorkflowsSilent();
+  } catch (e) {
+    console.error('Failed to resume workflow from error:', e);
+  }
+}
+
 async function stopWorkflow(id) {
   const ok = await showDashboardConfirm({
     title: 'Stop workflow',
@@ -1209,9 +1219,13 @@ function renderWorkflowCard(w) {
       <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20">Resume</button>
       <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
   }
+  if (w.can_resume_from_error) {
+    actions += `
+      <button onclick="resumeFromError('${w.ticket_key}')" class="workflow-action-btn bg-teal-500/10 text-teal-400 border-teal-500/20 hover:bg-teal-500/20">Retry from last failure</button>`;
+  }
   if (['Error', 'Stopped', 'Completed'].includes(status.label)) {
     actions += `
-      <button onclick="retryWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-blue-500/10 text-blue-400 border-blue-500/20 hover:bg-blue-500/20">Retry</button>`;
+      <button onclick="retryWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-blue-500/10 text-blue-400 border-blue-500/20 hover:bg-blue-500/20">Retry from 0</button>`;
   }
   if (w.can_address_pr_comments) {
     actions += `

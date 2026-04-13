@@ -99,7 +99,7 @@ Pause/resume: workflow state wraps prior state in `Paused`; `wait_if_paused` blo
 
 Stop (**API** / **`stop_all_workflows`**): cancels the workflow token (child processes stop via `ProcessHandle` / process groups on Unix), then **`ContainerRunner::cleanup_for_ticket`** immediately so isolated worker containers are not left running until the driver exits; Jira cleanup (unassign / To Do) runs in a spawned task as before. Drivers that exit with **`Cancelled`** while the row is **`Stopped`** or already removed do not overwrite **`Stopped`** with **`Error`**. **`acquire_agent_slot`** aborts on cancel so workflows do not block forever on the install/agent semaphore after stop. **Graceful process shutdown** (SIGINT/SIGTERM path in **`maestro-cli`**) uses snapshot persist + cancel so tickets stay **In Progress** for resume.
 
-The **index** dashboard uses a custom **confirm** modal (**`#dashboardConfirmModal`**) for **Stop**, **Delete**, and **Mark as Done** (not `window.confirm`). **Delete** and **Mark as Done** show a dark semi-transparent overlay with a spinner on the card while the request is in flight.
+The **index** dashboard uses a custom **confirm** modal (**`#dashboardConfirmModal`**) for **Stop**, **Delete**, and **Mark as Done** (not `window.confirm`). **Delete** and **Mark as Done** show a dark semi-transparent overlay with a spinner on the card while the request is in flight. **Error** / **Stopped** workflows show two retry buttons: **Retry from last failure** (teal, calls **`resume-from-error`** — re-drives from the failed step, skipping succeeded steps, reusing worktree and session ID; only shown when the worktree exists on disk) and **Retry from 0** (blue, calls **`retry`** — removes the workflow and starts fresh).
 
 File logging: `WorkflowLogWriter` writes under `{repo_path}/logs/<TICKET>.log`.
 
@@ -167,7 +167,8 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | POST | `/api/workflows/{id}/pause` | Same: ticket key |
 | POST | `/api/workflows/{id}/resume` | |
 | POST | `/api/workflows/{id}/stop` | |
-| POST | `/api/workflows/{id}/retry` | |
+| POST | `/api/workflows/{id}/retry` | Remove workflow and start fresh from step 0 (dashboard **Retry from 0**) |
+| POST | `/api/workflows/{id}/resume-from-error` | Re-drive from the last failed step, reusing existing worktree and skipping succeeded steps (dashboard **Retry from last failure**). Requires **Error** or **Stopped** state **and** worktree on disk; **`409`** otherwise. |
 | POST | `/api/workflows/{id}/address-pr-comments` | Start PR review agent loop (**`Done`** + **`pr_url`** + worktree) → **`202 Accepted`** |
 | POST | `/api/workflows/{id}/merge-base-branch` | Start merge-base-branch agent loop (**`Done`** + **`pr_url`** + worktree) → **`202 Accepted`** |
 | POST | `/api/workflows/{id}/mark-done` | Jira **`done_status`** + remove worktree; JSON **`MarkDoneOutcome`** |

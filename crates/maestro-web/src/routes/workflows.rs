@@ -68,6 +68,8 @@ pub struct WorkflowSummary {
     pub editor_port_mappings: Vec<(u16, u16)>,
     /// `true` when Jira (acli) was available when this workflow was created.
     pub jira_available: bool,
+    /// **Resume from error** is allowed (Error or Stopped, worktree exists on disk).
+    pub can_resume_from_error: bool,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -93,6 +95,11 @@ fn can_open_editor(w: &Workflow) -> bool {
     !w.state.is_active()
         && w.worktree_path.as_ref().is_some_and(|p| p.exists())
         && ContainerRunner::is_available()
+}
+
+fn can_resume_from_error(w: &Workflow) -> bool {
+    matches!(w.state, WorkflowState::Error { .. } | WorkflowState::Stopped)
+        && w.worktree_path.as_ref().is_some_and(|p| p.exists())
 }
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
@@ -137,6 +144,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 editor_url: None,
                 editor_port_mappings: Vec::new(),
                 jira_available: w.jira_available,
+                can_resume_from_error: can_resume_from_error(w),
             }
         })
         .collect();
@@ -182,6 +190,7 @@ pub async fn get_workflow(
         editor_url: editor_info.as_ref().map(|e| e.url.clone()),
         editor_port_mappings: editor_info.map(|e| e.port_mappings).unwrap_or_default(),
         jira_available: w.jira_available,
+        can_resume_from_error: can_resume_from_error(w),
     }))
 }
 
@@ -209,6 +218,20 @@ pub async fn resume_workflow(
     state
         .engine
         .resume_workflow(&id)
+        .await
+        .map(|()| StatusCode::OK)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+/// Resume a failed/stopped workflow from the last failed step, reusing the existing worktree and
+/// skipping already-succeeded steps. The worktree must still exist on disk.
+pub async fn resume_from_error(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .engine
+        .resume_from_error(&id)
         .await
         .map(|()| StatusCode::OK)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
