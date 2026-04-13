@@ -2332,6 +2332,10 @@ async fn run_pr_review_steps(
     interp_vars.insert("acceptance_criteria".into(), acceptance_criteria_str);
     interp_vars.insert("ticket_context".into(), ticket_context);
     interp_vars.insert("pr_url".into(), pr_url.to_string());
+    {
+        let cfg = config.read().await;
+        interp_vars.insert("base_branch".into(), cfg.git.base_branch.clone());
+    }
 
     // Construct container runner for PR review isolation
     let container_runner = if ContainerRunner::is_available() {
@@ -3163,6 +3167,7 @@ async fn run_workflow_steps(
 
     // Steps 4–N: agent_steps (or defaults) × outer loops; each step may repeat (see `repeat` on step)
     let cfg = config.read().await;
+    interp_vars.insert("base_branch".into(), cfg.git.base_branch.clone());
     let outer_loops = cfg.agent_sequence_outer_loops();
     let timeout = cfg.agent.step_timeout_secs;
     let claude_model = if cfg.agent.model.is_empty() {

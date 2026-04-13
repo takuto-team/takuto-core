@@ -993,8 +993,20 @@ async function openEditor(id) {
 }
 
 async function openTerminal(id) {
+  setWorkflowCardLoading(id, true, 'Starting terminal…');
   try {
-    const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/open-terminal`, { method: 'POST' });
+    // Ensure editor container is running first (terminal lives inside it).
+    let res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/open-terminal`, { method: 'POST' });
+    if (res.status === 409) {
+      // Editor not running — start it silently, then retry terminal.
+      const editorRes = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/open-editor`, { method: 'POST' });
+      if (!editorRes.ok) {
+        const t = await editorRes.text();
+        alert(t || 'Failed to start editor container');
+        return;
+      }
+      res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/open-terminal`, { method: 'POST' });
+    }
     if (!res.ok) {
       const t = await res.text();
       alert(t || 'Failed to start terminal');
@@ -1006,6 +1018,8 @@ async function openTerminal(id) {
   } catch (e) {
     console.error('Failed to open terminal:', e);
     alert('Failed to open terminal');
+  } finally {
+    setWorkflowCardLoading(id, false);
   }
 }
 
@@ -1345,18 +1359,20 @@ function renderWorkflowCard(w) {
     if (w.editor_url) {
       actions += `
         <a href="${escapeHtml(w.editor_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20 inline-flex items-center gap-1">Editor &#x2197;</a>`;
-      if (w.terminal_url) {
-        actions += `
-          <a href="${escapeHtml(w.terminal_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20 inline-flex items-center gap-1">Terminal &#x2197;</a>`;
-      } else {
-        actions += `
-          <button onclick="openTerminal('${w.ticket_key}')" class="workflow-action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20">Open terminal</button>`;
-      }
-      actions += `
-        <button onclick="closeEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Close editor</button>`;
     } else {
       actions += `
         <button onclick="openEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Open editor</button>`;
+    }
+    if (w.terminal_url) {
+      actions += `
+        <a href="${escapeHtml(w.terminal_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20 inline-flex items-center gap-1">Terminal &#x2197;</a>`;
+    } else {
+      actions += `
+        <button onclick="openTerminal('${w.ticket_key}')" class="workflow-action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20">Open terminal</button>`;
+    }
+    if (w.editor_url) {
+      actions += `
+        <button onclick="closeEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Close editor</button>`;
     }
   }
   actions += `

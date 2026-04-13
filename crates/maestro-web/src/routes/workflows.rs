@@ -540,6 +540,7 @@ pub struct OpenTerminalResponse {
 }
 
 /// Start a web terminal (ttyd) inside the running editor container.
+/// The editor container must already be running (use open-editor first).
 pub async fn open_terminal(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -551,7 +552,7 @@ pub async fn open_terminal(
         }));
     }
 
-    // Need a spare port. Get editor info to find available spares.
+    // Editor container must be running.
     let info = container::get_editor_info(&id)
         .await
         .ok_or((StatusCode::CONFLICT, "Editor container is not running — open the editor first.".into()))?;
