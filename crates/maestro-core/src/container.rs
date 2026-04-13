@@ -478,6 +478,13 @@ pub async fn start_editor(
             serde_json::Value::String(theme.to_string()),
         );
     }
+    // Set the browser tab title to the workflow name (with optional active editor info).
+    settings_json.insert(
+        "window.title".into(),
+        serde_json::Value::String(format!(
+            "{ticket_key} — ${{activeEditorShort}}${{separator}}${{rootName}}"
+        )),
+    );
     for (key, val) in settings {
         settings_json.insert(key.clone(), toml_value_to_json(val));
     }
@@ -686,10 +693,13 @@ if ! grep -qE '"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true' "$HOME/.cl
   echo '{"hasCompletedOnboarding":true}' > "$HOME/.claude/.claude.json"
 fi
 exec bash -l"#.to_string();
+    let tab_title = format!("titleFixed={ticket_key} — Terminal");
     let output = tokio::process::Command::new("docker")
         .args([
             "exec", "-d", &name, "ttyd", "-p",
-            &port.to_string(), "-W", "-t", "fontSize=14",
+            &port.to_string(), "-W",
+            "-t", "fontSize=14",
+            "-t", &tab_title,
             "bash", "-c", &shell_cmd,
         ])
         .output()
