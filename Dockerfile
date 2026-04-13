@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables \
     iproute2 \
     openssh-client \
+    python3 \
     socat \
     # Playwright Chromium system dependencies
     libglib2.0-0 \

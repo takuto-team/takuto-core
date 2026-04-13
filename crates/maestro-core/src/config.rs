@@ -247,6 +247,8 @@ pub struct Config {
     pub network: NetworkConfig,
     #[serde(default)]
     pub editor: EditorConfig,
+    #[serde(default)]
+    pub terminal: TerminalConfig,
     /// Ordered AI prompt steps (`[[agent_steps]]`). Empty → [`default_agent_steps`].
     #[serde(default)]
     pub agent_steps: Vec<AgentStepConfig>,
@@ -315,6 +317,16 @@ impl Default for EditorConfig {
             settings: std::collections::HashMap::new(),
         }
     }
+}
+
+/// Web terminal (ttyd) customization launched from the dashboard.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TerminalConfig {
+    /// Shell commands run once per editor container lifetime, before the first ttyd session.
+    /// Use this to install tools (e.g. `mise use -g zellij@latest`) or set up shell config.
+    /// Commands are executed with `/etc/maestro/env` sourced so API tokens are available.
+    #[serde(default)]
+    pub setup_commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -638,6 +650,7 @@ impl Default for Config {
             docker: DockerConfig::default(),
             network: NetworkConfig::default(),
             editor: EditorConfig::default(),
+            terminal: TerminalConfig::default(),
             agent_steps: Vec::new(),
             review_agent_steps: Vec::new(),
             merge_base_agent_steps: Vec::new(),

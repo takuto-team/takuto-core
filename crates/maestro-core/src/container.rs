@@ -371,6 +371,7 @@ async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
 /// Start a browser VS Code editor container for a workflow.
 ///
 /// Returns [`EditorInfo`] with the URL and port mappings on success.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_editor(
     ticket_key: &str,
     worktree_path: &Path,
@@ -380,6 +381,7 @@ pub async fn start_editor(
     theme: &str,
     extensions: &[String],
     settings: &std::collections::HashMap<String, toml::Value>,
+    setup_commands: &[String],
 ) -> std::result::Result<EditorInfo, String> {
     let name = editor_container_name(ticket_key);
 
@@ -526,6 +528,12 @@ pub async fn start_editor(
         return Err(format!("docker run failed: {stderr}"));
     }
 
+    // Run setup commands as root inside the new container (tool installs, etc.).
+    // Runs once per container lifetime (gated by /tmp/.maestro-terminal-setup-done).
+    if !setup_commands.is_empty() {
+        run_editor_setup_as_root(&name, setup_commands).await;
+    }
+
     let url = format!("http://localhost:{vscode_port}/?folder={folder}");
     info!(url = %url, spare = ?spare_ports, "Editor container started");
 
@@ -535,6 +543,74 @@ pub async fn start_editor(
         port_mappings,
         spare_ports,
     })
+}
+
+/// Run setup commands inside the editor container as root. Ensures ownership of the
+/// maestro user's home and cache directories is correct so `mise install` etc. can write.
+/// Idempotent via `/tmp/.maestro-terminal-setup-done` marker.
+async fn run_editor_setup_as_root(container: &str, setup_commands: &[String]) {
+    // Skip if already done for this container.
+    let marker = "/tmp/.maestro-terminal-setup-done";
+    let marker_check = tokio::process::Command::new("docker")
+        .args(["exec", container, "test", "-f", marker])
+        .output()
+        .await;
+    if matches!(&marker_check, Ok(o) if o.status.success()) {
+        return;
+    }
+
+    info!(container, "Running editor setup commands as root");
+
+    // Ensure maestro owns its home dir & mise volumes (fresh volumes mount root-owned).
+    // Runs as root unconditionally; fast and safe.
+    let chown_script = r#"
+chown -R maestro:maestro /home/maestro/.local/share/mise /home/maestro/.cache/mise 2>/dev/null || true
+chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
+"#;
+    let _ = tokio::process::Command::new("docker")
+        .args(["exec", "--user", "root", container, "bash", "-lc", chown_script])
+        .output()
+        .await;
+
+    let joined = setup_commands.join(" && echo && ");
+    let wrapped = format!(
+        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; {joined} && mise reshim 2>&1 || true"
+    );
+    // Run setup commands as the maestro user so tools are installed under their home dir,
+    // not root's. Use `su - maestro -c` from the root exec context.
+    let out = tokio::process::Command::new("docker")
+        .args([
+            "exec", "--user", "root", container, "bash", "-lc",
+            &format!(r#"su - maestro -c {}"#, shell_escape(&wrapped)),
+        ])
+        .output()
+        .await;
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            info!(container, %stdout, "Editor setup commands completed");
+            // Mark done so subsequent calls skip.
+            let _ = tokio::process::Command::new("docker")
+                .args(["exec", container, "touch", marker])
+                .output()
+                .await;
+        }
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!(
+                container,
+                code = ?o.status.code(),
+                %stdout,
+                %stderr,
+                "Editor setup commands failed (continuing without marker — will retry)"
+            );
+        }
+        Err(e) => {
+            warn!(container, error = %e, "Editor setup docker exec errored (continuing)");
+        }
+    }
 }
 
 /// Stop and remove an editor container for a workflow.
@@ -548,8 +624,12 @@ pub async fn stop_editor(ticket_key: &str) {
 }
 
 /// Start a web-based terminal (ttyd) inside the running editor container on `port`.
-/// Returns the URL on success.
-pub async fn start_terminal(ticket_key: &str, port: u16) -> std::result::Result<String, String> {
+/// Returns the URL on success. Setup commands (tool installs, etc.) are expected to
+/// have already been run at editor container creation by `run_editor_setup_as_root`.
+pub async fn start_terminal(
+    ticket_key: &str,
+    port: u16,
+) -> std::result::Result<String, String> {
     let name = editor_container_name(ticket_key);
 
     // Check the editor container is actually running.
@@ -569,21 +649,48 @@ pub async fn start_terminal(ticket_key: &str, port: u16) -> std::result::Result<
         }
     }
 
-    // Launch ttyd with a wrapper that:
-    // 1. Sources the maestro env file (Claude auth tokens, API keys, etc.)
-    // 2. Creates a minimal Claude Code config if missing (skips first-run wizard)
-    let shell_cmd = concat!(
-        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; ",
-        "if [ ! -f \"$HOME/.claude/settings.json\" ]; then ",
-        "mkdir -p \"$HOME/.claude\" && echo '{}' > \"$HOME/.claude/settings.json\"; ",
-        "fi; ",
-        "exec bash",
-    );
+    // Build the shell script that runs in each ttyd terminal:
+    // 1. Source the maestro env file (Claude auth tokens, API keys, etc.)
+    // 2. Auto-restore the most recent ~/.claude.json backup if missing (Claude Code
+    //    looks for this file — restoring avoids the first-run wizard each session).
+    // 3. Exec a login shell so /etc/profile.d/*.sh (mise shims, etc.) are loaded.
+    // NOTE: Tool installs (setup_commands) run at editor CONTAINER CREATION as root
+    //       via `run_editor_setup_as_root`, not here.
+    // `~/.claude.json` lives in the home dir (NOT inside `~/.claude/`), so it is NOT
+    // covered by the /shared-auth/claude volume. We symlink it into ~/.claude/ so
+    // auth state persists across container restarts.
+    // `~/.claude.json` lives in the home dir (NOT inside `~/.claude/`), so it is NOT
+    // covered by the /shared-auth/claude volume. We symlink it into ~/.claude/ so
+    // auth state persists across container restarts.
+    //
+    // Claude Code in INTERACTIVE mode triggers a login wizard unless `.claude.json`
+    // contains `hasCompletedOnboarding: true` — even when CLAUDE_CODE_OAUTH_TOKEN
+    // and ANTHROPIC_BASE_URL are set. We inject that field on startup so Claude
+    // uses the env-var auth (same as the headless --print mode used by workflows).
+    let shell_cmd = r#"[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a
+# Make ~/.claude.json persistent by symlinking into the shared volume.
+if [ ! -L "$HOME/.claude.json" ]; then
+  if [ -f "$HOME/.claude.json" ] && [ ! -f "$HOME/.claude/.claude.json" ]; then
+    mv "$HOME/.claude.json" "$HOME/.claude/.claude.json"
+  elif [ ! -f "$HOME/.claude/.claude.json" ] && ls "$HOME/.claude/backups/.claude.json.backup."* >/dev/null 2>&1; then
+    latest=$(ls -t "$HOME/.claude/backups/.claude.json.backup."* | head -1)
+    cp "$latest" "$HOME/.claude/.claude.json"
+  fi
+  rm -f "$HOME/.claude.json"
+  ln -s "$HOME/.claude/.claude.json" "$HOME/.claude.json"
+fi
+# Ensure hasCompletedOnboarding=true to skip the interactive login wizard.
+# If the existing file already has the field set to true, leave it alone (preserves
+# other state). Otherwise, write a minimal config — Claude uses env vars for auth.
+if ! grep -qE '"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true' "$HOME/.claude/.claude.json" 2>/dev/null; then
+  echo '{"hasCompletedOnboarding":true}' > "$HOME/.claude/.claude.json"
+fi
+exec bash -l"#.to_string();
     let output = tokio::process::Command::new("docker")
         .args([
             "exec", "-d", &name, "ttyd", "-p",
             &port.to_string(), "-W", "-t", "fontSize=14",
-            "bash", "-c", shell_cmd,
+            "bash", "-c", &shell_cmd,
         ])
         .output()
         .await
@@ -662,14 +769,19 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
             continue;
         }
 
-        // Symmetric mapping in editor range → VS Code or spare port
+        // Symmetric mapping in editor range → VS Code or spare port.
+        // `docker port` may emit the same mapping twice (IPv4 + IPv6), so dedupe.
         if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&container_port)
             && container_port == host_port
         {
-            editor_range_ports.push(host_port);
+            if !editor_range_ports.contains(&host_port) {
+                editor_range_ports.push(host_port);
+            }
         } else if !(EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&container_port) {
             // Asymmetric: app port (container) → host port
-            port_mappings.push((container_port, host_port));
+            if !port_mappings.contains(&(container_port, host_port)) {
+                port_mappings.push((container_port, host_port));
+            }
         }
     }
 

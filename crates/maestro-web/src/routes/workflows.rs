@@ -468,6 +468,7 @@ pub async fn open_editor(
     let theme = cfg.editor.theme.clone();
     let extensions = cfg.editor.extensions.clone();
     let settings = cfg.editor.settings.clone();
+    let setup_commands = cfg.terminal.setup_commands.clone();
     drop(workflows);
     drop(cfg);
 
@@ -477,7 +478,7 @@ pub async fn open_editor(
 
     let info = container::start_editor(
         &ticket_key, &worktree, &image, &app_ports, dynamic_ports,
-        &theme, &extensions, &settings,
+        &theme, &extensions, &settings, &setup_commands,
     )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;

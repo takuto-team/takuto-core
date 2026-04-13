@@ -177,6 +177,16 @@ compose_up_commands = []
 # "files.autoSave" = "afterDelay"
 # "editor.bracketPairColorization.enabled" = true
 
+[terminal]
+# Shell commands run once per editor container lifetime, before the first ttyd
+# terminal session. Use to install tools (zellij, nvim, tmux, etc.) that should
+# be available from the dashboard's "Open terminal" button. `/etc/maestro/env`
+# is sourced before each command, so API tokens/env vars are available.
+# Mise installs persist in the shared mise volume across container restarts.
+# setup_commands = [
+#   "mise use -g zellij@latest neovim@latest",
+# ]
+
 [network]
 # Additional domains to allow through the egress firewall
 # (e.g., private npm registries, internal APIs)
