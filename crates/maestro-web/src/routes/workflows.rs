@@ -455,6 +455,7 @@ pub async fn open_editor(
         .clone();
     let ticket_key = w.ticket_key.clone();
     let app_ports = cfg.editor.ports.clone();
+    let dynamic_ports = cfg.editor.dynamic_ports;
     let theme = cfg.editor.theme.clone();
     let extensions = cfg.editor.extensions.clone();
     let settings = cfg.editor.settings.clone();
@@ -466,11 +467,40 @@ pub async fn open_editor(
         .unwrap_or_else(|| "maestro:latest".to_string());
 
     let info = container::start_editor(
-        &ticket_key, &worktree, &image, &app_ports,
+        &ticket_key, &worktree, &image, &app_ports, dynamic_ports,
         &theme, &extensions, &settings,
     )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    // Spawn background port scanner if dynamic ports are available.
+    if !info.spare_ports.is_empty() {
+        let scanner_ticket = ticket_key.clone();
+        let scanner_spare = info.spare_ports.clone();
+        let scanner_vscode = info.vscode_port;
+        let scanner_app: Vec<u16> = app_ports.iter().copied().collect();
+        let scanner_event_tx = state.engine.event_tx.clone();
+        let scanner_cancel = tokio_util::sync::CancellationToken::new();
+        let scanner_cancel_clone = scanner_cancel.clone();
+
+        state
+            .editor_scanners
+            .write()
+            .await
+            .insert(ticket_key.clone(), scanner_cancel.clone());
+
+        tokio::spawn(async move {
+            container::run_port_scanner(
+                &scanner_ticket,
+                scanner_vscode,
+                &scanner_app,
+                scanner_spare,
+                scanner_event_tx,
+                scanner_cancel_clone,
+            )
+            .await;
+        });
+    }
 
     Ok(Json(OpenEditorResponse {
         url: info.url,
@@ -481,9 +511,15 @@ pub async fn open_editor(
 
 /// Stop and remove the editor container for a workflow.
 pub async fn close_editor(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> StatusCode {
+    // Cancel port scanner first so it doesn't try to scan a dying container.
+    if let Some(token) = state.editor_scanners.write().await.remove(&id) {
+        token.cancel();
+    }
+    // Clean up dynamic forward tracking.
+    state.dynamic_forwards.write().await.remove(&id);
     container::stop_editor(&id).await;
     StatusCode::OK
 }

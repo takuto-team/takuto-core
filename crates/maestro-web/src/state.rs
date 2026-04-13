@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 use maestro_core::config::Config;
 use maestro_core::workflow::engine::WorkflowEngine;
@@ -16,4 +18,8 @@ pub struct AppState {
     /// `true` when acli (Atlassian CLI) passed preflight authentication.
     /// When `false`: no Jira polling, no Jira operations in workflows, manual description entry only.
     pub jira_available: Arc<AtomicBool>,
+    /// Cancellation tokens for background port scanners, keyed by ticket_key.
+    pub editor_scanners: Arc<RwLock<HashMap<String, CancellationToken>>>,
+    /// Active dynamic port forwards per editor, keyed by ticket_key: `(detected_port, host_port)`.
+    pub dynamic_forwards: Arc<RwLock<HashMap<String, Vec<(u16, u16)>>>>,
 }

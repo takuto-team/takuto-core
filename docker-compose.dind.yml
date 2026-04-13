@@ -17,8 +17,8 @@ services:
     image: docker:27-dind
     privileged: true
     ports:
-      # Editor port range: 9100 for VS Code, 9101–9120 for user app ports
-      - "9100-9120:9100-9120"
+      # Editor port range: 9100 for VS Code, 9101+ for user app ports and dynamic forwards
+      - "9100-9200:9100-9200"
     environment:
       DOCKER_TLS_CERTDIR: ""
     volumes:

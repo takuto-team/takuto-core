@@ -82,6 +82,9 @@ pub struct WorkflowEvent {
     /// Estimated `steps_log` row total for this phase (same basis as the segmented dashboard bar).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress_steps_total: Option<u32>,
+    /// `(container_port, host_port)` for dynamic port forwarding events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forwarded_port: Option<(u16, u16)>,
 }
 
 pub struct Workflow {
@@ -439,6 +442,7 @@ impl WorkflowEngine {
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
 
         Ok(())
@@ -772,6 +776,7 @@ impl WorkflowEngine {
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
 
         Ok(())
@@ -804,6 +809,7 @@ impl WorkflowEngine {
                     stream: None,
                     progress_percent: None,
                     progress_steps_total: None,
+            forwarded_port: None,
                 });
 
                 workflow.cancel_token.clone()
@@ -884,6 +890,7 @@ impl WorkflowEngine {
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
 
         Ok(())
@@ -1010,6 +1017,7 @@ impl WorkflowEngine {
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
 
         Ok(())
@@ -1119,6 +1127,7 @@ impl WorkflowEngine {
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
 
         let engine_config = self.config.clone();
@@ -1226,6 +1235,7 @@ impl WorkflowEngine {
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
 
         let engine_config = self.config.clone();
@@ -1338,6 +1348,7 @@ impl WorkflowEngine {
                 stream: None,
                 progress_percent: None,
                 progress_steps_total: None,
+                forwarded_port: None,
             });
         }
 
@@ -1471,6 +1482,7 @@ async fn drive_workflow(
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
     }
 }
@@ -1578,6 +1590,7 @@ async fn drive_pr_review_workflow(
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
     }
 }
@@ -1692,6 +1705,7 @@ async fn drive_merge_base_workflow(
             stream: None,
             progress_percent: None,
             progress_steps_total: None,
+            forwarded_port: None,
         });
     }
 }
@@ -3410,6 +3424,7 @@ fn broadcast_step_started(
         stream: None,
         progress_percent: None,
         progress_steps_total: None,
+        forwarded_port: None,
     });
 }
 
@@ -3433,6 +3448,7 @@ async fn broadcast_step_completed(
         stream: None,
         progress_percent: dash.map(|(p, _)| p),
         progress_steps_total: dash.map(|(_, t)| t),
+        forwarded_port: None,
     });
 }
 
@@ -3490,6 +3506,7 @@ fn spawn_output_relay(
                     stream: Some(line.stream),
                     progress_percent: None,
                     progress_steps_total: None,
+            forwarded_port: None,
                 });
                 match result {
                     Ok(count) => {
@@ -3561,6 +3578,7 @@ async fn transition_to_agent_step(
             stream: None,
             progress_percent: dash.map(|(p, _)| p),
             progress_steps_total: dash.map(|(_, t)| t),
+            forwarded_port: None,
         });
     }
 }
@@ -3605,6 +3623,7 @@ async fn transition_to_pr_review_step(
             stream: None,
             progress_percent: dash.map(|(p, _)| p),
             progress_steps_total: dash.map(|(_, t)| t),
+            forwarded_port: None,
         });
     }
 }
@@ -3649,6 +3668,7 @@ async fn transition_to_merge_base_step(
             stream: None,
             progress_percent: dash.map(|(p, _)| p),
             progress_steps_total: dash.map(|(_, t)| t),
+            forwarded_port: None,
         });
     }
 }
@@ -3688,6 +3708,7 @@ async fn transition(
             stream: None,
             progress_percent: dash.map(|(p, _)| p),
             progress_steps_total: dash.map(|(_, t)| t),
+            forwarded_port: None,
         });
     }
 }

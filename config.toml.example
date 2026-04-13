@@ -144,8 +144,15 @@ compose_up_commands = []
 [editor]
 # Application ports to expose when opening VS Code editor from the dashboard
 # (e.g. dev server, Storybook). Each port in the container is mapped to a host
-# port from the DinD range (9100-9120); mappings are shown on the workflow card.
+# port from the DinD range (9100-9200); mappings are shown on the workflow card.
 # ports = [3000, 5173, 6006]
+
+# Number of extra spare ports pre-allocated for automatic detection and forwarding
+# of dev servers started inside the editor (e.g. Storybook on port 6006). When a new
+# listening port is detected, socat forwards traffic from a spare host port to the
+# container port. A toast notification appears on the dashboard with the forwarded URL.
+# Set to 0 to disable dynamic port forwarding. Default: 10.
+# dynamic_ports = 10
 
 # VS Code color theme
 # theme = "One Dark Pro"

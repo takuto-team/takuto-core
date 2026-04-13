@@ -102,6 +102,16 @@ function handleWorkflowEvent(evt) {
     return;
   }
 
+  // Dynamic port forwarding events
+  if (eventType === 'port_forwarded') {
+    handlePortForwarded(evt);
+    return;
+  }
+  if (eventType === 'port_unforwarded') {
+    handlePortUnforwarded(evt);
+    return;
+  }
+
   // Handle terminal-related events — DOM-only updates, no full re-render
   if (eventType === 'step_output') {
     handleStepOutput(evt);
@@ -234,6 +244,77 @@ function handleStepCompleted(evt) {
     }
     updateCardState(wf);
   }
+}
+
+// Client-side tracking of dynamic port forwards (from WebSocket events).
+const dynamicForwards = {}; // ticket_key → [[containerPort, hostPort], ...]
+
+function handlePortForwarded(evt) {
+  if (!evt.forwarded_port) return;
+  const [containerPort, hostPort] = evt.forwarded_port;
+  const key = evt.ticket_key;
+  if (!dynamicForwards[key]) dynamicForwards[key] = [];
+  dynamicForwards[key].push([containerPort, hostPort]);
+  showToast(`Port ${containerPort} forwarded`, `<a href="http://localhost:${hostPort}" target="_blank" rel="noopener" class="text-teal-300 underline">localhost:${hostPort}</a>`, key);
+  // Open the forwarded port in a new tab.
+  window.open(`http://localhost:${hostPort}`, '_blank', 'noopener,noreferrer');
+  // Update the port mappings display on the card.
+  updateDynamicPortsDisplay(key);
+}
+
+function handlePortUnforwarded(evt) {
+  if (!evt.forwarded_port) return;
+  const [containerPort] = evt.forwarded_port;
+  const key = evt.ticket_key;
+  if (dynamicForwards[key]) {
+    dynamicForwards[key] = dynamicForwards[key].filter(([cp]) => cp !== containerPort);
+  }
+  showToast(`Port ${containerPort} removed`, 'Forward stopped', key);
+  updateDynamicPortsDisplay(key);
+}
+
+function updateDynamicPortsDisplay(ticketKey) {
+  const container = document.getElementById(`port-mappings-${ticketKey}`);
+  if (!container) return;
+  const forwards = dynamicForwards[ticketKey] || [];
+  // Rebuild dynamic portion — keep any existing configured-port spans, replace dynamic ones.
+  // Simplest: re-render the entire container content from current state.
+  let html = '';
+  // Configured port mappings (from workflow data).
+  const wf = workflows[ticketKey];
+  if (wf && wf.editor_port_mappings && wf.editor_port_mappings.length > 0) {
+    html += wf.editor_port_mappings.map(([cp, hp]) =>
+      `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-violet-400 hover:text-violet-300">localhost:${hp}</a></span>`
+    ).join(' ');
+  }
+  // Dynamic forwards.
+  if (forwards.length > 0) {
+    html += forwards.map(([cp, hp]) =>
+      `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-teal-400 hover:text-teal-300">localhost:${hp}</a></span>`
+    ).join(' ');
+  }
+  container.innerHTML = html;
+  container.hidden = !html;
+}
+
+// Simple toast notification — auto-dismisses after 5 seconds.
+function showToast(title, bodyHtml, ticketKey) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'fixed bottom-4 right-4 z-50 flex flex-col gap-2';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  toast.className = 'toast-notification bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 shadow-lg max-w-sm';
+  toast.innerHTML = `<div class="text-sm font-medium text-gray-200">${escapeHtml(ticketKey)}: ${title}</div><div class="text-xs text-gray-400 mt-0.5">${bodyHtml}</div>`;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.3s';
+    setTimeout(() => toast.remove(), 300);
+  }, 5000);
 }
 
 // Update a single card's state indicators without re-rendering the whole grid
@@ -1253,13 +1334,20 @@ function renderWorkflowCard(w) {
         <button onclick="openEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Open editor</button>`;
     }
   }
-  // Port mappings display
-  if (w.editor_port_mappings && w.editor_port_mappings.length > 0) {
-    const mappings = w.editor_port_mappings.map(([cp, hp]) => `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-violet-400 hover:text-violet-300">localhost:${hp}</a></span>`).join(' ');
-    actions += `<div class="flex gap-3 items-center mt-1">${mappings}</div>`;
-  }
   actions += `
     <button onclick="openReportModal('${w.ticket_key}')" class="workflow-action-btn bg-gray-700/50 text-gray-300 border-gray-700 hover:bg-gray-700">Report</button>`;
+
+  // Port mappings (configured + dynamic) — rendered below the action buttons
+  let portMappingsHtml = '';
+  if (w.editor_port_mappings && w.editor_port_mappings.length > 0) {
+    const mappings = w.editor_port_mappings.map(([cp, hp]) => `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-violet-400 hover:text-violet-300">localhost:${hp}</a></span>`).join(' ');
+    portMappingsHtml += mappings;
+  }
+  const dynForwards = dynamicForwards[w.ticket_key] || [];
+  const dynHtml = dynForwards.map(([cp, hp]) =>
+    `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-teal-400 hover:text-teal-300">localhost:${hp}</a></span>`
+  ).join(' ');
+  portMappingsHtml += dynHtml;
 
   // Terminal panel for active workflows
   let terminalHtml = '';
@@ -1315,6 +1403,7 @@ function renderWorkflowCard(w) {
           <div class="workflow-progress-slot mt-2 w-full">${progressBarInnerHtml(w, status)}</div>
         </div>
         <div class="workflow-actions-row flex-shrink-0 flex flex-wrap gap-2">${actions}</div>
+        <div id="port-mappings-${w.ticket_key}" class="flex flex-wrap gap-3 items-center px-1"${portMappingsHtml ? '' : ' hidden'}>${portMappingsHtml}</div>
         ${terminalSlot}
       </div>
     </div>`;

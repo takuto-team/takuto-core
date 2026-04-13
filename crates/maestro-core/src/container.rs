@@ -1,9 +1,14 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tracing::{info, warn};
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
+
+use crate::workflow::engine::WorkflowEvent;
 
 /// Shell-escape a string for safe inclusion in `sh -c "..."`.
 fn shell_escape(s: &str) -> String {
@@ -298,7 +303,7 @@ fn toml_value_to_json(val: &toml::Value) -> serde_json::Value {
 
 /// Port range reserved for editor instances (VS Code + app ports) on the DinD host.
 const EDITOR_PORT_MIN: u16 = 9100;
-const EDITOR_PORT_MAX: u16 = 9120;
+const EDITOR_PORT_MAX: u16 = 9200;
 
 /// Information about a running editor container.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -309,6 +314,9 @@ pub struct EditorInfo {
     pub vscode_port: u16,
     /// `(container_port, host_port)` pairs for user-configured application ports.
     pub port_mappings: Vec<(u16, u16)>,
+    /// Pre-allocated spare host ports for dynamic forwarding (socat-based).
+    #[serde(default)]
+    pub spare_ports: Vec<u16>,
 }
 
 /// Return the deterministic editor container name for a ticket.
@@ -368,6 +376,7 @@ pub async fn start_editor(
     worktree_path: &Path,
     image: &str,
     app_ports: &[u16],
+    dynamic_ports: usize,
     theme: &str,
     extensions: &[String],
     settings: &std::collections::HashMap<String, toml::Value>,
@@ -379,14 +388,23 @@ pub async fn start_editor(
         return Ok(info);
     }
 
-    // Allocate ports: 1 for VS Code + N for app ports
-    let needed = 1 + app_ports.len();
+    // Remove any leftover stopped container with the same name so `docker run` doesn't
+    // fail with a name conflict (e.g., after a close-editor that raced with --rm).
+    let _ = tokio::process::Command::new("docker")
+        .args(["rm", "-f", &name])
+        .output()
+        .await;
+
+    // Allocate ports: 1 for VS Code + N for app ports + M spare for dynamic forwarding
+    let needed = 1 + app_ports.len() + dynamic_ports;
     let ports = allocate_editor_ports(needed).await.ok_or_else(|| {
         format!("No free editor ports available (need {needed}, range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
     })?;
 
     let vscode_port = ports[0];
     let mut port_mappings = Vec::new();
+    let spare_start = 1 + app_ports.len();
+    let spare_ports: Vec<u16> = ports[spare_start..].to_vec();
 
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -426,6 +444,12 @@ pub async fn start_editor(
         args.push("-p".into());
         args.push(format!("{host_port}:{app_port}"));
         port_mappings.push((app_port, host_port));
+    }
+
+    // Port mappings: spare ports for dynamic forwarding (symmetric — socat listens inside container)
+    for &sp in &spare_ports {
+        args.push("-p".into());
+        args.push(format!("{sp}:{sp}"));
     }
 
     // Working directory
@@ -503,12 +527,13 @@ pub async fn start_editor(
     }
 
     let url = format!("http://localhost:{vscode_port}/?folder={folder}");
-    info!(url = %url, "Editor container started");
+    info!(url = %url, spare = ?spare_ports, "Editor container started");
 
     Ok(EditorInfo {
         url,
         vscode_port,
         port_mappings,
+        spare_ports,
     })
 }
 
@@ -548,8 +573,9 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
     }
 
     let stdout = String::from_utf8_lossy(&port_output.stdout);
-    let mut vscode_port: Option<u16> = None;
     let mut port_mappings = Vec::new();
+    // Symmetric mappings where both ports are in the editor range (VS Code + spare ports).
+    let mut editor_range_ports: Vec<u16> = Vec::new();
 
     // Format: "9100/tcp -> 0.0.0.0:9100\n3000/tcp -> 0.0.0.0:9101"
     for line in stdout.lines() {
@@ -575,15 +601,21 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
             continue;
         }
 
-        // The first port in the editor range is the VS Code port
-        if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&container_port) {
-            vscode_port = Some(host_port);
-        } else {
+        // Symmetric mapping in editor range → VS Code or spare port
+        if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&container_port)
+            && container_port == host_port
+        {
+            editor_range_ports.push(host_port);
+        } else if !(EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&container_port) {
+            // Asymmetric: app port (container) → host port
             port_mappings.push((container_port, host_port));
         }
     }
 
-    let vscode_port = vscode_port?;
+    editor_range_ports.sort();
+    // The lowest port in the editor range is VS Code; the rest are spare/dynamic.
+    let vscode_port = *editor_range_ports.first()?;
+    let spare_ports: Vec<u16> = editor_range_ports.into_iter().skip(1).collect();
 
     // Get the working directory to reconstruct the folder URL
     let wd_output = tokio::process::Command::new("docker")
@@ -599,6 +631,7 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
         url,
         vscode_port,
         port_mappings,
+        spare_ports,
     })
 }
 
@@ -676,6 +709,210 @@ async fn prune_dangling_images() {
         ),
         Err(e) => warn!(error = %e, "Failed to run docker image prune"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic port forwarding — background port scanner
+// ---------------------------------------------------------------------------
+
+/// Scan listening ports inside an editor container and set up socat forwarding
+/// from pre-allocated spare host ports. Runs until `cancel` is triggered.
+///
+/// `known_ports` contains the VS Code port and any configured app ports — these
+/// are ignored by the scanner. `spare_ports` is the pool of symmetric-mapped
+/// ports available for dynamic forwarding.
+pub async fn run_port_scanner(
+    ticket_key: &str,
+    vscode_port: u16,
+    app_ports: &[u16],
+    spare_ports: Vec<u16>,
+    event_tx: broadcast::Sender<WorkflowEvent>,
+    cancel: CancellationToken,
+) {
+    let container = editor_container_name(ticket_key);
+    let ticket = ticket_key.to_string();
+
+    // Ports to never forward (VS Code, configured app ports, spare ports themselves).
+    let mut ignore: Vec<u16> = vec![vscode_port];
+    ignore.extend_from_slice(app_ports);
+    ignore.extend_from_slice(&spare_ports);
+
+    // active_forwards: detected_port → spare_port
+    let mut active_forwards: HashMap<u16, u16> = HashMap::new();
+    let mut available_spares: Vec<u16> = spare_ports;
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                // Kill all socat processes before exiting.
+                for (&detected, &spare) in &active_forwards {
+                    kill_socat(&container, spare).await;
+                    debug!(ticket = %ticket, detected, spare, "Cleaned up socat on scanner shutdown");
+                }
+                info!(ticket = %ticket, "Port scanner stopped");
+                return;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {}
+        }
+
+        let listening = match scan_listening_ports(&container).await {
+            Some(ports) => ports,
+            None => continue, // container might be starting up or gone
+        };
+
+        // Detect new ports.
+        for &port in &listening {
+            if ignore.contains(&port) || active_forwards.contains_key(&port) {
+                continue;
+            }
+            // Also ignore ports used by our own socat listeners.
+            if active_forwards.values().any(|&sp| sp == port) {
+                continue;
+            }
+            if let Some(spare) = available_spares.pop() {
+                if start_socat(&container, spare, port).await {
+                    info!(
+                        ticket = %ticket,
+                        detected = port,
+                        host_port = spare,
+                        "Dynamic port forwarded via socat"
+                    );
+                    active_forwards.insert(port, spare);
+                    ignore.push(spare); // don't re-scan the socat listener
+
+                    let _ = event_tx.send(WorkflowEvent {
+                        event_type: "port_forwarded".to_string(),
+                        workflow_id: String::new(),
+                        ticket_key: ticket.clone(),
+                        state: String::new(),
+                        timestamp: chrono::Utc::now(),
+                        error: None,
+                        step_name: None,
+                        output_line: None,
+                        stream: None,
+                        progress_percent: None,
+                        progress_steps_total: None,
+                        forwarded_port: Some((port, spare)),
+                    });
+                } else {
+                    // socat failed — return spare to pool.
+                    available_spares.push(spare);
+                }
+            } else {
+                warn!(
+                    ticket = %ticket,
+                    port,
+                    "No spare ports left for dynamic forwarding"
+                );
+            }
+        }
+
+        // Detect removed ports.
+        let gone: Vec<u16> = active_forwards
+            .keys()
+            .copied()
+            .filter(|p| !listening.contains(p))
+            .collect();
+
+        for port in gone {
+            if let Some(spare) = active_forwards.remove(&port) {
+                kill_socat(&container, spare).await;
+                ignore.retain(|&p| p != spare);
+                available_spares.push(spare);
+                info!(
+                    ticket = %ticket,
+                    detected = port,
+                    host_port = spare,
+                    "Dynamic port forward removed"
+                );
+
+                let _ = event_tx.send(WorkflowEvent {
+                    event_type: "port_unforwarded".to_string(),
+                    workflow_id: String::new(),
+                    ticket_key: ticket.clone(),
+                    state: String::new(),
+                    timestamp: chrono::Utc::now(),
+                    error: None,
+                    step_name: None,
+                    output_line: None,
+                    stream: None,
+                    progress_percent: None,
+                    progress_steps_total: None,
+                    forwarded_port: Some((port, spare)),
+                });
+            }
+        }
+    }
+}
+
+/// Run `ss -tlnH` inside the container and return listening ports.
+async fn scan_listening_ports(container: &str) -> Option<Vec<u16>> {
+    let output = tokio::process::Command::new("docker")
+        .args(["exec", container, "ss", "-tlnH"])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut ports = Vec::new();
+    // Format: "LISTEN  0  128  0.0.0.0:6006  0.0.0.0:*"
+    //    or:  "LISTEN  0  128  [::]:6006     [::]:*"
+    for line in stdout.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // The local address is typically the 4th field (index 3).
+        if fields.len() >= 4 {
+            let local = fields[3];
+            if let Some(port_str) = local.rsplit(':').next() {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    if port > 0 && !ports.contains(&port) {
+                        ports.push(port);
+                    }
+                }
+            }
+        }
+    }
+    Some(ports)
+}
+
+/// Start a `socat` process inside the container to forward `spare_port` → `target_port`.
+async fn start_socat(container: &str, spare_port: u16, target_port: u16) -> bool {
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "exec",
+            "-d",
+            container,
+            "socat",
+            &format!("TCP-LISTEN:{spare_port},fork,reuseaddr"),
+            &format!("TCP:localhost:{target_port}"),
+        ])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => true,
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!(container, spare_port, target_port, %stderr, "socat start failed");
+            false
+        }
+        Err(e) => {
+            warn!(container, spare_port, target_port, error = %e, "docker exec socat failed");
+            false
+        }
+    }
+}
+
+/// Kill the `socat` process listening on `spare_port` inside the container.
+async fn kill_socat(container: &str, spare_port: u16) {
+    let pattern = format!("TCP-LISTEN:{spare_port}");
+    let _ = tokio::process::Command::new("docker")
+        .args(["exec", container, "pkill", "-f", &pattern])
+        .output()
+        .await;
 }
 
 #[cfg(test)]

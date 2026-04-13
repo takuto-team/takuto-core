@@ -36,7 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     jq \
     iptables \
+    iproute2 \
     openssh-client \
+    socat \
     # Playwright Chromium system dependencies
     libglib2.0-0 \
     libnss3 \

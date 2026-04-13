@@ -282,9 +282,13 @@ impl Default for DockerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorConfig {
     /// Application ports to expose in the editor container (e.g. `[3000, 5173]`).
-    /// Each port is mapped to a host port from the DinD range (9100–9120).
+    /// Each port is mapped to a host port from the DinD range (9100–9200).
     #[serde(default)]
     pub ports: Vec<u16>,
+    /// Number of extra ports pre-allocated for dynamic forwarding (auto-detected dev servers).
+    /// Set to `0` to disable dynamic port forwarding. Default: `10`.
+    #[serde(default = "default_dynamic_ports")]
+    pub dynamic_ports: usize,
     /// VS Code color theme (e.g. `"One Dark Pro"`, `"GitHub Dark"`).
     #[serde(default)]
     pub theme: String,
@@ -297,10 +301,15 @@ pub struct EditorConfig {
     pub settings: std::collections::HashMap<String, toml::Value>,
 }
 
+fn default_dynamic_ports() -> usize {
+    10
+}
+
 impl Default for EditorConfig {
     fn default() -> Self {
         Self {
             ports: Vec::new(),
+            dynamic_ports: default_dynamic_ports(),
             theme: String::new(),
             extensions: Vec::new(),
             settings: std::collections::HashMap::new(),
