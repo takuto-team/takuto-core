@@ -488,22 +488,23 @@ pub async fn open_editor(
         let scanner_ticket = ticket_key.clone();
         let scanner_spare = info.spare_ports.clone();
         let scanner_vscode = info.vscode_port;
-        let scanner_app: Vec<u16> = app_ports.iter().copied().collect();
         let scanner_event_tx = state.engine.event_tx.clone();
         let scanner_cancel = tokio_util::sync::CancellationToken::new();
         let scanner_cancel_clone = scanner_cancel.clone();
 
-        state
-            .editor_scanners
-            .write()
-            .await
-            .insert(ticket_key.clone(), scanner_cancel.clone());
+        // Cancel any prior scanner for this ticket so we don't end up with two
+        // scanners racing to grab spare ports.
+        {
+            let mut scanners = state.editor_scanners.write().await;
+            if let Some(old) = scanners.insert(ticket_key.clone(), scanner_cancel.clone()) {
+                old.cancel();
+            }
+        }
 
         tokio::spawn(async move {
             container::run_port_scanner(
                 &scanner_ticket,
                 scanner_vscode,
-                &scanner_app,
                 scanner_spare,
                 scanner_event_tx,
                 scanner_cancel_clone,

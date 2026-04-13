@@ -397,16 +397,21 @@ pub async fn start_editor(
         .output()
         .await;
 
-    // Allocate ports: 1 for VS Code + N for app ports + M spare for dynamic forwarding
-    let needed = 1 + app_ports.len() + dynamic_ports;
+    // Allocate ports: 1 for VS Code + N spare ports for all forwarding (via socat).
+    // NOTE: `app_ports` config is no longer used for Docker port mappings. Instead, the
+    // port scanner detects listening ports inside the container and forwards them via
+    // socat on spare ports. This works regardless of whether the app binds to 0.0.0.0
+    // or 127.0.0.1 (unlike Docker's port forwarding which only reaches 0.0.0.0). To keep
+    // enough headroom, we allocate `app_ports.len() + dynamic_ports` spare ports.
+    let spare_count = app_ports.len() + dynamic_ports;
+    let needed = 1 + spare_count;
     let ports = allocate_editor_ports(needed).await.ok_or_else(|| {
         format!("No free editor ports available (need {needed}, range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
     })?;
 
     let vscode_port = ports[0];
-    let mut port_mappings = Vec::new();
-    let spare_start = 1 + app_ports.len();
-    let spare_ports: Vec<u16> = ports[spare_start..].to_vec();
+    let port_mappings: Vec<(u16, u16)> = Vec::new();
+    let spare_ports: Vec<u16> = ports[1..].to_vec();
 
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -436,19 +441,10 @@ pub async fn start_editor(
         args.push((*v).into());
     }
 
-    // Port mappings: VS Code
+    // Port mappings: VS Code + spare ports (symmetric — socat listens inside container
+    // on these ports and forwards to whatever the user's app is listening on).
     args.push("-p".into());
     args.push(format!("{vscode_port}:{vscode_port}"));
-
-    // Port mappings: app ports
-    for (i, &app_port) in app_ports.iter().enumerate() {
-        let host_port = ports[1 + i];
-        args.push("-p".into());
-        args.push(format!("{host_port}:{app_port}"));
-        port_mappings.push((app_port, host_port));
-    }
-
-    // Port mappings: spare ports for dynamic forwarding (symmetric — socat listens inside container)
     for &sp in &spare_ports {
         args.push("-p".into());
         args.push(format!("{sp}:{sp}"));
@@ -898,16 +894,14 @@ async fn prune_dangling_images() {
 // Dynamic port forwarding — background port scanner
 // ---------------------------------------------------------------------------
 
-/// Scan listening ports inside an editor container and set up socat forwarding
-/// from pre-allocated spare host ports. Runs until `cancel` is triggered.
+/// Scan listening ports inside an editor container and socat-forward them to spare
+/// host ports. Works for apps binding to either 0.0.0.0 or 127.0.0.1 inside the
+/// container, because socat runs inside the container and connects via `localhost`.
 ///
-/// `known_ports` contains the VS Code port and any configured app ports — these
-/// are ignored by the scanner. `spare_ports` is the pool of symmetric-mapped
-/// ports available for dynamic forwarding.
+/// `spare_ports` is the pool of symmetric-mapped host ports available for forwarding.
 pub async fn run_port_scanner(
     ticket_key: &str,
     vscode_port: u16,
-    app_ports: &[u16],
     spare_ports: Vec<u16>,
     event_tx: broadcast::Sender<WorkflowEvent>,
     cancel: CancellationToken,
@@ -915,19 +909,23 @@ pub async fn run_port_scanner(
     let container = editor_container_name(ticket_key);
     let ticket = ticket_key.to_string();
 
-    // Ports to never forward (VS Code, configured app ports, spare ports themselves).
-    let mut ignore: Vec<u16> = vec![vscode_port];
-    ignore.extend_from_slice(app_ports);
-    ignore.extend_from_slice(&spare_ports);
+    // Ports to never treat as "new": VS Code and all pre-allocated spare ports (they
+    // are docker-mapped; socat may briefly keep them LISTENing after kill, so never
+    // re-forward them).
+    let mut always_ignore: std::collections::HashSet<u16> =
+        std::collections::HashSet::new();
+    always_ignore.insert(vscode_port);
+    for sp in &spare_ports {
+        always_ignore.insert(*sp);
+    }
 
-    // active_forwards: detected_port → spare_port
+    // detected_port → spare_port (the host port socat is listening on).
     let mut active_forwards: HashMap<u16, u16> = HashMap::new();
     let mut available_spares: Vec<u16> = spare_ports;
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                // Kill all socat processes before exiting.
                 for (&detected, &spare) in &active_forwards {
                     kill_socat(&container, spare).await;
                     debug!(ticket = %ticket, detected, spare, "Cleaned up socat on scanner shutdown");
@@ -940,20 +938,18 @@ pub async fn run_port_scanner(
 
         let listening = match scan_listening_ports(&container).await {
             Some(ports) => ports,
-            None => continue, // container might be starting up or gone
+            None => continue,
         };
+        let listening_set: std::collections::HashSet<u16> =
+            listening.iter().map(|(p, _)| *p).collect();
 
-        // Detect new ports.
-        for &port in &listening {
-            if ignore.contains(&port) || active_forwards.contains_key(&port) {
-                continue;
-            }
-            // Also ignore ports used by our own socat listeners.
-            if active_forwards.values().any(|&sp| sp == port) {
+        // Detect new listening ports → start socat forwarding.
+        for &(port, family) in &listening {
+            if always_ignore.contains(&port) || active_forwards.contains_key(&port) {
                 continue;
             }
             if let Some(spare) = available_spares.pop() {
-                if start_socat(&container, spare, port).await {
+                if start_socat(&container, spare, port, family).await {
                     info!(
                         ticket = %ticket,
                         detected = port,
@@ -961,8 +957,6 @@ pub async fn run_port_scanner(
                         "Dynamic port forwarded via socat"
                     );
                     active_forwards.insert(port, spare);
-                    ignore.push(spare); // don't re-scan the socat listener
-
                     let _ = event_tx.send(WorkflowEvent {
                         event_type: "port_forwarded".to_string(),
                         workflow_id: String::new(),
@@ -978,29 +972,26 @@ pub async fn run_port_scanner(
                         forwarded_port: Some((port, spare)),
                     });
                 } else {
-                    // socat failed — return spare to pool.
                     available_spares.push(spare);
                 }
             } else {
-                warn!(
-                    ticket = %ticket,
-                    port,
-                    "No spare ports left for dynamic forwarding"
-                );
+                warn!(ticket = %ticket, port, "No spare ports left for dynamic forwarding");
             }
         }
 
-        // Detect removed ports.
+        // --- Dynamic ports: detect removed, tear down socat. ---
         let gone: Vec<u16> = active_forwards
             .keys()
             .copied()
-            .filter(|p| !listening.contains(p))
+            .filter(|p| !listening_set.contains(p))
             .collect();
 
         for port in gone {
             if let Some(spare) = active_forwards.remove(&port) {
                 kill_socat(&container, spare).await;
-                ignore.retain(|&p| p != spare);
+                // NOTE: do NOT remove `spare` from always_ignore — socat may linger
+                // briefly in LISTEN state, and we don't want the next scan to treat
+                // it as a new dev server. Spares always stay ignored.
                 available_spares.push(spare);
                 info!(
                     ticket = %ticket,
@@ -1028,8 +1019,17 @@ pub async fn run_port_scanner(
     }
 }
 
-/// Run `ss -tlnH` inside the container and return listening ports.
-async fn scan_listening_ports(container: &str) -> Option<Vec<u16>> {
+/// Address family detected for a listener. Affects socat's connect side so we
+/// reach apps regardless of whether they bind to 127.0.0.1 or ::1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ListenFamily {
+    Ipv4,
+    Ipv6,
+}
+
+/// Run `ss -tlnH` inside the container and return listening `(port, family)` entries.
+/// If the same port is listening on both families, prefer IPv4 (better Docker reachability).
+async fn scan_listening_ports(container: &str) -> Option<Vec<(u16, ListenFamily)>> {
     let output = tokio::process::Command::new("docker")
         .args(["exec", container, "ss", "-tlnH"])
         .output()
@@ -1041,42 +1041,66 @@ async fn scan_listening_ports(container: &str) -> Option<Vec<u16>> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut ports = Vec::new();
-    // Format: "LISTEN  0  128  0.0.0.0:6006  0.0.0.0:*"
-    //    or:  "LISTEN  0  128  [::]:6006     [::]:*"
+    let mut by_port: HashMap<u16, ListenFamily> = HashMap::new();
+    // Format: "LISTEN 0 128 0.0.0.0:6006  0.0.0.0:*"
+    //    or:  "LISTEN 0 128 [::]:6006     [::]:*"
+    //    or:  "LISTEN 0 128 127.0.0.1:5173  0.0.0.0:*"
+    //    or:  "LISTEN 0 128 [::1]:5173     [::]:*"
     for line in stdout.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
-        // The local address is typically the 4th field (index 3).
         if fields.len() >= 4 {
             let local = fields[3];
+            let family = if local.starts_with('[') {
+                ListenFamily::Ipv6
+            } else {
+                ListenFamily::Ipv4
+            };
             if let Some(port_str) = local.rsplit(':').next() {
                 if let Ok(port) = port_str.parse::<u16>() {
-                    if port > 0 && !ports.contains(&port) {
-                        ports.push(port);
+                    if port > 0 {
+                        let entry = by_port.entry(port).or_insert(family);
+                        if family == ListenFamily::Ipv4 {
+                            *entry = ListenFamily::Ipv4;
+                        }
                     }
                 }
             }
         }
     }
-    Some(ports)
+    Some(by_port.into_iter().collect())
 }
 
 /// Start a `socat` process inside the container to forward `spare_port` → `target_port`.
-async fn start_socat(container: &str, spare_port: u16, target_port: u16) -> bool {
+async fn start_socat(
+    container: &str,
+    spare_port: u16,
+    target_port: u16,
+    target_family: ListenFamily,
+) -> bool {
+    // Listen on IPv4 0.0.0.0 (Docker port-proxy connects via IPv4). For the target,
+    // use the same family the app is bound on — apps that bind to ::1 (IPv6 localhost,
+    // common with Node.js / Vite) are unreachable via 127.0.0.1.
+    let target = match target_family {
+        ListenFamily::Ipv4 => format!("TCP4:127.0.0.1:{target_port}"),
+        ListenFamily::Ipv6 => format!("TCP6:[::1]:{target_port}"),
+    };
     let output = tokio::process::Command::new("docker")
         .args([
             "exec",
             "-d",
             container,
             "socat",
-            &format!("TCP-LISTEN:{spare_port},fork,reuseaddr"),
-            &format!("TCP:localhost:{target_port}"),
+            &format!("TCP4-LISTEN:{spare_port},fork,reuseaddr,bind=0.0.0.0"),
+            &target,
         ])
         .output()
         .await;
 
     match output {
-        Ok(o) if o.status.success() => true,
+        Ok(o) if o.status.success() => {
+            info!(container, spare_port, target_port, family = ?target_family, "socat forward started");
+            true
+        }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
             warn!(container, spare_port, target_port, %stderr, "socat start failed");
@@ -1091,7 +1115,8 @@ async fn start_socat(container: &str, spare_port: u16, target_port: u16) -> bool
 
 /// Kill the `socat` process listening on `spare_port` inside the container.
 async fn kill_socat(container: &str, spare_port: u16) {
-    let pattern = format!("TCP-LISTEN:{spare_port}");
+    // Match either TCP-LISTEN or TCP4-LISTEN with the spare port.
+    let pattern = format!("LISTEN:{spare_port}");
     let _ = tokio::process::Command::new("docker")
         .args(["exec", container, "pkill", "-f", &pattern])
         .output()

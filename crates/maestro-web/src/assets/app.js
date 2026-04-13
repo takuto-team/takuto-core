@@ -277,18 +277,20 @@ function updateDynamicPortsDisplay(ticketKey) {
   const container = document.getElementById(`port-mappings-${ticketKey}`);
   if (!container) return;
   const forwards = dynamicForwards[ticketKey] || [];
-  // Rebuild dynamic portion — keep any existing configured-port spans, replace dynamic ones.
-  // Simplest: re-render the entire container content from current state.
+  const dynPortSet = new Set(forwards.map(([cp]) => cp));
   let html = '';
-  // Configured port mappings (from workflow data).
+  // Configured port mappings (from workflow data) — but skip ones already covered
+  // by a live dynamic forward (same container port) to avoid duplicate entries.
   const wf = workflows[ticketKey];
   if (wf && wf.editor_port_mappings && wf.editor_port_mappings.length > 0) {
-    html += wf.editor_port_mappings.map(([cp, hp]) =>
-      `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-violet-400 hover:text-violet-300">localhost:${hp}</a></span>`
-    ).join(' ');
+    html += wf.editor_port_mappings
+      .filter(([cp]) => !dynPortSet.has(cp))
+      .map(([cp, hp]) =>
+        `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-violet-400 hover:text-violet-300">localhost:${hp}</a></span>`
+      ).join(' ');
   }
-  // Dynamic forwards.
   if (forwards.length > 0) {
+    if (html) html += ' ';
     html += forwards.map(([cp, hp]) =>
       `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-teal-400 hover:text-teal-300">localhost:${hp}</a></span>`
     ).join(' ');
@@ -1378,13 +1380,19 @@ function renderWorkflowCard(w) {
   actions += `
     <button onclick="openReportModal('${w.ticket_key}')" class="workflow-action-btn bg-gray-700/50 text-gray-300 border-gray-700 hover:bg-gray-700">Report</button>`;
 
-  // Port mappings (configured + dynamic) — rendered below the action buttons
+  // Port mappings (configured + dynamic) — rendered below the action buttons.
+  // A port in dynamicForwards (from live WS events) supersedes the same port in
+  // editor_port_mappings (from the API) — avoid showing duplicates.
   let portMappingsHtml = '';
+  const dynForwards = dynamicForwards[w.ticket_key] || [];
+  const dynPortSet = new Set(dynForwards.map(([cp]) => cp));
   if (w.editor_port_mappings && w.editor_port_mappings.length > 0) {
-    const mappings = w.editor_port_mappings.map(([cp, hp]) => `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-violet-400 hover:text-violet-300">localhost:${hp}</a></span>`).join(' ');
+    const mappings = w.editor_port_mappings
+      .filter(([cp]) => !dynPortSet.has(cp))
+      .map(([cp, hp]) => `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-violet-400 hover:text-violet-300">localhost:${hp}</a></span>`)
+      .join(' ');
     portMappingsHtml += mappings;
   }
-  const dynForwards = dynamicForwards[w.ticket_key] || [];
   const dynHtml = dynForwards.map(([cp, hp]) =>
     `<span class="text-xs text-gray-500">${cp} &#x2192; <a href="http://localhost:${hp}" target="_blank" rel="noopener" class="text-teal-400 hover:text-teal-300">localhost:${hp}</a></span>`
   ).join(' ');
@@ -1444,7 +1452,7 @@ function renderWorkflowCard(w) {
           <div class="workflow-progress-slot mt-2 w-full">${progressBarInnerHtml(w, status)}</div>
         </div>
         <div class="workflow-actions-row flex-shrink-0 flex flex-wrap gap-2">${actions}</div>
-        <div id="port-mappings-${w.ticket_key}" class="flex flex-wrap gap-3 items-center px-1"${portMappingsHtml ? '' : ' hidden'}>${portMappingsHtml}</div>
+        <div id="port-mappings-${w.ticket_key}" class="flex flex-col gap-1 items-start px-1"${portMappingsHtml ? '' : ' hidden'}>${portMappingsHtml}</div>
         ${terminalSlot}
       </div>
     </div>`;
