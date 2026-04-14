@@ -133,6 +133,39 @@ docker compose up
 
 Dashboard at **http://localhost:8080**.
 
+### Browser-based Editor and Web Terminal
+
+Each workflow can spawn an isolated editor container running **[openvscode-server](https://github.com/gitpod-io/openvscode-server)** (browser VS Code) with the workflow's worktree mounted. From the dashboard, click **"Open editor"** on any workflow card to launch VS Code in your browser.
+
+Inside the editor container:
+
+- **Project tools** from `.mise.toml` or `[commands] install` are available
+- **Application ports** from `[editor] ports` are pre-mapped and linked on the dashboard (e.g., `http://localhost:9100` for port 3000)
+- **Dynamic ports** — if `[editor] dynamic_ports > 0` (default `10`), a background scanner detects new listening ports every 3 seconds and auto-forwards them via socat
+- **Web terminal** — click **"Open terminal"** to launch a browser-based shell (**ttyd**) inside the editor container. Useful for running commands, debugging, or interactive development
+
+**Port allocation:**
+
+- Ports are allocated from the range **9100–9200** (101 total)
+- Each editor container reserves 1 port for VS Code + N spare ports for apps
+- Port allocation retries with exponential backoff if Docker hasn't registered bindings yet
+- Web terminal startup includes a TCP health check to verify ttyd is listening before returning
+- If opening a second workflow's terminal fails with a port error, verify no other process is using the port range (e.g., run `lsof -i :9100-9200` on the host)
+
+**Setup commands:**
+
+Use `[terminal] setup_commands` to install tools once at editor creation (e.g., `"mise use -g neovim@latest"`). Commands run as root, then output is captured. The setup runs once per container lifetime (a marker file prevents re-runs on restarts):
+
+```toml
+[terminal]
+setup_commands = [
+  "apt-get update && apt-get install -y ripgrep",  # System package
+  "mise use -g zellij@latest",                      # Tool via mise
+]
+```
+
+Close an editor with the **"Close editor"** button on the workflow card; this stops the container and cancels any background port scanner tasks.
+
 ### Docker-in-Docker sidecar (optional)
 
 To run **`docker`** inside Maestro (for example nested **`docker run`**, `docker compose up`, or Playwright containers), merge the DinD sidecar Compose file. This runs a real Docker daemon in a sidecar container; Maestro connects via `DOCKER_HOST=tcp://dind:2375` automatically. Works on **all platforms** (macOS Podman, macOS Docker Desktop, Linux).
@@ -228,6 +261,22 @@ Optional **`[[agent_steps]]`** tables belong at the **root** of the file. In TOM
 | `pre_install` | `[]` | Shell commands to run in order before install (e.g., registry auth); a single string is accepted for backward compatibility |
 | `install` | `""` | Dependency install command (e.g., `"npm ci"`) |
 
+### `[editor]`
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ports` | `[]` | Application ports to expose in the VS Code editor container (e.g., `[3000, 5173]`). Each port is mapped to a host port from the range 9100–9200 and displayed as a clickable link on the dashboard workflow card |
+| `dynamic_ports` | `10` | Number of spare ports to pre-allocate for automatic forwarding of dev servers started inside the editor. A background port scanner detects new listening ports (every 3 seconds) and forwards them via socat. Set to `0` to disable dynamic forwarding |
+| `theme` | `"vs-dark"` | VS Code theme: `"vs-dark"`, `"vs-light"`, or `"hc-black"` |
+| `extensions` | `[]` | VS Code extensions to install (e.g., `["ms-python.python", "GitHub.copilot"]`); extension IDs are from the VS Code Marketplace |
+| `settings` | `{}` | VS Code settings as a TOML table (e.g., `{"editor.tabSize" = 2, "editor.formatOnSave" = true}`) |
+
+### `[terminal]`
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `setup_commands` | `[]` | Shell commands to run **once** at editor container creation (as root via `docker exec --user root`, then switched to `maestro` user). Useful for installing tools via mise (e.g., `["mise use -g zellij@latest neovim@latest"]`). Output is captured in Maestro logs. A marker file (`/tmp/.maestro-terminal-setup-done`) prevents re-running on container restarts |
+
 ### `[web]`
 
 | Key | Default | Description |
@@ -279,13 +328,13 @@ On **stop**: kills running sessions, unassigns ticket, moves back to “To Do”
 The web dashboard at `http://localhost:8080` provides:
 
 - **Workflow cards** — 2 per row, showing ticket, status, current step, progress bar
-- **Real-time terminal** — live streaming of command output via WebSocket
+- **Real-time terminal** — live streaming of command output via WebSocket; output persists across page reloads (last 100 lines served via API)
 - **Controls** — Pause, Resume, Stop, Retry buttons
 - **Report modal** — detailed step-by-step execution report
 - **Configuration page** — at `/config.html`
+- **Editor container** — for each workflow, an **"Open editor"** button starts a browser-based VS Code instance inside an isolated Docker container with the workflow's worktree mounted. The container includes the project's tools (from `.mise.toml` or `[commands] install`) and optionally configured applications from `[editor] ports`. Click **"Open terminal"** to launch a web-based shell (ttyd) inside the same editor container.
+- **Port forwarding** — detected app ports inside the editor container are automatically forwarded to spare host ports and displayed as clickable links on the workflow card (via `[editor] ports` config or dynamic detection via `[editor] dynamic_ports`).
 - **No-Jira mode UI** — when acli is not authenticated: an amber warning banner, a one-time alert dialog, polling controls hidden, and the **+** button opens a paste-description modal (workflow name + description) instead of the Jira ticket picker
-
-Terminal output persists across page reloads (last 100 lines served via API).
 
 ## Environment Variables
 
