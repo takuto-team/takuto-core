@@ -30,6 +30,7 @@ services:
       - agents-data:/shared-auth/agents
       - gh-auth:/shared-auth/gh
       - acli-auth:/shared-auth/acli
+      - fcli-auth:/shared-auth/fcli
       - npm-cache:/shared-auth/npm
       - mise-data:/shared-auth/mise-data
       - mise-cache:/shared-auth/mise-cache

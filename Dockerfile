@@ -67,6 +67,7 @@ RUN ARCH=$(dpkg --print-architecture) \
     && curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd \
     && chmod +x /usr/local/bin/ttyd
 
+
 # mise — version manager for Node, Python, Ruby, etc. (project `.mise.toml` / `.tool-versions`)
 RUN install -dm 755 /etc/apt/keyrings \
     && curl -fsSL https://mise.jdx.dev/gpg-key.pub -o /etc/apt/keyrings/mise-archive-keyring.asc \
@@ -92,6 +93,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# figma-cli (`fcli`) — Rust CLI, available to every container using this image
+# (workflows, editor, terminal). amd64: prebuilt release tarball. arm64: no
+# prebuilt exists, so we install rustup temporarily and cargo install from
+# source, then remove the Rust toolchain to keep the image slim. `build-essential`,
+# `libssl-dev`, and `pkg-config` are already installed above for mise.
+ARG FCLI_VERSION=v0.2.0
+RUN set -eux; \
+    ARCH=$(dpkg --print-architecture); \
+    if [ "$ARCH" = "amd64" ]; then \
+      TARBALL="fcli-${FCLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"; \
+      curl -fsSL "https://github.com/morphet81/figma-cli/releases/download/${FCLI_VERSION}/${TARBALL}" -o /tmp/fcli.tar.gz; \
+      tar -xzf /tmp/fcli.tar.gz -C /tmp; \
+      install -m 0755 /tmp/fcli /usr/local/bin/fcli; \
+      rm -rf /tmp/fcli /tmp/fcli.tar.gz; \
+    elif [ "$ARCH" = "arm64" ]; then \
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal; \
+      . "$HOME/.cargo/env"; \
+      cargo install --git https://github.com/morphet81/figma-cli --tag "${FCLI_VERSION}" --locked --root /usr/local; \
+      rustup self uninstall -y; \
+      rm -rf "$HOME/.cargo" "$HOME/.rustup"; \
+    else \
+      echo "Unsupported arch: $ARCH"; exit 1; \
+    fi; \
+    fcli --version
+
+# lokalise2 — Lokalise CLI v2 (Go). Prebuilt tarballs for both Linux arches
+# published to GitHub releases. Binary lands at /usr/local/bin/lokalise2.
+RUN set -eux; \
+    ARCH=$(dpkg --print-architecture); \
+    case "$ARCH" in \
+      amd64) LOKA_ARCH=x86_64 ;; \
+      arm64) LOKA_ARCH=arm64 ;; \
+      *) echo "Unsupported arch: $ARCH"; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/lokalise/lokalise-cli-2-go/releases/latest/download/lokalise2_linux_${LOKA_ARCH}.tar.gz" -o /tmp/lokalise2.tar.gz; \
+    tar -xzf /tmp/lokalise2.tar.gz -C /tmp; \
+    install -m 0755 /tmp/lokalise2 /usr/local/bin/lokalise2; \
+    rm -rf /tmp/lokalise2 /tmp/lokalise2.tar.gz; \
+    lokalise2 --version
 
 # Node.js 23+ (official tarball). Cursor Agent runs `node --use-system-ca`, which exists only on Node >= 23.9
 # on Linux; NodeSource 20.x rejects that flag with "bad option: --use-system-ca".

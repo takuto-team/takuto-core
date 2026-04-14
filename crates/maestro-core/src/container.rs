@@ -82,6 +82,12 @@ const PASSTHROUGH_ENV: &[&str] = &[
     "CLAUDE_CODE_OAUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
     "FIGMA_API_TOKEN",
+    // figma-cli (`fcli`) personal access token; takes priority over stored auth.
+    "FIGMA_ACCESS_TOKEN",
+    // Lokalise CLI v2 (`lokalise2`) — the tool itself reads `--token`; exporting a
+    // var lets users wrap invocations (e.g. `lokalise2 --token "$LOKALISE_API_TOKEN"`)
+    // or write a thin shell alias in maestro.env.
+    "LOKALISE_API_TOKEN",
     "CURSOR_API_KEY",
     // Optional: force a fixed browser bundle (must match the project's @playwright/test version).
     "PLAYWRIGHT_BROWSERS_PATH",
@@ -103,6 +109,7 @@ const WORKER_VOLUMES: &[&str] = &[
     "/shared-auth/agents:/home/maestro/.agents",
     "/shared-auth/gh:/home/maestro/.config/gh",
     "/shared-auth/acli:/home/maestro/.config/acli",
+    "/shared-auth/fcli:/home/maestro/.config/fcli",
     "/shared-auth/npm:/home/maestro/.npm",
     "/shared-auth/mise-data:/home/maestro/.local/share/mise",
     "/shared-auth/mise-cache:/home/maestro/.cache/mise",
@@ -354,18 +361,30 @@ async fn used_editor_ports() -> Vec<u16> {
 }
 
 /// Allocate `count` free host ports from the editor range.
+/// Retries with exponential backoff if not enough ports are available,
+/// since Docker port bindings may not be immediately visible.
 async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
-    let used = used_editor_ports().await;
-    let mut free = Vec::new();
-    for p in EDITOR_PORT_MIN..=EDITOR_PORT_MAX {
-        if !used.contains(&p) {
-            free.push(p);
-            if free.len() == count {
-                return Some(free);
+    for attempt in 0..5 {
+        let used = used_editor_ports().await;
+        let mut free = Vec::new();
+        for p in EDITOR_PORT_MIN..=EDITOR_PORT_MAX {
+            if !used.contains(&p) {
+                free.push(p);
+                if free.len() == count {
+                    return Some(free);
+                }
             }
         }
+
+        // Not enough free ports on this attempt. If this is not the last attempt,
+        // wait a bit for Docker to register port bindings and retry.
+        if attempt < 4 {
+            let delay_ms = 100 * (attempt + 1) as u64; // 100ms, 200ms, 300ms, 400ms
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            debug!(attempt, needed = count, available = free.len(), "Retrying port allocation after delay");
+        }
     }
-    None // not enough free ports
+    None // not enough free ports after retries
 }
 
 /// Start a browser VS Code editor container for a workflow.
@@ -412,6 +431,7 @@ pub async fn start_editor(
     let vscode_port = ports[0];
     let port_mappings: Vec<(u16, u16)> = Vec::new();
     let spare_ports: Vec<u16> = ports[1..].to_vec();
+    info!(ticket = %name, vscode_port, spare_ports = ?spare_ports, "Allocated editor ports");
 
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -690,6 +710,7 @@ if ! grep -qE '"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true' "$HOME/.cl
 fi
 exec bash -l"#.to_string();
     let tab_title = format!("titleFixed={ticket_key} — Terminal");
+    info!(ticket = %ticket_key, port, "Starting ttyd on port");
     let output = tokio::process::Command::new("docker")
         .args([
             "exec", "-d", &name, "ttyd", "-p",
@@ -707,9 +728,22 @@ exec bash -l"#.to_string();
         return Err(format!("ttyd start failed: {stderr}"));
     }
 
-    let url = format!("http://localhost:{port}");
-    info!(ticket = %ticket_key, url = %url, "Web terminal started");
-    Ok(url)
+    // Verify ttyd is actually listening on the port with a few retries.
+    // This catches cases where the docker exec command succeeds but ttyd fails to bind.
+    for attempt in 0..5 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        if let Ok(stream) = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await {
+            drop(stream);
+            let url = format!("http://localhost:{port}");
+            info!(ticket = %ticket_key, url = %url, "Web terminal verified listening");
+            return Ok(url);
+        }
+        if attempt < 4 {
+            debug!(ticket = %ticket_key, port, attempt = attempt + 1, "ttyd not yet listening, retrying");
+        }
+    }
+
+    Err(format!("ttyd failed to bind to port {port} — verify no other process is using this port", port = port))
 }
 
 /// Kill the ttyd process inside the editor container.

@@ -575,7 +575,8 @@ pub async fn open_terminal(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    state.terminal_ports.write().await.insert(id, port);
+    state.terminal_ports.write().await.insert(id.clone(), port);
+    tracing::info!(workflow = %id, port, "Terminal started on port");
 
     Ok(Json(OpenTerminalResponse { url }))
 }
