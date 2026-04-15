@@ -1,12 +1,31 @@
 # Example: PR review loop after main flow is Done (`[[review_agent_steps]]`).
-# Copy to `review.toml` (gitignored) and set:
+# Copy to `review.toml` (now tracked in git) and set:
 #   [general]
 #   review_workflow_steps_file = "workflows/review.toml"
 #
-# Placeholders: pr_url, description (alias for ticket_description), plus the same ticket fields as ticket steps.
-# Optional `when`: "always" (default), "ticketing", "no_ticketing".
+# Placeholders: {pr_url}, {ticket_context}, {base_branch}
 
 [[review_agent_steps]]
-name = "Address PR feedback"
-prompt = "Pull request URL: {pr_url}\n\nTicket context:\n{ticket_context}\n\nUse GitHub tooling (e.g. `gh pr view`, `gh api` for review comments) to find unresolved PR feedback. Address each item with code changes, commit, and push updates to the PR branch."
+name = "Fix review comments"
+prompt = """
+Pull request URL: {pr_url}
+
+Ticket context:
+{ticket_context}
+
+Use GitHub tooling to retrieve unresolved PR comments and review feedback.
+For each item: make necessary code changes, test locally, commit, and push to the PR branch.
+Do not bypass linting or tests.
+"""
+skills = [{ name = "address-pr-comments" }]
+repeat = 1
+
+[[review_agent_steps]]
+name = "Linting and test"
+prompt = """
+Run linting and test coverage, fix all reported issues.
+Do not disable rules or add ignore comments unless genuinely inapplicable.
+Re-run until both lint and test coverage pass completely.
+Once both checks pass cleanly, stage all changes and commit.
+"""
 repeat = 1
