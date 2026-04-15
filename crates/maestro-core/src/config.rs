@@ -327,6 +327,12 @@ pub struct TerminalConfig {
     /// Commands are executed with `/etc/maestro/env` sourced so API tokens are available.
     #[serde(default)]
     pub setup_commands: Vec<String>,
+    /// Default git editor installed and configured inside every editor container.
+    /// Set to a package name available via apt (e.g. `"nano"`, `"vim"`, `"micro"`).
+    /// When set, the package is installed and `git config --global core.editor` is
+    /// updated for the `maestro` user. Empty string (default) leaves git's default.
+    #[serde(default)]
+    pub git_editor: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

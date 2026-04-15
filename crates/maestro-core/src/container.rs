@@ -413,6 +413,7 @@ pub async fn start_editor(
     extensions: &[String],
     settings: &std::collections::HashMap<String, toml::Value>,
     setup_commands: &[String],
+    git_editor: &str,
 ) -> std::result::Result<EditorInfo, String> {
     let name = editor_container_name(ticket_key);
 
@@ -565,8 +566,8 @@ pub async fn start_editor(
 
     // Run setup commands as root inside the new container (tool installs, etc.).
     // Runs once per container lifetime (gated by /tmp/.maestro-terminal-setup-done).
-    if !setup_commands.is_empty() {
-        run_editor_setup_as_root(&name, setup_commands).await;
+    if !setup_commands.is_empty() || !git_editor.is_empty() {
+        run_editor_setup_as_root(&name, setup_commands, git_editor).await;
     }
 
     let url = format!("http://localhost:{vscode_port}/?folder={folder}");
@@ -583,7 +584,7 @@ pub async fn start_editor(
 /// Run setup commands inside the editor container as root. Ensures ownership of the
 /// maestro user's home and cache directories is correct so `mise install` etc. can write.
 /// Idempotent via `/tmp/.maestro-terminal-setup-done` marker.
-async fn run_editor_setup_as_root(container: &str, setup_commands: &[String]) {
+async fn run_editor_setup_as_root(container: &str, setup_commands: &[String], git_editor: &str) {
     // Skip if already done for this container.
     let marker = "/tmp/.maestro-terminal-setup-done";
     let marker_check = tokio::process::Command::new("docker")
@@ -607,22 +608,59 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
         .output()
         .await;
 
-    let joined = setup_commands.join(" && echo && ");
-    let wrapped = format!(
-        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; {joined} && mise reshim 2>&1 || true"
-    );
-    // Run setup commands as the maestro user so tools are installed under their home dir,
-    // not root's. Use `su - maestro -c` from the root exec context.
-    let out = tokio::process::Command::new("docker")
-        .args([
-            "exec", "--user", "root", container, "bash", "-lc",
-            &format!(r#"su - maestro -c {}"#, shell_escape(&wrapped)),
-        ])
-        .output()
-        .await;
+    // Install and configure the git editor if specified.
+    if !git_editor.is_empty() {
+        let escaped = shell_escape(git_editor);
+        let install_script = format!(
+            "apt-get install -y --no-install-recommends {escaped} 2>&1 \
+             && su - maestro -c 'git config --global core.editor {escaped}'"
+        );
+        let out = tokio::process::Command::new("docker")
+            .args(["exec", "--user", "root", container, "bash", "-lc", &install_script])
+            .output()
+            .await;
+        match out {
+            Ok(o) if o.status.success() => {
+                info!(container, git_editor, "Git editor installed and configured");
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                warn!(container, git_editor, %stderr, "Git editor install failed");
+            }
+            Err(e) => {
+                warn!(container, git_editor, error = %e, "Git editor install error");
+            }
+        }
+    }
+
+    // Run user-defined setup_commands as the maestro user.
+    let out = if !setup_commands.is_empty() {
+        let joined = setup_commands.join(" && echo && ");
+        let wrapped = format!(
+            "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; {joined} && mise reshim 2>&1 || true"
+        );
+        tokio::process::Command::new("docker")
+            .args([
+                "exec", "--user", "root", container, "bash", "-lc",
+                &format!(r#"su - maestro -c {}"#, shell_escape(&wrapped)),
+            ])
+            .output()
+            .await
+            .map(Some)
+    } else {
+        Ok(None)
+    };
+    let out = match out {
+        Ok(Some(o)) => Some(o),
+        Ok(None) => None,
+        Err(e) => {
+            warn!(container, error = %e, "Failed to run editor setup commands");
+            None
+        }
+    };
 
     match out {
-        Ok(o) if o.status.success() => {
+        Some(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
             info!(container, %stdout, "Editor setup commands completed");
             // Mark done so subsequent calls skip.
@@ -631,7 +669,7 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
                 .output()
                 .await;
         }
-        Ok(o) => {
+        Some(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout);
             let stderr = String::from_utf8_lossy(&o.stderr);
             warn!(
@@ -642,8 +680,12 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
                 "Editor setup commands failed (continuing without marker — will retry)"
             );
         }
-        Err(e) => {
-            warn!(container, error = %e, "Editor setup docker exec errored (continuing)");
+        None => {
+            // No user setup_commands; touch the marker so git editor install isn't re-run.
+            let _ = tokio::process::Command::new("docker")
+                .args(["exec", container, "touch", marker])
+                .output()
+                .await;
         }
     }
 }

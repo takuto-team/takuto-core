@@ -178,6 +178,13 @@ compose_up_commands = []
 # "editor.bracketPairColorization.enabled" = true
 
 [terminal]
+# Default git editor installed and configured inside every editor container.
+# Must be an apt package name (e.g. "nano", "vim", "micro", "helix").
+# When set, the package is installed via apt and `git config --global core.editor`
+# is updated for the maestro user so git commands (commit, rebase -i, etc.) open
+# the chosen editor instead of failing with "unable to start editor 'editor'".
+# git_editor = "nano"
+
 # Shell commands run once per editor container lifetime, before the first ttyd
 # terminal session. Use to install tools (zellij, nvim, tmux, etc.) that should
 # be available from the dashboard's "Open terminal" button. `/etc/maestro/env`
