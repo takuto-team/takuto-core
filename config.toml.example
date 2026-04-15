@@ -199,3 +199,6 @@ compose_up_commands = []
 # (e.g., private npm registries, internal APIs)
 extra_egress_hosts = []
 # Example: extra_egress_hosts = ["mycompany.d.codeartifact.amazonaws.com", "internal-api.example.com"]
+# When true, skip the egress allowlist and permit all outbound HTTPS (ports 443/8443).
+# Use only in trusted environments; `extra_egress_hosts` is ignored when this is enabled.
+# allow_all_https = false
