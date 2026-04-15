@@ -742,13 +742,16 @@ exec bash -l"#.to_string();
     }
 
     // Verify ttyd is actually listening on the port with a few retries.
-    // Use `docker exec nc -z` inside the container to check port binding, so it works
-    // regardless of DinD network topology. This runs the check inside the editor
-    // container's own network namespace where ttyd is actually listening.
+    // Use bash's /dev/tcp pseudo-device inside the container: no nc/socat needed,
+    // and it runs inside the editor container's own network namespace so it works
+    // regardless of DinD network topology.
     for attempt in 0..5 {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let nc_check = tokio::process::Command::new("docker")
-            .args(["exec", &name, "nc", "-z", "127.0.0.1", &port.to_string()])
+            .args([
+                "exec", &name, "bash", "-c",
+                &format!("echo > /dev/tcp/127.0.0.1/{port}"),
+            ])
             .output()
             .await;
         if matches!(nc_check, Ok(ref o) if o.status.success()) {
