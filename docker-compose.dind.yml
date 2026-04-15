@@ -51,6 +51,7 @@ services:
   maestro:
     environment:
       - DOCKER_HOST=tcp://dind:2375
+      - MAESTRO_DIND_PORT_OFFSET=100
     depends_on:
       dind:
         condition: service_healthy

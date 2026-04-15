@@ -38,6 +38,18 @@ fn sanitize_ticket_key(key: &str) -> String {
         .collect()
 }
 
+/// Return the host-visible port for an editor-range container port.
+/// When running behind DinD with a port offset (MAESTRO_DIND_PORT_OFFSET env var),
+/// the host port differs from the container-internal port by that offset.
+/// Example: with MAESTRO_DIND_PORT_OFFSET=100, container port 9101 → host port 9201.
+fn editor_host_port(container_port: u16) -> u16 {
+    let offset: u16 = std::env::var("MAESTRO_DIND_PORT_OFFSET")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    container_port + offset
+}
+
 /// Runs AI agent commands inside isolated Docker containers so each workflow
 /// gets its own filesystem and network namespace.
 pub struct ContainerRunner {
@@ -668,7 +680,8 @@ pub async fn start_terminal(
     if let Ok(out) = &check {
         if out.status.success() {
             // Already running — return URL with the given port.
-            return Ok(format!("http://localhost:{port}"));
+            let host_port = editor_host_port(port);
+            return Ok(format!("http://localhost:{host_port}"));
         }
     }
 
@@ -729,13 +742,19 @@ exec bash -l"#.to_string();
     }
 
     // Verify ttyd is actually listening on the port with a few retries.
-    // This catches cases where the docker exec command succeeds but ttyd fails to bind.
+    // Use `docker exec nc -z` inside the container to check port binding, so it works
+    // regardless of DinD network topology. This runs the check inside the editor
+    // container's own network namespace where ttyd is actually listening.
     for attempt in 0..5 {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-        if let Ok(stream) = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await {
-            drop(stream);
-            let url = format!("http://localhost:{port}");
-            info!(ticket = %ticket_key, url = %url, "Web terminal verified listening");
+        let nc_check = tokio::process::Command::new("docker")
+            .args(["exec", &name, "nc", "-z", "127.0.0.1", &port.to_string()])
+            .output()
+            .await;
+        if matches!(nc_check, Ok(ref o) if o.status.success()) {
+            let host_port = editor_host_port(port);
+            let url = format!("http://localhost:{host_port}");
+            info!(ticket = %ticket_key, container_port = port, host_port, url = %url, "Web terminal verified listening");
             return Ok(url);
         }
         if attempt < 4 {
@@ -743,7 +762,7 @@ exec bash -l"#.to_string();
         }
     }
 
-    Err(format!("ttyd failed to bind to port {port} — verify no other process is using this port", port = port))
+    Err(format!("ttyd failed to bind to port {port} — verify no other process is using this port"))
 }
 
 /// Kill the ttyd process inside the editor container.
@@ -838,7 +857,8 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
         .ok()?;
 
     let folder = String::from_utf8_lossy(&wd_output.stdout).trim().to_string();
-    let url = format!("http://localhost:{vscode_port}/?folder={folder}");
+    let host_vscode_port = editor_host_port(vscode_port);
+    let url = format!("http://localhost:{host_vscode_port}/?folder={folder}");
 
     Some(EditorInfo {
         url,
