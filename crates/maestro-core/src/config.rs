@@ -127,26 +127,37 @@ pub enum StepAvailability {
     NoTicketing,
 }
 
-/// One AI agent session in the ticket workflow (`[[agent_steps]]` in TOML).
+/// One step in the ticket workflow (`[[agent_steps]]` in TOML).
+///
+/// A step is either an **agent step** (has `prompt` and/or `skills`) or a **command step**
+/// (has `commands`). The two modes are mutually exclusive.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentStepConfig {
     pub name: String,
+    /// Prompt sent to the AI agent. Mutually exclusive with `commands`.
+    #[serde(default)]
     pub prompt: String,
-    /// Run this step this many times in sequence (each run after the first uses `--resume`). Default `1`.
+    /// Run this step this many times in sequence (each run after the first uses `--resume`
+    /// for agent steps, or re-runs the full command list for command steps). Default `1`.
     #[serde(default = "default_agent_step_repeat")]
     pub repeat: u8,
-    /// Optional skills to load for this step.
+    /// Optional skills to load for this step (agent steps only).
     #[serde(default)]
     pub skills: Vec<SkillRef>,
     /// Resume the previous step's Claude Code session instead of starting fresh.
     /// When `true`, the step continues with full conversation history from the prior step.
-    /// Default `false` — each step gets a clean session.
+    /// Default `false` — each step gets a clean session. Ignored on command steps.
     #[serde(default)]
     pub resume_previous: bool,
     /// When this step is eligible to run: `"always"` (default), `"ticketing"` (only when a ticketing
     /// system is active), or `"no_ticketing"` (only when no ticketing system is active).
     #[serde(default)]
     pub when: StepAvailability,
+    /// Shell commands to execute sequentially. Mutually exclusive with `prompt` and `skills`.
+    /// When present, the step runs each command via `bash -c` in the worktree directory
+    /// instead of launching an AI agent session.
+    #[serde(default)]
+    pub commands: Vec<String>,
 }
 
 impl AgentStepConfig {
@@ -157,6 +168,11 @@ impl AgentStepConfig {
             StepAvailability::Ticketing => ticketing_available,
             StepAvailability::NoTicketing => !ticketing_available,
         }
+    }
+
+    /// Returns `true` if this step executes shell commands instead of an AI agent session.
+    pub fn is_command_step(&self) -> bool {
+        !self.commands.is_empty()
     }
 }
 
@@ -170,6 +186,7 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
             skills: Vec::new(),
             resume_previous: false,
             when: StepAvailability::Always,
+            commands: Vec::new(),
         },
         AgentStepConfig {
             name: "Review changes".to_string(),
@@ -179,6 +196,7 @@ pub fn default_agent_steps() -> Vec<AgentStepConfig> {
             skills: Vec::new(),
             resume_previous: false,
             when: StepAvailability::Always,
+            commands: Vec::new(),
         },
     ]
 }
@@ -196,6 +214,7 @@ pub fn default_merge_base_agent_steps() -> Vec<AgentStepConfig> {
         skills: Vec::new(),
         resume_previous: false,
         when: StepAvailability::Always,
+        commands: Vec::new(),
     }]
 }
 
@@ -209,10 +228,53 @@ pub fn default_review_agent_steps() -> Vec<AgentStepConfig> {
         skills: Vec::new(),
         resume_previous: false,
         when: StepAvailability::Always,
+        commands: Vec::new(),
     }]
 }
 
 /// Replace `{variable}` placeholders using `vars`. Unknown names are left unchanged.
+/// Validate a list of agent/command steps, reporting errors with the given `list_name`
+/// (e.g. `"agent_steps"`, `"review_agent_steps"`).
+fn validate_step_list(steps: &[AgentStepConfig], list_name: &str) -> Result<()> {
+    for step in steps {
+        if step.name.trim().is_empty() {
+            return Err(MaestroError::Config(format!(
+                "Each [[{list_name}]] entry must have a non-empty name"
+            )));
+        }
+        if step.is_command_step() {
+            // Command step: reject if prompt or skills are also set.
+            if !step.prompt.trim().is_empty() {
+                return Err(MaestroError::Config(format!(
+                    "Step {:?} in [[{list_name}]]: cannot specify both `commands` and `prompt` (mutually exclusive)",
+                    step.name
+                )));
+            }
+            if !step.skills.is_empty() {
+                return Err(MaestroError::Config(format!(
+                    "Step {:?} in [[{list_name}]]: cannot specify both `commands` and `skills` (skills are agent-only)",
+                    step.name
+                )));
+            }
+        } else {
+            // Agent step: require prompt or skills.
+            if step.prompt.trim().is_empty() && step.skills.is_empty() {
+                return Err(MaestroError::Config(format!(
+                    "Step {:?} in [[{list_name}]] must have a non-empty `prompt`, at least one `skill`, or `commands`",
+                    step.name
+                )));
+            }
+        }
+        if step.repeat < 1 {
+            return Err(MaestroError::Config(format!(
+                "Step {:?} in [[{list_name}]]: repeat must be at least 1",
+                step.name
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn interpolate_agent_prompt(template: &str, vars: &HashMap<String, String>) -> String {
     let mut out = String::with_capacity(template.len() + 64);
     let mut rest = template;
@@ -869,65 +931,9 @@ impl Config {
             ));
         }
 
-        for step in &self.agent_steps {
-            if step.name.trim().is_empty() {
-                return Err(MaestroError::Config(
-                    "Each [[agent_steps]] entry must have a non-empty name".to_string(),
-                ));
-            }
-            if step.prompt.trim().is_empty() && step.skills.is_empty() {
-                return Err(MaestroError::Config(format!(
-                    "Agent step {:?} must have a non-empty prompt or at least one skill",
-                    step.name
-                )));
-            }
-            if step.repeat < 1 {
-                return Err(MaestroError::Config(format!(
-                    "Agent step {:?}: repeat must be at least 1",
-                    step.name
-                )));
-            }
-        }
-
-        for step in &self.review_agent_steps {
-            if step.name.trim().is_empty() {
-                return Err(MaestroError::Config(
-                    "Each [[review_agent_steps]] entry must have a non-empty name".to_string(),
-                ));
-            }
-            if step.prompt.trim().is_empty() && step.skills.is_empty() {
-                return Err(MaestroError::Config(format!(
-                    "Review agent step {:?} must have a non-empty prompt or at least one skill",
-                    step.name
-                )));
-            }
-            if step.repeat < 1 {
-                return Err(MaestroError::Config(format!(
-                    "Review agent step {:?}: repeat must be at least 1",
-                    step.name
-                )));
-            }
-        }
-
-        for step in &self.merge_base_agent_steps {
-            if step.name.trim().is_empty() {
-                return Err(MaestroError::Config(
-                    "Each [[merge_base_agent_steps]] entry must have a non-empty name".to_string(),
-                ));
-            }
-            if step.prompt.trim().is_empty() && step.skills.is_empty() {
-                return Err(MaestroError::Config(format!(
-                    "Merge base agent step {:?} must have a non-empty prompt or at least one skill",
-                    step.name
-                )));
-            }
-            if step.repeat < 1 {
-                return Err(MaestroError::Config(format!(
-                    "Merge base agent step {:?}: repeat must be at least 1",
-                    step.name
-                )));
-            }
-        }
+        validate_step_list(&self.agent_steps, "agent_steps")?;
+        validate_step_list(&self.review_agent_steps, "review_agent_steps")?;
+        validate_step_list(&self.merge_base_agent_steps, "merge_base_agent_steps")?;
 
         if self.agent.step_timeout_secs == 0 {
             return Err(MaestroError::Config(
@@ -1232,6 +1238,7 @@ step_timeout_secs = 600
             skills: Vec::new(),
             resume_previous: false,
             when: StepAvailability::Always,
+            commands: Vec::new(),
         });
         assert_eq!(custom.agent_sequence_outer_loops(), 1);
     }
@@ -1253,6 +1260,7 @@ step_timeout_secs = 600
             skills: Vec::new(),
             resume_previous: false,
             when: StepAvailability::Always,
+            commands: Vec::new(),
         });
         assert_eq!(custom.review_sequence_outer_loops(), 1);
     }
@@ -1509,5 +1517,292 @@ step_timeout_secs = 600
             app_private_key_path: "/etc/maestro/key.pem".into(),
         };
         assert!(cfg.is_configured());
+    }
+
+    // -- Command step tests --
+
+    #[test]
+    fn is_command_step_true_when_commands_present() {
+        let step = AgentStepConfig {
+            name: "Run tests".into(),
+            prompt: String::new(),
+            repeat: 1,
+            skills: Vec::new(),
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: vec!["npm test".into()],
+        };
+        assert!(step.is_command_step());
+    }
+
+    #[test]
+    fn is_command_step_false_when_no_commands() {
+        let step = AgentStepConfig {
+            name: "Implement".into(),
+            prompt: "do stuff".into(),
+            repeat: 1,
+            skills: Vec::new(),
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: Vec::new(),
+        };
+        assert!(!step.is_command_step());
+    }
+
+    #[test]
+    fn default_agent_steps_are_not_command_steps() {
+        for step in default_agent_steps() {
+            assert!(
+                !step.is_command_step(),
+                "default step {:?} should not be a command step",
+                step.name
+            );
+        }
+        for step in default_review_agent_steps() {
+            assert!(!step.is_command_step());
+        }
+        for step in default_merge_base_agent_steps() {
+            assert!(!step.is_command_step());
+        }
+    }
+
+    #[test]
+    fn validate_accepts_command_only_step() {
+        let mut config = Config::default();
+        config.agent_steps.push(AgentStepConfig {
+            name: "Lint".into(),
+            prompt: String::new(),
+            repeat: 1,
+            skills: Vec::new(),
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: vec!["npm run lint".into()],
+        });
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_step_with_both_prompt_and_commands() {
+        let mut config = Config::default();
+        config.agent_steps.push(AgentStepConfig {
+            name: "Bad".into(),
+            prompt: "do stuff".into(),
+            repeat: 1,
+            skills: Vec::new(),
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: vec!["npm test".into()],
+        });
+        let err = config.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot specify both") && msg.contains("commands") && msg.contains("prompt"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_step_with_both_skills_and_commands() {
+        let mut config = Config::default();
+        config.agent_steps.push(AgentStepConfig {
+            name: "Bad".into(),
+            prompt: String::new(),
+            repeat: 1,
+            skills: vec![SkillRef {
+                name: "my-skill".into(),
+                args: Vec::new(),
+            }],
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: vec!["npm test".into()],
+        });
+        let err = config.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot specify both") && msg.contains("commands") && msg.contains("skills"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_step_with_no_prompt_no_skills_no_commands() {
+        let mut config = Config::default();
+        config.agent_steps.push(AgentStepConfig {
+            name: "Empty".into(),
+            prompt: String::new(),
+            repeat: 1,
+            skills: Vec::new(),
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: Vec::new(),
+        });
+        let err = config.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must have"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_command_step_in_review_steps() {
+        let mut config = Config::default();
+        config.review_agent_steps.push(AgentStepConfig {
+            name: "Run checks".into(),
+            prompt: String::new(),
+            repeat: 1,
+            skills: Vec::new(),
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: vec!["cargo test".into()],
+        });
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_command_step_in_merge_base_steps() {
+        let mut config = Config::default();
+        config.merge_base_agent_steps.push(AgentStepConfig {
+            name: "Run checks".into(),
+            prompt: String::new(),
+            repeat: 1,
+            skills: Vec::new(),
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: vec!["cargo test".into()],
+        });
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_load_command_step_from_toml() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            br#"
+[general]
+poll_interval_secs = 30
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+repo_path = "/workspace"
+
+[commands]
+pre_install = []
+
+[web]
+port = 8080
+
+[agent]
+step_timeout_secs = 600
+
+[[agent_steps]]
+name = "Implement"
+prompt = "Do {ticket_key}"
+
+[[agent_steps]]
+name = "Lint and format"
+commands = [
+  "npm run lint --fix",
+  "npm run format"
+]
+
+[[agent_steps]]
+name = "Run tests"
+commands = ["npm test"]
+repeat = 2
+"#,
+        )
+        .unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(config.agent_steps.len(), 3);
+
+        // First step is a normal agent step
+        assert!(!config.agent_steps[0].is_command_step());
+        assert_eq!(config.agent_steps[0].prompt, "Do {ticket_key}");
+
+        // Second step is a command step
+        assert!(config.agent_steps[1].is_command_step());
+        assert_eq!(config.agent_steps[1].commands, vec!["npm run lint --fix", "npm run format"]);
+        assert!(config.agent_steps[1].prompt.is_empty());
+
+        // Third step is a command step with repeat
+        assert!(config.agent_steps[2].is_command_step());
+        assert_eq!(config.agent_steps[2].commands, vec!["npm test"]);
+        assert_eq!(config.agent_steps[2].repeat, 2);
+    }
+
+    #[test]
+    fn test_load_command_step_from_external_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let steps_path = dir.path().join("ticket-steps.toml");
+        std::fs::write(
+            &steps_path,
+            br#"[[agent_steps]]
+name = "Lint"
+commands = ["npm run lint"]
+"#,
+        )
+        .unwrap();
+
+        let main_path = dir.path().join("config.toml");
+        std::fs::write(
+            &main_path,
+            format!(
+                r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 1
+ticket_workflow_steps_file = "{}"
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+repo_path = "/workspace"
+
+[commands]
+pre_install = []
+
+[web]
+port = 8080
+
+[agent]
+step_timeout_secs = 600
+"#,
+                steps_path.file_name().unwrap().to_str().unwrap()
+            ),
+        )
+        .unwrap();
+
+        let config = Config::load(&main_path).unwrap();
+        assert_eq!(config.agent_steps.len(), 1);
+        assert!(config.agent_steps[0].is_command_step());
+        assert_eq!(config.agent_steps[0].commands, vec!["npm run lint"]);
+    }
+
+    #[test]
+    fn validate_rejects_prompt_and_commands_in_review_steps() {
+        let mut config = Config::default();
+        config.review_agent_steps.push(AgentStepConfig {
+            name: "Bad".into(),
+            prompt: "do stuff".into(),
+            repeat: 1,
+            skills: Vec::new(),
+            resume_previous: false,
+            when: StepAvailability::Always,
+            commands: vec!["npm test".into()],
+        });
+        let err = config.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot specify both") && msg.contains("review_agent_steps"),
+            "unexpected error: {msg}"
+        );
     }
 }
