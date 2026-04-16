@@ -13,7 +13,7 @@ pub struct GithubIssueRow {
 }
 
 /// Parse `owner/repo` from a GitHub URL or bare `owner/repo` string.
-fn parse_github_repo(repo_url: &str) -> Option<String> {
+pub fn parse_github_repo(repo_url: &str) -> Option<String> {
     let url = repo_url.trim().trim_end_matches('/').trim_end_matches(".git");
     if let Some(rest) = url.strip_prefix("https://github.com/") {
         if rest.contains('/') {

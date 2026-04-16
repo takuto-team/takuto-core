@@ -14,6 +14,7 @@ const BUILTIN_PREFIXES: &[&[&str]] = &[
     &["jira", "workitem", "view"],
     &["jira", "workitem", "assign"],
     &["jira", "workitem", "transition"],
+    &["jira", "workitem", "edit"],
     &["jira", "auth", "status"],
 ];
 

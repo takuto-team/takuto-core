@@ -93,6 +93,14 @@ pub fn build_router(state: AppState) -> Router {
             "/github/issues",
             get(routes::github::list_github_issues),
         )
+        .route(
+            "/tickets/{key}/improve",
+            post(routes::tickets::improve_ticket),
+        )
+        .route(
+            "/tickets/{key}/update-description",
+            post(routes::tickets::update_ticket_description),
+        )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
         .route("/polling", get(routes::polling::get_polling_status))
