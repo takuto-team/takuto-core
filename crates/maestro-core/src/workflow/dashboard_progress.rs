@@ -77,9 +77,9 @@ pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
     }
 
     // Main ticket pipeline
-    // When a ticketing system is available (Jira): 3 steps (Assign + Retrieve + Worktree).
-    // When not: 1 step (Worktree only — Assign and Retrieve are skipped entirely).
-    let mut t: u32 = if ticketing { 3 } else { 1 };
+    // Assign + Retrieve only run when Jira (acli) is available — GitHub Issues skips them.
+    // Jira: 3 steps (Assign + Retrieve + Worktree). GitHub/none: 1 step (Worktree only).
+    let mut t: u32 = if w.jira_available { 3 } else { 1 };
 
     let path_for_mise = w
         .worktree_path
