@@ -218,8 +218,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let acli_ok = docker_hooks::check_acli_auth();
     let jira_available = Arc::new(AtomicBool::new(acli_ok));
     if !acli_ok {
-        info!("Atlassian CLI (acli) is not authenticated — Jira integration disabled. \
-               No auto-polling; workflows skip Jira operations; manual description entry only.");
+        info!(
+            "Atlassian CLI (acli) is not authenticated — Jira integration disabled. \
+               No auto-polling; workflows skip Jira operations; manual description entry only."
+        );
     }
 
     let max_concurrent = config.read().await.general.max_concurrent_workflows as usize;

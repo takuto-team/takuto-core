@@ -139,10 +139,14 @@ mod tests {
     use std::path::PathBuf;
     use tokio_util::sync::CancellationToken;
 
-    use crate::workflow::step::StepLog;
     use crate::workflow::state::WorkflowState;
+    use crate::workflow::step::StepLog;
 
-    fn wf_with(state: WorkflowState, steps_log: Vec<StepLog>, worktree: Option<PathBuf>) -> Workflow {
+    fn wf_with(
+        state: WorkflowState,
+        steps_log: Vec<StepLog>,
+        worktree: Option<PathBuf>,
+    ) -> Workflow {
         let now = Utc::now();
         Workflow {
             id: "id".into(),

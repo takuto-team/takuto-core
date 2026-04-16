@@ -43,15 +43,14 @@ pub fn pr_url_from_agent_output(output: &str) -> Option<String> {
 
 /// Prefer TOML file, then stdout marker.
 pub fn resolve_pr_url(worktree: &Path, last_agent_output: Option<&str>) -> Option<String> {
-    if let Some(o) = read_workflow_outcome(worktree) {
-        if let Some(u) = o
+    if let Some(o) = read_workflow_outcome(worktree)
+        && let Some(u) = o
             .pr_url
             .as_ref()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
-        {
-            return Some(u.to_string());
-        }
+    {
+        return Some(u.to_string());
     }
     last_agent_output.and_then(pr_url_from_agent_output)
 }

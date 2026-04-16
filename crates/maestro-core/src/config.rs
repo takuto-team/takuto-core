@@ -227,7 +227,7 @@ pub fn interpolate_agent_prompt(template: &str, vars: &HashMap<String, String>) 
     out
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -263,7 +263,7 @@ pub struct Config {
 }
 
 /// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DockerConfig {
     /// Shell commands (`bash -c`) executed once while building the image, after tools are installed.
     #[serde(default)]
@@ -271,15 +271,6 @@ pub struct DockerConfig {
     /// Shell commands executed on every `docker compose up` as the maestro user, after auth preflight, before the server.
     #[serde(default)]
     pub compose_up_commands: Vec<String>,
-}
-
-impl Default for DockerConfig {
-    fn default() -> Self {
-        Self {
-            build_commands: Vec::new(),
-            compose_up_commands: Vec::new(),
-        }
-    }
 }
 
 /// Browser-based VS Code editor launched from the dashboard.
@@ -337,7 +328,7 @@ pub struct TerminalConfig {
     pub git_editor: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkConfig {
     #[serde(default)]
     pub extra_egress_hosts: Vec<String>,
@@ -518,7 +509,7 @@ where
     deserializer.deserialize_any(PreInstallVisitor)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommandsConfig {
     #[serde(default, deserialize_with = "deserialize_pre_install_vec")]
     pub pre_install: Vec<String>,
@@ -580,15 +571,6 @@ fn default_port() -> u16 {
 }
 fn default_step_timeout() -> u64 {
     1800
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            extra_egress_hosts: Vec::new(),
-            allow_all_https: false,
-        }
-    }
 }
 
 impl GeneralConfig {
@@ -659,16 +641,6 @@ impl Default for GitConfig {
     }
 }
 
-impl Default for CommandsConfig {
-    fn default() -> Self {
-        Self {
-            pre_install: Vec::new(),
-            install: String::new(),
-            pre_workflow: Vec::new(),
-        }
-    }
-}
-
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
@@ -676,27 +648,6 @@ impl Default for WebConfig {
             port: default_port(),
             dashboard_username: String::new(),
             dashboard_password: String::new(),
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            jira: JiraConfig::default(),
-            git: GitConfig::default(),
-            github: GitHubAppConfig::default(),
-            commands: CommandsConfig::default(),
-            web: WebConfig::default(),
-            agent: AgentConfig::default(),
-            docker: DockerConfig::default(),
-            network: NetworkConfig::default(),
-            editor: EditorConfig::default(),
-            terminal: TerminalConfig::default(),
-            agent_steps: Vec::new(),
-            review_agent_steps: Vec::new(),
-            merge_base_agent_steps: Vec::new(),
         }
     }
 }

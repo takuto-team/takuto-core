@@ -364,7 +364,11 @@ impl WorkflowEngine {
             let c = self.config.read().await;
             PathBuf::from(&c.git.repo_path)
         };
-        match self.actions.run_command("git worktree prune", &repo_path).await {
+        match self
+            .actions
+            .run_command("git worktree prune", &repo_path)
+            .await
+        {
             Ok(o) if o.success() => {}
             Ok(o) => warn!(
                 stderr = %o.stderr,
@@ -398,28 +402,27 @@ impl WorkflowEngine {
         cancel_token.cancel();
         ContainerRunner::cleanup_for_ticket(ticket_key).await;
 
-        if let Some(ref path) = worktree_path {
-            if path.exists() {
-                if let Err(e) = self.actions.remove_worktree(path).await {
-                    warn!(
-                        ticket = %ticket_key,
-                        path = %path.display(),
-                        error = %e,
-                        "Failed to remove worktree on delete (workflow row still removed)"
-                    );
-                }
-            }
+        if let Some(ref path) = worktree_path
+            && path.exists()
+            && let Err(e) = self.actions.remove_worktree(path).await
+        {
+            warn!(
+                ticket = %ticket_key,
+                path = %path.display(),
+                error = %e,
+                "Failed to remove worktree on delete (workflow row still removed)"
+            );
         }
 
-        if !branch_name.trim().is_empty() {
-            if let Err(e) = self.actions.delete_local_branch(&branch_name).await {
-                warn!(
-                    ticket = %ticket_key,
-                    branch = %branch_name,
-                    error = %e,
-                    "Failed to delete local branch on delete (best-effort)"
-                );
-            }
+        if !branch_name.trim().is_empty()
+            && let Err(e) = self.actions.delete_local_branch(&branch_name).await
+        {
+            warn!(
+                ticket = %ticket_key,
+                branch = %branch_name,
+                error = %e,
+                "Failed to delete local branch on delete (best-effort)"
+            );
         }
 
         self.best_effort_git_worktree_prune().await;
@@ -679,7 +682,8 @@ impl WorkflowEngine {
         ticket_description: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
-        let mut workflow = Workflow::new(ticket_key.clone(), ticket_summary, started_manually, jira);
+        let mut workflow =
+            Workflow::new(ticket_key.clone(), ticket_summary, started_manually, jira);
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
         }
@@ -735,9 +739,7 @@ impl WorkflowEngine {
             let mut workflows = self.workflows.write().await;
             let workflow = workflows
                 .get_mut(ticket_key)
-                .ok_or_else(|| {
-                    MaestroError::Config(format!("Workflow not found: {ticket_key}"))
-                })?;
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
 
             if !workflow.state.is_active() {
                 return Err(MaestroError::Config(format!(
@@ -787,9 +789,7 @@ impl WorkflowEngine {
             let mut workflows = self.workflows.write().await;
             let workflow = workflows
                 .get_mut(ticket_key)
-                .ok_or_else(|| {
-                    MaestroError::Config(format!("Workflow not found: {ticket_key}"))
-                })?;
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
 
             if let WorkflowState::Paused { source_state } = &workflow.state {
                 let restored = *source_state.clone();
@@ -809,7 +809,7 @@ impl WorkflowEngine {
                     stream: None,
                     progress_percent: None,
                     progress_steps_total: None,
-            forwarded_port: None,
+                    forwarded_port: None,
                 });
 
                 workflow.cancel_token.clone()
@@ -924,8 +924,13 @@ impl WorkflowEngine {
         self.workflows.write().await.remove(ticket_key);
 
         // Start a fresh one (preserves description for manual/no-Jira workflows)
-        self.start_workflow(ticket_key.to_string(), ticket_summary, false, ticket_description)
-            .await
+        self.start_workflow(
+            ticket_key.to_string(),
+            ticket_summary,
+            false,
+            ticket_description,
+        )
+        .await
     }
 
     /// Resume a failed or stopped workflow from the last failed step, reusing the existing
@@ -951,11 +956,7 @@ impl WorkflowEngine {
             };
 
             // Worktree must still exist on disk — otherwise there's nothing to resume from.
-            if !workflow
-                .worktree_path
-                .as_ref()
-                .is_some_and(|p| p.exists())
-            {
+            if !workflow.worktree_path.as_ref().is_some_and(|p| p.exists()) {
                 return Err(MaestroError::Config(
                     "Cannot resume: worktree no longer exists on disk. Use 'Retry from 0' instead."
                         .to_string(),
@@ -1291,16 +1292,15 @@ impl WorkflowEngine {
 
         let mut jira_ok = true;
         let mut jira_error = None;
-        if self.jira_available.load(Ordering::Relaxed) {
-            if let Err(e) = self
+        if self.jira_available.load(Ordering::Relaxed)
+            && let Err(e) = self
                 .actions
                 .transition_ticket(ticket_key, done_status.trim())
                 .await
-            {
-                jira_ok = false;
-                jira_error = Some(e.to_string());
-                warn!(ticket = %ticket_key, error = %e, "Jira transition to Done failed");
-            }
+        {
+            jira_ok = false;
+            jira_error = Some(e.to_string());
+            warn!(ticket = %ticket_key, error = %e, "Jira transition to Done failed");
         }
 
         // Clean up any worker containers for this workflow
@@ -1308,25 +1308,25 @@ impl WorkflowEngine {
 
         let mut worktree_ok = true;
         let mut worktree_error = None;
-        if let Some(ref path) = worktree_path {
-            if path.exists() {
-                if let Err(e) = self.actions.remove_worktree(path).await {
-                    worktree_ok = false;
-                    worktree_error = Some(e.to_string());
-                    warn!(ticket = %ticket_key, path = %path.display(), error = %e, "Failed to remove worktree");
-                }
-            }
+        if let Some(ref path) = worktree_path
+            && path.exists()
+            && let Err(e) = self.actions.remove_worktree(path).await
+        {
+            worktree_ok = false;
+            worktree_error = Some(e.to_string());
+            warn!(ticket = %ticket_key, path = %path.display(), error = %e, "Failed to remove worktree");
         }
 
-        if worktree_ok && !branch_name.trim().is_empty() {
-            if let Err(e) = self.actions.delete_local_branch(&branch_name).await {
-                warn!(
-                    ticket = %ticket_key,
-                    branch = %branch_name,
-                    error = %e,
-                    "Failed to delete local branch after mark-done (best-effort)"
-                );
-            }
+        if worktree_ok
+            && !branch_name.trim().is_empty()
+            && let Err(e) = self.actions.delete_local_branch(&branch_name).await
+        {
+            warn!(
+                ticket = %ticket_key,
+                branch = %branch_name,
+                error = %e,
+                "Failed to delete local branch after mark-done (best-effort)"
+            );
         }
 
         if worktree_ok {
@@ -1382,6 +1382,8 @@ impl WorkflowEngine {
     }
 }
 
+// Agent session parameters are inherently numerous.
+#[allow(clippy::too_many_arguments)]
 async fn drive_workflow(
     ticket_key: String,
     config: Arc<RwLock<Config>>,
@@ -1487,6 +1489,8 @@ async fn drive_workflow(
     }
 }
 
+// Agent session parameters are inherently numerous.
+#[allow(clippy::too_many_arguments)]
 async fn drive_pr_review_workflow(
     ticket_key: String,
     pr_url: String,
@@ -1980,32 +1984,27 @@ async fn run_agent_step_sequence(
                 log_writer.write_step(&step_label, "Starting").await;
 
                 // Build system prompt from step skills (Claude --bare only).
-                let system_prompt = if ai_stream_provider == AiAgentProvider::Claude
-                    && !step.skills.is_empty()
-                {
-                    crate::skill_resolve::build_system_prompt(
-                        &step.skills,
-                        skill_search_paths,
-                    )
-                    .await
-                } else {
-                    None
-                };
+                let system_prompt =
+                    if ai_stream_provider == AiAgentProvider::Claude && !step.skills.is_empty() {
+                        crate::skill_resolve::build_system_prompt(&step.skills, skill_search_paths)
+                            .await
+                    } else {
+                        None
+                    };
 
                 // For Cursor: prepend /skill invocations to the prompt (native support).
-                let step_prompt = if ai_stream_provider == AiAgentProvider::Cursor
-                    && !step.skills.is_empty()
-                {
-                    let invocations =
-                        crate::skill_resolve::build_cursor_skill_invocations(&step.skills);
-                    if step.prompt.is_empty() {
-                        invocations
+                let step_prompt =
+                    if ai_stream_provider == AiAgentProvider::Cursor && !step.skills.is_empty() {
+                        let invocations =
+                            crate::skill_resolve::build_cursor_skill_invocations(&step.skills);
+                        if step.prompt.is_empty() {
+                            invocations
+                        } else {
+                            format!("{invocations}\n\n{}", step.prompt)
+                        }
                     } else {
-                        format!("{invocations}\n\n{}", step.prompt)
-                    }
-                } else {
-                    step.prompt.clone()
-                };
+                        step.prompt.clone()
+                    };
 
                 // When Claude has skills as system prompt but no task prompt,
                 // direct it to follow the system prompt instructions.
@@ -2037,8 +2036,7 @@ async fn run_agent_step_sequence(
                     (effective_prompt, None)
                 };
 
-                let interpolated =
-                    interpolate_agent_prompt(&final_effective_prompt, interp_vars);
+                let interpolated = interpolate_agent_prompt(&final_effective_prompt, interp_vars);
                 let headless = headless_instructions_suffix(ai_stream_provider);
                 let full_prompt = format!("{interpolated}\n\n{headless}");
 
@@ -2154,14 +2152,8 @@ async fn run_agent_step_sequence(
                 }
 
                 add_step_log(workflows, ticket_key, step_log).await;
-                broadcast_step_completed(
-                    event_tx,
-                    ticket_key,
-                    &step_label,
-                    workflows,
-                    config,
-                )
-                .await;
+                broadcast_step_completed(event_tx, ticket_key, &step_label, workflows, config)
+                    .await;
             }
         }
     }
@@ -2235,11 +2227,9 @@ async fn sync_jira_for_resume(
                     "Resume: failed to refresh ticket details"
                 );
                 let wf = workflows.read().await;
-                let w = wf
-                    .get(ticket_key)
-                    .ok_or_else(|| {
-                        MaestroError::Config(format!("Workflow not found: {ticket_key}"))
-                    })?;
+                let w = wf.get(ticket_key).ok_or_else(|| {
+                    MaestroError::Config(format!("Workflow not found: {ticket_key}"))
+                })?;
                 crate::jira::client::JiraTicket {
                     key: ticket_key.to_string(),
                     summary: w.ticket_summary.clone(),
@@ -2292,6 +2282,8 @@ async fn acquire_agent_slot(
     }
 }
 
+// Agent session parameters are inherently numerous.
+#[allow(clippy::too_many_arguments)]
 async fn run_pr_review_steps(
     ticket_key: &str,
     pr_url: &str,
@@ -2505,6 +2497,8 @@ async fn run_pr_review_steps(
     Ok(())
 }
 
+// Agent session parameters are inherently numerous.
+#[allow(clippy::too_many_arguments)]
 async fn run_workflow_steps(
     ticket_key: &str,
     config: &Arc<RwLock<Config>>,
@@ -2522,14 +2516,14 @@ async fn run_workflow_steps(
     // never re-run assign/worktree/agent from scratch in that case.
     {
         let wf = workflows.read().await;
-        if let Some(w) = wf.get(ticket_key) {
-            if matches!(w.state, WorkflowState::Done) {
-                info!(
-                    ticket = %ticket_key,
-                    "Workflow already Done — skipping main workflow driver"
-                );
-                return Ok(());
-            }
+        if let Some(w) = wf.get(ticket_key)
+            && matches!(w.state, WorkflowState::Done)
+        {
+            info!(
+                ticket = %ticket_key,
+                "Workflow already Done — skipping main workflow driver"
+            );
+            return Ok(());
         }
     }
 
@@ -2681,14 +2675,24 @@ async fn run_workflow_steps(
             let wf = workflows.read().await;
             let (summary, description, item_type) = wf
                 .get(ticket_key)
-                .map(|w| (w.ticket_summary.clone(), w.ticket_description.clone(), w.ticket_type.clone()))
+                .map(|w| {
+                    (
+                        w.ticket_summary.clone(),
+                        w.ticket_description.clone(),
+                        w.ticket_type.clone(),
+                    )
+                })
                 .unwrap_or_default();
             drop(wf);
             crate::jira::client::JiraTicket {
                 key: ticket_key.to_string(),
                 summary,
                 description,
-                item_type: if item_type.is_empty() { "Task".to_string() } else { item_type },
+                item_type: if item_type.is_empty() {
+                    "Task".to_string()
+                } else {
+                    item_type
+                },
                 status: "In Progress".to_string(),
                 linked_items: Vec::new(),
             }
@@ -2830,14 +2834,8 @@ async fn run_workflow_steps(
                 step_log.output.push("mise install completed".to_string());
                 step_log.complete(StepStatus::Success);
                 add_step_log(workflows, ticket_key, step_log).await;
-                broadcast_step_completed(
-                    event_tx,
-                    ticket_key,
-                    "Mise install",
-                    workflows,
-                    config,
-                )
-                .await;
+                broadcast_step_completed(event_tx, ticket_key, "Mise install", workflows, config)
+                    .await;
             }
             Ok(output) => {
                 let stderr_tail = output
@@ -2921,14 +2919,8 @@ async fn run_workflow_steps(
                     step_log.output.push(format!("{step_name} completed"));
                     step_log.complete(StepStatus::Success);
                     add_step_log(workflows, ticket_key, step_log).await;
-                    broadcast_step_completed(
-                        event_tx,
-                        ticket_key,
-                        &step_name,
-                        workflows,
-                        config,
-                    )
-                    .await;
+                    broadcast_step_completed(event_tx, ticket_key, &step_name, workflows, config)
+                        .await;
                 }
                 Ok(output) => {
                     let stderr_tail = output
@@ -2962,7 +2954,7 @@ async fn run_workflow_steps(
     // Step 3c: Install dependencies
 
     if !install_cmd.is_empty()
-        && !(is_resume && step_already_succeeded(&prior_steps_log, "Install Dependencies"))
+        && (!is_resume || !step_already_succeeded(&prior_steps_log, "Install Dependencies"))
     {
         let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
         let mut step_log = StepLog::new("Install Dependencies".to_string());
@@ -3106,14 +3098,8 @@ async fn run_workflow_steps(
                     step_log.output.push(format!("{step_name} completed"));
                     step_log.complete(StepStatus::Success);
                     add_step_log(workflows, ticket_key, step_log).await;
-                    broadcast_step_completed(
-                        event_tx,
-                        ticket_key,
-                        &step_name,
-                        workflows,
-                        config,
-                    )
-                    .await;
+                    broadcast_step_completed(event_tx, ticket_key, &step_name, workflows, config)
+                        .await;
                 }
                 Ok(output) => {
                     let stderr_tail = output
@@ -3338,12 +3324,8 @@ fn truncate_utf8_by_bytes(s: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     format!(
-        "{}{}",
-        &s[..end],
-        format!(
-            "\n\n[truncated: exceeded {} byte limit for this field]",
-            max_bytes
-        )
+        "{}\n\n[truncated: exceeded {max_bytes} byte limit for this field]",
+        &s[..end]
     )
 }
 
@@ -3511,7 +3493,7 @@ fn spawn_output_relay(
                     stream: Some(line.stream),
                     progress_percent: None,
                     progress_steps_total: None,
-            forwarded_port: None,
+                    forwarded_port: None,
                 });
                 match result {
                     Ok(count) => {
@@ -3815,4 +3797,3 @@ fn extract_acceptance_criteria(description: &str) -> Vec<String> {
 
     criteria
 }
-

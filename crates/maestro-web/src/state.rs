@@ -8,6 +8,9 @@ use tokio_util::sync::CancellationToken;
 use maestro_core::config::Config;
 use maestro_core::workflow::engine::WorkflowEngine;
 
+/// Port forwarding map: ticket_key → list of `(detected_port, host_port)` pairs.
+type DynamicForwardsMap = Arc<RwLock<HashMap<String, Vec<(u16, u16)>>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Arc<WorkflowEngine>,
@@ -21,7 +24,7 @@ pub struct AppState {
     /// Cancellation tokens for background port scanners, keyed by ticket_key.
     pub editor_scanners: Arc<RwLock<HashMap<String, CancellationToken>>>,
     /// Active dynamic port forwards per editor, keyed by ticket_key: `(detected_port, host_port)`.
-    pub dynamic_forwards: Arc<RwLock<HashMap<String, Vec<(u16, u16)>>>>,
+    pub dynamic_forwards: DynamicForwardsMap,
     /// Spare port allocated for ttyd web terminal per editor, keyed by ticket_key.
     pub terminal_ports: Arc<RwLock<HashMap<String, u16>>>,
 }

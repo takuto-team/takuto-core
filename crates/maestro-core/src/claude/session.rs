@@ -18,6 +18,8 @@ impl ClaudeSession {
     /// Run a Claude Code session with the given full prompt (interpolated user text + headless suffix).
     ///
     /// `system_prompt` — optional skill content injected via `--system-prompt` (Claude `--bare` mode).
+    // Agent session parameters are inherently numerous.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_prompt(
         worktree: &Path,
         prompt: &str,
@@ -56,6 +58,8 @@ impl ClaudeSession {
 
 /// Run a Claude Code session. Returns (session_id, output).
 /// If resume_session_id is provided, continues that session instead of starting fresh.
+// Agent session parameters are inherently numerous.
+#[allow(clippy::too_many_arguments)]
 async fn run_claude_session(
     worktree: &Path,
     prompt: &str,
@@ -74,9 +78,7 @@ async fn run_claude_session(
     let effective_system_prompt;
     match (system_prompt, resume_session_id) {
         (Some(sp), Some(_)) => {
-            effective_prompt = format!(
-                "## Instructions for this step\n\n{sp}\n\n---\n\n{prompt}"
-            );
+            effective_prompt = format!("## Instructions for this step\n\n{sp}\n\n---\n\n{prompt}");
             effective_system_prompt = None;
         }
         (Some(sp), None) => {
@@ -123,12 +125,12 @@ async fn run_claude_session(
 
     // Add model flag if configured
     let model_flag;
-    if let Some(m) = model {
-        if !m.is_empty() {
-            model_flag = m.to_string();
-            args_vec.push("--model");
-            args_vec.push(&model_flag);
-        }
+    if let Some(m) = model
+        && !m.is_empty()
+    {
+        model_flag = m.to_string();
+        args_vec.push("--model");
+        args_vec.push(&model_flag);
     }
 
     let args: &[&str] = &args_vec;
@@ -213,74 +215,73 @@ fn parse_stream_json_output(raw: &str) -> String {
             continue;
         }
 
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(event_type) = value.get("type").and_then(|v| v.as_str()) {
-                match event_type {
-                    "system" => {
-                        let subtype = value
-                            .get("subtype")
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(event_type) = value.get("type").and_then(|v| v.as_str())
+        {
+            match event_type {
+                "system" => {
+                    let subtype = value
+                        .get("subtype")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    if subtype == "api_retry" {
+                        let attempt = value.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let error = value
+                            .get("error")
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown");
-                        if subtype == "api_retry" {
-                            let attempt =
-                                value.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let error = value
-                                .get("error")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            warn!(
-                                attempt = attempt,
-                                error = error,
-                                "Claude API retry detected in output"
-                            );
-                        } else {
-                            info!(subtype = subtype, "Claude stream event: system/{}", subtype);
-                        }
+                        warn!(
+                            attempt = attempt,
+                            error = error,
+                            "Claude API retry detected in output"
+                        );
+                    } else {
+                        info!(subtype = subtype, "Claude stream event: system/{}", subtype);
                     }
-                    "result" => {
-                        if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
-                            info!(result_len = result.len(), "Claude stream: result received");
-                            result_parts.push(result.to_string());
-                        }
-                        if let Some(usage) = value.get("usage") {
-                            let input_tokens = usage
-                                .get("input_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            let output_tokens = usage
-                                .get("output_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            info!(
-                                input_tokens = input_tokens,
-                                output_tokens = output_tokens,
-                                "Claude session token usage"
-                            );
-                        }
-                        if let Some(cost) = value.get("total_cost_usd").and_then(|v| v.as_f64()) {
-                            info!(cost_usd = cost, "Claude session cost");
-                        }
-                    }
-                    "content_block_delta" => {
-                        if let Some(text) = value
-                            .get("delta")
-                            .and_then(|d| d.get("text"))
-                            .and_then(|v| v.as_str())
-                        {
-                            result_parts.push(text.to_string());
-                        }
-                    }
-                    "assistant" => {
-                        if let Some(content) = value
-                            .get("message")
-                            .and_then(|m| m.get("content"))
-                            .and_then(|c| c.as_str())
-                        {
-                            result_parts.push(content.to_string());
-                        }
-                    }
-                    _ => {}
                 }
+                "result" => {
+                    if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
+                        info!(result_len = result.len(), "Claude stream: result received");
+                        result_parts.push(result.to_string());
+                    }
+                    if let Some(usage) = value.get("usage") {
+                        let input_tokens = usage
+                            .get("input_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let output_tokens = usage
+                            .get("output_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        info!(
+                            input_tokens = input_tokens,
+                            output_tokens = output_tokens,
+                            "Claude session token usage"
+                        );
+                    }
+                    if let Some(cost) = value.get("total_cost_usd").and_then(|v| v.as_f64()) {
+                        info!(cost_usd = cost, "Claude session cost");
+                    }
+                }
+                "content_block_delta" => {
+                    if let Some(text) = value
+                        .get("delta")
+                        .and_then(|d| d.get("text"))
+                        .and_then(|v| v.as_str())
+                    {
+                        result_parts.push(text.to_string());
+                    }
+                }
+                "assistant" => {
+                    if let Some(content) = value
+                        .get("message")
+                        .and_then(|m| m.get("content"))
+                        .and_then(|c| c.as_str())
+                    {
+                        result_parts.push(content.to_string());
+                    }
+                }
+                _ => {}
             }
         }
     }

@@ -58,10 +58,7 @@ pub fn substitute_skill_args(body: &str, args: &[String]) -> String {
 ///
 /// Reads each skill's SKILL.md, strips frontmatter, substitutes arguments, and
 /// concatenates them.  Returns `None` if no skills are configured or none are found.
-pub async fn build_system_prompt(
-    skills: &[SkillRef],
-    search_paths: &[PathBuf],
-) -> Option<String> {
+pub async fn build_system_prompt(skills: &[SkillRef], search_paths: &[PathBuf]) -> Option<String> {
     if skills.is_empty() {
         return None;
     }
@@ -186,8 +183,14 @@ mod tests {
         write_skill(tmp.path(), "skill-b", "---\nname: b\n---\n\nContent B.");
         let paths = vec![tmp.path().to_path_buf()];
         let skills = vec![
-            SkillRef { name: "skill-a".into(), args: Vec::new() },
-            SkillRef { name: "skill-b".into(), args: Vec::new() },
+            SkillRef {
+                name: "skill-a".into(),
+                args: Vec::new(),
+            },
+            SkillRef {
+                name: "skill-b".into(),
+                args: Vec::new(),
+            },
         ];
 
         let result = build_system_prompt(&skills, &paths).await.unwrap();
@@ -199,8 +202,14 @@ mod tests {
     #[test]
     fn cursor_skill_invocations() {
         let skills = vec![
-            SkillRef { name: "caveman".into(), args: vec!["ultra".into()] },
-            SkillRef { name: "address-ticket".into(), args: Vec::new() },
+            SkillRef {
+                name: "caveman".into(),
+                args: vec!["ultra".into()],
+            },
+            SkillRef {
+                name: "address-ticket".into(),
+                args: Vec::new(),
+            },
         ];
         let result = build_cursor_skill_invocations(&skills);
         assert_eq!(result, "/caveman ultra\n/address-ticket");

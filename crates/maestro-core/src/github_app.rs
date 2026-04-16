@@ -16,7 +16,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
@@ -170,20 +170,20 @@ impl GitHubAppTokenManager {
         // Fast path: read lock.
         {
             let cached = self.cached.read().await;
-            if let Some(ref ct) = *cached {
-                if ct.expires_at > Utc::now() + Duration::minutes(5) {
-                    return Ok(ct.token.clone());
-                }
+            if let Some(ref ct) = *cached
+                && ct.expires_at > Utc::now() + Duration::minutes(5)
+            {
+                return Ok(ct.token.clone());
             }
         }
 
         // Slow path: write lock + refresh.
         let mut cached = self.cached.write().await;
         // Re-check after acquiring write lock (another task may have refreshed).
-        if let Some(ref ct) = *cached {
-            if ct.expires_at > Utc::now() + Duration::minutes(5) {
-                return Ok(ct.token.clone());
-            }
+        if let Some(ref ct) = *cached
+            && ct.expires_at > Utc::now() + Duration::minutes(5)
+        {
+            return Ok(ct.token.clone());
         }
 
         let (token, expires_at) = self.fetch_installation_token(cwd).await?;
@@ -312,10 +312,7 @@ impl GitHubAppTokenManager {
 
     /// Git author email for the bot (e.g. `123456+maestro-bot[bot]@users.noreply.github.com`).
     pub fn bot_email(&self) -> String {
-        format!(
-            "{}+maestro-bot[bot]@users.noreply.github.com",
-            self.app_id
-        )
+        format!("{}+maestro-bot[bot]@users.noreply.github.com", self.app_id)
     }
 
     // -- Git / gh configuration --
@@ -342,13 +339,8 @@ impl GitHubAppTokenManager {
         })?;
 
         // Configure git to use gh as credential helper (for git push).
-        let setup_output = process::run_command(
-            "gh",
-            &["auth", "setup-git"],
-            cwd,
-            cancel.child_token(),
-        )
-        .await?;
+        let setup_output =
+            process::run_command("gh", &["auth", "setup-git"], cwd, cancel.child_token()).await?;
         if !setup_output.success() {
             warn!(
                 stderr = %setup_output.stderr.trim(),
@@ -410,9 +402,9 @@ impl GitHubAppTokenManager {
     ) -> Result<()> {
         let token = self.get_installation_token(cwd).await?;
 
-        gh_auth_login_with_token(&token, cwd).await.map_err(|e| {
-            MaestroError::GitHubApp(format!("Failed to refresh gh CLI token: {e}"))
-        })?;
+        gh_auth_login_with_token(&token, cwd)
+            .await
+            .map_err(|e| MaestroError::GitHubApp(format!("Failed to refresh gh CLI token: {e}")))?;
 
         Ok(())
     }
