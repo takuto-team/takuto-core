@@ -91,7 +91,7 @@ async fn run_claude_session(
         }
     }
 
-    let prompt_preview = &effective_prompt[..effective_prompt.len().min(200)];
+    let prompt_preview: String = effective_prompt.chars().take(200).collect();
     info!(
         prompt_len = effective_prompt.len(),
         prompt_preview = %prompt_preview,
