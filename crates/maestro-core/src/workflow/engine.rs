@@ -14,7 +14,7 @@ use crate::agent_prompt::headless_instructions_suffix;
 use crate::claude::session::ClaudeSession;
 use crate::config::{
     AgentStepConfig, AiAgentProvider, Config, TicketingSystem, cursor_model_for_cli,
-    interpolate_agent_prompt,
+    interpolate_agent_prompt, interpolate_command_template,
 };
 use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
@@ -182,7 +182,16 @@ impl Workflow {
             .into_iter()
             .filter(|s| s.status != StepStatus::Running)
             .collect();
-        let ticketing_available = rec.ticketing_system != TicketingSystem::None;
+        // Backward compatibility: old snapshots lack `ticketing_system` (deserializes as `None`)
+        // but may have `jira_available = true`. Derive the correct ticketing system so that
+        // `when: ticketing` steps are not incorrectly filtered out on resume.
+        let ticketing_system =
+            if rec.ticketing_system == TicketingSystem::None && rec.jira_available {
+                TicketingSystem::Jira
+            } else {
+                rec.ticketing_system
+            };
+        let ticketing_available = ticketing_system != TicketingSystem::None;
         Self {
             id: rec.id,
             ticket_key: rec.ticket_key,
@@ -209,7 +218,7 @@ impl Workflow {
             started_manually: rec.started_manually,
             jira_available: rec.jira_available,
             ticketing_available,
-            ticketing_system: rec.ticketing_system,
+            ticketing_system,
             last_session_id: rec.last_session_id,
         }
     }
@@ -2089,7 +2098,7 @@ async fn run_agent_step_sequence(
                         check_cancelled(cancel_token)?;
                         wait_if_paused(workflows, ticket_key, cancel_token).await?;
 
-                        let interpolated_cmd = interpolate_agent_prompt(cmd, interp_vars);
+                        let interpolated_cmd = interpolate_command_template(cmd, interp_vars);
                         info!(
                             ticket = %ticket_key,
                             step = %step_label,
