@@ -189,7 +189,7 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | GET | `/api/jira/todo-tickets-manual` | JSON array of **`{ "key", "summary" }`** for **To Do** issues in **`[jira] project_keys`**, **Epics excluded**, **`ORDER BY rank ASC`** (up to 200); **`AND`** **`[jira] jql_filter`** when set. **`400`** if no project keys. |
 | GET | `/api/jira/tickets/{key}/preview` | JSON **`{ "key", "summary", "description_markdown" }`** for the manual-start detail modal (ADF **description** → Markdown on the server). **`403`** if the ticket’s project is not in **`project_keys`**. |
 | GET | `/api/github/issues` | JSON array of **`{ "key", "summary", "body" }`** for open GitHub Issues (`GH-{n}` keys); filters out pull requests. |
-| POST | `/api/tickets/{key}/improve` | JSON **`{ "description", "summary" }`** — runs a headless Claude session (60 s timeout, **`[agent] model`** when set) with a technical-writer system prompt and returns **`{ "improved_description": "..." }`**. Powers the **"Improve with AI"** button in the ticket detail modal. |
+| POST | `/api/tickets/{key}/improve` | JSON **`{ "description", "summary" }`** — runs a headless Claude session (300 s timeout, **`[agent] model`** when set) with a technical-writer system prompt and returns **`{ "improved_description": "..." }`**. Powers the **"Improve with AI"** button in the ticket detail modal. |
 | POST | `/api/tickets/{key}/update-description` | JSON **`{ "description" }`** — persists the improved description back to the ticketing system. GitHub: `gh api --method PATCH repos/{owner}/issues/{n} --field body=…`. Jira: `acli jira workitem edit`. `none`: no-op 200 OK. |
 | POST | `/api/workflows/{id}/pause` | Same: ticket key |
 | POST | `/api/workflows/{id}/resume` | |

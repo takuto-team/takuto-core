@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::github::parse_github_repo;
 use crate::workflow::engine::WorkflowEngine;
 
 pub struct GitHubPoller {
@@ -67,6 +68,9 @@ impl GitHubPoller {
         // Derive owner/repo from git.repo_url (e.g. "https://github.com/owner/repo" or "owner/repo")
         let repo_url = config.git.repo_url.clone();
         let max_active = config.general.effective_max_active_workflows() as usize;
+        // In dry mode, external GitHub API writes (issue comments, etc.) are skipped by
+        // DryRunActions, but local workflow state (worktrees, steps_log) is still created.
+        // This matches the Jira poller's behaviour: dry_mode affects side-effects, not polling.
         let dry_mode = config.general.dry_mode;
         drop(config);
 
@@ -97,7 +101,10 @@ impl GitHubPoller {
 
         let slots_available = max_active - visible_count;
 
-        // Fetch open issues via `gh api`
+        // Fetch open issues via `gh api`.
+        // Note: unlike the Jira poller (which supports `jql_filter` and `item_types`),
+        // the GitHub poller currently fetches all open issues without label/milestone
+        // filtering. A future `[github] label_filter` config option could narrow this.
         let issues = fetch_open_issues(&owner_repo).await?;
 
         if issues.is_empty() {
@@ -148,27 +155,6 @@ struct GitHubIssue {
     key: String,
     summary: String,
     description: String,
-}
-
-/// Parse `owner/repo` from a GitHub URL or bare `owner/repo` string.
-fn parse_github_repo(repo_url: &str) -> Option<String> {
-    let url = repo_url.trim().trim_end_matches('/').trim_end_matches(".git");
-    // "https://github.com/owner/repo" or "git@github.com:owner/repo"
-    if let Some(rest) = url.strip_prefix("https://github.com/") {
-        if rest.contains('/') {
-            return Some(rest.to_string());
-        }
-    }
-    if let Some(rest) = url.strip_prefix("git@github.com:") {
-        if rest.contains('/') {
-            return Some(rest.to_string());
-        }
-    }
-    // bare "owner/repo"
-    if url.contains('/') && !url.contains("://") {
-        return Some(url.to_string());
-    }
-    None
 }
 
 /// Fetch open GitHub issues using `gh api`. Returns issues as key/summary/description.

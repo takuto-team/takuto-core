@@ -56,13 +56,14 @@ technically precise. Add acceptance criteria if none are present. Keep the origi
         description = body.description,
     );
 
-    let worktree = PathBuf::from("/tmp");
+    // Use the system temp dir rather than a hardcoded "/tmp" for portability.
+    let worktree = std::env::temp_dir();
 
     let session = ClaudeSession::run_prompt(
         &worktree,
         &prompt,
         CancellationToken::new(),
-        300,
+        300, // 5 minutes — generous for a single LLM generation
         None,
         model.as_deref(),
         None,
@@ -115,7 +116,9 @@ pub async fn update_ticket_description(
                     "--method",
                     "PATCH",
                     &format!("repos/{owner_repo}/issues/{issue_number}"),
-                    "--field",
+                    // --raw-field sends the value as a plain string, avoiding gh's
+                    // type-coercion of "true"/"false"/"123" in user-supplied text.
+                    "--raw-field",
                     &format!("body={}", body.description),
                 ])
                 .output()
