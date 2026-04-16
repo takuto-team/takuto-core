@@ -102,6 +102,30 @@ remote = "origin"
 repo_url = "https://github.com/org/repo.git"
 repo_path = "/workspace"
 
+# --- GitHub App authentication (optional) ---
+# When configured, Maestro authenticates as a GitHub App bot identity instead
+# of the personal `gh` user. Commits and PRs will be attributed to
+# `maestro-bot[bot]` (visible in the GitHub UI).
+#
+# All three fields (app_id, app_installation_id, and one private key source)
+# must be set to enable GitHub App authentication. Errors in the private key
+# or installation ID are non-fatal at startup — Maestro falls back to personal
+# `gh` auth and logs a warning.
+#
+# Required App permissions: contents (write), pull_requests (write), metadata (read).
+#
+# [github]
+# app_id = 123456
+# app_installation_id = 78901234
+# # PEM-encoded RSA private key (inline). Set either this or app_private_key_path.
+# app_private_key = """
+# -----BEGIN RSA PRIVATE KEY-----
+# MIIEpAIBAAKCAQEA...
+# -----END RSA PRIVATE KEY-----
+# """
+# # Or: path to a PEM file (alternative to inline key).
+# # app_private_key_path = "/etc/maestro/github-app-key.pem"
+
 [commands]
 # Command to run before install (e.g., registry auth: "aws codeartifact login ...")
 # Shell commands run in order before install (e.g. registry auth). Use a TOML array; a single string is still accepted.
