@@ -389,6 +389,7 @@ body { font-family: 'Inter', sans-serif; }
 /* Stacked ticket preview: 1280px max or viewport minus 12px horizontal margin */
 .manual-ticket-detail-panel {
   width: min(1280px, calc(100vw - 24px));
+  height: calc(100vh - 24px);
   max-height: calc(100vh - 24px);
   box-sizing: border-box;
 }

@@ -22,6 +22,16 @@ let ticketingSystem = 'none';
 const githubIssueDescriptions = {};
 /** Set when the ticket detail modal is open; used by **Start** to run the workflow. */
 let pendingManualTicketSelection = null;
+/** Raw markdown currently rendered in the ticket detail modal; captured for the Improve button. */
+let currentTicketDetailMarkdown = '';
+/** Snapshot of markdown before AI improvement; `null` means not in improved state. */
+let improveOriginalMarkdown = null;
+/** AbortController for the in-flight /improve fetch; `null` when no request is active. */
+let improveAbortController = null;
+/** setInterval handle for the improve countdown timer; `null` when not running. */
+let improveCountdownInterval = null;
+/** `true` while the description textarea editor is open in the detail modal. */
+let editMode = false;
 /** Bumps on each detail open so slower Jira preview responses cannot overwrite a newer selection. */
 let manualTicketPreviewSeq = 0;
 const TERMINAL_MAX_LINES = 500;
@@ -555,6 +565,11 @@ function setManualTicketDetailStartVisible(visible) {
 }
 
 function closeManualTicketDetailModal() {
+  if (improveAbortController) {
+    improveAbortController.abort();
+    improveAbortController = null;
+  }
+  resetImproveState();
   const modal = document.getElementById('manualTicketDetailModal');
   if (modal) modal.classList.add('hidden');
   pendingManualTicketSelection = null;
@@ -598,6 +613,7 @@ async function runTicketDescriptionPreviewLoad(ticketKey, summaryHint, seq, sync
       pendingManualTicketSelection.summary = hint;
     }
     const md = githubIssueDescriptions[ticketKey] || '';
+    currentTicketDetailMarkdown = md;
     const html = renderMarkdownToSafeHtml(md);
     body.innerHTML = html
       ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
@@ -636,6 +652,7 @@ async function runTicketDescriptionPreviewLoad(ticketKey, summaryHint, seq, sync
     }
 
     const md = typeof data.description_markdown === 'string' ? data.description_markdown : '';
+    currentTicketDetailMarkdown = md;
     const html = renderMarkdownToSafeHtml(md);
     if (!html) {
       body.innerHTML = '<p class="text-gray-500 italic px-5 py-6">No description</p>';
@@ -653,6 +670,245 @@ function closeManualWorkflowModal() {
   closeManualTicketDetailModal();
   const modal = document.getElementById('manualWorkflowModal');
   if (modal) modal.classList.add('hidden');
+}
+
+function resetImproveState() {
+  editMode = false;
+  improveOriginalMarkdown = null;
+  currentTicketDetailMarkdown = '';
+  const overlay = document.getElementById('manualTicketDetailImproveOverlay');
+  const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+  const editBtn = document.getElementById('manualTicketDetailEditBtn');
+  const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
+  const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+  const startBtn = document.getElementById('manualTicketDetailStartBtn');
+  if (overlay) overlay.classList.add('hidden');
+  if (improveBtn) improveBtn.disabled = false;
+  if (editBtn) { editBtn.textContent = 'Edit'; editBtn.disabled = false; }
+  if (editCancelBtn) editCancelBtn.classList.add('hidden');
+  if (closeBtn) { closeBtn.textContent = 'Close'; closeBtn.disabled = false; }
+  if (startBtn) { startBtn.textContent = 'Start'; startBtn.disabled = false; }
+}
+
+/** Exit edit mode and save the textarea content as the new current markdown. */
+function exitEditModeSave() {
+  if (!editMode) return;
+  const body = document.getElementById('manualTicketDetailBody');
+  const textarea = document.getElementById('manualTicketDetailEditArea');
+  const editBtn = document.getElementById('manualTicketDetailEditBtn');
+  const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
+  const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+  const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+  const startBtn = document.getElementById('manualTicketDetailStartBtn');
+  const newMd = textarea ? textarea.value : currentTicketDetailMarkdown;
+  const changed = newMd !== currentTicketDetailMarkdown;
+  currentTicketDetailMarkdown = newMd;
+
+  if (body) {
+    const html = renderMarkdownToSafeHtml(newMd);
+    body.innerHTML = html
+      ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+      : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+  }
+  editMode = false;
+  if (editBtn) { editBtn.textContent = 'Edit'; editBtn.disabled = false; }
+  if (editCancelBtn) editCancelBtn.classList.add('hidden');
+  if (improveBtn) improveBtn.disabled = false;
+  if (closeBtn) closeBtn.disabled = false;
+  if (startBtn) startBtn.disabled = false;
+
+  // Persist the edited description to the ticketing system.
+  if (changed) {
+    const p = pendingManualTicketSelection;
+    if (p) {
+      dashboardFetch(`/api/tickets/${encodeURIComponent(p.key)}/update-description`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: newMd }),
+      }).catch(e => console.warn('update-description after edit failed (non-fatal):', e));
+    }
+  }
+}
+
+/** Exit edit mode and discard any unsaved changes (re-render current markdown). */
+function exitEditModeDiscard() {
+  if (!editMode) return;
+  const body = document.getElementById('manualTicketDetailBody');
+  const editBtn = document.getElementById('manualTicketDetailEditBtn');
+  const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
+  const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+  const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+  const startBtn = document.getElementById('manualTicketDetailStartBtn');
+
+  if (body) {
+    const html = renderMarkdownToSafeHtml(currentTicketDetailMarkdown);
+    body.innerHTML = html
+      ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+      : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+  }
+  editMode = false;
+  if (editBtn) { editBtn.textContent = 'Edit'; editBtn.disabled = false; }
+  if (editCancelBtn) editCancelBtn.classList.add('hidden');
+  if (improveBtn) improveBtn.disabled = false;
+  if (closeBtn) closeBtn.disabled = false;
+  if (startBtn) startBtn.disabled = false;
+}
+
+function toggleEditMode() {
+  if (editMode) {
+    exitEditModeSave();
+  } else {
+    const body = document.getElementById('manualTicketDetailBody');
+    const editBtn = document.getElementById('manualTicketDetailEditBtn');
+    const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
+    const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+    const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+    const startBtn = document.getElementById('manualTicketDetailStartBtn');
+    if (!body) return;
+    editMode = true;
+    if (editBtn) editBtn.textContent = 'Save';
+    if (editCancelBtn) editCancelBtn.classList.remove('hidden');
+    if (improveBtn) improveBtn.disabled = true;
+    if (closeBtn) closeBtn.disabled = true;
+    if (startBtn) startBtn.disabled = true;
+    body.innerHTML =
+      `<textarea id="manualTicketDetailEditArea" spellcheck="false"` +
+      ` class="w-full h-full min-h-[12rem] bg-transparent text-gray-100 text-sm font-mono` +
+      ` leading-relaxed p-5 resize-none outline-none focus:outline-none block"` +
+      `>${escapeHtml(currentTicketDetailMarkdown)}</textarea>`;
+    const ta = document.getElementById('manualTicketDetailEditArea');
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+  }
+}
+
+function cancelOrCloseTicketDetail() {
+  // If in edit mode, discard the edit first (revert the body to rendered HTML).
+  if (editMode) {
+    exitEditModeDiscard();
+  }
+  if (improveOriginalMarkdown !== null) {
+    const body = document.getElementById('manualTicketDetailBody');
+    if (body) {
+      const html = renderMarkdownToSafeHtml(improveOriginalMarkdown);
+      body.innerHTML = html
+        ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+        : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+    }
+    currentTicketDetailMarkdown = improveOriginalMarkdown;
+    improveOriginalMarkdown = null;
+    const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+    const startBtn = document.getElementById('manualTicketDetailStartBtn');
+    if (closeBtn) closeBtn.textContent = 'Close';
+    if (startBtn) startBtn.textContent = 'Start';
+  } else {
+    closeManualTicketDetailModal();
+  }
+}
+
+async function confirmOrStartTicketDetail() {
+  const p = pendingManualTicketSelection;
+  if (!p) return;
+  // Commit any open edit before proceeding.
+  if (editMode) exitEditModeSave();
+  const ticketKey = p.key;
+  const ticketSummary = p.summary;
+  const descriptionToUse = currentTicketDetailMarkdown || null;
+
+  if (improveOriginalMarkdown !== null) {
+    // "Confirm" — persist improved description to ticketing system, stay in modal.
+    // Fire-and-forget (best-effort); don't block the UX on network.
+    dashboardFetch(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: descriptionToUse }),
+    }).catch(e => console.warn('update-description failed (non-fatal):', e));
+
+    // Exit improved state: keep the improved description as current, revert buttons to Close/Start.
+    improveOriginalMarkdown = null;
+    const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+    const startBtn = document.getElementById('manualTicketDetailStartBtn');
+    if (closeBtn) closeBtn.textContent = 'Close';
+    if (startBtn) startBtn.textContent = 'Start';
+    return;
+  }
+
+  // "Start" — launch the workflow.
+  closeManualWorkflowModal();
+  await startManualWorkflowRequest(ticketKey, ticketSummary, descriptionToUse);
+}
+
+async function improveTicketWithAI() {
+  const p = pendingManualTicketSelection;
+  if (!p) return;
+  const overlay = document.getElementById('manualTicketDetailImproveOverlay');
+  const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+  const editBtn = document.getElementById('manualTicketDetailEditBtn');
+  if (improveBtn) improveBtn.disabled = true;
+  if (editBtn) editBtn.disabled = true;
+  if (overlay) overlay.classList.remove('hidden');
+
+  const IMPROVE_TIMEOUT_SECS = 300;
+  const countdownEl = document.getElementById('manualTicketDetailImproveCountdown');
+  let remaining = IMPROVE_TIMEOUT_SECS;
+  function formatRemaining(s) {
+    const m = Math.floor(s / 60), sec = s % 60;
+    return `${m}:${String(sec).padStart(2, '0')} remaining until timeout`;
+  }
+  if (countdownEl) countdownEl.textContent = formatRemaining(remaining);
+  improveCountdownInterval = setInterval(() => {
+    remaining = Math.max(0, remaining - 1);
+    if (countdownEl) countdownEl.textContent = formatRemaining(remaining);
+  }, 1000);
+
+  improveAbortController = new AbortController();
+  try {
+    const res = await dashboardFetch(`/api/tickets/${encodeURIComponent(p.key)}/improve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: currentTicketDetailMarkdown, summary: p.summary }),
+      signal: improveAbortController.signal,
+    });
+    improveAbortController = null;
+    const text = await res.text();
+    if (!res.ok) {
+      alert(text || 'Failed to improve ticket description');
+      return;
+    }
+    let data;
+    try { data = JSON.parse(text); } catch { alert('Invalid response from AI'); return; }
+    const improved = data.improved_description || '';
+    improveOriginalMarkdown = currentTicketDetailMarkdown;
+    currentTicketDetailMarkdown = improved;
+    const body = document.getElementById('manualTicketDetailBody');
+    if (body) {
+      const html = renderMarkdownToSafeHtml(improved);
+      body.innerHTML = html
+        ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+        : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+    }
+    const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+    const startBtn = document.getElementById('manualTicketDetailStartBtn');
+    if (closeBtn) closeBtn.textContent = 'Cancel';
+    if (startBtn) startBtn.textContent = 'Confirm';
+    if (improveBtn) improveBtn.disabled = false;
+    if (editBtn) editBtn.disabled = false;
+  } catch (e) {
+    improveAbortController = null;
+    if (e.name !== 'AbortError') {
+      console.error(e);
+      alert('Failed to improve ticket description');
+      if (improveBtn) improveBtn.disabled = false;
+      if (editBtn) editBtn.disabled = false;
+    }
+    // AbortError: the modal was closed, nothing to do
+  } finally {
+    if (improveCountdownInterval) { clearInterval(improveCountdownInterval); improveCountdownInterval = null; }
+    if (countdownEl) countdownEl.textContent = '';
+    if (overlay) overlay.classList.add('hidden');
+  }
 }
 
 function renderMarkdownToSafeHtml(markdown) {
@@ -769,12 +1025,14 @@ async function confirmManualWorkflowStart() {
   await startManualWorkflowRequest(ticketKey, ticketSummary);
 }
 
-async function startManualWorkflowRequest(ticketKey, ticketSummary) {
+async function startManualWorkflowRequest(ticketKey, ticketSummary, description = null) {
   try {
+    const payload = { ticket_key: ticketKey, ticket_summary: ticketSummary };
+    if (description) payload.ticket_description = description;
     const res = await dashboardFetch('/api/workflows/start-manual', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticket_key: ticketKey, ticket_summary: ticketSummary }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const errText = await res.text();
