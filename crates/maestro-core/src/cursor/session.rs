@@ -15,6 +15,8 @@ pub struct CursorSession {
 
 impl CursorSession {
     /// Run Cursor Agent with the given full prompt (interpolated user text + headless suffix).
+    // Agent session parameters are inherently numerous.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_prompt(
         cursor_cli: &str,
         worktree: &Path,
@@ -50,6 +52,8 @@ impl CursorSession {
     }
 }
 
+// Agent session parameters are inherently numerous.
+#[allow(clippy::too_many_arguments)]
 async fn run_cursor_agent_session(
     cursor_cli: &str,
     worktree: &Path,
@@ -80,11 +84,11 @@ async fn run_cursor_agent_session(
         workspace.to_string(),
     ];
 
-    if let Some(m) = model {
-        if !m.is_empty() {
-            owned.push("--model".to_string());
-            owned.push(m.to_string());
-        }
+    if let Some(m) = model
+        && !m.is_empty()
+    {
+        owned.push("--model".to_string());
+        owned.push(m.to_string());
     }
 
     if let Some(sid) = resume_session_id {
@@ -172,31 +176,31 @@ fn parse_cursor_stream_json_output(raw: &str) -> String {
 
         match event_type {
             "result" => {
-                if let Some(r) = value.get("result").and_then(|v| v.as_str()) {
-                    if !r.is_empty() {
-                        result_parts.push(r.to_string());
-                    }
+                if let Some(r) = value.get("result").and_then(|v| v.as_str())
+                    && !r.is_empty()
+                {
+                    result_parts.push(r.to_string());
                 }
             }
             "assistant" => {
-                if let Some(message) = value.get("message") {
-                    if let Some(content) = message.get("content") {
-                        if let Some(text) = content.as_str() {
-                            result_parts.push(text.to_string());
-                        } else if let Some(arr) = content.as_array() {
-                            let texts: Vec<&str> = arr
-                                .iter()
-                                .filter_map(|item| {
-                                    if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                        item.get("text").and_then(|t| t.as_str())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if !texts.is_empty() {
-                                result_parts.push(texts.join(""));
-                            }
+                if let Some(message) = value.get("message")
+                    && let Some(content) = message.get("content")
+                {
+                    if let Some(text) = content.as_str() {
+                        result_parts.push(text.to_string());
+                    } else if let Some(arr) = content.as_array() {
+                        let texts: Vec<&str> = arr
+                            .iter()
+                            .filter_map(|item| {
+                                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                    item.get("text").and_then(|t| t.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if !texts.is_empty() {
+                            result_parts.push(texts.join(""));
                         }
                     }
                 }

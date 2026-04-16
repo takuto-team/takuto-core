@@ -98,14 +98,14 @@ fn cursor_data_tree_looks_populated(root: &Path) -> bool {
                     return true;
                 }
                 if low.ends_with(".json") {
-                    if let Ok(raw) = std::fs::read_to_string(&p) {
-                        if let Ok(v) = serde_json::from_str::<JsonValue>(&raw) {
-                            if json_value_has_auth_fields(&v) {
-                                return true;
-                            }
-                            if v.as_object().is_some_and(|m| m.len() >= 2 && len >= 32) {
-                                return true;
-                            }
+                    if let Ok(raw) = std::fs::read_to_string(&p)
+                        && let Ok(v) = serde_json::from_str::<JsonValue>(&raw)
+                    {
+                        if json_value_has_auth_fields(&v) {
+                            return true;
+                        }
+                        if v.as_object().is_some_and(|m| m.len() >= 2 && len >= 32) {
+                            return true;
                         }
                     }
                     continue;
@@ -143,10 +143,10 @@ fn json_value_has_auth_fields(v: &JsonValue) -> bool {
             }
             for (k, val) in map {
                 let kl = k.to_lowercase();
-                if kl.contains("token") || kl.ends_with("apikey") || kl == "api_key" {
-                    if val.as_str().is_some_and(|s| !s.trim().is_empty()) {
-                        return true;
-                    }
+                if (kl.contains("token") || kl.ends_with("apikey") || kl == "api_key")
+                    && val.as_str().is_some_and(|s| !s.trim().is_empty())
+                {
+                    return true;
                 }
             }
             map.values().any(json_value_has_auth_fields)

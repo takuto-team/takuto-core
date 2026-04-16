@@ -240,7 +240,7 @@ pub fn interpolate_agent_prompt(template: &str, vars: &HashMap<String, String>) 
     out
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -248,6 +248,8 @@ pub struct Config {
     pub jira: JiraConfig,
     #[serde(default)]
     pub git: GitConfig,
+    #[serde(default)]
+    pub github: GitHubAppConfig,
     #[serde(default)]
     pub commands: CommandsConfig,
     #[serde(default)]
@@ -274,7 +276,7 @@ pub struct Config {
 }
 
 /// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DockerConfig {
     /// Shell commands (`bash -c`) executed once while building the image, after tools are installed.
     #[serde(default)]
@@ -282,15 +284,6 @@ pub struct DockerConfig {
     /// Shell commands executed on every `docker compose up` as the maestro user, after auth preflight, before the server.
     #[serde(default)]
     pub compose_up_commands: Vec<String>,
-}
-
-impl Default for DockerConfig {
-    fn default() -> Self {
-        Self {
-            build_commands: Vec::new(),
-            compose_up_commands: Vec::new(),
-        }
-    }
 }
 
 /// Browser-based VS Code editor launched from the dashboard.
@@ -356,7 +349,7 @@ pub struct TerminalConfig {
     pub git_editor: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkConfig {
     #[serde(default)]
     pub extra_egress_hosts: Vec<String>,
@@ -455,6 +448,40 @@ pub struct GitConfig {
     pub repo_path: String,
 }
 
+/// GitHub App credentials for bot-attributed commits and pull requests.
+///
+/// When all required fields are set, Maestro authenticates as the GitHub App's
+/// bot identity instead of the personal `gh` user. Commits and PRs will be
+/// attributed to `maestro-bot[bot]`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitHubAppConfig {
+    /// The GitHub App's numeric App ID.
+    #[serde(default)]
+    pub app_id: u64,
+    /// The installation ID for the target org/repository.
+    #[serde(default)]
+    pub app_installation_id: u64,
+    /// PEM-encoded RSA private key for signing JWTs (inline content).
+    /// Set **either** this or `app_private_key_path`, not both.
+    #[serde(default)]
+    pub app_private_key: String,
+    /// Path to a PEM-encoded RSA private key file.
+    /// Set **either** this or `app_private_key`, not both.
+    #[serde(default)]
+    pub app_private_key_path: String,
+}
+
+impl GitHubAppConfig {
+    /// Returns `true` when the minimum required fields are set (app_id, installation_id,
+    /// and at least one private key source).
+    pub fn is_configured(&self) -> bool {
+        self.app_id != 0
+            && self.app_installation_id != 0
+            && (!self.app_private_key.trim().is_empty()
+                || !self.app_private_key_path.trim().is_empty())
+    }
+}
+
 fn deserialize_pre_install_vec<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Vec<String>, D::Error>
@@ -506,7 +533,7 @@ where
     deserializer.deserialize_any(PreInstallVisitor)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommandsConfig {
     #[serde(default, deserialize_with = "deserialize_pre_install_vec")]
     pub pre_install: Vec<String>,
@@ -568,15 +595,6 @@ fn default_port() -> u16 {
 }
 fn default_step_timeout() -> u64 {
     1800
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            extra_egress_hosts: Vec::new(),
-            allow_all_https: false,
-        }
-    }
 }
 
 impl GeneralConfig {
@@ -648,16 +666,6 @@ impl Default for GitConfig {
     }
 }
 
-impl Default for CommandsConfig {
-    fn default() -> Self {
-        Self {
-            pre_install: Vec::new(),
-            install: String::new(),
-            pre_workflow: Vec::new(),
-        }
-    }
-}
-
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
@@ -665,26 +673,6 @@ impl Default for WebConfig {
             port: default_port(),
             dashboard_username: String::new(),
             dashboard_password: String::new(),
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            jira: JiraConfig::default(),
-            git: GitConfig::default(),
-            commands: CommandsConfig::default(),
-            web: WebConfig::default(),
-            agent: AgentConfig::default(),
-            docker: DockerConfig::default(),
-            network: NetworkConfig::default(),
-            editor: EditorConfig::default(),
-            terminal: TerminalConfig::default(),
-            agent_steps: Vec::new(),
-            review_agent_steps: Vec::new(),
-            merge_base_agent_steps: Vec::new(),
         }
     }
 }
@@ -960,6 +948,40 @@ impl Config {
             ));
         }
 
+        // GitHub App: if any field is set, validate consistency (all-or-nothing for required fields).
+        let gh = &self.github;
+        let has_id = gh.app_id != 0;
+        let has_inst = gh.app_installation_id != 0;
+        let has_key_inline = !gh.app_private_key.trim().is_empty();
+        let has_key_path = !gh.app_private_key_path.trim().is_empty();
+        let has_any = has_id || has_inst || has_key_inline || has_key_path;
+        if has_any {
+            if !has_id {
+                return Err(MaestroError::Config(
+                    "[github] app_id must be set (non-zero) when GitHub App auth is configured"
+                        .to_string(),
+                ));
+            }
+            if !has_inst {
+                return Err(MaestroError::Config(
+                    "[github] app_installation_id must be set (non-zero) when GitHub App auth is configured"
+                        .to_string(),
+                ));
+            }
+            if !has_key_inline && !has_key_path {
+                return Err(MaestroError::Config(
+                    "[github] set app_private_key (PEM content) or app_private_key_path (path to PEM file)"
+                        .to_string(),
+                ));
+            }
+            if has_key_inline && has_key_path {
+                return Err(MaestroError::Config(
+                    "[github] set either app_private_key or app_private_key_path, not both"
+                        .to_string(),
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -968,10 +990,12 @@ impl Config {
             .map_err(|e| MaestroError::Config(format!("Failed to serialize config: {e}")))
     }
 
-    /// Copy for JSON API responses: strips dashboard password (never expose via `GET /api/config`).
+    /// Copy for JSON API responses: strips secrets (never expose via `GET /api/config`).
     pub fn redacted_for_api_clone(&self) -> Self {
         let mut c = self.clone();
         c.web.dashboard_password.clear();
+        c.github.app_private_key.clear();
+        c.github.app_private_key_path.clear();
         c
     }
 }
@@ -1423,5 +1447,67 @@ step_timeout_secs = 600
         let mut c = Config::default();
         let patch: RuntimeDashboardConfigPatch = serde_json::from_str(r#"{"web":{}}"#).unwrap();
         assert!(c.apply_runtime_dashboard_patch(patch).is_err());
+    }
+
+    // -- GitHubAppConfig::is_configured --
+
+    #[test]
+    fn github_app_config_unconfigured_by_default() {
+        assert!(!GitHubAppConfig::default().is_configured());
+    }
+
+    #[test]
+    fn github_app_config_requires_app_id() {
+        let cfg = GitHubAppConfig {
+            app_id: 0,
+            app_installation_id: 42,
+            app_private_key: "pem".into(),
+            app_private_key_path: String::new(),
+        };
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn github_app_config_requires_installation_id() {
+        let cfg = GitHubAppConfig {
+            app_id: 99,
+            app_installation_id: 0,
+            app_private_key: "pem".into(),
+            app_private_key_path: String::new(),
+        };
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn github_app_config_requires_private_key_source() {
+        let cfg = GitHubAppConfig {
+            app_id: 99,
+            app_installation_id: 42,
+            app_private_key: "   ".into(),
+            app_private_key_path: "   ".into(),
+        };
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn github_app_config_configured_with_inline_key() {
+        let cfg = GitHubAppConfig {
+            app_id: 99,
+            app_installation_id: 42,
+            app_private_key: "-----BEGIN RSA PRIVATE KEY-----".into(),
+            app_private_key_path: String::new(),
+        };
+        assert!(cfg.is_configured());
+    }
+
+    #[test]
+    fn github_app_config_configured_with_key_path() {
+        let cfg = GitHubAppConfig {
+            app_id: 99,
+            app_installation_id: 42,
+            app_private_key: String::new(),
+            app_private_key_path: "/etc/maestro/key.pem".into(),
+        };
+        assert!(cfg.is_configured());
     }
 }

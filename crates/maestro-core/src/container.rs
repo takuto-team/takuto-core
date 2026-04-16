@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::broadcast;
@@ -16,9 +16,15 @@ fn shell_escape(s: &str) -> String {
         return "''".to_string();
     }
     // If the string is safe (alphanumeric, common flags), return as-is.
-    if s.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'/' || b == b'.' || b == b'=' || b == b':')
-    {
+    if s.bytes().all(|b| {
+        b.is_ascii_alphanumeric()
+            || b == b'-'
+            || b == b'_'
+            || b == b'/'
+            || b == b'.'
+            || b == b'='
+            || b == b':'
+    }) {
         return s.to_string();
     }
     // Wrap in single quotes, escaping embedded single quotes.
@@ -101,6 +107,10 @@ const PASSTHROUGH_ENV: &[&str] = &[
     // or write a thin shell alias in maestro.env.
     "LOKALISE_API_TOKEN",
     "CURSOR_API_KEY",
+    // When set in the environment, overrides personal `gh` auth in worker containers.
+    // (GitHubAppTokenManager uses `gh auth login --with-token` + the shared auth volume
+    // instead; this passthrough covers cases where GH_TOKEN is set externally.)
+    "GH_TOKEN",
     // Optional: force a fixed browser bundle (must match the project's @playwright/test version).
     "PLAYWRIGHT_BROWSERS_PATH",
     // Match CI behaviour when needed (some tools tweak output when CI is set).
@@ -194,11 +204,11 @@ impl ContainerRunner {
         }
 
         for key in PASSTHROUGH_ENV {
-            if let Ok(val) = std::env::var(key) {
-                if !val.is_empty() {
-                    args.push("-e".into());
-                    args.push(format!("{key}={val}"));
-                }
+            if let Ok(val) = std::env::var(key)
+                && !val.is_empty()
+            {
+                args.push("-e".into());
+                args.push(format!("{key}={val}"));
             }
         }
 
@@ -263,7 +273,6 @@ impl ContainerRunner {
         let sanitized = sanitize_ticket_key(&self.ticket_key);
         remove_containers_matching(&sanitized).await;
     }
-
 
     /// Force-remove all worker containers for a given ticket key (no instance needed).
     pub async fn cleanup_for_ticket(ticket_key: &str) {
@@ -346,7 +355,13 @@ fn editor_container_name(ticket_key: &str) -> String {
 /// List host ports already claimed by any `maestro-editor-*` container.
 async fn used_editor_ports() -> Vec<u16> {
     let output = tokio::process::Command::new("docker")
-        .args(["ps", "--filter", "name=maestro-editor-", "--format", "{{.Ports}}"])
+        .args([
+            "ps",
+            "--filter",
+            "name=maestro-editor-",
+            "--format",
+            "{{.Ports}}",
+        ])
         .output()
         .await;
 
@@ -404,7 +419,12 @@ async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
         if attempt < 4 {
             let delay_ms = 100 * (attempt + 1) as u64; // 100ms, 200ms, 300ms, 400ms
             tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-            debug!(attempt, needed = count, available = free.len(), "Retrying port allocation after delay");
+            debug!(
+                attempt,
+                needed = count,
+                available = free.len(),
+                "Retrying port allocation after delay"
+            );
         }
     }
     None // not enough free ports after retries
@@ -472,11 +492,11 @@ pub async fn start_editor(
         args.push(format!("{k}={v}"));
     }
     for key in PASSTHROUGH_ENV {
-        if let Ok(val) = std::env::var(key) {
-            if !val.is_empty() {
-                args.push("-e".into());
-                args.push(format!("{key}={val}"));
-            }
+        if let Ok(val) = std::env::var(key)
+            && !val.is_empty()
+        {
+            args.push("-e".into());
+            args.push(format!("{key}={val}"));
         }
     }
 
@@ -545,7 +565,9 @@ pub async fn start_editor(
 
     for ext in extensions {
         let escaped = shell_escape(ext);
-        script_parts.push(format!("openvscode-server --install-extension {escaped} --force 2>/dev/null || true"));
+        script_parts.push(format!(
+            "openvscode-server --install-extension {escaped} --force 2>/dev/null || true"
+        ));
     }
 
     script_parts.push(format!(
@@ -617,7 +639,15 @@ chown -R maestro:maestro /home/maestro/.local/share/mise /home/maestro/.cache/mi
 chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
 "#;
     let _ = tokio::process::Command::new("docker")
-        .args(["exec", "--user", "root", container, "bash", "-lc", chown_script])
+        .args([
+            "exec",
+            "--user",
+            "root",
+            container,
+            "bash",
+            "-lc",
+            chown_script,
+        ])
         .output()
         .await;
 
@@ -629,7 +659,15 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
              && su - maestro -c 'git config --global core.editor {escaped}'"
         );
         let out = tokio::process::Command::new("docker")
-            .args(["exec", "--user", "root", container, "bash", "-lc", &install_script])
+            .args([
+                "exec",
+                "--user",
+                "root",
+                container,
+                "bash",
+                "-lc",
+                &install_script,
+            ])
             .output()
             .await;
         match out {
@@ -664,7 +702,12 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
         );
         tokio::process::Command::new("docker")
             .args([
-                "exec", "--user", "root", container, "bash", "-lc",
+                "exec",
+                "--user",
+                "root",
+                container,
+                "bash",
+                "-lc",
                 &format!(r#"su - maestro -c {}"#, shell_escape(&wrapped)),
             ])
             .output()
@@ -769,10 +812,7 @@ pub async fn stop_editor(ticket_key: &str) {
 /// Start a web-based terminal (ttyd) inside the running editor container on `port`.
 /// Returns the URL on success. Setup commands (tool installs, etc.) are expected to
 /// have already been run at editor container creation by `run_editor_setup_as_root`.
-pub async fn start_terminal(
-    ticket_key: &str,
-    port: u16,
-) -> std::result::Result<String, String> {
+pub async fn start_terminal(ticket_key: &str, port: u16) -> std::result::Result<String, String> {
     let name = editor_container_name(ticket_key);
 
     // Check the editor container is actually running.
@@ -821,11 +861,20 @@ exec bash -l"#.to_string();
     info!(ticket = %ticket_key, port, "Starting ttyd on port");
     let output = tokio::process::Command::new("docker")
         .args([
-            "exec", "-d", &name, "ttyd", "-p",
-            &port.to_string(), "-W",
-            "-t", "fontSize=14",
-            "-t", &tab_title,
-            "bash", "-c", &shell_cmd,
+            "exec",
+            "-d",
+            &name,
+            "ttyd",
+            "-p",
+            &port.to_string(),
+            "-W",
+            "-t",
+            "fontSize=14",
+            "-t",
+            &tab_title,
+            "bash",
+            "-c",
+            &shell_cmd,
         ])
         .output()
         .await
@@ -844,7 +893,10 @@ exec bash -l"#.to_string();
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let nc_check = tokio::process::Command::new("docker")
             .args([
-                "exec", &name, "bash", "-c",
+                "exec",
+                &name,
+                "bash",
+                "-c",
                 &format!("echo > /dev/tcp/127.0.0.1/{port}"),
             ])
             .output()
@@ -860,7 +912,9 @@ exec bash -l"#.to_string();
         }
     }
 
-    Err(format!("ttyd failed to bind to port {port} — verify no other process is using this port"))
+    Err(format!(
+        "ttyd failed to bind to port {port} — verify no other process is using this port"
+    ))
 }
 
 /// Return the container port that ttyd is currently listening on inside the editor container,
@@ -980,7 +1034,9 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
         .await
         .ok()?;
 
-    let folder = String::from_utf8_lossy(&wd_output.stdout).trim().to_string();
+    let folder = String::from_utf8_lossy(&wd_output.stdout)
+        .trim()
+        .to_string();
     let host_vscode_port = editor_host_port(vscode_port);
     let url = format!("http://localhost:{host_vscode_port}/?folder={folder}");
 
@@ -1090,8 +1146,7 @@ pub async fn run_port_scanner(
     // Ports to never treat as "new": VS Code and all pre-allocated spare ports (they
     // are docker-mapped; socat may briefly keep them LISTENing after kill, so never
     // re-forward them).
-    let mut always_ignore: std::collections::HashSet<u16> =
-        std::collections::HashSet::new();
+    let mut always_ignore: std::collections::HashSet<u16> = std::collections::HashSet::new();
     always_ignore.insert(vscode_port);
     for sp in &spare_ports {
         always_ignore.insert(*sp);
@@ -1233,14 +1288,13 @@ async fn scan_listening_ports(container: &str) -> Option<Vec<(u16, ListenFamily)
             } else {
                 ListenFamily::Ipv4
             };
-            if let Some(port_str) = local.rsplit(':').next() {
-                if let Ok(port) = port_str.parse::<u16>() {
-                    if port > 0 {
-                        let entry = by_port.entry(port).or_insert(family);
-                        if family == ListenFamily::Ipv4 {
-                            *entry = ListenFamily::Ipv4;
-                        }
-                    }
+            if let Some(port_str) = local.rsplit(':').next()
+                && let Ok(port) = port_str.parse::<u16>()
+                && port > 0
+            {
+                let entry = by_port.entry(port).or_insert(family);
+                if family == ListenFamily::Ipv4 {
+                    *entry = ListenFamily::Ipv4;
                 }
             }
         }
@@ -1412,7 +1466,11 @@ mod tests {
         assert_eq!(tail[3], "sh");
         assert_eq!(tail[4], "-c");
         // The shell command restores .claude.json then execs the original program
-        assert!(tail[5].contains("exec claude --print -p hello"), "sh -c body: {}", tail[5]);
+        assert!(
+            tail[5].contains("exec claude --print -p hello"),
+            "sh -c body: {}",
+            tail[5]
+        );
     }
 
     #[test]

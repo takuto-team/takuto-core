@@ -103,8 +103,10 @@ fn can_open_editor(w: &Workflow) -> bool {
 }
 
 fn can_resume_from_error(w: &Workflow) -> bool {
-    matches!(w.state, WorkflowState::Error { .. } | WorkflowState::Stopped)
-        && w.worktree_path.as_ref().is_some_and(|p| p.exists())
+    matches!(
+        w.state,
+        WorkflowState::Error { .. } | WorkflowState::Stopped
+    ) && w.worktree_path.as_ref().is_some_and(|p| p.exists())
 }
 
 fn ticketing_system_str(ts: TicketingSystem) -> &'static str {
@@ -366,7 +368,9 @@ pub async fn start_manual_workflow(
     State(state): State<AppState>,
     Json(body): Json<StartManualWorkflowBody>,
 ) -> Result<Json<StartManualWorkflowResponse>, (StatusCode, String)> {
-    let jira_on = state.jira_available.load(std::sync::atomic::Ordering::Relaxed);
+    let jira_on = state
+        .jira_available
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     let ticket_key = {
         let k = body.ticket_key.trim().to_string();
@@ -383,7 +387,11 @@ pub async fn start_manual_workflow(
     let ticket_summary = {
         let s = body.ticket_summary.trim();
         if s.is_empty() {
-            if jira_on { ticket_key.clone() } else { "Manual workflow".to_string() }
+            if jira_on {
+                ticket_key.clone()
+            } else {
+                "Manual workflow".to_string()
+            }
         } else {
             s.to_string()
         }
@@ -466,7 +474,8 @@ pub async fn open_editor(
     if !can_open_editor(w) {
         return Err((
             StatusCode::CONFLICT,
-            "Cannot open editor: workflow is active, worktree missing, or Docker unavailable".into(),
+            "Cannot open editor: workflow is active, worktree missing, or Docker unavailable"
+                .into(),
         ));
     }
 
@@ -495,8 +504,8 @@ pub async fn open_editor(
         &ticket_key, &worktree, &image, &app_ports, dynamic_ports,
         &theme, &extensions, &settings, &setup_commands, &startup_commands, &git_editor,
     )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     // Spawn background port scanner if dynamic ports are available.
     if !info.spare_ports.is_empty() {
@@ -536,10 +545,7 @@ pub async fn open_editor(
 }
 
 /// Stop and remove the editor container for a workflow.
-pub async fn close_editor(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> StatusCode {
+pub async fn close_editor(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
     // Cancel port scanner first so it doesn't try to scan a dying container.
     if let Some(token) = state.editor_scanners.write().await.remove(&id) {
         token.cancel();
@@ -570,9 +576,10 @@ pub async fn open_terminal(
     }
 
     // Editor container must be running.
-    let info = container::get_editor_info(&id)
-        .await
-        .ok_or((StatusCode::CONFLICT, "Editor container is not running — open the editor first.".into()))?;
+    let info = container::get_editor_info(&id).await.ok_or((
+        StatusCode::CONFLICT,
+        "Editor container is not running — open the editor first.".into(),
+    ))?;
 
     // Recover from a server restart: ttyd may already be running from a previous session.
     // Ask the container for the actual port (via pgrep) rather than trusting the now-empty map.
@@ -610,10 +617,7 @@ pub async fn open_terminal(
 }
 
 /// Stop the web terminal for a workflow's editor container.
-pub async fn close_terminal(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> StatusCode {
+pub async fn close_terminal(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
     state.terminal_ports.write().await.remove(&id);
     container::stop_terminal(&id).await;
     StatusCode::OK

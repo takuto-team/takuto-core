@@ -5,30 +5,14 @@ use serde::Serialize;
 
 use crate::state::AppState;
 
+// Re-export so tickets.rs can import via `crate::routes::github::parse_github_repo`.
+pub use maestro_core::github::parse_github_repo;
+
 #[derive(Serialize)]
 pub struct GithubIssueRow {
     pub key: String,
     pub summary: String,
     pub body: String,
-}
-
-/// Parse `owner/repo` from a GitHub URL or bare `owner/repo` string.
-pub fn parse_github_repo(repo_url: &str) -> Option<String> {
-    let url = repo_url.trim().trim_end_matches('/').trim_end_matches(".git");
-    if let Some(rest) = url.strip_prefix("https://github.com/") {
-        if rest.contains('/') {
-            return Some(rest.to_string());
-        }
-    }
-    if let Some(rest) = url.strip_prefix("git@github.com:") {
-        if rest.contains('/') {
-            return Some(rest.to_string());
-        }
-    }
-    if url.contains('/') && !url.contains("://") {
-        return Some(url.to_string());
-    }
-    None
 }
 
 /// `GET /api/github/issues` — returns open GitHub issues for the configured repo.

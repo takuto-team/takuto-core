@@ -118,7 +118,10 @@ pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Resu
 ///
 /// If the dashboard row was removed but disk cleanup failed (or the tree was never registered),
 /// reusing the path would keep another ticket’s files while Jira prompts match the new key.
-pub async fn clear_worktree_path_for_recreate(repo_path: &Path, worktree_path: &Path) -> Result<()> {
+pub async fn clear_worktree_path_for_recreate(
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> Result<()> {
     if !worktree_path.exists() {
         return Ok(());
     }

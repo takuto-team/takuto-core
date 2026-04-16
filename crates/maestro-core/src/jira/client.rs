@@ -87,7 +87,7 @@ impl JiraClient {
                     "Searching for tickets"
                 );
 
-                let search_args = vec![
+                let search_args = [
                     "jira".to_string(),
                     "workitem".to_string(),
                     "search".to_string(),
@@ -163,7 +163,7 @@ impl JiraClient {
 
         info!(jql = %jql, "Searching for To Do tickets (board-style, by rank)");
 
-        let search_args = vec![
+        let search_args = [
             "jira".to_string(),
             "workitem".to_string(),
             "search".to_string(),
@@ -519,13 +519,13 @@ fn extract_description_text(fields: &serde_json::Value) -> String {
                 collect_text(child, buf);
             }
             // Add newline after paragraph-level nodes
-            if let Some(node_type) = node.get("type").and_then(|v| v.as_str()) {
-                if matches!(
+            if let Some(node_type) = node.get("type").and_then(|v| v.as_str())
+                && matches!(
                     node_type,
                     "paragraph" | "heading" | "bulletList" | "orderedList"
-                ) {
-                    buf.push('\n');
-                }
+                )
+            {
+                buf.push('\n');
             }
         }
     }

@@ -7,6 +7,7 @@ pub mod cursor;
 pub mod docker_hooks;
 pub mod error;
 pub mod git;
+pub mod github_app;
 pub mod github;
 pub mod jira;
 pub mod process;

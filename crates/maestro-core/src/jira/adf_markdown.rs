@@ -145,43 +145,43 @@ fn append_list_item_markdown(
     index: usize,
 ) {
     let indent = "    ".repeat(list_depth as usize);
-    if let Some("listItem") = item.get("type").and_then(|t| t.as_str()) {
-        if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
-            let mut first = true;
-            for block in content {
-                let bt = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                if first {
-                    out.push_str(&indent);
-                    if ordered {
-                        out.push_str(&format!("{index}. "));
-                    } else {
-                        out.push_str("- ");
-                    }
-                    first = false;
-                    match bt {
-                        "paragraph" => {
-                            append_inline_content(block, out);
-                            out.push('\n');
-                        }
-                        "bulletList" | "orderedList" => {
-                            out.push('\n');
-                            append_block_markdown(block, out, list_depth + 1);
-                        }
-                        _ => {
-                            let mut tmp = String::new();
-                            append_block_markdown(block, &mut tmp, list_depth + 1);
-                            let t = tmp.trim_end();
-                            if !t.is_empty() {
-                                out.push_str(t);
-                            }
-                            out.push('\n');
-                        }
-                    }
+    if let Some("listItem") = item.get("type").and_then(|t| t.as_str())
+        && let Some(content) = item.get("content").and_then(|c| c.as_array())
+    {
+        let mut first = true;
+        for block in content {
+            let bt = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if first {
+                out.push_str(&indent);
+                if ordered {
+                    out.push_str(&format!("{index}. "));
                 } else {
-                    out.push_str(&indent);
-                    out.push_str("  ");
-                    append_block_markdown(block, out, list_depth + 1);
+                    out.push_str("- ");
                 }
+                first = false;
+                match bt {
+                    "paragraph" => {
+                        append_inline_content(block, out);
+                        out.push('\n');
+                    }
+                    "bulletList" | "orderedList" => {
+                        out.push('\n');
+                        append_block_markdown(block, out, list_depth + 1);
+                    }
+                    _ => {
+                        let mut tmp = String::new();
+                        append_block_markdown(block, &mut tmp, list_depth + 1);
+                        let t = tmp.trim_end();
+                        if !t.is_empty() {
+                            out.push_str(t);
+                        }
+                        out.push('\n');
+                    }
+                }
+            } else {
+                out.push_str(&indent);
+                out.push_str("  ");
+                append_block_markdown(block, out, list_depth + 1);
             }
         }
     }
@@ -207,7 +207,11 @@ fn append_inline_content(block: &Value, out: &mut String) {
             match ct {
                 "hardBreak" => out.push_str("  \n"),
                 "emoji" => {
-                    if let Some(short) = c.get("attrs").and_then(|a| a.get("shortName")).and_then(|s| s.as_str()) {
+                    if let Some(short) = c
+                        .get("attrs")
+                        .and_then(|a| a.get("shortName"))
+                        .and_then(|s| s.as_str())
+                    {
                         out.push(':');
                         out.push_str(short);
                         out.push(':');
@@ -225,12 +229,20 @@ fn append_inline_content(block: &Value, out: &mut String) {
                     }
                 }
                 "inlineCard" | "blockCard" => {
-                    if let Some(url) = c.get("attrs").and_then(|a| a.get("url")).and_then(|u| u.as_str()) {
+                    if let Some(url) = c
+                        .get("attrs")
+                        .and_then(|a| a.get("url"))
+                        .and_then(|u| u.as_str())
+                    {
                         out.push_str(&format!("<{url}>"));
                     }
                 }
                 "date" => {
-                    if let Some(ts) = c.get("attrs").and_then(|a| a.get("timestamp")).and_then(|t| t.as_i64()) {
+                    if let Some(ts) = c
+                        .get("attrs")
+                        .and_then(|a| a.get("timestamp"))
+                        .and_then(|t| t.as_i64())
+                    {
                         out.push_str(&format!("`{ts}`"));
                     }
                 }

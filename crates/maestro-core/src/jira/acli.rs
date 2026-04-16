@@ -150,10 +150,9 @@ mod tests {
     }
 
     #[test]
-    fn delete_and_edit_blocked() {
+    fn delete_and_move_blocked() {
         for argv in [
             &["jira", "workitem", "delete", "--key", "X"][..],
-            &["jira", "workitem", "edit", "--key", "X"][..],
             &["jira", "workitem", "move", "--key", "X"][..],
         ] {
             assert!(
@@ -162,6 +161,15 @@ mod tests {
                 argv.join(" ")
             );
         }
+    }
+
+    #[test]
+    fn edit_is_allowed() {
+        // edit was added to BUILTIN_PREFIXES to support the ticket-improve feature.
+        assert!(acli_argv_allowed(
+            &["jira", "workitem", "edit", "--key", "X"],
+            &[]
+        ));
     }
 
     #[test]

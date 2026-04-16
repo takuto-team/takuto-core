@@ -8,15 +8,14 @@ use crate::config::AiAgentProvider;
 pub fn extract_session_id_from_ndjson(raw: &str) -> Option<String> {
     for line in raw.lines() {
         let line = line.trim();
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
-            if value.get("type").and_then(|v| v.as_str()) == Some("system")
-                && value.get("subtype").and_then(|v| v.as_str()) == Some("init")
-            {
-                return value
-                    .get("session_id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-            }
+        if let Ok(value) = serde_json::from_str::<Value>(line)
+            && value.get("type").and_then(|v| v.as_str()) == Some("system")
+            && value.get("subtype").and_then(|v| v.as_str()) == Some("init")
+        {
+            return value
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
         }
     }
     None
@@ -76,25 +75,25 @@ fn humanize_claude_output(raw: &str) -> Option<String> {
             }
         }
         "assistant" => {
-            if let Some(message) = value.get("message") {
-                if let Some(content) = message.get("content") {
-                    if let Some(text) = content.as_str() {
-                        return Some(text.to_string());
-                    }
-                    if let Some(arr) = content.as_array() {
-                        let texts: Vec<&str> = arr
-                            .iter()
-                            .filter_map(|item| {
-                                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                    item.get("text").and_then(|t| t.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if !texts.is_empty() {
-                            return Some(texts.join(""));
-                        }
+            if let Some(message) = value.get("message")
+                && let Some(content) = message.get("content")
+            {
+                if let Some(text) = content.as_str() {
+                    return Some(text.to_string());
+                }
+                if let Some(arr) = content.as_array() {
+                    let texts: Vec<&str> = arr
+                        .iter()
+                        .filter_map(|item| {
+                            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                item.get("text").and_then(|t| t.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if !texts.is_empty() {
+                        return Some(texts.join(""));
                     }
                 }
             }
@@ -102,16 +101,15 @@ fn humanize_claude_output(raw: &str) -> Option<String> {
         }
         "tool_use" | "tool_call" => {
             let tool_name = value.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            if tool_name == "Bash" || tool_name == "bash" {
-                if let Some(cmd) = value
+            if (tool_name == "Bash" || tool_name == "bash")
+                && let Some(cmd) = value
                     .get("input")
                     .and_then(|i| i.get("command"))
                     .and_then(|c| c.as_str())
-                {
-                    info!(command = %cmd, "Agent shell command (Claude)");
-                    let short = if cmd.len() > 120 { &cmd[..120] } else { cmd };
-                    return Some(format!("$ {short}"));
-                }
+            {
+                info!(command = %cmd, "Agent shell command (Claude)");
+                let short = if cmd.len() > 120 { &cmd[..120] } else { cmd };
+                return Some(format!("$ {short}"));
             }
             if !tool_name.is_empty() {
                 Some(format!("Tool: {tool_name}"))
@@ -159,36 +157,36 @@ fn humanize_cursor_output(raw: &str) -> Option<String> {
         }
         "user" => None,
         "assistant" => {
-            if let Some(message) = value.get("message") {
-                if let Some(content) = message.get("content") {
-                    let joined = if let Some(text) = content.as_str() {
-                        Some(text.to_string())
-                    } else if let Some(arr) = content.as_array() {
-                        let texts: Vec<&str> = arr
-                            .iter()
-                            .filter_map(|item| {
-                                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                    item.get("text").and_then(|t| t.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if texts.is_empty() {
-                            None
-                        } else {
-                            Some(texts.join(""))
-                        }
-                    } else {
+            if let Some(message) = value.get("message")
+                && let Some(content) = message.get("content")
+            {
+                let joined = if let Some(text) = content.as_str() {
+                    Some(text.to_string())
+                } else if let Some(arr) = content.as_array() {
+                    let texts: Vec<&str> = arr
+                        .iter()
+                        .filter_map(|item| {
+                            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                item.get("text").and_then(|t| t.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if texts.is_empty() {
                         None
-                    };
-                    if let Some(s) = joined {
-                        let t = s.trim();
-                        if t.is_empty() {
-                            return None;
-                        }
-                        return Some(t.to_string());
+                    } else {
+                        Some(texts.join(""))
                     }
+                } else {
+                    None
+                };
+                if let Some(s) = joined {
+                    let t = s.trim();
+                    if t.is_empty() {
+                        return None;
+                    }
+                    return Some(t.to_string());
                 }
             }
             None
@@ -328,20 +326,22 @@ fn summarize_cursor_tool_event(value: &Value) -> Option<String> {
     }
 
     if subtype == "completed" {
-        if let Some(s) = tc.get("shellToolCall") {
-            if let Some(result) = s.get("result") {
-                let (key, r) = if let Some(r) = result.get("success") {
-                    ("success", r)
-                } else if let Some(r) = result.get("failure") {
-                    ("failure", r)
-                } else {
-                    return None;
-                };
-                let cmd = r.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                let exit_code = r.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
-                info!(command = %cmd, exit_code = exit_code, result = %key, "Agent shell command completed");
-                return Some(cursor_shell_completed_dashboard_line(key, cmd, exit_code, r));
-            }
+        if let Some(s) = tc.get("shellToolCall")
+            && let Some(result) = s.get("result")
+        {
+            let (key, r) = if let Some(r) = result.get("success") {
+                ("success", r)
+            } else if let Some(r) = result.get("failure") {
+                ("failure", r)
+            } else {
+                return None;
+            };
+            let cmd = r.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let exit_code = r.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
+            info!(command = %cmd, exit_code = exit_code, result = %key, "Agent shell command completed");
+            return Some(cursor_shell_completed_dashboard_line(
+                key, cmd, exit_code, r,
+            ));
         }
         return None;
     }
@@ -387,7 +387,8 @@ mod tests {
 
     #[test]
     fn cursor_assistant_empty_after_trim_yields_none() {
-        let raw = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"   \n\t  "}]}}"#;
+        let raw =
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"   \n\t  "}]}}"#;
         assert_eq!(cursor_humanize(raw), None);
     }
 
@@ -395,10 +396,7 @@ mod tests {
     fn cursor_function_started_includes_args_snippet() {
         let raw = r#"{"type":"tool_call","subtype":"started","tool_call":{"function":{"name":"read_file","arguments":"{\"path\":\"/tmp/secret.txt\"}"}}}"#;
         let line = cursor_humanize(raw).expect("expected line");
-        assert!(
-            line.starts_with("Tool: read_file ("),
-            "unexpected: {line}"
-        );
+        assert!(line.starts_with("Tool: read_file ("), "unexpected: {line}");
         assert_ne!(line.as_str(), "Tool call started");
         assert!(line.contains("path"), "{line}");
     }
