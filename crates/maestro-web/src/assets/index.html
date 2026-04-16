@@ -267,7 +267,11 @@
           <textarea id="pasteDescBody" placeholder="Paste the full ticket description here..."
             class="flex-1 min-h-[200px] w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-3 text-sm text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-none font-mono leading-relaxed"></textarea>
         </div>
-        <div class="flex-shrink-0 border-t border-gray-800 px-5 py-4 flex justify-end gap-3 bg-gray-900/95">
+        <div class="flex-shrink-0 border-t border-gray-800 px-5 py-4 flex items-center gap-3 bg-gray-900/95">
+          <button type="button" id="pasteDescImproveBtn" onclick="void improvePasteDescription()"
+            class="dashboard-header-btn bg-purple-700/80 text-white border-purple-600 hover:bg-purple-700 min-w-[8.5rem] mr-auto">
+            Improve with AI
+          </button>
           <button type="button" onclick="closePasteDescriptionModal()"
             class="dashboard-header-btn bg-gray-800/80 text-gray-300 border-gray-700 hover:bg-gray-800 hover:border-gray-600 min-w-[5.5rem]">
             Cancel

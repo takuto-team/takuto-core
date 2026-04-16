@@ -1992,6 +1992,44 @@ function slugifyWorkflowName(name) {
     .replace(/^-+|-+$/g, '');
 }
 
+async function improvePasteDescription() {
+  const textarea = document.getElementById('pasteDescBody');
+  const nameInput = document.getElementById('pasteDescName');
+  const improveBtn = document.getElementById('pasteDescImproveBtn');
+  const startBtn = document.getElementById('pasteDescStartBtn');
+  if (!textarea || !improveBtn) return;
+
+  const description = textarea.value.trim();
+  const summary = nameInput ? nameInput.value.trim() : '';
+
+  improveBtn.disabled = true;
+  improveBtn.textContent = 'Improving…';
+  if (startBtn) startBtn.disabled = true;
+
+  try {
+    const res = await dashboardFetch('/api/tickets/manual/improve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description, summary }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('Improve failed:', errText);
+    } else {
+      const data = await res.json();
+      if (typeof data.improved_description === 'string' && data.improved_description.trim()) {
+        textarea.value = data.improved_description;
+      }
+    }
+  } catch (e) {
+    console.error('Improve failed:', e);
+  } finally {
+    improveBtn.disabled = false;
+    improveBtn.textContent = 'Improve with AI';
+    if (startBtn) startBtn.disabled = false;
+  }
+}
+
 function openPasteDescriptionModal() {
   const modal = document.getElementById('pasteDescriptionModal');
   if (!modal) return;
