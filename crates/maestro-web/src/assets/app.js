@@ -1688,12 +1688,10 @@ function renderWorkflowCard(w) {
   let actions = jiraLinkActions;
   if (status.label === 'Running') {
     actions += `
-      <button onclick="pauseWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-yellow-500/10 text-yellow-400 border-yellow-500/20 hover:bg-yellow-500/20">Pause</button>
-      <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
+      <button onclick="pauseWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-yellow-500/10 text-yellow-400 border-yellow-500/20 hover:bg-yellow-500/20">Pause</button>`;
   } else if (status.label === 'Paused') {
     actions += `
-      <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20">Resume</button>
-      <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
+      <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20">Resume</button>`;
   }
   if (w.can_resume_from_error) {
     actions += `

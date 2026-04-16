@@ -819,6 +819,9 @@ impl WorkflowEngine {
                 let restored = *source_state.clone();
                 workflow.state = restored;
                 workflow.updated_at = Utc::now();
+                // Drop any Running entries — they represent the step that was interrupted by pause.
+                // The fresh driver will re-run that step from scratch.
+                workflow.steps_log.retain(|s| s.status != StepStatus::Running);
 
                 let state_line = workflow.status_display();
                 self.broadcast_event(WorkflowEvent {
@@ -1477,7 +1480,24 @@ async fn drive_workflow(
                     );
                     return;
                 }
-                _ => {}
+                _ => {
+                    // Check for pause→resume race: if the workflow now holds a fresh (non-cancelled)
+                    // cancel token, our token was replaced by resume_workflow. A new driver has already
+                    // taken over — exit silently rather than overwriting the state with Error.
+                    let replaced = {
+                        let wf = workflows.read().await;
+                        wf.get(&ticket_key)
+                            .map(|w| !w.cancel_token.is_cancelled())
+                            .unwrap_or(false)
+                    };
+                    if replaced {
+                        info!(
+                            ticket = %ticket_key,
+                            "Workflow driver cancelled; replaced by fresh driver after pause→resume"
+                        );
+                        return;
+                    }
+                }
             }
         }
 
@@ -2566,10 +2586,17 @@ async fn run_workflow_steps(
     let is_resume = reuse_path.is_some();
 
     // Capture completed steps from prior run so we can skip them on resume.
+    // Strip Running entries — they represent steps interrupted by pause/cancellation and must rerun.
     let prior_steps_log: Vec<StepLog> = if is_resume {
         let wf = workflows.read().await;
         wf.get(ticket_key)
-            .map(|w| w.steps_log.clone())
+            .map(|w| {
+                w.steps_log
+                    .iter()
+                    .filter(|s| s.status != StepStatus::Running)
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     } else {
         Vec::new()
