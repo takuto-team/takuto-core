@@ -75,25 +75,25 @@ fn humanize_claude_output(raw: &str) -> Option<String> {
             }
         }
         "assistant" => {
-            if let Some(message) = value.get("message") {
-                if let Some(content) = message.get("content") {
-                    if let Some(text) = content.as_str() {
-                        return Some(text.to_string());
-                    }
-                    if let Some(arr) = content.as_array() {
-                        let texts: Vec<&str> = arr
-                            .iter()
-                            .filter_map(|item| {
-                                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                    item.get("text").and_then(|t| t.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if !texts.is_empty() {
-                            return Some(texts.join(""));
-                        }
+            if let Some(message) = value.get("message")
+                && let Some(content) = message.get("content")
+            {
+                if let Some(text) = content.as_str() {
+                    return Some(text.to_string());
+                }
+                if let Some(arr) = content.as_array() {
+                    let texts: Vec<&str> = arr
+                        .iter()
+                        .filter_map(|item| {
+                            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                item.get("text").and_then(|t| t.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if !texts.is_empty() {
+                        return Some(texts.join(""));
                     }
                 }
             }
@@ -157,8 +157,9 @@ fn humanize_cursor_output(raw: &str) -> Option<String> {
         }
         "user" => None,
         "assistant" => {
-            if let Some(message) = value.get("message") {
-            if let Some(content) = message.get("content") {
+            if let Some(message) = value.get("message")
+                && let Some(content) = message.get("content")
+            {
                 let joined = if let Some(text) = content.as_str() {
                     Some(text.to_string())
                 } else if let Some(arr) = content.as_array() {
@@ -187,7 +188,6 @@ fn humanize_cursor_output(raw: &str) -> Option<String> {
                     }
                     return Some(t.to_string());
                 }
-            }
             }
             None
         }
@@ -326,8 +326,9 @@ fn summarize_cursor_tool_event(value: &Value) -> Option<String> {
     }
 
     if subtype == "completed" {
-        if let Some(s) = tc.get("shellToolCall") {
-        if let Some(result) = s.get("result") {
+        if let Some(s) = tc.get("shellToolCall")
+            && let Some(result) = s.get("result")
+        {
             let (key, r) = if let Some(r) = result.get("success") {
                 ("success", r)
             } else if let Some(r) = result.get("failure") {
@@ -341,7 +342,6 @@ fn summarize_cursor_tool_event(value: &Value) -> Option<String> {
             return Some(cursor_shell_completed_dashboard_line(
                 key, cmd, exit_code, r,
             ));
-        }
         }
         return None;
     }

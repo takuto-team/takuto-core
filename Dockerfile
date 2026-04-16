@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 # Stage 1: Build
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.88-bookworm AS builder
 
 WORKDIR /app
 # Without this, Cargo hides progress in non-TTY Docker builds — looks hung for many minutes.
