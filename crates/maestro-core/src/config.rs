@@ -336,10 +336,18 @@ impl Default for EditorConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TerminalConfig {
     /// Shell commands run once per editor container lifetime, before the first ttyd session.
-    /// Use this to install tools (e.g. `mise use -g zellij@latest`) or set up shell config.
+    /// Use this for expensive one-time setup (apt installs, tool configuration).
     /// Commands are executed with `/etc/maestro/env` sourced so API tokens are available.
+    /// Guarded by `/tmp/.maestro-terminal-setup-done` — won't re-run on the same container.
     #[serde(default)]
     pub setup_commands: Vec<String>,
+    /// Shell commands run every time a fresh editor container is created.
+    /// Use for tools that should be refreshed on each editor open, e.g.:
+    ///   `mise use -g ruby@3.3` — installs on first open, verifies on subsequent opens.
+    /// Installs via mise persist in the shared mise volume so only the first run is slow.
+    /// `/etc/maestro/env` is sourced before each command.
+    #[serde(default)]
+    pub startup_commands: Vec<String>,
     /// Default git editor installed and configured inside every editor container.
     /// Set to a package name available via apt (e.g. `"nano"`, `"vim"`, `"micro"`).
     /// When set, the package is installed and `git config --global core.editor` is

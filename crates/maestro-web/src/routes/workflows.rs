@@ -482,6 +482,7 @@ pub async fn open_editor(
     let extensions = cfg.editor.extensions.clone();
     let settings = cfg.editor.settings.clone();
     let setup_commands = cfg.terminal.setup_commands.clone();
+    let startup_commands = cfg.terminal.startup_commands.clone();
     let git_editor = cfg.terminal.git_editor.clone();
     drop(workflows);
     drop(cfg);
@@ -492,7 +493,7 @@ pub async fn open_editor(
 
     let info = container::start_editor(
         &ticket_key, &worktree, &image, &app_ports, dynamic_ports,
-        &theme, &extensions, &settings, &setup_commands, &git_editor,
+        &theme, &extensions, &settings, &setup_commands, &startup_commands, &git_editor,
     )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -564,7 +565,7 @@ pub async fn open_terminal(
     // Reuse existing terminal if already started.
     if let Some(&port) = state.terminal_ports.read().await.get(&id) {
         return Ok(Json(OpenTerminalResponse {
-            url: format!("http://localhost:{port}"),
+            url: format!("http://localhost:{}", container::editor_host_port(port)),
         }));
     }
 
@@ -573,13 +574,17 @@ pub async fn open_terminal(
         .await
         .ok_or((StatusCode::CONFLICT, "Editor container is not running — open the editor first.".into()))?;
 
-    // Pick a spare port not already used by the port scanner's socat or another terminal.
+    // Pick a spare port that is:
+    //  1. Not already allocated to another workflow's terminal.
+    //  2. Not currently listening inside this container (socat dynamic forwards also bind
+    //     spare ports, so ttyd would fail to bind if we picked one socat already holds).
     let used_by_terminals: Vec<u16> = state.terminal_ports.read().await.values().copied().collect();
+    let in_use = container::listening_ports_in_editor(&id).await;
     let port = info
         .spare_ports
         .iter()
         .copied()
-        .find(|p| !used_by_terminals.contains(p))
+        .find(|p| !used_by_terminals.contains(p) && !in_use.contains(p))
         .ok_or((
             StatusCode::CONFLICT,
             "No spare ports available for terminal.".into(),
