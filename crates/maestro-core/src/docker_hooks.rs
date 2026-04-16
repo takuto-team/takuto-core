@@ -294,17 +294,122 @@ pub fn check_acli_auth() -> bool {
     auth_cmd_ok("acli", &["jira", "auth", "status"])
 }
 
+/// Try to recover from a failed `gh auth status` by switching to a user whose oauth token starts
+/// with `gho_` (personal access token — does not expire). This handles the case where a GitHub App
+/// installation token (`ghs_`) was set as the active user and has since expired.
+///
+/// Parses `~/.config/gh/hosts.yml` for the `github.com` host, finds any user with a `gho_` token,
+/// and runs `gh auth switch --user <name> --hostname github.com`. Returns `true` if we switched and
+/// `gh auth status` now passes.
+fn gh_auth_recover_expired_token() -> bool {
+    let hosts_path = preflight_home().join(".config/gh/hosts.yml");
+    let content = match std::fs::read_to_string(&hosts_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // Minimal line-based parse — avoids a YAML dependency.
+    // Expected structure (4-space indented YAML written by the gh CLI):
+    //   github.com:
+    //       users:
+    //           morphet81:
+    //               oauth_token: gho_...
+    //           sous-coder[bot]:
+    //               oauth_token: ghs_...
+    let mut in_github_com = false;
+    let mut in_users = false;
+    let mut current_user: Option<String> = None;
+    let mut personal_token_users: Vec<String> = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+
+        if !in_github_com {
+            if trimmed == "github.com:" {
+                in_github_com = true;
+            }
+            continue;
+        }
+
+        // A zero-indent non-comment line means we left the github.com block.
+        if indent == 0 && !trimmed.starts_with('#') {
+            break;
+        }
+
+        if trimmed == "users:" {
+            in_users = true;
+            current_user = None;
+            continue;
+        }
+
+        if in_users {
+            // A line at indent=4 that isn't "users:" signals we left the users block.
+            if indent <= 4 && trimmed != "users:" {
+                in_users = false;
+                current_user = None;
+                continue;
+            }
+            // Username entries sit at indent=8 and end with ':'
+            if indent == 8 && trimmed.ends_with(':') {
+                current_user = Some(trimmed.trim_end_matches(':').to_string());
+                continue;
+            }
+            // Token lines are at indent=12
+            if indent >= 12 {
+                if let Some(ref user) = current_user {
+                    if let Some(token) = trimmed.strip_prefix("oauth_token:") {
+                        let tok = token.trim();
+                        if tok.starts_with("gho_") {
+                            personal_token_users.push(user.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for user in personal_token_users {
+        let switched = Command::new("gh")
+            .args(["auth", "switch", "--user", &user, "--hostname", "github.com"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if switched && auth_cmd_ok("gh", &["auth", "status"]) {
+            eprintln!(
+                "[maestro preflight] Auto-switched active gh user to '{user}' \
+                 (previous token was expired or invalid — common with GitHub App installation tokens)."
+            );
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Verify required CLIs for the configured AI provider. Used before `docker compose up`.
 ///
 /// GitHub and AI-provider auth remain hard errors; acli auth is a soft-fail
 /// (the app can run without Jira integration).
 pub fn preflight(config: &Config) -> Result<PreflightResult> {
     eprintln!("[maestro preflight] Checking GitHub CLI (gh)…");
-    if !auth_cmd_ok("gh", &["auth", "status"]) {
-        return Err(MaestroError::Config(
-            "GitHub CLI (gh) is not authenticated. Run: docker compose run --rm -it maestro setup"
-                .to_string(),
-        ));
+    // Use `gh auth token` rather than `gh auth status`: the latter exits non-zero when *any*
+    // listed account has an invalid token (e.g. an expired GitHub App installation token), even
+    // if the active account is perfectly valid. `gh auth token` checks only the active user.
+    if !auth_cmd_ok("gh", &["auth", "token", "-h", "github.com"]) {
+        // Attempt recovery: if the active gh user has an expired token (common with GitHub App
+        // installation tokens that expire hourly), switch to any user with a personal token.
+        if !gh_auth_recover_expired_token() {
+            return Err(MaestroError::Config(
+                "GitHub CLI (gh) is not authenticated. Run: docker compose run --rm -it maestro setup"
+                    .to_string(),
+            ));
+        }
     }
 
     let acli_ok = if config.general.ticketing_system == TicketingSystem::Jira {
