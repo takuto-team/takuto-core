@@ -357,13 +357,24 @@ async fn used_editor_ports() -> Vec<u16> {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let mut ports = Vec::new();
-    // Format: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->3000/tcp"
+    // Docker may emit individual mappings or compressed ranges when many consecutive
+    // symmetric ports are bound:
+    //   individual: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->9101/tcp"
+    //   range:      "0.0.0.0:9100-9110->9100-9110/tcp"
     for segment in stdout.split(|c: char| c == ',' || c == '\n') {
         let segment = segment.trim();
-        // Extract host port from "0.0.0.0:PORT->"
         if let Some(arrow) = segment.find("->") {
             if let Some(colon) = segment[..arrow].rfind(':') {
-                if let Ok(p) = segment[colon + 1..arrow].parse::<u16>() {
+                let host_part = &segment[colon + 1..arrow];
+                if let Some((lo, hi)) = host_part.split_once('-') {
+                    // Range format: "9100-9110"
+                    if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
+                        for p in lo..=hi {
+                            ports.push(p);
+                        }
+                    }
+                } else if let Ok(p) = host_part.parse::<u16>() {
+                    // Single port: "9100"
                     ports.push(p);
                 }
             }
