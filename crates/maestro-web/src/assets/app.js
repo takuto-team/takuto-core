@@ -498,6 +498,16 @@ async function fetchConfig() {
     jiraSite = typeof cfg.jira?.site === 'string' ? cfg.jira.site : '';
     jiraAvailable = cfg.jira_available !== false;
     ticketingSystem = typeof cfg.ticketing_system === 'string' ? cfg.ticketing_system : 'none';
+    const githubAppBadge = document.getElementById('githubAppBadge');
+    if (githubAppBadge) {
+      if (cfg.github_app_configured === true) {
+        githubAppBadge.classList.remove('hidden');
+        githubAppBadge.classList.add('flex');
+      } else {
+        githubAppBadge.classList.add('hidden');
+        githubAppBadge.classList.remove('flex');
+      }
+    }
     const banner = document.getElementById('dryBanner');
     if (banner) {
       banner.classList.toggle('hidden', !dryMode);

@@ -18,6 +18,8 @@ pub struct ConfigResponse {
     pub jira_available: bool,
     /// Ticketing system in use: `"jira"`, `"github"`, or `"none"`.
     pub ticketing_system: String,
+    /// `true` when a GitHub App is fully configured (`[github]` section has all required fields).
+    pub github_app_configured: bool,
 }
 
 pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
@@ -28,6 +30,7 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
         TicketingSystem::None => "none",
     };
     Json(ConfigResponse {
+        github_app_configured: config.github.is_configured(),
         config: config.redacted_for_api_clone(),
         jira_available: state.jira_available.load(Ordering::Relaxed),
         ticketing_system: ticketing_system_str.to_string(),
