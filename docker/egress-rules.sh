@@ -96,7 +96,7 @@ MAESTRO_CONFIG="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
 if [ -f "$MAESTRO_CONFIG" ]; then
     # Parse TOML array: extra_egress_hosts = ["host1", "host2"]
     extra_hosts=$(sed -n 's/^[[:space:]]*extra_egress_hosts[[:space:]]*=[[:space:]]*\[//p' "$MAESTRO_CONFIG" 2>/dev/null \
-        | tr -d '[]"' | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | grep -v '^$')
+        | tr -d '[]"' | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | grep -v '^$' || true)
     if [ -n "$extra_hosts" ]; then
         echo "Adding custom egress hosts from config..."
         echo "$extra_hosts" | while read -r host; do
