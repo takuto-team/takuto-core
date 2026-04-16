@@ -376,22 +376,22 @@ async fn used_editor_ports() -> Vec<u16> {
     // symmetric ports are bound:
     //   individual: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->9101/tcp"
     //   range:      "0.0.0.0:9100-9110->9100-9110/tcp"
-    for segment in stdout.split(|c: char| c == ',' || c == '\n') {
+    for segment in stdout.split([',', '\n']) {
         let segment = segment.trim();
-        if let Some(arrow) = segment.find("->") {
-            if let Some(colon) = segment[..arrow].rfind(':') {
-                let host_part = &segment[colon + 1..arrow];
-                if let Some((lo, hi)) = host_part.split_once('-') {
-                    // Range format: "9100-9110"
-                    if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
-                        for p in lo..=hi {
-                            ports.push(p);
-                        }
+        if let Some(arrow) = segment.find("->")
+            && let Some(colon) = segment[..arrow].rfind(':')
+        {
+            let host_part = &segment[colon + 1..arrow];
+            if let Some((lo, hi)) = host_part.split_once('-') {
+                // Range format: "9100-9110"
+                if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
+                    for p in lo..=hi {
+                        ports.push(p);
                     }
-                } else if let Ok(p) = host_part.parse::<u16>() {
-                    // Single port: "9100"
-                    ports.push(p);
                 }
+            } else if let Ok(p) = host_part.parse::<u16>() {
+                // Single port: "9100"
+                ports.push(p);
             }
         }
     }
@@ -688,7 +688,12 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
     // Equivalent to what entrypoint.sh does for the main container.
     let _ = tokio::process::Command::new("docker")
         .args([
-            "exec", "--user", "root", container, "bash", "-lc",
+            "exec",
+            "--user",
+            "root",
+            container,
+            "bash",
+            "-lc",
             "su - maestro -c 'gh auth setup-git 2>/dev/null || true'",
         ])
         .output()
@@ -772,7 +777,12 @@ async fn run_editor_startup_commands(container: &str, cmds: &[String]) {
     );
     let out = tokio::process::Command::new("docker")
         .args([
-            "exec", "--user", "root", container, "bash", "-lc",
+            "exec",
+            "--user",
+            "root",
+            container,
+            "bash",
+            "-lc",
             &format!("su - maestro -c {}", shell_escape(&wrapped)),
         ])
         .output()
@@ -936,7 +946,8 @@ pub async fn find_running_terminal(ticket_key: &str) -> Option<u16> {
         .lines()
         .filter_map(|line| {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            parts.windows(2)
+            parts
+                .windows(2)
                 .find(|w| w[0] == "-p")
                 .and_then(|w| w[1].parse::<u16>().ok())
         })

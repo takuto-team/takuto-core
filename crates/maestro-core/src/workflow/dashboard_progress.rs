@@ -194,4 +194,51 @@ mod tests {
         assert_eq!(workflow_progress_filled_segments(74, 10), 7);
         assert_eq!(workflow_progress_filled_segments(75, 10), 8);
     }
+
+    #[test]
+    fn command_steps_counted_in_total() {
+        use crate::config::AgentStepConfig;
+        use crate::config::StepAvailability;
+
+        let w = wf_with(WorkflowState::AddressingTicket { pass: 1 }, vec![], None);
+
+        // Config with a mix of agent and command steps
+        let mut cfg = Config::default();
+        cfg.agent_steps = vec![
+            AgentStepConfig {
+                name: "Implement".into(),
+                prompt: "Do stuff".into(),
+                repeat: 1,
+                skills: Vec::new(),
+                resume_previous: false,
+                when: StepAvailability::Always,
+                commands: Vec::new(),
+            },
+            AgentStepConfig {
+                name: "Run lint".into(),
+                prompt: String::new(),
+                repeat: 1,
+                skills: Vec::new(),
+                resume_previous: false,
+                when: StepAvailability::Always,
+                commands: vec!["npm run lint".into()],
+            },
+            AgentStepConfig {
+                name: "Run tests".into(),
+                prompt: String::new(),
+                repeat: 2,
+                skills: Vec::new(),
+                resume_previous: false,
+                when: StepAvailability::Always,
+                commands: vec!["npm test".into()],
+            },
+        ];
+
+        let total = estimated_step_total(&w, &cfg);
+        // 3 (jira steps) + 1 (implement) + 1 (lint) + 2 (tests × repeat 2) + 1 (workflow complete) = 8
+        assert_eq!(
+            total, 8,
+            "command steps should be counted the same as agent steps"
+        );
+    }
 }

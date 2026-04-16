@@ -2,20 +2,18 @@
 #   [general]
 #   merge_base_workflow_steps_file = "workflows/merge_base.toml"
 #
-# Each step is a [[merge_base_agent_steps]] table. Steps run in order. All fields:
+# Each step is a [[merge_base_agent_steps]] table. Steps run in order.
 #
-#   name    = "Human-readable step name"  (shown in dashboard)
-#   prompt  = """Multi-line prompt sent to the agent."""
-#   repeat  = 1          # How many times to re-run this step (default 1).
-#   when    = "always"   # Eligibility filter:
-#                        #   "always"       – run unconditionally (default)
-#                        #   "ticketing"    – only when a ticketing system (Jira/GitHub) is configured
-#                        #   "no_ticketing" – only when no ticketing system is configured
-#   skills  = [...]      # Optional list of Claude Code /skills to inject before the prompt.
-#                        # Each entry: { name = "skill-name" } or { name = "skill-name", args = ["--flag"] }
-#                        # Skills are loaded from the `skills/` directory next to the Maestro binary.
+# A step is either an **agent step** (prompt/skills) or a **command step** (commands).
+# See ticket.example.toml for full field reference.
 #
-# Available prompt placeholders (replaced at runtime):
+# Agent step fields:
+#   name, prompt, repeat, when, skills, resume_previous
+#
+# Command step fields:
+#   name, commands, repeat, when
+#
+# Available prompt placeholders (replaced at runtime, work in both prompt and commands):
 #   {base_branch}     – the target branch to merge from (e.g. main, develop)
 #   {pr_url}          – URL of the open pull request
 #   {ticket_context}  – formatted summary: key, title, description, acceptance criteria

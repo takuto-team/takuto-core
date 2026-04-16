@@ -2,8 +2,12 @@
 #   [general]
 #   ticket_workflow_steps_file = "workflows/ticket.toml"
 #
-# Each step is an [[agent_steps]] table. Steps run in order. All fields:
+# Each step is an [[agent_steps]] table. Steps run in order.
 #
+# A step is either an **agent step** (prompt/skills) or a **command step** (commands).
+# The two modes are mutually exclusive: a step cannot have both `prompt` and `commands`.
+#
+# Agent step fields:
 #   name    = "Human-readable step name"  (shown in dashboard)
 #   prompt  = """Multi-line prompt sent to the agent."""
 #   repeat  = 1          # How many times to re-run this step (default 1).
@@ -16,7 +20,13 @@
 #                        # Each entry: { name = "skill-name" } or { name = "skill-name", args = ["--flag"] }
 #                        # Skills are loaded from the `skills/` directory next to the Maestro binary.
 #
-# Available prompt placeholders (replaced at runtime):
+# Command step fields:
+#   name     = "Human-readable step name"
+#   commands = ["cmd1", "cmd2"]   # Shell commands executed sequentially via `bash -c`.
+#   repeat   = 1                  # The entire command list runs `repeat` times.
+#   when     = "always"           # Same eligibility filter as agent steps.
+#
+# Available prompt placeholders (replaced at runtime, work in both prompt and commands):
 #   {description}          – ticket/issue description text
 #   {ticket_context}       – formatted summary: key, title, description, acceptance criteria
 #   {base_branch}          – the target branch for this PR (e.g. main, develop)
@@ -107,6 +117,7 @@ Do not create a PR.
 repeat = 1
 
 # ── Step 4: Lint and test ────────────────────────────────────────────────────
+# This is an agent step — the AI runs lint/test and fixes issues interactively.
 # Replace the commands below with whatever is appropriate for your stack.
 [[agent_steps]]
 name = "Lint and test"
@@ -126,6 +137,19 @@ Once all checks pass cleanly, stage all changes and commit with a message of
 Do not create a PR.
 """
 repeat = 1
+
+# ── Alternative: command step for deterministic lint/test ────────────────────
+# Use a command step when the check is mechanical and should not consume AI tokens.
+# Uncomment the block below and remove the agent step above to use it.
+#
+# [[agent_steps]]
+# name = "Lint and test"
+# commands = [
+#   "npm run lint --fix",
+#   "npm run format",
+#   "npm test"
+# ]
+# repeat = 1
 
 # ── Step 5: Create PR ────────────────────────────────────────────────────────
 [[agent_steps]]

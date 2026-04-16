@@ -820,7 +820,9 @@ impl WorkflowEngine {
                 workflow.updated_at = Utc::now();
                 // Drop any Running entries — they represent the step that was interrupted by pause.
                 // The fresh driver will re-run that step from scratch.
-                workflow.steps_log.retain(|s| s.status != StepStatus::Running);
+                workflow
+                    .steps_log
+                    .retain(|s| s.status != StepStatus::Running);
 
                 let state_line = workflow.status_display();
                 self.broadcast_event(WorkflowEvent {
@@ -1834,7 +1836,9 @@ async fn run_merge_base_steps(
     let cursor_cli = cfg.agent.cursor_cli.clone();
     let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
+        wf.get(ticket_key)
+            .map(|w| w.ticketing_available)
+            .unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_merge_base_agent_steps()
@@ -2022,6 +2026,185 @@ async fn run_agent_step_sequence(
                     }
                 }
 
+                let is_last_run_of_outer_cycle = step_idx + 1 == num_steps && r == step_repeat;
+
+                // ── Command step execution ──────────────────────────────────
+                if step.is_command_step() {
+                    // Command steps don't use AI session resumption. Clear the flag
+                    // so the next agent step (if any) starts with its own prompt rather
+                    // than the snapshot-resume "Continue what you were doing…" message.
+                    snapshot_resume_pending = false;
+
+                    let mut step_log = StepLog::new(step_label.clone());
+                    broadcast_step_started(event_tx, ticket_key, &step_label);
+                    log_writer
+                        .write_step(&step_label, "Starting command step")
+                        .await;
+
+                    let relay_label = match phase {
+                        AgentRunPhase::Main => format!(
+                            "{} · step {}/{} · run {}/{}",
+                            step.name,
+                            step_idx + 1,
+                            num_steps,
+                            r,
+                            step_repeat
+                        ),
+                        AgentRunPhase::PrReview => format!(
+                            "[PR review] {} · step {}/{} · run {}/{}",
+                            step.name,
+                            step_idx + 1,
+                            num_steps,
+                            r,
+                            step_repeat
+                        ),
+                        AgentRunPhase::MergeBase => format!(
+                            "[Merge base] {} · step {}/{} · run {}/{}",
+                            step.name,
+                            step_idx + 1,
+                            num_steps,
+                            r,
+                            step_repeat
+                        ),
+                    };
+                    let line_tx = spawn_output_relay(
+                        event_tx,
+                        ticket_key,
+                        &relay_label,
+                        log_writer,
+                        workflows,
+                        ai_stream_provider,
+                    );
+
+                    let total_cmds = step.commands.len();
+                    let mut cmd_failed = false;
+
+                    for (cmd_idx, cmd) in step.commands.iter().enumerate() {
+                        check_cancelled(cancel_token)?;
+                        wait_if_paused(workflows, ticket_key, cancel_token).await?;
+
+                        let interpolated_cmd = interpolate_agent_prompt(cmd, interp_vars);
+                        info!(
+                            ticket = %ticket_key,
+                            step = %step_label,
+                            command = %interpolated_cmd,
+                            index = cmd_idx + 1,
+                            total = total_cmds,
+                            "Running command"
+                        );
+                        log_writer
+                            .write_step(
+                                &step_label,
+                                &format!(
+                                    "Running command {}/{}: {}",
+                                    cmd_idx + 1,
+                                    total_cmds,
+                                    interpolated_cmd
+                                ),
+                            )
+                            .await;
+
+                        let cmd_result = if let Some(runner) = container_runner {
+                            let (prog, docker_args) = runner.wrap_shell_command(&interpolated_cmd);
+                            let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
+                            crate::process::run_command_streaming_with_timeout(
+                                &prog,
+                                &refs,
+                                worktree_path,
+                                cancel_token.child_token(),
+                                line_tx.clone(),
+                                timeout,
+                            )
+                            .await
+                        } else {
+                            crate::process::run_shell_command_streaming_with_timeout(
+                                &interpolated_cmd,
+                                worktree_path,
+                                cancel_token.child_token(),
+                                line_tx.clone(),
+                                timeout,
+                            )
+                            .await
+                        };
+
+                        match cmd_result {
+                            Ok(output) if output.success() => {
+                                step_log.output.push(format!(
+                                    "Command {}/{} completed",
+                                    cmd_idx + 1,
+                                    total_cmds
+                                ));
+                            }
+                            Ok(output) => {
+                                let stderr_tail = output
+                                    .stderr
+                                    .lines()
+                                    .rev()
+                                    .take(20)
+                                    .collect::<Vec<_>>()
+                                    .into_iter()
+                                    .rev()
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                let msg = format!(
+                                    "Command {}/{} failed (exit code {}):\n{}",
+                                    cmd_idx + 1,
+                                    total_cmds,
+                                    output.exit_code,
+                                    stderr_tail
+                                );
+                                warn!(
+                                    ticket = %ticket_key,
+                                    step = %step_label,
+                                    command = %interpolated_cmd,
+                                    exit_code = output.exit_code,
+                                    "Command step command failed"
+                                );
+                                step_log.fail(msg);
+                                cmd_failed = true;
+                                break;
+                            }
+                            Err(e) => {
+                                let msg =
+                                    format!("Command {}/{} error: {}", cmd_idx + 1, total_cmds, e);
+                                warn!(
+                                    ticket = %ticket_key,
+                                    step = %step_label,
+                                    command = %interpolated_cmd,
+                                    error = %e,
+                                    "Command step command error"
+                                );
+                                step_log.fail(msg);
+                                cmd_failed = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if !cmd_failed {
+                        step_log
+                            .output
+                            .push(format!("All {total_cmds} command(s) completed"));
+                        step_log.complete(StepStatus::Success);
+                    }
+
+                    if cmd_failed && !is_last_run_of_outer_cycle {
+                        add_step_log(workflows, ticket_key, step_log).await;
+                        error!(
+                            ticket = %ticket_key,
+                            step = %step_label,
+                            "Command step failed — aborting workflow"
+                        );
+                        return Err(MaestroError::AiAgent("Command step failed".to_string()));
+                    }
+
+                    add_step_log(workflows, ticket_key, step_log).await;
+                    broadcast_step_completed(event_tx, ticket_key, &step_label, workflows, config)
+                        .await;
+                    continue;
+                }
+
+                // ── Agent step execution ────────────────────────────────────
                 let mut step_log = StepLog::new(step_label.clone());
                 broadcast_step_started(event_tx, ticket_key, &step_label);
                 log_writer.write_step(&step_label, "Starting").await;
@@ -2146,8 +2329,6 @@ async fn run_agent_step_sequence(
                     .await
                     .map(|s| (s.session_id, s.output)),
                 };
-
-                let is_last_run_of_outer_cycle = step_idx + 1 == num_steps && r == step_repeat;
 
                 match session_result {
                     Ok((session_id, output)) => {
@@ -2404,7 +2585,9 @@ async fn run_pr_review_steps(
     let cursor_cli = cfg.agent.cursor_cli.clone();
     let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
+        wf.get(ticket_key)
+            .map(|w| w.ticketing_available)
+            .unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_review_agent_steps()
@@ -3217,7 +3400,9 @@ async fn run_workflow_steps(
     let cursor_cli = cfg.agent.cursor_cli.clone();
     let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
+        wf.get(ticket_key)
+            .map(|w| w.ticketing_available)
+            .unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_agent_steps()

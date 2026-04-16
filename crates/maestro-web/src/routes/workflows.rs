@@ -501,8 +501,17 @@ pub async fn open_editor(
         .unwrap_or_else(|| "maestro:latest".to_string());
 
     let info = container::start_editor(
-        &ticket_key, &worktree, &image, &app_ports, dynamic_ports,
-        &theme, &extensions, &settings, &setup_commands, &startup_commands, &git_editor,
+        &ticket_key,
+        &worktree,
+        &image,
+        &app_ports,
+        dynamic_ports,
+        &theme,
+        &extensions,
+        &settings,
+        &setup_commands,
+        &startup_commands,
+        &git_editor,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -594,7 +603,13 @@ pub async fn open_terminal(
     //  1. Not already allocated to another workflow's terminal.
     //  2. Not currently listening inside this container (socat dynamic forwards also bind
     //     spare ports, so ttyd would fail to bind if we picked one socat already holds).
-    let used_by_terminals: Vec<u16> = state.terminal_ports.read().await.values().copied().collect();
+    let used_by_terminals: Vec<u16> = state
+        .terminal_ports
+        .read()
+        .await
+        .values()
+        .copied()
+        .collect();
     let in_use = container::listening_ports_in_editor(&id).await;
     let port = info
         .spare_ports
