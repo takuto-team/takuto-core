@@ -1448,4 +1448,66 @@ step_timeout_secs = 600
         let patch: RuntimeDashboardConfigPatch = serde_json::from_str(r#"{"web":{}}"#).unwrap();
         assert!(c.apply_runtime_dashboard_patch(patch).is_err());
     }
+
+    // -- GitHubAppConfig::is_configured --
+
+    #[test]
+    fn github_app_config_unconfigured_by_default() {
+        assert!(!GitHubAppConfig::default().is_configured());
+    }
+
+    #[test]
+    fn github_app_config_requires_app_id() {
+        let cfg = GitHubAppConfig {
+            app_id: 0,
+            app_installation_id: 42,
+            app_private_key: "pem".into(),
+            app_private_key_path: String::new(),
+        };
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn github_app_config_requires_installation_id() {
+        let cfg = GitHubAppConfig {
+            app_id: 99,
+            app_installation_id: 0,
+            app_private_key: "pem".into(),
+            app_private_key_path: String::new(),
+        };
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn github_app_config_requires_private_key_source() {
+        let cfg = GitHubAppConfig {
+            app_id: 99,
+            app_installation_id: 42,
+            app_private_key: "   ".into(),
+            app_private_key_path: "   ".into(),
+        };
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn github_app_config_configured_with_inline_key() {
+        let cfg = GitHubAppConfig {
+            app_id: 99,
+            app_installation_id: 42,
+            app_private_key: "-----BEGIN RSA PRIVATE KEY-----".into(),
+            app_private_key_path: String::new(),
+        };
+        assert!(cfg.is_configured());
+    }
+
+    #[test]
+    fn github_app_config_configured_with_key_path() {
+        let cfg = GitHubAppConfig {
+            app_id: 99,
+            app_installation_id: 42,
+            app_private_key: String::new(),
+            app_private_key_path: "/etc/maestro/key.pem".into(),
+        };
+        assert!(cfg.is_configured());
+    }
 }

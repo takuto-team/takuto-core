@@ -445,6 +445,152 @@ async fn gh_auth_login_with_token(token: &str, cwd: &Path) -> std::result::Resul
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::GitHubAppConfig;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn mgr_with_app_id(app_id: u64) -> GitHubAppTokenManager {
+        GitHubAppTokenManager {
+            app_id,
+            installation_id: 12345,
+            // EncodingKey does not expose a public constructor for testing without
+            // a real key, so we only test the pure helper methods that don't call
+            // generate_jwt / fetch_installation_token.
+            encoding_key: EncodingKey::from_secret(b"dummy"),
+            cached: RwLock::new(None),
+        }
+    }
+
+    // -- resolve_private_key --
+
+    #[test]
+    fn resolve_private_key_inline() {
+        let cfg = GitHubAppConfig {
+            app_id: 1,
+            app_installation_id: 1,
+            app_private_key: "inline-pem-content".into(),
+            app_private_key_path: String::new(),
+        };
+        assert_eq!(
+            GitHubAppTokenManager::resolve_private_key(&cfg).unwrap(),
+            "inline-pem-content"
+        );
+    }
+
+    #[test]
+    fn resolve_private_key_from_file() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"file-pem-content").unwrap();
+        let cfg = GitHubAppConfig {
+            app_id: 1,
+            app_installation_id: 1,
+            app_private_key: String::new(),
+            app_private_key_path: f.path().to_str().unwrap().to_string(),
+        };
+        assert_eq!(
+            GitHubAppTokenManager::resolve_private_key(&cfg).unwrap(),
+            "file-pem-content"
+        );
+    }
+
+    #[test]
+    fn resolve_private_key_both_set_is_error() {
+        let cfg = GitHubAppConfig {
+            app_id: 1,
+            app_installation_id: 1,
+            app_private_key: "inline".into(),
+            app_private_key_path: "/some/path".into(),
+        };
+        assert!(GitHubAppTokenManager::resolve_private_key(&cfg).is_err());
+    }
+
+    #[test]
+    fn resolve_private_key_neither_set_is_error() {
+        let cfg = GitHubAppConfig::default();
+        assert!(GitHubAppTokenManager::resolve_private_key(&cfg).is_err());
+    }
+
+    #[test]
+    fn resolve_private_key_missing_file_is_error() {
+        let cfg = GitHubAppConfig {
+            app_id: 1,
+            app_installation_id: 1,
+            app_private_key: String::new(),
+            app_private_key_path: "/nonexistent/key.pem".into(),
+        };
+        assert!(GitHubAppTokenManager::resolve_private_key(&cfg).is_err());
+    }
+
+    // -- bot_name / bot_email --
+
+    #[test]
+    fn bot_name_is_fixed() {
+        assert_eq!(mgr_with_app_id(0).bot_name(), "maestro-bot[bot]");
+    }
+
+    #[test]
+    fn bot_email_contains_app_id() {
+        let mgr = mgr_with_app_id(123456);
+        assert_eq!(
+            mgr.bot_email(),
+            "123456+maestro-bot[bot]@users.noreply.github.com"
+        );
+    }
+
+    // -- format_api_error --
+
+    #[test]
+    fn format_api_error_not_found() {
+        let mgr = mgr_with_app_id(1);
+        let err = GitHubApiError {
+            message: "Not Found".into(),
+            documentation_url: String::new(),
+        };
+        let msg = mgr.format_api_error(&err);
+        assert!(msg.contains("installation not found"));
+        assert!(msg.contains("app_installation_id"));
+    }
+
+    #[test]
+    fn format_api_error_unauthorized() {
+        let mgr = mgr_with_app_id(42);
+        let err = GitHubApiError {
+            message: "could not be decoded".into(),
+            documentation_url: "https://docs.github.com/".into(),
+        };
+        let msg = mgr.format_api_error(&err);
+        assert!(msg.contains("JWT authentication failed"));
+        assert!(msg.contains("42")); // app_id
+        assert!(msg.contains("https://docs.github.com/"));
+    }
+
+    #[test]
+    fn format_api_error_permissions() {
+        let mgr = mgr_with_app_id(1);
+        let err = GitHubApiError {
+            message: "Resource not accessible by integration".into(),
+            documentation_url: String::new(),
+        };
+        let msg = mgr.format_api_error(&err);
+        assert!(msg.contains("lacks required permissions"));
+        assert!(msg.contains("pull_requests"));
+    }
+
+    #[test]
+    fn format_api_error_generic() {
+        let mgr = mgr_with_app_id(1);
+        let err = GitHubApiError {
+            message: "Something unexpected".into(),
+            documentation_url: String::new(),
+        };
+        let msg = mgr.format_api_error(&err);
+        assert!(msg.contains("Something unexpected"));
+    }
+}
+
 /// Try to create a [`GitHubAppTokenManager`] from config.
 ///
 /// Returns `None` (with a warning log) when:
