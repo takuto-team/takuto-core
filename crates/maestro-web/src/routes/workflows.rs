@@ -562,7 +562,7 @@ pub async fn open_terminal(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<OpenTerminalResponse>, (StatusCode, String)> {
-    // Reuse existing terminal if already started.
+    // Reuse existing terminal if already recorded in the in-memory map.
     if let Some(&port) = state.terminal_ports.read().await.get(&id) {
         return Ok(Json(OpenTerminalResponse {
             url: format!("http://localhost:{}", container::editor_host_port(port)),
@@ -573,6 +573,15 @@ pub async fn open_terminal(
     let info = container::get_editor_info(&id)
         .await
         .ok_or((StatusCode::CONFLICT, "Editor container is not running — open the editor first.".into()))?;
+
+    // Recover from a server restart: ttyd may already be running from a previous session.
+    // Ask the container for the actual port (via pgrep) rather than trusting the now-empty map.
+    if let Some(port) = container::find_running_terminal(&id).await {
+        state.terminal_ports.write().await.insert(id.clone(), port);
+        return Ok(Json(OpenTerminalResponse {
+            url: format!("http://localhost:{}", container::editor_host_port(port)),
+        }));
+    }
 
     // Pick a spare port that is:
     //  1. Not already allocated to another workflow's terminal.

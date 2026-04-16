@@ -770,19 +770,6 @@ pub async fn start_terminal(
         return Err("Editor container is not running — open the editor first.".into());
     }
 
-    // Check if ttyd is already running inside the container.
-    let check = tokio::process::Command::new("docker")
-        .args(["exec", &name, "pgrep", "-x", "ttyd"])
-        .output()
-        .await;
-    if let Ok(out) = &check {
-        if out.status.success() {
-            // Already running — return URL with the given port.
-            let host_port = editor_host_port(port);
-            return Ok(format!("http://localhost:{host_port}"));
-        }
-    }
-
     // Build the shell script that runs in each ttyd terminal:
     // 1. Source the maestro env file (Claude auth tokens, API keys, etc.)
     // 2. Auto-restore the most recent ~/.claude.json backup if missing (Claude Code
@@ -864,6 +851,32 @@ exec bash -l"#.to_string();
     }
 
     Err(format!("ttyd failed to bind to port {port} — verify no other process is using this port"))
+}
+
+/// Return the container port that ttyd is currently listening on inside the editor container,
+/// or `None` if ttyd is not running.  Uses `pgrep -a ttyd` to read the actual `-p PORT` argument
+/// so the result is always correct regardless of what was recorded in memory.
+pub async fn find_running_terminal(ticket_key: &str) -> Option<u16> {
+    let name = editor_container_name(ticket_key);
+    let out = tokio::process::Command::new("docker")
+        .args(["exec", &name, "pgrep", "-a", "ttyd"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // Output: "PID ttyd -p PORT -W -t ..."
+    // Find the argument following "-p".
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            parts.windows(2)
+                .find(|w| w[0] == "-p")
+                .and_then(|w| w[1].parse::<u16>().ok())
+        })
+        .next()
 }
 
 /// Kill the ttyd process inside the editor container.
