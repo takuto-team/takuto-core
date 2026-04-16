@@ -16,6 +16,8 @@ let jiraProjectsConfigured = false;
 let jiraSite = '';
 /** `true` when acli (Jira) is authenticated — from `GET /api/config`. */
 let jiraAvailable = true;
+/** Ticketing system in use: `"jira"`, `"github"`, or `"none"` — from `GET /api/config`. */
+let ticketingSystem = 'none';
 /** Set when the ticket detail modal is open; used by **Start** to run the workflow. */
 let pendingManualTicketSelection = null;
 /** Bumps on each detail open so slower Jira preview responses cannot overwrite a newer selection. */
@@ -421,9 +423,9 @@ function applyPollingUi() {
   const btn = document.getElementById('pollingToggleBtn');
   const label = document.getElementById('pollingStatusLabel');
   if (!btn) return;
-  // When Jira is not available, hide polling controls entirely.
+  // When no ticketing system is configured, hide polling controls entirely.
   const pollingContainer = btn.closest('.border-l');
-  if (!jiraAvailable) {
+  if (ticketingSystem === 'none') {
     if (pollingContainer) pollingContainer.style.display = 'none';
     return;
   }
@@ -483,13 +485,14 @@ async function fetchConfig() {
       Array.isArray(cfg.jira?.project_keys) && cfg.jira.project_keys.length > 0;
     jiraSite = typeof cfg.jira?.site === 'string' ? cfg.jira.site : '';
     jiraAvailable = cfg.jira_available !== false;
+    ticketingSystem = typeof cfg.ticketing_system === 'string' ? cfg.ticketing_system : 'none';
     const banner = document.getElementById('dryBanner');
     if (banner) {
       banner.classList.toggle('hidden', !dryMode);
     }
     const noJiraBanner = document.getElementById('noJiraBanner');
     if (noJiraBanner) {
-      noJiraBanner.classList.toggle('hidden', jiraAvailable);
+      noJiraBanner.classList.toggle('hidden', ticketingSystem !== 'none');
     }
     applyPollingUi();
   } catch (e) {
@@ -502,18 +505,25 @@ function manualSlotsUsed() {
 }
 
 function isAddWorkflowDisabled() {
-  if (jiraAvailable && !jiraProjectsConfigured) return true;
+  if (ticketingSystem === 'jira' && !jiraProjectsConfigured) return true;
   if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) return true;
   return false;
 }
 
 function addWorkflowTitle() {
-  if (!jiraAvailable) {
+  if (ticketingSystem === 'none') {
     if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
       return `Manual workflow limit reached (${maxConcurrentManual})`;
     }
     return 'Paste a description to start a workflow';
   }
+  if (ticketingSystem === 'github') {
+    if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
+      return `Manual workflow limit reached (${maxConcurrentManual})`;
+    }
+    return 'Start workflow for a GitHub issue';
+  }
+  // jira
   if (!jiraProjectsConfigured) return 'Configure [jira] project_keys to enable manual starts';
   if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
     return `Manual workflow limit reached (${maxConcurrentManual})`;
@@ -522,7 +532,7 @@ function addWorkflowTitle() {
 }
 
 function renderAddWorkflowCell() {
-  if (jiraAvailable && !jiraProjectsConfigured) return '';
+  if (ticketingSystem === 'jira' && !jiraProjectsConfigured) return '';
   const dis = isAddWorkflowDisabled();
   return `
     <div class="workflow-add-cell">
@@ -762,10 +772,84 @@ async function startManualWorkflowRequest(ticketKey, ticketSummary) {
 
 async function openManualWorkflowModal() {
   if (isAddWorkflowDisabled()) return;
-  if (!jiraAvailable) {
+  if (ticketingSystem === 'none') {
     openPasteDescriptionModal();
     return;
   }
+  if (ticketingSystem === 'github') {
+    await openGithubIssuePickerModal();
+    return;
+  }
+  // jira
+  await openJiraTicketPickerModal();
+}
+
+async function openGithubIssuePickerModal() {
+  const modal = document.getElementById('manualWorkflowModal');
+  const body = document.getElementById('manualWorkflowModalBody');
+  if (!modal || !body) return;
+  modal.classList.remove('hidden');
+  body.innerHTML = `
+    <div class="manual-workflow-loading">
+      <div class="manual-workflow-spinner" role="status" aria-label="Loading"></div>
+      <span>Loading issues from GitHub…</span>
+    </div>`;
+  try {
+    const res = await dashboardFetch('/api/github/issues');
+    const text = await res.text();
+    if (!res.ok) {
+      body.innerHTML = `<p class="text-sm text-red-400 px-2 py-6 text-center">${escapeHtml(text || res.statusText || 'Failed to load issues')}</p>`;
+      return;
+    }
+    let issues;
+    try {
+      issues = JSON.parse(text);
+    } catch {
+      body.innerHTML = '<p class="text-sm text-red-400 px-2 py-6 text-center">Invalid response from server</p>';
+      return;
+    }
+    const existingKeys = new Set(Object.keys(workflows));
+    const available = Array.isArray(issues)
+      ? issues.filter(t => typeof t.key === 'string' && t.key && !existingKeys.has(t.key))
+      : [];
+    if (available.length === 0) {
+      body.innerHTML =
+        '<p class="text-sm text-gray-500 px-2 py-8 text-center">No available GitHub issues (all listed issues already have a workflow on the dashboard, or GitHub returned none).</p>';
+      return;
+    }
+    body.innerHTML = '';
+    const listEl = document.createElement('div');
+    listEl.className = 'manual-workflow-list';
+    for (const t of available) {
+      const key = t.key;
+      const summary = typeof t.summary === 'string' ? t.summary : '';
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'manual-workflow-row';
+      row.dataset.ticketKey = key;
+      row.dataset.ticketSummary = summary || key;
+      const kEl = document.createElement('div');
+      kEl.className = 'manual-workflow-row-key';
+      kEl.textContent = key;
+      const sEl = document.createElement('div');
+      sEl.className = 'manual-workflow-row-summary';
+      sEl.textContent = summary || key;
+      row.appendChild(kEl);
+      row.appendChild(sEl);
+      row.addEventListener('click', () => {
+        closeManualWorkflowModal();
+        startManualWorkflowRequest(key, summary || key);
+      });
+      listEl.appendChild(row);
+    }
+    body.appendChild(listEl);
+  } catch (e) {
+    console.error(e);
+    body.innerHTML = '<p class="text-sm text-red-400 px-2 py-6 text-center">Could not load issues</p>';
+  }
+}
+
+async function openJiraTicketPickerModal() {
   const modal = document.getElementById('manualWorkflowModal');
   const body = document.getElementById('manualWorkflowModalBody');
   if (!modal || !body) return;
@@ -1466,9 +1550,9 @@ function renderWorkflows() {
 
   if (list.length === 0) {
     empty.classList.remove('hidden');
-    // Update empty state text for no-Jira mode.
+    // Update empty state text for no-ticketing mode.
     const emptyText = empty.querySelector('p');
-    if (emptyText && !jiraAvailable) {
+    if (emptyText && ticketingSystem === 'none') {
       emptyText.textContent = 'No workflows yet. Click the button below to paste a ticket description and start a workflow.';
     }
     grid.innerHTML = '';
@@ -1696,8 +1780,8 @@ async function init() {
       window.location.href = '/login.html';
     });
   }
-  // Show the no-Jira alert dialog on page load when acli is not authenticated.
-  if (!jiraAvailable) {
+  // Show the no-ticketing alert dialog on page load when ticketing_system = none.
+  if (ticketingSystem === 'none') {
     const alertModal = document.getElementById('noJiraAlertModal');
     if (alertModal) {
       alertModal.classList.remove('hidden');
@@ -1725,5 +1809,7 @@ window.openWorkflowTicketDescriptionModal = openWorkflowTicketDescriptionModal;
 window.confirmManualWorkflowStart = confirmManualWorkflowStart;
 window.closePasteDescriptionModal = closePasteDescriptionModal;
 window.submitPasteDescription = submitPasteDescription;
+window.openGithubIssuePickerModal = openGithubIssuePickerModal;
+window.openJiraTicketPickerModal = openJiraTicketPickerModal;
 
 init();

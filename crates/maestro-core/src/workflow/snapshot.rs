@@ -45,6 +45,10 @@ pub struct PersistedWorkflowRecord {
     /// Last Claude/Cursor session ID for `--resume` across restarts.
     #[serde(default)]
     pub last_session_id: Option<String>,
+    /// Ticketing system active when this workflow was created. `#[serde(default)]` means
+    /// old snapshots without this field get `TicketingSystem::None`.
+    #[serde(default)]
+    pub ticketing_system: crate::config::TicketingSystem,
 }
 
 fn default_jira_available() -> bool {

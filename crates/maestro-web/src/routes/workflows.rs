@@ -3,6 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
+use maestro_core::config::TicketingSystem;
 use maestro_core::container::{self, ContainerRunner};
 use maestro_core::jira::ticket_browse_url;
 use maestro_core::workflow::dashboard_progress;
@@ -68,6 +69,8 @@ pub struct WorkflowSummary {
     pub editor_port_mappings: Vec<(u16, u16)>,
     /// `true` when Jira (acli) was available when this workflow was created.
     pub jira_available: bool,
+    /// Which ticketing system was active when this workflow was created: `"jira"`, `"github"`, or `"none"`.
+    pub ticketing_system: String,
     /// **Resume from error** is allowed (Error or Stopped, worktree exists on disk).
     pub can_resume_from_error: bool,
     /// Set when a web terminal (ttyd) is running for this workflow's editor container.
@@ -102,6 +105,14 @@ fn can_open_editor(w: &Workflow) -> bool {
 fn can_resume_from_error(w: &Workflow) -> bool {
     matches!(w.state, WorkflowState::Error { .. } | WorkflowState::Stopped)
         && w.worktree_path.as_ref().is_some_and(|p| p.exists())
+}
+
+fn ticketing_system_str(ts: TicketingSystem) -> &'static str {
+    match ts {
+        TicketingSystem::None => "none",
+        TicketingSystem::Jira => "jira",
+        TicketingSystem::GitHub => "github",
+    }
 }
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
@@ -146,6 +157,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 editor_url: None,
                 editor_port_mappings: Vec::new(),
                 jira_available: w.jira_available,
+                ticketing_system: ticketing_system_str(w.ticketing_system).to_string(),
                 can_resume_from_error: can_resume_from_error(w),
                 terminal_url: None,
             }
@@ -193,6 +205,7 @@ pub async fn get_workflow(
         editor_url: editor_info.as_ref().map(|e| e.url.clone()),
         editor_port_mappings: editor_info.map(|e| e.port_mappings).unwrap_or_default(),
         jira_available: w.jira_available,
+        ticketing_system: ticketing_system_str(w.ticketing_system).to_string(),
         can_resume_from_error: can_resume_from_error(w),
         terminal_url: state
             .terminal_ports

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value as JsonValue;
 
-use crate::config::{AiAgentProvider, Config};
+use crate::config::{AiAgentProvider, Config, TicketingSystem};
 use crate::error::{MaestroError, Result};
 
 fn preflight_home() -> PathBuf {
@@ -307,14 +307,20 @@ pub fn preflight(config: &Config) -> Result<PreflightResult> {
         ));
     }
 
-    eprintln!("[maestro preflight] Checking Atlassian CLI (acli)…");
-    let acli_ok = check_acli_auth();
-    if !acli_ok {
-        eprintln!(
-            "[maestro preflight] WARNING: Atlassian CLI (acli) is not authenticated. \
-             The app will start without Jira integration (no auto-polling, manual description entry only)."
-        );
-    }
+    let acli_ok = if config.general.ticketing_system == TicketingSystem::Jira {
+        eprintln!("[maestro preflight] Checking Atlassian CLI (acli) [ticketing_system = jira]…");
+        let ok = check_acli_auth();
+        if !ok {
+            eprintln!(
+                "[maestro preflight] WARNING: Atlassian CLI (acli) is not authenticated. \
+                 Jira integration will be disabled (no auto-polling, manual description entry only)."
+            );
+        }
+        ok
+    } else {
+        // ticketing_system is "none" or "github" — acli is not required
+        false
+    };
 
     match config.agent.provider {
         AiAgentProvider::Claude => {

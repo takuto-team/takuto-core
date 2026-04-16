@@ -60,6 +60,11 @@
 
 [general]
 dry_mode = false
+# Ticketing system that drives workflow automation.
+# "none"   — no ticketing integration; start workflows manually from the dashboard (default).
+# "jira"   — poll Jira for To Do tickets; requires Atlassian CLI (acli) auth (run make setup).
+# "github" — poll GitHub Issues from git.repo_url; no Atlassian auth required.
+ticketing_system = "none"
 # Start with Jira polling paused (same as dashboard **Pause polling**). Use **Resume polling** after startup to pick up To Do tickets without editing config again.
 # pause_jira_polling_on_startup = true
 poll_interval_secs = 60

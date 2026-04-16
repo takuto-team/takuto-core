@@ -12,8 +12,9 @@ use tracing_subscriber::EnvFilter;
 use maestro_core::actions::dry_run::DryRunActions;
 use maestro_core::actions::real::RealActions;
 use maestro_core::actions::traits::ExternalActions;
-use maestro_core::config::Config;
+use maestro_core::config::{Config, TicketingSystem};
 use maestro_core::docker_hooks;
+use maestro_core::github::poller::GitHubPoller;
 use maestro_core::jira::poller::JiraPoller;
 use maestro_core::workflow::engine::WorkflowEngine;
 use maestro_web::server::build_router;
@@ -100,18 +101,29 @@ fn run_preflight(config_path: &std::path::Path) -> ExitCode {
         }
     };
 
+    let ticketing = config.general.ticketing_system;
     match docker_hooks::preflight(&config) {
         Err(e) => {
             eprintln!("Preflight failed: {e}");
             ExitCode::FAILURE
         }
         Ok(result) => {
-            if !result.acli_ok {
-                eprintln!(
-                    "Preflight OK (warning: acli not authenticated — Jira integration disabled)."
-                );
-            } else {
-                eprintln!("Preflight OK.");
+            match ticketing {
+                TicketingSystem::Jira => {
+                    if !result.acli_ok {
+                        eprintln!(
+                            "Preflight OK (warning: acli not authenticated — Jira integration disabled, falling back to manual mode)."
+                        );
+                    } else {
+                        eprintln!("Preflight OK (ticketing_system = jira, acli authenticated).");
+                    }
+                }
+                TicketingSystem::GitHub => {
+                    eprintln!("Preflight OK (ticketing_system = github — polling GitHub issues, no Atlassian auth required).");
+                }
+                TicketingSystem::None => {
+                    eprintln!("Preflight OK (ticketing_system = none — manual description entry only).");
+                }
             }
             ExitCode::SUCCESS
         }
@@ -203,9 +215,15 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(RealActions::new(repo_path, git_remote, acli_extras))
     };
 
-    let acli_ok = docker_hooks::check_acli_auth();
+    let ticketing_system = config.read().await.general.ticketing_system;
+
+    let acli_ok = if ticketing_system == TicketingSystem::Jira {
+        docker_hooks::check_acli_auth()
+    } else {
+        false
+    };
     let jira_available = Arc::new(AtomicBool::new(acli_ok));
-    if !acli_ok {
+    if ticketing_system == TicketingSystem::Jira && !acli_ok {
         info!("Atlassian CLI (acli) is not authenticated — Jira integration disabled. \
                No auto-polling; workflows skip Jira operations; manual description entry only.");
     }
@@ -216,6 +234,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         actions.clone(),
         max_concurrent,
         jira_available.clone(),
+        ticketing_system,
     ));
 
     match engine.restore_persisted_workflows().await {
@@ -246,11 +265,14 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         polling_paused.clone(),
     );
 
+    let polling_paused_for_gh = polling_paused.clone();
+    let cancel_token_for_gh = cancel_token.clone();
     let app_state = AppState {
         engine: engine.clone(),
         config: config.clone(),
         polling_paused,
         jira_available: jira_available.clone(),
+        ticketing_system,
         editor_scanners: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -293,14 +315,26 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::select! {
         _ = async {
-            if acli_ok {
-                poller.run().await;
-            } else {
-                // No Jira integration — poller stays idle forever.
-                std::future::pending::<()>().await;
+            match ticketing_system {
+                TicketingSystem::Jira if acli_ok => {
+                    poller.run().await;
+                }
+                TicketingSystem::GitHub => {
+                    let gh_poller = GitHubPoller::new(
+                        config.clone(),
+                        engine.clone(),
+                        cancel_token_for_gh,
+                        polling_paused_for_gh,
+                    );
+                    gh_poller.run().await;
+                }
+                _ => {
+                    // No ticketing integration or Jira not authenticated — poller stays idle forever.
+                    std::future::pending::<()>().await;
+                }
             }
         } => {
-            info!("Jira poller stopped");
+            info!("Poller stopped");
         }
         _ = snapshot_task => {
             info!("Workflow snapshot syncer stopped");

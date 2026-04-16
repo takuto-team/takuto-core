@@ -16,6 +16,19 @@ pub enum AiAgentProvider {
     Cursor,
 }
 
+/// Which ticketing system (if any) drives workflow automation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TicketingSystem {
+    /// No ticketing integration — manual description entry only (default).
+    #[default]
+    None,
+    /// Jira via `acli` — current behavior with auto-polling and ticket transitions.
+    Jira,
+    /// GitHub Issues — poll open issues, no Atlassian auth required.
+    GitHub,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     #[serde(default)]
@@ -108,9 +121,9 @@ pub enum StepAvailability {
     /// Run regardless of ticketing system status (default when omitted).
     #[default]
     Always,
-    /// Run only when acli (Jira) is authenticated.
+    /// Run only when a ticketing system (`jira` or `github`) is active.
     Ticketing,
-    /// Run only when acli (Jira) is **not** authenticated (manual description mode).
+    /// Run only when **no** ticketing system is active.
     NoTicketing,
 }
 
@@ -130,19 +143,19 @@ pub struct AgentStepConfig {
     /// Default `false` — each step gets a clean session.
     #[serde(default)]
     pub resume_previous: bool,
-    /// When this step is eligible to run: `"always"` (default), `"ticketing"` (only when Jira/acli
-    /// is authenticated), or `"no_ticketing"` (only when Jira is **not** available).
+    /// When this step is eligible to run: `"always"` (default), `"ticketing"` (only when a ticketing
+    /// system is active), or `"no_ticketing"` (only when no ticketing system is active).
     #[serde(default)]
     pub when: StepAvailability,
 }
 
 impl AgentStepConfig {
     /// Returns `true` if this step should run given the current ticketing system availability.
-    pub fn available_for(&self, jira_available: bool) -> bool {
+    pub fn available_for(&self, ticketing_available: bool) -> bool {
         match self.when {
             StepAvailability::Always => true,
-            StepAvailability::Ticketing => jira_available,
-            StepAvailability::NoTicketing => !jira_available,
+            StepAvailability::Ticketing => ticketing_available,
+            StepAvailability::NoTicketing => !ticketing_available,
         }
     }
 }
@@ -374,6 +387,9 @@ pub struct GeneralConfig {
     /// Load **`[[merge_base_agent_steps]]`** from this file. Empty = use inline **`merge_base_agent_steps`** in `config.toml`.
     #[serde(default)]
     pub merge_base_workflow_steps_file: String,
+    /// Which ticketing system drives workflow automation. Default `none` (no ticketing integration).
+    #[serde(default)]
+    pub ticketing_system: TicketingSystem,
 }
 
 /// How linked Jira issues are included in `{ticket_context}` for agent prompts.
@@ -580,6 +596,7 @@ impl Default for GeneralConfig {
             ticket_workflow_steps_file: String::new(),
             review_workflow_steps_file: String::new(),
             merge_base_workflow_steps_file: String::new(),
+            ticketing_system: TicketingSystem::None,
         }
     }
 }
