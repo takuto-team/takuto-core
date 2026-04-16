@@ -185,12 +185,12 @@ impl Workflow {
         // Backward compatibility: old snapshots lack `ticketing_system` (deserializes as `None`)
         // but may have `jira_available = true`. Derive the correct ticketing system so that
         // `when: ticketing` steps are not incorrectly filtered out on resume.
-        let ticketing_system = if rec.ticketing_system == TicketingSystem::None && rec.jira_available
-        {
-            TicketingSystem::Jira
-        } else {
-            rec.ticketing_system
-        };
+        let ticketing_system =
+            if rec.ticketing_system == TicketingSystem::None && rec.jira_available {
+                TicketingSystem::Jira
+            } else {
+                rec.ticketing_system
+            };
         let ticketing_available = ticketing_system != TicketingSystem::None;
         Self {
             id: rec.id,

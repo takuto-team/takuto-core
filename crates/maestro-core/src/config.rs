@@ -1246,10 +1246,7 @@ step_timeout_secs = 600
     fn interpolate_command_template_shell_escapes_values() {
         let mut vars = HashMap::new();
         vars.insert("ticket_key".into(), "GH-1".into());
-        vars.insert(
-            "ticket_summary".into(),
-            "Fix $(rm -rf /) bug".into(),
-        );
+        vars.insert("ticket_summary".into(), "Fix $(rm -rf /) bug".into());
         assert_eq!(
             interpolate_command_template("echo {ticket_key} {ticket_summary}", &vars),
             "echo 'GH-1' 'Fix $(rm -rf /) bug'"

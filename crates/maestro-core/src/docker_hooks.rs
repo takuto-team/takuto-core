@@ -361,14 +361,13 @@ fn gh_auth_recover_expired_token() -> bool {
                 continue;
             }
             // Token lines are at indent=12
-            if indent >= 12 {
-                if let Some(ref user) = current_user {
-                    if let Some(token) = trimmed.strip_prefix("oauth_token:") {
-                        let tok = token.trim();
-                        if tok.starts_with("gho_") {
-                            personal_token_users.push(user.clone());
-                        }
-                    }
+            if indent >= 12
+                && let Some(ref user) = current_user
+                && let Some(token) = trimmed.strip_prefix("oauth_token:")
+            {
+                let tok = token.trim();
+                if tok.starts_with("gho_") {
+                    personal_token_users.push(user.clone());
                 }
             }
         }
@@ -376,7 +375,14 @@ fn gh_auth_recover_expired_token() -> bool {
 
     for user in personal_token_users {
         let switched = Command::new("gh")
-            .args(["auth", "switch", "--user", &user, "--hostname", "github.com"])
+            .args([
+                "auth",
+                "switch",
+                "--user",
+                &user,
+                "--hostname",
+                "github.com",
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()

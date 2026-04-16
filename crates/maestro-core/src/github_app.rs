@@ -392,9 +392,7 @@ impl GitHubAppTokenManager {
     pub async fn get_token_for_injection(&self, cwd: &Path) -> Result<String> {
         self.get_installation_token(cwd).await
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {
