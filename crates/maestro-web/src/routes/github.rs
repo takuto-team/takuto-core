@@ -9,6 +9,7 @@ use crate::state::AppState;
 pub struct GithubIssueRow {
     pub key: String,
     pub summary: String,
+    pub body: String,
 }
 
 /// Parse `owner/repo` from a GitHub URL or bare `owner/repo` string.
@@ -87,9 +88,11 @@ pub async fn list_github_issues(
                     }
                     let number = v.get("number")?.as_u64()?;
                     let title = v.get("title")?.as_str().unwrap_or("").to_string();
+                    let body = v.get("body").and_then(|b| b.as_str()).unwrap_or("").to_string();
                     Some(GithubIssueRow {
                         key: format!("GH-{number}"),
                         summary: title,
+                        body,
                     })
                 })
                 .collect()

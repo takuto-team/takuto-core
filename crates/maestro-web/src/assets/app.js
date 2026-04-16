@@ -18,6 +18,8 @@ let jiraSite = '';
 let jiraAvailable = true;
 /** Ticketing system in use: `"jira"`, `"github"`, or `"none"` — from `GET /api/config`. */
 let ticketingSystem = 'none';
+/** Cache of GitHub issue bodies keyed by `GH-{n}` — populated when the picker loads. */
+const githubIssueDescriptions = {};
 /** Set when the ticket detail modal is open; used by **Start** to run the workflow. */
 let pendingManualTicketSelection = null;
 /** Bumps on each detail open so slower Jira preview responses cannot overwrite a newer selection. */
@@ -587,6 +589,22 @@ async function runTicketDescriptionPreviewLoad(ticketKey, summaryHint, seq, sync
   const summaryEl = document.getElementById('manualTicketDetailSummary');
   if (!body || !summaryEl) return;
 
+  // GitHub: render from cache without calling the Jira endpoint.
+  if (ticketingSystem === 'github') {
+    if (seq !== manualTicketPreviewSeq) return;
+    const hint = typeof summaryHint === 'string' && summaryHint.trim() ? summaryHint.trim() : ticketKey;
+    summaryEl.textContent = hint;
+    if (syncPending && pendingManualTicketSelection && pendingManualTicketSelection.key === ticketKey) {
+      pendingManualTicketSelection.summary = hint;
+    }
+    const md = githubIssueDescriptions[ticketKey] || '';
+    const html = renderMarkdownToSafeHtml(md);
+    body.innerHTML = html
+      ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+      : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+    return;
+  }
+
   try {
     const res = await dashboardFetch(
       `/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`
@@ -825,6 +843,8 @@ async function openGithubIssuePickerModal() {
     for (const t of available) {
       const key = t.key;
       const summary = typeof t.summary === 'string' ? t.summary : '';
+      // Cache description so the detail modal can render it without a Jira call.
+      githubIssueDescriptions[key] = typeof t.body === 'string' ? t.body : '';
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'manual-workflow-row';
@@ -838,10 +858,6 @@ async function openGithubIssuePickerModal() {
       sEl.textContent = summary || key;
       row.appendChild(kEl);
       row.appendChild(sEl);
-      row.addEventListener('click', () => {
-        closeManualWorkflowModal();
-        startManualWorkflowRequest(key, summary || key);
-      });
       listEl.appendChild(row);
     }
     body.appendChild(listEl);
@@ -1702,12 +1718,6 @@ function setupManualWorkflowListDelegation() {
     ev.preventDefault();
     ev.stopPropagation();
     const summary = row.dataset.ticketSummary || key;
-    // GitHub issues don't have a Jira preview — start directly.
-    if (ticketingSystem === 'github') {
-      closeManualWorkflowModal();
-      void startManualWorkflowRequest(key, summary);
-      return;
-    }
     void openManualTicketDetailModal(key, summary);
   });
 }
