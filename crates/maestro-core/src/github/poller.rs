@@ -176,10 +176,10 @@ async fn fetch_open_issues(owner_repo: &str) -> crate::error::Result<Vec<GitHubI
     let output = tokio::process::Command::new("gh")
         .args([
             "api",
+            "--method", "GET",
             &format!("repos/{owner_repo}/issues"),
             "--field", "state=open",
             "--field", "per_page=50",
-            "--field", "filter=all",
         ])
         .output()
         .await

@@ -53,13 +53,13 @@ pub async fn list_github_issues(
     let output = tokio::process::Command::new("gh")
         .args([
             "api",
+            "--method",
+            "GET",
             &format!("repos/{owner_repo}/issues"),
             "--field",
             "state=open",
             "--field",
             "per_page=50",
-            "--field",
-            "filter=all",
         ])
         .output()
         .await

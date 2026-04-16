@@ -788,6 +788,8 @@ async function openGithubIssuePickerModal() {
   const modal = document.getElementById('manualWorkflowModal');
   const body = document.getElementById('manualWorkflowModalBody');
   if (!modal || !body) return;
+  const subtitle = document.getElementById('manualWorkflowModalSubtitle');
+  if (subtitle) subtitle.textContent = 'Open issues from GitHub';
   modal.classList.remove('hidden');
   body.innerHTML = `
     <div class="manual-workflow-loading">
@@ -853,6 +855,8 @@ async function openJiraTicketPickerModal() {
   const modal = document.getElementById('manualWorkflowModal');
   const body = document.getElementById('manualWorkflowModalBody');
   if (!modal || !body) return;
+  const subtitle = document.getElementById('manualWorkflowModalSubtitle');
+  if (subtitle) subtitle.innerHTML = 'To Do on the board (Epics excluded); matches <code class="text-gray-400">[jira] jql_filter</code> when set';
   modal.classList.remove('hidden');
   body.innerHTML = `
     <div class="manual-workflow-loading">
