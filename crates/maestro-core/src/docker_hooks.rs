@@ -301,6 +301,8 @@ pub fn check_acli_auth() -> bool {
 /// Parses `~/.config/gh/hosts.yml` for the `github.com` host, finds any user with a `gho_` token,
 /// and runs `gh auth switch --user <name> --hostname github.com`. Returns `true` if we switched and
 /// `gh auth status` now passes.
+// TODO: This uses a fragile line-based YAML parser with hardcoded indent levels (4/8/12 spaces)
+// matching the current `gh` CLI output format. Consider using a YAML library if gh changes format.
 fn gh_auth_recover_expired_token() -> bool {
     let hosts_path = preflight_home().join(".config/gh/hosts.yml");
     let content = match std::fs::read_to_string(&hosts_path) {
