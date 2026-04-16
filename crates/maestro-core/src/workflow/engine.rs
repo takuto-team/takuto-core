@@ -14,7 +14,7 @@ use crate::agent_prompt::headless_instructions_suffix;
 use crate::claude::session::ClaudeSession;
 use crate::config::{
     AgentStepConfig, AiAgentProvider, Config, TicketingSystem, cursor_model_for_cli,
-    interpolate_agent_prompt,
+    interpolate_agent_prompt, interpolate_command_template,
 };
 use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
@@ -2089,7 +2089,7 @@ async fn run_agent_step_sequence(
                         check_cancelled(cancel_token)?;
                         wait_if_paused(workflows, ticket_key, cancel_token).await?;
 
-                        let interpolated_cmd = interpolate_agent_prompt(cmd, interp_vars);
+                        let interpolated_cmd = interpolate_command_template(cmd, interp_vars);
                         info!(
                             ticket = %ticket_key,
                             step = %step_label,
