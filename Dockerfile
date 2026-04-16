@@ -94,11 +94,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Rust toolchain — baked system-wide so it is available in every container
+# (editor, ephemeral workers, terminal) regardless of volume state.
+# RUSTUP_HOME/CARGO_HOME are NOT volume-mounted, so the install lives in the
+# image layer. Other runtimes (Java, Ruby, Go, …) are best managed via `mise`
+# and the shared mise volume; Rust is special because many Rust workflows need
+# `cargo` in ephemeral workers that start before any mise install can run.
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal \
+    && /usr/local/cargo/bin/rustup component add rustfmt clippy \
+    && chmod -R a+r /usr/local/rustup /usr/local/cargo \
+    && find /usr/local/cargo/bin -type f -exec chmod a+x {} \; \
+    && /usr/local/cargo/bin/cargo --version \
+    && /usr/local/cargo/bin/rustc --version
+
 # figma-cli (`fcli`) — Rust CLI, available to every container using this image
 # (workflows, editor, terminal). amd64: prebuilt release tarball. arm64: no
-# prebuilt exists, so we install rustup temporarily and cargo install from
-# source, then remove the Rust toolchain to keep the image slim. `build-essential`,
-# `libssl-dev`, and `pkg-config` are already installed above for mise.
+# prebuilt binary exists, so we build from source using the Rust toolchain
+# baked above. `build-essential`, `libssl-dev`, and `pkg-config` are already
+# installed above for mise.
 ARG FCLI_VERSION=v0.2.0
 RUN set -eux; \
     ARCH=$(dpkg --print-architecture); \
@@ -109,11 +125,9 @@ RUN set -eux; \
       install -m 0755 /tmp/fcli /usr/local/bin/fcli; \
       rm -rf /tmp/fcli /tmp/fcli.tar.gz; \
     elif [ "$ARCH" = "arm64" ]; then \
-      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal; \
-      . "$HOME/.cargo/env"; \
-      cargo install --git https://github.com/morphet81/figma-cli --tag "${FCLI_VERSION}" --locked --root /usr/local; \
-      rustup self uninstall -y; \
-      rm -rf "$HOME/.cargo" "$HOME/.rustup"; \
+      /usr/local/cargo/bin/cargo install \
+        --git https://github.com/morphet81/figma-cli --tag "${FCLI_VERSION}" \
+        --locked --root /usr/local; \
     else \
       echo "Unsupported arch: $ARCH"; exit 1; \
     fi; \
@@ -157,7 +171,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI (npm global)
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@2.1.110
 
 # Cursor Agent CLI (for [agent] provider = "cursor"). The launcher resolves paths with realpath("$0");
 # copying only the script to /usr/local/bin breaks it (looks for index.js next to the copy). Install the
@@ -256,7 +270,7 @@ ENV MISE_CACHE_DIR=/home/maestro/.cache/mise
 ENV MISE_CONFIG_DIR=/home/maestro/.config/mise
 ENV MISE_TRUST_ALL_CONFIGS=1
 ENV MISE_YES=1
-ENV PATH="/home/maestro/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV PATH="/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 RUN printf '%s\n' \
     'export MISE_DATA_DIR=/home/maestro/.local/share/mise' \
@@ -264,7 +278,7 @@ RUN printf '%s\n' \
     'export MISE_CONFIG_DIR=/home/maestro/.config/mise' \
     'export MISE_TRUST_ALL_CONFIGS=1' \
     'export MISE_YES=1' \
-    'export PATH="$MISE_DATA_DIR/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+    'export PATH="$MISE_DATA_DIR/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
     > /etc/profile.d/zz-maestro-mise.sh \
     && chmod 644 /etc/profile.d/zz-maestro-mise.sh
 

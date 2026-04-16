@@ -367,6 +367,30 @@ impl JiraClient {
         Ok(())
     }
 
+    pub async fn update_description(&self, key: &str, description: &str) -> Result<()> {
+        info!(ticket = key, "Updating ticket description");
+        let output = self
+            .acli(&[
+                "jira",
+                "workitem",
+                "edit",
+                "--key",
+                key,
+                "--description",
+                description,
+                "--yes",
+            ])
+            .await?;
+
+        if !output.success() {
+            return Err(MaestroError::Jira(format!(
+                "Failed to update description for {key}: {}",
+                output.stderr
+            )));
+        }
+        Ok(())
+    }
+
     async fn get_linked_item(&self, key: &str, link_type: &str) -> Result<LinkedItem> {
         let output = self
             .acli(&[

@@ -1,10 +1,27 @@
-# Example: PR review loop after main flow is Done (`[[review_agent_steps]]`).
-# Copy to `review.toml` (now tracked in git) and set:
+# Example: PR review loop — copy to `review.toml` and configure in config.toml:
 #   [general]
 #   review_workflow_steps_file = "workflows/review.toml"
 #
-# Placeholders: {pr_url}, {ticket_context}, {base_branch}
+# Each step is a [[review_agent_steps]] table. Steps run in order. All fields:
+#
+#   name    = "Human-readable step name"  (shown in dashboard)
+#   prompt  = """Multi-line prompt sent to the agent."""
+#   repeat  = 1          # How many times to re-run this step (default 1).
+#                        # Use repeat = 2 for a review/fix loop.
+#   when    = "always"   # Eligibility filter:
+#                        #   "always"       – run unconditionally (default)
+#                        #   "ticketing"    – only when a ticketing system (Jira/GitHub) is configured
+#                        #   "no_ticketing" – only when no ticketing system is configured
+#   skills  = [...]      # Optional list of Claude Code /skills to inject before the prompt.
+#                        # Each entry: { name = "skill-name" } or { name = "skill-name", args = ["--flag"] }
+#                        # Skills are loaded from the `skills/` directory next to the Maestro binary.
+#
+# Available prompt placeholders (replaced at runtime):
+#   {pr_url}          – URL of the pull request being reviewed
+#   {ticket_context}  – formatted summary: key, title, description, acceptance criteria
+#   {base_branch}     – the target branch for this PR (e.g. main, develop)
 
+# ── Step 1: Fix review comments ──────────────────────────────────────────────
 [[review_agent_steps]]
 name = "Fix review comments"
 prompt = """
@@ -13,19 +30,28 @@ Pull request URL: {pr_url}
 Ticket context:
 {ticket_context}
 
-Use GitHub tooling to retrieve unresolved PR comments and review feedback.
-For each item: make necessary code changes, test locally, commit, and push to the PR branch.
-Do not bypass linting or tests.
+Retrieve all unresolved PR review comments and feedback.
+For each item: make the necessary code changes, verify the fix locally, commit with a descriptive
+message, and push to the PR branch.
+Do not bypass linting or tests while making fixes.
 """
-skills = [{ name = "address-pr-comments" }]
 repeat = 1
 
+# ── Step 2: Lint and test ────────────────────────────────────────────────────
+# Replace the commands below with whatever is appropriate for your stack.
 [[review_agent_steps]]
-name = "Linting and test"
+name = "Lint and test"
 prompt = """
-Run linting and test coverage, fix all reported issues.
-Do not disable rules or add ignore comments unless genuinely inapplicable.
-Re-run until both lint and test coverage pass completely.
-Once both checks pass cleanly, stage all changes and commit.
+Run your project's linting tool and fix all reported issues. Do not suppress warnings or add
+ignore directives unless a rule is genuinely inapplicable; if so, leave an inline comment
+explaining why. Re-run and confirm the linter exits clean with zero warnings before moving on.
+
+Run your project's test suite and ensure all tests pass. If any tests fail, fix the underlying
+code — do not delete or skip tests. Re-run until the full suite is green.
+
+Run your project's formatter (if applicable) and apply any required formatting changes.
+
+Once all checks pass cleanly, stage all changes and commit with a message of
+`chore: fix lint warnings, format, and failing tests`.
 """
 repeat = 1

@@ -16,8 +16,22 @@ let jiraProjectsConfigured = false;
 let jiraSite = '';
 /** `true` when acli (Jira) is authenticated — from `GET /api/config`. */
 let jiraAvailable = true;
+/** Ticketing system in use: `"jira"`, `"github"`, or `"none"` — from `GET /api/config`. */
+let ticketingSystem = 'none';
+/** Cache of GitHub issue bodies keyed by `GH-{n}` — populated when the picker loads. */
+const githubIssueDescriptions = {};
 /** Set when the ticket detail modal is open; used by **Start** to run the workflow. */
 let pendingManualTicketSelection = null;
+/** Raw markdown currently rendered in the ticket detail modal; captured for the Improve button. */
+let currentTicketDetailMarkdown = '';
+/** Snapshot of markdown before AI improvement; `null` means not in improved state. */
+let improveOriginalMarkdown = null;
+/** AbortController for the in-flight /improve fetch; `null` when no request is active. */
+let improveAbortController = null;
+/** setInterval handle for the improve countdown timer; `null` when not running. */
+let improveCountdownInterval = null;
+/** `true` while the description textarea editor is open in the detail modal. */
+let editMode = false;
 /** Bumps on each detail open so slower Jira preview responses cannot overwrite a newer selection. */
 let manualTicketPreviewSeq = 0;
 const TERMINAL_MAX_LINES = 500;
@@ -421,9 +435,9 @@ function applyPollingUi() {
   const btn = document.getElementById('pollingToggleBtn');
   const label = document.getElementById('pollingStatusLabel');
   if (!btn) return;
-  // When Jira is not available, hide polling controls entirely.
+  // When no ticketing system is configured, hide polling controls entirely.
   const pollingContainer = btn.closest('.border-l');
-  if (!jiraAvailable) {
+  if (ticketingSystem === 'none') {
     if (pollingContainer) pollingContainer.style.display = 'none';
     return;
   }
@@ -483,13 +497,14 @@ async function fetchConfig() {
       Array.isArray(cfg.jira?.project_keys) && cfg.jira.project_keys.length > 0;
     jiraSite = typeof cfg.jira?.site === 'string' ? cfg.jira.site : '';
     jiraAvailable = cfg.jira_available !== false;
+    ticketingSystem = typeof cfg.ticketing_system === 'string' ? cfg.ticketing_system : 'none';
     const banner = document.getElementById('dryBanner');
     if (banner) {
       banner.classList.toggle('hidden', !dryMode);
     }
     const noJiraBanner = document.getElementById('noJiraBanner');
     if (noJiraBanner) {
-      noJiraBanner.classList.toggle('hidden', jiraAvailable);
+      noJiraBanner.classList.toggle('hidden', ticketingSystem !== 'none');
     }
     applyPollingUi();
   } catch (e) {
@@ -502,18 +517,25 @@ function manualSlotsUsed() {
 }
 
 function isAddWorkflowDisabled() {
-  if (jiraAvailable && !jiraProjectsConfigured) return true;
+  if (ticketingSystem === 'jira' && !jiraProjectsConfigured) return true;
   if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) return true;
   return false;
 }
 
 function addWorkflowTitle() {
-  if (!jiraAvailable) {
+  if (ticketingSystem === 'none') {
     if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
       return `Manual workflow limit reached (${maxConcurrentManual})`;
     }
     return 'Paste a description to start a workflow';
   }
+  if (ticketingSystem === 'github') {
+    if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
+      return `Manual workflow limit reached (${maxConcurrentManual})`;
+    }
+    return 'Start workflow for a GitHub issue';
+  }
+  // jira
   if (!jiraProjectsConfigured) return 'Configure [jira] project_keys to enable manual starts';
   if (maxConcurrentManual > 0 && manualSlotsUsed() >= maxConcurrentManual) {
     return `Manual workflow limit reached (${maxConcurrentManual})`;
@@ -522,7 +544,7 @@ function addWorkflowTitle() {
 }
 
 function renderAddWorkflowCell() {
-  if (jiraAvailable && !jiraProjectsConfigured) return '';
+  if (ticketingSystem === 'jira' && !jiraProjectsConfigured) return '';
   const dis = isAddWorkflowDisabled();
   return `
     <div class="workflow-add-cell">
@@ -543,6 +565,11 @@ function setManualTicketDetailStartVisible(visible) {
 }
 
 function closeManualTicketDetailModal() {
+  if (improveAbortController) {
+    improveAbortController.abort();
+    improveAbortController = null;
+  }
+  resetImproveState();
   const modal = document.getElementById('manualTicketDetailModal');
   if (modal) modal.classList.add('hidden');
   pendingManualTicketSelection = null;
@@ -577,6 +604,23 @@ async function runTicketDescriptionPreviewLoad(ticketKey, summaryHint, seq, sync
   const summaryEl = document.getElementById('manualTicketDetailSummary');
   if (!body || !summaryEl) return;
 
+  // GitHub: render from cache without calling the Jira endpoint.
+  if (ticketingSystem === 'github') {
+    if (seq !== manualTicketPreviewSeq) return;
+    const hint = typeof summaryHint === 'string' && summaryHint.trim() ? summaryHint.trim() : ticketKey;
+    summaryEl.textContent = hint;
+    if (syncPending && pendingManualTicketSelection && pendingManualTicketSelection.key === ticketKey) {
+      pendingManualTicketSelection.summary = hint;
+    }
+    const md = githubIssueDescriptions[ticketKey] || '';
+    currentTicketDetailMarkdown = md;
+    const html = renderMarkdownToSafeHtml(md);
+    body.innerHTML = html
+      ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+      : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+    return;
+  }
+
   try {
     const res = await dashboardFetch(
       `/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`
@@ -608,6 +652,7 @@ async function runTicketDescriptionPreviewLoad(ticketKey, summaryHint, seq, sync
     }
 
     const md = typeof data.description_markdown === 'string' ? data.description_markdown : '';
+    currentTicketDetailMarkdown = md;
     const html = renderMarkdownToSafeHtml(md);
     if (!html) {
       body.innerHTML = '<p class="text-gray-500 italic px-5 py-6">No description</p>';
@@ -625,6 +670,245 @@ function closeManualWorkflowModal() {
   closeManualTicketDetailModal();
   const modal = document.getElementById('manualWorkflowModal');
   if (modal) modal.classList.add('hidden');
+}
+
+function resetImproveState() {
+  editMode = false;
+  improveOriginalMarkdown = null;
+  currentTicketDetailMarkdown = '';
+  const overlay = document.getElementById('manualTicketDetailImproveOverlay');
+  const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+  const editBtn = document.getElementById('manualTicketDetailEditBtn');
+  const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
+  const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+  const startBtn = document.getElementById('manualTicketDetailStartBtn');
+  if (overlay) overlay.classList.add('hidden');
+  if (improveBtn) improveBtn.disabled = false;
+  if (editBtn) { editBtn.textContent = 'Edit'; editBtn.disabled = false; }
+  if (editCancelBtn) editCancelBtn.classList.add('hidden');
+  if (closeBtn) { closeBtn.textContent = 'Close'; closeBtn.disabled = false; }
+  if (startBtn) { startBtn.textContent = 'Start'; startBtn.disabled = false; }
+}
+
+/** Exit edit mode and save the textarea content as the new current markdown. */
+function exitEditModeSave() {
+  if (!editMode) return;
+  const body = document.getElementById('manualTicketDetailBody');
+  const textarea = document.getElementById('manualTicketDetailEditArea');
+  const editBtn = document.getElementById('manualTicketDetailEditBtn');
+  const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
+  const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+  const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+  const startBtn = document.getElementById('manualTicketDetailStartBtn');
+  const newMd = textarea ? textarea.value : currentTicketDetailMarkdown;
+  const changed = newMd !== currentTicketDetailMarkdown;
+  currentTicketDetailMarkdown = newMd;
+
+  if (body) {
+    const html = renderMarkdownToSafeHtml(newMd);
+    body.innerHTML = html
+      ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+      : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+  }
+  editMode = false;
+  if (editBtn) { editBtn.textContent = 'Edit'; editBtn.disabled = false; }
+  if (editCancelBtn) editCancelBtn.classList.add('hidden');
+  if (improveBtn) improveBtn.disabled = false;
+  if (closeBtn) closeBtn.disabled = false;
+  if (startBtn) startBtn.disabled = false;
+
+  // Persist the edited description to the ticketing system.
+  if (changed) {
+    const p = pendingManualTicketSelection;
+    if (p) {
+      dashboardFetch(`/api/tickets/${encodeURIComponent(p.key)}/update-description`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: newMd }),
+      }).catch(e => console.warn('update-description after edit failed (non-fatal):', e));
+    }
+  }
+}
+
+/** Exit edit mode and discard any unsaved changes (re-render current markdown). */
+function exitEditModeDiscard() {
+  if (!editMode) return;
+  const body = document.getElementById('manualTicketDetailBody');
+  const editBtn = document.getElementById('manualTicketDetailEditBtn');
+  const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
+  const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+  const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+  const startBtn = document.getElementById('manualTicketDetailStartBtn');
+
+  if (body) {
+    const html = renderMarkdownToSafeHtml(currentTicketDetailMarkdown);
+    body.innerHTML = html
+      ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+      : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+  }
+  editMode = false;
+  if (editBtn) { editBtn.textContent = 'Edit'; editBtn.disabled = false; }
+  if (editCancelBtn) editCancelBtn.classList.add('hidden');
+  if (improveBtn) improveBtn.disabled = false;
+  if (closeBtn) closeBtn.disabled = false;
+  if (startBtn) startBtn.disabled = false;
+}
+
+function toggleEditMode() {
+  if (editMode) {
+    exitEditModeSave();
+  } else {
+    const body = document.getElementById('manualTicketDetailBody');
+    const editBtn = document.getElementById('manualTicketDetailEditBtn');
+    const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
+    const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+    const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+    const startBtn = document.getElementById('manualTicketDetailStartBtn');
+    if (!body) return;
+    editMode = true;
+    if (editBtn) editBtn.textContent = 'Save';
+    if (editCancelBtn) editCancelBtn.classList.remove('hidden');
+    if (improveBtn) improveBtn.disabled = true;
+    if (closeBtn) closeBtn.disabled = true;
+    if (startBtn) startBtn.disabled = true;
+    body.innerHTML =
+      `<textarea id="manualTicketDetailEditArea" spellcheck="false"` +
+      ` class="w-full h-full min-h-[12rem] bg-transparent text-gray-100 text-sm font-mono` +
+      ` leading-relaxed p-5 resize-none outline-none focus:outline-none block"` +
+      `>${escapeHtml(currentTicketDetailMarkdown)}</textarea>`;
+    const ta = document.getElementById('manualTicketDetailEditArea');
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+  }
+}
+
+function cancelOrCloseTicketDetail() {
+  // If in edit mode, discard the edit first (revert the body to rendered HTML).
+  if (editMode) {
+    exitEditModeDiscard();
+  }
+  if (improveOriginalMarkdown !== null) {
+    const body = document.getElementById('manualTicketDetailBody');
+    if (body) {
+      const html = renderMarkdownToSafeHtml(improveOriginalMarkdown);
+      body.innerHTML = html
+        ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+        : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+    }
+    currentTicketDetailMarkdown = improveOriginalMarkdown;
+    improveOriginalMarkdown = null;
+    const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+    const startBtn = document.getElementById('manualTicketDetailStartBtn');
+    if (closeBtn) closeBtn.textContent = 'Close';
+    if (startBtn) startBtn.textContent = 'Start';
+  } else {
+    closeManualTicketDetailModal();
+  }
+}
+
+async function confirmOrStartTicketDetail() {
+  const p = pendingManualTicketSelection;
+  if (!p) return;
+  // Commit any open edit before proceeding.
+  if (editMode) exitEditModeSave();
+  const ticketKey = p.key;
+  const ticketSummary = p.summary;
+  const descriptionToUse = currentTicketDetailMarkdown || null;
+
+  if (improveOriginalMarkdown !== null) {
+    // "Confirm" — persist improved description to ticketing system, stay in modal.
+    // Fire-and-forget (best-effort); don't block the UX on network.
+    dashboardFetch(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: descriptionToUse }),
+    }).catch(e => console.warn('update-description failed (non-fatal):', e));
+
+    // Exit improved state: keep the improved description as current, revert buttons to Close/Start.
+    improveOriginalMarkdown = null;
+    const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+    const startBtn = document.getElementById('manualTicketDetailStartBtn');
+    if (closeBtn) closeBtn.textContent = 'Close';
+    if (startBtn) startBtn.textContent = 'Start';
+    return;
+  }
+
+  // "Start" — launch the workflow.
+  closeManualWorkflowModal();
+  await startManualWorkflowRequest(ticketKey, ticketSummary, descriptionToUse);
+}
+
+async function improveTicketWithAI() {
+  const p = pendingManualTicketSelection;
+  if (!p) return;
+  const overlay = document.getElementById('manualTicketDetailImproveOverlay');
+  const improveBtn = document.getElementById('manualTicketDetailImproveBtn');
+  const editBtn = document.getElementById('manualTicketDetailEditBtn');
+  if (improveBtn) improveBtn.disabled = true;
+  if (editBtn) editBtn.disabled = true;
+  if (overlay) overlay.classList.remove('hidden');
+
+  const IMPROVE_TIMEOUT_SECS = 300;
+  const countdownEl = document.getElementById('manualTicketDetailImproveCountdown');
+  let remaining = IMPROVE_TIMEOUT_SECS;
+  function formatRemaining(s) {
+    const m = Math.floor(s / 60), sec = s % 60;
+    return `${m}:${String(sec).padStart(2, '0')} remaining until timeout`;
+  }
+  if (countdownEl) countdownEl.textContent = formatRemaining(remaining);
+  improveCountdownInterval = setInterval(() => {
+    remaining = Math.max(0, remaining - 1);
+    if (countdownEl) countdownEl.textContent = formatRemaining(remaining);
+  }, 1000);
+
+  improveAbortController = new AbortController();
+  try {
+    const res = await dashboardFetch(`/api/tickets/${encodeURIComponent(p.key)}/improve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: currentTicketDetailMarkdown, summary: p.summary }),
+      signal: improveAbortController.signal,
+    });
+    improveAbortController = null;
+    const text = await res.text();
+    if (!res.ok) {
+      alert(text || 'Failed to improve ticket description');
+      return;
+    }
+    let data;
+    try { data = JSON.parse(text); } catch { alert('Invalid response from AI'); return; }
+    const improved = data.improved_description || '';
+    improveOriginalMarkdown = currentTicketDetailMarkdown;
+    currentTicketDetailMarkdown = improved;
+    const body = document.getElementById('manualTicketDetailBody');
+    if (body) {
+      const html = renderMarkdownToSafeHtml(improved);
+      body.innerHTML = html
+        ? `<div class="manual-ticket-detail-prose px-5 py-4">${html}</div>`
+        : '<p class="text-gray-500 italic px-5 py-6">No description</p>';
+    }
+    const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
+    const startBtn = document.getElementById('manualTicketDetailStartBtn');
+    if (closeBtn) closeBtn.textContent = 'Cancel';
+    if (startBtn) startBtn.textContent = 'Confirm';
+    if (improveBtn) improveBtn.disabled = false;
+    if (editBtn) editBtn.disabled = false;
+  } catch (e) {
+    improveAbortController = null;
+    if (e.name !== 'AbortError') {
+      console.error(e);
+      alert('Failed to improve ticket description');
+      if (improveBtn) improveBtn.disabled = false;
+      if (editBtn) editBtn.disabled = false;
+    }
+    // AbortError: the modal was closed, nothing to do
+  } finally {
+    if (improveCountdownInterval) { clearInterval(improveCountdownInterval); improveCountdownInterval = null; }
+    if (countdownEl) countdownEl.textContent = '';
+    if (overlay) overlay.classList.add('hidden');
+  }
 }
 
 function renderMarkdownToSafeHtml(markdown) {
@@ -741,12 +1025,14 @@ async function confirmManualWorkflowStart() {
   await startManualWorkflowRequest(ticketKey, ticketSummary);
 }
 
-async function startManualWorkflowRequest(ticketKey, ticketSummary) {
+async function startManualWorkflowRequest(ticketKey, ticketSummary, description = null) {
   try {
+    const payload = { ticket_key: ticketKey, ticket_summary: ticketSummary };
+    if (description) payload.ticket_description = description;
     const res = await dashboardFetch('/api/workflows/start-manual', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticket_key: ticketKey, ticket_summary: ticketSummary }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const errText = await res.text();
@@ -762,13 +1048,89 @@ async function startManualWorkflowRequest(ticketKey, ticketSummary) {
 
 async function openManualWorkflowModal() {
   if (isAddWorkflowDisabled()) return;
-  if (!jiraAvailable) {
+  if (ticketingSystem === 'none') {
     openPasteDescriptionModal();
     return;
   }
+  if (ticketingSystem === 'github') {
+    await openGithubIssuePickerModal();
+    return;
+  }
+  // jira
+  await openJiraTicketPickerModal();
+}
+
+async function openGithubIssuePickerModal() {
   const modal = document.getElementById('manualWorkflowModal');
   const body = document.getElementById('manualWorkflowModalBody');
   if (!modal || !body) return;
+  const subtitle = document.getElementById('manualWorkflowModalSubtitle');
+  if (subtitle) subtitle.textContent = 'Open issues from GitHub';
+  modal.classList.remove('hidden');
+  body.innerHTML = `
+    <div class="manual-workflow-loading">
+      <div class="manual-workflow-spinner" role="status" aria-label="Loading"></div>
+      <span>Loading issues from GitHub…</span>
+    </div>`;
+  try {
+    const res = await dashboardFetch('/api/github/issues');
+    const text = await res.text();
+    if (!res.ok) {
+      body.innerHTML = `<p class="text-sm text-red-400 px-2 py-6 text-center">${escapeHtml(text || res.statusText || 'Failed to load issues')}</p>`;
+      return;
+    }
+    let issues;
+    try {
+      issues = JSON.parse(text);
+    } catch {
+      body.innerHTML = '<p class="text-sm text-red-400 px-2 py-6 text-center">Invalid response from server</p>';
+      return;
+    }
+    const existingKeys = new Set(Object.keys(workflows));
+    const available = Array.isArray(issues)
+      ? issues.filter(t => typeof t.key === 'string' && t.key && !existingKeys.has(t.key))
+      : [];
+    if (available.length === 0) {
+      body.innerHTML =
+        '<p class="text-sm text-gray-500 px-2 py-8 text-center">No available GitHub issues (all listed issues already have a workflow on the dashboard, or GitHub returned none).</p>';
+      return;
+    }
+    body.innerHTML = '';
+    const listEl = document.createElement('div');
+    listEl.className = 'manual-workflow-list';
+    for (const t of available) {
+      const key = t.key;
+      const summary = typeof t.summary === 'string' ? t.summary : '';
+      // Cache description so the detail modal can render it without a Jira call.
+      githubIssueDescriptions[key] = typeof t.body === 'string' ? t.body : '';
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'manual-workflow-row';
+      row.dataset.ticketKey = key;
+      row.dataset.ticketSummary = summary || key;
+      const kEl = document.createElement('div');
+      kEl.className = 'manual-workflow-row-key';
+      kEl.textContent = key;
+      const sEl = document.createElement('div');
+      sEl.className = 'manual-workflow-row-summary';
+      sEl.textContent = summary || key;
+      row.appendChild(kEl);
+      row.appendChild(sEl);
+      listEl.appendChild(row);
+    }
+    body.appendChild(listEl);
+  } catch (e) {
+    console.error(e);
+    body.innerHTML = '<p class="text-sm text-red-400 px-2 py-6 text-center">Could not load issues</p>';
+  }
+}
+
+async function openJiraTicketPickerModal() {
+  const modal = document.getElementById('manualWorkflowModal');
+  const body = document.getElementById('manualWorkflowModalBody');
+  if (!modal || !body) return;
+  const subtitle = document.getElementById('manualWorkflowModalSubtitle');
+  if (subtitle) subtitle.innerHTML = 'To Do on the board (Epics excluded); matches <code class="text-gray-400">[jira] jql_filter</code> when set';
   modal.classList.remove('hidden');
   body.innerHTML = `
     <div class="manual-workflow-loading">
@@ -1326,12 +1688,10 @@ function renderWorkflowCard(w) {
   let actions = jiraLinkActions;
   if (status.label === 'Running') {
     actions += `
-      <button onclick="pauseWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-yellow-500/10 text-yellow-400 border-yellow-500/20 hover:bg-yellow-500/20">Pause</button>
-      <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
+      <button onclick="pauseWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-yellow-500/10 text-yellow-400 border-yellow-500/20 hover:bg-yellow-500/20">Pause</button>`;
   } else if (status.label === 'Paused') {
     actions += `
-      <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20">Resume</button>
-      <button onclick="stopWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20">Stop</button>`;
+      <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20">Resume</button>`;
   }
   if (w.can_resume_from_error) {
     actions += `
@@ -1466,9 +1826,9 @@ function renderWorkflows() {
 
   if (list.length === 0) {
     empty.classList.remove('hidden');
-    // Update empty state text for no-Jira mode.
+    // Update empty state text for no-ticketing mode.
     const emptyText = empty.querySelector('p');
-    if (emptyText && !jiraAvailable) {
+    if (emptyText && ticketingSystem === 'none') {
       emptyText.textContent = 'No workflows yet. Click the button below to paste a ticket description and start a workflow.';
     }
     grid.innerHTML = '';
@@ -1632,6 +1992,44 @@ function slugifyWorkflowName(name) {
     .replace(/^-+|-+$/g, '');
 }
 
+async function improvePasteDescription() {
+  const textarea = document.getElementById('pasteDescBody');
+  const nameInput = document.getElementById('pasteDescName');
+  const improveBtn = document.getElementById('pasteDescImproveBtn');
+  const startBtn = document.getElementById('pasteDescStartBtn');
+  if (!textarea || !improveBtn) return;
+
+  const description = textarea.value.trim();
+  const summary = nameInput ? nameInput.value.trim() : '';
+
+  improveBtn.disabled = true;
+  improveBtn.textContent = 'Improving…';
+  if (startBtn) startBtn.disabled = true;
+
+  try {
+    const res = await dashboardFetch('/api/tickets/manual/improve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description, summary }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('Improve failed:', errText);
+    } else {
+      const data = await res.json();
+      if (typeof data.improved_description === 'string' && data.improved_description.trim()) {
+        textarea.value = data.improved_description;
+      }
+    }
+  } catch (e) {
+    console.error('Improve failed:', e);
+  } finally {
+    improveBtn.disabled = false;
+    improveBtn.textContent = 'Improve with AI';
+    if (startBtn) startBtn.disabled = false;
+  }
+}
+
 function openPasteDescriptionModal() {
   const modal = document.getElementById('pasteDescriptionModal');
   if (!modal) return;
@@ -1696,8 +2094,8 @@ async function init() {
       window.location.href = '/login.html';
     });
   }
-  // Show the no-Jira alert dialog on page load when acli is not authenticated.
-  if (!jiraAvailable) {
+  // Show the no-ticketing alert dialog on page load when ticketing_system = none.
+  if (ticketingSystem === 'none') {
     const alertModal = document.getElementById('noJiraAlertModal');
     if (alertModal) {
       alertModal.classList.remove('hidden');
@@ -1725,5 +2123,7 @@ window.openWorkflowTicketDescriptionModal = openWorkflowTicketDescriptionModal;
 window.confirmManualWorkflowStart = confirmManualWorkflowStart;
 window.closePasteDescriptionModal = closePasteDescriptionModal;
 window.submitPasteDescription = submitPasteDescription;
+window.openGithubIssuePickerModal = openGithubIssuePickerModal;
+window.openJiraTicketPickerModal = openJiraTicketPickerModal;
 
 init();

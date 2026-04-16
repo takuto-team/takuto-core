@@ -1,18 +1,35 @@
-# Example: main Jira ticket pipeline (`[[agent_steps]]`).
-# Copy to `ticket.toml` (now tracked in git) and set in config.toml:
+# Example: main ticket pipeline — copy to `ticket.toml` and configure in config.toml:
 #   [general]
 #   ticket_workflow_steps_file = "workflows/ticket.toml"
 #
-# Placeholders: {description}, {ticket_context}, {base_branch}, {ticket_type}, {acceptance_criteria}
+# Each step is an [[agent_steps]] table. Steps run in order. All fields:
 #
-# `when` controls step eligibility: "always" (default), "ticketing" (only when Jira/acli is
-# authenticated), "no_ticketing" (only when Jira is unavailable). Steps whose `when` does not
-# match the current mode are skipped entirely and do not count in the progress bar.
+#   name    = "Human-readable step name"  (shown in dashboard)
+#   prompt  = """Multi-line prompt sent to the agent."""
+#   repeat  = 1          # How many times to re-run this step (default 1).
+#                        # Use repeat = 2 for a review/fix loop.
+#   when    = "always"   # Eligibility filter:
+#                        #   "always"       – run unconditionally (default)
+#                        #   "ticketing"    – only when a ticketing system (Jira/GitHub) is configured
+#                        #   "no_ticketing" – only when no ticketing system is configured
+#   skills  = [...]      # Optional list of Claude Code /skills to inject before the prompt.
+#                        # Each entry: { name = "skill-name" } or { name = "skill-name", args = ["--flag"] }
+#                        # Skills are loaded from the `skills/` directory next to the Maestro binary.
+#
+# Available prompt placeholders (replaced at runtime):
+#   {description}          – ticket/issue description text
+#   {ticket_context}       – formatted summary: key, title, description, acceptance criteria
+#   {base_branch}          – the target branch for this PR (e.g. main, develop)
+#   {ticket_type}          – ticket type label (e.g. Bug, Story, Task)
+#   {acceptance_criteria}  – acceptance criteria field, if available from the ticketing system
 
+# ── Step 1a: Implement (no ticketing system) ────────────────────────────────
+# Shown only when no Jira/GitHub ticketing system is configured.
+# The description is passed directly in the prompt via {description}.
 [[agent_steps]]
-name = "Implement ticket without Jira"
+name = "Implement ticket"
 prompt = """
-Follow instructions provided below:
+Follow the instructions provided below:
 {description}
 
 BOUNDARIES: This step covers implementation only.
@@ -20,22 +37,19 @@ BOUNDARIES: This step covers implementation only.
 - Do NOT create a PR — a dedicated "Create PR" step follows.
 These rules apply to you and to any sub-agents you spawn.
 
-SCOPE CONSTRAINT: Only implement what is explicitly described above. Do not fix, refactor, or improve
-anything else you encounter — even if it looks broken or suboptimal. If you find something unrelated
-that warrants attention, add a # TODO comment inline with a one-line explanation and move on.
+SCOPE CONSTRAINT: Only implement what is explicitly described above. Do not fix, refactor, or
+improve anything else you encounter — even if it looks broken or suboptimal. If you find something
+unrelated that warrants attention, add a # TODO comment inline with a one-line explanation and move on.
 
-If ticket description lacks details, you may refer to the main branch which contains the current existing app; mechanisms implemented there may be
-reused in the app we are building (business logic).
-
-You may use playwright-cli or other testing tools to test your implementation.
+If the description lacks details, you may refer to the main branch which contains the existing
+codebase; patterns and business logic implemented there may be reused.
 """
-skills = [
-  { name = "address-ticket", args = ["--no-jira", "--headless"] },
-  { name = "figma" }
-]
 when = "no_ticketing"
 repeat = 1
 
+# ── Step 1b: Implement (with ticketing system) ───────────────────────────────
+# Shown only when a Jira or GitHub ticketing system is configured.
+# The full ticket context is loaded into the agent's system prompt automatically.
 [[agent_steps]]
 name = "Implement ticket"
 prompt = """
@@ -46,85 +60,84 @@ BOUNDARIES: This step covers implementation only.
 - Do NOT create a PR — a dedicated "Create PR" step follows.
 These rules apply to you and to any sub-agents you spawn.
 
-SCOPE CONSTRAINT: Only implement what is explicitly described in the ticket. Do not fix, refactor, or improve
-anything else you encounter — even if it looks broken or suboptimal. If you find something unrelated
-that warrants attention, add a # TODO comment inline with a one-line explanation and move on.
+SCOPE CONSTRAINT: Only implement what is explicitly described in the ticket. Do not fix, refactor,
+or improve anything else you encounter — even if it looks broken or suboptimal. If you find
+something unrelated that warrants attention, add a # TODO comment inline with a one-line
+explanation and move on.
 
-If ticket description lacks details, you may refer to the main branch which contains the current existing app; mechanisms implemented there may be
-reused in the app we are building (business logic).
-
-You may use playwright-cli or other testing tools to test your implementation.
+If the ticket lacks details, you may refer to the main branch which contains the existing
+codebase; patterns and business logic implemented there may be reused.
 """
-skills = [
-  { name = "address-ticket", args = ["--headless"] },
-  { name = "figma" }
-]
 when = "ticketing"
 repeat = 1
 
+# ── Step 2: Review changes ───────────────────────────────────────────────────
 [[agent_steps]]
-name = "Review Changes"
+name = "Review changes"
 prompt = """
 Ticket context:
 {ticket_context}
 
 Review all changes made on this branch relative to `{base_branch}` (i.e., `git diff {base_branch}...HEAD`).
 
-STRICT SCOPE RULE: Only address issues in code that was changed as part of this ticket — lines and files visible in
-`git diff {base_branch}...HEAD`. If you find a pre-existing issue in unchanged code, do NOT fix it — add a
-# TODO comment at the call site with a one-line explanation and move on.
+STRICT SCOPE RULE: Only address issues in code changed as part of this ticket — lines and files
+visible in `git diff {base_branch}...HEAD`. If you find a pre-existing issue in unchanged code,
+do NOT fix it — add a # TODO comment at the call site with a one-line explanation and move on.
 
-For each finding: re-examine it in the context of the surrounding code and confirm it is a genuine issue, not a false positive or a stylistic preference.
-Address all confirmed findings in changed code. For anything you choose to skip, explicitly state what it is and why it does not warrant a change.
+For each finding: re-examine it in context and confirm it is a genuine issue, not a false positive
+or a stylistic preference. Address all confirmed findings. For anything you skip, explicitly state
+what it is and why it does not warrant a change.
 
 When done, list what was fixed and what was intentionally left as-is.
 Do not create a PR.
 """
-skills = [{ name = "review-changes", args = ["--headless"] }]
 repeat = 2
 
+# ── Step 3: Commit changes ───────────────────────────────────────────────────
 [[agent_steps]]
 name = "Commit changes"
 prompt = """
 Review all uncommitted changes and organize them into logical, meaningful commits.
-For each commit: stage only the relevant files, write a concise conventional commit message (e.g. feat:, fix:, refactor:, chore:), and commit.
+For each commit: stage only the relevant files, write a concise conventional commit message
+(e.g. feat:, fix:, refactor:, chore:), and commit.
 Do not squash unrelated changes into a single commit.
 When done, print a summary of the commits made.
 Do not create a PR.
 """
 repeat = 1
 
+# ── Step 4: Lint and test ────────────────────────────────────────────────────
+# Replace the commands below with whatever is appropriate for your stack.
 [[agent_steps]]
-name = "Linting and test"
+name = "Lint and test"
 prompt = """
-Run your project's linting and test commands and fix all reported issues — do not disable rules or add ignore comments unless a rule is genuinely inapplicable, and if so,
-leave an inline comment explaining why. Re-run and confirm exits clean with zero errors and zero warnings before moving on.
+Run your project's linting tool and fix all reported issues. Do not suppress warnings or add
+ignore directives unless a rule is genuinely inapplicable; if so, leave an inline comment
+explaining why. Re-run and confirm the linter exits clean with zero warnings before moving on.
 
-Then run test coverage and review the coverage report. For any uncovered lines, write targeted tests that cover the missing branches
-and edge cases — do not write vacuous tests that hit lines without asserting meaningful behaviour. Re-run coverage after each batch of new tests
-to confirm the gap is closed. Do not stop until both lint and test coverage are fully passing.
+Run your project's test suite and ensure all tests pass. If any tests fail, fix the underlying
+code — do not delete or skip tests. Re-run until the full suite is green.
+
+Run your project's formatter (if applicable) and apply any required formatting changes.
+
+Once all checks pass cleanly, stage all changes and commit with a message of
+`chore: fix lint warnings, format, and failing tests`.
 
 Do not create a PR.
 """
 repeat = 1
 
-[[agent_steps]]
-name = "Update Snapshots"
-prompt = """
-Update visual snapshots or test snapshots if applicable to your project.
-Do not create a PR.
-"""
-repeat = 1
-
+# ── Step 5: Create PR ────────────────────────────────────────────────────────
 [[agent_steps]]
 name = "Create PR"
 prompt = """
 Ticket context:
 {ticket_context}
 
-Ticket title must be a conventional commit message and should not contain the workflow name, branch name or ticket name.
+The PR title must be a conventional commit message and must not contain the workflow name,
+branch name, or ticket ID.
 
-If new features or configurations have been added, document them in the PR description.
+If new features or configurations have been added, document them clearly in the PR description.
 """
 skills = [{ name = "create-pr", args = ["--no-draft"] }]
 repeat = 1

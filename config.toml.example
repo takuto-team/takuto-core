@@ -60,6 +60,11 @@
 
 [general]
 dry_mode = false
+# Ticketing system that drives workflow automation.
+# "none"   — no ticketing integration; start workflows manually from the dashboard (default).
+# "jira"   — poll Jira for To Do tickets; requires Atlassian CLI (acli) auth (run make setup).
+# "github" — poll GitHub Issues from git.repo_url; no Atlassian auth required.
+ticketing_system = "none"
 # Start with Jira polling paused (same as dashboard **Pause polling**). Use **Resume polling** after startup to pick up To Do tickets without editing config again.
 # pause_jira_polling_on_startup = true
 poll_interval_secs = 60
@@ -209,13 +214,24 @@ compose_up_commands = []
 # the chosen editor instead of failing with "unable to start editor 'editor'".
 # git_editor = "nano"
 
-# Shell commands run once per editor container lifetime, before the first ttyd
-# terminal session. Use to install tools (zellij, nvim, tmux, etc.) that should
-# be available from the dashboard's "Open terminal" button. `/etc/maestro/env`
-# is sourced before each command, so API tokens/env vars are available.
+# Shell commands run ONCE per editor container lifetime (guarded by a marker file).
+# Use for expensive one-time setup: apt packages, tool configuration, etc.
+# `/etc/maestro/env` is sourced before each command (API tokens available).
 # Mise installs persist in the shared mise volume across container restarts.
 # setup_commands = [
 #   "mise use -g zellij@latest neovim@latest",
+# ]
+
+# Shell commands run EVERY TIME a fresh editor container is created (no once-only guard).
+# Use for tools that should be verified/updated on each editor open, e.g. language
+# runtimes managed by mise. The shared mise volume caches installs, so only the first
+# run downloads; subsequent runs just verify the version is current (fast).
+# Note: Rust (cargo, rustc, rustfmt, clippy) is pre-installed in the image — no need
+# to add it here.
+# startup_commands = [
+#   "mise use -g java@21",
+#   "mise use -g ruby@3.3",
+#   "mise use -g golang@latest",
 # ]
 
 [network]

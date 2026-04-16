@@ -20,10 +20,11 @@
 # Both work identically with explicit -f flags.
 COMPOSE := $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose")
 
-# podman-compose needs --podman-run-args BEFORE -f for interactive commands.
-# Detect the native podman-compose binary for those cases.
-PODMAN_COMPOSE_BIN := $(shell command -v podman-compose 2>/dev/null)
 IS_PODMAN := $(shell command -v podman >/dev/null 2>&1 && echo 1 || echo 0)
+# Detect standalone podman-compose binary (needs --podman-run-args for -it).
+PODMAN_COMPOSE_BIN := $(shell command -v podman-compose 2>/dev/null)
+# Project name = current directory name (matches podman-compose volume naming convention).
+PROJECT_NAME := $(shell basename $(CURDIR))
 
 # Set DIND=0 to run without the Docker-in-Docker sidecar.
 DIND ?= 1
@@ -39,10 +40,18 @@ MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.
 
 build:
 	@mkdir -p skills
-	$(COMPOSE) $(COMPOSE_FILES) build
+	$(COMPOSE) $(COMPOSE_FILES) build || (echo "ERROR: Image build failed. Check the output above." >&2; exit 1)
 
 up:
-	$(COMPOSE) $(COMPOSE_FILES) up -d
+	@if [ ! -f config.toml ]; then \
+		echo "ERROR: config.toml not found. Copy config.toml.example to config.toml and fill in your settings." >&2; \
+		exit 1; \
+	fi
+	@if [ ! -f maestro.env ]; then \
+		echo "NOTE: maestro.env not found — creating empty file (add secrets here if needed)."; \
+		touch maestro.env; \
+	fi
+	$(COMPOSE) $(COMPOSE_FILES) up -d || (echo "ERROR: Failed to start containers. Run 'make logs' for details." >&2; exit 1)
 ifeq ($(DIND),1)
 	@$(MAKE) --no-print-directory load-worker
 endif
@@ -51,15 +60,76 @@ down:
 	$(COMPOSE) $(COMPOSE_FILES) down
 
 setup:
+	@if [ ! -f config.toml ]; then \
+		echo "ERROR: config.toml not found. Copy config.toml.example to config.toml and fill in your settings." >&2; \
+		exit 1; \
+	fi
+	@if [ ! -f maestro.env ]; then \
+		echo "NOTE: maestro.env not found — creating empty file (add secrets here if needed)."; \
+		touch maestro.env; \
+	fi
 ifeq ($(IS_PODMAN),1)
-	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it" -f docker-compose.yml run --rm maestro setup
+	@P=$(PROJECT_NAME); \
+	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro_maestro:" | head -1); \
+	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
+	podman run --rm -it \
+		--network=host \
+		--security-opt=label=disable \
+		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
+		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
+		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
+		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$${P}_claude-auth":/home/maestro/.claude \
+		-v "$${P}_cursor-auth":/home/maestro/.cursor \
+		-v "$${P}_agents-data":/home/maestro/.agents \
+		-v "$${P}_gh-auth":/home/maestro/.config/gh \
+		-v "$${P}_acli-auth":/home/maestro/.config/acli \
+		-v "$${P}_fcli-auth":/home/maestro/.config/fcli \
+		-v "$${P}_workspace":/workspace \
+		-v "$${P}_npm-cache":/home/maestro/.npm \
+		-v "$${P}_mise-data":/home/maestro/.local/share/mise \
+		-v "$${P}_mise-cache":/home/maestro/.cache/mise \
+		-v "$${P}_aws-config":/home/maestro/.aws \
+		-v "$${P}_playwright-cache":/home/maestro/.cache/ms-playwright \
+		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
+		-e MAESTRO_HOME=/home/maestro \
+		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
+		-e "FIGMA_API_TOKEN=$${FIGMA_API_TOKEN:-}" \
+		-e NODE_OPTIONS=--dns-result-order=ipv4first \
+		"$$IMAGE" setup
 else
-	docker compose -f docker-compose.yml run --rm -it maestro setup
+	@P=$(PROJECT_NAME); \
+	IMAGE=$$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[-_]maestro:|^maestro[-_]maestro:" | head -1); \
+	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
+	docker run --rm -it \
+		--network host \
+		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
+		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
+		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
+		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$${P}_claude-auth":/home/maestro/.claude \
+		-v "$${P}_cursor-auth":/home/maestro/.cursor \
+		-v "$${P}_agents-data":/home/maestro/.agents \
+		-v "$${P}_gh-auth":/home/maestro/.config/gh \
+		-v "$${P}_acli-auth":/home/maestro/.config/acli \
+		-v "$${P}_fcli-auth":/home/maestro/.config/fcli \
+		-v "$${P}_workspace":/workspace \
+		-v "$${P}_npm-cache":/home/maestro/.npm \
+		-v "$${P}_mise-data":/home/maestro/.local/share/mise \
+		-v "$${P}_mise-cache":/home/maestro/.cache/mise \
+		-v "$${P}_aws-config":/home/maestro/.aws \
+		-v "$${P}_playwright-cache":/home/maestro/.cache/ms-playwright \
+		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
+		-e MAESTRO_HOME=/home/maestro \
+		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
+		-e "FIGMA_API_TOKEN=$${FIGMA_API_TOKEN:-}" \
+		-e NODE_OPTIONS=--dns-result-order=ipv4first \
+		"$$IMAGE" setup
 endif
 
 test:
 ifeq ($(IS_PODMAN),1)
-	$(PODMAN_COMPOSE_BIN) --podman-run-args="-it" $(COMPOSE_FILES) run --rm maestro test-workflow
+	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro test-workflow
 else
 	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro test-workflow
 endif
@@ -75,14 +145,39 @@ ps:
 
 bash:
 ifeq ($(IS_PODMAN),1)
-	podman exec -u maestro -it maestro bash
+	@P=$(PROJECT_NAME); \
+	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro_maestro:" | head -1); \
+	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
+	podman run --rm -it --user maestro \
+		--security-opt=label=disable \
+		--entrypoint /bin/bash \
+		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
+		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
+		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
+		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$${P}_claude-auth":/home/maestro/.claude \
+		-v "$${P}_cursor-auth":/home/maestro/.cursor \
+		-v "$${P}_agents-data":/home/maestro/.agents \
+		-v "$${P}_gh-auth":/home/maestro/.config/gh \
+		-v "$${P}_acli-auth":/home/maestro/.config/acli \
+		-v "$${P}_fcli-auth":/home/maestro/.config/fcli \
+		-v "$${P}_workspace":/workspace \
+		-v "$${P}_npm-cache":/home/maestro/.npm \
+		-v "$${P}_mise-data":/home/maestro/.local/share/mise \
+		-v "$${P}_mise-cache":/home/maestro/.cache/mise \
+		-v "$${P}_aws-config":/home/maestro/.aws \
+		-e HOME=/home/maestro \
+		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
+		-e MAESTRO_HOME=/home/maestro \
+		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
+		"$$IMAGE"
 else
 	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
 endif
 
 exec:
 ifeq ($(IS_PODMAN),1)
-	podman exec -u maestro -it maestro bash
+	@$(MAKE) bash
 else
 	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
 endif

@@ -48,7 +48,7 @@ fn sanitize_ticket_key(key: &str) -> String {
 /// When running behind DinD with a port offset (MAESTRO_DIND_PORT_OFFSET env var),
 /// the host port differs from the container-internal port by that offset.
 /// Example: with MAESTRO_DIND_PORT_OFFSET=100, container port 9101 → host port 9201.
-fn editor_host_port(container_port: u16) -> u16 {
+pub fn editor_host_port(container_port: u16) -> u16 {
     let offset: u16 = std::env::var("MAESTRO_DIND_PORT_OFFSET")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -82,7 +82,7 @@ const WORKER_ENV: &[(&str, &str)] = &[
     ("MISE_YES", "1"),
     (
         "PATH",
-        "/home/maestro/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ),
     ("DOCKER_HOST", "tcp://dind:2375"),
     ("MAESTRO_CONFIG", "/etc/maestro/config.toml"),
@@ -372,15 +372,27 @@ async fn used_editor_ports() -> Vec<u16> {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let mut ports = Vec::new();
-    // Format: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->3000/tcp"
-    for segment in stdout.split([',', '\n']) {
+    // Docker may emit individual mappings or compressed ranges when many consecutive
+    // symmetric ports are bound:
+    //   individual: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->9101/tcp"
+    //   range:      "0.0.0.0:9100-9110->9100-9110/tcp"
+    for segment in stdout.split(|c: char| c == ',' || c == '\n') {
         let segment = segment.trim();
-        // Extract host port from "0.0.0.0:PORT->"
-        if let Some(arrow) = segment.find("->")
-            && let Some(colon) = segment[..arrow].rfind(':')
-            && let Ok(p) = segment[colon + 1..arrow].parse::<u16>()
-        {
-            ports.push(p);
+        if let Some(arrow) = segment.find("->") {
+            if let Some(colon) = segment[..arrow].rfind(':') {
+                let host_part = &segment[colon + 1..arrow];
+                if let Some((lo, hi)) = host_part.split_once('-') {
+                    // Range format: "9100-9110"
+                    if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
+                        for p in lo..=hi {
+                            ports.push(p);
+                        }
+                    }
+                } else if let Ok(p) = host_part.parse::<u16>() {
+                    // Single port: "9100"
+                    ports.push(p);
+                }
+            }
         }
     }
     ports
@@ -432,6 +444,7 @@ pub async fn start_editor(
     extensions: &[String],
     settings: &std::collections::HashMap<String, toml::Value>,
     setup_commands: &[String],
+    startup_commands: &[String],
     git_editor: &str,
 ) -> std::result::Result<EditorInfo, String> {
     let name = editor_container_name(ticket_key);
@@ -585,11 +598,12 @@ pub async fn start_editor(
         return Err(format!("docker run failed: {stderr}"));
     }
 
-    // Run setup commands as root inside the new container (tool installs, etc.).
-    // Runs once per container lifetime (gated by /tmp/.maestro-terminal-setup-done).
+    // Run one-time setup (apt installs, git editor) — gated by marker file.
     if !setup_commands.is_empty() || !git_editor.is_empty() {
         run_editor_setup_as_root(&name, setup_commands, git_editor).await;
     }
+    // Run startup commands every time a fresh container is created (no marker file).
+    run_editor_startup_commands(&name, startup_commands).await;
 
     let url = format!("http://localhost:{vscode_port}/?folder={folder}");
     info!(url = %url, spare = ?spare_ports, "Editor container started");
@@ -670,6 +684,16 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
         }
     }
 
+    // Configure gh as the git credential helper so `git push` works without prompting.
+    // Equivalent to what entrypoint.sh does for the main container.
+    let _ = tokio::process::Command::new("docker")
+        .args([
+            "exec", "--user", "root", container, "bash", "-lc",
+            "su - maestro -c 'gh auth setup-git 2>/dev/null || true'",
+        ])
+        .output()
+        .await;
+
     // Run user-defined setup_commands as the maestro user.
     let out = if !setup_commands.is_empty() {
         let joined = setup_commands.join(" && echo && ");
@@ -732,6 +756,49 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
     }
 }
 
+/// Run `startup_commands` as the maestro user inside the editor container.
+///
+/// Unlike `run_editor_setup_as_root` this has **no marker file** — it runs every time
+/// a fresh container is created. Use for idempotent commands like `mise use -g ruby@3.3`
+/// that should verify/update tool versions on each editor open.
+async fn run_editor_startup_commands(container: &str, cmds: &[String]) {
+    if cmds.is_empty() {
+        return;
+    }
+    info!(container, "Running editor startup commands");
+    let joined = cmds.join(" && echo && ");
+    let wrapped = format!(
+        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; {joined} && mise reshim 2>&1 || true"
+    );
+    let out = tokio::process::Command::new("docker")
+        .args([
+            "exec", "--user", "root", container, "bash", "-lc",
+            &format!("su - maestro -c {}", shell_escape(&wrapped)),
+        ])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            info!(container, %stdout, "Editor startup commands completed");
+        }
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!(
+                container,
+                code = ?o.status.code(),
+                %stdout,
+                %stderr,
+                "Editor startup commands failed (continuing)"
+            );
+        }
+        Err(e) => {
+            warn!(container, error = %e, "Failed to run editor startup commands");
+        }
+    }
+}
+
 /// Stop and remove an editor container for a workflow.
 pub async fn stop_editor(ticket_key: &str) {
     let name = editor_container_name(ticket_key);
@@ -751,19 +818,6 @@ pub async fn start_terminal(ticket_key: &str, port: u16) -> std::result::Result<
     // Check the editor container is actually running.
     if get_editor_info(ticket_key).await.is_none() {
         return Err("Editor container is not running — open the editor first.".into());
-    }
-
-    // Check if ttyd is already running inside the container.
-    let check = tokio::process::Command::new("docker")
-        .args(["exec", &name, "pgrep", "-x", "ttyd"])
-        .output()
-        .await;
-    if let Ok(out) = &check
-        && out.status.success()
-    {
-        // Already running — return URL with the given port.
-        let host_port = editor_host_port(port);
-        return Ok(format!("http://localhost:{host_port}"));
     }
 
     // Build the shell script that runs in each ttyd terminal:
@@ -861,6 +915,32 @@ exec bash -l"#.to_string();
     Err(format!(
         "ttyd failed to bind to port {port} — verify no other process is using this port"
     ))
+}
+
+/// Return the container port that ttyd is currently listening on inside the editor container,
+/// or `None` if ttyd is not running.  Uses `pgrep -a ttyd` to read the actual `-p PORT` argument
+/// so the result is always correct regardless of what was recorded in memory.
+pub async fn find_running_terminal(ticket_key: &str) -> Option<u16> {
+    let name = editor_container_name(ticket_key);
+    let out = tokio::process::Command::new("docker")
+        .args(["exec", &name, "pgrep", "-a", "ttyd"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // Output: "PID ttyd -p PORT -W -t ..."
+    // Find the argument following "-p".
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            parts.windows(2)
+                .find(|w| w[0] == "-p")
+                .and_then(|w| w[1].parse::<u16>().ok())
+        })
+        .next()
 }
 
 /// Kill the ttyd process inside the editor container.
@@ -1220,6 +1300,17 @@ async fn scan_listening_ports(container: &str) -> Option<Vec<(u16, ListenFamily)
         }
     }
     Some(by_port.into_iter().collect())
+}
+
+/// Return the set of ports currently listening inside the editor container.
+/// Used by `open_terminal` to avoid picking a spare port already bound by socat.
+/// Returns an empty set if the container is unreachable or `ss` fails.
+pub async fn listening_ports_in_editor(ticket_key: &str) -> std::collections::HashSet<u16> {
+    let name = editor_container_name(ticket_key);
+    scan_listening_ports(&name)
+        .await
+        .map(|v| v.into_iter().map(|(p, _)| p).collect())
+        .unwrap_or_default()
 }
 
 /// Start a `socat` process inside the container to forward `spare_port` → `target_port`.

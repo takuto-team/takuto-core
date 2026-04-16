@@ -5,7 +5,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use serde::Serialize;
 
-use maestro_core::config::{Config, RuntimeDashboardConfigPatch};
+use maestro_core::config::{Config, RuntimeDashboardConfigPatch, TicketingSystem};
 
 use crate::state::AppState;
 
@@ -16,13 +16,21 @@ pub struct ConfigResponse {
     pub config: Config,
     /// `true` when acli (Jira) is authenticated.
     pub jira_available: bool,
+    /// Ticketing system in use: `"jira"`, `"github"`, or `"none"`.
+    pub ticketing_system: String,
 }
 
 pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     let config = state.config.read().await;
+    let ticketing_system_str = match state.ticketing_system {
+        TicketingSystem::Jira => "jira",
+        TicketingSystem::GitHub => "github",
+        TicketingSystem::None => "none",
+    };
     Json(ConfigResponse {
         config: config.redacted_for_api_clone(),
         jira_available: state.jira_available.load(Ordering::Relaxed),
+        ticketing_system: ticketing_system_str.to_string(),
     })
 }
 

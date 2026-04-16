@@ -50,16 +50,20 @@ if [ "$(id -u)" = "0" ]; then
         fi
     fi
 
-    # Use runuser (not `su -`): login shells can block without a TTY under Podman/Docker, and `su -`
-    # strips the environment (e.g. MAESTRO_CONFIG, FIGMA_API_TOKEN from compose).
+    # Use setpriv instead of runuser/su: setpriv drops UID/GID without calling setsid(), so the
+    # controlling terminal is preserved. runuser calls setsid() for PAM session management, which
+    # detaches from the controlling TTY — interactive CLI prompts (e.g. claude auth login) then
+    # cannot show their token-entry prompt because tcgetpgrp() returns ENOTTY.
     echo "[maestro] Starting as maestro user (preflight, hooks, server)..."
-    exec runuser -u maestro -- /bin/bash -c "cd /workspace && exec /usr/local/bin/entrypoint.sh $(printf '%q ' "$@")"
+    _uid=$(id -u maestro)
+    _gid=$(id -g maestro)
+    exec setpriv --reuid="$_uid" --regid="$_gid" --init-groups -- /usr/local/bin/entrypoint.sh "$@"
 fi
 
 # ─── Everything below runs as the maestro user ───────────────────────────────
 
-export HOME="${HOME:-/home/maestro}"
-export MAESTRO_HOME="${MAESTRO_HOME:-/home/maestro}"
+export HOME=/home/maestro
+export MAESTRO_HOME=/home/maestro
 # Match docker-compose cursor-auth volume so `agent login` (setup) and `agent` (runtime) use the same store.
 export CURSOR_CONFIG_DIR="${CURSOR_CONFIG_DIR:-$HOME/.cursor}"
 export MISE_DATA_DIR="/home/maestro/.local/share/mise"
@@ -72,7 +76,7 @@ export PATH="$MISE_DATA_DIR/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/
 
 # Restore .claude.json from backup if missing (volume can lose it on unclean shutdown)
 if [ ! -f "$HOME/.claude.json" ]; then
-    backup=$(ls -t "$HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1)
+    backup=$(ls -t "$HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1) || true
     if [ -n "$backup" ]; then
         cp "$backup" "$HOME/.claude.json"
         echo "[maestro] Restored .claude.json from backup"
@@ -104,8 +108,19 @@ if [ "${1:-}" = "setup" ]; then
     agent_provider=$(grep -E '^\s*provider\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d ' ' || true)
     agent_provider="${agent_provider:-claude}"
 
+    # Read [general] ticketing_system from config (default: none).
+    ticketing_system=$(grep -E '^\s*ticketing_system\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d ' ' | tr '[:upper:]' '[:lower:]' || true)
+    ticketing_system="${ticketing_system:-none}"
+
+    # Ensure TERM is set so readline-based CLIs (claude, gh, etc.) show interactive prompts.
+    export TERM="${TERM:-xterm-256color}"
+    # Force Node.js (claude) to resolve localhost as IPv4 (127.0.0.1) rather than IPv6 ([::1]).
+    # Without this, the OAuth callback server binds to [::1] but the browser redirects to 127.0.0.1,
+    # causing the callback to never arrive and the auth flow to hang with no paste prompt.
+    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
+
     echo "=== Maestro Setup ==="
-    echo "Required: GitHub CLI + Atlassian CLI + agent provider ($agent_provider). Optional: repository clone."
+    echo "Required: GitHub CLI + agent provider ($agent_provider). Atlassian CLI (acli) required only when ticketing_system = jira (current: $ticketing_system)."
     echo "Optional: add a gitignored ./skills folder at the Maestro repo root (merged on start); other tools via [docker] build_commands / compose_up_commands in config.toml."
     echo ""
 
@@ -128,50 +143,54 @@ if [ "${1:-}" = "setup" ]; then
     fi
     echo ""
 
-    # Step 2: Atlassian (required — manual API token, no port needed)
-    echo "--- Step 2/4: Atlassian CLI (required) ---"
-    jira_site=$(grep -E '^\s*site\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
-    jira_email=$(grep -E '^\s*email\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
+    # Step 2: Atlassian (required for jira ticketing_system — manual API token, no port needed)
+    echo "--- Step 2/4: Atlassian CLI $([ "$ticketing_system" = "jira" ] && echo "(required)" || echo "(skipped — ticketing_system = $ticketing_system)") ---"
+    if [ "$ticketing_system" != "jira" ]; then
+        echo "Atlassian CLI auth skipped (not needed for ticketing_system = $ticketing_system)."
+    else
+        jira_site=$(grep -E '^\s*site\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
+        jira_email=$(grep -E '^\s*email\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
 
-    acli_auth() {
-        if [ -z "$jira_site" ] || [ -z "$jira_email" ]; then
-            echo "ERROR: 'site' and 'email' must be set in [jira] config."
-            echo "       Add them to config.toml and re-run setup."
-            return 1
-        fi
-        echo "Authenticate with an Atlassian API token."
-        echo "  Site:  $jira_site"
-        echo "  Email: $jira_email"
-        echo ""
-        echo "Generate a token at: https://id.atlassian.com/manage-profile/security/api-tokens"
-        echo ""
-        read -sp "Paste your Atlassian API token: " api_token
-        echo
-        echo "$api_token" | acli jira auth login --site "$jira_site" --email "$jira_email" --token
-    }
+        acli_auth() {
+            if [ -z "$jira_site" ] || [ -z "$jira_email" ]; then
+                echo "ERROR: 'site' and 'email' must be set in [jira] config."
+                echo "       Add them to config.toml and re-run setup."
+                return 1
+            fi
+            echo "Authenticate with an Atlassian API token."
+            echo "  Site:  $jira_site"
+            echo "  Email: $jira_email"
+            echo ""
+            echo "Generate a token at: https://id.atlassian.com/manage-profile/security/api-tokens"
+            echo ""
+            read -sp "Paste your Atlassian API token: " api_token
+            echo
+            echo "$api_token" | acli jira auth login --site "$jira_site" --email "$jira_email" --token
+        }
 
-    if acli jira auth status >/dev/null 2>&1; then
-        echo "Atlassian CLI: already authenticated."
-        read -p "Re-authenticate? [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if acli jira auth status >/dev/null 2>&1; then
+            echo "Atlassian CLI: already authenticated."
+            read -p "Re-authenticate? [y/N] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                acli_auth
+            fi
+        else
+            echo "Atlassian CLI: authentication is required."
             acli_auth
         fi
-    else
-        echo "Atlassian CLI: authentication is required."
-        acli_auth
-    fi
-    if ! acli jira auth status >/dev/null 2>&1; then
-        echo "ERROR: Atlassian CLI authentication failed or was not completed."
-        exit 1
-    fi
-    # Sync Jira credentials to global auth so `acli auth status` (without
-    # product qualifier) also reports authenticated.  Many skills check the
-    # global status; without this copy the check fails even though Jira auth
-    # is perfectly valid.
-    acli_cfg_dir="${HOME}/.config/acli"
-    if [ -f "${acli_cfg_dir}/jira_config.yaml" ]; then
-        cp "${acli_cfg_dir}/jira_config.yaml" "${acli_cfg_dir}/global_auth_config.yaml"
+        if ! acli jira auth status >/dev/null 2>&1; then
+            echo "ERROR: Atlassian CLI authentication failed or was not completed."
+            exit 1
+        fi
+        # Sync Jira credentials to global auth so `acli auth status` (without
+        # product qualifier) also reports authenticated.  Many skills check the
+        # global status; without this copy the check fails even though Jira auth
+        # is perfectly valid.
+        acli_cfg_dir="${HOME}/.config/acli"
+        if [ -f "${acli_cfg_dir}/jira_config.yaml" ]; then
+            cp "${acli_cfg_dir}/jira_config.yaml" "${acli_cfg_dir}/global_auth_config.yaml"
+        fi
     fi
     echo ""
 
@@ -189,11 +208,15 @@ if [ "${1:-}" = "setup" ]; then
             read -p "Re-authenticate? [y/N] " -n 1 -r
             echo
             if [[ $REPLY =~ ^[Yy]$ ]]; then
-                claude auth login
+                stty sane 2>/dev/null || true
+                echo "Follow the Claude Code setup wizard. Once authenticated, type /exit to return."
+                claude
             fi
         else
-            echo "Claude Code: authentication is required (browser OAuth via --network=host)."
-            claude auth login
+            echo "Claude Code: authentication is required."
+            echo "Follow the Claude Code setup wizard. Once authenticated, type /exit to return."
+            stty sane 2>/dev/null || true
+            claude
         fi
         if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && ! claude auth status >/dev/null 2>&1; then
             echo "ERROR: Claude Code authentication failed or was not completed."
@@ -258,6 +281,9 @@ fi
 
 echo "[maestro] Running auth preflight..."
 if ! /usr/local/bin/maestro --config "$CONFIG_FILE" preflight; then
+    echo "[maestro] Preflight failed. Run 'make setup' to complete authentication." >&2
+    echo "[maestro] Retrying in 30s — use 'make bash' to authenticate manually in the meantime." >&2
+    sleep 30
     exit 1
 fi
 

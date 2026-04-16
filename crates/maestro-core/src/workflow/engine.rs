@@ -13,7 +13,8 @@ use crate::actions::traits::ExternalActions;
 use crate::agent_prompt::headless_instructions_suffix;
 use crate::claude::session::ClaudeSession;
 use crate::config::{
-    AgentStepConfig, AiAgentProvider, Config, cursor_model_for_cli, interpolate_agent_prompt,
+    AgentStepConfig, AiAgentProvider, Config, TicketingSystem, cursor_model_for_cli,
+    interpolate_agent_prompt,
 };
 use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
@@ -110,6 +111,11 @@ pub struct Workflow {
     /// `true` when Jira (acli) was available at workflow creation time.
     /// When `false`, the workflow skips all Jira operations and those steps are not counted in progress.
     pub jira_available: bool,
+    /// `true` when a ticketing system (`jira` or `github`) is active for this workflow.
+    /// Derived from `ticketing_system != TicketingSystem::None` at creation/restore time.
+    pub ticketing_available: bool,
+    /// Which ticketing system was active when this workflow was created.
+    pub ticketing_system: TicketingSystem,
     /// Last Claude/Cursor session ID for `--resume` across container restarts.
     pub last_session_id: Option<String>,
 }
@@ -120,8 +126,10 @@ impl Workflow {
         ticket_summary: String,
         started_manually: bool,
         jira_available: bool,
+        ticketing_system: TicketingSystem,
     ) -> Self {
         let now = Utc::now();
+        let ticketing_available = ticketing_system != TicketingSystem::None;
         Self {
             id: Uuid::new_v4().to_string(),
             ticket_key,
@@ -140,6 +148,8 @@ impl Workflow {
             current_step_label: None,
             started_manually,
             jira_available,
+            ticketing_available,
+            ticketing_system,
             last_session_id: None,
         }
     }
@@ -172,6 +182,7 @@ impl Workflow {
             .into_iter()
             .filter(|s| s.status != StepStatus::Running)
             .collect();
+        let ticketing_available = rec.ticketing_system != TicketingSystem::None;
         Self {
             id: rec.id,
             ticket_key: rec.ticket_key,
@@ -197,6 +208,8 @@ impl Workflow {
             current_step_label: rec.current_step_label,
             started_manually: rec.started_manually,
             jira_available: rec.jira_available,
+            ticketing_available,
+            ticketing_system: rec.ticketing_system,
             last_session_id: rec.last_session_id,
         }
     }
@@ -228,6 +241,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
         started_manually: w.started_manually,
         jira_available: w.jira_available,
         last_session_id: w.last_session_id.clone(),
+        ticketing_system: w.ticketing_system,
     }
 }
 
@@ -295,6 +309,8 @@ pub struct WorkflowEngine {
     /// `true` when acli (Atlassian CLI) is authenticated. When `false`, workflows skip all Jira
     /// operations (assign, transition, retrieve details) and the poller is not started.
     pub jira_available: Arc<AtomicBool>,
+    /// Which ticketing system is configured for this engine run.
+    pub ticketing_system: TicketingSystem,
 }
 
 impl WorkflowEngine {
@@ -303,6 +319,7 @@ impl WorkflowEngine {
         actions: Arc<dyn ExternalActions>,
         max_concurrent_workflows: usize,
         jira_available: Arc<AtomicBool>,
+        ticketing_system: TicketingSystem,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         let permits = max_concurrent_workflows.max(1);
@@ -314,6 +331,7 @@ impl WorkflowEngine {
             agent_run_semaphore: Arc::new(Semaphore::new(permits)),
             suppress_cancelled_as_error: Arc::new(AtomicBool::new(false)),
             jira_available,
+            ticketing_system,
         }
     }
 
@@ -682,8 +700,13 @@ impl WorkflowEngine {
         ticket_description: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
-        let mut workflow =
-            Workflow::new(ticket_key.clone(), ticket_summary, started_manually, jira);
+        let mut workflow = Workflow::new(
+            ticket_key.clone(),
+            ticket_summary,
+            started_manually,
+            jira,
+            self.ticketing_system,
+        );
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
         }
@@ -795,6 +818,9 @@ impl WorkflowEngine {
                 let restored = *source_state.clone();
                 workflow.state = restored;
                 workflow.updated_at = Utc::now();
+                // Drop any Running entries — they represent the step that was interrupted by pause.
+                // The fresh driver will re-run that step from scratch.
+                workflow.steps_log.retain(|s| s.status != StepStatus::Running);
 
                 let state_line = workflow.status_display();
                 self.broadcast_event(WorkflowEvent {
@@ -1455,7 +1481,24 @@ async fn drive_workflow(
                     );
                     return;
                 }
-                _ => {}
+                _ => {
+                    // Check for pause→resume race: if the workflow now holds a fresh (non-cancelled)
+                    // cancel token, our token was replaced by resume_workflow. A new driver has already
+                    // taken over — exit silently rather than overwriting the state with Error.
+                    let replaced = {
+                        let wf = workflows.read().await;
+                        wf.get(&ticket_key)
+                            .map(|w| !w.cancel_token.is_cancelled())
+                            .unwrap_or(false)
+                    };
+                    if replaced {
+                        info!(
+                            ticket = %ticket_key,
+                            "Workflow driver cancelled; replaced by fresh driver after pause→resume"
+                        );
+                        return;
+                    }
+                }
             }
         }
 
@@ -1789,14 +1832,14 @@ async fn run_merge_base_steps(
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
-    let jira_avail = {
+    let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
+        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_merge_base_agent_steps()
         .into_iter()
-        .filter(|s| s.available_for(jira_avail))
+        .filter(|s| s.available_for(ticketing_avail))
         .collect();
     drop(cfg);
 
@@ -2359,14 +2402,14 @@ async fn run_pr_review_steps(
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
-    let jira_avail = {
+    let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
+        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_review_agent_steps()
         .into_iter()
-        .filter(|s| s.available_for(jira_avail))
+        .filter(|s| s.available_for(ticketing_avail))
         .collect();
     drop(cfg);
 
@@ -2536,10 +2579,17 @@ async fn run_workflow_steps(
     let is_resume = reuse_path.is_some();
 
     // Capture completed steps from prior run so we can skip them on resume.
+    // Strip Running entries — they represent steps interrupted by pause/cancellation and must rerun.
     let prior_steps_log: Vec<StepLog> = if is_resume {
         let wf = workflows.read().await;
         wf.get(ticket_key)
-            .map(|w| w.steps_log.clone())
+            .map(|w| {
+                w.steps_log
+                    .iter()
+                    .filter(|s| s.status != StepStatus::Running)
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -3165,14 +3215,14 @@ async fn run_workflow_steps(
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
-    let jira_avail = {
+    let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
+        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_agent_steps()
         .into_iter()
-        .filter(|s| s.available_for(jira_avail))
+        .filter(|s| s.available_for(ticketing_avail))
         .collect();
     drop(cfg);
 

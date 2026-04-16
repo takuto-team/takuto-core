@@ -16,12 +16,9 @@ maestro.env
 /skills/*
 !/skills/.gitkeep
 
-# Default workflow step files are tracked; other paths under workflows/ stay local.
+# Only example workflow files are tracked; copy them to non-example names for local use.
 /workflows/*
 !/workflows/*.example.toml
-!/workflows/ticket.toml
-!/workflows/review.toml
-!/workflows/merge_base.toml
 
 # Working files
 SECURITY_ASSESSMENT_APPLICATION.md

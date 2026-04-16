@@ -3,6 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
+use maestro_core::config::TicketingSystem;
 use maestro_core::container::{self, ContainerRunner};
 use maestro_core::jira::ticket_browse_url;
 use maestro_core::workflow::dashboard_progress;
@@ -68,6 +69,8 @@ pub struct WorkflowSummary {
     pub editor_port_mappings: Vec<(u16, u16)>,
     /// `true` when Jira (acli) was available when this workflow was created.
     pub jira_available: bool,
+    /// Which ticketing system was active when this workflow was created: `"jira"`, `"github"`, or `"none"`.
+    pub ticketing_system: String,
     /// **Resume from error** is allowed (Error or Stopped, worktree exists on disk).
     pub can_resume_from_error: bool,
     /// Set when a web terminal (ttyd) is running for this workflow's editor container.
@@ -104,6 +107,14 @@ fn can_resume_from_error(w: &Workflow) -> bool {
         w.state,
         WorkflowState::Error { .. } | WorkflowState::Stopped
     ) && w.worktree_path.as_ref().is_some_and(|p| p.exists())
+}
+
+fn ticketing_system_str(ts: TicketingSystem) -> &'static str {
+    match ts {
+        TicketingSystem::None => "none",
+        TicketingSystem::Jira => "jira",
+        TicketingSystem::GitHub => "github",
+    }
 }
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
@@ -148,6 +159,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 editor_url: None,
                 editor_port_mappings: Vec::new(),
                 jira_available: w.jira_available,
+                ticketing_system: ticketing_system_str(w.ticketing_system).to_string(),
                 can_resume_from_error: can_resume_from_error(w),
                 terminal_url: None,
             }
@@ -195,6 +207,7 @@ pub async fn get_workflow(
         editor_url: editor_info.as_ref().map(|e| e.url.clone()),
         editor_port_mappings: editor_info.map(|e| e.port_mappings).unwrap_or_default(),
         jira_available: w.jira_available,
+        ticketing_system: ticketing_system_str(w.ticketing_system).to_string(),
         can_resume_from_error: can_resume_from_error(w),
         terminal_url: state
             .terminal_ports
@@ -478,6 +491,7 @@ pub async fn open_editor(
     let extensions = cfg.editor.extensions.clone();
     let settings = cfg.editor.settings.clone();
     let setup_commands = cfg.terminal.setup_commands.clone();
+    let startup_commands = cfg.terminal.startup_commands.clone();
     let git_editor = cfg.terminal.git_editor.clone();
     drop(workflows);
     drop(cfg);
@@ -487,16 +501,8 @@ pub async fn open_editor(
         .unwrap_or_else(|| "maestro:latest".to_string());
 
     let info = container::start_editor(
-        &ticket_key,
-        &worktree,
-        &image,
-        &app_ports,
-        dynamic_ports,
-        &theme,
-        &extensions,
-        &settings,
-        &setup_commands,
-        &git_editor,
+        &ticket_key, &worktree, &image, &app_ports, dynamic_ports,
+        &theme, &extensions, &settings, &setup_commands, &startup_commands, &git_editor,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -562,10 +568,10 @@ pub async fn open_terminal(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<OpenTerminalResponse>, (StatusCode, String)> {
-    // Reuse existing terminal if already started.
+    // Reuse existing terminal if already recorded in the in-memory map.
     if let Some(&port) = state.terminal_ports.read().await.get(&id) {
         return Ok(Json(OpenTerminalResponse {
-            url: format!("http://localhost:{port}"),
+            url: format!("http://localhost:{}", container::editor_host_port(port)),
         }));
     }
 
@@ -575,19 +581,26 @@ pub async fn open_terminal(
         "Editor container is not running — open the editor first.".into(),
     ))?;
 
-    // Pick a spare port not already used by the port scanner's socat or another terminal.
-    let used_by_terminals: Vec<u16> = state
-        .terminal_ports
-        .read()
-        .await
-        .values()
-        .copied()
-        .collect();
+    // Recover from a server restart: ttyd may already be running from a previous session.
+    // Ask the container for the actual port (via pgrep) rather than trusting the now-empty map.
+    if let Some(port) = container::find_running_terminal(&id).await {
+        state.terminal_ports.write().await.insert(id.clone(), port);
+        return Ok(Json(OpenTerminalResponse {
+            url: format!("http://localhost:{}", container::editor_host_port(port)),
+        }));
+    }
+
+    // Pick a spare port that is:
+    //  1. Not already allocated to another workflow's terminal.
+    //  2. Not currently listening inside this container (socat dynamic forwards also bind
+    //     spare ports, so ttyd would fail to bind if we picked one socat already holds).
+    let used_by_terminals: Vec<u16> = state.terminal_ports.read().await.values().copied().collect();
+    let in_use = container::listening_ports_in_editor(&id).await;
     let port = info
         .spare_ports
         .iter()
         .copied()
-        .find(|p| !used_by_terminals.contains(p))
+        .find(|p| !used_by_terminals.contains(p) && !in_use.contains(p))
         .ok_or((
             StatusCode::CONFLICT,
             "No spare ports available for terminal.".into(),
