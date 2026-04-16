@@ -1702,6 +1702,12 @@ function setupManualWorkflowListDelegation() {
     ev.preventDefault();
     ev.stopPropagation();
     const summary = row.dataset.ticketSummary || key;
+    // GitHub issues don't have a Jira preview — start directly.
+    if (ticketingSystem === 'github') {
+      closeManualWorkflowModal();
+      void startManualWorkflowRequest(key, summary);
+      return;
+    }
     void openManualTicketDetailModal(key, summary);
   });
 }
