@@ -820,7 +820,9 @@ impl WorkflowEngine {
                 workflow.updated_at = Utc::now();
                 // Drop any Running entries — they represent the step that was interrupted by pause.
                 // The fresh driver will re-run that step from scratch.
-                workflow.steps_log.retain(|s| s.status != StepStatus::Running);
+                workflow
+                    .steps_log
+                    .retain(|s| s.status != StepStatus::Running);
 
                 let state_line = workflow.status_display();
                 self.broadcast_event(WorkflowEvent {
@@ -1834,7 +1836,9 @@ async fn run_merge_base_steps(
     let cursor_cli = cfg.agent.cursor_cli.clone();
     let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
+        wf.get(ticket_key)
+            .map(|w| w.ticketing_available)
+            .unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_merge_base_agent_steps()
@@ -2101,10 +2105,8 @@ async fn run_agent_step_sequence(
                             .await;
 
                         let cmd_result = if let Some(runner) = container_runner {
-                            let (prog, docker_args) =
-                                runner.wrap_shell_command(&interpolated_cmd);
-                            let refs: Vec<&str> =
-                                docker_args.iter().map(|s| s.as_str()).collect();
+                            let (prog, docker_args) = runner.wrap_shell_command(&interpolated_cmd);
+                            let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
                             crate::process::run_command_streaming_with_timeout(
                                 &prog,
                                 &refs,
@@ -2163,12 +2165,8 @@ async fn run_agent_step_sequence(
                                 break;
                             }
                             Err(e) => {
-                                let msg = format!(
-                                    "Command {}/{} error: {}",
-                                    cmd_idx + 1,
-                                    total_cmds,
-                                    e
-                                );
+                                let msg =
+                                    format!("Command {}/{} error: {}", cmd_idx + 1, total_cmds, e);
                                 warn!(
                                     ticket = %ticket_key,
                                     step = %step_label,
@@ -2197,16 +2195,12 @@ async fn run_agent_step_sequence(
                             step = %step_label,
                             "Command step failed — aborting workflow"
                         );
-                        return Err(MaestroError::AiAgent(
-                            "Command step failed".to_string(),
-                        ));
+                        return Err(MaestroError::AiAgent("Command step failed".to_string()));
                     }
 
                     add_step_log(workflows, ticket_key, step_log).await;
-                    broadcast_step_completed(
-                        event_tx, ticket_key, &step_label, workflows, config,
-                    )
-                    .await;
+                    broadcast_step_completed(event_tx, ticket_key, &step_label, workflows, config)
+                        .await;
                     continue;
                 }
 
@@ -2591,7 +2585,9 @@ async fn run_pr_review_steps(
     let cursor_cli = cfg.agent.cursor_cli.clone();
     let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
+        wf.get(ticket_key)
+            .map(|w| w.ticketing_available)
+            .unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_review_agent_steps()
@@ -3404,7 +3400,9 @@ async fn run_workflow_steps(
     let cursor_cli = cfg.agent.cursor_cli.clone();
     let ticketing_avail = {
         let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.ticketing_available).unwrap_or(false)
+        wf.get(ticket_key)
+            .map(|w| w.ticketing_available)
+            .unwrap_or(false)
     };
     let steps: Vec<_> = cfg
         .resolved_agent_steps()

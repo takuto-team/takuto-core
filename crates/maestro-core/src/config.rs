@@ -1596,7 +1596,9 @@ step_timeout_secs = 600
         let err = config.validate().unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("cannot specify both") && msg.contains("commands") && msg.contains("prompt"),
+            msg.contains("cannot specify both")
+                && msg.contains("commands")
+                && msg.contains("prompt"),
             "unexpected error: {msg}"
         );
     }
@@ -1619,7 +1621,9 @@ step_timeout_secs = 600
         let err = config.validate().unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("cannot specify both") && msg.contains("commands") && msg.contains("skills"),
+            msg.contains("cannot specify both")
+                && msg.contains("commands")
+                && msg.contains("skills"),
             "unexpected error: {msg}"
         );
     }
@@ -1638,10 +1642,7 @@ step_timeout_secs = 600
         });
         let err = config.validate().unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("must have"),
-            "unexpected error: {msg}"
-        );
+        assert!(msg.contains("must have"), "unexpected error: {msg}");
     }
 
     #[test]
@@ -1726,7 +1727,10 @@ repeat = 2
 
         // Second step is a command step
         assert!(config.agent_steps[1].is_command_step());
-        assert_eq!(config.agent_steps[1].commands, vec!["npm run lint --fix", "npm run format"]);
+        assert_eq!(
+            config.agent_steps[1].commands,
+            vec!["npm run lint --fix", "npm run format"]
+        );
         assert!(config.agent_steps[1].prompt.is_empty());
 
         // Third step is a command step with repeat

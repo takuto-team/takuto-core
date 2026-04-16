@@ -200,11 +200,7 @@ mod tests {
         use crate::config::AgentStepConfig;
         use crate::config::StepAvailability;
 
-        let w = wf_with(
-            WorkflowState::AddressingTicket { pass: 1 },
-            vec![],
-            None,
-        );
+        let w = wf_with(WorkflowState::AddressingTicket { pass: 1 }, vec![], None);
 
         // Config with a mix of agent and command steps
         let mut cfg = Config::default();
@@ -240,6 +236,9 @@ mod tests {
 
         let total = estimated_step_total(&w, &cfg);
         // 3 (jira steps) + 1 (implement) + 1 (lint) + 2 (tests × repeat 2) + 1 (workflow complete) = 8
-        assert_eq!(total, 8, "command steps should be counted the same as agent steps");
+        assert_eq!(
+            total, 8,
+            "command steps should be counted the same as agent steps"
+        );
     }
 }

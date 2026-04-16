@@ -23,7 +23,12 @@ impl GitHubPoller {
         cancel_token: CancellationToken,
         polling_paused: Arc<AtomicBool>,
     ) -> Self {
-        Self { config, engine, cancel_token, polling_paused }
+        Self {
+            config,
+            engine,
+            cancel_token,
+            polling_paused,
+        }
     }
 
     pub async fn run(&self) {
@@ -128,7 +133,8 @@ impl GitHubPoller {
                 "Starting workflow for GitHub issue"
             );
 
-            match self.engine
+            match self
+                .engine
                 .start_workflow(
                     issue.key.clone(),
                     issue.summary.clone(),
@@ -162,10 +168,13 @@ async fn fetch_open_issues(owner_repo: &str) -> crate::error::Result<Vec<GitHubI
     let output = tokio::process::Command::new("gh")
         .args([
             "api",
-            "--method", "GET",
+            "--method",
+            "GET",
             &format!("repos/{owner_repo}/issues"),
-            "--field", "state=open",
-            "--field", "per_page=50",
+            "--field",
+            "state=open",
+            "--field",
+            "per_page=50",
         ])
         .output()
         .await
@@ -181,25 +190,31 @@ async fn fetch_open_issues(owner_repo: &str) -> crate::error::Result<Vec<GitHubI
     let json: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
 
-    let issues = json.as_array().map(|arr| {
-        arr.iter().filter_map(|v| {
-            // Skip pull requests (GitHub API returns PRs in issues endpoint)
-            if v.get("pull_request").is_some() {
-                return None;
-            }
-            let number = v.get("number")?.as_u64()?;
-            let title = v.get("title")?.as_str().unwrap_or("").to_string();
-            let body = v.get("body")
-                .and_then(|b| b.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some(GitHubIssue {
-                key: format!("GH-{number}"),
-                summary: title,
-                description: body,
-            })
-        }).collect::<Vec<_>>()
-    }).unwrap_or_default();
+    let issues = json
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    // Skip pull requests (GitHub API returns PRs in issues endpoint)
+                    if v.get("pull_request").is_some() {
+                        return None;
+                    }
+                    let number = v.get("number")?.as_u64()?;
+                    let title = v.get("title")?.as_str().unwrap_or("").to_string();
+                    let body = v
+                        .get("body")
+                        .and_then(|b| b.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    Some(GitHubIssue {
+                        key: format!("GH-{number}"),
+                        summary: title,
+                        description: body,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     Ok(issues)
 }

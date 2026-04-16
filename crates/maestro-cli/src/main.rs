@@ -119,10 +119,14 @@ fn run_preflight(config_path: &std::path::Path) -> ExitCode {
                     }
                 }
                 TicketingSystem::GitHub => {
-                    eprintln!("Preflight OK (ticketing_system = github — polling GitHub issues, no Atlassian auth required).");
+                    eprintln!(
+                        "Preflight OK (ticketing_system = github — polling GitHub issues, no Atlassian auth required)."
+                    );
                 }
                 TicketingSystem::None => {
-                    eprintln!("Preflight OK (ticketing_system = none — manual description entry only).");
+                    eprintln!(
+                        "Preflight OK (ticketing_system = none — manual description entry only)."
+                    );
                 }
             }
             ExitCode::SUCCESS
@@ -236,8 +240,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
     let jira_available = Arc::new(AtomicBool::new(acli_ok));
     if ticketing_system == TicketingSystem::Jira && !acli_ok {
-        info!("Atlassian CLI (acli) is not authenticated — Jira integration disabled. \
-               No auto-polling; workflows skip Jira operations; manual description entry only.");
+        info!(
+            "Atlassian CLI (acli) is not authenticated — Jira integration disabled. \
+               No auto-polling; workflows skip Jira operations; manual description entry only."
+        );
     }
 
     let max_concurrent = config.read().await.general.max_concurrent_workflows as usize;

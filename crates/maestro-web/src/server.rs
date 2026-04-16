@@ -89,10 +89,7 @@ pub fn build_router(state: AppState) -> Router {
             "/jira/tickets/{key}/preview",
             get(routes::jira::get_ticket_preview),
         )
-        .route(
-            "/github/issues",
-            get(routes::github::list_github_issues),
-        )
+        .route("/github/issues", get(routes::github::list_github_issues))
         .route(
             "/tickets/{key}/improve",
             post(routes::tickets::improve_ticket),

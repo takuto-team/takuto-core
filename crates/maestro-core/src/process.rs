@@ -390,7 +390,9 @@ pub async fn run_shell_command_streaming_with_timeout(
     timeout_secs: u64,
 ) -> Result<CommandOutput> {
     let handle = spawn_shell_in_worktree(command, cwd, cancel_token).await?;
-    handle.wait_with_streaming_timeout(timeout_secs, line_tx).await
+    handle
+        .wait_with_streaming_timeout(timeout_secs, line_tx)
+        .await
 }
 
 /// Run a command with explicit args, streaming output, and a timeout.
@@ -403,7 +405,9 @@ pub async fn run_command_streaming_with_timeout(
     timeout_secs: u64,
 ) -> Result<CommandOutput> {
     let handle = ProcessHandle::spawn(program, args, cwd, cancel_token).await?;
-    handle.wait_with_streaming_timeout(timeout_secs, line_tx).await
+    handle
+        .wait_with_streaming_timeout(timeout_secs, line_tx)
+        .await
 }
 
 #[cfg(test)]
