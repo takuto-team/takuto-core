@@ -263,6 +263,17 @@ impl ExternalActions for DryRunActions {
         apply_git_identity_from_gh(cwd, CancellationToken::new()).await
     }
 
+    async fn get_gh_installation_token(&self, cwd: &Path) -> Option<String> {
+        let app = self.github_app.as_ref()?;
+        match app.get_token_for_injection(cwd).await {
+            Ok(token) => Some(token),
+            Err(e) => {
+                info!(error = %e, "[DRY] GitHub App token fetch failed");
+                None
+            }
+        }
+    }
+
     async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool> {
         info!(
             cwd = %cwd.display(),

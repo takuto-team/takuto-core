@@ -322,6 +322,17 @@ impl ExternalActions for RealActions {
         apply_git_identity_from_gh(cwd, CancellationToken::new()).await
     }
 
+    async fn get_gh_installation_token(&self, cwd: &Path) -> Option<String> {
+        let app = self.github_app.as_ref()?;
+        match app.get_token_for_injection(cwd).await {
+            Ok(token) => Some(token),
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch GitHub App installation token for worker injection");
+                None
+            }
+        }
+    }
+
     async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool> {
         gh_request_self_pr_reviewer(cwd, pr_url, CancellationToken::new()).await?;
         Ok(true)

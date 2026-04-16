@@ -214,6 +214,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             mgr,
         )
     };
+
     let actions: Arc<dyn ExternalActions> = if dry_mode {
         info!("Running in DRY MODE — no external writes");
         Arc::new(DryRunActions::new(

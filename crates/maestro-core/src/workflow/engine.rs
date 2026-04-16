@@ -1769,7 +1769,7 @@ async fn run_merge_base_steps(
     ticket_type: &str,
     config: &Arc<RwLock<Config>>,
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
-    _actions: &Arc<dyn ExternalActions>,
+    actions: &Arc<dyn ExternalActions>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
@@ -1818,7 +1818,13 @@ async fn run_merge_base_steps(
             drop(cfg);
             img
         };
-        Some(ContainerRunner::new(ticket_key, worktree_path, &image))
+        let gh_token = actions.get_gh_installation_token(worktree_path).await;
+        let runner = ContainerRunner::new(ticket_key, worktree_path, &image);
+        Some(if let Some(token) = gh_token {
+            runner.with_gh_token(token)
+        } else {
+            runner
+        })
     } else {
         None
     };
@@ -2566,7 +2572,13 @@ async fn run_pr_review_steps(
             drop(cfg);
             img
         };
-        Some(ContainerRunner::new(ticket_key, worktree_path, &image))
+        let gh_token = actions.get_gh_installation_token(worktree_path).await;
+        let runner = ContainerRunner::new(ticket_key, worktree_path, &image);
+        Some(if let Some(token) = gh_token {
+            runner.with_gh_token(token)
+        } else {
+            runner
+        })
     } else {
         None
     };
@@ -3009,7 +3021,13 @@ async fn run_workflow_steps(
             let _ = std::fs::create_dir_all(&maestro_shared);
         }
         info!(ticket = %ticket_key, image = %image, "Container isolation enabled for workflow");
-        Some(ContainerRunner::new(ticket_key, &worktree_path, &image))
+        let gh_token = actions.get_gh_installation_token(&worktree_path).await;
+        let runner = ContainerRunner::new(ticket_key, &worktree_path, &image);
+        Some(if let Some(token) = gh_token {
+            runner.with_gh_token(token)
+        } else {
+            runner
+        })
     } else {
         None
     };

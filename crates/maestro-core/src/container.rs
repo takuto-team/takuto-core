@@ -63,6 +63,10 @@ pub struct ContainerRunner {
     image: String,
     worktree_path: PathBuf,
     step_counter: std::sync::atomic::AtomicU32,
+    /// GitHub App installation token injected as `GH_TOKEN` into every worker container.
+    /// Overrides the personal `gh` user for bot-attributed commits and PRs without
+    /// touching the shared `~/.config/gh/hosts.yml` volume.
+    gh_token: Option<String>,
 }
 
 static DOCKER_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -151,7 +155,15 @@ impl ContainerRunner {
             image: image.to_string(),
             worktree_path: worktree_path.to_path_buf(),
             step_counter: std::sync::atomic::AtomicU32::new(0),
+            gh_token: None,
         }
+    }
+
+    /// Set a GitHub App installation token to inject as `GH_TOKEN` into every
+    /// worker container spawned by this runner.
+    pub fn with_gh_token(mut self, token: String) -> Self {
+        self.gh_token = Some(token);
+        self
     }
 
     /// Check if Docker is available (`DOCKER_HOST` set and `docker info` succeeds).
@@ -204,12 +216,30 @@ impl ContainerRunner {
         }
 
         for key in PASSTHROUGH_ENV {
+            // GH_TOKEN is handled separately below — skip it here so the installation
+            // token (if set) takes precedence over any ambient host env var.
+            if *key == "GH_TOKEN" {
+                continue;
+            }
             if let Ok(val) = std::env::var(key)
                 && !val.is_empty()
             {
                 args.push("-e".into());
                 args.push(format!("{key}={val}"));
             }
+        }
+
+        // Inject the GitHub App installation token when available so the agent process
+        // uses bot identity for gh CLI calls without touching the shared hosts.yml volume.
+        if let Some(ref token) = self.gh_token {
+            args.push("-e".into());
+            args.push(format!("GH_TOKEN={token}"));
+        } else if let Ok(val) = std::env::var("GH_TOKEN")
+            && !val.is_empty()
+        {
+            // Fall back to ambient GH_TOKEN from the host environment.
+            args.push("-e".into());
+            args.push(format!("GH_TOKEN={val}"));
         }
 
         for v in WORKER_VOLUMES {

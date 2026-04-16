@@ -25,6 +25,11 @@ pub trait ExternalActions: Send + Sync {
     /// Set `git config user.name` / `user.email` in `cwd` from `gh api user` (GitHub no-reply email).
     async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()>;
 
+    /// Return a fresh GitHub App installation token for injection as `GH_TOKEN` into worker
+    /// container environments. Returns `None` when the GitHub App is not configured or when
+    /// a token fetch fails (caller falls back to the personal `gh` user in that case).
+    async fn get_gh_installation_token(&self, cwd: &Path) -> Option<String>;
+
     /// Request the authenticated `gh` user as a reviewer on `pr_url` (`gh pr edit --add-reviewer`).
     /// Returns `Ok(true)` if `gh` reported success, `Ok(false)` if skipped (e.g. dry mode), `Err` if `gh` failed.
     async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool>;

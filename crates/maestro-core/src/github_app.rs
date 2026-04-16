@@ -12,13 +12,11 @@
 //! 4. Tokens are cached and refreshed 5 minutes before expiry.
 
 use std::path::Path;
-use std::process::Stdio;
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -317,28 +315,24 @@ impl GitHubAppTokenManager {
 
     // -- Git / gh configuration --
 
-    /// Configure `gh` CLI auth and git identity in `cwd` for the GitHub App bot.
+    /// Configure git identity in `cwd` for the GitHub App bot and set up the
+    /// `gh` credential helper.
     ///
-    /// 1. Fetches (or reuses cached) installation access token.
-    /// 2. Logs in to `gh` with the token (`gh auth login --with-token`).
-    /// 3. Configures git credential helper via `gh auth setup-git`.
-    /// 4. Sets `user.name` and `user.email` to the bot identity.
+    /// **Does not touch `hosts.yml`** — the installation token is injected as the
+    /// `GH_TOKEN` environment variable into worker-container `docker run` invocations
+    /// by `ContainerRunner` instead. This keeps the shared auth volume clean and the
+    /// main container's personal gh user active for dashboard API calls.
+    ///
+    /// 1. Configures git credential helper via `gh auth setup-git` (writes local
+    ///    `~/.gitconfig` only, not the shared gh config volume).
+    /// 2. Sets `user.name` and `user.email` to the bot identity.
     pub async fn configure_git_and_gh_auth(
         &self,
         cwd: &Path,
         cancel: CancellationToken,
     ) -> Result<()> {
-        let token = self.get_installation_token(cwd).await?;
-
-        // Configure gh CLI with the installation token.
-        // Pipe via stdin to avoid interpolating the token into a shell command string.
-        gh_auth_login_with_token(&token, cwd).await.map_err(|e| {
-            MaestroError::GitHubApp(format!(
-                "Failed to configure gh CLI with GitHub App token: {e}"
-            ))
-        })?;
-
         // Configure git to use gh as credential helper (for git push).
+        // gh reads GH_TOKEN from the environment when present, so no login call is needed.
         let setup_output =
             process::run_command("gh", &["auth", "setup-git"], cwd, cancel.child_token()).await?;
         if !setup_output.success() {
@@ -384,66 +378,23 @@ impl GitHubAppTokenManager {
             git_name = %bot_name,
             git_email = %bot_email,
             app_id = self.app_id,
-            "Git author and gh CLI configured for GitHub App bot identity"
+            "Git author configured for GitHub App bot identity (GH_TOKEN injected into worker containers)"
         );
 
         Ok(())
     }
 
-    /// Refresh the `gh` CLI token if it is close to expiry.
+    /// Return a fresh installation access token for injection into worker containers
+    /// as the `GH_TOKEN` environment variable.
     ///
-    /// Call this before long-running agent sessions to ensure the token stays
-    /// valid. The installation token cache is checked first; if the cached token
-    /// is still fresh, only the `gh auth login` step runs (no GitHub API call).
-    pub async fn refresh_gh_auth_if_needed(
-        &self,
-        cwd: &Path,
-        _cancel: CancellationToken,
-    ) -> Result<()> {
-        let token = self.get_installation_token(cwd).await?;
-
-        gh_auth_login_with_token(&token, cwd)
-            .await
-            .map_err(|e| MaestroError::GitHubApp(format!("Failed to refresh gh CLI token: {e}")))?;
-
-        Ok(())
+    /// Uses the internal cache; fetches a new token from GitHub only when the cached
+    /// one is within 5 minutes of expiry.
+    pub async fn get_token_for_injection(&self, cwd: &Path) -> Result<String> {
+        self.get_installation_token(cwd).await
     }
+
 }
 
-/// Run `gh auth login --with-token` by piping the token to stdin.
-///
-/// This avoids interpolating the token into a shell command string, which would
-/// be a shell-injection risk if the token ever contained shell metacharacters.
-async fn gh_auth_login_with_token(token: &str, cwd: &Path) -> std::result::Result<(), String> {
-    let mut child = tokio::process::Command::new("gh")
-        .args(["auth", "login", "--with-token"])
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn gh: {e}"))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(token.as_bytes())
-            .await
-            .map_err(|e| format!("failed to write token to gh stdin: {e}"))?;
-        // Drop stdin to close the pipe so gh reads EOF.
-    }
-
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("gh auth login failed: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(stderr.trim().to_string());
-    }
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
