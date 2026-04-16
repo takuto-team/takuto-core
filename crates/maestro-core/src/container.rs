@@ -646,6 +646,16 @@ chown -R maestro:maestro /home/maestro/.config/mise 2>/dev/null || true
         }
     }
 
+    // Configure gh as the git credential helper so `git push` works without prompting.
+    // Equivalent to what entrypoint.sh does for the main container.
+    let _ = tokio::process::Command::new("docker")
+        .args([
+            "exec", "--user", "root", container, "bash", "-lc",
+            "su - maestro -c 'gh auth setup-git 2>/dev/null || true'",
+        ])
+        .output()
+        .await;
+
     // Run user-defined setup_commands as the maestro user.
     let out = if !setup_commands.is_empty() {
         let joined = setup_commands.join(" && echo && ");
