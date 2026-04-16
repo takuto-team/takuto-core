@@ -101,6 +101,10 @@ const PASSTHROUGH_ENV: &[&str] = &[
     // or write a thin shell alias in maestro.env.
     "LOKALISE_API_TOKEN",
     "CURSOR_API_KEY",
+    // When set in the environment, overrides personal `gh` auth in worker containers.
+    // (GitHubAppTokenManager uses `gh auth login --with-token` + the shared auth volume
+    // instead; this passthrough covers cases where GH_TOKEN is set externally.)
+    "GH_TOKEN",
     // Optional: force a fixed browser bundle (must match the project's @playwright/test version).
     "PLAYWRIGHT_BROWSERS_PATH",
     // Match CI behaviour when needed (some tools tweak output when CI is set).

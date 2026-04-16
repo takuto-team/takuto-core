@@ -8,6 +8,9 @@ pub enum MaestroError {
     #[error("Git error: {0}")]
     Git(String),
 
+    #[error("GitHub App error: {0}")]
+    GitHubApp(String),
+
     #[error("Claude session error: {0}")]
     Claude(String),
 

@@ -187,20 +187,32 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let (repo_path, git_remote, dry_mode, acli_extras) = {
+    let (repo_path, git_remote, dry_mode, acli_extras, github_app_mgr) = {
         let c = config.read().await;
+        let mgr = maestro_core::github_app::try_create_token_manager(&c.github);
         (
             PathBuf::from(&c.git.repo_path),
             c.git.remote.clone(),
             c.general.dry_mode,
             c.jira.acli_extra_argv_prefixes(),
+            mgr,
         )
     };
     let actions: Arc<dyn ExternalActions> = if dry_mode {
         info!("Running in DRY MODE — no external writes");
-        Arc::new(DryRunActions::new(repo_path, git_remote, acli_extras))
+        Arc::new(DryRunActions::new(
+            repo_path,
+            git_remote,
+            acli_extras,
+            github_app_mgr,
+        ))
     } else {
-        Arc::new(RealActions::new(repo_path, git_remote, acli_extras))
+        Arc::new(RealActions::new(
+            repo_path,
+            git_remote,
+            acli_extras,
+            github_app_mgr,
+        ))
     };
 
     let acli_ok = docker_hooks::check_acli_auth();

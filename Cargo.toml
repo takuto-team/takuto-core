@@ -43,6 +43,9 @@ mime_guess = "2"
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
+# JWT / GitHub App authentication
+jsonwebtoken = "9"
+
 # Unix process management
 libc = "0.2"
 

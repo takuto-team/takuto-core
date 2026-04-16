@@ -14,6 +14,7 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+jsonwebtoken = { workspace = true }
 dirs = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

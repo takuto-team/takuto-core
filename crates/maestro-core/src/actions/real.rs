@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -8,6 +9,7 @@ use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
 use crate::git::worktree_remove;
+use crate::github_app::GitHubAppTokenManager;
 use crate::jira::acli;
 use crate::process::{self, CommandOutput};
 
@@ -15,6 +17,7 @@ pub struct RealActions {
     pub repo_path: PathBuf,
     git_remote: String,
     acli_extra_prefixes: Vec<Vec<String>>,
+    github_app: Option<Arc<GitHubAppTokenManager>>,
 }
 
 impl RealActions {
@@ -22,11 +25,13 @@ impl RealActions {
         repo_path: PathBuf,
         git_remote: String,
         acli_extra_prefixes: Vec<Vec<String>>,
+        github_app: Option<Arc<GitHubAppTokenManager>>,
     ) -> Self {
         Self {
             repo_path,
             git_remote,
             acli_extra_prefixes,
+            github_app,
         }
     }
 }
@@ -309,6 +314,11 @@ impl ExternalActions for RealActions {
     }
 
     async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()> {
+        if let Some(ref app) = self.github_app {
+            return app
+                .configure_git_and_gh_auth(cwd, CancellationToken::new())
+                .await;
+        }
         apply_git_identity_from_gh(cwd, CancellationToken::new()).await
     }
 
