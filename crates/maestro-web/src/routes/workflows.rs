@@ -207,7 +207,7 @@ pub async fn get_workflow(
             .read()
             .await
             .get(&w.ticket_key)
-            .map(|port| format!("http://localhost:{port}")),
+            .map(|(port, token)| container::build_terminal_url(container::editor_host_port(*port), token)),
     }))
 }
 
@@ -565,6 +565,9 @@ pub async fn close_editor(State(state): State<AppState>, Path(id): Path<String>)
 #[derive(Serialize)]
 pub struct OpenTerminalResponse {
     pub url: String,
+    /// The raw authentication token (same value embedded in the URL path).
+    /// Provided separately so programmatic consumers can use it independently.
+    pub credential: String,
 }
 
 /// Start a web terminal (ttyd) inside the running editor container.
@@ -574,9 +577,10 @@ pub async fn open_terminal(
     Path(id): Path<String>,
 ) -> Result<Json<OpenTerminalResponse>, (StatusCode, String)> {
     // Reuse existing terminal if already recorded in the in-memory map.
-    if let Some(&port) = state.terminal_ports.read().await.get(&id) {
+    if let Some((port, token)) = state.terminal_ports.read().await.get(&id) {
         return Ok(Json(OpenTerminalResponse {
-            url: format!("http://localhost:{}", container::editor_host_port(port)),
+            url: container::build_terminal_url(container::editor_host_port(*port), token),
+            credential: token.clone(),
         }));
     }
 
@@ -587,11 +591,17 @@ pub async fn open_terminal(
     ))?;
 
     // Recover from a server restart: ttyd may already be running from a previous session.
-    // Ask the container for the actual port (via pgrep) rather than trusting the now-empty map.
-    if let Some(port) = container::find_running_terminal(&id).await {
-        state.terminal_ports.write().await.insert(id.clone(), port);
+    // Ask the container for the actual port and token (via pgrep) rather than trusting the now-empty map.
+    if let Some((port, token)) = container::find_running_terminal(&id).await {
+        let url = container::build_terminal_url(container::editor_host_port(port), &token);
+        state
+            .terminal_ports
+            .write()
+            .await
+            .insert(id.clone(), (port, token.clone()));
         return Ok(Json(OpenTerminalResponse {
-            url: format!("http://localhost:{}", container::editor_host_port(port)),
+            url,
+            credential: token,
         }));
     }
 
@@ -604,7 +614,7 @@ pub async fn open_terminal(
         .read()
         .await
         .values()
-        .copied()
+        .map(|(port, _)| *port)
         .collect();
     let in_use = container::listening_ports_in_editor(&id).await;
     let port = info
@@ -617,14 +627,21 @@ pub async fn open_terminal(
             "No spare ports available for terminal.".into(),
         ))?;
 
-    let url = container::start_terminal(&id, port)
+    let (url, token) = container::start_terminal(&id, port)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    state.terminal_ports.write().await.insert(id.clone(), port);
+    state
+        .terminal_ports
+        .write()
+        .await
+        .insert(id.clone(), (port, token.clone()));
     tracing::info!(workflow = %id, port, "Terminal started on port");
 
-    Ok(Json(OpenTerminalResponse { url }))
+    Ok(Json(OpenTerminalResponse {
+        url,
+        credential: token,
+    }))
 }
 
 /// Stop the web terminal for a workflow's editor container.
