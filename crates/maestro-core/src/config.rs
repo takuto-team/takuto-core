@@ -646,6 +646,11 @@ pub struct WebConfig {
     pub dashboard_username: String,
     #[serde(default)]
     pub dashboard_password: String,
+    /// Allowed CORS origins (e.g. `["http://localhost:8080", "https://maestro.example.com"]`).
+    /// When empty (default), auto-computed from `host` and `port`.
+    /// Startup-only — not patchable via `PUT /api/config`.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 impl WebConfig {
@@ -653,6 +658,93 @@ impl WebConfig {
     pub fn dashboard_auth_enabled(&self) -> bool {
         !self.dashboard_username.trim().is_empty() && !self.dashboard_password.is_empty()
     }
+
+    /// Normalize `cors_origins` in place: strip default ports (:80 for http, :443 for https).
+    /// Invalid entries are kept unchanged so that `Config::validate()` can report them as errors.
+    /// Call this before `Config::validate()` so validation sees the canonical form.
+    pub fn normalize_cors_origins(&mut self) {
+        self.cors_origins = self
+            .cors_origins
+            .iter()
+            .map(|o| validate_cors_origin(o).unwrap_or_else(|_| o.clone()))
+            .collect();
+    }
+
+    /// Return the effective CORS origins: the explicit list if non-empty,
+    /// otherwise a sensible default derived from `host` and `port`.
+    pub fn resolved_cors_origins(&self) -> Vec<String> {
+        if !self.cors_origins.is_empty() {
+            return self.cors_origins.clone();
+        }
+        // Auto-compute: when binding to a wildcard or loopback address, the dashboard
+        // is reachable via multiple hostnames (localhost, 127.0.0.1, 0.0.0.0, etc.).
+        // Include all common variants so the CORS check passes regardless of which
+        // hostname the operator typed in the browser address bar.
+        let host = self.host.trim();
+        let is_wildcard =
+            host == "0.0.0.0" || host == "[::]";
+        let is_loopback = host == "127.0.0.1" || host == "::1";
+        if is_wildcard {
+            vec![
+                format!("http://localhost:{}", self.port),
+                format!("http://127.0.0.1:{}", self.port),
+                format!("http://0.0.0.0:{}", self.port),
+            ]
+        } else if is_loopback {
+            vec![
+                format!("http://localhost:{}", self.port),
+                format!("http://{}:{}", host, self.port),
+            ]
+        } else {
+            vec![format!("http://{}:{}", host, self.port)]
+        }
+    }
+}
+
+/// Validate a single CORS origin string.
+/// Must start with `http://` or `https://`, must have no path component (no `/` after the authority).
+/// Normalizes default ports: strips `:80` from `http://` and `:443` from `https://`.
+pub fn validate_cors_origin(origin: &str) -> std::result::Result<String, String> {
+    let trimmed = origin.trim();
+    if trimmed.is_empty() {
+        return Err("[web] cors_origins: entry must not be empty".into());
+    }
+
+    let (scheme, authority) = if let Some(rest) = trimmed.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = trimmed.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        return Err(format!(
+            "[web] cors_origins: '{trimmed}' must start with http:// or https://"
+        ));
+    };
+
+    if authority.is_empty() {
+        return Err(format!(
+            "[web] cors_origins: '{trimmed}' has no host after scheme"
+        ));
+    }
+
+    // Origins must not contain a path — no `/` in the authority portion.
+    if authority.contains('/') {
+        return Err(format!(
+            "[web] cors_origins: '{trimmed}' must not contain a path (no '/' after the host)"
+        ));
+    }
+
+    // Normalize default ports: strip :80 for http, :443 for https.
+    let normalized = match scheme {
+        "http" if authority.ends_with(":80") => {
+            format!("http://{}", authority.strip_suffix(":80").unwrap())
+        }
+        "https" if authority.ends_with(":443") => {
+            format!("https://{}", authority.strip_suffix(":443").unwrap())
+        }
+        _ => format!("{scheme}://{authority}"),
+    };
+
+    Ok(normalized)
 }
 
 // Default value functions
@@ -764,6 +856,7 @@ impl Default for WebConfig {
             port: default_port(),
             dashboard_username: String::new(),
             dashboard_password: String::new(),
+            cors_origins: Vec::new(),
         }
     }
 }
@@ -886,6 +979,7 @@ impl Config {
         let mut config: Config = toml::from_str(&content)?;
         let base = path.parent().unwrap_or_else(|| Path::new("."));
         config.apply_workflow_step_files(base)?;
+        config.web.normalize_cors_origins();
         config.validate()?;
         Ok(config)
     }
@@ -951,6 +1045,13 @@ impl Config {
             return Err(MaestroError::Config(format!(
                 "[web] dashboard_password exceeds {MAX_DASHBOARD_PASSWORD_LEN} bytes"
             )));
+        }
+
+        // Validate CORS origins (normalization is done by `normalize_cors_origins` before validate).
+        for (i, origin) in self.web.cors_origins.iter().enumerate() {
+            if let Err(msg) = validate_cors_origin(origin) {
+                return Err(MaestroError::Config(format!("{msg} (entry index {i})")));
+            }
         }
 
         if self.jira.done_status.trim().is_empty() {
@@ -1857,6 +1958,345 @@ step_timeout_secs = 600
         assert!(
             msg.contains("cannot specify both") && msg.contains("review_agent_steps"),
             "unexpected error: {msg}"
+        );
+    }
+
+    // -- CORS origin tests --
+
+    #[test]
+    fn cors_origins_defaults_to_empty_vec() {
+        let config = Config::default();
+        assert!(config.web.cors_origins.is_empty());
+    }
+
+    #[test]
+    fn cors_origins_deserialized_from_toml() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            br#"
+[general]
+poll_interval_secs = 30
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+[git]
+base_branch = "main"
+repo_path = "/workspace"
+[commands]
+pre_install = []
+[web]
+port = 8080
+cors_origins = ["http://example.com:3000"]
+[agent]
+step_timeout_secs = 600
+"#,
+        )
+        .unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(config.web.cors_origins, vec!["http://example.com:3000"]);
+    }
+
+    #[test]
+    fn cors_origins_invalid_in_toml_rejected_by_load() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            br#"
+[general]
+poll_interval_secs = 30
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+[git]
+base_branch = "main"
+repo_path = "/workspace"
+[commands]
+pre_install = []
+[web]
+port = 8080
+cors_origins = ["localhost:3000"]
+[agent]
+step_timeout_secs = 600
+"#,
+        )
+        .unwrap();
+        let err = Config::load(f.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("http://") || msg.contains("https://"),
+            "expected scheme error from Config::load, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cors_origins_omitted_in_toml_defaults_to_empty() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(valid_config_toml().as_bytes()).unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert!(config.web.cors_origins.is_empty());
+    }
+
+    // -- resolved_cors_origins auto-computation --
+
+    #[test]
+    fn resolved_cors_origins_wildcard_includes_all_variants() {
+        let web = WebConfig {
+            host: "0.0.0.0".into(),
+            port: 3000,
+            cors_origins: Vec::new(),
+            ..Default::default()
+        };
+        assert_eq!(
+            web.resolved_cors_origins(),
+            vec![
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://0.0.0.0:3000",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolved_cors_origins_ipv6_any_includes_all_variants() {
+        let web = WebConfig {
+            host: "[::]".into(),
+            port: 8080,
+            cors_origins: Vec::new(),
+            ..Default::default()
+        };
+        assert_eq!(
+            web.resolved_cors_origins(),
+            vec![
+                "http://localhost:8080",
+                "http://127.0.0.1:8080",
+                "http://0.0.0.0:8080",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolved_cors_origins_127001_includes_localhost() {
+        let web = WebConfig {
+            host: "127.0.0.1".into(),
+            port: 9090,
+            cors_origins: Vec::new(),
+            ..Default::default()
+        };
+        assert_eq!(
+            web.resolved_cors_origins(),
+            vec!["http://localhost:9090", "http://127.0.0.1:9090"]
+        );
+    }
+
+    #[test]
+    fn resolved_cors_origins_ipv6_loopback_includes_localhost() {
+        let web = WebConfig {
+            host: "::1".into(),
+            port: 4000,
+            cors_origins: Vec::new(),
+            ..Default::default()
+        };
+        assert_eq!(
+            web.resolved_cors_origins(),
+            vec!["http://localhost:4000", "http://::1:4000"]
+        );
+    }
+
+    #[test]
+    fn resolved_cors_origins_specific_host() {
+        let web = WebConfig {
+            host: "10.0.0.5".into(),
+            port: 8080,
+            cors_origins: Vec::new(),
+            ..Default::default()
+        };
+        assert_eq!(web.resolved_cors_origins(), vec!["http://10.0.0.5:8080"]);
+    }
+
+    #[test]
+    fn resolved_cors_origins_returns_explicit_list() {
+        let web = WebConfig {
+            host: "0.0.0.0".into(),
+            port: 8080,
+            cors_origins: vec![
+                "https://app.example.com".into(),
+                "http://localhost:3000".into(),
+            ],
+            ..Default::default()
+        };
+        let resolved = web.resolved_cors_origins();
+        assert_eq!(
+            resolved,
+            vec!["https://app.example.com", "http://localhost:3000"]
+        );
+    }
+
+    // -- Validation: valid origins --
+
+    #[test]
+    fn validate_accepts_http_origin() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["http://localhost:3000".into()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_https_origin() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["https://app.example.com".into()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_multiple_origins() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec![
+            "http://localhost:3000".into(),
+            "https://prod.example.com".into(),
+        ];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_empty_cors_origins() {
+        let config = Config::default();
+        assert!(config.validate().is_ok());
+    }
+
+    // -- Validation: invalid origins --
+
+    #[test]
+    fn validate_rejects_origin_without_scheme() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["localhost:3000".into()];
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("http://") || err.to_string().contains("https://"),
+            "expected scheme error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_ftp_scheme() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["ftp://files.example.com".into()];
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("http://") || err.to_string().contains("https://"),
+            "expected scheme error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_origin_with_path() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["http://localhost:3000/api".into()];
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("path"),
+            "expected path error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_origin_with_trailing_slash() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["http://localhost:3000/".into()];
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("path"),
+            "expected path error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_string_origin() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["".into()];
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("empty"),
+            "expected empty error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_whitespace_only_origin() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["   ".into()];
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("empty"),
+            "expected empty error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_if_any_origin_invalid() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["http://localhost:3000".into(), "bad".into()];
+        assert!(config.validate().is_err());
+    }
+
+    // -- Normalization --
+
+    #[test]
+    fn normalize_cors_origins_strips_http_port_80() {
+        let mut web = WebConfig {
+            cors_origins: vec!["http://example.com:80".into()],
+            ..Default::default()
+        };
+        web.normalize_cors_origins();
+        assert_eq!(web.cors_origins, vec!["http://example.com"]);
+    }
+
+    #[test]
+    fn normalize_cors_origins_strips_https_port_443() {
+        let mut web = WebConfig {
+            cors_origins: vec!["https://example.com:443".into()],
+            ..Default::default()
+        };
+        web.normalize_cors_origins();
+        assert_eq!(web.cors_origins, vec!["https://example.com"]);
+    }
+
+    #[test]
+    fn normalize_cors_origins_preserves_non_default_port() {
+        let mut web = WebConfig {
+            cors_origins: vec!["http://example.com:8080".into()],
+            ..Default::default()
+        };
+        web.normalize_cors_origins();
+        assert_eq!(web.cors_origins, vec!["http://example.com:8080"]);
+    }
+
+    // -- Redaction --
+
+    #[test]
+    fn redacted_clone_preserves_cors_origins() {
+        let mut config = Config::default();
+        config.web.cors_origins = vec!["http://localhost:3000".into()];
+        let redacted = config.redacted_for_api_clone();
+        assert_eq!(redacted.web.cors_origins, vec!["http://localhost:3000"]);
+    }
+
+    // -- Runtime patch rejection --
+
+    #[test]
+    fn runtime_patch_rejects_cors_origins_field() {
+        let err = serde_json::from_str::<RuntimeDashboardConfigPatch>(
+            r#"{"web":{"cors_origins":["http://x"]}}"#,
+        )
+        .unwrap_err();
+        let s = err.to_string();
+        assert!(
+            s.contains("unknown field") || s.contains("Unknown field"),
+            "expected unknown field error: {s}"
         );
     }
 }
