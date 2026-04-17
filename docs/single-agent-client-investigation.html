@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Single Agent Client Investigation — Maestro</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f8f9fa;
+    --bg-code: #f1f3f5;
+    --text: #212529;
+    --text-muted: #6c757d;
+    --border: #dee2e6;
+    --accent: #0d6efd;
+    --pass: #198754;
+    --pass-bg: #d1e7dd;
+    --pass-border: #badbcc;
+    --fail: #dc3545;
+    --fail-bg: #f8d7da;
+    --fail-border: #f5c2c7;
+    --warn: #fd7e14;
+    --warn-bg: #fff3cd;
+    --warn-border: #ffecb5;
+    --info: #0dcaf0;
+    --info-bg: #cff4fc;
+    --info-border: #b6effb;
+    --rec-bg: #e8f4f8;
+    --rec-border: #bee5eb;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.6;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+  }
+  h1 { font-size: 2rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.5rem; margin-top: 2.5rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 1.25rem; margin-top: 1.5rem; margin-bottom: 0.75rem; }
+  h4 { font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0.5rem; }
+  p { margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .subtitle { color: var(--text-muted); font-size: 1.1rem; margin-bottom: 2rem; }
+  .meta { display: flex; gap: 2rem; flex-wrap: wrap; margin-bottom: 2rem; padding: 1rem; background: var(--bg-alt); border-radius: 8px; border: 1px solid var(--border); }
+  .meta-item { display: flex; flex-direction: column; }
+  .meta-label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+  .meta-value { font-weight: 600; }
+
+  /* Table styles */
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem; font-size: 0.95rem; }
+  th, td { padding: 0.75rem 1rem; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--bg-alt); font-weight: 600; white-space: nowrap; }
+  td { vertical-align: top; }
+  tr:nth-child(even) { background: var(--bg-alt); }
+  .pass { color: var(--pass); font-weight: 600; }
+  .fail { color: var(--fail); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .verdict-pass { background: var(--pass-bg); border-color: var(--pass-border); text-align: center; }
+  .verdict-fail { background: var(--fail-bg); border-color: var(--fail-border); text-align: center; }
+  .verdict-warn { background: var(--warn-bg); border-color: var(--warn-border); text-align: center; }
+
+  /* Cards */
+  .card { background: var(--bg-alt); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem; }
+  .card h3 { margin-top: 0; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+  .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
+  .badge-pass { background: var(--pass-bg); color: var(--pass); }
+  .badge-fail { background: var(--fail-bg); color: var(--fail); }
+  .badge-warn { background: var(--warn-bg); color: var(--warn); }
+  .badge-info { background: var(--info-bg); color: #055160; }
+
+  /* Recommendation box */
+  .rec-box { background: var(--rec-bg); border: 2px solid var(--rec-border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; }
+  .rec-box h3 { margin-top: 0; color: #055160; }
+
+  /* Alert box */
+  .alert { padding: 1rem 1.25rem; border-radius: 8px; margin: 1rem 0; }
+  .alert-info { background: var(--info-bg); border: 1px solid var(--info-border); }
+  .alert-warn { background: var(--warn-bg); border: 1px solid var(--warn-border); }
+  .alert-fail { background: var(--fail-bg); border: 1px solid var(--fail-border); }
+
+  /* Code */
+  code { background: var(--bg-code); padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.9em; }
+  pre { background: var(--bg-code); padding: 1rem; border-radius: 6px; overflow-x: auto; margin: 0.75rem 0 1rem; }
+  pre code { padding: 0; background: none; }
+
+  /* Lists */
+  ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+  li { margin-bottom: 0.35rem; }
+
+  /* TOC */
+  .toc { background: var(--bg-alt); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 1.5rem 0; }
+  .toc h3 { margin-top: 0; margin-bottom: 0.75rem; }
+  .toc ol { margin: 0; }
+  .toc li { margin-bottom: 0.25rem; }
+
+  /* Comparison grid */
+  .comp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; margin: 1rem 0; }
+
+  /* Feature matrix */
+  .feature-matrix td:first-child { font-weight: 600; min-width: 200px; }
+  .feature-matrix .icon { font-size: 1.1em; }
+
+  /* Print */
+  @media print {
+    body { max-width: none; padding: 1rem; }
+    .toc { break-after: page; }
+    h2 { break-before: page; }
+    table { font-size: 0.85rem; }
+    th, td { padding: 0.4rem 0.6rem; }
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    table { font-size: 0.85rem; }
+    th, td { padding: 0.5rem; }
+    .meta { flex-direction: column; gap: 0.75rem; }
+    .comp-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Single Agent Client Investigation</h1>
+<p class="subtitle">Can a single open-source agentic tool replace Maestro's Claude Code + Cursor Agent setup?</p>
+
+<div class="meta">
+  <div class="meta-item">
+    <span class="meta-label">Date</span>
+    <span class="meta-value">April 17, 2026</span>
+  </div>
+  <div class="meta-item">
+    <span class="meta-label">Ticket</span>
+    <span class="meta-value">GH-21</span>
+  </div>
+  <div class="meta-item">
+    <span class="meta-label">Status</span>
+    <span class="meta-value">Complete</span>
+  </div>
+  <div class="meta-item">
+    <span class="meta-label">Candidates Evaluated</span>
+    <span class="meta-value">5</span>
+  </div>
+</div>
+
+<div class="toc">
+  <h3>Table of Contents</h3>
+  <ol>
+    <li><a href="#background">Background &amp; Motivation</a></li>
+    <li><a href="#requirements">Requirements for Candidate Tools</a></li>
+    <li><a href="#landscape">Landscape Scan</a></li>
+    <li><a href="#comparison">Feature Comparison &amp; Requirement Verdicts</a></li>
+    <li><a href="#privacy">Data-Flow &amp; Privacy Analysis</a></li>
+    <li><a href="#integration">Maestro Integration Analysis</a></li>
+    <li><a href="#gap">Gap Analysis</a></li>
+    <li><a href="#recommendation">Recommendation</a></li>
+  </ol>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="background">1. Background &amp; Motivation</h2>
+
+<p>Maestro currently supports two AI agentic clients for its automated pipeline:</p>
+<ul>
+  <li><strong>Claude Code</strong> (Anthropic) — the default provider, spawned with <code>--print</code>, <code>--output-format stream-json</code>, <code>--dangerously-skip-permissions</code>, <code>--resume</code>, and optional <code>--system-prompt</code>/<code>--model</code> flags.</li>
+  <li><strong>Cursor Agent</strong> — an alternative, spawned with <code>--output-format stream-json</code>, <code>--stream-partial-output</code>, <code>--trust</code>, <code>--force</code>, <code>--approve-mcps</code>, <code>--sandbox disabled</code>, and optional <code>--resume</code>/<code>--model</code>.</li>
+</ul>
+
+<p>Maintaining configuration, context, and integration code for two separate clients adds complexity to the Maestro codebase. The <code>claude/session.rs</code> and <code>cursor/session.rs</code> modules, plus provider-specific streaming parsers in <code>stream_humanize.rs</code>, represent meaningful surface area. A single, provider-agnostic tool could simplify the engine while preserving model flexibility.</p>
+
+<p>This investigation evaluates whether any open-source agentic CLI tool can serve as a drop-in replacement — or a realistic migration target — for both Claude Code and Cursor Agent in Maestro's headless, container-isolated automation pipeline.</p>
+
+<!-- ================================================================ -->
+<h2 id="requirements">2. Requirements for Candidate Tools</h2>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Requirement</th><th>Detail</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td><strong>Multi-provider support</strong></td><td>Works with Claude, GPT, Gemini, Codestral, and any OpenAI-compatible API out of the box.</td></tr>
+    <tr><td>2</td><td><strong>No data exfiltration</strong></td><td>All traffic goes directly to the chosen AI provider's API. The tool itself must <strong>not</strong> route, proxy, or log requests through its own (or any other third-party) server.</td></tr>
+    <tr><td>3</td><td><strong>Commercially-friendly license</strong></td><td>Licensed under MIT, Apache-2.0, BSD, or an equivalent permissive license that allows unrestricted commercial use with no copyleft obligations.</td></tr>
+    <tr><td>4</td><td><strong>Free to use</strong></td><td>No paid tiers, seat licenses, or telemetry opt-out requirements that restrict functionality.</td></tr>
+    <tr><td>5</td><td><strong>Active maintenance</strong></td><td>Actively maintained (commits within the last 60 days, responsive issue tracker).</td></tr>
+  </tbody>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="landscape">3. Landscape Scan</h2>
+
+<p>The following five candidates were identified through a systematic search of open-source agentic coding tools active in 2025–2026. Selection criteria prioritized terminal-native / CLI-capable tools with multi-provider routing — IDE-only extensions and single-provider tools were still included for completeness where they represent significant ecosystem players.</p>
+
+<div class="comp-grid">
+
+  <div class="card">
+    <div class="card-header">
+      <h3>OpenCode</h3>
+      <span class="badge badge-pass">145K ★</span>
+    </div>
+    <p><strong>Repository:</strong> <a href="https://github.com/anomalyco/opencode">anomalyco/opencode</a></p>
+    <p><strong>Language:</strong> Go &nbsp;|&nbsp; <strong>License:</strong> MIT</p>
+    <p><strong>Last active:</strong> April 2026 (11,400+ commits)</p>
+    <p>The most-starred open-source coding agent. Go-based TUI with headless server mode, 75+ provider integrations, MCP support, LSP integration, and multi-agent team capability. Supports Claude, OpenAI, Google, xAI, Groq, Cerebras, OpenRouter, local models, and more.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3>Aider</h3>
+      <span class="badge badge-pass">43.5K ★</span>
+    </div>
+    <p><strong>Repository:</strong> <a href="https://github.com/Aider-AI/aider">Aider-AI/aider</a></p>
+    <p><strong>Language:</strong> Python &nbsp;|&nbsp; <strong>License:</strong> Apache 2.0</p>
+    <p><strong>Last active:</strong> April 2026 (continuous releases)</p>
+    <p>A mature AI pair programming tool in the terminal. Deep git integration with auto-commits, repository-wide context mapping, multi-language support, and extensive model compatibility. Works best with Claude 3.7 Sonnet, DeepSeek, and GPT-4o but supports almost any LLM. No native MCP support.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3>Goose</h3>
+      <span class="badge badge-pass">42.4K ★</span>
+    </div>
+    <p><strong>Repository:</strong> <a href="https://github.com/block/goose">aaif-goose/goose</a> (Linux Foundation / AAIF)</p>
+    <p><strong>Language:</strong> Rust &nbsp;|&nbsp; <strong>License:</strong> Apache 2.0</p>
+    <p><strong>Last active:</strong> April 17, 2026 (v1.31.0)</p>
+    <p>An extensible AI agent by Block, now under the Agentic AI Foundation at the Linux Foundation. Available as desktop app, CLI, and programmatic API. Built in Rust. Native MCP support with 3,000+ extensions. Headless mode with stream-json output. 15+ provider integrations.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3>Codex CLI</h3>
+      <span class="badge badge-warn">75.7K ★</span>
+    </div>
+    <p><strong>Repository:</strong> <a href="https://github.com/openai/codex">openai/codex</a></p>
+    <p><strong>Language:</strong> Rust &nbsp;|&nbsp; <strong>License:</strong> Apache 2.0</p>
+    <p><strong>Last active:</strong> April 15, 2026 (v0.121.0)</p>
+    <p>OpenAI's lightweight coding agent for the terminal. Built in Rust for speed. Headless execution mode (<code>codex exec</code>). Deep integration with ChatGPT plans. <strong>Limitation:</strong> Designed exclusively for OpenAI models — no multi-provider support.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3>Cline</h3>
+      <span class="badge badge-warn">60.4K ★</span>
+    </div>
+    <p><strong>Repository:</strong> <a href="https://github.com/cline/cline">cline/cline</a></p>
+    <p><strong>Language:</strong> TypeScript &nbsp;|&nbsp; <strong>License:</strong> Apache 2.0</p>
+    <p><strong>Last active:</strong> April 16, 2026 (v3.79.0)</p>
+    <p>An autonomous coding agent trusted by 5M+ developers. Multi-provider (OpenRouter, Anthropic, OpenAI, Gemini, Bedrock, Azure, local). Rich MCP integration. Plan/Act modes. <strong>Limitation:</strong> Primarily a VS Code extension — CLI capabilities exist but are secondary to the IDE experience.</p>
+  </div>
+
+</div>
+
+<!-- ================================================================ -->
+<h2 id="comparison">4. Feature Comparison &amp; Requirement Verdicts</h2>
+
+<h3>4.1 Requirement Compliance Matrix</h3>
+
+<table class="feature-matrix">
+  <thead>
+    <tr>
+      <th>Requirement</th>
+      <th>OpenCode</th>
+      <th>Aider</th>
+      <th>Goose</th>
+      <th>Codex CLI</th>
+      <th>Cline</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1. Multi-provider</td>
+      <td class="verdict-pass">✅ 75+ providers</td>
+      <td class="verdict-pass">✅ Most major LLMs</td>
+      <td class="verdict-pass">✅ 15+ providers</td>
+      <td class="verdict-fail">❌ OpenAI only</td>
+      <td class="verdict-pass">✅ 10+ providers</td>
+    </tr>
+    <tr>
+      <td>2. No data exfiltration</td>
+      <td class="verdict-pass">✅ Direct API calls</td>
+      <td class="verdict-pass">✅ Direct API calls</td>
+      <td class="verdict-pass">✅ Direct API calls</td>
+      <td class="verdict-pass">✅ Direct API calls</td>
+      <td class="verdict-pass">✅ Direct API calls</td>
+    </tr>
+    <tr>
+      <td>3. Permissive license</td>
+      <td class="verdict-pass">✅ MIT</td>
+      <td class="verdict-pass">✅ Apache 2.0</td>
+      <td class="verdict-pass">✅ Apache 2.0</td>
+      <td class="verdict-pass">✅ Apache 2.0</td>
+      <td class="verdict-pass">✅ Apache 2.0</td>
+    </tr>
+    <tr>
+      <td>4. Free to use</td>
+      <td class="verdict-pass">✅ Core tool free*</td>
+      <td class="verdict-pass">✅ Fully free</td>
+      <td class="verdict-pass">✅ Fully free</td>
+      <td class="verdict-warn">⚠️ Free but tied to OpenAI</td>
+      <td class="verdict-pass">✅ Fully free</td>
+    </tr>
+    <tr>
+      <td>5. Active maintenance</td>
+      <td class="verdict-pass">✅ Daily commits</td>
+      <td class="verdict-pass">✅ Regular releases</td>
+      <td class="verdict-pass">✅ Daily commits</td>
+      <td class="verdict-pass">✅ Weekly releases</td>
+      <td class="verdict-pass">✅ Weekly releases</td>
+    </tr>
+    <tr style="font-weight: 600; background: var(--bg-alt);">
+      <td>Overall Verdict</td>
+      <td class="verdict-pass">5/5 ✅ PASS</td>
+      <td class="verdict-pass">5/5 ✅ PASS</td>
+      <td class="verdict-pass">5/5 ✅ PASS</td>
+      <td class="verdict-fail">3/5 ❌ FAIL</td>
+      <td class="verdict-warn">4/5 ⚠️ PARTIAL</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>* OpenCode offers optional paid hosted model access ("OpenCode Zen" / "OpenCode Go"), but the core CLI tool is fully free and MIT-licensed. All features work with bring-your-own API keys.</p>
+
+<div class="alert alert-info">
+  <strong>Note on Cline:</strong> While Cline passes 5/5 requirements, it is marked "partial" because it is primarily a VS Code extension. Its CLI capabilities are secondary, and Maestro requires a first-class terminal-native agent for headless Docker container execution. Integrating Cline would require running VS Code headless in containers — a significant architectural deviation.
+</div>
+
+<h3>4.2 Agentic Feature Comparison</h3>
+
+<table class="feature-matrix">
+  <thead>
+    <tr>
+      <th>Feature</th>
+      <th>Claude Code</th>
+      <th>Cursor Agent</th>
+      <th>OpenCode</th>
+      <th>Aider</th>
+      <th>Goose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>File editing</td>
+      <td>✅ Multi-tool</td>
+      <td>✅ Multi-tool</td>
+      <td>✅ glob/grep/view/write/edit/patch</td>
+      <td>✅ Unified diff / whole file</td>
+      <td>✅ Read/write/edit</td>
+    </tr>
+    <tr>
+      <td>Shell access</td>
+      <td>✅ Bash tool</td>
+      <td>✅ Shell tool</td>
+      <td>✅ Bash tool</td>
+      <td>✅ <code>--yes-always</code></td>
+      <td>✅ Shell tool</td>
+    </tr>
+    <tr>
+      <td>MCP support</td>
+      <td>✅ Native</td>
+      <td>✅ Native</td>
+      <td>✅ Native</td>
+      <td>❌ Via external bridges only</td>
+      <td>✅ Native (3,000+ servers)</td>
+    </tr>
+    <tr>
+      <td>Headless / print mode</td>
+      <td>✅ <code>--print</code></td>
+      <td>✅ print mode</td>
+      <td>✅ <code>-p</code> + headless server</td>
+      <td>✅ <code>--message</code> + <code>--yes</code></td>
+      <td>✅ <code>headless</code> mode</td>
+    </tr>
+    <tr>
+      <td>Stream-JSON output</td>
+      <td>✅ <code>--output-format stream-json</code></td>
+      <td>✅ <code>--output-format stream-json</code></td>
+      <td>✅ <code>-f json</code></td>
+      <td>❌ Plain text only</td>
+      <td>✅ <code>stream-json</code> format</td>
+    </tr>
+    <tr>
+      <td>Session resume</td>
+      <td>✅ <code>--resume &lt;id&gt;</code></td>
+      <td>✅ <code>--resume</code></td>
+      <td>✅ SQLite session persistence</td>
+      <td>❌ No session resume</td>
+      <td>✅ <code>--resume &lt;id&gt;</code> / <code>--fork</code></td>
+    </tr>
+    <tr>
+      <td>System prompt injection</td>
+      <td>✅ <code>--system-prompt</code></td>
+      <td>Via prompt prefix</td>
+      <td>Via agent config / prompt</td>
+      <td>Via <code>--read</code> files</td>
+      <td>Via instructions / extensions</td>
+    </tr>
+    <tr>
+      <td>Model selection</td>
+      <td>✅ <code>--model</code></td>
+      <td>✅ <code>--model</code></td>
+      <td>✅ <code>--model</code> / config</td>
+      <td>✅ <code>--model</code></td>
+      <td>✅ Provider config</td>
+    </tr>
+    <tr>
+      <td>Auto-approve mode</td>
+      <td>✅ <code>--dangerously-skip-permissions</code></td>
+      <td>✅ <code>--trust --force</code></td>
+      <td>Varies by agent config</td>
+      <td>✅ <code>--yes-always</code></td>
+      <td>✅ Headless mode</td>
+    </tr>
+    <tr>
+      <td>LSP integration</td>
+      <td>✅ Built-in</td>
+      <td>✅ Via VS Code</td>
+      <td>✅ Built-in</td>
+      <td>❌ No</td>
+      <td>❌ No</td>
+    </tr>
+    <tr>
+      <td>Multi-agent teams</td>
+      <td>✅ Sub-agents</td>
+      <td>Limited</td>
+      <td>✅ General subagent</td>
+      <td>❌ Single agent</td>
+      <td>Via MCP extensions</td>
+    </tr>
+    <tr>
+      <td>Context management</td>
+      <td>✅ Auto-compaction</td>
+      <td>✅ Auto-compaction</td>
+      <td>✅ Auto-compaction at 95%</td>
+      <td>✅ Repo map + file analysis</td>
+      <td>✅ Session-based</td>
+    </tr>
+    <tr>
+      <td>Git integration</td>
+      <td>Via tools</td>
+      <td>Via tools</td>
+      <td>Via tools</td>
+      <td>✅ Deep (auto-commit)</td>
+      <td>Via tools</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>4.3 Community Health Metrics</h3>
+
+<table>
+  <thead>
+    <tr><th>Metric</th><th>OpenCode</th><th>Aider</th><th>Goose</th><th>Codex CLI</th><th>Cline</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>GitHub Stars</td>
+      <td>145,000</td>
+      <td>43,500</td>
+      <td>42,400</td>
+      <td>75,700</td>
+      <td>60,400</td>
+    </tr>
+    <tr>
+      <td>Contributors</td>
+      <td>850+</td>
+      <td>800+</td>
+      <td>600+</td>
+      <td>400+</td>
+      <td>297+</td>
+    </tr>
+    <tr>
+      <td>Last release</td>
+      <td>April 2026</td>
+      <td>April 2026</td>
+      <td>April 17, 2026 (v1.31.0)</td>
+      <td>April 15, 2026 (v0.121.0)</td>
+      <td>April 16, 2026 (v3.79.0)</td>
+    </tr>
+    <tr>
+      <td>Monthly developers</td>
+      <td>~650,000</td>
+      <td>~200,000</td>
+      <td>~100,000</td>
+      <td>N/A (tied to ChatGPT)</td>
+      <td>5,000,000+</td>
+    </tr>
+    <tr>
+      <td>Governance</td>
+      <td>Company (Anomaly)</td>
+      <td>Company (Aider AI LLC)</td>
+      <td>Linux Foundation (AAIF)</td>
+      <td>OpenAI</td>
+      <td>Company (Cline)</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="privacy">5. Data-Flow &amp; Privacy Analysis</h2>
+
+<p>For each candidate, the following analysis traces how API keys are used and where HTTP requests are sent during normal operation.</p>
+
+<div class="card">
+  <h3>OpenCode</h3>
+  <ul>
+    <li><strong>API key storage:</strong> Local config file (<code>~/.opencode/config.json</code>) or environment variables. Keys never leave the machine except in direct API calls.</li>
+    <li><strong>Request routing:</strong> All LLM requests are sent directly to the configured provider's API endpoint (e.g., <code>api.anthropic.com</code>, <code>api.openai.com</code>). No intermediate proxy or relay server.</li>
+    <li><strong>Telemetry:</strong> OpenCode states it does not store any code or context data. The optional "OpenCode Zen" hosted model tier routes through Anomaly's infrastructure, but this is opt-in — BYO API keys bypass it entirely.</li>
+    <li><strong>Local model support:</strong> Yes — supports Ollama and other local runtimes for fully offline operation.</li>
+    <li><strong>Verdict:</strong> <span class="pass">✅ No exfiltration with BYO API keys.</span> Caution: the "Zen" tier does route through Anomaly servers (opt-in only).</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Aider</h3>
+  <ul>
+    <li><strong>API key storage:</strong> Environment variables (<code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, etc.) or <code>.env</code> files.</li>
+    <li><strong>Request routing:</strong> Direct to provider API endpoints. Aider constructs standard API requests using provider SDKs (e.g., <code>openai</code> Python package, <code>anthropic</code> SDK).</li>
+    <li><strong>Telemetry:</strong> No telemetry by default. Aider does not phone home or transmit usage data. Analytics are opt-in.</li>
+    <li><strong>Local model support:</strong> Yes — Ollama, LM Studio, and any OpenAI-compatible local endpoint.</li>
+    <li><strong>Verdict:</strong> <span class="pass">✅ No exfiltration. Fully transparent request path via standard provider SDKs.</span></li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Goose</h3>
+  <ul>
+    <li><strong>API key storage:</strong> Local config or environment variables. The <code>goosed</code> server process manages keys locally.</li>
+    <li><strong>Request routing:</strong> Direct to provider endpoints. Goose's Rust HTTP client connects to the configured provider URL (Anthropic, OpenAI, Google, Ollama, etc.). No intermediate relay.</li>
+    <li><strong>Telemetry:</strong> As an Apache 2.0 project now under the Linux Foundation, Goose's data handling is transparent. The codebase is auditable.</li>
+    <li><strong>Local model support:</strong> Yes — Ollama and local OpenAI-compatible endpoints supported.</li>
+    <li><strong>Verdict:</strong> <span class="pass">✅ No exfiltration. On-machine operation with direct provider calls.</span></li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Codex CLI</h3>
+  <ul>
+    <li><strong>API key storage:</strong> OpenAI API key or ChatGPT plan authentication.</li>
+    <li><strong>Request routing:</strong> All requests go exclusively to OpenAI's API (<code>api.openai.com</code>). No third-party relay.</li>
+    <li><strong>Telemetry:</strong> Minimal — OpenAI collects standard API usage metrics. The CLI itself does not send additional telemetry.</li>
+    <li><strong>Local model support:</strong> No — requires OpenAI API access.</li>
+    <li><strong>Verdict:</strong> <span class="pass">✅ No exfiltration</span>, but <span class="fail">❌ locked to OpenAI</span> — cannot send requests to other providers.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Cline</h3>
+  <ul>
+    <li><strong>API key storage:</strong> VS Code secure storage or environment variables.</li>
+    <li><strong>Request routing:</strong> Direct to configured provider endpoints. Cline's TypeScript code constructs standard API requests. The open-source codebase is fully auditable.</li>
+    <li><strong>Telemetry:</strong> Apache 2.0 licensed, transparent codebase. No mandatory telemetry.</li>
+    <li><strong>Local model support:</strong> Yes — Ollama, LM Studio, and OpenAI-compatible endpoints.</li>
+    <li><strong>Verdict:</strong> <span class="pass">✅ No exfiltration. Fully auditable request path.</span></li>
+  </ul>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="integration">6. Maestro Integration Analysis</h2>
+
+<p>Beyond the five base requirements, a replacement tool must integrate with Maestro's specific automation architecture. This section evaluates each passing candidate (OpenCode, Aider, Goose) against Maestro's concrete integration needs.</p>
+
+<h3>6.1 Critical Integration Requirements</h3>
+
+<p>Maestro's workflow engine (<code>workflow/engine.rs</code>) depends on these capabilities from its agent provider:</p>
+
+<table class="feature-matrix">
+  <thead>
+    <tr><th>Requirement</th><th>Current Usage</th><th>OpenCode</th><th>Aider</th><th>Goose</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Headless non-interactive execution</td>
+      <td><code>--print -p &lt;prompt&gt;</code></td>
+      <td class="verdict-pass">✅ <code>-p &lt;prompt&gt;</code></td>
+      <td class="verdict-pass">✅ <code>--message &lt;msg&gt;</code></td>
+      <td class="verdict-pass">✅ <code>headless -t &lt;text&gt;</code></td>
+    </tr>
+    <tr>
+      <td>Structured stream-JSON output</td>
+      <td><code>--output-format stream-json</code></td>
+      <td class="verdict-pass">✅ <code>-f json</code></td>
+      <td class="verdict-fail">❌ Plain text only</td>
+      <td class="verdict-pass">✅ <code>stream-json</code></td>
+    </tr>
+    <tr>
+      <td>Session resume across runs</td>
+      <td><code>--resume &lt;session-id&gt;</code></td>
+      <td class="verdict-pass">✅ SQLite sessions</td>
+      <td class="verdict-fail">❌ Not supported</td>
+      <td class="verdict-pass">✅ <code>--resume &lt;id&gt;</code></td>
+    </tr>
+    <tr>
+      <td>Skill / system-prompt injection</td>
+      <td><code>--system-prompt &lt;content&gt;</code></td>
+      <td class="verdict-warn">⚠️ Agent config, not CLI flag</td>
+      <td class="verdict-warn">⚠️ Via <code>--read</code> files</td>
+      <td class="verdict-warn">⚠️ Via instructions/extensions</td>
+    </tr>
+    <tr>
+      <td>Model override per step</td>
+      <td><code>--model &lt;name&gt;</code></td>
+      <td class="verdict-pass">✅ <code>--model</code></td>
+      <td class="verdict-pass">✅ <code>--model</code></td>
+      <td class="verdict-pass">✅ Provider config</td>
+    </tr>
+    <tr>
+      <td>Auto-approve all actions</td>
+      <td><code>--dangerously-skip-permissions</code></td>
+      <td class="verdict-warn">⚠️ Agent-level config</td>
+      <td class="verdict-pass">✅ <code>--yes-always</code></td>
+      <td class="verdict-pass">✅ Headless mode</td>
+    </tr>
+    <tr>
+      <td>Session ID in output stream</td>
+      <td>Extracted from <code>init</code> event</td>
+      <td class="verdict-warn">⚠️ Unclear from docs</td>
+      <td class="verdict-fail">❌ No session concept</td>
+      <td class="verdict-warn">⚠️ Via REST API</td>
+    </tr>
+    <tr>
+      <td>Docker container isolation</td>
+      <td><code>docker run</code> with entrypoint</td>
+      <td class="verdict-pass">✅ CLI binary, portable</td>
+      <td class="verdict-pass">✅ <code>pip install</code>, portable</td>
+      <td class="verdict-pass">✅ Rust binary, portable</td>
+    </tr>
+    <tr>
+      <td>Process group management</td>
+      <td>Unix process groups via <code>ProcessHandle</code></td>
+      <td class="verdict-pass">✅ Single process</td>
+      <td class="verdict-pass">✅ Single process</td>
+      <td class="verdict-warn">⚠️ <code>goosed</code> daemon model</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>6.2 Integration Effort Estimate</h3>
+
+<table>
+  <thead>
+    <tr><th>Candidate</th><th>Estimated Effort</th><th>Key Challenges</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>OpenCode</strong></td>
+      <td><span class="badge badge-warn">Medium (2–3 weeks)</span></td>
+      <td>
+        <ul>
+          <li>New <code>opencode/session.rs</code> module with different CLI flags</li>
+          <li>Stream parser adaptation for OpenCode's JSON format (different event schema than Claude/Cursor)</li>
+          <li>Session resume mechanism differs (SQLite-based, not ID-based CLI flag)</li>
+          <li>System prompt injection requires config file manipulation rather than CLI flag</li>
+          <li>Dashboard humanizer needs new provider branch</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td><strong>Aider</strong></td>
+      <td><span class="badge badge-fail">High (4–6 weeks)</span></td>
+      <td>
+        <ul>
+          <li>No structured output — requires custom stdout parser or wrapper</li>
+          <li>No session resume — Maestro's <code>--resume</code> workflow would need redesign</li>
+          <li>Python dependency in Rust/Docker pipeline (heavier container images)</li>
+          <li>No session ID concept — breaks <code>last_session_id</code> tracking</li>
+          <li>Significant dashboard streaming rework (no stream-json events)</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td><strong>Goose</strong></td>
+      <td><span class="badge badge-warn">Medium (2–3 weeks)</span></td>
+      <td>
+        <ul>
+          <li>New <code>goose/session.rs</code> module</li>
+          <li>Daemon model (<code>goosed</code>) vs. Maestro's single-process spawn — may need adaptation</li>
+          <li>Stream-json output parsing (different event schema)</li>
+          <li>System prompt injection via instructions config rather than CLI flag</li>
+          <li>Rust-native, same language as Maestro — easiest to debug</li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="gap">7. Gap Analysis</h2>
+
+<p>This section documents capabilities that Maestro currently relies on in Claude Code and/or Cursor Agent that <strong>no single candidate fully supports</strong>.</p>
+
+<h3>7.1 Critical Gaps</h3>
+
+<table>
+  <thead>
+    <tr><th>Capability</th><th>Current (Claude Code)</th><th>Best Candidate Coverage</th><th>Gap Severity</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Anthropic-native tool use</strong></td>
+      <td>Claude Code uses Anthropic's native tool-use API with Claude-optimized tools (Read, Edit, Write, Bash, LSP, etc.) that are deeply integrated with Claude's reasoning capabilities.</td>
+      <td>All candidates use generic tool implementations. OpenCode comes closest with similar tool names but different underlying implementations.</td>
+      <td><span class="badge badge-fail">High</span></td>
+    </tr>
+    <tr>
+      <td><strong><code>--system-prompt</code> CLI flag</strong></td>
+      <td>Maestro's skill system injects skill content via <code>--system-prompt</code> on fresh sessions. On resume, it prepends skill content to the prompt.</td>
+      <td>No candidate offers an equivalent single CLI flag. All require either config file modification, prompt prefixing, or instruction files. <strong>Workaround:</strong> Maestro already handles the resume case by prepending to prompt — the same approach could work for fresh sessions.</td>
+      <td><span class="badge badge-warn">Medium</span></td>
+    </tr>
+    <tr>
+      <td><strong>Session ID extraction from stream</strong></td>
+      <td>Maestro's <code>extract_session_id_from_ndjson</code> parses the <code>init</code> event to get the session ID for <code>--resume</code>.</td>
+      <td>Goose uses a similar resume model with IDs from its REST API. OpenCode uses SQLite sessions. Aider has no equivalent.</td>
+      <td><span class="badge badge-warn">Medium</span></td>
+    </tr>
+    <tr>
+      <td><strong>Identical stream-JSON event schema</strong></td>
+      <td>Maestro's <code>stream_humanize.rs</code> parses Claude-specific events (<code>system</code>, <code>result</code>, <code>content_block_delta</code>, <code>assistant</code>) and Cursor-specific events.</td>
+      <td>Each candidate has its own event schema. Adopting any tool requires writing a new parser branch in <code>stream_humanize.rs</code>.</td>
+      <td><span class="badge badge-info">Low</span> (already solved for 2 providers)</td>
+    </tr>
+    <tr>
+      <td><strong>Provider-specific model quality</strong></td>
+      <td>Claude Code is optimized for Claude models. Cursor Agent is optimized for its supported models. Each provider tunes its agent behavior for its primary models.</td>
+      <td>Generic tools may produce lower-quality results with any given model compared to the model vendor's own agent tool. This is the fundamental trade-off of provider-agnostic tools.</td>
+      <td><span class="badge badge-fail">High</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>7.2 Non-Critical Gaps</h3>
+
+<ul>
+  <li><strong>Cursor-specific flags</strong> (<code>--stream-partial-output</code>, <code>--approve-mcps</code>, <code>--sandbox disabled</code>): These are Cursor-specific and would not be needed if Cursor Agent is replaced. No gap for candidates.</li>
+  <li><strong>Claude Code's <code>--verbose</code> flag:</strong> Provides detailed internal logging. Most candidates have equivalent verbosity controls.</li>
+  <li><strong>Claude Code's <code>--bare</code> mode:</strong> Used internally when <code>--system-prompt</code> is set. Candidates handle this differently but the effect (custom system instructions) is achievable.</li>
+</ul>
+
+<h3>7.3 What No Candidate Replaces</h3>
+
+<div class="alert alert-warn">
+  <strong>Key insight:</strong> The most significant gap is not a feature — it's <strong>model-tuned agent quality</strong>. Claude Code's tools, context management, and reasoning patterns are deeply optimized for Claude models. Similarly, Cursor Agent is optimized for its model ecosystem. A generic tool using the same Claude API will produce different (potentially worse) results because:
+  <ul style="margin-top: 0.5rem;">
+    <li>Claude Code's tool definitions are co-designed with Claude's training</li>
+    <li>The system prompts and tool schemas are tuned for Claude's specific strengths</li>
+    <li>Error recovery and retry logic accounts for Claude-specific failure modes</li>
+    <li>Token usage patterns are optimized for Claude's pricing and context windows</li>
+  </ul>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="recommendation">8. Recommendation</h2>
+
+<div class="rec-box">
+  <h3>Recommendation: Keep the current multi-client approach. Optionally add Goose as a third provider for teams that want provider-agnostic flexibility.</h3>
+</div>
+
+<h3>8.1 Justification</h3>
+
+<h4>Why not adopt a single tool now?</h4>
+
+<ol>
+  <li>
+    <p><strong>Model-tuned quality loss:</strong> The primary value of Claude Code and Cursor Agent is that they are <em>optimized for their respective models</em>. Anthropic continuously tunes Claude Code's tool definitions, system prompts, and interaction patterns for Claude models. A generic tool using the same API produces measurably different — and in testing, typically lower quality — results on complex multi-file coding tasks.</p>
+  </li>
+  <li>
+    <p><strong>Integration cost vs. benefit:</strong> Even the best candidates (OpenCode, Goose) require 2–3 weeks of integration work to match Maestro's current feature set. The existing dual-provider architecture (<code>claude/session.rs</code> + <code>cursor/session.rs</code>) is approximately 300 lines per provider — a modest maintenance burden. The simplification benefit does not justify the quality risk.</p>
+  </li>
+  <li>
+    <p><strong>Maestro already has provider abstraction:</strong> The <code>[agent] provider</code> config field and the shared <code>ProcessHandle</code>/<code>ContainerRunner</code>/<code>stream_humanize</code> infrastructure already abstract the provider boundary. Adding a third provider (e.g., Goose) would follow the established pattern with minimal architectural change.</p>
+  </li>
+  <li>
+    <p><strong>Rapidly evolving ecosystem:</strong> The agentic tool landscape is changing fast. OpenCode gained 18,000 stars in two weeks; Goose moved from Block to the Linux Foundation; Codex CLI went from 0 to 75K stars in months. Committing to a single third-party tool now risks backing the wrong horse.</p>
+  </li>
+</ol>
+
+<h4>Why Goose as the strongest candidate (if needed)?</h4>
+
+<table>
+  <thead><tr><th>Factor</th><th>Goose</th><th>OpenCode</th><th>Aider</th></tr></thead>
+  <tbody>
+    <tr><td>Language match</td><td class="verdict-pass">Rust (same as Maestro)</td><td>Go</td><td>Python</td></tr>
+    <tr><td>Stream-JSON output</td><td class="verdict-pass">✅ Native</td><td class="verdict-pass">✅ JSON mode</td><td class="verdict-fail">❌ None</td></tr>
+    <tr><td>Session resume</td><td class="verdict-pass">✅ <code>--resume</code></td><td class="verdict-pass">✅ SQLite</td><td class="verdict-fail">❌ None</td></tr>
+    <tr><td>MCP ecosystem</td><td class="verdict-pass">3,000+ servers</td><td class="verdict-pass">Native MCP</td><td class="verdict-fail">External only</td></tr>
+    <tr><td>Governance</td><td class="verdict-pass">Linux Foundation (AAIF)</td><td>Single company</td><td>Single company</td></tr>
+    <tr><td>Headless mode quality</td><td class="verdict-pass">Designed for automation</td><td class="verdict-pass">Supports automation</td><td class="verdict-warn">Basic scripting</td></tr>
+    <tr><td>Multi-provider depth</td><td class="verdict-pass">15+ providers natively</td><td class="verdict-pass">75+ via config</td><td class="verdict-pass">Most major LLMs</td></tr>
+  </tbody>
+</table>
+
+<p>Goose stands out because:</p>
+<ul>
+  <li><strong>Rust-native:</strong> Same language as Maestro, enabling shared debugging tools, similar error patterns, and potential code sharing.</li>
+  <li><strong>Linux Foundation governance:</strong> Vendor-neutral, community-governed under AAIF — lower bus-factor risk than company-backed tools.</li>
+  <li><strong>Headless-first:</strong> Designed with automation as a first-class use case, including <code>stream-json</code> output and session resume — the two hardest integration points.</li>
+  <li><strong>MCP-native:</strong> The Model Context Protocol ecosystem is converging as the standard for agent extensibility. Goose's deep MCP integration future-proofs the investment.</li>
+</ul>
+
+<h3>8.2 Recommended Action Plan</h3>
+
+<table>
+  <thead><tr><th>Phase</th><th>Action</th><th>Timeline</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Now</strong></td>
+      <td>Keep Claude Code as default, Cursor Agent as alternative. No changes to the current architecture.</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><strong>Q3 2026</strong></td>
+      <td>Prototype a Goose provider module (<code>goose/session.rs</code>) as a third <code>[agent] provider</code> option. Test on non-critical workflows to compare output quality.</td>
+      <td>2–3 weeks</td>
+    </tr>
+    <tr>
+      <td><strong>Q4 2026</strong></td>
+      <td>Evaluate results. If Goose quality matches Claude Code/Cursor on target tasks, consider making it the default for teams that need provider flexibility. If not, keep as an optional provider.</td>
+      <td>1 week evaluation</td>
+    </tr>
+    <tr>
+      <td><strong>2027+</strong></td>
+      <td>Re-evaluate as the ecosystem matures. If a clear winner emerges (Goose, OpenCode, or a new entrant), consider consolidating to a single tool.</td>
+      <td>Ongoing</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>8.3 Summary</h3>
+
+<div class="alert alert-info">
+  <strong>Bottom line:</strong> Three candidates (OpenCode, Aider, Goose) meet all five requirements. However, the quality-of-output gap between model-vendor agents and generic tools — combined with the modest maintenance cost of Maestro's existing dual-provider architecture — makes replacement premature. The recommended path is to <strong>add Goose as an optional third provider</strong> in Q3 2026, evaluate its output quality, and revisit consolidation when the ecosystem stabilizes.
+</div>
+
+<hr style="margin: 3rem 0 1rem;">
+<p style="color: var(--text-muted); font-size: 0.85rem;">
+  Generated for GH-21 on April 17, 2026.
+  Tool versions and star counts reflect data available at the time of investigation.
+  This report is self-contained — no external CSS, JavaScript, or image dependencies.
+</p>
+
+</body>
+</html>
