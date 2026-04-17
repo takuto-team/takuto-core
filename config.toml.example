@@ -84,6 +84,8 @@ ticketing_system = "none"
 # Start with Jira polling paused (same as dashboard **Pause polling**). Use **Resume polling** after startup to pick up To Do tickets without editing config again.
 # pause_jira_polling_on_startup = true
 poll_interval_secs = 60
+# Interval (seconds) for polling GitHub to check whether workflow PRs have been merged. 0 disables.
+pr_merge_poll_interval_secs = 60
 # Concurrent install / agent sessions (semaphore across workflows).
 max_concurrent_workflows = 1
 # Max workflows still listed on the dashboard (every visible row, including **Done**, paused, stopped, error).

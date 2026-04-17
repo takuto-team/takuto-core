@@ -127,6 +127,23 @@ body { font-family: 'Inter', sans-serif; }
   color: rgb(221, 214, 254);
 }
 
+/* Badge shown when the workflow's PR has been merged (GitHub). */
+.workflow-card .workflow-merged-badge {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  background-color: rgba(168, 85, 247, 0.18);
+  color: rgb(216, 180, 254);
+  white-space: nowrap;
+}
+
 .workflow-card .workflow-action-btn {
   box-sizing: border-box;
   flex: 1 1 auto;

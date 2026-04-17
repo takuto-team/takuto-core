@@ -150,6 +150,9 @@ function handleWorkflowEvent(evt) {
     if (typeof evt.progress_steps_total === 'number' && Number.isFinite(evt.progress_steps_total)) {
       wf.progress_steps_total = Math.max(0, Math.floor(evt.progress_steps_total));
     }
+    if (typeof evt.pr_merged === 'boolean') {
+      wf.pr_merged = evt.pr_merged;
+    }
     if (evt.error) {
       wf.error = evt.error;
     }
@@ -347,6 +350,18 @@ function updateCardState(wf) {
   // Update status badge
   const badgeEl = card.querySelector('.status-badge');
   if (badgeEl) badgeEl.innerHTML = statusBadgeHtml(status);
+
+  // Update merged badge
+  const headerActions = card.querySelector('.workflow-card-header-actions');
+  if (headerActions) {
+    const existingMerged = headerActions.querySelector('.workflow-merged-badge');
+    if (wf.pr_merged && !existingMerged) {
+      const badge = document.createElement('span');
+      badge.className = 'workflow-merged-badge';
+      badge.innerHTML = '<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg> Merged';
+      headerActions.insertBefore(badge, headerActions.firstChild);
+    }
+  }
 
   // Update step display
   const stepEl = document.getElementById(`step-display-${wf.ticket_key}`);
@@ -1795,8 +1810,11 @@ function renderWorkflowCard(w) {
     ? `<div class="workflow-card-terminal-slot">${terminalHtml}</div>`
     : '<div class="workflow-card-terminal-placeholder" aria-hidden="true"></div>';
 
+  const mergedBadgeHtml = (prUrl && w.pr_merged)
+    ? '<span class="workflow-merged-badge"><svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg> Merged</span>'
+    : '';
   const showPrHtml = prUrl
-    ? `<a href="${escapeAttr(prUrl)}" target="_blank" rel="noopener noreferrer" class="workflow-show-pr-btn">Show PR</a>`
+    ? `${mergedBadgeHtml}<a href="${escapeAttr(prUrl)}" target="_blank" rel="noopener noreferrer" class="workflow-show-pr-btn">Show PR</a>`
     : '';
 
   return `

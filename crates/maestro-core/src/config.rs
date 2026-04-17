@@ -492,6 +492,9 @@ pub struct GeneralConfig {
     /// Which ticketing system drives workflow automation. Default `none` (no ticketing integration).
     #[serde(default)]
     pub ticketing_system: TicketingSystem,
+    /// Interval in seconds for polling PR merge status via the GitHub API (`0` disables polling). Default: 60.
+    #[serde(default = "default_pr_merge_poll_interval")]
+    pub pr_merge_poll_interval_secs: u64,
 }
 
 /// How linked Jira issues are included in `{ticket_context}` for agent prompts.
@@ -788,6 +791,9 @@ fn default_port() -> u16 {
 fn default_step_timeout() -> u64 {
     1800
 }
+fn default_pr_merge_poll_interval() -> u64 {
+    60
+}
 
 impl GeneralConfig {
     /// Effective cap on **visible** dashboard workflows for the Jira poller. **`max_active_workflows == 0`** mirrors **`max_concurrent_workflows`**.
@@ -815,6 +821,7 @@ impl Default for GeneralConfig {
             review_workflow_steps_file: String::new(),
             merge_base_workflow_steps_file: String::new(),
             ticketing_system: TicketingSystem::None,
+            pr_merge_poll_interval_secs: default_pr_merge_poll_interval(),
         }
     }
 }

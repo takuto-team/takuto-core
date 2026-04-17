@@ -33,6 +33,8 @@ pub struct PersistedWorkflowRecord {
     pub branch_name: String,
     pub worktree_path: Option<PathBuf>,
     pub pr_url: Option<String>,
+    #[serde(default)]
+    pub pr_merged: bool,
     pub terminal_lines: Vec<PersistedTerminalLine>,
     pub current_step_label: Option<String>,
     /// Dashboard **Start workflow** (manual); poller-started workflows omit this field (deserializes as `false`).

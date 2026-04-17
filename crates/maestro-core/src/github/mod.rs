@@ -1,4 +1,5 @@
 pub mod poller;
+pub mod pr_merge_poller;
 
 /// Parse `owner/repo` from a GitHub URL or bare `owner/repo` string.
 ///
@@ -27,6 +28,26 @@ pub fn parse_github_repo(repo_url: &str) -> Option<String> {
         return Some(url.to_string());
     }
     None
+}
+
+/// Parse a GitHub pull request URL into `(owner/repo, pr_number)`.
+///
+/// Handles: `https://github.com/{owner}/{repo}/pull/{number}` (with optional trailing segments).
+/// Returns `None` for non-matching URLs.
+pub fn parse_pr_url(url: &str) -> Option<(String, u64)> {
+    let url = url.trim().trim_end_matches('/');
+    let rest = url.strip_prefix("https://github.com/")?;
+    // rest = "owner/repo/pull/123" or "owner/repo/pull/123/files"
+    let mut parts = rest.splitn(4, '/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    let pull_segment = parts.next().filter(|&s| s == "pull")?;
+    let _ = pull_segment; // consumed to verify
+    let number_segment = parts.next()?;
+    // number_segment might be "123" or "123/files" — extract leading digits
+    let number_str = number_segment.split('/').next()?;
+    let number: u64 = number_str.parse().ok()?;
+    Some((format!("{owner}/{repo}"), number))
 }
 
 /// A GitHub issue fetched from the GitHub API.
@@ -94,4 +115,75 @@ pub async fn fetch_open_issues(owner_repo: &str) -> crate::error::Result<Vec<Git
         .unwrap_or_default();
 
     Ok(issues)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_pr_url_standard() {
+        assert_eq!(
+            parse_pr_url("https://github.com/owner/repo/pull/123"),
+            Some(("owner/repo".to_string(), 123))
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_trailing_slash() {
+        assert_eq!(
+            parse_pr_url("https://github.com/owner/repo/pull/123/"),
+            Some(("owner/repo".to_string(), 123))
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_with_extra_segments() {
+        assert_eq!(
+            parse_pr_url("https://github.com/owner/repo/pull/123/files"),
+            Some(("owner/repo".to_string(), 123))
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_hyphenated_names() {
+        assert_eq!(
+            parse_pr_url("https://github.com/my-org/my-repo/pull/42"),
+            Some(("my-org/my-repo".to_string(), 42))
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_issue_url_returns_none() {
+        assert_eq!(
+            parse_pr_url("https://github.com/owner/repo/issues/123"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_non_github_returns_none() {
+        assert_eq!(
+            parse_pr_url("https://gitlab.com/owner/repo/merge_requests/1"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_pr_url_empty_returns_none() {
+        assert_eq!(parse_pr_url(""), None);
+    }
+
+    #[test]
+    fn parse_pr_url_bare_owner_repo_returns_none() {
+        assert_eq!(parse_pr_url("owner/repo"), None);
+    }
+
+    #[test]
+    fn parse_pr_url_non_numeric_returns_none() {
+        assert_eq!(
+            parse_pr_url("https://github.com/owner/repo/pull/abc"),
+            None
+        );
+    }
 }

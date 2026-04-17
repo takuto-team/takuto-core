@@ -1326,6 +1326,7 @@ pub async fn run_port_scanner(
                         progress_percent: None,
                         progress_steps_total: None,
                         forwarded_port: Some((port, spare)),
+                        pr_merged: None,
                     });
                 } else {
                     available_spares.push(spare);
@@ -1369,6 +1370,7 @@ pub async fn run_port_scanner(
                     progress_percent: None,
                     progress_steps_total: None,
                     forwarded_port: Some((port, spare)),
+                    pr_merged: None,
                 });
             }
         }
