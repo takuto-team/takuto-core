@@ -270,7 +270,7 @@ fn validate_step_list(steps: &[AgentStepConfig], list_name: &str) -> Result<()> 
             // Agent step: require prompt or skills.
             if step.prompt.trim().is_empty() && step.skills.is_empty() {
                 return Err(MaestroError::Config(format!(
-                    "Step {:?} in [[{list_name}]] must have a non-empty `prompt`, at least one `skill`, or `commands`",
+                    "Step {:?} in [[{list_name}]] must have a non-empty `prompt` and/or at least one `skill`",
                     step.name
                 )));
             }
