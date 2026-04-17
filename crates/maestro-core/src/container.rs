@@ -894,7 +894,10 @@ pub async fn stop_editor(ticket_key: &str) {
 /// Start a web-based terminal (ttyd) inside the running editor container on `port`.
 /// Returns the URL on success. Setup commands (tool installs, etc.) are expected to
 /// have already been run at editor container creation by `run_editor_setup_as_root`.
-pub async fn start_terminal(ticket_key: &str, port: u16) -> std::result::Result<(String, String), String> {
+pub async fn start_terminal(
+    ticket_key: &str,
+    port: u16,
+) -> std::result::Result<(String, String), String> {
     let name = editor_container_name(ticket_key);
 
     // Check the editor container is actually running.
@@ -1032,10 +1035,7 @@ pub fn parse_terminal_auth_from_pgrep(pgrep_output: &str) -> Option<(u16, String
                 .windows(2)
                 .find(|w| w[0] == "-p")
                 .and_then(|w| w[1].parse::<u16>().ok())?;
-            let base = parts
-                .windows(2)
-                .find(|w| w[0] == "-b")
-                .map(|w| w[1])?;
+            let base = parts.windows(2).find(|w| w[0] == "-b").map(|w| w[1])?;
             let token = base.strip_prefix('/')?;
             if token.is_empty() {
                 return None;
@@ -1789,7 +1789,8 @@ mod tests {
 
     #[test]
     fn parse_terminal_auth_from_pgrep_multiple_lines() {
-        let output = "42 ttyd -p 9150 -b /token1 bash -c ls\n99 ttyd -p 9200 -b /token2 bash -c ls\n";
+        let output =
+            "42 ttyd -p 9150 -b /token1 bash -c ls\n99 ttyd -p 9200 -b /token2 bash -c ls\n";
         // Returns the first valid match.
         assert_eq!(
             parse_terminal_auth_from_pgrep(output),
@@ -1801,7 +1802,10 @@ mod tests {
     fn parse_terminal_auth_from_pgrep_strips_leading_slash() {
         let output = "42 ttyd -p 9150 -b /mysecrettoken bash -c ls\n";
         let (_, token) = parse_terminal_auth_from_pgrep(output).unwrap();
-        assert!(!token.starts_with('/'), "Token must not start with /: {token}");
+        assert!(
+            !token.starts_with('/'),
+            "Token must not start with /: {token}"
+        );
         assert_eq!(token, "mysecrettoken");
     }
 

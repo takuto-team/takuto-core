@@ -207,7 +207,9 @@ pub async fn get_workflow(
             .read()
             .await
             .get(&w.ticket_key)
-            .map(|(port, token)| container::build_terminal_url(container::editor_host_port(*port), token)),
+            .map(|(port, token)| {
+                container::build_terminal_url(container::editor_host_port(*port), token)
+            }),
     }))
 }
 
