@@ -1636,11 +1636,7 @@ mod tests {
             token.chars().all(|c| c.is_ascii_hexdigit()),
             "Token must be lowercase hex: {token}"
         );
-        assert_eq!(
-            token,
-            token.to_lowercase(),
-            "Token must be lowercase"
-        );
+        assert_eq!(token, token.to_lowercase(), "Token must be lowercase");
     }
 
     #[test]
