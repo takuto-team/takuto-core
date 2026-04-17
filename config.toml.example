@@ -162,6 +162,14 @@ port = 8080
 # GET /api/config never returns dashboard_password. Use strong unique values in production.
 dashboard_username = ""
 dashboard_password = ""
+# Allowed CORS origins. When empty (default), auto-computed from host and port
+# (e.g. http://localhost:8080 when host is 0.0.0.0).
+# Set explicitly when behind a reverse proxy or TLS terminator:
+#   cors_origins = ["https://maestro.example.com"]
+# Multiple origins are supported (e.g. for dev + production access):
+#   cors_origins = ["http://localhost:8080", "https://maestro.example.com"]
+# Startup-only — not changeable via PUT /api/config. Requires restart.
+cors_origins = []
 
 [agent]
 # AI tool for implement / review / fix steps: "claude" (Claude Code CLI) or "cursor" (Cursor Agent CLI).
