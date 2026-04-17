@@ -473,6 +473,13 @@ pub fn build_editor_url(host_port: u16, connection_token: &str, folder: &str) ->
     format!("http://localhost:{host_port}/?tkn={connection_token}&folder={folder}")
 }
 
+/// Build the terminal URL including the secret base path for authentication.
+/// The token is used as a secret URL path segment — only requests to this path
+/// are served by ttyd, providing access control equivalent to the editor `?tkn=` pattern.
+pub fn build_terminal_url(host_port: u16, token: &str) -> String {
+    format!("http://localhost:{host_port}/{token}/")
+}
+
 /// Parse the `maestro.connection_token` value from a Docker inspect JSON labels string.
 /// Returns `None` if the label is absent, empty, or the JSON is malformed.
 pub fn parse_connection_token_from_labels(json_str: &str) -> Option<String> {
@@ -887,7 +894,10 @@ pub async fn stop_editor(ticket_key: &str) {
 /// Start a web-based terminal (ttyd) inside the running editor container on `port`.
 /// Returns the URL on success. Setup commands (tool installs, etc.) are expected to
 /// have already been run at editor container creation by `run_editor_setup_as_root`.
-pub async fn start_terminal(ticket_key: &str, port: u16) -> std::result::Result<String, String> {
+pub async fn start_terminal(
+    ticket_key: &str,
+    port: u16,
+) -> std::result::Result<(String, String), String> {
     let name = editor_container_name(ticket_key);
 
     // Check the editor container is actually running.
@@ -932,6 +942,8 @@ if ! grep -qE '"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true' "$HOME/.cl
   echo '{"hasCompletedOnboarding":true}' > "$HOME/.claude/.claude.json"
 fi
 exec bash -l"#.to_string();
+    let token = generate_connection_token();
+    let base_path = format!("/{token}");
     let tab_title = format!("titleFixed={ticket_key} — Terminal");
     info!(ticket = %ticket_key, port, "Starting ttyd on port");
     let output = tokio::process::Command::new("docker")
@@ -943,6 +955,8 @@ exec bash -l"#.to_string();
             "-p",
             &port.to_string(),
             "-W",
+            "-b",
+            &base_path,
             "-t",
             "fontSize=14",
             "-t",
@@ -978,9 +992,9 @@ exec bash -l"#.to_string();
             .await;
         if matches!(nc_check, Ok(ref o) if o.status.success()) {
             let host_port = editor_host_port(port);
-            let url = format!("http://localhost:{host_port}");
-            info!(ticket = %ticket_key, container_port = port, host_port, url = %url, "Web terminal verified listening");
-            return Ok(url);
+            let url = build_terminal_url(host_port, &token);
+            info!(ticket = %ticket_key, container_port = port, host_port, "Web terminal verified listening (token redacted)");
+            return Ok((url, token));
         }
         if attempt < 4 {
             debug!(ticket = %ticket_key, port, attempt = attempt + 1, "ttyd not yet listening, retrying");
@@ -995,7 +1009,7 @@ exec bash -l"#.to_string();
 /// Return the container port that ttyd is currently listening on inside the editor container,
 /// or `None` if ttyd is not running.  Uses `pgrep -a ttyd` to read the actual `-p PORT` argument
 /// so the result is always correct regardless of what was recorded in memory.
-pub async fn find_running_terminal(ticket_key: &str) -> Option<u16> {
+pub async fn find_running_terminal(ticket_key: &str) -> Option<(u16, String)> {
     let name = editor_container_name(ticket_key);
     let out = tokio::process::Command::new("docker")
         .args(["exec", &name, "pgrep", "-a", "ttyd"])
@@ -1005,16 +1019,28 @@ pub async fn find_running_terminal(ticket_key: &str) -> Option<u16> {
     if !out.status.success() {
         return None;
     }
-    // Output: "PID ttyd -p PORT -W -t ..."
-    // Find the argument following "-p".
-    String::from_utf8_lossy(&out.stdout)
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    parse_terminal_auth_from_pgrep(&stdout)
+}
+
+/// Parse both the `-p PORT` and `-b /TOKEN` values from `pgrep -a ttyd` output.
+/// Returns `None` if either value is missing or the port is invalid.
+/// The leading `/` is stripped from the base-path value.
+pub fn parse_terminal_auth_from_pgrep(pgrep_output: &str) -> Option<(u16, String)> {
+    pgrep_output
         .lines()
         .filter_map(|line| {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            parts
+            let port = parts
                 .windows(2)
                 .find(|w| w[0] == "-p")
-                .and_then(|w| w[1].parse::<u16>().ok())
+                .and_then(|w| w[1].parse::<u16>().ok())?;
+            let base = parts.windows(2).find(|w| w[0] == "-b").map(|w| w[1])?;
+            let token = base.strip_prefix('/')?;
+            if token.is_empty() {
+                return None;
+            }
+            Some((port, token.to_string()))
         })
         .next()
 }
@@ -1694,5 +1720,106 @@ mod tests {
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["connection_token"], "abc");
         assert_eq!(json["url"], "http://localhost:9100/?tkn=abc&folder=/w");
+    }
+
+    // ── Terminal authentication tests ──────────────────────────────────
+
+    #[test]
+    fn build_terminal_url_includes_token_in_path() {
+        let url = build_terminal_url(9150, "abcdef0123456789abcdef0123456789");
+        assert_eq!(
+            url,
+            "http://localhost:9150/abcdef0123456789abcdef0123456789/"
+        );
+    }
+
+    #[test]
+    fn build_terminal_url_trailing_slash() {
+        let url = build_terminal_url(9100, "aabb");
+        assert!(url.ends_with('/'), "Terminal URL must end with /: {url}");
+        // The token is immediately before the trailing slash.
+        assert!(
+            url.ends_with("aabb/"),
+            "Token must be immediately before trailing slash: {url}"
+        );
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_normal() {
+        let output =
+            "42 ttyd -p 9150 -W -b /abcdef0123456789abcdef0123456789 -t fontSize=14 bash -c ls\n";
+        assert_eq!(
+            parse_terminal_auth_from_pgrep(output),
+            Some((9150, "abcdef0123456789abcdef0123456789".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_reversed_flag_order() {
+        let output = "42 ttyd -b /aabb1122 -p 9200 -W bash -c ls\n";
+        assert_eq!(
+            parse_terminal_auth_from_pgrep(output),
+            Some((9200, "aabb1122".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_missing_base_path() {
+        // ttyd running without -b flag → None (treated as unauthenticated / absent)
+        let output = "42 ttyd -p 9150 -W -t fontSize=14 bash -c ls\n";
+        assert_eq!(parse_terminal_auth_from_pgrep(output), None);
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_missing_port() {
+        let output = "42 ttyd -b /abcdef0123456789abcdef0123456789 -W bash -c ls\n";
+        assert_eq!(parse_terminal_auth_from_pgrep(output), None);
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_empty_output() {
+        assert_eq!(parse_terminal_auth_from_pgrep(""), None);
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_invalid_port() {
+        let output = "42 ttyd -p 99999 -b /aabb1122 bash -c ls\n";
+        assert_eq!(parse_terminal_auth_from_pgrep(output), None);
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_multiple_lines() {
+        let output =
+            "42 ttyd -p 9150 -b /token1 bash -c ls\n99 ttyd -p 9200 -b /token2 bash -c ls\n";
+        // Returns the first valid match.
+        assert_eq!(
+            parse_terminal_auth_from_pgrep(output),
+            Some((9150, "token1".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_strips_leading_slash() {
+        let output = "42 ttyd -p 9150 -b /mysecrettoken bash -c ls\n";
+        let (_, token) = parse_terminal_auth_from_pgrep(output).unwrap();
+        assert!(
+            !token.starts_with('/'),
+            "Token must not start with /: {token}"
+        );
+        assert_eq!(token, "mysecrettoken");
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_base_path_no_value() {
+        // -b is the last argument (no value follows)
+        let output = "42 ttyd -p 9150 -b\n";
+        assert_eq!(parse_terminal_auth_from_pgrep(output), None);
+    }
+
+    #[test]
+    fn parse_terminal_auth_from_pgrep_empty_base_path() {
+        // -b with just / (empty token after stripping the slash)
+        let output = "42 ttyd -p 9150 -b / bash -c ls\n";
+        assert_eq!(parse_terminal_auth_from_pgrep(output), None);
     }
 }

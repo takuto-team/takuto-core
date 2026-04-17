@@ -69,20 +69,20 @@ pub struct PersistedTerminalLine {
 /// 3. `$HOME/.maestro` — local dev fallback
 /// 4. `repo_path/.maestro` — legacy fallback
 pub fn resolve_snapshot_dir(repo_path: &Path) -> PathBuf {
-    if let Ok(dir) = std::env::var("MAESTRO_DATA_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
+    if let Ok(dir) = std::env::var("MAESTRO_DATA_DIR")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir);
     }
-    if let Ok(home) = std::env::var("MAESTRO_HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home).join(".maestro");
-        }
+    if let Ok(home) = std::env::var("MAESTRO_HOME")
+        && !home.is_empty()
+    {
+        return PathBuf::from(home).join(".maestro");
     }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home).join(".maestro");
-        }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        return PathBuf::from(home).join(".maestro");
     }
     // Legacy fallback — inside the repo
     repo_path.join(".maestro")
