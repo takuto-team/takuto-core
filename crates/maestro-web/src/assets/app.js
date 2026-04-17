@@ -716,7 +716,7 @@ function resetImproveState() {
   const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
   const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
   const startBtn = document.getElementById('manualTicketDetailStartBtn');
-  if (overlay) overlay.classList.add('hidden');
+  if (overlay) { overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   if (improveBtn) improveBtn.disabled = false;
   if (editBtn) { editBtn.textContent = 'Edit'; editBtn.disabled = false; }
   if (editCancelBtn) editCancelBtn.classList.add('hidden');
@@ -882,7 +882,7 @@ async function improveTicketWithAI() {
   const editBtn = document.getElementById('manualTicketDetailEditBtn');
   if (improveBtn) improveBtn.disabled = true;
   if (editBtn) editBtn.disabled = true;
-  if (overlay) overlay.classList.remove('hidden');
+  if (overlay) { overlay.classList.remove('hidden'); overlay.classList.add('flex'); }
 
   const IMPROVE_TIMEOUT_SECS = 300;
   const countdownEl = document.getElementById('manualTicketDetailImproveCountdown');
