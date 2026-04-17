@@ -691,8 +691,7 @@ impl WebConfig {
         // Include all common variants so the CORS check passes regardless of which
         // hostname the operator typed in the browser address bar.
         let host = self.host.trim();
-        let is_wildcard =
-            host == "0.0.0.0" || host == "[::]";
+        let is_wildcard = host == "0.0.0.0" || host == "[::]";
         let is_loopback = host == "127.0.0.1" || host == "::1";
         if is_wildcard {
             vec![
