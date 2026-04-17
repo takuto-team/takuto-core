@@ -136,6 +136,7 @@ body { font-family: 'Inter', sans-serif; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.25rem;
   text-align: center;
   font-size: 0.75rem;
   font-weight: 500;
@@ -144,6 +145,54 @@ body { font-family: 'Inter', sans-serif; }
   border-width: 1px;
   border-style: solid;
   transition: background-color 0.15s, border-color 0.15s;
+}
+/* Primary actions: Resume, Pause, Retry, Address PR, Merge Base */
+.workflow-action-btn.wf-btn-primary {
+  background: rgba(59, 130, 246, 0.1);
+  color: rgb(147, 197, 253);
+  border-color: rgba(59, 130, 246, 0.25);
+}
+.workflow-action-btn.wf-btn-primary:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+/* Secondary actions: Go to ticket, Show description, Report, Editor, Terminal */
+.workflow-action-btn.wf-btn-secondary {
+  background: rgba(75, 85, 99, 0.3);
+  color: rgb(209, 213, 219);
+  border-color: rgba(75, 85, 99, 0.5);
+}
+.workflow-action-btn.wf-btn-secondary:hover {
+  background: rgba(75, 85, 99, 0.45);
+}
+/* Success: Mark as Done */
+.workflow-action-btn.wf-btn-success {
+  background: rgba(16, 185, 129, 0.1);
+  color: rgb(110, 231, 183);
+  border-color: rgba(16, 185, 129, 0.25);
+}
+.workflow-action-btn.wf-btn-success:hover {
+  background: rgba(16, 185, 129, 0.2);
+}
+/* Destructive actions: Delete, Stop, Close editor */
+.workflow-action-btn.wf-btn-danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: rgb(252, 165, 165);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+.workflow-action-btn.wf-btn-danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+}
+/* Screen reader only (for icon-only buttons) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
 }
 
 /* Segmented dashboard progress (one segment per estimated step). */
@@ -274,6 +323,54 @@ body { font-family: 'Inter', sans-serif; }
 }
 .terminal-line-warn {
   color: #d29922;
+}
+/* Step separator between different steps in the terminal output */
+.terminal-step-separator {
+  color: #484f58;
+  text-align: center;
+  font-size: 11px;
+  padding: 4px 0;
+  letter-spacing: 0.05em;
+  user-select: none;
+}
+
+/* Collapsible terminal for completed workflows */
+.terminal-panel.collapsed .terminal-body {
+  display: none;
+}
+.terminal-panel.collapsed {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+.terminal-toggle-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: #8b949e;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.15s, color 0.15s, transform 0.2s;
+}
+.terminal-toggle-btn:hover {
+  background: rgba(139, 148, 158, 0.15);
+  color: #c9d1d9;
+}
+.terminal-panel.collapsed .terminal-toggle-btn {
+  transform: rotate(-90deg);
+}
+
+/* Report modal: collapsible output lines */
+.report-output-collapsed {
+  display: none;
+}
+.report-output-expanded {
+  display: block;
 }
 
 /* Manual workflow: full-width grid cell, short row (cards remain 600px tall). */

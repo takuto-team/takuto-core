@@ -178,19 +178,31 @@ function ensureTerminalState(ticketKey) {
 
 function handleStepStarted(evt) {
   const ts = ensureTerminalState(evt.ticket_key);
+  // Insert a visual separator between steps (do NOT clear previous output).
+  if (ts.lines.length > 0) {
+    ts.lines.push({ text: `\u2500\u2500\u2500 ${evt.step_name} \u2500\u2500\u2500`, stream: 'separator' });
+    // Respect the line cap after pushing the separator
+    if (ts.lines.length > TERMINAL_MAX_LINES) {
+      ts.lines.shift();
+      const bodyEl = document.getElementById(`terminal-body-${evt.ticket_key}`);
+      if (bodyEl && bodyEl.firstChild) bodyEl.removeChild(bodyEl.firstChild);
+    }
+    const bodyEl = document.getElementById(`terminal-body-${evt.ticket_key}`);
+    if (bodyEl) {
+      const sep = document.createElement('div');
+      sep.className = 'terminal-step-separator';
+      sep.textContent = `\u2500\u2500\u2500 ${evt.step_name} \u2500\u2500\u2500`;
+      bodyEl.appendChild(sep);
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+    }
+  }
   ts.stepName = evt.step_name;
-  ts.lines = [];
   ts.completed = false;
 
   const headerEl = document.getElementById(`terminal-step-${evt.ticket_key}`);
   if (headerEl) {
     headerEl.textContent = `$ ${evt.step_name}`;
     headerEl.closest('.terminal-header').classList.remove('completed');
-  }
-
-  const bodyEl = document.getElementById(`terminal-body-${evt.ticket_key}`);
-  if (bodyEl) {
-    bodyEl.innerHTML = '';
   }
 
   // Update local workflow state so subsequent updateCardState calls don't overwrite with a stale label.
@@ -257,6 +269,18 @@ function handleStepCompleted(evt) {
       wf.progress_steps_total = Math.max(0, Math.floor(evt.progress_steps_total));
     }
     updateCardState(wf);
+  }
+}
+
+/** Toggle collapsed/expanded state of a terminal panel (used for completed workflows). */
+function toggleTerminalPanel(btn) {
+  const panel = btn.closest('.terminal-panel');
+  if (!panel) return;
+  panel.classList.toggle('collapsed');
+  // After expanding, scroll terminal body to bottom
+  if (!panel.classList.contains('collapsed')) {
+    const body = panel.querySelector('.terminal-body');
+    if (body) body.scrollTop = body.scrollHeight;
   }
 }
 
@@ -692,7 +716,7 @@ function resetImproveState() {
   const editCancelBtn = document.getElementById('manualTicketDetailEditCancelBtn');
   const closeBtn = document.getElementById('manualTicketDetailCloseBtn');
   const startBtn = document.getElementById('manualTicketDetailStartBtn');
-  if (overlay) overlay.classList.add('hidden');
+  if (overlay) { overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   if (improveBtn) improveBtn.disabled = false;
   if (editBtn) { editBtn.textContent = 'Edit'; editBtn.disabled = false; }
   if (editCancelBtn) editCancelBtn.classList.add('hidden');
@@ -858,7 +882,7 @@ async function improveTicketWithAI() {
   const editBtn = document.getElementById('manualTicketDetailEditBtn');
   if (improveBtn) improveBtn.disabled = true;
   if (editBtn) editBtn.disabled = true;
-  if (overlay) overlay.classList.remove('hidden');
+  if (overlay) { overlay.classList.remove('hidden'); overlay.classList.add('flex'); }
 
   const IMPROVE_TIMEOUT_SECS = 300;
   const countdownEl = document.getElementById('manualTicketDetailImproveCountdown');
@@ -1271,22 +1295,6 @@ async function resumeFromError(id) {
   }
 }
 
-async function stopWorkflow(id) {
-  const ok = await showDashboardConfirm({
-    title: 'Stop workflow',
-    message:
-      'Are you sure you want to stop this workflow? The ticket will be unassigned and moved back to To Do.',
-    confirmLabel: 'Stop',
-    danger: true,
-  });
-  if (!ok) return;
-  try {
-    await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/stop`, { method: 'POST' });
-  } catch (e) {
-    console.error('Failed to stop workflow:', e);
-  }
-}
-
 async function addressPrComments(id) {
   try {
     const res = await dashboardFetch(`/api/workflows/${encodeURIComponent(id)}/address-pr-comments`, { method: 'POST' });
@@ -1689,66 +1697,78 @@ function renderWorkflowCard(w) {
   if (status.label === 'Error' && w.state.startsWith('Error:')) stateDisplay = w.state.replace('Error: ', '');
   const stateDisplayWithProgress = formatStepLineWithProgress(w, stateDisplay);
 
+  // Compute total workflow duration for terminal states
+  const cardIsTerminal = ['Completed', 'Error', 'Stopped'].includes(status.label);
+  const cardTotalDuration = cardIsTerminal && w.started_at && w.updated_at
+    ? formatDuration(new Date(w.started_at), new Date(w.updated_at))
+    : null;
+
   const jiraBrowse = workflowJiraBrowseUrl(w);
   const isNoJiraWorkflow = w.jira_available === false;
   const goToTicketBtn = isNoJiraWorkflow ? '' : `
-      <button type="button" onclick="window.open('${escapeAttr(jiraBrowse)}', '_blank', 'noopener,noreferrer')" class="workflow-action-btn bg-sky-500/10 text-sky-300 border-sky-500/25 hover:bg-sky-500/20">Go to ticket</button>`;
+      <button type="button" onclick="window.open('${escapeAttr(jiraBrowse)}', '_blank', 'noopener,noreferrer')" class="workflow-action-btn wf-btn-secondary">Go to ticket</button>`;
   const jiraLinkActions = `${goToTicketBtn}
-      <button type="button" onclick="void openWorkflowTicketDescriptionModal(${escapeAttr(JSON.stringify(w.ticket_key))}, ${escapeAttr(JSON.stringify(w.ticket_summary))})" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Show description</button>`;
+      <button type="button" onclick="void openWorkflowTicketDescriptionModal(${escapeAttr(JSON.stringify(w.ticket_key))}, ${escapeAttr(JSON.stringify(w.ticket_summary))})" class="workflow-action-btn wf-btn-secondary">Show description</button>`;
   let actions = jiraLinkActions;
   if (status.label === 'Running') {
     actions += `
-      <button onclick="pauseWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-yellow-500/10 text-yellow-400 border-yellow-500/20 hover:bg-yellow-500/20">Pause</button>`;
+      <button onclick="pauseWorkflow('${w.ticket_key}')" class="workflow-action-btn wf-btn-primary" title="Pause">
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6" /></svg>
+        <span class="sr-only">Pause</span>
+      </button>`;
   } else if (status.label === 'Paused') {
     actions += `
-      <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20">Resume</button>`;
+      <button onclick="resumeWorkflow('${w.ticket_key}')" class="workflow-action-btn wf-btn-primary" title="Resume">
+        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        <span class="sr-only">Resume</span>
+      </button>`;
   }
   if (w.can_resume_from_error) {
     actions += `
-      <button onclick="resumeFromError('${w.ticket_key}')" class="workflow-action-btn bg-teal-500/10 text-teal-400 border-teal-500/20 hover:bg-teal-500/20">Retry from last failure</button>`;
+      <button onclick="resumeFromError('${w.ticket_key}')" class="workflow-action-btn wf-btn-primary">Retry from last failure</button>`;
   }
   if (['Error', 'Stopped', 'Completed'].includes(status.label)) {
     actions += `
-      <button onclick="retryWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-blue-500/10 text-blue-400 border-blue-500/20 hover:bg-blue-500/20">Retry from 0</button>`;
+      <button onclick="retryWorkflow('${w.ticket_key}')" class="workflow-action-btn wf-btn-primary">Retry from 0</button>`;
   }
   if (w.can_address_pr_comments) {
     actions += `
-      <button onclick="addressPrComments('${w.ticket_key}')" class="workflow-action-btn bg-indigo-500/10 text-indigo-300 border-indigo-500/25 hover:bg-indigo-500/20">Address PR Comments</button>`;
+      <button onclick="addressPrComments('${w.ticket_key}')" class="workflow-action-btn wf-btn-primary">Address PR Comments</button>`;
   }
   if (w.can_merge_base) {
     actions += `
-      <button onclick="mergeBaseBranch('${w.ticket_key}')" class="workflow-action-btn bg-amber-500/10 text-amber-400 border-amber-500/25 hover:bg-amber-500/20">Merge Base Branch</button>`;
+      <button onclick="mergeBaseBranch('${w.ticket_key}')" class="workflow-action-btn wf-btn-primary">Merge Base Branch</button>`;
   }
   if (w.can_mark_done) {
     actions += `
-      <button onclick="markWorkflowDone('${w.ticket_key}')" class="workflow-action-btn bg-emerald-500/10 text-emerald-400 border-emerald-500/25 hover:bg-emerald-500/20">Mark as Done</button>`;
+      <button onclick="markWorkflowDone('${w.ticket_key}')" class="workflow-action-btn wf-btn-success">Mark as Done</button>`;
   }
   if (w.can_delete) {
     actions += `
-      <button onclick="deleteWorkflow('${w.ticket_key}')" class="workflow-action-btn bg-gray-600/30 text-gray-300 border-gray-600/50 hover:bg-gray-600/45">Delete</button>`;
+      <button onclick="deleteWorkflow('${w.ticket_key}')" class="workflow-action-btn wf-btn-danger">Delete</button>`;
   }
   if (w.can_open_editor) {
     if (w.editor_url) {
       actions += `
-        <a href="${escapeHtml(w.editor_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20 inline-flex items-center gap-1">Editor &#x2197;</a>`;
+        <a href="${escapeHtml(w.editor_url)}" target="_blank" rel="noopener" class="workflow-action-btn wf-btn-secondary inline-flex items-center gap-1">Editor &#x2197;</a>`;
     } else {
       actions += `
-        <button onclick="openEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Open editor</button>`;
+        <button onclick="openEditor('${w.ticket_key}')" class="workflow-action-btn wf-btn-secondary">Open editor</button>`;
     }
     if (w.terminal_url) {
       actions += `
-        <a href="${escapeHtml(w.terminal_url)}" target="_blank" rel="noopener" class="workflow-action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20 inline-flex items-center gap-1">Terminal &#x2197;</a>`;
+        <a href="${escapeHtml(w.terminal_url)}" target="_blank" rel="noopener" class="workflow-action-btn wf-btn-secondary inline-flex items-center gap-1">Terminal &#x2197;</a>`;
     } else {
       actions += `
-        <button onclick="openTerminal('${w.ticket_key}')" class="workflow-action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20">Open terminal</button>`;
+        <button onclick="openTerminal('${w.ticket_key}')" class="workflow-action-btn wf-btn-secondary">Open terminal</button>`;
     }
     if (w.editor_url) {
       actions += `
-        <button onclick="closeEditor('${w.ticket_key}')" class="workflow-action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20">Close editor</button>`;
+        <button onclick="closeEditor('${w.ticket_key}')" class="workflow-action-btn wf-btn-danger">Close editor</button>`;
     }
   }
   actions += `
-    <button onclick="openReportModal('${w.ticket_key}')" class="workflow-action-btn bg-gray-700/50 text-gray-300 border-gray-700 hover:bg-gray-700">Report</button>`;
+    <button onclick="openReportModal('${w.ticket_key}')" class="workflow-action-btn wf-btn-secondary">Report</button>`;
 
   // Port mappings (configured + dynamic) — rendered below the action buttons.
   // A port in dynamicForwards (from live WS events) supersedes the same port in
@@ -1768,27 +1788,49 @@ function renderWorkflowCard(w) {
   ).join(' ');
   portMappingsHtml += dynHtml;
 
-  // Terminal panel for active workflows
+  // Terminal panel — always shown (live for Running/Paused; read-only for terminal states)
   let terminalHtml = '';
-  if (status.label === 'Running' || status.label === 'Paused') {
-    const ts = terminalState[w.ticket_key];
-    const stepDisplay = ts ? (ts.completed ? `${ts.stepName} -- completed` : `$ ${ts.stepName}`) : '$ Waiting...';
-    const headerCompletedClass = ts && ts.completed ? ' completed' : '';
-    let linesHtml = '';
-    if (ts && ts.lines.length > 0) {
-      linesHtml = ts.lines.map(l => {
-        const isWarn = /\bwarn(ing)?\b/i.test(l.text) || /\bWARN\b/.test(l.text);
-        const cls = isWarn ? ' class="terminal-line-warn"' : (l.stream === 'stderr' ? ' class="terminal-line-stderr"' : '');
-        return `<div${cls}>${escapeHtml(l.text)}</div>`;
-      }).join('');
+  const isTerminalState = ['Completed', 'Error', 'Stopped'].includes(status.label);
+  {
+    let ts = terminalState[w.ticket_key];
+    // For completed workflows without live terminal state, populate from API terminal_lines
+    if (!ts && w.terminal_lines && w.terminal_lines.length > 0) {
+      ts = {
+        stepName: w.state,
+        lines: w.terminal_lines.map(l => ({ text: l.text, stream: l.stream })),
+        completed: true,
+      };
+      terminalState[w.ticket_key] = ts;
     }
-    terminalHtml = `
-      <div class="terminal-panel workflow-card-terminal">
-        <div class="terminal-header${headerCompletedClass}">
-          <span id="terminal-step-${w.ticket_key}">${escapeHtml(stepDisplay)}</span>
-        </div>
-        <div class="terminal-body workflow-card-terminal-body" id="terminal-body-${w.ticket_key}">${linesHtml}</div>
-      </div>`;
+    const hasLines = ts && ts.lines.length > 0;
+    if (hasLines || !isTerminalState) {
+      const stepDisplay = ts ? (ts.completed ? `${ts.stepName} -- completed` : `$ ${ts.stepName}`) : '$ Waiting...';
+      const headerCompletedClass = (ts && ts.completed) || isTerminalState ? ' completed' : '';
+      let linesHtml = '';
+      if (ts && ts.lines.length > 0) {
+        linesHtml = ts.lines.map(l => {
+          if (l.stream === 'separator') return `<div class="terminal-step-separator">${escapeHtml(l.text)}</div>`;
+          const isWarn = /\bwarn(ing)?\b/i.test(l.text) || /\bWARN\b/.test(l.text);
+          const cls = isWarn ? ' class="terminal-line-warn"' : (l.stream === 'stderr' ? ' class="terminal-line-stderr"' : '');
+          return `<div${cls}>${escapeHtml(l.text)}</div>`;
+        }).join('');
+      }
+      // Terminal states get a collapsible terminal (collapsed by default)
+      const collapsedClass = isTerminalState ? ' collapsed' : '';
+      const toggleBtn = isTerminalState
+        ? `<button type="button" class="terminal-toggle-btn" onclick="toggleTerminalPanel(this)" title="Toggle logs">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
+          </button>`
+        : '';
+      terminalHtml = `
+        <div class="terminal-panel workflow-card-terminal${collapsedClass}">
+          <div class="terminal-header${headerCompletedClass}">
+            <span id="terminal-step-${w.ticket_key}">${escapeHtml(stepDisplay)}</span>
+            ${toggleBtn}
+          </div>
+          <div class="terminal-body workflow-card-terminal-body" id="terminal-body-${w.ticket_key}">${linesHtml}</div>
+        </div>`;
+    }
   }
 
   const terminalSlot = terminalHtml
@@ -1817,7 +1859,10 @@ function renderWorkflowCard(w) {
           <h3 class="text-sm font-medium text-gray-200 truncate leading-snug">${escapeHtml(w.ticket_summary)}</h3>
         </div>
         <div class="flex-shrink-0 bg-gray-800/50 rounded-lg px-3 py-2.5">
-          <div class="text-xs text-gray-500 mb-1">${stepLabel}</div>
+          <div class="flex items-center justify-between">
+            <div class="text-xs text-gray-500 mb-1">${stepLabel}</div>
+            ${cardTotalDuration ? `<div class="flex items-center gap-1.5 text-xs text-gray-400 mb-1"><svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg><span class="font-mono">${cardTotalDuration}</span></div>` : ''}
+          </div>
           <div id="step-display-${w.ticket_key}" class="text-sm font-mono text-gray-300">${escapeHtml(stateDisplayWithProgress)}</div>
           <div class="workflow-progress-slot mt-2 w-full">${progressBarInnerHtml(w, status)}</div>
         </div>
@@ -1882,10 +1927,15 @@ function renderReport(w) {
   document.getElementById('reportTitle').textContent = w.ticket_summary;
 
   const body = document.getElementById('reportBody');
+  // Compute total workflow duration for terminal states
+  const isTerminal = ['Completed', 'Error', 'Stopped'].includes(status.label);
+  const totalDuration = isTerminal && w.started_at && w.updated_at
+    ? formatDuration(new Date(w.started_at), new Date(w.updated_at))
+    : null;
   let html = `
     <div>
       <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Ticket Info</h3>
-      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+      <div class="grid grid-cols-2 sm:grid-cols-${totalDuration ? '4' : '3'} gap-3 text-sm">
         <div class="bg-gray-800/50 rounded-lg px-3 py-2.5">
           <div class="text-xs text-gray-500 mb-0.5">Ticket</div>
           <div class="text-gray-300 font-mono">${escapeHtml(w.ticket_key)}</div>
@@ -1898,6 +1948,10 @@ function renderReport(w) {
           <div class="text-xs text-gray-500 mb-0.5">Started</div>
           <div class="font-mono text-gray-300">${new Date(w.started_at).toLocaleString()}</div>
         </div>
+        ${totalDuration ? `<div class="bg-gray-800/50 rounded-lg px-3 py-2.5">
+          <div class="text-xs text-gray-500 mb-0.5">Total Duration</div>
+          <div class="font-mono text-gray-300 font-medium">${totalDuration}</div>
+        </div>` : ''}
       </div>
     </div>`;
 
@@ -1931,12 +1985,46 @@ function renderReport(w) {
       const rowBg = isFailed ? 'bg-red-950/30 border border-red-900/30' : 'bg-gray-800/50';
       const opacity = isSkipped ? 'opacity-40' : '';
 
+      // Build output section: show last 3 lines by default, expand toggle for more
+      let outputHtml = '';
+      if (step.output && step.output.length > 0) {
+        const MAX_VISIBLE = 3;
+        const lines = step.output;
+        const visibleLines = lines.slice(-MAX_VISIBLE);
+        const hiddenLines = lines.length > MAX_VISIBLE ? lines.slice(0, lines.length - MAX_VISIBLE) : [];
+        if (hiddenLines.length > 0) {
+          const hiddenId = `report-output-hidden-${w.ticket_key}-${step.step_name.replace(/\W+/g, '_')}`;
+          outputHtml = `<div class="mt-1">
+            <div id="${hiddenId}" class="report-output-collapsed">
+              ${hiddenLines.map(l => `<div class="text-xs text-gray-500 font-mono">${escapeHtml(l)}</div>`).join('')}
+            </div>
+            ${visibleLines.map(l => `<div class="text-xs text-gray-500 font-mono">${escapeHtml(l)}</div>`).join('')}
+            <button type="button" onclick="toggleReportOutput('${hiddenId}', this)" class="text-xs text-blue-400 hover:text-blue-300 mt-0.5 cursor-pointer">Show ${hiddenLines.length} more line${hiddenLines.length > 1 ? 's' : ''}</button>
+          </div>`;
+        } else {
+          outputHtml = `<div class="mt-1">
+            ${visibleLines.map(l => `<div class="text-xs text-gray-500 font-mono">${escapeHtml(l)}</div>`).join('')}
+          </div>`;
+        }
+      }
+
+      // Status label text
+      const statusLabel = isSuccess ? 'Success' : isFailed ? 'Failed' : isSkipped ? 'Skipped' : 'Running';
+
       html += `
         <div class="flex items-start gap-3 ${rowBg} rounded-lg px-4 py-3 ${opacity}">
           <div class="flex-shrink-0 w-6 h-6 rounded-full ${bgClass} flex items-center justify-center mt-0.5">${iconHtml}</div>
           <div class="flex-1 min-w-0">
-            <div class="text-sm ${isFailed ? 'text-red-300 font-medium' : isSkipped ? 'text-gray-500' : 'text-gray-200'}">${escapeHtml(step.step_name)}</div>
-            ${step.output && step.output.length > 0 ? `<div class="text-xs text-gray-500 font-mono mt-0.5">${escapeHtml(step.output[step.output.length - 1])}</div>` : ''}
+            <div class="flex items-center gap-2">
+              <span class="text-sm ${isFailed ? 'text-red-300 font-medium' : isSkipped ? 'text-gray-500' : 'text-gray-200'}">${escapeHtml(step.step_name)}</span>
+              <span class="text-xs px-1.5 py-0.5 rounded ${
+                isSuccess ? 'bg-green-500/15 text-green-400' :
+                isFailed ? 'bg-red-500/15 text-red-400' :
+                isSkipped ? 'bg-gray-700/50 text-gray-500' :
+                'bg-blue-500/15 text-blue-400'
+              }">${statusLabel}</span>
+            </div>
+            ${outputHtml}
             ${step.error ? `<pre class="mt-2 text-xs font-mono text-red-300/70 bg-red-950/40 rounded-md p-2.5 overflow-x-auto whitespace-pre-wrap">${escapeHtml(step.error)}</pre>` : ''}
           </div>
           <div class="text-xs text-gray-500 font-mono whitespace-nowrap">${duration}</div>
@@ -1948,11 +2036,31 @@ function renderReport(w) {
   body.innerHTML = html;
 }
 
+/** Toggle hidden output lines in the report modal. */
+function toggleReportOutput(hiddenId, btn) {
+  const el = document.getElementById(hiddenId);
+  if (!el) return;
+  const isHidden = el.classList.contains('report-output-collapsed');
+  if (isHidden) {
+    el.classList.remove('report-output-collapsed');
+    el.classList.add('report-output-expanded');
+    btn.textContent = 'Show less';
+  } else {
+    el.classList.add('report-output-collapsed');
+    el.classList.remove('report-output-expanded');
+    // Restore original button text
+    const count = el.children.length;
+    btn.textContent = `Show ${count} more line${count > 1 ? 's' : ''}`;
+  }
+}
+
 function formatDuration(start, end) {
-  const secs = Math.floor((end - start) / 1000);
-  const mins = Math.floor(secs / 60);
-  const rem = secs % 60;
-  return `${mins}m ${String(rem).padStart(2, '0')}s`;
+  const totalSecs = Math.max(0, Math.floor((end - start) / 1000));
+  const hours = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+  if (hours > 0) return `${hours}h ${String(mins).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`;
+  return `${mins}m ${String(secs).padStart(2, '0')}s`;
 }
 
 function escapeHtml(str) {
@@ -2017,7 +2125,8 @@ async function improvePasteDescription() {
   if (startBtn) startBtn.disabled = true;
 
   try {
-    const res = await dashboardFetch('/api/tickets/manual/improve', {
+    const ticketKey = summary ? slugifyWorkflowName(summary) : 'manual';
+    const res = await dashboardFetch(`/api/tickets/${encodeURIComponent(ticketKey)}/improve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ description, summary }),
