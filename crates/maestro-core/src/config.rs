@@ -29,6 +29,16 @@ pub enum TicketingSystem {
     GitHub,
 }
 
+impl fmt::Display for TicketingSystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Jira => f.write_str("jira"),
+            Self::GitHub => f.write_str("github"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     #[serde(default)]
