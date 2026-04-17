@@ -110,8 +110,15 @@ pub fn build_router(state: AppState) -> Router {
 
     let api = Router::new().merge(api_public).merge(api_protected);
 
+    // Read the config outside of an async context to avoid panicking on
+    // tokio::sync::RwLock::blocking_read() inside the runtime.
+    // Safety: build_router is called once at startup; the try_read() will
+    // succeed because no writer is active during router construction.
     let cors_layer = {
-        let config = state.config.blocking_read();
+        let config = state
+            .config
+            .try_read()
+            .expect("config lock should be available during router construction");
         build_cors_layer(&config.web)
     };
 
@@ -348,26 +355,34 @@ mod tests {
 
     #[tokio::test]
     async fn cors_auto_computed_origin_when_empty() {
-        // Default: host="0.0.0.0", port=8080, cors_origins=[] → http://localhost:8080
+        // Default: host="0.0.0.0", port=8080, cors_origins=[] →
+        // http://localhost:8080, http://127.0.0.1:8080, http://0.0.0.0:8080
         let web = WebConfig::default();
-        let app = test_router(&web);
 
-        let resp = app
-            .oneshot(
-                Request::get("/api/health")
-                    .header("Origin", "http://localhost:8080")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        // All three auto-computed variants should be allowed
+        for origin in &[
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://0.0.0.0:8080",
+        ] {
+            let app = test_router(&web);
+            let resp = app
+                .oneshot(
+                    Request::get("/api/health")
+                        .header("Origin", *origin)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::OK);
-        let acao = resp
-            .headers()
-            .get("access-control-allow-origin")
-            .expect("missing ACAO header for auto-computed origin");
-        assert_eq!(acao, "http://localhost:8080");
+            assert_eq!(resp.status(), StatusCode::OK);
+            let acao = resp
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap_or_else(|| panic!("missing ACAO header for auto-computed origin {origin}"));
+            assert_eq!(acao, *origin);
+        }
     }
 
     #[tokio::test]

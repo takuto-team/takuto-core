@@ -676,16 +676,28 @@ impl WebConfig {
         if !self.cors_origins.is_empty() {
             return self.cors_origins.clone();
         }
-        // Auto-compute: wildcard/loopback bind addresses → http://localhost:{port}
+        // Auto-compute: when binding to a wildcard or loopback address, the dashboard
+        // is reachable via multiple hostnames (localhost, 127.0.0.1, 0.0.0.0, etc.).
+        // Include all common variants so the CORS check passes regardless of which
+        // hostname the operator typed in the browser address bar.
         let host = self.host.trim();
-        let is_wildcard_or_loopback =
-            host == "0.0.0.0" || host == "[::]" || host == "127.0.0.1" || host == "::1";
-        let effective_host = if is_wildcard_or_loopback {
-            "localhost"
+        let is_wildcard =
+            host == "0.0.0.0" || host == "[::]";
+        let is_loopback = host == "127.0.0.1" || host == "::1";
+        if is_wildcard {
+            vec![
+                format!("http://localhost:{}", self.port),
+                format!("http://127.0.0.1:{}", self.port),
+                format!("http://0.0.0.0:{}", self.port),
+            ]
+        } else if is_loopback {
+            vec![
+                format!("http://localhost:{}", self.port),
+                format!("http://{}:{}", host, self.port),
+            ]
         } else {
-            host
-        };
-        vec![format!("http://{}:{}", effective_host, self.port)]
+            vec![format!("http://{}:{}", host, self.port)]
+        }
     }
 }
 
@@ -2026,47 +2038,67 @@ step_timeout_secs = 600
     // -- resolved_cors_origins auto-computation --
 
     #[test]
-    fn resolved_cors_origins_wildcard_becomes_localhost() {
+    fn resolved_cors_origins_wildcard_includes_all_variants() {
         let web = WebConfig {
             host: "0.0.0.0".into(),
             port: 3000,
             cors_origins: Vec::new(),
             ..Default::default()
         };
-        assert_eq!(web.resolved_cors_origins(), vec!["http://localhost:3000"]);
+        assert_eq!(
+            web.resolved_cors_origins(),
+            vec![
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://0.0.0.0:3000",
+            ]
+        );
     }
 
     #[test]
-    fn resolved_cors_origins_ipv6_any_becomes_localhost() {
+    fn resolved_cors_origins_ipv6_any_includes_all_variants() {
         let web = WebConfig {
             host: "[::]".into(),
             port: 8080,
             cors_origins: Vec::new(),
             ..Default::default()
         };
-        assert_eq!(web.resolved_cors_origins(), vec!["http://localhost:8080"]);
+        assert_eq!(
+            web.resolved_cors_origins(),
+            vec![
+                "http://localhost:8080",
+                "http://127.0.0.1:8080",
+                "http://0.0.0.0:8080",
+            ]
+        );
     }
 
     #[test]
-    fn resolved_cors_origins_127001_becomes_localhost() {
+    fn resolved_cors_origins_127001_includes_localhost() {
         let web = WebConfig {
             host: "127.0.0.1".into(),
             port: 9090,
             cors_origins: Vec::new(),
             ..Default::default()
         };
-        assert_eq!(web.resolved_cors_origins(), vec!["http://localhost:9090"]);
+        assert_eq!(
+            web.resolved_cors_origins(),
+            vec!["http://localhost:9090", "http://127.0.0.1:9090"]
+        );
     }
 
     #[test]
-    fn resolved_cors_origins_ipv6_loopback_becomes_localhost() {
+    fn resolved_cors_origins_ipv6_loopback_includes_localhost() {
         let web = WebConfig {
             host: "::1".into(),
             port: 4000,
             cors_origins: Vec::new(),
             ..Default::default()
         };
-        assert_eq!(web.resolved_cors_origins(), vec!["http://localhost:4000"]);
+        assert_eq!(
+            web.resolved_cors_origins(),
+            vec!["http://localhost:4000", "http://::1:4000"]
+        );
     }
 
     #[test]
