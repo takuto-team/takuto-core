@@ -79,6 +79,7 @@ ifeq ($(IS_PODMAN),1)
 		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
 		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
 		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
 		-v "$${P}_cursor-auth":/home/maestro/.cursor \
 		-v "$${P}_agents-data":/home/maestro/.agents \
@@ -93,6 +94,7 @@ ifeq ($(IS_PODMAN),1)
 		-v "$${P}_playwright-cache":/home/maestro/.cache/ms-playwright \
 		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
 		-e MAESTRO_HOME=/home/maestro \
+		-e MAESTRO_DATA_DIR=/home/maestro/.maestro \
 		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
 		-e "FIGMA_API_TOKEN=$${FIGMA_API_TOKEN:-}" \
 		-e NODE_OPTIONS=--dns-result-order=ipv4first \
@@ -107,6 +109,7 @@ else
 		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
 		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
 		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
 		-v "$${P}_cursor-auth":/home/maestro/.cursor \
 		-v "$${P}_agents-data":/home/maestro/.agents \
@@ -121,6 +124,7 @@ else
 		-v "$${P}_playwright-cache":/home/maestro/.cache/ms-playwright \
 		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
 		-e MAESTRO_HOME=/home/maestro \
+		-e MAESTRO_DATA_DIR=/home/maestro/.maestro \
 		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
 		-e "FIGMA_API_TOKEN=$${FIGMA_API_TOKEN:-}" \
 		-e NODE_OPTIONS=--dns-result-order=ipv4first \
@@ -155,6 +159,7 @@ ifeq ($(IS_PODMAN),1)
 		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
 		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
 		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
 		-v "$${P}_cursor-auth":/home/maestro/.cursor \
 		-v "$${P}_agents-data":/home/maestro/.agents \
@@ -169,6 +174,7 @@ ifeq ($(IS_PODMAN),1)
 		-e HOME=/home/maestro \
 		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
 		-e MAESTRO_HOME=/home/maestro \
+		-e MAESTRO_DATA_DIR=/home/maestro/.maestro \
 		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
 		"$$IMAGE"
 else

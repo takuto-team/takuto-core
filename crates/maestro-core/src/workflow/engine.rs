@@ -364,7 +364,7 @@ impl WorkflowEngine {
         self.sync_workflow_snapshot_from_map().await
     }
 
-    /// Rewrite `.maestro/workflow_snapshot.json` from the current in-memory map (best-effort).
+    /// Rewrite `workflow_snapshot.json` from the current in-memory map (best-effort).
     async fn sync_workflow_snapshot_from_map(&self) -> Result<()> {
         let repo_path = {
             let c = self.config.read().await;
@@ -478,7 +478,7 @@ impl WorkflowEngine {
         Ok(())
     }
 
-    /// Write `.maestro/workflow_snapshot.json` and cancel drivers so processes stop, without Jira unassign / **Stopped** (for container restart).
+    /// Write `workflow_snapshot.json` and cancel drivers so processes stop, without Jira unassign / **Stopped** (for container restart).
     pub async fn persist_interrupt_for_restart(&self) -> Result<()> {
         self.suppress_cancelled_as_error
             .store(true, Ordering::SeqCst);
@@ -531,6 +531,11 @@ impl WorkflowEngine {
             let c = self.config.read().await;
             PathBuf::from(&c.git.repo_path)
         };
+
+        info!(
+            path = %snapshot::snapshot_path(&repo_path).display(),
+            "Looking for workflow snapshot"
+        );
 
         let Some(file) = read_workflow_snapshot(&repo_path)? else {
             return Ok(0);

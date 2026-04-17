@@ -449,6 +449,8 @@ pub async fn start_manual_workflow(
 #[derive(Serialize)]
 pub struct OpenEditorResponse {
     pub url: String,
+    /// Connection token for openvscode-server authentication.
+    pub connection_token: String,
     pub vscode_port: u16,
     pub port_mappings: Vec<(u16, u16)>,
 }
@@ -541,6 +543,7 @@ pub async fn open_editor(
 
     Ok(Json(OpenEditorResponse {
         url: info.url,
+        connection_token: info.connection_token,
         vscode_port: info.vscode_port,
         port_mappings: info.port_mappings,
     }))

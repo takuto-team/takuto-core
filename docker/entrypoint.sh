@@ -26,6 +26,7 @@ if [ "$(id -u)" = "0" ]; then
             echo "[maestro] WARNING: chown maestro:maestro $dir failed (hooks writing under this path may see Permission denied)" >&2
         fi
     }
+    chown_maestro_tree /home/maestro/.maestro
     chown_maestro_tree /home/maestro/.claude
     chown_maestro_tree /home/maestro/.cursor
     chown_maestro_tree /home/maestro/.agents
