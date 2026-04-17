@@ -30,6 +30,7 @@ services:
       # Custom environment variables (optional)
       - ./maestro.env:/etc/maestro/env:ro
       # Persistent auth + skills state for maestro user
+      - maestro-data:/home/maestro/.maestro
       - claude-auth:/home/maestro/.claude
       - cursor-auth:/home/maestro/.cursor
       - agents-data:/home/maestro/.agents
@@ -52,6 +53,8 @@ services:
       - MAESTRO_CONFIG=/etc/maestro/config.toml
       # Stable home for hook scripts ($HOME can be wrong/empty in some Podman setups; docker-hooks forces this for children)
       - MAESTRO_HOME=/home/maestro
+      # Workflow snapshot storage (persisted via maestro-data volume, survives workspace branch switches)
+      - MAESTRO_DATA_DIR=/home/maestro/.maestro
       # Keep Cursor CLI config/auth on the same path as the cursor-auth volume (default can differ with XDG)
       - CURSOR_CONFIG_DIR=/home/maestro/.cursor
       # Figma API token (optional, also configurable in config.toml)
@@ -65,6 +68,7 @@ services:
       start_period: 10s
 
 volumes:
+  maestro-data:
   claude-auth:
   cursor-auth:
   agents-data:

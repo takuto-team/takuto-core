@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::state::WorkflowState;
 use super::step::StepLog;
 
-/// File name under `{git.repo_path}/.maestro/`.
+/// File name for the workflow snapshot.
 pub const SNAPSHOT_FILENAME: &str = "workflow_snapshot.json";
 
 pub const SNAPSHOT_VERSION: u32 = 1;
@@ -61,7 +61,39 @@ pub struct PersistedTerminalLine {
     pub stream: String,
 }
 
+/// Resolve the directory for storing the workflow snapshot.
+///
+/// Priority:
+/// 1. `$MAESTRO_DATA_DIR` — explicit override
+/// 2. `$MAESTRO_HOME/.maestro` — container convention (MAESTRO_HOME=/home/maestro)
+/// 3. `$HOME/.maestro` — local dev fallback
+/// 4. `repo_path/.maestro` — legacy fallback
+pub fn resolve_snapshot_dir(repo_path: &Path) -> PathBuf {
+    if let Ok(dir) = std::env::var("MAESTRO_DATA_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    if let Ok(home) = std::env::var("MAESTRO_HOME") {
+        if !home.is_empty() {
+            return PathBuf::from(home).join(".maestro");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return PathBuf::from(home).join(".maestro");
+        }
+    }
+    // Legacy fallback — inside the repo
+    repo_path.join(".maestro")
+}
+
 pub fn snapshot_path(repo_path: &Path) -> PathBuf {
+    resolve_snapshot_dir(repo_path).join(SNAPSHOT_FILENAME)
+}
+
+/// Legacy snapshot path inside `{repo_path}/.maestro/`.
+fn legacy_snapshot_path(repo_path: &Path) -> PathBuf {
     repo_path.join(".maestro").join(SNAPSHOT_FILENAME)
 }
 
@@ -69,9 +101,9 @@ pub fn write_workflow_snapshot(
     repo_path: &Path,
     workflows: &[PersistedWorkflowRecord],
 ) -> crate::error::Result<()> {
-    let dir = repo_path.join(".maestro");
+    let dir = resolve_snapshot_dir(repo_path);
     fs::create_dir_all(&dir)?;
-    let path = snapshot_path(repo_path);
+    let path = dir.join(SNAPSHOT_FILENAME);
     let tmp = path.with_extension("json.tmp");
     let file = WorkflowSnapshotFile {
         version: SNAPSHOT_VERSION,
@@ -84,17 +116,49 @@ pub fn write_workflow_snapshot(
     Ok(())
 }
 
+/// Read the workflow snapshot, checking the new location first then migrating from the legacy
+/// `{repo_path}/.maestro/` location if needed.
 pub fn read_workflow_snapshot(
     repo_path: &Path,
 ) -> crate::error::Result<Option<WorkflowSnapshotFile>> {
     let path = snapshot_path(repo_path);
-    if !path.exists() {
-        return Ok(None);
+    if path.exists() {
+        let bytes = fs::read(&path)?;
+        let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
+            .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
+        return Ok(Some(file));
     }
-    let bytes = fs::read(&path)?;
-    let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-        .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
-    Ok(Some(file))
+
+    // Try the legacy location and migrate if found.
+    let legacy = legacy_snapshot_path(repo_path);
+    if legacy != path && legacy.exists() {
+        let bytes = fs::read(&legacy)?;
+        let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
+            .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
+        tracing::info!(
+            from = %legacy.display(),
+            to = %path.display(),
+            "Migrating workflow snapshot from legacy location"
+        );
+        // Best-effort migration: copy to the new location and remove the old one.
+        // If the new location is not writable (e.g. volume permissions), still return
+        // the snapshot so workflows are restored — migration will succeed on next write.
+        let dir = resolve_snapshot_dir(repo_path);
+        match fs::create_dir_all(&dir).and_then(|_| fs::write(&path, &bytes)) {
+            Ok(()) => {
+                let _ = fs::remove_file(&legacy);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Could not write snapshot to new location; using legacy path (migration will retry)"
+                );
+            }
+        }
+        return Ok(Some(file));
+    }
+
+    Ok(None)
 }
 
 pub fn remove_workflow_snapshot(repo_path: &Path) -> crate::error::Result<()> {

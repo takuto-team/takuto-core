@@ -23,6 +23,7 @@ services:
       DOCKER_TLS_CERTDIR: ""
     volumes:
       - workspace:/workspace
+      - maestro-data:/shared-auth/maestro-data
       - dind-storage:/var/lib/docker
       # Auth volumes — workers bind-mount from /shared-auth/* into standard home paths
       - claude-auth:/shared-auth/claude
@@ -57,5 +58,6 @@ services:
         condition: service_healthy
 
 volumes:
+  maestro-data:
   dind-storage:
   vscode-data:
