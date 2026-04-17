@@ -16,7 +16,7 @@ pub struct GithubIssueRow {
 }
 
 /// `GET /api/github/issues` — returns open GitHub issues for the configured repo.
-/// Returns `[{ "key": "GH-1", "summary": "..." }]`.
+/// Returns `[{ "key": "GH-1", "summary": "...", "body": "..." }]`.
 pub async fn list_github_issues(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<GithubIssueRow>>, (StatusCode, String)> {
@@ -35,57 +35,18 @@ pub async fn list_github_issues(
         )
     })?;
 
-    let output = tokio::process::Command::new("gh")
-        .args([
-            "api",
-            "--method",
-            "GET",
-            &format!("repos/{owner_repo}/issues"),
-            "--field",
-            "state=open",
-            "--field",
-            "per_page=50",
-        ])
-        .output()
+    let issues = maestro_core::github::fetch_open_issues(&owner_repo)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            format!("gh api repos/{owner_repo}/issues failed: {stderr}"),
-        ));
-    }
-
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 
-    let rows: Vec<GithubIssueRow> = json
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| {
-                    // Skip pull requests (GitHub API returns PRs in the issues endpoint)
-                    if v.get("pull_request").is_some() {
-                        return None;
-                    }
-                    let number = v.get("number")?.as_u64()?;
-                    let title = v.get("title")?.as_str().unwrap_or("").to_string();
-                    let body = v
-                        .get("body")
-                        .and_then(|b| b.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    Some(GithubIssueRow {
-                        key: format!("GH-{number}"),
-                        summary: title,
-                        body,
-                    })
-                })
-                .collect()
+    let rows: Vec<GithubIssueRow> = issues
+        .into_iter()
+        .map(|issue| GithubIssueRow {
+            key: issue.key,
+            summary: issue.summary,
+            body: issue.body,
         })
-        .unwrap_or_default();
+        .collect();
 
     Ok(Json(rows))
 }
