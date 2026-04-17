@@ -366,8 +366,10 @@ const EDITOR_PORT_MAX: u16 = 9200;
 /// Information about a running editor container.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EditorInfo {
-    /// URL to open in the browser (e.g. `http://localhost:9100/?folder=...`).
+    /// URL to open in the browser (e.g. `http://localhost:9100/?tkn=...&folder=...`).
     pub url: String,
+    /// Connection token for openvscode-server authentication.
+    pub connection_token: String,
     /// VS Code port on the host.
     pub vscode_port: u16,
     /// `(container_port, host_port)` pairs for user-configured application ports.
@@ -460,6 +462,29 @@ async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
     None // not enough free ports after retries
 }
 
+/// Generate a cryptographically random connection token for editor sessions.
+/// Returns a 32-character lowercase hex string (UUID v4 simple format).
+pub fn generate_connection_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Build the editor URL including the connection token for authentication.
+pub fn build_editor_url(host_port: u16, connection_token: &str, folder: &str) -> String {
+    format!("http://localhost:{host_port}/?tkn={connection_token}&folder={folder}")
+}
+
+/// Parse the `maestro.connection_token` value from a Docker inspect JSON labels string.
+/// Returns `None` if the label is absent, empty, or the JSON is malformed.
+pub fn parse_connection_token_from_labels(json_str: &str) -> Option<String> {
+    let labels: std::collections::HashMap<String, String> = serde_json::from_str(json_str).ok()?;
+    let token = labels.get("maestro.connection_token")?;
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.clone())
+    }
+}
+
 /// Start a browser VS Code editor container for a workflow.
 ///
 /// Returns [`EditorInfo`] with the URL and port mappings on success.
@@ -506,6 +531,7 @@ pub async fn start_editor(
     let vscode_port = ports[0];
     let port_mappings: Vec<(u16, u16)> = Vec::new();
     let spare_ports: Vec<u16> = ports[1..].to_vec();
+    let connection_token = generate_connection_token();
     info!(ticket = %name, vscode_port, spare_ports = ?spare_ports, "Allocated editor ports");
 
     let mut args: Vec<String> = vec![
@@ -557,6 +583,10 @@ pub async fn start_editor(
     args.push("--entrypoint".into());
     args.push("".into());
 
+    // Connection token label for get_editor_info() retrieval.
+    args.push("--label".into());
+    args.push(format!("maestro.connection_token={connection_token}"));
+
     // Image
     args.push(image.into());
 
@@ -601,7 +631,7 @@ pub async fn start_editor(
     }
 
     script_parts.push(format!(
-        "exec openvscode-server --port {vscode_port} --host 0.0.0.0 --without-connection-token"
+        "exec openvscode-server --port {vscode_port} --host 0.0.0.0 --connection-token {connection_token}"
     ));
 
     let cmd = script_parts.join("; ");
@@ -635,11 +665,16 @@ pub async fn start_editor(
     // Run startup commands every time a fresh container is created (no marker file).
     run_editor_startup_commands(&name, startup_commands).await;
 
-    let url = format!("http://localhost:{vscode_port}/?folder={folder}");
-    info!(url = %url, spare = ?spare_ports, "Editor container started");
+    // TODO: should use `editor_host_port(vscode_port)` here (like `get_editor_info`)
+    // so the URL is correct when MAESTRO_DIND_PORT_OFFSET is set. Pre-existing issue.
+    let url = build_editor_url(vscode_port, &connection_token, &folder);
+    // Log URL without the connection token to avoid leaking the secret in logs.
+    let log_url = format!("http://localhost:{vscode_port}/?tkn=<redacted>&folder={folder}");
+    info!(url = %log_url, spare = ?spare_ports, "Editor container started");
 
     Ok(EditorInfo {
         url,
+        connection_token,
         vscode_port,
         port_mappings,
         spare_ports,
@@ -997,17 +1032,37 @@ pub async fn stop_terminal(ticket_key: &str) {
 pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
     let name = editor_container_name(ticket_key);
 
-    let output = tokio::process::Command::new("docker")
-        .args(["inspect", &name, "--format", "{{.State.Running}} {{range .HostConfig.PortBindings}}{{range .}}{{.HostPort}} {{end}}{{end}} {{json .Config.Labels}}"])
+    let label_output = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            &name,
+            "--format",
+            "{{.State.Running}} {{json .Config.Labels}}",
+        ])
         .output()
         .await
         .ok()?;
 
-    if !output.status.success() {
+    if !label_output.status.success() {
         return None;
     }
 
-    // Simpler approach: get ports via docker port
+    let label_stdout = String::from_utf8_lossy(&label_output.stdout);
+    let label_stdout = label_stdout.trim();
+
+    // Parse "true {\"maestro.connection_token\":\"...\", ...}" format
+    // First word is running state, rest is JSON labels.
+    let (running_str, labels_json) = label_stdout.split_once(' ')?;
+    if running_str != "true" {
+        return None; // Container not running.
+    }
+
+    // Extract connection token from labels. Containers without the token
+    // (pre-existing from before this security feature) are treated as absent
+    // so the user must close and reopen the editor to get a secure session.
+    let connection_token = parse_connection_token_from_labels(labels_json)?;
+
+    // Get ports via docker port
     let port_output = tokio::process::Command::new("docker")
         .args(["port", &name])
         .output()
@@ -1079,10 +1134,11 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
         .trim()
         .to_string();
     let host_vscode_port = editor_host_port(vscode_port);
-    let url = format!("http://localhost:{host_vscode_port}/?folder={folder}");
+    let url = build_editor_url(host_vscode_port, &connection_token, &folder);
 
     Some(EditorInfo {
         url,
+        connection_token,
         vscode_port,
         port_mappings,
         spare_ports,
@@ -1570,5 +1626,73 @@ mod tests {
         for mount in WORKER_VOLUMES {
             assert!(has_volume(&args, mount), "Missing volume mount {mount}");
         }
+    }
+
+    #[test]
+    fn generate_connection_token_is_valid_hex() {
+        let token = generate_connection_token();
+        assert_eq!(token.len(), 32, "Token must be 32 hex characters");
+        assert!(
+            token.chars().all(|c| c.is_ascii_hexdigit()),
+            "Token must be lowercase hex: {token}"
+        );
+        assert_eq!(token, token.to_lowercase(), "Token must be lowercase");
+    }
+
+    #[test]
+    fn generate_connection_token_is_unique() {
+        let t1 = generate_connection_token();
+        let t2 = generate_connection_token();
+        assert_ne!(t1, t2, "Two generated tokens must be different");
+    }
+
+    #[test]
+    fn build_editor_url_includes_tkn_param() {
+        let url = build_editor_url(9100, "abcdef0123456789abcdef0123456789", "/workspace/proj");
+        assert_eq!(
+            url,
+            "http://localhost:9100/?tkn=abcdef0123456789abcdef0123456789&folder=/workspace/proj"
+        );
+    }
+
+    #[test]
+    fn parse_connection_token_from_labels_present() {
+        let json = r#"{"maestro.connection_token":"abcdef0123456789abcdef0123456789","other":"x"}"#;
+        assert_eq!(
+            parse_connection_token_from_labels(json),
+            Some("abcdef0123456789abcdef0123456789".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_connection_token_from_labels_missing() {
+        let json = r#"{"other.label":"x"}"#;
+        assert_eq!(parse_connection_token_from_labels(json), None);
+    }
+
+    #[test]
+    fn parse_connection_token_from_labels_empty_value() {
+        let json = r#"{"maestro.connection_token":""}"#;
+        assert_eq!(parse_connection_token_from_labels(json), None);
+    }
+
+    #[test]
+    fn parse_connection_token_from_labels_invalid_json() {
+        assert_eq!(parse_connection_token_from_labels("not json"), None);
+        assert_eq!(parse_connection_token_from_labels(""), None);
+    }
+
+    #[test]
+    fn editor_info_serializes_connection_token() {
+        let info = EditorInfo {
+            url: "http://localhost:9100/?tkn=abc&folder=/w".to_string(),
+            connection_token: "abc".to_string(),
+            vscode_port: 9100,
+            port_mappings: vec![],
+            spare_ports: vec![],
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["connection_token"], "abc");
+        assert_eq!(json["url"], "http://localhost:9100/?tkn=abc&folder=/w");
     }
 }
