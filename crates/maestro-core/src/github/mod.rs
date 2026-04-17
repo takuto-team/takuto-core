@@ -181,9 +181,6 @@ mod tests {
 
     #[test]
     fn parse_pr_url_non_numeric_returns_none() {
-        assert_eq!(
-            parse_pr_url("https://github.com/owner/repo/pull/abc"),
-            None
-        );
+        assert_eq!(parse_pr_url("https://github.com/owner/repo/pull/abc"), None);
     }
 }

@@ -333,11 +333,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let pr_merge_poller = PrMergePoller::new(
-        config.clone(),
-        engine.clone(),
-        cancel_token.clone(),
-    );
+    let pr_merge_poller = PrMergePoller::new(config.clone(), engine.clone(), cancel_token.clone());
 
     tokio::select! {
         _ = async {
