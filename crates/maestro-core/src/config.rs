@@ -29,6 +29,16 @@ pub enum TicketingSystem {
     GitHub,
 }
 
+impl fmt::Display for TicketingSystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Jira => f.write_str("jira"),
+            Self::GitHub => f.write_str("github"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     #[serde(default)]
@@ -260,7 +270,7 @@ fn validate_step_list(steps: &[AgentStepConfig], list_name: &str) -> Result<()> 
             // Agent step: require prompt or skills.
             if step.prompt.trim().is_empty() && step.skills.is_empty() {
                 return Err(MaestroError::Config(format!(
-                    "Step {:?} in [[{list_name}]] must have a non-empty `prompt`, at least one `skill`, or `commands`",
+                    "Step {:?} in [[{list_name}]] must have a non-empty `prompt` and/or at least one `skill`",
                     step.name
                 )));
             }

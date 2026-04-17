@@ -3,7 +3,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use maestro_core::config::TicketingSystem;
 use maestro_core::container::{self, ContainerRunner};
 use maestro_core::jira::ticket_browse_url;
 use maestro_core::workflow::dashboard_progress;
@@ -109,13 +108,7 @@ fn can_resume_from_error(w: &Workflow) -> bool {
     ) && w.worktree_path.as_ref().is_some_and(|p| p.exists())
 }
 
-fn ticketing_system_str(ts: TicketingSystem) -> &'static str {
-    match ts {
-        TicketingSystem::None => "none",
-        TicketingSystem::Jira => "jira",
-        TicketingSystem::GitHub => "github",
-    }
-}
+// `TicketingSystem` implements `Display`, so use `.to_string()` directly.
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
     match state {
@@ -159,7 +152,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 editor_url: None,
                 editor_port_mappings: Vec::new(),
                 jira_available: w.jira_available,
-                ticketing_system: ticketing_system_str(w.ticketing_system).to_string(),
+                ticketing_system: w.ticketing_system.to_string(),
                 can_resume_from_error: can_resume_from_error(w),
                 terminal_url: None,
             }
@@ -207,7 +200,7 @@ pub async fn get_workflow(
         editor_url: editor_info.as_ref().map(|e| e.url.clone()),
         editor_port_mappings: editor_info.map(|e| e.port_mappings).unwrap_or_default(),
         jira_available: w.jira_available,
-        ticketing_system: ticketing_system_str(w.ticketing_system).to_string(),
+        ticketing_system: w.ticketing_system.to_string(),
         can_resume_from_error: can_resume_from_error(w),
         terminal_url: state
             .terminal_ports

@@ -209,6 +209,10 @@ impl GitHubAppTokenManager {
             "curl",
             &[
                 "-s",
+                "--max-time",
+                "30",
+                "--connect-timeout",
+                "10",
                 "-X",
                 "POST",
                 "-H",

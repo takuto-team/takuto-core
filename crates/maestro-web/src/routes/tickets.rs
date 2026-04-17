@@ -34,12 +34,26 @@ pub struct UpdateDescriptionBody {
     pub description: String,
 }
 
+/// Maximum allowed length for the ticket description in an improve request (100 KB).
+const MAX_IMPROVE_DESCRIPTION_LEN: usize = 100 * 1024;
+
 /// `POST /api/tickets/{key}/improve` — run a headless Claude session to improve the ticket description.
 pub async fn improve_ticket(
     State(state): State<AppState>,
     Path(key): Path<String>,
     Json(body): Json<ImproveTicketBody>,
 ) -> Result<Json<ImproveTicketResponse>, (StatusCode, String)> {
+    if body.description.len() > MAX_IMPROVE_DESCRIPTION_LEN {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "Description exceeds maximum allowed length ({} bytes, limit {})",
+                body.description.len(),
+                MAX_IMPROVE_DESCRIPTION_LEN
+            ),
+        ));
+    }
+
     let model = {
         let config = state.config.read().await;
         let m = config.agent.model.trim().to_string();
