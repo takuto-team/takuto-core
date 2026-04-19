@@ -74,6 +74,12 @@ body {
   @apply bg-red-500/20;
 }
 
+/* Terminal connection animation — dots light up sequentially, hold, then reset */
+.connection-dot {
+  @apply w-1.5 h-1.5 rounded-full;
+  background-color: #374151;
+}
+
 /* Terminal step separator */
 .terminal-step-separator {
   @apply text-gray-500 text-xs py-1 border-t border-gray-800 mt-1;

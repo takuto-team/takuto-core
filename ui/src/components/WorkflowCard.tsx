@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { api, apiPost } from "../api/client";
 import type { WorkflowSummary } from "../api/types";
 import type { TerminalState } from "../hooks/useWorkflows";
@@ -45,7 +45,7 @@ function formatDuration(start: Date, end: Date): string {
 }
 
 export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShowDescription, onReport }: Props) {
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<false | "generic" | string>(false);
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
 
@@ -60,8 +60,8 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
     : null;
 
   const withLoading = useCallback(
-    async (fn: () => Promise<void>) => {
-      setLoading(true);
+    async (fn: () => Promise<void>, message?: string) => {
+      setLoading(message || "generic");
       try {
         await fn();
         onRefresh();
@@ -139,8 +139,10 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
     <>
       <div className={`workflow-card border ${borderClass} transition-colors ${status.label === "Stopped" ? "opacity-60 hover:opacity-80" : ""} relative`}>
         {loading && (
-          <div className="absolute inset-0 bg-gray-900/80 z-10 flex items-center justify-center rounded-xl">
-            <span className="text-sm text-gray-400">Working...</span>
+          <div className="absolute inset-0 bg-gray-900/90 z-10 flex items-center justify-center rounded-xl">
+            {loading !== "generic" ? <ConnectionOverlay message={loading as string} /> : (
+              <span className="text-sm text-gray-400">Working...</span>
+            )}
           </div>
         )}
 
@@ -210,14 +212,14 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
                       Editor &#x2197;
                     </a>
                   ) : (
-                    <ActionBtn variant="secondary" onClick={() => withLoading(openEditor)}>Open Editor</ActionBtn>
+                    <ActionBtn variant="secondary" onClick={() => withLoading(openEditor, "Setting up a secure connection to an editor")}>Open Editor</ActionBtn>
                   )}
                   {w.terminal_url ? (
                     <a href={w.terminal_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
                       Terminal &#x2197;
                     </a>
                   ) : (
-                    <ActionBtn variant="secondary" onClick={() => withLoading(openTerminal)}>Open Terminal</ActionBtn>
+                    <ActionBtn variant="secondary" onClick={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}>Open Terminal</ActionBtn>
                   )}
                 </>
               )}
@@ -320,6 +322,64 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
         />
       )}
     </>
+  );
+}
+
+/* ── Terminal connection overlay ── */
+
+const DOT_COUNT = 7;
+const STEP_MS = 220;
+const PAUSE_MS = 500;
+
+function ConnectionOverlay({ message }: { message: string }) {
+  const [lit, setLit] = useState(0);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    const tick = () => {
+      setLit((prev) => {
+        if (prev >= DOT_COUNT) {
+          // All lit — pause then reset
+          timer.current = setTimeout(tick, PAUSE_MS);
+          return 0;
+        }
+        timer.current = setTimeout(tick, STEP_MS);
+        return prev + 1;
+      });
+    };
+    timer.current = setTimeout(tick, STEP_MS);
+    return () => clearTimeout(timer.current);
+  }, []);
+
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <span className="text-sm text-gray-300">{message}</span>
+      <div className="flex items-center gap-0">
+        <ComputerIcon />
+        <div className="flex items-center gap-1.5 px-3">
+          {Array.from({ length: DOT_COUNT }, (_, i) => (
+            <span
+              key={i}
+              className="connection-dot"
+              style={{ backgroundColor: i < lit ? "#22c55e" : undefined }}
+            />
+          ))}
+        </div>
+        <ComputerIcon />
+      </div>
+    </div>
+  );
+}
+
+function ComputerIcon() {
+  return (
+    <svg className="w-8 h-8 text-gray-400" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth={2}>
+      <rect x="8" y="8" width="48" height="34" rx="3" />
+      <rect x="12" y="12" width="40" height="24" rx="1" fill="currentColor" opacity="0.1" />
+      <line x1="32" y1="42" x2="32" y2="50" />
+      <line x1="22" y1="50" x2="42" y2="50" strokeLinecap="round" />
+      <text x="16" y="28" fontSize="10" fill="currentColor" opacity="0.5" fontFamily="monospace">&gt;_</text>
+    </svg>
   );
 }
 
