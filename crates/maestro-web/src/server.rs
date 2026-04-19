@@ -12,7 +12,7 @@ use crate::routes;
 use crate::state::AppState;
 
 #[derive(Embed)]
-#[folder = "src/assets/"]
+#[folder = "../../ui/dist/"]
 struct Assets;
 
 pub fn build_router(state: AppState) -> Router {
@@ -174,34 +174,41 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
     // Map root to index.html
     let path = if path.is_empty() { "index.html" } else { path };
 
-    // Serve from assets/ prefix or directly
-    let asset_path = if let Some(stripped) = path.strip_prefix("assets/") {
-        stripped
-    } else {
-        path
-    };
-
-    match Assets::get(asset_path) {
+    match Assets::get(path) {
         Some(content) => {
-            let mime = mime_guess::from_path(asset_path)
+            let mime = mime_guess::from_path(path)
                 .first_or_octet_stream()
                 .to_string();
             let mut res = Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime);
             // Avoid stale dashboard JS/HTML/CSS after upgrades (embedded assets otherwise get heuristic browser cache).
-            if asset_path.ends_with(".html")
-                || asset_path.ends_with(".js")
-                || asset_path.ends_with(".css")
+            if path.ends_with(".html")
+                || path.ends_with(".js")
+                || path.ends_with(".css")
             {
                 res = res.header(header::CACHE_CONTROL, "no-store, max-age=0");
             }
             res.body(Body::from(content.data.to_vec())).unwrap()
         }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Not Found"))
-            .unwrap(),
+        None => {
+            // SPA fallback: serve index.html for routes handled by React Router
+            // (e.g. /config.html, /login.html) unless it looks like a real file request.
+            if !path.contains('.') || path.ends_with(".html") {
+                if let Some(index) = Assets::get("index.html") {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "text/html")
+                        .header(header::CACHE_CONTROL, "no-store, max-age=0")
+                        .body(Body::from(index.data.to_vec()))
+                        .unwrap();
+                }
+            }
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Not Found"))
+                .unwrap()
+        }
     }
 }
 
