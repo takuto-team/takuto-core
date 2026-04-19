@@ -280,6 +280,36 @@ fi
 
 # --- Normal mode ---
 
+# Validate that required config files are volume-mounted.
+# The distributed image ships WITHOUT baked-in config — users must mount their own.
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "" >&2
+    echo "ERROR: config.toml not found at $CONFIG_FILE" >&2
+    echo "" >&2
+    echo "  The Maestro image does not include a default configuration." >&2
+    echo "  You must mount your config file when starting the container." >&2
+    echo "" >&2
+    echo "  docker-compose example (already in docker-compose.yml):" >&2
+    echo "    volumes:" >&2
+    echo "      - ./config.toml:/etc/maestro/config.toml:ro" >&2
+    echo "" >&2
+    echo "  docker run example:" >&2
+    echo "    docker run -v \$(pwd)/config.toml:/etc/maestro/config.toml:ro maestro" >&2
+    echo "" >&2
+    echo "  A reference example is available inside the image at:" >&2
+    echo "    /etc/maestro/examples/config.toml.example" >&2
+    echo "  Copy it to your host and customize:" >&2
+    echo "    docker run --rm --entrypoint cat maestro /etc/maestro/examples/config.toml.example > config.toml" >&2
+    echo "" >&2
+    exit 1
+fi
+
+if [ ! -f /etc/maestro/env ]; then
+    echo "[maestro] WARNING: maestro.env not mounted at /etc/maestro/env." >&2
+    echo "[maestro]          This file is optional but recommended for API tokens and secrets." >&2
+    echo "[maestro]          Mount it with: -v ./maestro.env:/etc/maestro/env:ro" >&2
+fi
+
 echo "[maestro] Running auth preflight..."
 if ! /usr/local/bin/maestro --config "$CONFIG_FILE" preflight; then
     echo "[maestro] Preflight failed. Run 'make setup' to complete authentication." >&2
