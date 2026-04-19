@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+:root {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-gray-950 text-gray-100 min-h-screen;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-700 rounded-full;
+}
+
+/* Terminal output area */
+.terminal-output {
+  @apply font-mono text-xs leading-relaxed whitespace-pre-wrap break-all;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+/* Progress bar segments */
+.progress-segment {
+  @apply h-2 rounded-full transition-all duration-300;
+}
+
+/* Modal backdrop */
+.modal-backdrop {
+  @apply fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center;
+}
+
+/* Workflow card */
+.workflow-card {
+  @apply bg-gray-900/80 border border-gray-800 rounded-xl p-5 flex flex-col gap-3;
+}
+
+/* Action button base */
+.action-btn {
+  @apply text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors cursor-pointer inline-flex items-center gap-1;
+}
+
+/* 4-category button palette (matches vanilla JS redesign) */
+.wf-btn-primary {
+  @apply bg-blue-500/10 text-blue-400 border-blue-500/25;
+}
+.wf-btn-primary:hover {
+  @apply bg-blue-500/20;
+}
+.wf-btn-secondary {
+  @apply bg-gray-700/40 text-gray-300 border-gray-600/50;
+}
+.wf-btn-secondary:hover {
+  @apply bg-gray-700/60;
+}
+.wf-btn-success {
+  @apply bg-emerald-500/10 text-emerald-400 border-emerald-500/25;
+}
+.wf-btn-success:hover {
+  @apply bg-emerald-500/20;
+}
+.wf-btn-danger {
+  @apply bg-red-500/10 text-red-400 border-red-500/25;
+}
+.wf-btn-danger:hover {
+  @apply bg-red-500/20;
+}
+
+/* Terminal connection animation — dots light up sequentially, hold, then reset */
+.connection-dot {
+  @apply w-1.5 h-1.5 rounded-full;
+  background-color: #374151;
+}
+
+/* Terminal step separator */
+.terminal-step-separator {
+  @apply text-gray-500 text-xs py-1 border-t border-gray-800 mt-1;
+}

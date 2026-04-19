@@ -36,9 +36,13 @@ endif
 # Resolve the actual image name for the maestro service (compose may prefix with project name).
 MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
 
-.PHONY: build up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind
+.PHONY: build up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build
 
-build:
+ui-build:
+	@echo "Building React dashboard..."
+	cd ui && npm install --legacy-peer-deps && npm run build
+
+build: ui-build
 	@mkdir -p skills
 	$(COMPOSE) $(COMPOSE_FILES) build || (echo "ERROR: Image build failed. Check the output above." >&2; exit 1)
 

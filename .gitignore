@@ -24,6 +24,10 @@ maestro.env
 SECURITY_ASSESSMENT_APPLICATION.md
 SECURITY_ASSESSMENT_CONTAINER.md
 
+# React dashboard build output and dependencies
+/ui/node_modules/
+/ui/dist/
+
 # tmp folder
 /tmp
 

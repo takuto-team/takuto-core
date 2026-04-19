@@ -1,5 +1,7 @@
 target/
 .git/
+ui/node_modules/
+ui/dist/
 .claude/
 *.md
 !crates/**/*.md

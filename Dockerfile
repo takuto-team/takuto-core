@@ -1,5 +1,14 @@
 # syntax=docker/dockerfile:1.6
-# Stage 1: Build
+# Stage 1a: Build React dashboard
+FROM node:23-bookworm-slim AS ui-builder
+
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --legacy-peer-deps
+COPY ui/ ./
+RUN npm run build
+
+# Stage 1b: Build Rust binary
 FROM rust:1.88-bookworm AS builder
 
 WORKDIR /app
@@ -10,6 +19,8 @@ ENV CARGO_TERM_PROGRESS_WIDTH=80
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+# rust-embed resolves ../../ui/dist/ relative to crates/maestro-web/
+COPY --from=ui-builder /ui/dist/ ui/dist/
 
 # BuildKit cache mounts: persist downloaded crates + `target/` between `docker compose build` runs.
 # Copy the binary to `/out` so it exists in the image layer (the mounted `/app/target` is not part of the layer).

@@ -161,6 +161,7 @@ mod tests {
             branch_name: String::new(),
             worktree_path: worktree,
             pr_url: None,
+            pr_merged: false,
             cancel_token: CancellationToken::new(),
             terminal_lines: Vec::new(),
             current_step_label: None,

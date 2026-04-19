@@ -15,6 +15,7 @@ use maestro_core::actions::traits::ExternalActions;
 use maestro_core::config::{Config, TicketingSystem};
 use maestro_core::docker_hooks;
 use maestro_core::github::poller::GitHubPoller;
+use maestro_core::github::pr_merge_poller::PrMergePoller;
 use maestro_core::jira::poller::JiraPoller;
 use maestro_core::workflow::engine::WorkflowEngine;
 use maestro_web::server::build_router;
@@ -332,6 +333,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let pr_merge_poller = PrMergePoller::new(config.clone(), engine.clone(), cancel_token.clone());
+
     tokio::select! {
         _ = async {
             match ticketing_system {
@@ -354,6 +357,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         } => {
             info!("Poller stopped");
+        }
+        _ = pr_merge_poller.run() => {
+            info!("PR merge status poller stopped");
         }
         _ = snapshot_task => {
             info!("Workflow snapshot syncer stopped");

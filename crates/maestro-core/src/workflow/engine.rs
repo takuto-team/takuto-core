@@ -86,6 +86,8 @@ pub struct WorkflowEvent {
     /// `(container_port, host_port)` for dynamic port forwarding events.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forwarded_port: Option<(u16, u16)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged: Option<bool>,
 }
 
 pub struct Workflow {
@@ -101,6 +103,7 @@ pub struct Workflow {
     pub branch_name: String,
     pub worktree_path: Option<PathBuf>,
     pub pr_url: Option<String>,
+    pub pr_merged: bool,
     pub cancel_token: CancellationToken,
     /// Recent terminal output lines for persistence across page reloads.
     pub terminal_lines: Vec<TerminalLine>,
@@ -143,6 +146,7 @@ impl Workflow {
             branch_name: String::new(),
             worktree_path: None,
             pr_url: None,
+            pr_merged: false,
             cancel_token: CancellationToken::new(),
             terminal_lines: Vec::new(),
             current_step_label: None,
@@ -205,6 +209,7 @@ impl Workflow {
             branch_name: rec.branch_name,
             worktree_path: rec.worktree_path,
             pr_url: rec.pr_url,
+            pr_merged: rec.pr_merged,
             cancel_token: CancellationToken::new(),
             terminal_lines: rec
                 .terminal_lines
@@ -238,6 +243,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
         branch_name: w.branch_name.clone(),
         worktree_path: w.worktree_path.clone(),
         pr_url: w.pr_url.clone(),
+        pr_merged: w.pr_merged,
         terminal_lines: w
             .terminal_lines
             .iter()
@@ -473,6 +479,7 @@ impl WorkflowEngine {
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
 
         Ok(())
@@ -816,6 +823,7 @@ impl WorkflowEngine {
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
 
         Ok(())
@@ -852,6 +860,7 @@ impl WorkflowEngine {
                     progress_percent: None,
                     progress_steps_total: None,
                     forwarded_port: None,
+                    pr_merged: None,
                 });
 
                 workflow.cancel_token.clone()
@@ -933,6 +942,7 @@ impl WorkflowEngine {
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
 
         Ok(())
@@ -1061,6 +1071,7 @@ impl WorkflowEngine {
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
 
         Ok(())
@@ -1171,6 +1182,7 @@ impl WorkflowEngine {
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
 
         let engine_config = self.config.clone();
@@ -1279,6 +1291,7 @@ impl WorkflowEngine {
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
 
         let engine_config = self.config.clone();
@@ -1391,6 +1404,7 @@ impl WorkflowEngine {
                 progress_percent: None,
                 progress_steps_total: None,
                 forwarded_port: None,
+                pr_merged: None,
             });
         }
 
@@ -1544,6 +1558,7 @@ async fn drive_workflow(
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
     }
 }
@@ -1654,6 +1669,7 @@ async fn drive_pr_review_workflow(
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
     }
 }
@@ -1769,6 +1785,7 @@ async fn drive_merge_base_workflow(
             progress_percent: None,
             progress_steps_total: None,
             forwarded_port: None,
+            pr_merged: None,
         });
     }
 }
@@ -3679,6 +3696,7 @@ fn broadcast_step_started(
         progress_percent: None,
         progress_steps_total: None,
         forwarded_port: None,
+        pr_merged: None,
     });
 }
 
@@ -3703,6 +3721,7 @@ async fn broadcast_step_completed(
         progress_percent: dash.map(|(p, _)| p),
         progress_steps_total: dash.map(|(_, t)| t),
         forwarded_port: None,
+        pr_merged: None,
     });
 }
 
@@ -3761,6 +3780,7 @@ fn spawn_output_relay(
                     progress_percent: None,
                     progress_steps_total: None,
                     forwarded_port: None,
+                    pr_merged: None,
                 });
                 match result {
                     Ok(count) => {
@@ -3833,6 +3853,7 @@ async fn transition_to_agent_step(
             progress_percent: dash.map(|(p, _)| p),
             progress_steps_total: dash.map(|(_, t)| t),
             forwarded_port: None,
+            pr_merged: None,
         });
     }
 }
@@ -3878,6 +3899,7 @@ async fn transition_to_pr_review_step(
             progress_percent: dash.map(|(p, _)| p),
             progress_steps_total: dash.map(|(_, t)| t),
             forwarded_port: None,
+            pr_merged: None,
         });
     }
 }
@@ -3923,6 +3945,7 @@ async fn transition_to_merge_base_step(
             progress_percent: dash.map(|(p, _)| p),
             progress_steps_total: dash.map(|(_, t)| t),
             forwarded_port: None,
+            pr_merged: None,
         });
     }
 }
@@ -3963,6 +3986,7 @@ async fn transition(
             progress_percent: dash.map(|(p, _)| p),
             progress_steps_total: dash.map(|(_, t)| t),
             forwarded_port: None,
+            pr_merged: None,
         });
     }
 }
