@@ -247,14 +247,21 @@ RUN chmod 0755 /usr/local/bin/merge-project-skills.sh
 # Copy Maestro binary from builder (see builder stage: binary staged under `/out` for cache-friendly builds)
 COPY --from=builder /out/maestro /usr/local/bin/maestro
 
-# Optional: TOML file in build context used only for [docker] build_commands (default: example with empty hooks)
+# Optional: TOML file in build context used only for [docker] build_commands (default: example with empty hooks).
+# Note: if you override MAESTRO_BUILD_CONFIG to a custom filename, ensure it is NOT excluded by .dockerignore.
 ARG MAESTRO_BUILD_CONFIG=config.toml.example
 COPY ${MAESTRO_BUILD_CONFIG} /tmp/maestro-build-config.toml
 RUN mkdir -p /workspace \
-    && maestro --config /tmp/maestro-build-config.toml docker-hooks build
+    && maestro --config /tmp/maestro-build-config.toml docker-hooks build \
+    && rm -f /tmp/maestro-build-config.toml
 
-# Copy default runtime config
-COPY config.toml.example /etc/maestro/config.toml
+# Ship example files as reference for distributed-image users.
+# Runtime config is NOT baked in — users must volume-mount config.toml, maestro.env,
+# and workflows/ (see docker-compose.yml). The entrypoint validates the mount.
+RUN mkdir -p /etc/maestro/examples/workflows
+COPY config.toml.example /etc/maestro/examples/config.toml.example
+COPY maestro.env.example /etc/maestro/examples/maestro.env.example
+COPY workflows/*.example.toml /etc/maestro/examples/workflows/
 
 # Create non-root user (Claude Code refuses --dangerously-skip-permissions as root).
 # Default UID 999; override MAESTRO_UID via compose for host engine sockets. Group `maestro` gets the next free GID.
