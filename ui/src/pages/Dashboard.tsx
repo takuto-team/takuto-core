@@ -58,6 +58,8 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
 
   const ticketingSystem = config?.ticketing_system || "none";
   const dryMode = config?.general?.dry_mode || false;
+  const githubAppConfigured = config?.github_app_configured || false;
+  const githubAppInstallationId = config?.github?.app_installation_id || undefined;
 
   const handleAddWorkflow = useCallback(() => {
     if (ticketingSystem === "none") {
@@ -123,7 +125,13 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         onToggle={polling.toggle}
       />
 
-      <Header connected={connected} authEnabled={authEnabled} onLogout={onLogout} />
+      <Header
+        connected={connected}
+        authEnabled={authEnabled}
+        githubAppConfigured={githubAppConfigured}
+        githubAppInstallationId={githubAppInstallationId}
+        onLogout={onLogout}
+      />
 
       {/* Dry mode banner */}
       {dryMode && (

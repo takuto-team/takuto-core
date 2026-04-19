@@ -73,12 +73,18 @@ export interface ConfigResponse {
     site: string;
     [key: string]: unknown;
   };
+  github: {
+    app_id: number;
+    app_installation_id: number;
+    [key: string]: unknown;
+  };
   web: {
     dashboard_username: string;
     [key: string]: unknown;
   };
   jira_available: boolean;
   ticketing_system: string;
+  github_app_configured: boolean;
   [key: string]: unknown;
 }
 

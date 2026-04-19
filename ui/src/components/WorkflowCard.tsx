@@ -34,13 +34,30 @@ function progressInfo(w: WorkflowSummary) {
   return { pct, total, filled };
 }
 
+function formatDuration(start: Date, end: Date): string {
+  const secs = Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShowDescription, onReport }: Props) {
   const [loading, setLoading] = useState(false);
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
+  const [terminalCollapsed, setTerminalCollapsed] = useState(true);
 
   const status = getStatusInfo(w.state);
   const { pct, total, filled } = progressInfo(w);
   const prUrl = w.pr_url?.trim() || "";
+  const isTerminal = ["Completed", "Error", "Stopped"].includes(status.label);
+  const isActive = status.label === "Running" || status.label === "Paused";
+
+  const duration = isTerminal && w.started_at && w.updated_at
+    ? formatDuration(new Date(w.started_at), new Date(w.updated_at))
+    : null;
 
   const withLoading = useCallback(
     async (fn: () => Promise<void>) => {
@@ -110,7 +127,13 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
       ? "border-yellow-500/30 hover:border-yellow-500/40"
       : "border-gray-800 hover:border-gray-700";
 
-  const isActive = status.label === "Running" || status.label === "Paused";
+  // Effective terminal state — for completed workflows, use API terminal_lines if no live state
+  const effectiveTs = ts ?? (
+    isTerminal && w.terminal_lines?.length > 0
+      ? { stepName: w.state, lines: w.terminal_lines, completed: true }
+      : undefined
+  );
+  const hasTerminalLines = effectiveTs && effectiveTs.lines.length > 0;
 
   return (
     <>
@@ -121,7 +144,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
           </div>
         )}
 
-        {/* Header */}
+        {/* Header: ticket key + status badge + PR links */}
         <div className="flex items-center justify-between gap-3 min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <span className={`font-mono text-sm text-${status.color}-400 font-medium`}>{w.ticket_key}</span>
@@ -130,17 +153,15 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
           {prUrl && (
             <div className="flex items-center gap-2 flex-shrink-0">
               {w.pr_merged && (
-                <span className="inline-flex items-center gap-1 text-xs text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-500/20">
-                  Merged
-                </span>
+                <span className="text-xs text-purple-400/80">Merged</span>
               )}
               <a
                 href={prUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-blue-400 hover:text-blue-300 bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20"
+                className="action-btn wf-btn-secondary inline-flex items-center gap-1"
               >
-                Show PR
+                Show PR &#x2197;
               </a>
             </div>
           )}
@@ -149,108 +170,142 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
         {/* Summary */}
         <h3 className="text-sm font-medium text-gray-200 truncate">{w.ticket_summary}</h3>
 
-        {/* Progress */}
-        <div className="bg-gray-800/50 rounded-lg px-3 py-2.5">
-          <div className="text-xs text-gray-500 mb-1">{stepLabel}</div>
-          <div className="text-sm font-mono text-gray-300">{stateDisplay}</div>
+        {/* Progress frame with Report button */}
+        <div className="bg-gray-800/50 rounded-lg px-3 py-2.5 relative">
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-gray-500">{stepLabel}</div>
+            <div className="flex items-center gap-2">
+              {duration && (
+                <span className="flex items-center gap-1 text-xs text-gray-400">
+                  <ClockIcon />
+                  <span className="font-mono">{duration}</span>
+                </span>
+              )}
+              <button
+                onClick={() => onReport(w.ticket_key)}
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+              >
+                Report
+              </button>
+            </div>
+          </div>
+          <div className="text-sm font-mono text-gray-300 mt-0.5">{stateDisplay}</div>
           <div className="mt-2">
             <ProgressBar pct={pct} total={total} filled={filled} color={status.color} />
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex flex-wrap gap-2">
-          {!w.jira_available ? null : (
-            <ActionBtn
-              color="sky"
-              onClick={() => window.open(w.jira_browse_url, "_blank")}
-            >
-              Go to ticket
-            </ActionBtn>
-          )}
-          <ActionBtn color="violet" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary)}>
-            Show description
-          </ActionBtn>
-
-          {status.label === "Running" && (
-            <ActionBtn color="yellow" onClick={() => withLoading(doAction("pause"))}>Pause</ActionBtn>
-          )}
-          {status.label === "Paused" && (
-            <ActionBtn color="green" onClick={() => withLoading(doAction("resume"))}>Resume</ActionBtn>
-          )}
-          {w.can_resume_from_error && (
-            <ActionBtn color="teal" onClick={() => withLoading(doAction("resume-from-error"))}>
-              Retry from last failure
-            </ActionBtn>
-          )}
-          {["Error", "Stopped", "Completed"].includes(status.label) && (
-            <ActionBtn color="blue" onClick={() => withLoading(doAction("retry"))}>Retry from 0</ActionBtn>
-          )}
-          {w.can_address_pr_comments && (
-            <ActionBtn color="indigo" onClick={() => withLoading(doAction("address-pr-comments"))}>
-              Address PR Comments
-            </ActionBtn>
-          )}
-          {w.can_merge_base && (
-            <ActionBtn color="amber" onClick={() => withLoading(doAction("merge-base-branch"))}>
-              Merge Base Branch
-            </ActionBtn>
-          )}
-          {w.can_mark_done && (
-            <ActionBtn
-              color="emerald"
-              onClick={() => confirmAction("Mark as Done", "mark-done", doAction("mark-done"))}
-            >
-              Mark as Done
-            </ActionBtn>
-          )}
-          {w.can_delete && (
-            <ActionBtn
-              color="gray"
-              onClick={() => confirmAction("Delete", "delete", doAction("delete"))}
-            >
-              Delete
-            </ActionBtn>
-          )}
-
-          {/* Editor / Terminal */}
-          {w.can_open_editor && (
-            <>
-              {w.editor_url ? (
-                <a
-                  href={w.editor_url}
-                  target="_blank"
-                  rel="noopener"
-                  className="action-btn bg-violet-500/10 text-violet-300 border-violet-500/25 hover:bg-violet-500/20 inline-flex items-center gap-1"
-                >
-                  Editor &#x2197;
-                </a>
-              ) : (
-                <ActionBtn color="violet" onClick={() => withLoading(openEditor)}>Open editor</ActionBtn>
+        {/* Actions — reorganized by row for finished workflows */}
+        {isTerminal ? (
+          <div className="flex flex-col gap-2">
+            {/* Row 1: Navigation actions */}
+            <div className="flex flex-wrap gap-2">
+              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary)}>
+                Show description
+              </ActionBtn>
+              {w.can_open_editor && (
+                <>
+                  {w.editor_url ? (
+                    <a href={w.editor_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
+                      Editor &#x2197;
+                    </a>
+                  ) : (
+                    <ActionBtn variant="secondary" onClick={() => withLoading(openEditor)}>Open Editor</ActionBtn>
+                  )}
+                  {w.terminal_url ? (
+                    <a href={w.terminal_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
+                      Terminal &#x2197;
+                    </a>
+                  ) : (
+                    <ActionBtn variant="secondary" onClick={() => withLoading(openTerminal)}>Open Terminal</ActionBtn>
+                  )}
+                </>
               )}
-              {w.terminal_url ? (
-                <a
-                  href={w.terminal_url}
-                  target="_blank"
-                  rel="noopener"
-                  className="action-btn bg-orange-500/10 text-orange-300 border-orange-500/25 hover:bg-orange-500/20 inline-flex items-center gap-1"
-                >
-                  Terminal &#x2197;
-                </a>
-              ) : (
-                <ActionBtn color="orange" onClick={() => withLoading(openTerminal)}>Open terminal</ActionBtn>
+            </div>
+            {/* Row 2: Workflow actions */}
+            <div className="flex flex-wrap gap-2">
+              {w.can_resume_from_error && (
+                <ActionBtn variant="primary" onClick={() => confirmAction("Retry from last failure", "resume-from-error", doAction("resume-from-error"))}>
+                  Retry from last failure
+                </ActionBtn>
+              )}
+              <ActionBtn variant="primary" onClick={() => confirmAction("Retry from 0", "retry", doAction("retry"))}>
+                Retry from 0
+              </ActionBtn>
+              {w.can_merge_base && (
+                <ActionBtn variant="primary" onClick={() => withLoading(doAction("merge-base-branch"))}>
+                  Merge Base Branch
+                </ActionBtn>
+              )}
+              {w.can_address_pr_comments && (
+                <ActionBtn variant="primary" onClick={() => withLoading(doAction("address-pr-comments"))}>
+                  Address PR Comments
+                </ActionBtn>
+              )}
+            </div>
+            {/* Row 3: Destructive / lifecycle */}
+            <div className="flex flex-wrap gap-2">
+              {w.can_mark_done && (
+                <ActionBtn variant="success" onClick={() => confirmAction("Mark as Done", "mark-done", doAction("mark-done"))}>
+                  Mark as Done
+                </ActionBtn>
+              )}
+              {w.can_delete && (
+                <ActionBtn variant="danger" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
+                  Delete
+                </ActionBtn>
               )}
               {w.editor_url && (
-                <ActionBtn color="violet" onClick={() => withLoading(closeEditor)}>Close editor</ActionBtn>
+                <ActionBtn variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</ActionBtn>
               )}
-            </>
-          )}
+            </div>
+          </div>
+        ) : (
+          /* Running / Paused actions — flat list */
+          <div className="flex flex-wrap gap-2">
+            {!w.jira_available ? null : (
+              <ActionBtn variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
+                Go to ticket
+              </ActionBtn>
+            )}
+            <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary)}>
+              Show description
+            </ActionBtn>
+            {status.label === "Running" && (
+              <ActionBtn variant="primary" onClick={() => withLoading(doAction("pause"))} title="Pause">
+                <PauseIcon /> Pause
+              </ActionBtn>
+            )}
+            {status.label === "Paused" && (
+              <ActionBtn variant="primary" onClick={() => withLoading(doAction("resume"))} title="Resume">
+                <PlayIcon /> Resume
+              </ActionBtn>
+            )}
+          </div>
+        )}
 
-          <ActionBtn color="gray" onClick={() => onReport(w.ticket_key)}>Report</ActionBtn>
-        </div>
-
-        {/* Terminal output for active workflows */}
-        {isActive && <TerminalOutput state={ts} />}
+        {/* Terminal output — always shown for active; collapsible for terminal states */}
+        {isActive && <TerminalOutput state={effectiveTs} />}
+        {isTerminal && hasTerminalLines && (
+          <div>
+            <button
+              onClick={() => setTerminalCollapsed(!terminalCollapsed)}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
+            >
+              <svg
+                className={`w-3.5 h-3.5 transition-transform ${terminalCollapsed ? "" : "rotate-180"}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+              {terminalCollapsed ? "Show logs" : "Hide logs"}
+            </button>
+            {!terminalCollapsed && <TerminalOutput state={effectiveTs} />}
+          </div>
+        )}
       </div>
 
       {confirm && (
@@ -268,20 +323,27 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
   );
 }
 
+/* ── Button variants matching the 4-category palette from the redesign ── */
+
 function ActionBtn({
-  color,
+  variant,
   onClick,
   children,
+  title,
 }: {
-  color: string;
+  variant: "primary" | "secondary" | "success" | "danger";
   onClick: () => void;
   children: React.ReactNode;
+  title?: string;
 }) {
+  const cls = {
+    primary: "wf-btn-primary",
+    secondary: "wf-btn-secondary",
+    success: "wf-btn-success",
+    danger: "wf-btn-danger",
+  }[variant];
   return (
-    <button
-      onClick={onClick}
-      className={`action-btn bg-${color}-500/10 text-${color}-400 border-${color}-500/25 hover:bg-${color}-500/20`}
-    >
+    <button onClick={onClick} title={title} className={`action-btn ${cls}`}>
       {children}
     </button>
   );
@@ -290,9 +352,7 @@ function ActionBtn({
 function StatusBadge({ status }: { status: StatusInfo }) {
   const { label, color } = status;
   return (
-    <span
-      className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-${color}-500/15 text-${color}-400 border border-${color}-500/20`}
-    >
+    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-${color}-500/15 text-${color}-400 border border-${color}-500/20`}>
       {label === "Completed" && <CheckIcon />}
       {label === "Error" && <XIcon />}
       {label === "Running" && <span className={`w-1.5 h-1.5 bg-${color}-400 rounded-full animate-pulse`} />}
@@ -317,6 +377,30 @@ function XIcon() {
   );
 }
 
+function PauseIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
 function ProgressBar({ pct, total, filled, color }: { pct: number; total: number; filled: number; color: string }) {
   if (total <= 0) {
     return (
@@ -330,9 +414,7 @@ function ProgressBar({ pct, total, filled, color }: { pct: number; total: number
       {Array.from({ length: total }, (_, i) => (
         <div
           key={i}
-          className={`h-2 flex-1 rounded-full transition-all ${
-            i < filled ? `bg-${color}-500` : "bg-gray-600"
-          }`}
+          className={`h-2 flex-1 rounded-full transition-all ${i < filled ? `bg-${color}-500` : "bg-gray-600"}`}
         />
       ))}
     </div>
