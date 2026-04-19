@@ -672,11 +672,9 @@ pub async fn start_editor(
     // Run startup commands every time a fresh container is created (no marker file).
     run_editor_startup_commands(&name, startup_commands).await;
 
-    // TODO: should use `editor_host_port(vscode_port)` here (like `get_editor_info`)
-    // so the URL is correct when MAESTRO_DIND_PORT_OFFSET is set. Pre-existing issue.
-    let url = build_editor_url(vscode_port, &connection_token, &folder);
-    // Log URL without the connection token to avoid leaking the secret in logs.
-    let log_url = format!("http://localhost:{vscode_port}/?tkn=<redacted>&folder={folder}");
+    let host_vscode_port = editor_host_port(vscode_port);
+    let url = build_editor_url(host_vscode_port, &connection_token, &folder);
+    let log_url = format!("http://localhost:{host_vscode_port}/?tkn=<redacted>&folder={folder}");
     info!(url = %log_url, spare = ?spare_ports, "Editor container started");
 
     Ok(EditorInfo {
