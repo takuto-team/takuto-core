@@ -171,6 +171,7 @@ ifeq ($(IS_PODMAN),1)
 		-v "$${P}_mise-data":/home/maestro/.local/share/mise \
 		-v "$${P}_mise-cache":/home/maestro/.cache/mise \
 		-v "$${P}_aws-config":/home/maestro/.aws \
+		-v "$${P}_playwright-cache":/home/maestro/.cache/ms-playwright \
 		-e HOME=/home/maestro \
 		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
 		-e MAESTRO_HOME=/home/maestro \

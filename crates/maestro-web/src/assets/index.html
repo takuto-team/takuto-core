@@ -17,7 +17,7 @@
       },
     };
   </script>
-  <link rel="stylesheet" href="/assets/styles.css?v=card-header-align-1" />
+  <link rel="stylesheet" href="/assets/styles.css?v=card-redesign-1" />
   <script src="https://cdn.jsdelivr.net/npm/marked@11.2.0/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 </head>
@@ -146,7 +146,7 @@
     <div class="relative flex items-center justify-center min-h-screen p-3 pointer-events-none">
       <div class="manual-ticket-detail-panel pointer-events-auto animate-scale-in bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
         <!-- Full-modal AI-improve overlay (shown while Claude is running) -->
-        <div id="manualTicketDetailImproveOverlay" class="hidden absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-900/85 backdrop-blur-sm rounded-2xl">
+        <div id="manualTicketDetailImproveOverlay" class="hidden absolute inset-0 z-10 flex-col items-center justify-center bg-gray-900/85 backdrop-blur-sm rounded-2xl">
           <div class="manual-workflow-spinner" role="status" aria-label="Improving…"></div>
           <p class="mt-4 text-sm text-gray-300">Improving description…</p>
           <p id="manualTicketDetailImproveCountdown" class="mt-1 text-xs text-gray-500"></p>
@@ -321,6 +321,6 @@
   </div>
 
   <!-- Bump `v=` after dashboard JS/HTML changes so browsers never keep a stale embedded `app.js`. -->
-  <script src="/assets/app.js?v=no-jira-mode-1"></script>
+  <script src="/assets/app.js?v=card-redesign-1"></script>
 </body>
 </html>
