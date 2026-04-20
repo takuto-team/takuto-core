@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { apiJson, apiPost } from "../api/client";
 import type { ConfigResponse } from "../api/types";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -22,12 +22,17 @@ interface Props {
 export function Dashboard({ onLogout, authEnabled }: Props) {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const { workflows, orderKeys, terminalStates, dynamicForwards, fetchWorkflows, handleEvent } = useWorkflows();
-  const { connected } = useWebSocket((evt) => {
-    handleEvent(evt);
-    // Re-fetch on reconnect
-    if (connected) fetchWorkflows();
-  });
+  const { connected } = useWebSocket(handleEvent);
+  const prevConnected = useRef(false);
   const polling = usePolling();
+
+  // Re-fetch workflows on WebSocket reconnect (connected: false → true)
+  useEffect(() => {
+    if (connected && !prevConnected.current) {
+      fetchWorkflows();
+    }
+    prevConnected.current = connected;
+  }, [connected, fetchWorkflows]);
 
   // Modal state
   const [showPicker, setShowPicker] = useState(false);
@@ -80,11 +85,15 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   const handleStartWorkflow = useCallback(async () => {
     if (!detailModal) return;
     try {
-      await apiPost("/api/workflows/start-manual", {
+      const res = await apiPost("/api/workflows/start-manual", {
         ticket_key: detailModal.key,
         ticket_summary: detailModal.summary,
         ticket_description: detailModal.description || "",
       });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
       setDetailModal(null);
       fetchWorkflows();
     } catch (e) {
@@ -95,11 +104,15 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   const handlePasteSubmit = useCallback(
     async (name: string, description: string) => {
       try {
-        await apiPost("/api/workflows/start-manual", {
+        const res = await apiPost("/api/workflows/start-manual", {
           ticket_key: name,
           ticket_summary: name || "Manual workflow",
           ticket_description: description,
         });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `HTTP ${res.status}`);
+        }
         setShowPaste(false);
         fetchWorkflows();
       } catch (e) {
@@ -151,7 +164,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           onShowDescription={handleShowDescription}
           onReport={setReportKey}
           onAddWorkflow={handleAddWorkflow}
-          canAddWorkflow={ticketingSystem !== "none" || true}
+          canAddWorkflow={true}
         />
       </main>
 

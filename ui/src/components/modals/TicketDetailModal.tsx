@@ -60,9 +60,13 @@ export function TicketDetailModal({
 
   const handleSaveDescription = async () => {
     try {
-      await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
+      const res = await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
         description: editText,
       });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
       setMarkdown(editText);
       setEditMode(false);
     } catch (e) {

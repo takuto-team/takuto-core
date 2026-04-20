@@ -116,7 +116,11 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
   };
 
   const closeEditor = async () => {
-    await apiPost(`/api/workflows/${encodeURIComponent(w.ticket_key)}/close-editor`);
+    const res = await apiPost(`/api/workflows/${encodeURIComponent(w.ticket_key)}/close-editor`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || "Failed to close editor");
+    }
   };
 
   // Step display
