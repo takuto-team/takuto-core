@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from "react";
+import { useEffect, useRef, useMemo, memo } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
@@ -38,7 +38,7 @@ interface Props {
   className?: string;
 }
 
-export function MarkdownPreview({ markdown, className }: Props) {
+export const MarkdownPreview = memo(function MarkdownPreview({ markdown, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const { html, blocks } = useMemo(() => {
@@ -87,4 +87,4 @@ export function MarkdownPreview({ markdown, className }: Props) {
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
-}
+});
