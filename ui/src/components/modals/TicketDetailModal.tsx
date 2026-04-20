@@ -99,8 +99,8 @@ export function TicketDetailModal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full mx-4 max-h-[90vh] flex flex-col"
-        style={{ maxWidth: "min(1280px, calc(100vw - 24px))" }}
+        className="bg-gray-900 border border-gray-700 rounded-xl w-full mx-4 flex flex-col"
+        style={{ maxWidth: "min(1280px, calc(100vw - 24px))", height: "calc(100vh - 48px)" }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
