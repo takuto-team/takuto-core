@@ -2,19 +2,20 @@ import { useEffect, useRef, useMemo } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
-// Override the code block renderer once at module load so mermaid fences
-// produce <pre class="mermaid"> elements that the useEffect below can pick up.
+// Collect mermaid blocks during parse, replace them with placeholder divs.
+// After DOMPurify runs (which would mangle raw mermaid syntax), we inject
+// the original source into the placeholders and let mermaid.run() render them.
+let mermaidBlocks: string[] = [];
+
 marked.use({
   renderer: {
     code({ text, lang }: { text: string; lang?: string }): string | false {
       if (lang === "mermaid") {
-        const escaped = text
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
-        return `<pre class="mermaid">${escaped}</pre>`;
+        const idx = mermaidBlocks.length;
+        mermaidBlocks.push(text);
+        return `<div data-mermaid-idx="${idx}" class="mermaid-placeholder"></div>`;
       }
-      return false; // fall through to default renderer for all other code blocks
+      return false; // fall through to default renderer
     },
   },
 });
@@ -40,16 +41,33 @@ interface Props {
 export function MarkdownPreview({ markdown, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const html = useMemo(() => {
+  const { html, blocks } = useMemo(() => {
+    mermaidBlocks = [];
     const raw = marked.parse(markdown) as string;
-    return DOMPurify.sanitize(raw);
+    const sanitized = DOMPurify.sanitize(raw, {
+      ADD_ATTR: ["data-mermaid-idx"],
+    });
+    return { html: sanitized, blocks: [...mermaidBlocks] };
   }, [markdown]);
 
   useEffect(() => {
-    if (!containerRef.current) return;
-    const nodes = Array.from(
-      containerRef.current.querySelectorAll<HTMLElement>("pre.mermaid")
+    if (!containerRef.current || blocks.length === 0) return;
+
+    // Inject mermaid source into placeholder divs
+    const placeholders = containerRef.current.querySelectorAll<HTMLElement>(
+      "[data-mermaid-idx]"
     );
+    const nodes: HTMLElement[] = [];
+    placeholders.forEach((el) => {
+      const idx = parseInt(el.getAttribute("data-mermaid-idx") || "", 10);
+      if (!isNaN(idx) && blocks[idx]) {
+        el.textContent = blocks[idx];
+        el.className = "mermaid";
+        el.removeAttribute("data-mermaid-idx");
+        nodes.push(el);
+      }
+    });
+
     if (nodes.length === 0) return;
 
     let cancelled = false;
@@ -60,7 +78,7 @@ export function MarkdownPreview({ markdown, className }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [html]);
+  }, [html, blocks]);
 
   return (
     <div
