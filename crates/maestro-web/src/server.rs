@@ -78,6 +78,18 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::close_terminal),
         )
         .route(
+            "/workflows/{id}/run-commands",
+            get(routes::workflows::list_run_commands),
+        )
+        .route(
+            "/workflows/{id}/run-commands/{index}/start",
+            post(routes::workflows::start_run_command),
+        )
+        .route(
+            "/workflows/{id}/run-commands/{index}/stop",
+            post(routes::workflows::stop_run_command),
+        )
+        .route(
             "/workflows/start-manual",
             post(routes::workflows::start_manual_workflow),
         )
