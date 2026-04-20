@@ -127,6 +127,17 @@ export function useWorkflows() {
         return;
       }
 
+      // Run command events — update run_commands in workflow state
+      if (
+        event_type === "run_command_port_forwarded" ||
+        event_type === "run_command_port_unforwarded" ||
+        event_type === "run_command_stopped"
+      ) {
+        // Re-fetch to get updated run_commands state from the API
+        fetchWorkflows();
+        return;
+      }
+
       // Port forwarding events — update dynamic forwards map
       if (event_type === "port_forwarded" && evt.forwarded_port) {
         const [cp, hp] = evt.forwarded_port;
