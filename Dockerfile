@@ -6,6 +6,8 @@ WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci --legacy-peer-deps
 COPY ui/ ./
+# VERSION file is read by vite.config.ts at build time (resolve("../VERSION"))
+COPY VERSION /VERSION
 RUN npm run build
 
 # Stage 1b: Build Rust binary
