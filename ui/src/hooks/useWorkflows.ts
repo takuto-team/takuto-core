@@ -13,11 +13,21 @@ const TERMINAL_MAX_LINES = 500;
 /** Dynamic port forwards from WebSocket events, keyed by ticket_key → [container_port, host_port][] */
 export type DynamicForwards = Record<string, [number, number][]>;
 
+export interface SystemError {
+  id: number;
+  ticketKey: string;
+  message: string;
+  timestamp: Date;
+}
+
+let errorIdCounter = 0;
+
 export function useWorkflows() {
   const [workflows, setWorkflows] = useState<Record<string, WorkflowSummary>>({});
   const [orderKeys, setOrderKeys] = useState<string[]>([]);
   const [terminalStates, setTerminalStates] = useState<Record<string, TerminalState>>({});
   const [dynamicForwards, setDynamicForwards] = useState<DynamicForwards>({});
+  const [systemErrors, setSystemErrors] = useState<SystemError[]>([]);
   const initialLoadDone = useRef(false);
 
   const fetchWorkflows = useCallback(async () => {
@@ -127,6 +137,28 @@ export function useWorkflows() {
         return;
       }
 
+      // Run command events — update run_commands in workflow state
+      if (
+        event_type === "run_command_port_forwarded" ||
+        event_type === "run_command_port_unforwarded" ||
+        event_type === "run_command_stopped"
+      ) {
+        // Surface error from run command failure
+        if (event_type === "run_command_stopped" && evt.error) {
+          setSystemErrors((prev) => [
+            ...prev,
+            {
+              id: ++errorIdCounter,
+              ticketKey: ticket_key,
+              message: evt.error!,
+              timestamp: new Date(),
+            },
+          ]);
+        }
+        fetchWorkflows();
+        return;
+      }
+
       // Port forwarding events — update dynamic forwards map
       if (event_type === "port_forwarded" && evt.forwarded_port) {
         const [cp, hp] = evt.forwarded_port;
@@ -180,11 +212,17 @@ export function useWorkflows() {
     [fetchWorkflows]
   );
 
+  const dismissError = useCallback((id: number) => {
+    setSystemErrors((prev) => prev.filter((e) => e.id !== id));
+  }, []);
+
   return {
     workflows,
     orderKeys,
     terminalStates,
     dynamicForwards,
+    systemErrors,
+    dismissError,
     fetchWorkflows,
     handleEvent,
   };

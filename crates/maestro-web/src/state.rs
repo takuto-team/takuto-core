@@ -13,6 +13,22 @@ use maestro_core::workflow::engine::WorkflowEngine;
 /// socat forwards (tracked by the event subscriber).
 pub type DynamicForwardsMap = Arc<RwLock<HashMap<String, Vec<(u16, u16)>>>>;
 
+/// State for a single active run command.
+#[derive(Debug, Clone)]
+pub struct RunCommandState {
+    /// Index of the command in the `[[run_commands]]` config array.
+    pub cmd_index: usize,
+    /// Name from config.
+    pub name: String,
+    /// Cancellation token for the background port scanner.
+    pub scanner_cancel: CancellationToken,
+    /// Detected port forwarding: `(container_port, host_port)`.
+    pub forwarded_port: Option<(u16, u16)>,
+}
+
+/// Map of active run commands: `ticket_key → vec of RunCommandState`.
+pub type RunCommandsMap = Arc<RwLock<HashMap<String, Vec<RunCommandState>>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Arc<WorkflowEngine>,
@@ -31,4 +47,6 @@ pub struct AppState {
     pub dynamic_forwards: DynamicForwardsMap,
     /// Spare port and auth token allocated for ttyd web terminal per editor, keyed by ticket_key.
     pub terminal_ports: Arc<RwLock<HashMap<String, (u16, String)>>>,
+    /// Active run command processes, keyed by ticket_key.
+    pub run_commands: RunCommandsMap,
 }

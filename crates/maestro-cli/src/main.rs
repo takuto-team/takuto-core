@@ -302,6 +302,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         terminal_ports: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
+        run_commands: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
     };
     let app = build_router(app_state);
 

@@ -118,6 +118,8 @@ pub struct WorkflowSummary {
     pub can_resume_from_error: bool,
     /// Set when a web terminal (ttyd) is running for this workflow's editor container.
     pub terminal_url: Option<String>,
+    /// Configured run commands (from `[[run_commands]]` in config), with current running status.
+    pub run_commands: Vec<RunCommandStatus>,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -161,10 +163,39 @@ fn extract_error(state: &WorkflowState) -> Option<String> {
     }
 }
 
+/// Build the run command status list for a given workflow's ticket key.
+fn build_run_commands_status(
+    cfg_commands: &[maestro_core::config::RunCommandConfig],
+    active_cmds: Option<&Vec<crate::state::RunCommandState>>,
+) -> Vec<RunCommandStatus> {
+    cfg_commands
+        .iter()
+        .enumerate()
+        .map(|(i, rc)| {
+            let (running, forwarded_port) = if let Some(active) = active_cmds {
+                if let Some(cmd_state) = active.iter().find(|c| c.cmd_index == i) {
+                    (true, cmd_state.forwarded_port)
+                } else {
+                    (false, None)
+                }
+            } else {
+                (false, None)
+            };
+            RunCommandStatus {
+                index: i,
+                name: rc.name.clone(),
+                running,
+                forwarded_port,
+            }
+        })
+        .collect()
+}
+
 pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowSummary>> {
     let cfg = state.config.read().await;
     let workflows = state.engine.workflows.read().await;
     let dyn_fwd = state.dynamic_forwards.read().await;
+    let run_cmds_state = state.run_commands.read().await;
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
         .map(|w| {
@@ -173,6 +204,8 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
             // Use the server-side dynamic-forwards cache so that port buttons
             // appear immediately on page load (no per-workflow Docker call).
             let port_mappings = dyn_fwd.get(&w.ticket_key).cloned().unwrap_or_default();
+            let run_commands =
+                build_run_commands_status(&cfg.run_commands, run_cmds_state.get(&w.ticket_key));
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -204,6 +237,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 ticketing_system: w.ticketing_system.to_string(),
                 can_resume_from_error: can_resume_from_error(w),
                 terminal_url: None,
+                run_commands,
             }
         })
         .collect();
@@ -274,6 +308,10 @@ pub async fn get_workflow(
             .map(|(port, token)| {
                 container::build_terminal_url(container::editor_host_port(*port), token)
             }),
+        run_commands: {
+            let run_cmds_state = state.run_commands.read().await;
+            build_run_commands_status(&cfg.run_commands, run_cmds_state.get(&ticket_key))
+        },
     }))
 }
 
@@ -312,6 +350,9 @@ pub async fn resume_from_error(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // Stop any running run commands — the workflow is transitioning back to active
+    cleanup_run_commands(&state, &id).await;
+
     state
         .engine
         .resume_from_error(&id)
@@ -325,6 +366,9 @@ pub async fn retry_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // Stop any running run commands — the old workflow is being removed
+    cleanup_run_commands(&state, &id).await;
+
     state
         .engine
         .retry_workflow(&id)
@@ -356,6 +400,9 @@ pub async fn address_pr_comments(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // Stop any running run commands — the workflow is transitioning back to active
+    cleanup_run_commands(&state, &id).await;
+
     state
         .engine
         .start_pr_review_workflow(&id)
@@ -369,6 +416,9 @@ pub async fn merge_base_branch(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // Stop any running run commands — the workflow is transitioning back to active
+    cleanup_run_commands(&state, &id).await;
+
     state
         .engine
         .start_merge_base_workflow(&id)
@@ -382,6 +432,9 @@ pub async fn mark_work_done(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<MarkDoneOutcome>, (StatusCode, String)> {
+    // Stop any running run commands for this workflow
+    cleanup_run_commands(&state, &id).await;
+
     state
         .engine
         .mark_work_done(&id)
@@ -395,12 +448,27 @@ pub async fn delete_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // Stop any running run commands for this workflow
+    cleanup_run_commands(&state, &id).await;
+
     state
         .engine
         .delete_workflow(&id)
         .await
         .map(|()| StatusCode::OK)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+/// Stop all run commands and clean up state for a workflow.
+async fn cleanup_run_commands(state: &AppState, ticket_key: &str) {
+    let mut run_cmds = state.run_commands.write().await;
+    if let Some(cmds) = run_cmds.remove(ticket_key) {
+        for cmd in &cmds {
+            cmd.scanner_cancel.cancel();
+        }
+        drop(run_cmds);
+        container::stop_all_run_commands(ticket_key).await;
+    }
 }
 
 #[derive(Deserialize)]
@@ -738,6 +806,297 @@ pub async fn close_terminal(State(state): State<AppState>, Path(id): Path<String
     state.terminal_ports.write().await.remove(&id);
     container::stop_terminal(&id).await;
     StatusCode::OK
+}
+
+// ---------------------------------------------------------------------------
+// Run commands — start/stop user-defined shell commands in dedicated containers
+// ---------------------------------------------------------------------------
+
+/// Status of a single run command.
+#[derive(Serialize)]
+pub struct RunCommandStatus {
+    /// Index of the command in the `[[run_commands]]` config array.
+    pub index: usize,
+    /// Display name from config.
+    pub name: String,
+    /// Whether the command is currently running.
+    pub running: bool,
+    /// Forwarded port `(container_port, host_port)`, if detected.
+    pub forwarded_port: Option<(u16, u16)>,
+}
+
+/// Response for `GET /api/workflows/{id}/run-commands`.
+#[derive(Serialize)]
+pub struct RunCommandsStatusResponse {
+    pub commands: Vec<RunCommandStatus>,
+}
+
+/// Request body for `POST /api/workflows/{id}/run-commands/{index}/start`.
+#[derive(Deserialize)]
+pub struct StartRunCommandRequest {}
+
+/// Response for `POST /api/workflows/{id}/run-commands/{index}/start`.
+#[derive(Serialize)]
+pub struct StartRunCommandResponse {
+    pub index: usize,
+    pub name: String,
+}
+
+/// List the status of all configured run commands for a workflow.
+pub async fn list_run_commands(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<RunCommandsStatusResponse>, (StatusCode, String)> {
+    let cfg = state.config.read().await;
+    let workflows = state.engine.workflows.read().await;
+    let _w = workflows
+        .get(&id)
+        .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
+
+    let run_cmds_state = state.run_commands.read().await;
+    let active_cmds = run_cmds_state.get(&id);
+
+    let commands: Vec<RunCommandStatus> = cfg
+        .run_commands
+        .iter()
+        .enumerate()
+        .map(|(i, rc)| {
+            let (running, forwarded_port) = if let Some(active) = active_cmds {
+                if let Some(cmd_state) = active.iter().find(|c| c.cmd_index == i) {
+                    (true, cmd_state.forwarded_port)
+                } else {
+                    (false, None)
+                }
+            } else {
+                (false, None)
+            };
+            RunCommandStatus {
+                index: i,
+                name: rc.name.clone(),
+                running,
+                forwarded_port,
+            }
+        })
+        .collect();
+
+    Ok(Json(RunCommandsStatusResponse { commands }))
+}
+
+/// Start a run command for a workflow.
+pub async fn start_run_command(
+    State(state): State<AppState>,
+    Path((id, index)): Path<(String, usize)>,
+) -> Result<Json<StartRunCommandResponse>, (StatusCode, String)> {
+    let cfg = state.config.read().await;
+    let rc = cfg.run_commands.get(index).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!(
+            "Run command index {index} out of range (max {})",
+            cfg.run_commands.len()
+        ),
+    ))?;
+    let rc_name = rc.name.clone();
+    let rc_command = rc.command.clone();
+    let dynamic_ports = cfg.editor.dynamic_ports;
+    drop(cfg);
+
+    let workflows = state.engine.workflows.read().await;
+    let w = workflows
+        .get(&id)
+        .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
+
+    // Run commands only allowed when the workflow is not active (same as editor)
+    if w.state.is_active() {
+        return Err((
+            StatusCode::CONFLICT,
+            "Cannot start run command while workflow is active".into(),
+        ));
+    }
+
+    let worktree = w
+        .worktree_path
+        .as_ref()
+        .ok_or((StatusCode::CONFLICT, "No worktree path".into()))?
+        .clone();
+
+    if !worktree.exists() {
+        return Err((
+            StatusCode::CONFLICT,
+            "Worktree does not exist on disk".into(),
+        ));
+    }
+
+    let ticket_key = w.ticket_key.clone();
+    drop(workflows);
+
+    // Check if already running
+    {
+        let run_cmds = state.run_commands.read().await;
+        if let Some(active) = run_cmds.get(&ticket_key)
+            && active.iter().any(|c| c.cmd_index == index)
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("Run command '{}' is already running", rc_name),
+            ));
+        }
+    }
+
+    if !ContainerRunner::is_available() {
+        return Err((
+            StatusCode::CONFLICT,
+            "Docker is not available — cannot start run command container".into(),
+        ));
+    }
+
+    let image = ContainerRunner::discover_worker_image()
+        .await
+        .unwrap_or_else(|| "maestro:latest".to_string());
+
+    let spare_ports = container::start_run_command(
+        &ticket_key,
+        &worktree,
+        &image,
+        &rc_command,
+        index,
+        dynamic_ports,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    // Register in state BEFORE spawning background tasks so that events
+    // emitted by the scanner/tracker always find an existing map entry
+    // (avoids a race where a fast container exit leaves a stale entry).
+    let cancel = CancellationToken::new();
+    let scanner_cancel = cancel.clone();
+    let tracker_cancel = cancel.clone();
+    {
+        let mut run_cmds = state.run_commands.write().await;
+        let entry = run_cmds.entry(ticket_key.clone()).or_default();
+        entry.push(crate::state::RunCommandState {
+            cmd_index: index,
+            name: rc_name.clone(),
+            scanner_cancel: cancel,
+            forwarded_port: None,
+        });
+    }
+
+    // Start background port scanner for this run command
+    let event_tx = state.engine.event_tx.clone();
+    let ticket_for_scanner = ticket_key.clone();
+
+    let run_cmds_map = state.run_commands.clone();
+    let ticket_for_tracker = ticket_key.clone();
+
+    // Spawn port scanner
+    tokio::spawn({
+        let spare = spare_ports.clone();
+        async move {
+            container::run_run_command_port_scanner(
+                &ticket_for_scanner,
+                index,
+                spare,
+                event_tx,
+                scanner_cancel,
+            )
+            .await;
+        }
+    });
+
+    // Spawn tracker that updates run_commands state on port events
+    let mut rx = state.engine.subscribe();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = tracker_cancel.cancelled() => break,
+                result = rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            if event.ticket_key != ticket_for_tracker {
+                                continue;
+                            }
+                            let cmd_idx_str = event.step_name.as_deref().unwrap_or("");
+                            let evt_cmd_index: usize = match cmd_idx_str.parse() {
+                                Ok(i) => i,
+                                Err(_) => continue,
+                            };
+                            if evt_cmd_index != index {
+                                continue;
+                            }
+                            match event.event_type.as_str() {
+                                "run_command_port_forwarded" => {
+                                    if let Some(fwd) = event.forwarded_port {
+                                        let mut map = run_cmds_map.write().await;
+                                        if let Some(cmd) = map.get_mut(&ticket_for_tracker).and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == index)) {
+                                            cmd.forwarded_port = Some(fwd);
+                                        }
+                                    }
+                                }
+                                "run_command_port_unforwarded" => {
+                                    let mut map = run_cmds_map.write().await;
+                                    if let Some(cmd) = map.get_mut(&ticket_for_tracker).and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == index))
+                                        && let Some(gone) = event.forwarded_port && cmd.forwarded_port.map(|f| f.0) == Some(gone.0) {
+                                        cmd.forwarded_port = None;
+                                    }
+                                }
+                                "run_command_stopped" => {
+                                    // Container exited on its own — clean up state
+                                    let mut map = run_cmds_map.write().await;
+                                    if let Some(cmds) = map.get_mut(&ticket_for_tracker) {
+                                        cmds.retain(|c| c.cmd_index != index);
+                                        if cmds.is_empty() {
+                                            map.remove(&ticket_for_tracker);
+                                        }
+                                    }
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(Json(StartRunCommandResponse {
+        index,
+        name: rc_name,
+    }))
+}
+
+/// Stop a running run command.
+pub async fn stop_run_command(
+    State(state): State<AppState>,
+    Path((id, index)): Path<(String, usize)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let workflows = state.engine.workflows.read().await;
+    let w = workflows
+        .get(&id)
+        .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
+    let ticket_key = w.ticket_key.clone();
+    drop(workflows);
+
+    // Cancel scanner and remove from state
+    {
+        let mut run_cmds = state.run_commands.write().await;
+        if let Some(cmds) = run_cmds.get_mut(&ticket_key) {
+            if let Some(pos) = cmds.iter().position(|c| c.cmd_index == index) {
+                cmds[pos].scanner_cancel.cancel();
+                cmds.remove(pos);
+            }
+            if cmds.is_empty() {
+                run_cmds.remove(&ticket_key);
+            }
+        }
+    }
+
+    // Stop the container
+    container::stop_run_command(&ticket_key, index).await;
+
+    Ok(StatusCode::OK)
 }
 
 #[cfg(test)]
