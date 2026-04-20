@@ -84,7 +84,7 @@ setup:
 	fi
 ifeq ($(IS_PODMAN),1)
 	@P=$(PROJECT_NAME); \
-	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro_maestro:" | head -1); \
+	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro[-_]maestro:" | head -1); \
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
 	podman run --rm -it \
 		--network=host \
@@ -164,7 +164,7 @@ ps:
 bash:
 ifeq ($(IS_PODMAN),1)
 	@P=$(PROJECT_NAME); \
-	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro_maestro:" | head -1); \
+	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro[-_]maestro:" | head -1); \
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
 	podman run --rm -it --user maestro \
 		--security-opt=label=disable \
@@ -204,7 +204,7 @@ else
 endif
 
 load-worker:
-	@IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep maestro_maestro | head -1); \
+	@IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "maestro[-_]maestro" | head -1); \
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run make build first." >&2; exit 1; fi; \
 	echo "Waiting for DinD to be ready..."; \
 	for i in $$(seq 1 30); do \
