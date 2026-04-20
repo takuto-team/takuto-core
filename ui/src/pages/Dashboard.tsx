@@ -13,6 +13,7 @@ import { TicketDetailModal } from "../components/modals/TicketDetailModal";
 import { PasteDescriptionModal } from "../components/modals/PasteDescriptionModal";
 import { ReportModal } from "../components/modals/ReportModal";
 import { NoJiraAlertModal } from "../components/modals/NoJiraAlertModal";
+import { SystemErrorAlert } from "../components/SystemErrorAlert";
 
 interface Props {
   onLogout: () => void;
@@ -21,7 +22,7 @@ interface Props {
 
 export function Dashboard({ onLogout, authEnabled }: Props) {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const { workflows, orderKeys, terminalStates, dynamicForwards, fetchWorkflows, handleEvent } = useWorkflows();
+  const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, dismissError, fetchWorkflows, handleEvent } = useWorkflows();
   const { connected } = useWebSocket(handleEvent);
   const prevConnected = useRef(false);
   const polling = usePolling();
@@ -208,6 +209,9 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           }}
         />
       )}
+
+      {/* System error alerts (bottom-right) */}
+      <SystemErrorAlert errors={systemErrors} onDismiss={dismissError} />
     </div>
   );
 }

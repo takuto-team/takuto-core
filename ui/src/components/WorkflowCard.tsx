@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { api, apiPost } from "../api/client";
-import type { WorkflowSummary } from "../api/types";
+import type { WorkflowSummary, RunCommandStatus } from "../api/types";
 import type { TerminalState } from "../hooks/useWorkflows";
 import { TerminalOutput } from "./TerminalOutput";
 import { ConfirmModal } from "./modals/ConfirmModal";
@@ -277,6 +277,13 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
               )}
             </div>
             <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />
+            {w.run_commands && w.run_commands.length > 0 && (
+              <RunCommands
+                ticketKey={w.ticket_key}
+                commands={w.run_commands}
+                withLoading={withLoading}
+              />
+            )}
           </div>
         ) : (
           /* Running / Paused actions — flat list */
@@ -309,6 +316,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
         {isActive && <TerminalOutput state={effectiveTs} />}
         {isTerminal && hasTerminalLines && (
           <div>
+            <div className="border-t border-gray-800/60 mb-2" />
             <button
               onClick={() => setTerminalCollapsed(!terminalCollapsed)}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
@@ -438,6 +446,135 @@ function PortIcon() {
   return (
     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+    </svg>
+  );
+}
+
+/* ── Run commands ── */
+
+function RunCommands({
+  ticketKey,
+  commands,
+  withLoading,
+}: {
+  ticketKey: string;
+  commands: RunCommandStatus[];
+  withLoading: (fn: () => Promise<void>, message?: string) => Promise<void>;
+}) {
+  const startCmd = (index: number) => async () => {
+    const res = await apiPost(`/api/workflows/${encodeURIComponent(ticketKey)}/run-commands/${index}/start`);
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || "Failed to start run command");
+    }
+  };
+
+  const stopCmd = (index: number) => async () => {
+    const res = await apiPost(`/api/workflows/${encodeURIComponent(ticketKey)}/run-commands/${index}/stop`);
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || "Failed to stop run command");
+    }
+  };
+
+  const copyUrl = (port: number) => {
+    const url = `http://localhost:${port}`;
+    navigator.clipboard.writeText(url).catch(() => {
+      // Fallback for insecure contexts
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    });
+  };
+
+  return (
+    <>
+      <div className="border-t border-gray-800/60" />
+      <div className="flex flex-col gap-1.5">
+        {commands.map((cmd) => (
+          <div key={cmd.index} className="flex items-center gap-2 flex-wrap">
+            {cmd.running ? (
+              <>
+                <button
+                  onClick={() => withLoading(stopCmd(cmd.index))}
+                  className="action-btn wf-btn-danger inline-flex items-center gap-1"
+                >
+                  <StopSquareIcon /> Stop {cmd.name}
+                </button>
+                {cmd.forwarded_port ? (
+                  <>
+                    <button
+                      onClick={() => copyUrl(cmd.forwarded_port![1])}
+                      className="action-btn wf-btn-secondary inline-flex items-center gap-1"
+                      title={`Copy http://localhost:${cmd.forwarded_port[1]}`}
+                    >
+                      <CopyIcon /> Copy
+                    </button>
+                    <a
+                      href={`http://localhost:${cmd.forwarded_port[1]}`}
+                      target="_blank"
+                      rel="noopener"
+                      className="action-btn wf-btn-secondary inline-flex items-center gap-1"
+                    >
+                      <ExternalLinkIcon /> Open
+                    </a>
+                  </>
+                ) : (
+                  <>
+                    <span
+                      className="action-btn wf-btn-secondary opacity-50 cursor-not-allowed inline-flex items-center gap-1"
+                      title="No listening port detected"
+                    >
+                      <CopyIcon /> Copy
+                    </span>
+                    <span
+                      className="action-btn wf-btn-secondary opacity-50 cursor-not-allowed inline-flex items-center gap-1"
+                      title="No listening port detected"
+                    >
+                      <ExternalLinkIcon /> Open
+                    </span>
+                  </>
+                )}
+              </>
+            ) : (
+              <button
+                onClick={() => withLoading(startCmd(cmd.index), `Starting ${cmd.name}`)}
+                className="action-btn wf-btn-primary inline-flex items-center gap-1"
+              >
+                <PlayIcon /> Run {cmd.name}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function StopSquareIcon() {
+  return (
+    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+      <rect x="6" y="6" width="12" height="12" rx="1" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+    </svg>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
     </svg>
   );
 }

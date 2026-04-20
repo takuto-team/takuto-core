@@ -365,6 +365,11 @@ pub struct Config {
     pub editor: EditorConfig,
     #[serde(default)]
     pub terminal: TerminalConfig,
+    /// User-defined run commands available from the dashboard after a workflow completes.
+    /// Each entry defines a named shell command (e.g. dev server, Storybook) that can be
+    /// started/stopped from the workflow card.
+    #[serde(default)]
+    pub run_commands: Vec<RunCommandConfig>,
     /// Ordered AI prompt steps (`[[agent_steps]]`). Empty → [`default_agent_steps`].
     #[serde(default)]
     pub agent_steps: Vec<AgentStepConfig>,
@@ -374,6 +379,16 @@ pub struct Config {
     /// Merge base branch loop (`[[merge_base_agent_steps]]`) after main flow is Done. Empty → [`default_merge_base_agent_steps`].
     #[serde(default)]
     pub merge_base_agent_steps: Vec<AgentStepConfig>,
+}
+
+/// A user-defined run command that can be launched from the dashboard after a workflow completes.
+/// Each command runs in a dedicated container with port detection and forwarding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunCommandConfig {
+    /// Display label for the command (e.g. `"Dev Server"`, `"Storybook"`).
+    pub name: String,
+    /// Shell command to execute (e.g. `"npm run dev"`, `"npx storybook dev -p 6006"`).
+    pub command: String,
 }
 
 /// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
@@ -1087,6 +1102,33 @@ impl Config {
                 "[jira] done_status must be non-empty (Jira transition target for Mark as Done)"
                     .to_string(),
             ));
+        }
+
+        // Validate run commands: names must be non-empty and unique.
+        for (i, rc) in self.run_commands.iter().enumerate() {
+            if rc.name.trim().is_empty() {
+                return Err(MaestroError::Config(format!(
+                    "[[run_commands]] entry {i} has an empty name"
+                )));
+            }
+            if rc.command.trim().is_empty() {
+                return Err(MaestroError::Config(format!(
+                    "[[run_commands]] entry '{}' has an empty command",
+                    rc.name
+                )));
+            }
+        }
+        {
+            let mut seen_names = std::collections::HashSet::new();
+            for rc in &self.run_commands {
+                let key = rc.name.trim().to_lowercase();
+                if !seen_names.insert(key) {
+                    return Err(MaestroError::Config(format!(
+                        "[[run_commands]] duplicate name: '{}'",
+                        rc.name.trim()
+                    )));
+                }
+            }
         }
 
         validate_step_list(&self.agent_steps, "agent_steps")?;

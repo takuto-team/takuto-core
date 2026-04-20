@@ -42,6 +42,14 @@ export interface WorkflowSummary {
   ticketing_system: string;
   can_resume_from_error: boolean;
   terminal_url: string | null;
+  run_commands: RunCommandStatus[];
+}
+
+export interface RunCommandStatus {
+  index: number;
+  name: string;
+  running: boolean;
+  forwarded_port: [number, number] | null;
 }
 
 export interface WorkflowEvent {
