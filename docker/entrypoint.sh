@@ -73,7 +73,7 @@ export MISE_CONFIG_DIR="/home/maestro/.config/mise"
 export MISE_TRUST_ALL_CONFIGS=1
 export MISE_YES=1
 mkdir -p "$MISE_DATA_DIR/shims" "$MISE_CACHE_DIR" "$MISE_CONFIG_DIR"
-export PATH="$MISE_DATA_DIR/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="$MISE_DATA_DIR/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Restore .claude.json from backup if missing (volume can lose it on unclean shutdown)
 if [ ! -f "$HOME/.claude.json" ]; then
