@@ -30,6 +30,7 @@ export function TicketDetailModal({
   const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
   const [sideBySide, setSideBySide] = useState(false);
   const [debouncedText, setDebouncedText] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (initialDescription) return;
@@ -63,13 +64,14 @@ export function TicketDetailModal({
 
   const handleStartEdit = () => {
     setEditText(markdown);
-    setDebouncedText(markdown); // seed debounce immediately so preview is not blank
+    setDebouncedText(markdown);
     setActiveTab("write");
     setSideBySide(false);
     setEditMode(true);
   };
 
   const handleSaveDescription = async () => {
+    setSaving(true);
     try {
       const res = await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
         description: editText,
@@ -82,6 +84,8 @@ export function TicketDetailModal({
       setEditMode(false);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -95,6 +99,8 @@ export function TicketDetailModal({
     setSideBySide(checked);
     if (!checked) setActiveTab("write");
   };
+
+  const editDirty = editMode && editText !== markdown;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -113,6 +119,28 @@ export function TicketDetailModal({
             &times;
           </button>
         </div>
+
+        {/* Modified banner — shown when editing and text differs, or after AI improve */}
+        {editDirty && (
+          <div className="bg-blue-900/20 border-b border-blue-700/30 px-4 py-2 flex items-center justify-between">
+            <span className="text-xs text-blue-300">Description modified — save to update the ticket</span>
+            <div className="flex gap-2">
+              <button
+                onClick={handleCancelEdit}
+                className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+              >
+                Discard
+              </button>
+              <button
+                onClick={handleSaveDescription}
+                disabled={saving}
+                className="text-xs px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Tab bar — only visible in edit mode */}
         {editMode && (
@@ -162,7 +190,6 @@ export function TicketDetailModal({
           ) : editMode ? (
             sideBySide ? (
               <>
-                {/* Write pane */}
                 <div className="flex-1 overflow-y-auto p-4 border-r border-gray-800">
                   <textarea
                     value={editText}
@@ -171,7 +198,6 @@ export function TicketDetailModal({
                     autoFocus
                   />
                 </div>
-                {/* Preview pane — debounced */}
                 <div className="flex-1 overflow-y-auto p-4">
                   <MarkdownPreview markdown={debouncedText} />
                 </div>
@@ -202,41 +228,26 @@ export function TicketDetailModal({
           <div className="flex gap-2">
             <button
               onClick={handleImprove}
-              disabled={improving}
+              disabled={improving || editMode}
               className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
             >
               {improving ? "Improving..." : "Improve with AI"}
             </button>
-            {!editMode ? (
+            {!editMode && (
               <button
                 onClick={handleStartEdit}
                 className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
               >
                 Edit
               </button>
-            ) : (
-              <>
-                <button
-                  onClick={handleSaveDescription}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-green-600/20 text-green-300 border border-green-500/30 hover:bg-green-600/30 cursor-pointer"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={handleCancelEdit}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </>
             )}
           </div>
           <div className="flex gap-2">
             <button
-              onClick={onClose}
+              onClick={editMode ? handleCancelEdit : onClose}
               className="text-xs px-4 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
             >
-              Close
+              {editMode ? "Cancel" : "Close"}
             </button>
             {showStartButton && onStart && (
               <button
