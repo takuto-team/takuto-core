@@ -74,6 +74,19 @@
 # """
 # repeat = 1
 
+# --- Custom run commands (optional `[[run_commands]]` at TOML root) ---
+# Define named shell commands that appear as actionable buttons on the workflow card
+# after a workflow completes. Each command runs in a dedicated container with automatic
+# port detection and forwarding.
+#
+# [[run_commands]]
+# name = "Dev Server"
+# command = "npm run dev"
+#
+# [[run_commands]]
+# name = "Storybook"
+# command = "npx storybook dev -p 6006"
+
 [general]
 dry_mode = false
 # Ticketing system that drives workflow automation.
