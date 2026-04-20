@@ -48,8 +48,10 @@ export function TicketDetailModal({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (initialDescription) return;
-    if (ticketingSystem === "github") return;
+    // No-ticketing mode: description comes from the workflow (initialDescription prop).
+    // GitHub mode: description comes from the workflow (cached issue body).
+    // Only Jira mode needs to fetch from the preview API.
+    if (initialDescription || ticketingSystem === "none" || ticketingSystem === "github") return;
     apiJson<TicketPreview>(`/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`)
       .then((data) => setMarkdown(data.description_markdown || ""))
       .catch(() => setMarkdown("*Failed to load description*"))
