@@ -1558,7 +1558,7 @@ pub async fn start_run_command(
     let mut args: Vec<String> = vec![
         "run".into(),
         "-d".into(),
-        "--rm".into(),
+        // No --rm: the scanner captures exit code + logs before explicit cleanup.
         "--name".into(),
         name.clone(),
         "--cap-add=NET_ADMIN".into(),
@@ -1655,6 +1655,67 @@ pub async fn is_run_command_running(ticket_key: &str, cmd_index: usize) -> bool 
     }
 }
 
+/// Try to get the exit code and last log lines from a run-command container that
+/// has exited. Returns `None` for a clean exit (code 0) or if the container was
+/// already removed (`--rm`). Returns an error message string for non-zero exits.
+async fn get_run_command_exit_error(container_name: &str) -> Option<String> {
+    // Try docker inspect for exit code — may fail if container already removed by --rm.
+    let inspect = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.ExitCode}}",
+            container_name,
+        ])
+        .output()
+        .await
+        .ok()?;
+
+    if !inspect.status.success() {
+        // Container already removed — try to get logs from docker events or just report unknown.
+        // With --rm, the container is gone. We can't retrieve logs.
+        return None;
+    }
+
+    let exit_code: i32 = String::from_utf8_lossy(&inspect.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0);
+
+    if exit_code == 0 {
+        return None;
+    }
+
+    // Container still exists momentarily — grab last few log lines before --rm cleans up.
+    let logs = tokio::process::Command::new("docker")
+        .args(["logs", "--tail", "20", container_name])
+        .output()
+        .await
+        .ok();
+
+    let log_tail = logs
+        .map(|o| {
+            let mut out = String::from_utf8_lossy(&o.stdout).to_string();
+            let err = String::from_utf8_lossy(&o.stderr);
+            if !err.trim().is_empty() {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&err);
+            }
+            out.trim().to_string()
+        })
+        .unwrap_or_default();
+
+    let msg = if log_tail.is_empty() {
+        format!("Command exited with code {exit_code}")
+    } else {
+        format!("Command exited with code {exit_code}:\n{log_tail}")
+    };
+
+    Some(msg)
+}
+
 /// Stop and remove a run-command container.
 pub async fn stop_run_command(ticket_key: &str, cmd_index: usize) {
     let name = run_command_container_name(ticket_key, cmd_index);
@@ -1732,16 +1793,22 @@ pub async fn run_run_command_port_scanner(
             _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {}
         }
 
-        // Check if the container is still running; if not, emit stopped event and exit.
+        // Check if the container is still running; if not, capture exit info and emit stopped event.
         if !is_run_command_running(&ticket, cmd_index).await {
-            info!(ticket = %ticket, cmd_index, "Run command container exited — stopping scanner");
+            // Try to get the exit code and last log lines from the (possibly already removed) container.
+            let error_msg = get_run_command_exit_error(&container).await;
+            if let Some(ref err) = error_msg {
+                warn!(ticket = %ticket, cmd_index, error = %err, "Run command container exited with error");
+            } else {
+                info!(ticket = %ticket, cmd_index, "Run command container exited — stopping scanner");
+            }
             let _ = event_tx.send(WorkflowEvent {
                 event_type: "run_command_stopped".to_string(),
                 workflow_id: String::new(),
                 ticket_key: ticket.clone(),
                 state: String::new(),
                 timestamp: chrono::Utc::now(),
-                error: None,
+                error: error_msg,
                 step_name: Some(format!("{cmd_index}")),
                 output_line: None,
                 stream: None,
@@ -1750,6 +1817,11 @@ pub async fn run_run_command_port_scanner(
                 forwarded_port: None,
                 pr_merged: None,
             });
+            // Clean up the stopped container (we removed --rm to capture exit info).
+            let _ = tokio::process::Command::new("docker")
+                .args(["rm", "-f", &container])
+                .output()
+                .await;
             return;
         }
 
