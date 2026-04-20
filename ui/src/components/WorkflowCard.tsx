@@ -8,6 +8,7 @@ import { ConfirmModal } from "./modals/ConfirmModal";
 interface Props {
   workflow: WorkflowSummary;
   terminalState?: TerminalState;
+  dynamicForwards: [number, number][];
   onRefresh: () => void;
   onShowDescription: (ticketKey: string, summary: string) => void;
   onReport: (ticketKey: string) => void;
@@ -54,7 +55,7 @@ function formatDuration(start: Date, end: Date): string {
   return `${s}s`;
 }
 
-export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShowDescription, onReport }: Props) {
+export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, onRefresh, onShowDescription, onReport }: Props) {
   const [loading, setLoading] = useState<false | "generic" | string>(false);
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
@@ -271,29 +272,33 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
                 <ActionBtn variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</ActionBtn>
               )}
             </div>
+            <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />
           </div>
         ) : (
           /* Running / Paused actions — flat list */
-          <div className="flex flex-wrap gap-2">
-            {!w.jira_available ? null : (
-              <ActionBtn variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
-                Go to ticket
+          <>
+            <div className="flex flex-wrap gap-2">
+              {!w.jira_available ? null : (
+                <ActionBtn variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
+                  Go to ticket
+                </ActionBtn>
+              )}
+              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary)}>
+                Show description
               </ActionBtn>
-            )}
-            <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary)}>
-              Show description
-            </ActionBtn>
-            {status.label === "Running" && (
-              <ActionBtn variant="primary" onClick={() => withLoading(doAction("pause"))} title="Pause">
-                <PauseIcon /> Pause
-              </ActionBtn>
-            )}
-            {status.label === "Paused" && (
-              <ActionBtn variant="primary" onClick={() => withLoading(doAction("resume"))} title="Resume">
-                <PlayIcon /> Resume
-              </ActionBtn>
-            )}
-          </div>
+              {status.label === "Running" && (
+                <ActionBtn variant="primary" onClick={() => withLoading(doAction("pause"))} title="Pause">
+                  <PauseIcon /> Pause
+                </ActionBtn>
+              )}
+              {status.label === "Paused" && (
+                <ActionBtn variant="primary" onClick={() => withLoading(doAction("resume"))} title="Resume">
+                  <PlayIcon /> Resume
+                </ActionBtn>
+              )}
+            </div>
+            <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />
+          </>
         )}
 
         {/* Terminal output — always shown for active; collapsible for terminal states */}
@@ -389,6 +394,46 @@ function ComputerIcon() {
       <line x1="32" y1="42" x2="32" y2="50" />
       <line x1="22" y1="50" x2="42" y2="50" strokeLinecap="round" />
       <text x="16" y="28" fontSize="10" fill="currentColor" opacity="0.5" fontFamily="monospace">&gt;_</text>
+    </svg>
+  );
+}
+
+/* ── Port mappings ── */
+
+function PortMappings({ apiMappings, dynamicForwards }: { apiMappings: [number, number][]; dynamicForwards: [number, number][] }) {
+  // Merge API mappings + dynamic forwards, deduplicating by container port (dynamic wins)
+  const dynPorts = new Set(dynamicForwards.map(([cp]) => cp));
+  const merged: [number, number][] = [
+    ...apiMappings.filter(([cp]) => !dynPorts.has(cp)),
+    ...dynamicForwards,
+  ];
+  if (merged.length === 0) return null;
+
+  return (
+    <>
+      <div className="border-t border-gray-800/60" />
+      <div className="flex flex-wrap gap-2">
+        {merged.map(([cp, hp]) => (
+          <a
+            key={`${cp}-${hp}`}
+            href={`http://localhost:${hp}`}
+            target="_blank"
+            rel="noopener"
+            className="action-btn wf-btn-secondary inline-flex items-center gap-1"
+          >
+            <PortIcon />
+            {cp} &rarr; localhost:{hp}
+          </a>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function PortIcon() {
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
     </svg>
   );
 }

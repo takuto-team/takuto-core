@@ -21,7 +21,7 @@ interface Props {
 
 export function Dashboard({ onLogout, authEnabled }: Props) {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const { workflows, orderKeys, terminalStates, fetchWorkflows, handleEvent } = useWorkflows();
+  const { workflows, orderKeys, terminalStates, dynamicForwards, fetchWorkflows, handleEvent } = useWorkflows();
   const { connected } = useWebSocket((evt) => {
     handleEvent(evt);
     // Re-fetch on reconnect
@@ -146,6 +146,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           workflows={workflows}
           orderKeys={orderKeys}
           terminalStates={terminalStates}
+          dynamicForwards={dynamicForwards}
           onRefresh={fetchWorkflows}
           onShowDescription={handleShowDescription}
           onReport={setReportKey}

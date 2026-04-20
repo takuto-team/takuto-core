@@ -10,10 +10,14 @@ export interface TerminalState {
 
 const TERMINAL_MAX_LINES = 500;
 
+/** Dynamic port forwards from WebSocket events, keyed by ticket_key → [container_port, host_port][] */
+export type DynamicForwards = Record<string, [number, number][]>;
+
 export function useWorkflows() {
   const [workflows, setWorkflows] = useState<Record<string, WorkflowSummary>>({});
   const [orderKeys, setOrderKeys] = useState<string[]>([]);
   const [terminalStates, setTerminalStates] = useState<Record<string, TerminalState>>({});
+  const [dynamicForwards, setDynamicForwards] = useState<DynamicForwards>({});
   const initialLoadDone = useRef(false);
 
   const fetchWorkflows = useCallback(async () => {
@@ -72,6 +76,11 @@ export function useWorkflows() {
           delete next[ticket_key];
           return next;
         });
+        setDynamicForwards((prev) => {
+          const next = { ...prev };
+          delete next[ticket_key];
+          return next;
+        });
         return;
       }
 
@@ -118,9 +127,24 @@ export function useWorkflows() {
         return;
       }
 
-      // Port forwarding events — just re-fetch for simplicity
-      if (event_type === "port_forwarded" || event_type === "port_unforwarded") {
-        fetchWorkflows();
+      // Port forwarding events — update dynamic forwards map
+      if (event_type === "port_forwarded" && evt.forwarded_port) {
+        const [cp, hp] = evt.forwarded_port;
+        setDynamicForwards((prev) => {
+          const existing = prev[ticket_key] || [];
+          if (existing.some(([c]) => c === cp)) return prev;
+          return { ...prev, [ticket_key]: [...existing, [cp, hp]] };
+        });
+        return;
+      }
+      if (event_type === "port_unforwarded" && evt.forwarded_port) {
+        const [cp] = evt.forwarded_port;
+        setDynamicForwards((prev) => {
+          const existing = prev[ticket_key];
+          if (!existing) return prev;
+          const filtered = existing.filter(([c]) => c !== cp);
+          return { ...prev, [ticket_key]: filtered };
+        });
         return;
       }
 
@@ -155,6 +179,7 @@ export function useWorkflows() {
     workflows,
     orderKeys,
     terminalStates,
+    dynamicForwards,
     fetchWorkflows,
     handleEvent,
   };

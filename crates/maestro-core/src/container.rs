@@ -1311,6 +1311,7 @@ pub async fn run_port_scanner(
                         "Dynamic port forwarded via socat"
                     );
                     active_forwards.insert(port, spare);
+                    let host_spare = editor_host_port(spare);
                     let _ = event_tx.send(WorkflowEvent {
                         event_type: "port_forwarded".to_string(),
                         workflow_id: String::new(),
@@ -1323,7 +1324,7 @@ pub async fn run_port_scanner(
                         stream: None,
                         progress_percent: None,
                         progress_steps_total: None,
-                        forwarded_port: Some((port, spare)),
+                        forwarded_port: Some((port, host_spare)),
                         pr_merged: None,
                     });
                 } else {
@@ -1355,6 +1356,7 @@ pub async fn run_port_scanner(
                     "Dynamic port forward removed"
                 );
 
+                let host_spare = editor_host_port(spare);
                 let _ = event_tx.send(WorkflowEvent {
                     event_type: "port_unforwarded".to_string(),
                     workflow_id: String::new(),
@@ -1367,7 +1369,7 @@ pub async fn run_port_scanner(
                     stream: None,
                     progress_percent: None,
                     progress_steps_total: None,
-                    forwarded_port: Some((port, spare)),
+                    forwarded_port: Some((port, host_spare)),
                     pr_merged: None,
                 });
             }

@@ -1,11 +1,12 @@
 import type { WorkflowSummary } from "../api/types";
-import type { TerminalState } from "../hooks/useWorkflows";
+import type { TerminalState, DynamicForwards } from "../hooks/useWorkflows";
 import { WorkflowCard } from "./WorkflowCard";
 
 interface Props {
   workflows: Record<string, WorkflowSummary>;
   orderKeys: string[];
   terminalStates: Record<string, TerminalState>;
+  dynamicForwards: DynamicForwards;
   onRefresh: () => void;
   onShowDescription: (ticketKey: string, summary: string) => void;
   onReport: (ticketKey: string) => void;
@@ -17,6 +18,7 @@ export function WorkflowGrid({
   workflows,
   orderKeys,
   terminalStates,
+  dynamicForwards,
   onRefresh,
   onShowDescription,
   onReport,
@@ -50,6 +52,7 @@ export function WorkflowGrid({
           key={w.ticket_key}
           workflow={w}
           terminalState={terminalStates[w.ticket_key]}
+          dynamicForwards={dynamicForwards[w.ticket_key] || []}
           onRefresh={onRefresh}
           onShowDescription={onShowDescription}
           onReport={onReport}
