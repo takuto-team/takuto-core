@@ -60,7 +60,8 @@ up:
 		exit 1; \
 	fi
 	@if [ ! -f maestro.env ]; then \
-		echo "NOTE: maestro.env not found — creating empty file (add secrets here if needed)."; \
+		echo "WARNING: maestro.env not found — creating empty file."; \
+		echo "         Add API tokens and secrets to maestro.env (see maestro.env.example)."; \
 		touch maestro.env; \
 	fi
 	$(COMPOSE) $(COMPOSE_FILES) up -d || (echo "ERROR: Failed to start containers. Run 'make logs' for details." >&2; exit 1)
@@ -77,7 +78,8 @@ setup:
 		exit 1; \
 	fi
 	@if [ ! -f maestro.env ]; then \
-		echo "NOTE: maestro.env not found — creating empty file (add secrets here if needed)."; \
+		echo "WARNING: maestro.env not found — creating empty file."; \
+		echo "         Add API tokens and secrets to maestro.env (see maestro.env.example)."; \
 		touch maestro.env; \
 	fi
 ifeq ($(IS_PODMAN),1)
