@@ -15,7 +15,13 @@ use crate::state::AppState;
 
 const IMPROVE_SYSTEM_PROMPT: &str = "\
 You are a technical writer who improves software ticket descriptions. \
-Output ONLY the improved description in Markdown format. \
+Output the improved title on the FIRST line, then a line containing only `---`, \
+then the improved description in Markdown format. Example:\n\
+Improved Title Here\n\
+---\n\
+Improved description in Markdown...\n\n\
+You may use Mermaid diagram blocks (```mermaid) when a visual flowchart, \
+sequence diagram, or architecture diagram would clarify the description. \
 Do not add any preamble, commentary, explanation, or closing remarks.";
 
 #[derive(Deserialize)]
@@ -27,11 +33,17 @@ pub struct ImproveTicketBody {
 #[derive(Serialize)]
 pub struct ImproveTicketResponse {
     pub improved_description: String,
+    /// Improved title suggested by the AI (empty if parsing failed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub improved_summary: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateDescriptionBody {
     pub description: String,
+    /// Optional summary/title update (used in no-ticketing mode).
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 /// Maximum allowed length for the ticket description in an improve request (100 KB).
@@ -87,8 +99,23 @@ technically precise. Add acceptance criteria if none are present. Keep the origi
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Parse "Title\n---\nDescription" format from AI output.
+    let (improved_summary, improved_description) =
+        if let Some((before, after)) = session.output.split_once("\n---\n") {
+            let title = before.trim().to_string();
+            let desc = after.trim().to_string();
+            if title.is_empty() {
+                (None, session.output.clone())
+            } else {
+                (Some(title), desc)
+            }
+        } else {
+            (None, session.output.clone())
+        };
+
     Ok(Json(ImproveTicketResponse {
-        improved_description: session.output,
+        improved_description,
+        improved_summary,
     }))
 }
 
@@ -100,7 +127,17 @@ pub async fn update_ticket_description(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     match state.ticketing_system {
         TicketingSystem::None => {
-            // No ticketing system — nothing to persist.
+            // No external ticketing system — persist to the in-memory workflow.
+            let mut workflows = state.engine.workflows.write().await;
+            if let Some(wf) = workflows.get_mut(&key) {
+                wf.ticket_description = body.description.clone();
+                if let Some(ref s) = body.summary {
+                    wf.ticket_summary = s.clone();
+                }
+            }
+            drop(workflows);
+            // Best-effort snapshot sync so the edit survives a restart.
+            let _ = state.engine.sync_workflow_snapshot().await;
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::GitHub => {

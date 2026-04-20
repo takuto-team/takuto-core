@@ -2,15 +2,58 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use maestro_core::container::{self, ContainerRunner};
 use maestro_core::jira::ticket_browse_url;
 use maestro_core::workflow::dashboard_progress;
-use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow};
+use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow, WorkflowEvent};
 use maestro_core::workflow::state::WorkflowState;
 use maestro_core::workflow::step::StepLog;
 
-use crate::state::AppState;
+use crate::state::{AppState, DynamicForwardsMap};
+
+/// Listen on the workflow event broadcast channel and keep the dynamic-forwards
+/// map in sync for the given ticket.  Runs until `cancel` fires or the channel
+/// closes.
+pub async fn track_port_forwards(
+    ticket_key: String,
+    dyn_fwd: DynamicForwardsMap,
+    mut rx: broadcast::Receiver<WorkflowEvent>,
+    cancel: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            msg = rx.recv() => {
+                match msg {
+                    Ok(evt) if evt.ticket_key == ticket_key => {
+                        if evt.event_type == "port_forwarded"
+                            && let Some((cp, hp)) = evt.forwarded_port
+                        {
+                            let mut map = dyn_fwd.write().await;
+                            let list = map.entry(ticket_key.clone()).or_default();
+                            if !list.iter().any(|&(c, _)| c == cp) {
+                                list.push((cp, hp));
+                            }
+                        } else if evt.event_type == "port_unforwarded"
+                            && let Some((cp, _)) = evt.forwarded_port
+                        {
+                            let mut map = dyn_fwd.write().await;
+                            if let Some(list) = map.get_mut(&ticket_key) {
+                                list.retain(|&(c, _)| c != cp);
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
 
 #[derive(Serialize)]
 pub struct TerminalLineDto {
@@ -121,11 +164,15 @@ fn extract_error(state: &WorkflowState) -> Option<String> {
 pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowSummary>> {
     let cfg = state.config.read().await;
     let workflows = state.engine.workflows.read().await;
+    let dyn_fwd = state.dynamic_forwards.read().await;
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
         .map(|w| {
             let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
             let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
+            // Use the server-side dynamic-forwards cache so that port buttons
+            // appear immediately on page load (no per-workflow Docker call).
+            let port_mappings = dyn_fwd.get(&w.ticket_key).cloned().unwrap_or_default();
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -152,7 +199,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
                 can_open_editor: can_open_editor(w),
                 editor_url: None,
-                editor_port_mappings: Vec::new(),
+                editor_port_mappings: port_mappings,
                 jira_available: w.jira_available,
                 ticketing_system: w.ticketing_system.to_string(),
                 can_resume_from_error: can_resume_from_error(w),
@@ -174,7 +221,21 @@ pub async fn get_workflow(
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
     let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
-    let editor_info = container::get_editor_info(&w.ticket_key).await;
+    let ticket_key = w.ticket_key.clone();
+    let editor_info = container::get_editor_info(&ticket_key).await;
+    // Prefer the server-side dynamic-forwards cache (includes both static Docker
+    // mappings seeded at open-editor time and dynamically-detected socat forwards).
+    // Fall back to Docker-queried port mappings for editors opened before this
+    // Maestro process started (server restart).
+    let dyn_fwd = state.dynamic_forwards.read().await;
+    let port_mappings = if let Some(forwards) = dyn_fwd.get(&ticket_key) {
+        forwards.clone()
+    } else {
+        editor_info
+            .as_ref()
+            .map(|e| e.port_mappings.clone())
+            .unwrap_or_default()
+    };
     Ok(Json(WorkflowSummary {
         id: w.id.clone(),
         ticket_key: w.ticket_key.clone(),
@@ -201,7 +262,7 @@ pub async fn get_workflow(
         jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
         can_open_editor: can_open_editor(w),
         editor_url: editor_info.as_ref().map(|e| e.url.clone()),
-        editor_port_mappings: editor_info.map(|e| e.port_mappings).unwrap_or_default(),
+        editor_port_mappings: port_mappings,
         jira_available: w.jira_available,
         ticketing_system: w.ticketing_system.to_string(),
         can_resume_from_error: can_resume_from_error(w),
@@ -209,7 +270,7 @@ pub async fn get_workflow(
             .terminal_ports
             .read()
             .await
-            .get(&w.ticket_key)
+            .get(&ticket_key)
             .map(|(port, token)| {
                 container::build_terminal_url(container::editor_host_port(*port), token)
             }),
@@ -516,6 +577,14 @@ pub async fn open_editor(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
+    // Seed the server-side dynamic-forwards map with the static (Docker -p) port
+    // mappings so that `GET /api/workflows` returns them immediately (no need to
+    // wait for the port scanner or call get_editor_info per-workflow).
+    {
+        let mut fwd = state.dynamic_forwards.write().await;
+        fwd.insert(ticket_key.clone(), info.port_mappings.clone());
+    }
+
     // Spawn background port scanner if dynamic ports are available.
     if !info.spare_ports.is_empty() {
         let scanner_ticket = ticket_key.clone();
@@ -544,6 +613,21 @@ pub async fn open_editor(
             )
             .await;
         });
+
+        // Spawn a companion task that subscribes to broadcast events and keeps
+        // `dynamic_forwards` in sync with the port scanner's forwarded/unforwarded
+        // events.  This allows the list endpoint to return current port data without
+        // per-workflow Docker calls.
+        let dyn_fwd = state.dynamic_forwards.clone();
+        let rx = state.engine.event_tx.subscribe();
+        let tracker_ticket = ticket_key.clone();
+        let tracker_cancel = {
+            let scanners = state.editor_scanners.read().await;
+            scanners.get(&ticket_key).cloned()
+        };
+        if let Some(cancel_tok) = tracker_cancel {
+            tokio::spawn(track_port_forwards(tracker_ticket, dyn_fwd, rx, cancel_tok));
+        }
     }
 
     Ok(Json(OpenEditorResponse {
@@ -654,4 +738,225 @@ pub async fn close_terminal(State(state): State<AppState>, Path(id): Path<String
     state.terminal_ports.write().await.remove(&id);
     container::stop_terminal(&id).await;
     StatusCode::OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    /// Create a minimal `WorkflowEvent` for port-forwarding tests.
+    fn port_event(
+        event_type: &str,
+        ticket_key: &str,
+        container_port: u16,
+        host_port: u16,
+    ) -> WorkflowEvent {
+        WorkflowEvent {
+            event_type: event_type.to_string(),
+            workflow_id: String::new(),
+            ticket_key: ticket_key.to_string(),
+            state: String::new(),
+            timestamp: chrono::Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+            progress_percent: None,
+            progress_steps_total: None,
+            forwarded_port: Some((container_port, host_port)),
+            pr_merged: None,
+        }
+    }
+
+    /// `track_port_forwards` adds ports on `port_forwarded` events.
+    #[tokio::test]
+    async fn track_port_forwards_adds_on_forwarded() {
+        let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        let m = map.clone();
+        let c = cancel.clone();
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+
+        // Send a port_forwarded event.
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
+        // Give the task time to process.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        {
+            let fwd = map.read().await;
+            let ports = fwd.get("T-1").expect("should have entry");
+            assert_eq!(ports, &[(3000, 9100)]);
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    /// `track_port_forwards` removes ports on `port_unforwarded` events.
+    #[tokio::test]
+    async fn track_port_forwards_removes_on_unforwarded() {
+        let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        // Seed with an existing port.
+        map.write()
+            .await
+            .insert("T-1".into(), vec![(3000, 9100), (5000, 9101)]);
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        let m = map.clone();
+        let c = cancel.clone();
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+
+        // Unforward port 3000.
+        tx.send(port_event("port_unforwarded", "T-1", 3000, 9100))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        {
+            let fwd = map.read().await;
+            let ports = fwd.get("T-1").expect("should have entry");
+            assert_eq!(ports, &[(5000, 9101)]);
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    /// `track_port_forwards` ignores events for other tickets.
+    #[tokio::test]
+    async fn track_port_forwards_ignores_other_tickets() {
+        let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        let m = map.clone();
+        let c = cancel.clone();
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+
+        // Send event for a different ticket.
+        tx.send(port_event("port_forwarded", "T-2", 3000, 9100))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        {
+            let fwd = map.read().await;
+            assert!(fwd.get("T-1").is_none(), "should not add ports for T-1");
+            assert!(fwd.get("T-2").is_none(), "should not add ports for T-2");
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    /// `track_port_forwards` deduplicates by container port.
+    #[tokio::test]
+    async fn track_port_forwards_deduplicates_by_container_port() {
+        let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        let m = map.clone();
+        let c = cancel.clone();
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+
+        // Send the same port twice.
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        {
+            let fwd = map.read().await;
+            let ports = fwd.get("T-1").expect("should have entry");
+            assert_eq!(
+                ports.len(),
+                1,
+                "duplicate container port should not be added twice"
+            );
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    /// `track_port_forwards` handles multiple ports for the same ticket.
+    #[tokio::test]
+    async fn track_port_forwards_multiple_ports() {
+        let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        let m = map.clone();
+        let c = cancel.clone();
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 5173, 9101))
+            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 8080, 9102))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        {
+            let fwd = map.read().await;
+            let ports = fwd.get("T-1").expect("should have entry");
+            assert_eq!(ports.len(), 3);
+            assert!(ports.contains(&(3000, 9100)));
+            assert!(ports.contains(&(5173, 9101)));
+            assert!(ports.contains(&(8080, 9102)));
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    /// `track_port_forwards` exits when the cancellation token is cancelled.
+    #[tokio::test]
+    async fn track_port_forwards_exits_on_cancel() {
+        let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), map, rx, cancel.clone()));
+
+        cancel.cancel();
+        // Should exit promptly.
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("task should exit within 1 second")
+            .expect("task should not panic");
+    }
+
+    /// `track_port_forwards` exits when the broadcast channel is closed.
+    #[tokio::test]
+    async fn track_port_forwards_exits_on_channel_close() {
+        let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), map, rx, cancel));
+
+        // Drop the sender to close the channel.
+        drop(tx);
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("task should exit within 1 second")
+            .expect("task should not panic");
+    }
 }

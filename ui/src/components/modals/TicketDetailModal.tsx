@@ -1,10 +1,15 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { marked } from "marked";
-import DOMPurify from "dompurify";
+import { useState, useEffect, useRef } from "react";
 import { apiJson, apiPost } from "../../api/client";
 import type { TicketPreview, ImproveResponse } from "../../api/types";
+import { MarkdownPreview } from "../MarkdownPreview";
 
 const IMPROVE_TIMEOUT_SECS = 300;
+
+function formatCountdown(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, "0")} remaining until timeout`;
+}
 
 interface Props {
   ticketKey: string;
@@ -14,12 +19,8 @@ interface Props {
   showStartButton: boolean;
   onStart?: () => void;
   onClose: () => void;
-}
-
-function formatCountdown(secs: number): string {
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}:${String(s).padStart(2, "0")} remaining until timeout`;
+  /** Called after a successful save so the parent can refresh workflow data. */
+  onSaved?: () => void;
 }
 
 export function TicketDetailModal({
@@ -30,26 +31,21 @@ export function TicketDetailModal({
   showStartButton,
   onStart,
   onClose,
+  onSaved,
 }: Props) {
   const [markdown, setMarkdown] = useState(initialDescription || "");
-  const [loading, setLoading] = useState(!initialDescription);
+  const [loading, setLoading] = useState(!initialDescription && ticketingSystem !== "none");
+  const [editTitle, setEditTitle] = useState(summary);
   const [improving, setImproving] = useState(false);
   const [countdown, setCountdown] = useState(IMPROVE_TIMEOUT_SECS);
-  const [editMode, setEditMode] = useState(false);
-  const [editText, setEditText] = useState("");
-  const [originalMarkdown, setOriginalMarkdown] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
   const abortRef = useRef<AbortController | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-      if (countdownRef.current) clearInterval(countdownRef.current);
-    };
-  }, []);
+  const [editMode, setEditMode] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const [sideBySide, setSideBySide] = useState(false);
+  const [debouncedText, setDebouncedText] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (initialDescription) return;
@@ -60,16 +56,24 @@ export function TicketDetailModal({
       .finally(() => setLoading(false));
   }, [ticketKey, initialDescription, ticketingSystem]);
 
-  const renderHtml = useCallback(() => {
-    const raw = marked.parse(markdown) as string;
-    return DOMPurify.sanitize(raw);
-  }, [markdown]);
+  // Debounce editText for the side-by-side preview pane (400 ms)
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedText(editText), 400);
+    return () => clearTimeout(id);
+  }, [editText]);
+
+  // Cleanup abort/countdown on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
+  }, []);
 
   const handleImprove = async () => {
     setImproving(true);
     setCountdown(IMPROVE_TIMEOUT_SECS);
 
-    // Start countdown timer
     if (countdownRef.current) clearInterval(countdownRef.current);
     countdownRef.current = setInterval(() => {
       setCountdown((prev) => Math.max(0, prev - 1));
@@ -81,7 +85,7 @@ export function TicketDetailModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ description: markdown, summary }),
+        body: JSON.stringify({ description: markdown, summary: editTitle }),
         signal: abortRef.current.signal,
       });
       abortRef.current = null;
@@ -91,8 +95,15 @@ export function TicketDetailModal({
         return;
       }
       const data: ImproveResponse = await res.json();
-      setOriginalMarkdown(markdown);
       setMarkdown(data.improved_description);
+      if (data.improved_summary) {
+        setEditTitle(data.improved_summary);
+      }
+      if (!editMode) {
+        setEditText(data.improved_description);
+        setDebouncedText(data.improved_description);
+        setEditMode(true);
+      }
     } catch (e) {
       abortRef.current = null;
       if (e instanceof Error && e.name !== "AbortError") {
@@ -117,20 +128,34 @@ export function TicketDetailModal({
     }
   };
 
-  const handleRevert = () => {
-    if (originalMarkdown !== null) {
-      setMarkdown(originalMarkdown);
-      setOriginalMarkdown(null);
-    }
+  const handleStartEdit = () => {
+    setEditText(markdown);
+    setEditTitle(summary);
+    setDebouncedText(markdown);
+    setActiveTab("write");
+    setSideBySide(false);
+    setEditMode(true);
   };
 
-  const handleSaveImproved = async () => {
+  const handleSaveDescription = async () => {
     setSaving(true);
     try {
-      await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
-        description: markdown,
+      const payload: Record<string, string> = { description: editText };
+      if (editTitle !== summary) {
+        payload.summary = editTitle;
+      }
+      const res = await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, payload);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      setMarkdown(editText);
+      requestAnimationFrame(() => {
+        setEditMode(false);
+        setActiveTab("write");
+        setSideBySide(false);
       });
-      setOriginalMarkdown(null);
+      onSaved?.();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -138,26 +163,24 @@ export function TicketDetailModal({
     }
   };
 
-  const handleSaveEdit = async () => {
-    try {
-      await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
-        description: editText,
-      });
-      setMarkdown(editText);
-      setEditMode(false);
-      setOriginalMarkdown(null);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to save");
-    }
+  const handleCancelEdit = () => {
+    setEditMode(false);
+    setActiveTab("write");
+    setSideBySide(false);
   };
 
-  const isImproved = originalMarkdown !== null;
+  const handleSideBySideChange = (checked: boolean) => {
+    setSideBySide(checked);
+    if (!checked) setActiveTab("write");
+  };
+
+  const editDirty = editMode && (editText !== markdown || editTitle !== summary);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full mx-4 max-h-[90vh] flex flex-col relative"
-        style={{ maxWidth: "min(1280px, calc(100vw - 24px))" }}
+        className="bg-gray-900 border border-gray-700 rounded-xl w-full mx-4 flex flex-col relative"
+        style={{ maxWidth: "min(1280px, calc(100vw - 24px))", height: "calc(100vh - 48px)" }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Improve overlay with countdown */}
@@ -175,30 +198,43 @@ export function TicketDetailModal({
           </div>
         )}
 
+        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <span className="font-mono text-xs text-blue-400">{ticketKey}</span>
-            <h3 className="text-lg font-medium text-white truncate">{summary}</h3>
+            {editMode ? (
+              <input
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="block w-full mt-1 bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-lg font-medium text-white"
+              />
+            ) : (
+              <h3 className="text-lg font-medium text-white truncate">{summary}</h3>
+            )}
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 cursor-pointer text-xl flex-shrink-0 ml-4">
             &times;
           </button>
         </div>
 
-        {isImproved && (
-          <div className="bg-purple-900/20 border-b border-purple-700/30 px-4 py-2 flex items-center justify-between">
-            <span className="text-xs text-purple-300">AI-improved description — review before saving</span>
+        {/* Edit banner — always visible in edit mode; buttons disabled until content changes */}
+        {editMode && (
+          <div className={`border-b px-4 py-2 flex items-center justify-between ${editDirty ? "bg-blue-900/20 border-blue-700/30" : "bg-gray-800/30 border-gray-800"}`}>
+            <span className={`text-xs ${editDirty ? "text-blue-300" : "text-gray-500"}`}>
+              {editDirty ? "Description modified — save to update the ticket" : "Editing description"}
+            </span>
             <div className="flex gap-2">
               <button
-                onClick={handleRevert}
+                onClick={handleCancelEdit}
                 className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
               >
-                Revert
+                Discard
               </button>
               <button
-                onClick={handleSaveImproved}
-                disabled={saving}
-                className="text-xs px-3 py-1 rounded-lg bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-50 cursor-pointer"
+                onClick={handleSaveDescription}
+                disabled={saving || !editDirty}
+                className="text-xs px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
               >
                 {saving ? "Saving..." : "Save"}
               </button>
@@ -206,67 +242,112 @@ export function TicketDetailModal({
           </div>
         )}
 
-        <div className="overflow-y-auto flex-1 p-6">
+        {/* Tab bar — only visible in edit mode */}
+        {editMode && (
+          <div className="flex items-center px-6 py-2 border-b border-gray-800 gap-2">
+            {!sideBySide && (
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setActiveTab("write")}
+                  className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${
+                    activeTab === "write"
+                      ? "bg-gray-800 text-gray-200 border border-gray-700"
+                      : "text-gray-500 hover:text-gray-300"
+                  }`}
+                >
+                  Write
+                </button>
+                <button
+                  onClick={() => setActiveTab("preview")}
+                  className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${
+                    activeTab === "preview"
+                      ? "bg-gray-800 text-gray-200 border border-gray-700"
+                      : "text-gray-500 hover:text-gray-300"
+                  }`}
+                >
+                  Preview
+                </button>
+              </div>
+            )}
+            <label className="ml-auto flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={sideBySide}
+                onChange={(e) => handleSideBySideChange(e.target.checked)}
+                className="w-3 h-3 accent-blue-500"
+              />
+              Side by side
+            </label>
+          </div>
+        )}
+
+        {/* Content area */}
+        <div className={`flex-1 ${editMode && sideBySide ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
           {loading ? (
-            <p className="text-gray-500 text-sm">Loading description...</p>
+            <div className="flex-1 overflow-y-auto p-6">
+              <p className="text-gray-500 text-sm">Loading description...</p>
+            </div>
           ) : editMode ? (
-            <textarea
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              className="w-full h-64 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-y"
-            />
+            sideBySide ? (
+              <>
+                <div className="flex-1 overflow-y-auto p-4 border-r border-gray-800">
+                  <textarea
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    className="w-full h-full min-h-64 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-none"
+                    autoFocus
+                  />
+                </div>
+                <div className="flex-1 overflow-y-auto p-4">
+                  <MarkdownPreview markdown={debouncedText} />
+                </div>
+              </>
+            ) : activeTab === "write" ? (
+              <div className="flex-1 overflow-y-auto p-6">
+                <textarea
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  className="w-full h-64 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-y"
+                  autoFocus
+                />
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-6">
+                <MarkdownPreview markdown={editText} />
+              </div>
+            )
           ) : (
-            <div
-              className="prose prose-invert prose-sm max-w-none"
-              dangerouslySetInnerHTML={{ __html: renderHtml() }}
-            />
+            <div className="flex-1 overflow-y-auto p-6">
+              <MarkdownPreview markdown={markdown} />
+            </div>
           )}
         </div>
 
+        {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-gray-800 gap-3">
           <div className="flex gap-2">
-            {!isImproved && (
+            <button
+              onClick={handleImprove}
+              disabled={improving || editMode}
+              className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
+            >
+              {improving ? "Improving..." : "Improve with AI"}
+            </button>
+            {!editMode && (
               <button
-                onClick={handleImprove}
-                disabled={improving || editMode}
-                className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
-              >
-                Improve with AI
-              </button>
-            )}
-            {!editMode && !isImproved ? (
-              <button
-                onClick={() => {
-                  setEditText(markdown);
-                  setEditMode(true);
-                }}
+                onClick={handleStartEdit}
                 className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
               >
                 Edit
               </button>
-            ) : editMode ? (
-              <>
-                <button
-                  onClick={handleSaveEdit}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-green-600/20 text-green-300 border border-green-500/30 hover:bg-green-600/30 cursor-pointer"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={() => setEditMode(false)}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </>
-            ) : null}
+            )}
           </div>
           <div className="flex gap-2">
             <button
-              onClick={onClose}
+              onClick={editMode ? handleCancelEdit : onClose}
               className="text-xs px-4 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
             >
-              Close
+              {editMode ? "Cancel" : "Close"}
             </button>
             {showStartButton && onStart && (
               <button

@@ -149,6 +149,8 @@ export function useWorkflows() {
       }
 
       // Workflow state change — update locally
+      let needsRefetch = false;
+
       setWorkflows((prev) => {
         const wf = prev[ticket_key];
         if (wf) {
@@ -159,18 +161,21 @@ export function useWorkflows() {
           if (typeof evt.pr_merged === "boolean") updated.pr_merged = evt.pr_merged;
           if (evt.error) updated.error = evt.error;
 
-          // Terminal states: re-fetch full data for action flags / pr_url
-          const terminal = ["done", "error", "stopped"];
-          if (terminal.includes(updated.state.toLowerCase())) {
-            fetchWorkflows();
+          // Terminal states: schedule re-fetch for action flags / pr_url
+          const lower = updated.state.toLowerCase();
+          const isTerminal = lower === "done" || lower.startsWith("error") || lower === "stopped";
+          if (isTerminal) {
+            needsRefetch = true;
             return prev;
           }
           return { ...prev, [ticket_key]: updated };
         }
-        // Unknown workflow — fetch all
-        if (ticket_key) fetchWorkflows();
+        // Unknown workflow — schedule fetch
+        if (ticket_key) needsRefetch = true;
         return prev;
       });
+
+      if (needsRefetch) fetchWorkflows();
     },
     [fetchWorkflows]
   );

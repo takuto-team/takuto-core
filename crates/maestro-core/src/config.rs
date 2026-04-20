@@ -703,12 +703,24 @@ impl WebConfig {
                 format!("http://0.0.0.0:{}", self.port),
             ]
         } else if is_loopback {
+            // IPv6 addresses in URLs must be bracketed (RFC 2732).
+            let host_part = if host.contains(':') {
+                format!("[{}]", host)
+            } else {
+                host.to_string()
+            };
             vec![
                 format!("http://localhost:{}", self.port),
-                format!("http://{}:{}", host, self.port),
+                format!("http://{}:{}", host_part, self.port),
             ]
         } else {
-            vec![format!("http://{}:{}", host, self.port)]
+            // Bracket IPv6 literal addresses in the origin URL.
+            let host_part = if host.contains(':') {
+                format!("[{}]", host)
+            } else {
+                host.to_string()
+            };
+            vec![format!("http://{}:{}", host_part, self.port)]
         }
     }
 }
@@ -2113,7 +2125,7 @@ step_timeout_secs = 600
         };
         assert_eq!(
             web.resolved_cors_origins(),
-            vec!["http://localhost:4000", "http://::1:4000"]
+            vec!["http://localhost:4000", "http://[::1]:4000"]
         );
     }
 

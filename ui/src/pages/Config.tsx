@@ -17,12 +17,14 @@ export function Config({ onLogout, authEnabled }: Props) {
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
-    apiJson<ConfigResponse>("/api/config").then((data) => {
-      setConfig(data);
-      setUsername(data.web?.dashboard_username || "");
-      setMaxConcurrent(data.general?.max_concurrent_workflows || 1);
-      setMaxActive(data.general?.max_active_workflows || 0);
-    });
+    apiJson<ConfigResponse>("/api/config")
+      .then((data) => {
+        setConfig(data);
+        setUsername(data.web?.dashboard_username || "");
+        setMaxConcurrent(data.general?.max_concurrent_workflows || 1);
+        setMaxActive(data.general?.max_active_workflows || 0);
+      })
+      .catch(() => {});
   }, []);
 
   const handleSubmit = async (e: FormEvent) => {

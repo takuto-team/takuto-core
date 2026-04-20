@@ -134,4 +134,5 @@ export interface MarkDoneOutcome {
 
 export interface ImproveResponse {
   improved_description: string;
+  improved_summary?: string;
 }

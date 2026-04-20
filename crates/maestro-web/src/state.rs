@@ -8,8 +8,10 @@ use tokio_util::sync::CancellationToken;
 use maestro_core::config::{Config, TicketingSystem};
 use maestro_core::workflow::engine::WorkflowEngine;
 
-/// Port forwarding map: ticket_key → list of `(detected_port, host_port)` pairs.
-type DynamicForwardsMap = Arc<RwLock<HashMap<String, Vec<(u16, u16)>>>>;
+/// Port forwarding map: ticket_key → list of `(container_port, host_port)` pairs.
+/// Includes both static Docker `-p` mappings (seeded at editor open) and dynamic
+/// socat forwards (tracked by the event subscriber).
+pub type DynamicForwardsMap = Arc<RwLock<HashMap<String, Vec<(u16, u16)>>>>;
 
 #[derive(Clone)]
 pub struct AppState {
