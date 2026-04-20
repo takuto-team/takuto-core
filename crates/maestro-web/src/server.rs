@@ -183,10 +183,7 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime);
             // Avoid stale dashboard JS/HTML/CSS after upgrades (embedded assets otherwise get heuristic browser cache).
-            if path.ends_with(".html")
-                || path.ends_with(".js")
-                || path.ends_with(".css")
-            {
+            if path.ends_with(".html") || path.ends_with(".js") || path.ends_with(".css") {
                 res = res.header(header::CACHE_CONTROL, "no-store, max-age=0");
             }
             res.body(Body::from(content.data.to_vec())).unwrap()
@@ -194,15 +191,15 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
         None => {
             // SPA fallback: serve index.html for routes handled by React Router
             // (e.g. /config.html, /login.html) unless it looks like a real file request.
-            if !path.contains('.') || path.ends_with(".html") {
-                if let Some(index) = Assets::get("index.html") {
-                    return Response::builder()
-                        .status(StatusCode::OK)
-                        .header(header::CONTENT_TYPE, "text/html")
-                        .header(header::CACHE_CONTROL, "no-store, max-age=0")
-                        .body(Body::from(index.data.to_vec()))
-                        .unwrap();
-                }
+            if (!path.contains('.') || path.ends_with(".html"))
+                && let Some(index) = Assets::get("index.html")
+            {
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/html")
+                    .header(header::CACHE_CONTROL, "no-store, max-age=0")
+                    .body(Body::from(index.data.to_vec()))
+                    .unwrap();
             }
             Response::builder()
                 .status(StatusCode::NOT_FOUND)

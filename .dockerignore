@@ -6,9 +6,17 @@ ui/dist/
 *.md
 !crates/**/*.md
 docker-compose.yml
+docker-compose.dind.yml
 .dockerignore
 .env
 .env.*
 *.log
 tests/
 design/
+# User-specific config files must NOT be baked into the distributed image.
+# They are volume-mounted at runtime (see docker-compose.yml).
+config.toml
+maestro.env
+# Exclude user workflow files but keep tracked examples (needed by MAESTRO_BUILD_CONFIG).
+workflows/*
+!workflows/*.example.toml

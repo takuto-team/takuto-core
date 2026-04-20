@@ -19,6 +19,8 @@
 # Auto-detect compose provider. Prefer podman if present, else docker.
 # Both work identically with explicit -f flags.
 COMPOSE := $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose")
+# Verify the detected compose command actually works (the docker CLI may lack the compose plugin).
+HAS_COMPOSE := $(shell $(COMPOSE) version >/dev/null 2>&1 && echo 1 || echo 0)
 
 IS_PODMAN := $(shell command -v podman >/dev/null 2>&1 && echo 1 || echo 0)
 # Detect standalone podman-compose binary (needs --podman-run-args for -it).
@@ -43,8 +45,14 @@ ui-build:
 	cd ui && npm install --legacy-peer-deps && npm run build
 
 build: ui-build
+	@echo "Building Rust workspace..."
+	cargo build
 	@mkdir -p skills
+ifeq ($(HAS_COMPOSE),1)
 	$(COMPOSE) $(COMPOSE_FILES) build || (echo "ERROR: Image build failed. Check the output above." >&2; exit 1)
+else
+	@echo "NOTE: docker/podman compose not available — skipping container image build."
+endif
 
 up:
 	@if [ ! -f config.toml ]; then \
@@ -52,7 +60,8 @@ up:
 		exit 1; \
 	fi
 	@if [ ! -f maestro.env ]; then \
-		echo "NOTE: maestro.env not found — creating empty file (add secrets here if needed)."; \
+		echo "WARNING: maestro.env not found — creating empty file."; \
+		echo "         Add API tokens and secrets to maestro.env (see maestro.env.example)."; \
 		touch maestro.env; \
 	fi
 	$(COMPOSE) $(COMPOSE_FILES) up -d || (echo "ERROR: Failed to start containers. Run 'make logs' for details." >&2; exit 1)
@@ -69,7 +78,8 @@ setup:
 		exit 1; \
 	fi
 	@if [ ! -f maestro.env ]; then \
-		echo "NOTE: maestro.env not found — creating empty file (add secrets here if needed)."; \
+		echo "WARNING: maestro.env not found — creating empty file."; \
+		echo "         Add API tokens and secrets to maestro.env (see maestro.env.example)."; \
 		touch maestro.env; \
 	fi
 ifeq ($(IS_PODMAN),1)

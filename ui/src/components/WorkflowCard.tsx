@@ -18,6 +18,16 @@ interface StatusInfo {
   color: string;
 }
 
+/** Map color keys to concrete Tailwind color hex values — avoids dynamic class names
+ *  that Tailwind v4 would purge at build time. */
+const COLOR_HEX: Record<string, { bg: string; text: string; border: string; bgFaint: string }> = {
+  green:  { bg: "#22c55e", text: "#4ade80", border: "rgba(34,197,94,0.2)",  bgFaint: "rgba(34,197,94,0.15)" },
+  red:    { bg: "#ef4444", text: "#f87171", border: "rgba(239,68,68,0.2)",  bgFaint: "rgba(239,68,68,0.15)" },
+  yellow: { bg: "#eab308", text: "#facc15", border: "rgba(234,179,8,0.2)",  bgFaint: "rgba(234,179,8,0.15)" },
+  gray:   { bg: "#6b7280", text: "#9ca3af", border: "rgba(107,114,128,0.2)", bgFaint: "rgba(107,114,128,0.15)" },
+  blue:   { bg: "#3b82f6", text: "#60a5fa", border: "rgba(59,130,246,0.2)", bgFaint: "rgba(59,130,246,0.15)" },
+};
+
 function getStatusInfo(state: string): StatusInfo {
   const s = state.toLowerCase();
   if (s === "done" || s.startsWith("completed")) return { label: "Completed", color: "green" };
@@ -149,7 +159,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, onRefresh, onShow
         {/* Header: ticket key + status badge + PR links */}
         <div className="flex items-center justify-between gap-3 min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span className={`font-mono text-sm text-${status.color}-400 font-medium`}>{w.ticket_key}</span>
+            <span className="font-mono text-sm font-medium" style={{ color: (COLOR_HEX[status.color] || COLOR_HEX.blue).text }}>{w.ticket_key}</span>
             <StatusBadge status={status} />
           </div>
           {prUrl && (
@@ -411,11 +421,15 @@ function ActionBtn({
 
 function StatusBadge({ status }: { status: StatusInfo }) {
   const { label, color } = status;
+  const c = COLOR_HEX[color] || COLOR_HEX.blue;
   return (
-    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-${color}-500/15 text-${color}-400 border border-${color}-500/20`}>
+    <span
+      className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full"
+      style={{ backgroundColor: c.bgFaint, color: c.text, borderWidth: 1, borderColor: c.border }}
+    >
       {label === "Completed" && <CheckIcon />}
       {label === "Error" && <XIcon />}
-      {label === "Running" && <span className={`w-1.5 h-1.5 bg-${color}-400 rounded-full animate-pulse`} />}
+      {label === "Running" && <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: c.text }} />}
       {label}
     </span>
   );
@@ -462,10 +476,11 @@ function ClockIcon() {
 }
 
 function ProgressBar({ pct, total, filled, color }: { pct: number; total: number; filled: number; color: string }) {
+  const c = COLOR_HEX[color] || COLOR_HEX.blue;
   if (total <= 0) {
     return (
       <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
-        <div className={`bg-${color}-500 h-1.5 rounded-full transition-all`} style={{ width: `${pct}%` }} />
+        <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: c.bg }} />
       </div>
     );
   }
@@ -474,7 +489,8 @@ function ProgressBar({ pct, total, filled, color }: { pct: number; total: number
       {Array.from({ length: total }, (_, i) => (
         <div
           key={i}
-          className={`h-2 flex-1 rounded-full transition-all ${i < filled ? `bg-${color}-500` : "bg-gray-600"}`}
+          className="h-2 flex-1 rounded-full transition-all"
+          style={{ backgroundColor: i < filled ? c.bg : "#4b5563" }}
         />
       ))}
     </div>
