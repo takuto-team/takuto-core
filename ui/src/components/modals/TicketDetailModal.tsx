@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react";
-import { marked } from "marked";
-import DOMPurify from "dompurify";
 import { apiJson, apiPostJson, apiPost } from "../../api/client";
 import type { TicketPreview, ImproveResponse } from "../../api/types";
+import { MarkdownPreview } from "../MarkdownPreview";
 
 interface Props {
   ticketKey: string;
@@ -28,6 +27,9 @@ export function TicketDetailModal({
   const [improving, setImproving] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
+  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const [sideBySide, setSideBySide] = useState(false);
+  const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
     if (initialDescription) return;
@@ -38,10 +40,11 @@ export function TicketDetailModal({
       .finally(() => setLoading(false));
   }, [ticketKey, initialDescription, ticketingSystem]);
 
-  const renderHtml = () => {
-    const raw = marked.parse(markdown) as string;
-    return DOMPurify.sanitize(raw);
-  };
+  // Debounce editText for the side-by-side preview pane (400 ms)
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedText(editText), 400);
+    return () => clearTimeout(id);
+  }, [editText]);
 
   const handleImprove = async () => {
     setImproving(true);
@@ -56,6 +59,14 @@ export function TicketDetailModal({
     } finally {
       setImproving(false);
     }
+  };
+
+  const handleStartEdit = () => {
+    setEditText(markdown);
+    setDebouncedText(markdown); // seed debounce immediately so preview is not blank
+    setActiveTab("write");
+    setSideBySide(false);
+    setEditMode(true);
   };
 
   const handleSaveDescription = async () => {
@@ -74,6 +85,17 @@ export function TicketDetailModal({
     }
   };
 
+  const handleCancelEdit = () => {
+    setEditMode(false);
+    setActiveTab("write");
+    setSideBySide(false);
+  };
+
+  const handleSideBySideChange = (checked: boolean) => {
+    setSideBySide(checked);
+    if (!checked) setActiveTab("write");
+  };
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -81,6 +103,7 @@ export function TicketDetailModal({
         style={{ maxWidth: "min(1280px, calc(100vw - 24px))" }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
           <div className="min-w-0">
             <span className="font-mono text-xs text-blue-400">{ticketKey}</span>
@@ -91,23 +114,90 @@ export function TicketDetailModal({
           </button>
         </div>
 
-        <div className="overflow-y-auto flex-1 p-6">
+        {/* Tab bar — only visible in edit mode */}
+        {editMode && (
+          <div className="flex items-center px-6 py-2 border-b border-gray-800 gap-2">
+            {!sideBySide && (
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setActiveTab("write")}
+                  className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${
+                    activeTab === "write"
+                      ? "bg-gray-800 text-gray-200 border border-gray-700"
+                      : "text-gray-500 hover:text-gray-300"
+                  }`}
+                >
+                  Write
+                </button>
+                <button
+                  onClick={() => setActiveTab("preview")}
+                  className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${
+                    activeTab === "preview"
+                      ? "bg-gray-800 text-gray-200 border border-gray-700"
+                      : "text-gray-500 hover:text-gray-300"
+                  }`}
+                >
+                  Preview
+                </button>
+              </div>
+            )}
+            <label className="ml-auto flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={sideBySide}
+                onChange={(e) => handleSideBySideChange(e.target.checked)}
+                className="w-3 h-3 accent-blue-500"
+              />
+              Side by side
+            </label>
+          </div>
+        )}
+
+        {/* Content area */}
+        <div className={`flex-1 ${editMode && sideBySide ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
           {loading ? (
-            <p className="text-gray-500 text-sm">Loading description...</p>
+            <div className="flex-1 overflow-y-auto p-6">
+              <p className="text-gray-500 text-sm">Loading description...</p>
+            </div>
           ) : editMode ? (
-            <textarea
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              className="w-full h-64 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-y"
-            />
+            sideBySide ? (
+              <>
+                {/* Write pane */}
+                <div className="flex-1 overflow-y-auto p-4 border-r border-gray-800">
+                  <textarea
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    className="w-full h-full min-h-64 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-none"
+                    autoFocus
+                  />
+                </div>
+                {/* Preview pane — debounced */}
+                <div className="flex-1 overflow-y-auto p-4">
+                  <MarkdownPreview markdown={debouncedText} />
+                </div>
+              </>
+            ) : activeTab === "write" ? (
+              <div className="flex-1 overflow-y-auto p-6">
+                <textarea
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  className="w-full h-64 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-y"
+                  autoFocus
+                />
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-6">
+                <MarkdownPreview markdown={editText} />
+              </div>
+            )
           ) : (
-            <div
-              className="prose prose-invert prose-sm max-w-none"
-              dangerouslySetInnerHTML={{ __html: renderHtml() }}
-            />
+            <div className="flex-1 overflow-y-auto p-6">
+              <MarkdownPreview markdown={markdown} />
+            </div>
           )}
         </div>
 
+        {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-gray-800 gap-3">
           <div className="flex gap-2">
             <button
@@ -119,10 +209,7 @@ export function TicketDetailModal({
             </button>
             {!editMode ? (
               <button
-                onClick={() => {
-                  setEditText(markdown);
-                  setEditMode(true);
-                }}
+                onClick={handleStartEdit}
                 className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
               >
                 Edit
@@ -136,7 +223,7 @@ export function TicketDetailModal({
                   Save
                 </button>
                 <button
-                  onClick={() => setEditMode(false)}
+                  onClick={handleCancelEdit}
                   className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
                 >
                   Cancel
