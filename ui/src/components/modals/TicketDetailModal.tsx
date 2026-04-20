@@ -28,6 +28,9 @@ export function TicketDetailModal({
   const [improving, setImproving] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
+  /** Snapshot of markdown before AI improvement; null means not in improved state. */
+  const [originalMarkdown, setOriginalMarkdown] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (initialDescription) return;
@@ -50,6 +53,7 @@ export function TicketDetailModal({
         `/api/tickets/${encodeURIComponent(ticketKey)}/improve`,
         { description: markdown, summary }
       );
+      setOriginalMarkdown(markdown);
       setMarkdown(data.improved_description);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to improve");
@@ -58,17 +62,41 @@ export function TicketDetailModal({
     }
   };
 
-  const handleSaveDescription = async () => {
+  const handleRevert = () => {
+    if (originalMarkdown !== null) {
+      setMarkdown(originalMarkdown);
+      setOriginalMarkdown(null);
+    }
+  };
+
+  const handleSaveImproved = async () => {
+    setSaving(true);
+    try {
+      await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
+        description: markdown,
+      });
+      setOriginalMarkdown(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveEdit = async () => {
     try {
       await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
         description: editText,
       });
       setMarkdown(editText);
       setEditMode(false);
+      setOriginalMarkdown(null);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to save");
     }
   };
+
+  const isImproved = originalMarkdown !== null;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -86,6 +114,27 @@ export function TicketDetailModal({
             &times;
           </button>
         </div>
+
+        {isImproved && (
+          <div className="bg-purple-900/20 border-b border-purple-700/30 px-4 py-2 flex items-center justify-between">
+            <span className="text-xs text-purple-300">AI-improved description — review before saving</span>
+            <div className="flex gap-2">
+              <button
+                onClick={handleRevert}
+                className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+              >
+                Revert
+              </button>
+              <button
+                onClick={handleSaveImproved}
+                disabled={saving}
+                className="text-xs px-3 py-1 rounded-lg bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-50 cursor-pointer"
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="overflow-y-auto flex-1 p-6">
           {loading ? (
@@ -106,14 +155,16 @@ export function TicketDetailModal({
 
         <div className="flex items-center justify-between p-4 border-t border-gray-800 gap-3">
           <div className="flex gap-2">
-            <button
-              onClick={handleImprove}
-              disabled={improving}
-              className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
-            >
-              {improving ? "Improving..." : "Improve with AI"}
-            </button>
-            {!editMode ? (
+            {!isImproved && (
+              <button
+                onClick={handleImprove}
+                disabled={improving || editMode}
+                className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
+              >
+                {improving ? "Improving..." : "Improve with AI"}
+              </button>
+            )}
+            {!editMode && !isImproved ? (
               <button
                 onClick={() => {
                   setEditText(markdown);
@@ -123,10 +174,10 @@ export function TicketDetailModal({
               >
                 Edit
               </button>
-            ) : (
+            ) : editMode ? (
               <>
                 <button
-                  onClick={handleSaveDescription}
+                  onClick={handleSaveEdit}
                   className="text-xs px-3 py-1.5 rounded-lg bg-green-600/20 text-green-300 border border-green-500/30 hover:bg-green-600/30 cursor-pointer"
                 >
                   Save
@@ -138,7 +189,7 @@ export function TicketDetailModal({
                   Cancel
                 </button>
               </>
-            )}
+            ) : null}
           </div>
           <div className="flex gap-2">
             <button
