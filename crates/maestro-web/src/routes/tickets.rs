@@ -16,6 +16,8 @@ use crate::state::AppState;
 const IMPROVE_SYSTEM_PROMPT: &str = "\
 You are a technical writer who improves software ticket descriptions. \
 Output ONLY the improved description in Markdown format. \
+You may use Mermaid diagram blocks (```mermaid) when a visual flowchart, \
+sequence diagram, or architecture diagram would clarify the description. \
 Do not add any preamble, commentary, explanation, or closing remarks.";
 
 #[derive(Deserialize)]
