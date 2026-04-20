@@ -316,6 +316,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
         {isActive && <TerminalOutput state={effectiveTs} />}
         {isTerminal && hasTerminalLines && (
           <div>
+            <div className="border-t border-gray-800/60 mb-2" />
             <button
               onClick={() => setTerminalCollapsed(!terminalCollapsed)}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
