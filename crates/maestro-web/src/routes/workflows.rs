@@ -204,10 +204,8 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
             // Use the server-side dynamic-forwards cache so that port buttons
             // appear immediately on page load (no per-workflow Docker call).
             let port_mappings = dyn_fwd.get(&w.ticket_key).cloned().unwrap_or_default();
-            let run_commands = build_run_commands_status(
-                &cfg.run_commands,
-                run_cmds_state.get(&w.ticket_key),
-            );
+            let run_commands =
+                build_run_commands_status(&cfg.run_commands, run_cmds_state.get(&w.ticket_key));
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -892,7 +890,10 @@ pub async fn start_run_command(
     let cfg = state.config.read().await;
     let rc = cfg.run_commands.get(index).ok_or((
         StatusCode::BAD_REQUEST,
-        format!("Run command index {index} out of range (max {})", cfg.run_commands.len()),
+        format!(
+            "Run command index {index} out of range (max {})",
+            cfg.run_commands.len()
+        ),
     ))?;
     let rc_name = rc.name.clone();
     let rc_command = rc.command.clone();

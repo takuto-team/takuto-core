@@ -1650,9 +1650,7 @@ pub async fn is_run_command_running(ticket_key: &str, cmd_index: usize) -> bool 
         .await;
 
     match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).trim() == "true"
-        }
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim() == "true",
         _ => false,
     }
 }
