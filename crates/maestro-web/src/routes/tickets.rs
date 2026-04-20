@@ -15,7 +15,11 @@ use crate::state::AppState;
 
 const IMPROVE_SYSTEM_PROMPT: &str = "\
 You are a technical writer who improves software ticket descriptions. \
-Output ONLY the improved description in Markdown format. \
+Output the improved title on the FIRST line, then a line containing only `---`, \
+then the improved description in Markdown format. Example:\n\
+Improved Title Here\n\
+---\n\
+Improved description in Markdown...\n\n\
 You may use Mermaid diagram blocks (```mermaid) when a visual flowchart, \
 sequence diagram, or architecture diagram would clarify the description. \
 Do not add any preamble, commentary, explanation, or closing remarks.";
@@ -29,6 +33,9 @@ pub struct ImproveTicketBody {
 #[derive(Serialize)]
 pub struct ImproveTicketResponse {
     pub improved_description: String,
+    /// Improved title suggested by the AI (empty if parsing failed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub improved_summary: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -92,8 +99,23 @@ technically precise. Add acceptance criteria if none are present. Keep the origi
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Parse "Title\n---\nDescription" format from AI output.
+    let (improved_summary, improved_description) =
+        if let Some((before, after)) = session.output.split_once("\n---\n") {
+            let title = before.trim().to_string();
+            let desc = after.trim().to_string();
+            if title.is_empty() {
+                (None, session.output.clone())
+            } else {
+                (Some(title), desc)
+            }
+        } else {
+            (None, session.output.clone())
+        };
+
     Ok(Json(ImproveTicketResponse {
-        improved_description: session.output,
+        improved_description,
+        improved_summary,
     }))
 }
 

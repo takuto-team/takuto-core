@@ -56,9 +56,18 @@ export function TicketDetailModal({
     try {
       const data = await apiPostJson<ImproveResponse>(
         `/api/tickets/${encodeURIComponent(ticketKey)}/improve`,
-        { description: markdown, summary }
+        { description: markdown, summary: editTitle }
       );
       setMarkdown(data.improved_description);
+      if (data.improved_summary) {
+        setEditTitle(data.improved_summary);
+      }
+      // Enter edit mode so the user can review and save the changes
+      if (!editMode) {
+        setEditText(data.improved_description);
+        setDebouncedText(data.improved_description);
+        setEditMode(true);
+      }
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to improve");
     } finally {
