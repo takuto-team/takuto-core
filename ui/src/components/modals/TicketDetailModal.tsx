@@ -1,8 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { apiJson, apiPostJson, apiPost } from "../../api/client";
+import { apiJson, apiPost } from "../../api/client";
 import type { TicketPreview, ImproveResponse } from "../../api/types";
+
+const IMPROVE_TIMEOUT_SECS = 300;
 
 interface Props {
   ticketKey: string;
@@ -12,6 +14,12 @@ interface Props {
   showStartButton: boolean;
   onStart?: () => void;
   onClose: () => void;
+}
+
+function formatCountdown(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, "0")} remaining until timeout`;
 }
 
 export function TicketDetailModal({
@@ -26,11 +34,22 @@ export function TicketDetailModal({
   const [markdown, setMarkdown] = useState(initialDescription || "");
   const [loading, setLoading] = useState(!initialDescription);
   const [improving, setImproving] = useState(false);
+  const [countdown, setCountdown] = useState(IMPROVE_TIMEOUT_SECS);
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
-  /** Snapshot of markdown before AI improvement; null means not in improved state. */
   const [originalMarkdown, setOriginalMarkdown] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (initialDescription) return;
@@ -41,24 +60,60 @@ export function TicketDetailModal({
       .finally(() => setLoading(false));
   }, [ticketKey, initialDescription, ticketingSystem]);
 
-  const renderHtml = () => {
+  const renderHtml = useCallback(() => {
     const raw = marked.parse(markdown) as string;
     return DOMPurify.sanitize(raw);
-  };
+  }, [markdown]);
 
   const handleImprove = async () => {
     setImproving(true);
+    setCountdown(IMPROVE_TIMEOUT_SECS);
+
+    // Start countdown timer
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    countdownRef.current = setInterval(() => {
+      setCountdown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+
+    abortRef.current = new AbortController();
     try {
-      const data = await apiPostJson<ImproveResponse>(
-        `/api/tickets/${encodeURIComponent(ticketKey)}/improve`,
-        { description: markdown, summary }
-      );
+      const res = await fetch(`/api/tickets/${encodeURIComponent(ticketKey)}/improve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ description: markdown, summary }),
+        signal: abortRef.current.signal,
+      });
+      abortRef.current = null;
+      if (!res.ok) {
+        const text = await res.text();
+        alert(text || "Failed to improve ticket description");
+        return;
+      }
+      const data: ImproveResponse = await res.json();
       setOriginalMarkdown(markdown);
       setMarkdown(data.improved_description);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to improve");
+      abortRef.current = null;
+      if (e instanceof Error && e.name !== "AbortError") {
+        alert("Failed to improve ticket description");
+      }
     } finally {
       setImproving(false);
+      if (countdownRef.current) {
+        clearInterval(countdownRef.current);
+        countdownRef.current = null;
+      }
+    }
+  };
+
+  const handleCancelImprove = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setImproving(false);
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
     }
   };
 
@@ -101,10 +156,25 @@ export function TicketDetailModal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full mx-4 max-h-[90vh] flex flex-col"
+        className="bg-gray-900 border border-gray-700 rounded-xl w-full mx-4 max-h-[90vh] flex flex-col relative"
         style={{ maxWidth: "min(1280px, calc(100vw - 24px))" }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Improve overlay with countdown */}
+        {improving && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-900/85 backdrop-blur-sm rounded-xl">
+            <div className="w-8 h-8 border-2 border-gray-600 border-t-blue-400 rounded-full animate-spin" />
+            <p className="mt-4 text-sm text-gray-300">Improving description...</p>
+            <p className="mt-1 text-xs text-gray-500">{formatCountdown(countdown)}</p>
+            <button
+              onClick={handleCancelImprove}
+              className="mt-4 text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
           <div className="min-w-0">
             <span className="font-mono text-xs text-blue-400">{ticketKey}</span>
@@ -161,7 +231,7 @@ export function TicketDetailModal({
                 disabled={improving || editMode}
                 className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
               >
-                {improving ? "Improving..." : "Improve with AI"}
+                Improve with AI
               </button>
             )}
             {!editMode && !isImproved ? (
