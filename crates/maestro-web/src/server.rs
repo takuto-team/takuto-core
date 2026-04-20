@@ -18,6 +18,7 @@ struct Assets;
 pub fn build_router(state: AppState) -> Router {
     let api_public = Router::new()
         .route("/health", get(health))
+        .route("/version", get(routes::config::get_version))
         .route("/auth/status", get(routes::auth::auth_status))
         .route("/auth/login", post(routes::auth::login))
         .route("/auth/logout", post(routes::auth::logout));

@@ -18,6 +18,7 @@ ENV CARGO_TERM_PROGRESS_WHEN=always
 ENV CARGO_TERM_PROGRESS_WIDTH=80
 
 COPY Cargo.toml Cargo.lock ./
+COPY VERSION ./
 COPY crates/ crates/
 # rust-embed resolves ../../ui/dist/ relative to crates/maestro-web/
 COPY --from=ui-builder /ui/dist/ ui/dist/
@@ -34,6 +35,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 # Stage 2: Runtime
 FROM debian:bookworm-slim AS runtime
+
+ARG MAESTRO_VERSION=dev
+LABEL org.opencontainers.image.version="${MAESTRO_VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/morphet81/maestro"
+LABEL org.opencontainers.image.title="Maestro"
+LABEL org.opencontainers.image.description="Automated workflow orchestration for AI coding agents"
 
 # Match host UID for rootless Podman API sockets (often mode 0600 — only the user matters). Set in compose `.env` and rebuild.
 # Do not force the primary GID to match the host: macOS "staff" is often GID 20, which is `dialout` on Debian and already exists.

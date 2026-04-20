@@ -210,6 +210,11 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         />
       )}
 
+      {/* Version footer */}
+      <footer className="py-3 text-center">
+        <span className="text-xs text-gray-600">Maestro v{__APP_VERSION__}</span>
+      </footer>
+
       {/* System error alerts (bottom-right) */}
       <SystemErrorAlert errors={systemErrors} onDismiss={dismissError} />
     </div>

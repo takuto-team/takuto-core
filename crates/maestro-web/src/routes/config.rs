@@ -22,6 +22,12 @@ pub struct ConfigResponse {
     pub github_app_configured: bool,
 }
 
+pub async fn get_version() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "version": maestro_core::VERSION.trim()
+    }))
+}
+
 pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     let config = state.config.read().await;
     Json(ConfigResponse {

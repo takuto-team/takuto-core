@@ -1,3 +1,6 @@
+/// Application version from the VERSION file at the repository root.
+pub const VERSION: &str = include_str!("../../../VERSION");
+
 pub mod actions;
 pub mod agent_prompt;
 pub mod claude;
