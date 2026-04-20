@@ -18,6 +18,18 @@ maestro/
 ├── config.toml                 # default configuration
 ├── Dockerfile
 ├── docker-compose.yml
+├── ui/                         # React + TypeScript dashboard (Vite PWA)
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── index.html              # Vite entry point
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx              # React Router: /, /login.html, /config.html
+│       ├── api/                 # API client + TypeScript types
+│       ├── hooks/               # useAuth, useWebSocket, useWorkflows, usePolling
+│       ├── components/          # Header, WorkflowCard, TerminalOutput, modals, etc.
+│       ├── pages/               # Dashboard, Login, Config
+│       └── styles/              # Tailwind CSS + custom styles
 ├── crates/
 │   ├── maestro-core/           # workflow engine, orchestrator, external integrations
 │   │   ├── Cargo.toml
@@ -58,10 +70,7 @@ maestro/
 │   │       │   ├── config.rs     # config CRUD
 │   │       │   └── ws.rs         # WebSocket handler
 │   │       ├── state.rs        # shared app state
-│   │       └── assets/         # static frontend files
-│   │           ├── index.html
-│   │           ├── app.js
-│   │           └── styles.css
+│   │       └── (no assets — served from ui/dist/ via rust-embed)
 │   └── maestro-cli/            # binary entry point
 │       ├── Cargo.toml
 │       └── src/
@@ -311,38 +320,81 @@ Passed to all axum handlers via `axum::extract::State`.
 
 ## Frontend
 
-Vanilla JS + Tailwind CSS, served as embedded static assets.
+React 19 + TypeScript PWA, built with Vite and Tailwind CSS v4. Source lives in `ui/`; the production build (`ui/dist/`) is embedded in the Rust binary via `rust-embed`.
+
+### Tech stack
+
+- **Vite** — build tooling, HMR for local development
+- **React 19** + **TypeScript** — component framework
+- **Tailwind CSS v4** + **@tailwindcss/typography** — styling and prose rendering
+- **React Router v7** — client-side routing (`/`, `/login.html`, `/config.html`)
+- **vite-plugin-pwa** — service worker and manifest for installable PWA
+- **marked** + **DOMPurify** — Markdown rendering with HTML sanitization
+- **mermaid** — diagram rendering in description previews (lazy-loaded, code-split)
 
 ### Pages
 
 1. **Dashboard** (`/`)
-   - Grid of workflow cards
-   - Header: WebSocket status, **Pause / Resume Jira polling**, link to config
-   - Each card shows: ticket key (linked to Jira), current state with visual indicator, elapsed time, error message if any
-   - Action buttons: Pause/Resume, Stop
-   - Report button opens modal with full execution log
-   - Auto-updates via WebSocket
+   - Polling status label at the very top (text, not a button)
+   - Header: WebSocket status, GitHub App bot badge, config link, logout
+   - Summary stats: Running / Completed / Errors / Paused counters
+   - Grid of workflow cards with progress segments, action buttons, terminal output
+   - Run command buttons on completed workflows (from `[[run_commands]]` config)
+   - Port forwarding buttons for detected app ports
+   - Connection animation overlay when opening editor or terminal
 
-2. **Configuration** (`/config`)
-   - Form with all configurable fields
-   - Save sends strict `PUT /api/config` JSON patch (dashboard login + max concurrent / max active only)
-   - Validates before submit
+2. **Configuration** (`/config.html`)
+   - Runtime-only settings: dashboard login + concurrency caps
+   - Read-only JSON snapshot of full config
+   - Strict `PUT /api/config` patch on save
 
-3. **Report Modal**
-   - Step-by-step execution log
-   - Expandable sections per step with stdout/stderr
-   - Duration per step
-   - Final status
+3. **Login** (`/login.html`)
+   - Username/password form; session cookie auth
+   - Auto-redirect when dashboard auth is not enabled
 
-### Asset Embedding
+### Ticket detail modal
+
+- Markdown preview with Mermaid diagram support (fenced ` ```mermaid ` blocks)
+- **Write/Preview** tabs with optional **side-by-side** mode (debounced 400ms preview)
+- Modal animates to full width when side-by-side is enabled
+- Editable title and description; blue "modified" banner with Save/Discard
+- **Improve with AI** — overlay with countdown timer, returns suggested title + description
+- Title and description saved to the ticketing system (or in-memory for no-ticketing mode)
+
+### Report modal
+
+- Step-by-step execution report with status per step
+- Copyable JSON output
+
+### System error alerts
+
+- Dismissable red alert cards in the bottom-right corner
+- Surfaced from WebSocket events (e.g., run command failures with exit code + log tail)
+
+### Build pipeline
+
+```
+cd ui && npm run build    # → ui/dist/
+cargo build               # rust-embed bundles ui/dist/ into the binary
+```
 
 ```rust
 #[derive(RustEmbed)]
-#[folder = "crates/maestro-web/src/assets/"]
+#[folder = "../../ui/dist/"]
 struct Assets;
 ```
 
-Assets are compiled into the binary, making the Docker image self-contained with no external file dependencies.
+The Dockerfile uses a multi-stage build: a `node:23` stage builds the React app, then the output is copied into the Rust builder stage. `make build` runs both steps automatically.
+
+### Local development
+
+```bash
+cd ui
+npm install --legacy-peer-deps
+npm run dev                # Vite dev server on :5173, proxies /api and /ws to :8080
+```
+
+No Rust rebuild needed during frontend work — Vite serves with HMR.
 
 ---
 

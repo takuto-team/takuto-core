@@ -327,14 +327,19 @@ On **stop**: kills running sessions, unassigns ticket, moves back to “To Do”
 
 The web dashboard at `http://localhost:8080` provides:
 
-- **Workflow cards** — 2 per row, showing ticket, status, current step, progress bar
-- **Real-time terminal** — live streaming of command output via WebSocket; output persists across page reloads (last 100 lines served via API)
-- **Controls** — Pause, Resume, Stop, Retry buttons
-- **Report modal** — detailed step-by-step execution report
-- **Configuration page** — at `/config.html`
-- **Editor container** — for each workflow, an **"Open editor"** button starts a browser-based VS Code instance inside an isolated Docker container with the workflow's worktree mounted. The container includes the project's tools (from `.mise.toml` or `[commands] install`) and optionally configured applications from `[editor] ports`. Click **"Open terminal"** to launch a web-based shell (ttyd) inside the same editor container.
-- **Port forwarding** — detected app ports inside the editor container are automatically forwarded to spare host ports and displayed as clickable links on the workflow card (via `[editor] ports` config or dynamic detection via `[editor] dynamic_ports`).
-- **No-Jira mode UI** — when acli is not authenticated: an amber warning banner, a one-time alert dialog, polling controls hidden, and the **+** button opens a paste-description modal (workflow name + description) instead of the Jira ticket picker
+- **Workflow cards** — responsive grid showing ticket, status, progress segments, current step, duration
+- **Real-time terminal** — live streaming of command output via WebSocket; logs persist after completion (collapsible)
+- **Controls** — Pause/Resume (with icons), Retry from 0, Retry from last failure, Mark as Done, Delete (with confirmation)
+- **Report modal** — step-by-step execution report with copyable JSON
+- **Configuration page** — at `/config.html` (runtime settings only)
+- **Ticket detail modal** — Markdown preview with Mermaid diagram support, Write/Preview tabs, side-by-side editing mode, editable title and description, **Improve with AI** (suggests title + description with countdown overlay)
+- **Editor container** — **"Open editor"** starts a browser VS Code with secure connection token authentication. **"Open terminal"** launches a web shell (ttyd) with secret base-path auth. Both show a connection animation during setup.
+- **Port forwarding** — detected app ports are automatically forwarded and shown as clickable buttons on the card (via `[editor] dynamic_ports` or `[editor] ports`)
+- **Run commands** — custom shell commands from `[[run_commands]]` in config appear as buttons on completed workflow cards. Containers run with automatic port detection; errors are shown in system alert cards with exit code and log output.
+- **No-ticketing mode** — the **+** button opens a paste-description modal; descriptions and titles are editable and persisted in-memory (survives restart via snapshot)
+- **GitHub Issues mode** — the **+** button opens an issue picker from the configured repo
+- **GitHub App badge** — header shows "Bot Connected" with the app's avatar when GitHub App auth is configured
+- **PWA** — installable progressive web app with service worker
 
 ## Environment Variables
 
@@ -482,21 +487,52 @@ podman pod rm -f $(podman pod ls -q) 2>/dev/null
 ### Build locally
 
 ```bash
+# Build the React dashboard (required before cargo build)
+cd ui && npm install --legacy-peer-deps && npm run build && cd ..
+
+# Build the Rust binary (embeds ui/dist/ via rust-embed)
 cargo build
 cargo test
 cargo check
 ```
 
+Or use the Makefile which handles both:
+
+```bash
+make ui-build   # React build only
+make build      # React + Rust + Docker image
+```
+
+### Dashboard UI development
+
+The dashboard is a React 19 + TypeScript PWA in `ui/`. For local development with hot reload:
+
+```bash
+cd ui
+npm install --legacy-peer-deps
+npm run dev     # Vite dev server on :5173
+```
+
+Vite proxies `/api` and `/ws` to `localhost:8080` (the Rust backend). No Rust rebuild needed during frontend work.
+
+**Tech stack:** Vite, React 19, TypeScript, Tailwind CSS v4, React Router v7, vite-plugin-pwa, marked + DOMPurify (Markdown), mermaid (diagrams).
+
 ### Project structure
 
 ```
+ui/                # React + TypeScript dashboard (Vite PWA)
+  src/
+    api/           # API client + TypeScript types
+    hooks/         # useAuth, useWebSocket, useWorkflows, usePolling
+    components/    # Header, WorkflowCard, modals, SystemErrorAlert, etc.
+    pages/         # Dashboard, Login, Config
+    styles/        # Tailwind CSS + custom styles
 crates/
   maestro-core/    # Workflow engine, Jira/GitHub/Claude integrations, config
-  maestro-web/     # Axum web server, REST API, WebSocket, static assets
+  maestro-web/     # Axum web server, REST API, WebSocket (serves ui/dist/)
   maestro-cli/     # CLI entry point
 docker/
   entrypoint.sh    # Container entrypoint (root preamble + maestro user)
   egress-rules.sh  # iptables egress allowlist
   test-*.sh        # Diagnostic test scripts
-design/            # HTML/CSS mockups
 ```
