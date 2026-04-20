@@ -161,17 +161,20 @@ pub async fn update_ticket_description(
                     )
                 })?;
 
+            let mut gh_args = vec![
+                "api".to_string(),
+                "--method".to_string(),
+                "PATCH".to_string(),
+                format!("repos/{owner_repo}/issues/{issue_number}"),
+                "--raw-field".to_string(),
+                format!("body={}", body.description),
+            ];
+            if let Some(ref s) = body.summary {
+                gh_args.push("--raw-field".to_string());
+                gh_args.push(format!("title={s}"));
+            }
             let output = tokio::process::Command::new("gh")
-                .args([
-                    "api",
-                    "--method",
-                    "PATCH",
-                    &format!("repos/{owner_repo}/issues/{issue_number}"),
-                    // --raw-field sends the value as a plain string, avoiding gh's
-                    // type-coercion of "true"/"false"/"123" in user-supplied text.
-                    "--raw-field",
-                    &format!("body={}", body.description),
-                ])
+                .args(&gh_args)
                 .output()
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -183,6 +186,17 @@ pub async fn update_ticket_description(
                     format!("gh api PATCH issues/{issue_number} failed: {stderr}"),
                 ));
             }
+
+            // Also update the in-memory workflow so the dashboard reflects changes.
+            let mut workflows = state.engine.workflows.write().await;
+            if let Some(wf) = workflows.get_mut(&key) {
+                wf.ticket_description = body.description.clone();
+                if let Some(ref s) = body.summary {
+                    wf.ticket_summary = s.clone();
+                }
+            }
+            drop(workflows);
+            let _ = state.engine.sync_workflow_snapshot().await;
 
             Ok(Json(serde_json::json!({})))
         }
@@ -199,6 +213,18 @@ pub async fn update_ticket_description(
                 .update_description(&key, &body.description)
                 .await
                 .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+            // Also update the in-memory workflow so the dashboard reflects changes.
+            let mut workflows = state.engine.workflows.write().await;
+            if let Some(wf) = workflows.get_mut(&key) {
+                wf.ticket_description = body.description.clone();
+                if let Some(ref s) = body.summary {
+                    wf.ticket_summary = s.clone();
+                }
+            }
+            drop(workflows);
+            let _ = state.engine.sync_workflow_snapshot().await;
+
             Ok(Json(serde_json::json!({})))
         }
     }
