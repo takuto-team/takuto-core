@@ -122,8 +122,8 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     [fetchWorkflows]
   );
 
-  const handleShowDescription = useCallback((key: string, summary: string) => {
-    setDetailModal({ key, summary, showStart: false });
+  const handleShowDescription = useCallback((key: string, summary: string, description?: string) => {
+    setDetailModal({ key, summary, description, showStart: false });
   }, []);
 
   const workflowList = Object.values(workflows);
@@ -191,6 +191,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           showStartButton={detailModal.showStart}
           onStart={handleStartWorkflow}
           onClose={() => setDetailModal(null)}
+          onSaved={fetchWorkflows}
         />
       )}
       {reportKey && workflows[reportKey] && (

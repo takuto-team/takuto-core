@@ -32,6 +32,9 @@ pub struct ImproveTicketResponse {
 #[derive(Deserialize)]
 pub struct UpdateDescriptionBody {
     pub description: String,
+    /// Optional summary/title update (used in no-ticketing mode).
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 /// Maximum allowed length for the ticket description in an improve request (100 KB).
@@ -100,7 +103,17 @@ pub async fn update_ticket_description(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     match state.ticketing_system {
         TicketingSystem::None => {
-            // No ticketing system — nothing to persist.
+            // No external ticketing system — persist to the in-memory workflow.
+            let mut workflows = state.engine.workflows.write().await;
+            if let Some(wf) = workflows.get_mut(&key) {
+                wf.ticket_description = body.description.clone();
+                if let Some(ref s) = body.summary {
+                    wf.ticket_summary = s.clone();
+                }
+            }
+            drop(workflows);
+            // Best-effort snapshot sync so the edit survives a restart.
+            let _ = state.engine.sync_workflow_snapshot().await;
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::GitHub => {

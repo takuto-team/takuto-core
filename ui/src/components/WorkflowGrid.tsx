@@ -8,7 +8,7 @@ interface Props {
   terminalStates: Record<string, TerminalState>;
   dynamicForwards: DynamicForwards;
   onRefresh: () => void;
-  onShowDescription: (ticketKey: string, summary: string) => void;
+  onShowDescription: (ticketKey: string, summary: string, description?: string) => void;
   onReport: (ticketKey: string) => void;
   onAddWorkflow: () => void;
   canAddWorkflow: boolean;

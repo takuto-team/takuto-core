@@ -10,7 +10,7 @@ interface Props {
   terminalState?: TerminalState;
   dynamicForwards: [number, number][];
   onRefresh: () => void;
-  onShowDescription: (ticketKey: string, summary: string) => void;
+  onShowDescription: (ticketKey: string, summary: string, description?: string) => void;
   onReport: (ticketKey: string) => void;
 }
 
@@ -217,7 +217,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
           <div className="flex flex-col gap-2">
             {/* Row 1: Navigation actions */}
             <div className="flex flex-wrap gap-2">
-              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary)}>
+              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
                 Show description
               </ActionBtn>
               {w.can_open_editor && (
@@ -287,7 +287,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                   Go to ticket
                 </ActionBtn>
               )}
-              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary)}>
+              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
                 Show description
               </ActionBtn>
               {status.label === "Running" && (

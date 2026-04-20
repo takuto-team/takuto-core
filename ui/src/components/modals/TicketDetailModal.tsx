@@ -11,6 +11,8 @@ interface Props {
   showStartButton: boolean;
   onStart?: () => void;
   onClose: () => void;
+  /** Called after a successful save so the parent can refresh workflow data. */
+  onSaved?: () => void;
 }
 
 export function TicketDetailModal({
@@ -21,9 +23,11 @@ export function TicketDetailModal({
   showStartButton,
   onStart,
   onClose,
+  onSaved,
 }: Props) {
   const [markdown, setMarkdown] = useState(initialDescription || "");
-  const [loading, setLoading] = useState(!initialDescription);
+  const [loading, setLoading] = useState(!initialDescription && ticketingSystem !== "none");
+  const [editTitle, setEditTitle] = useState(summary);
   const [improving, setImproving] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
@@ -64,6 +68,7 @@ export function TicketDetailModal({
 
   const handleStartEdit = () => {
     setEditText(markdown);
+    setEditTitle(summary);
     setDebouncedText(markdown);
     setActiveTab("write");
     setSideBySide(false);
@@ -73,23 +78,23 @@ export function TicketDetailModal({
   const handleSaveDescription = async () => {
     setSaving(true);
     try {
-      const res = await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, {
-        description: editText,
-      });
+      const payload: Record<string, string> = { description: editText };
+      // Include summary if the title was changed.
+      if (editTitle !== summary) {
+        payload.summary = editTitle;
+      }
+      const res = await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, payload);
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || `HTTP ${res.status}`);
       }
-      // Update the saved markdown first so editDirty becomes false (banner
-      // shows "Editing description" with disabled Save), then exit edit mode
-      // in the next tick so MarkdownPreview has time to render mermaid before
-      // the layout shifts from side-by-side/tabbed back to read-only.
       setMarkdown(editText);
       requestAnimationFrame(() => {
         setEditMode(false);
         setActiveTab("write");
         setSideBySide(false);
       });
+      onSaved?.();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -108,7 +113,7 @@ export function TicketDetailModal({
     if (!checked) setActiveTab("write");
   };
 
-  const editDirty = editMode && editText !== markdown;
+  const editDirty = editMode && (editText !== markdown || editTitle !== summary);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -119,9 +124,18 @@ export function TicketDetailModal({
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <span className="font-mono text-xs text-blue-400">{ticketKey}</span>
-            <h3 className="text-lg font-medium text-white truncate">{summary}</h3>
+            {editMode ? (
+              <input
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="block w-full mt-1 bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-lg font-medium text-white"
+              />
+            ) : (
+              <h3 className="text-lg font-medium text-white truncate">{summary}</h3>
+            )}
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 cursor-pointer text-xl flex-shrink-0 ml-4">
             &times;
