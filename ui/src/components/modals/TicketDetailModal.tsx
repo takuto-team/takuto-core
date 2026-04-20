@@ -141,7 +141,6 @@ export function TicketDetailModal({
     setSaving(true);
     try {
       const payload: Record<string, string> = { description: editText };
-      // Include summary if the title was changed.
       if (editTitle !== summary) {
         payload.summary = editTitle;
       }
@@ -198,6 +197,7 @@ export function TicketDetailModal({
             </button>
           </div>
         )}
+
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
           <div className="min-w-0 flex-1">
