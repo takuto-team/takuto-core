@@ -284,7 +284,7 @@ export function TicketDetailModal({
         )}
 
         {/* Content area */}
-        <div className={`flex-1 ${editMode && sideBySide ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
+        <div className={`flex-1 min-h-0 ${editMode && sideBySide ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
           {loading ? (
             <div className="flex-1 overflow-y-auto p-6">
               <p className="text-gray-500 text-sm">Loading description...</p>
