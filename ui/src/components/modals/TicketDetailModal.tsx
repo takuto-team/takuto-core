@@ -305,11 +305,11 @@ export function TicketDetailModal({
                 </div>
               </>
             ) : activeTab === "write" ? (
-              <div className="flex-1 overflow-y-auto p-6">
+              <div className="flex-1 flex flex-col p-6 min-h-0">
                 <textarea
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
-                  className="w-full h-64 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-y"
+                  className="w-full flex-1 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-none"
                   autoFocus
                 />
               </div>
