@@ -1611,9 +1611,10 @@ pub async fn start_run_command(
     // Image
     args.push(image.into());
 
-    // Shell command: source env, then exec the user command
+    // Shell command: source env, then run the user command.
+    // No `exec` prefix — the command may use shell builtins like `cd`.
     let script = format!(
-        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; exec {command}"
+        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; {command}"
     );
     args.push("bash".into());
     args.push("-lc".into());
