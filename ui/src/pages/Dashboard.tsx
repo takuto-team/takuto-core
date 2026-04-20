@@ -123,8 +123,11 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   );
 
   const handleShowDescription = useCallback((key: string, summary: string, description?: string) => {
-    setDetailModal({ key, summary, description, showStart: false });
-  }, []);
+    // For Jira, don't pass cached description — the modal fetches fresh from the preview API.
+    // For None and GitHub, use the in-memory description (it's the source of truth or a good cache).
+    const desc = ticketingSystem === "jira" ? undefined : description;
+    setDetailModal({ key, summary, description: desc, showStart: false });
+  }, [ticketingSystem]);
 
   const workflowList = Object.values(workflows);
 

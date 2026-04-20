@@ -187,16 +187,16 @@ pub async fn update_ticket_description(
                 ));
             }
 
-            // Also update the in-memory workflow so the dashboard reflects changes.
-            let mut workflows = state.engine.workflows.write().await;
-            if let Some(wf) = workflows.get_mut(&key) {
-                wf.ticket_description = body.description.clone();
-                if let Some(ref s) = body.summary {
+            // Update in-memory summary (for dashboard card title) but NOT description —
+            // GitHub is the authoritative source; next "Show description" fetches fresh.
+            if let Some(ref s) = body.summary {
+                let mut workflows = state.engine.workflows.write().await;
+                if let Some(wf) = workflows.get_mut(&key) {
                     wf.ticket_summary = s.clone();
                 }
+                drop(workflows);
+                let _ = state.engine.sync_workflow_snapshot().await;
             }
-            drop(workflows);
-            let _ = state.engine.sync_workflow_snapshot().await;
 
             Ok(Json(serde_json::json!({})))
         }
@@ -214,16 +214,16 @@ pub async fn update_ticket_description(
                 .await
                 .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 
-            // Also update the in-memory workflow so the dashboard reflects changes.
-            let mut workflows = state.engine.workflows.write().await;
-            if let Some(wf) = workflows.get_mut(&key) {
-                wf.ticket_description = body.description.clone();
-                if let Some(ref s) = body.summary {
+            // Update in-memory summary (for dashboard card title) but NOT description —
+            // Jira is the authoritative source; next "Show description" fetches fresh.
+            if let Some(ref s) = body.summary {
+                let mut workflows = state.engine.workflows.write().await;
+                if let Some(wf) = workflows.get_mut(&key) {
                     wf.ticket_summary = s.clone();
                 }
+                drop(workflows);
+                let _ = state.engine.sync_workflow_snapshot().await;
             }
-            drop(workflows);
-            let _ = state.engine.sync_workflow_snapshot().await;
 
             Ok(Json(serde_json::json!({})))
         }
