@@ -384,46 +384,46 @@ fn editor_container_name(ticket_key: &str) -> String {
     format!("maestro-editor-{}", sanitize_ticket_key(ticket_key))
 }
 
-/// List host ports already claimed by any `maestro-editor-*` container.
+/// List host ports already claimed by any Maestro-managed container
+/// (`maestro-editor-*` and `maestro-run-*`). Both container families
+/// allocate from the same editor port range (9100–9200), so the
+/// allocator must see ports from both to avoid collisions.
 async fn used_editor_ports() -> Vec<u16> {
-    let output = tokio::process::Command::new("docker")
-        .args([
-            "ps",
-            "--filter",
-            "name=maestro-editor-",
-            "--format",
-            "{{.Ports}}",
-        ])
-        .output()
-        .await;
-
-    let Ok(out) = output else { return Vec::new() };
-    if !out.status.success() {
-        return Vec::new();
-    }
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
     let mut ports = Vec::new();
-    // Docker may emit individual mappings or compressed ranges when many consecutive
-    // symmetric ports are bound:
-    //   individual: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->9101/tcp"
-    //   range:      "0.0.0.0:9100-9110->9100-9110/tcp"
-    for segment in stdout.split([',', '\n']) {
-        let segment = segment.trim();
-        if let Some(arrow) = segment.find("->")
-            && let Some(colon) = segment[..arrow].rfind(':')
-        {
-            let host_part = &segment[colon + 1..arrow];
-            if let Some((lo, hi)) = host_part.split_once('-') {
-                // Range format: "9100-9110"
-                if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
-                    for p in lo..=hi {
-                        ports.push(p);
+    // Check both editor and run-command containers that share the port range.
+    for filter in ["name=maestro-editor-", "name=maestro-run-"] {
+        let output = tokio::process::Command::new("docker")
+            .args(["ps", "--filter", filter, "--format", "{{.Ports}}"])
+            .output()
+            .await;
+
+        let Ok(out) = output else { continue };
+        if !out.status.success() {
+            continue;
+        }
+
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // Docker may emit individual mappings or compressed ranges when many consecutive
+        // symmetric ports are bound:
+        //   individual: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->9101/tcp"
+        //   range:      "0.0.0.0:9100-9110->9100-9110/tcp"
+        for segment in stdout.split([',', '\n']) {
+            let segment = segment.trim();
+            if let Some(arrow) = segment.find("->")
+                && let Some(colon) = segment[..arrow].rfind(':')
+            {
+                let host_part = &segment[colon + 1..arrow];
+                if let Some((lo, hi)) = host_part.split_once('-') {
+                    // Range format: "9100-9110"
+                    if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
+                        for p in lo..=hi {
+                            ports.push(p);
+                        }
                     }
+                } else if let Ok(p) = host_part.parse::<u16>() {
+                    // Single port: "9100"
+                    ports.push(p);
                 }
-            } else if let Ok(p) = host_part.parse::<u16>() {
-                // Single port: "9100"
-                ports.push(p);
             }
         }
     }
@@ -1489,6 +1489,346 @@ async fn kill_socat(container: &str, spare_port: u16) {
         .args(["exec", container, "pkill", "-f", &pattern])
         .output()
         .await;
+}
+
+// ---------------------------------------------------------------------------
+// Run commands — dedicated containers for user-defined shell commands
+// ---------------------------------------------------------------------------
+
+/// Deterministic container name for a run command instance.
+pub fn run_command_container_name(ticket_key: &str, cmd_index: usize) -> String {
+    format!(
+        "maestro-run-{}-{}",
+        sanitize_ticket_key(ticket_key),
+        cmd_index
+    )
+}
+
+/// Information about a running run-command container.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RunCommandInfo {
+    /// Index of the command in the `[[run_commands]]` config array.
+    pub index: usize,
+    /// The host port on which the detected application port is forwarded, if any.
+    pub forwarded_port: Option<(u16, u16)>,
+}
+
+/// Start a run-command container for a workflow.
+///
+/// Runs the given shell `command` in a dedicated Docker container. Allocates spare
+/// ports from the editor range for dynamic port forwarding (socat). Returns the
+/// allocated spare ports so the caller can start a port scanner.
+pub async fn start_run_command(
+    ticket_key: &str,
+    worktree_path: &Path,
+    image: &str,
+    command: &str,
+    cmd_index: usize,
+    dynamic_ports: usize,
+) -> std::result::Result<Vec<u16>, String> {
+    let name = run_command_container_name(ticket_key, cmd_index);
+
+    // Check if already running
+    if is_run_command_running(ticket_key, cmd_index).await {
+        return Err(format!("Run command container '{name}' is already running"));
+    }
+
+    // Remove any leftover stopped container with the same name.
+    let _ = tokio::process::Command::new("docker")
+        .args(["rm", "-f", &name])
+        .output()
+        .await;
+
+    // Allocate spare ports for dynamic forwarding.
+    let spare_count = dynamic_ports.max(3); // at least 3 ports for typical dev servers
+    let spare_ports = allocate_editor_ports(spare_count).await.ok_or_else(|| {
+        format!(
+            "No free ports available for run command (need {spare_count}, range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})"
+        )
+    })?;
+
+    info!(
+        ticket = %ticket_key,
+        cmd_index,
+        container = %name,
+        spare_ports = ?spare_ports,
+        "Starting run command container"
+    );
+
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "-d".into(),
+        "--rm".into(),
+        "--name".into(),
+        name.clone(),
+        "--cap-add=NET_ADMIN".into(),
+    ];
+
+    // Environment
+    for (k, v) in WORKER_ENV {
+        args.push("-e".into());
+        args.push(format!("{k}={v}"));
+    }
+    for key in PASSTHROUGH_ENV {
+        if let Ok(val) = std::env::var(key)
+            && !val.is_empty()
+        {
+            args.push("-e".into());
+            args.push(format!("{key}={val}"));
+        }
+    }
+
+    // Volumes
+    for v in WORKER_VOLUMES {
+        args.push("-v".into());
+        args.push((*v).into());
+    }
+
+    // Port mappings — spare ports for socat forwarding
+    for &sp in &spare_ports {
+        args.push("-p".into());
+        args.push(format!("{sp}:{sp}"));
+    }
+
+    // Working directory
+    args.push("-w".into());
+    args.push(worktree_path.to_string_lossy().into_owned());
+
+    // User
+    args.push("--user".into());
+    args.push("maestro:maestro".into());
+
+    // Entrypoint override — run as user directly
+    args.push("--entrypoint".into());
+    args.push("".into());
+
+    // Label to identify run-command containers
+    args.push("--label".into());
+    args.push(format!("maestro.run_command={cmd_index}"));
+    args.push("--label".into());
+    args.push(format!("maestro.ticket_key={ticket_key}"));
+
+    // Image
+    args.push(image.into());
+
+    // Shell command: source env, then exec the user command
+    let script = format!(
+        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; exec {command}"
+    );
+    args.push("bash".into());
+    args.push("-lc".into());
+    args.push(script);
+
+    let output = tokio::process::Command::new("docker")
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to start run command container: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "docker run failed for run command '{name}': {stderr}"
+        ));
+    }
+
+    info!(
+        ticket = %ticket_key,
+        container = %name,
+        "Run command container started"
+    );
+
+    Ok(spare_ports)
+}
+
+/// Check if a run-command container is currently running.
+pub async fn is_run_command_running(ticket_key: &str, cmd_index: usize) -> bool {
+    let name = run_command_container_name(ticket_key, cmd_index);
+    let output = tokio::process::Command::new("docker")
+        .args(["inspect", "--format", "{{.State.Running}}", &name])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout).trim() == "true"
+        }
+        _ => false,
+    }
+}
+
+/// Stop and remove a run-command container.
+pub async fn stop_run_command(ticket_key: &str, cmd_index: usize) {
+    let name = run_command_container_name(ticket_key, cmd_index);
+    let _ = tokio::process::Command::new("docker")
+        .args(["rm", "-f", &name])
+        .output()
+        .await;
+    info!(ticket = %ticket_key, cmd_index, container = %name, "Run command container stopped");
+}
+
+/// Stop ALL run-command containers for a ticket.
+pub async fn stop_all_run_commands(ticket_key: &str) {
+    let sanitized = sanitize_ticket_key(ticket_key);
+    let prefix = format!("maestro-run-{sanitized}-");
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("name={prefix}"),
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+        .await;
+
+    if let Ok(out) = output
+        && out.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for name in stdout.lines() {
+            let name = name.trim();
+            if !name.is_empty() {
+                let _ = tokio::process::Command::new("docker")
+                    .args(["rm", "-f", name])
+                    .output()
+                    .await;
+                info!(container = %name, "Run command container cleaned up");
+            }
+        }
+    }
+}
+
+/// Run a port scanner for a run-command container. Similar to `run_port_scanner` for
+/// editor containers, but tracks only a single container and uses its own spare ports.
+pub async fn run_run_command_port_scanner(
+    ticket_key: &str,
+    cmd_index: usize,
+    spare_ports: Vec<u16>,
+    event_tx: broadcast::Sender<WorkflowEvent>,
+    cancel: CancellationToken,
+) {
+    let container = run_command_container_name(ticket_key, cmd_index);
+    let ticket = ticket_key.to_string();
+
+    // Ports to never treat as "new": all pre-allocated spare ports
+    let mut always_ignore: std::collections::HashSet<u16> = std::collections::HashSet::new();
+    for sp in &spare_ports {
+        always_ignore.insert(*sp);
+    }
+
+    let mut active_forwards: HashMap<u16, u16> = HashMap::new();
+    let mut available_spares: Vec<u16> = spare_ports;
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                for (&detected, &spare) in &active_forwards {
+                    kill_socat(&container, spare).await;
+                    debug!(ticket = %ticket, cmd_index, detected, spare, "Cleaned up run-cmd socat on scanner shutdown");
+                }
+                info!(ticket = %ticket, cmd_index, "Run command port scanner stopped");
+                return;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {}
+        }
+
+        // Check if the container is still running; if not, emit stopped event and exit.
+        if !is_run_command_running(&ticket, cmd_index).await {
+            info!(ticket = %ticket, cmd_index, "Run command container exited — stopping scanner");
+            let _ = event_tx.send(WorkflowEvent {
+                event_type: "run_command_stopped".to_string(),
+                workflow_id: String::new(),
+                ticket_key: ticket.clone(),
+                state: String::new(),
+                timestamp: chrono::Utc::now(),
+                error: None,
+                step_name: Some(format!("{cmd_index}")),
+                output_line: None,
+                stream: None,
+                progress_percent: None,
+                progress_steps_total: None,
+                forwarded_port: None,
+                pr_merged: None,
+            });
+            return;
+        }
+
+        let listening = match scan_listening_ports(&container).await {
+            Some(ports) => ports,
+            None => continue,
+        };
+        let listening_set: std::collections::HashSet<u16> =
+            listening.iter().map(|(p, _)| *p).collect();
+
+        // Detect new listening ports → start socat forwarding.
+        for &(port, family) in &listening {
+            if always_ignore.contains(&port) || active_forwards.contains_key(&port) {
+                continue;
+            }
+            if let Some(spare) = available_spares.pop() {
+                if start_socat(&container, spare, port, family).await {
+                    info!(
+                        ticket = %ticket,
+                        cmd_index,
+                        detected = port,
+                        host_port = spare,
+                        "Run command: dynamic port forwarded via socat"
+                    );
+                    active_forwards.insert(port, spare);
+                    let host_spare = editor_host_port(spare);
+                    let _ = event_tx.send(WorkflowEvent {
+                        event_type: "run_command_port_forwarded".to_string(),
+                        workflow_id: String::new(),
+                        ticket_key: ticket.clone(),
+                        state: String::new(),
+                        timestamp: chrono::Utc::now(),
+                        error: None,
+                        step_name: Some(format!("{cmd_index}")),
+                        output_line: None,
+                        stream: None,
+                        progress_percent: None,
+                        progress_steps_total: None,
+                        forwarded_port: Some((port, host_spare)),
+                        pr_merged: None,
+                    });
+                } else {
+                    available_spares.push(spare);
+                }
+            }
+        }
+
+        // Detect removed ports → tear down socat.
+        let gone: Vec<u16> = active_forwards
+            .keys()
+            .copied()
+            .filter(|p| !listening_set.contains(p))
+            .collect();
+
+        for port in gone {
+            if let Some(spare) = active_forwards.remove(&port) {
+                kill_socat(&container, spare).await;
+                available_spares.push(spare);
+                let host_spare = editor_host_port(spare);
+                let _ = event_tx.send(WorkflowEvent {
+                    event_type: "run_command_port_unforwarded".to_string(),
+                    workflow_id: String::new(),
+                    ticket_key: ticket.clone(),
+                    state: String::new(),
+                    timestamp: chrono::Utc::now(),
+                    error: None,
+                    step_name: Some(format!("{cmd_index}")),
+                    output_line: None,
+                    stream: None,
+                    progress_percent: None,
+                    progress_steps_total: None,
+                    forwarded_port: Some((port, host_spare)),
+                    pr_merged: None,
+                });
+            }
+        }
+    }
 }
 
 #[cfg(test)]
