@@ -84,7 +84,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ttyd — lightweight web-based terminal (used by the dashboard "Open terminal" button)
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in amd64) TTYD_ARCH=x86_64 ;; arm64) TTYD_ARCH=aarch64 ;; *) echo "Unsupported arch: $ARCH" && exit 1 ;; esac \
-    && curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd \
+    && curl -fSL --retry 3 --retry-delay 5 "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd \
     && chmod +x /usr/local/bin/ttyd
 
 
@@ -122,7 +122,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # `cargo` in ephemeral workers that start before any mise install can run.
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+RUN curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-delay 5 https://sh.rustup.rs \
     | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal \
     && /usr/local/cargo/bin/rustup component add rustfmt clippy \
     && chmod -R a+r /usr/local/rustup /usr/local/cargo \
@@ -147,34 +147,39 @@ RUN ARCH=$(dpkg --print-architecture); \
       echo "WARN: fcli prebuilt binary not available for $ARCH — skipping"; \
     fi
 
-# lokalise2 — Lokalise CLI v2 (Go). Prebuilt tarballs for both Linux arches
-# published to GitHub releases. Binary lands at /usr/local/bin/lokalise2.
-RUN set -eux; \
-    ARCH=$(dpkg --print-architecture); \
+# lokalise2 — Lokalise CLI v2 (Go). Optional — build continues without it.
+RUN ARCH=$(dpkg --print-architecture); \
     case "$ARCH" in \
       amd64) LOKA_ARCH=x86_64 ;; \
       arm64) LOKA_ARCH=arm64 ;; \
-      *) echo "Unsupported arch: $ARCH"; exit 1 ;; \
+      *) LOKA_ARCH="" ;; \
     esac; \
-    curl -fsSL "https://github.com/lokalise/lokalise-cli-2-go/releases/latest/download/lokalise2_linux_${LOKA_ARCH}.tar.gz" -o /tmp/lokalise2.tar.gz; \
-    tar -xzf /tmp/lokalise2.tar.gz -C /tmp; \
-    install -m 0755 /tmp/lokalise2 /usr/local/bin/lokalise2; \
-    rm -rf /tmp/lokalise2 /tmp/lokalise2.tar.gz; \
-    lokalise2 --version
+    if [ -n "$LOKA_ARCH" ]; then \
+      curl -fSL --retry 3 --retry-delay 5 "https://github.com/lokalise/lokalise-cli-2-go/releases/latest/download/lokalise2_linux_${LOKA_ARCH}.tar.gz" -o /tmp/lokalise2.tar.gz \
+      && tar -xzf /tmp/lokalise2.tar.gz -C /tmp \
+      && install -m 0755 /tmp/lokalise2 /usr/local/bin/lokalise2 \
+      && rm -rf /tmp/lokalise2 /tmp/lokalise2.tar.gz \
+      && lokalise2 --version \
+      || echo "WARN: lokalise2 install failed — Lokalise features unavailable"; \
+    else \
+      echo "WARN: lokalise2 not available for $ARCH — skipping"; \
+    fi
 
 # Node.js 23+ (official tarball). Cursor Agent runs `node --use-system-ca`, which exists only on Node >= 23.9
 # on Linux; NodeSource 20.x rejects that flag with "bad option: --use-system-ca".
 ARG NODE_VERSION=23.11.0
-RUN set -eux; \
-    ARCH="$(dpkg --print-architecture)"; \
-    case "$ARCH" in \
+RUN ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
       amd64) NODE_ARCH=x64 ;; \
       arm64) NODE_ARCH=arm64 ;; \
       *) echo "unsupported architecture: $ARCH"; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" \
-      | tar -xz -C /usr/local --strip-components=1; \
-    node --version; npm --version
+    esac \
+    && curl -fSL --retry 3 --retry-delay 5 \
+       "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" \
+       -o /tmp/node.tar.gz \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
+    && rm -f /tmp/node.tar.gz \
+    && node --version && npm --version
 
 # Install gh CLI (official apt repository)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
