@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 //! Dashboard session cookie auth (username + password via `POST /api/auth/login`).
 
 use std::time::{SystemTime, UNIX_EPOCH};

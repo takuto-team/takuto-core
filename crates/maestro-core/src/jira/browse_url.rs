@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 //! Build Jira **browse** URLs from **`[jira] site`** and a ticket key (dashboard links).
 
 /// Returns `https://…/browse/TICKET` using the same rules as operators expect from **`[jira] site`**

@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -185,6 +188,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             "Config file not found, using defaults"
         );
     }
+
+    maestro_core::license::init_license_tier();
 
     info!(dry_mode = config.general.dry_mode, "Maestro starting");
 

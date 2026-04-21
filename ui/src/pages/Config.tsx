@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 import { useState, useEffect, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { apiJson, api } from "../api/client";

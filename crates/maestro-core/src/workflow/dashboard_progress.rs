@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 //! Dashboard progress bar: completed `steps_log` entries vs an estimated total from `Config` and state.
 
 use std::path::Path;

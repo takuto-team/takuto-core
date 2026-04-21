@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 //! Remove a registered git worktree with `git worktree remove --force`.
 //!
 //! Isolated Docker workers historically ran some commands as root (`docker run` default user),

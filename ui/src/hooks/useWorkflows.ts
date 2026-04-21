@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 import { useState, useCallback, useRef, useEffect } from "react";
 import { apiJson } from "../api/client";
 import type { WorkflowSummary, WorkflowEvent, TerminalLine } from "../api/types";

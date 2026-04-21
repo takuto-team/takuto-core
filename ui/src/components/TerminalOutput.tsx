@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 import { useEffect, useRef } from "react";
 import type { TerminalState } from "../hooks/useWorkflows";
 

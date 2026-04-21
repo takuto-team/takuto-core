@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 //! Convert Jira **ADF** (Atlassian Document Format) description JSON to Markdown for dashboard preview.
 
 use serde_json::Value;

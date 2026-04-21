@@ -41,6 +41,7 @@ FROM debian:bookworm-slim AS runtime
 ARG MAESTRO_VERSION=dev
 LABEL org.opencontainers.image.version="${MAESTRO_VERSION}"
 LABEL org.opencontainers.image.source="https://github.com/morphet81/maestro-core"
+LABEL org.opencontainers.image.licenses="FSL-1.1-ALv2"
 LABEL org.opencontainers.image.title="Maestro"
 LABEL org.opencontainers.image.description="Automated workflow orchestration for AI coding agents"
 

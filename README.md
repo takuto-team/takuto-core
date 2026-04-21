@@ -536,3 +536,11 @@ docker/
   egress-rules.sh  # iptables egress allowlist
   test-*.sh        # Diagnostic test scripts
 ```
+
+## License
+
+Maestro Core is source-available under the [Functional Source License 1.1 (FSL-1.1-ALv2)](LICENSE).
+
+You can self-host freely. If you offer Maestro as a service to others, the FSL
+does not permit using it to offer a competing product or hosted service. For organizations that need a commercial
+license, see morphet.contact@gmail.com.

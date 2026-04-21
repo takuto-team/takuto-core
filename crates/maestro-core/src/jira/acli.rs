@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 //! Allowlisted `acli` argv patterns. Maestro only issues Jira read/assign/transition commands unless
 //! `[jira] acli_allowed_extra_prefixes` extends the list (advanced).
 

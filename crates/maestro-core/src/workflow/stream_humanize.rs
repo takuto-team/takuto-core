@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 //! Turn newline-delimited JSON from AI CLIs into short lines for the dashboard.
 
 use serde_json::Value;

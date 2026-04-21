@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 //! Git author and PR reviewer alignment with the authenticated `gh` user.
 
 use std::path::Path;

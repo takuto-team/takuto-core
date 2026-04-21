@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 pub fn branch_name_for_ticket(ticket_key: &str, item_type: &str) -> String {
     let prefix = match item_type.to_lowercase().as_str() {
         "bug" => "fix",
