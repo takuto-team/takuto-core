@@ -133,8 +133,10 @@ if [ "${1:-}" = "setup" ]; then
         echo "GitHub CLI: authentication is required."
         gh auth login
     fi
-    if ! gh auth status >/dev/null 2>&1; then
+    if ! gh auth status 2>&1 | grep -qi "logged in"; then
         echo "ERROR: GitHub CLI authentication failed or was not completed."
+        echo "       gh auth status output:"
+        gh auth status 2>&1 | sed 's/^/       /'
         exit 1
     fi
     echo ""
