@@ -3,6 +3,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { Config } from "./pages/Config";
 import { useAuth } from "./hooks/useAuth";
+import { ToastProvider, ToastContainer } from "./hooks/useToast";
 
 export function App() {
   const { authEnabled, loggedIn, loading, login, logout } = useAuth();
@@ -20,11 +21,14 @@ export function App() {
   }
 
   return (
-    <Routes>
-      <Route path="/" element={<Dashboard onLogout={logout} authEnabled={authEnabled} />} />
-      <Route path="/login.html" element={<Login onLogin={login} />} />
-      <Route path="/config.html" element={<Config onLogout={logout} authEnabled={authEnabled} />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <ToastProvider>
+      <Routes>
+        <Route path="/" element={<Dashboard onLogout={logout} authEnabled={authEnabled} />} />
+        <Route path="/login.html" element={<Login onLogin={login} />} />
+        <Route path="/config.html" element={<Config onLogout={logout} authEnabled={authEnabled} />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      <ToastContainer />
+    </ToastProvider>
   );
 }

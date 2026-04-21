@@ -3,6 +3,7 @@ import { api, apiPost } from "../api/client";
 import type { WorkflowSummary, RunCommandStatus } from "../api/types";
 import type { TerminalState } from "../hooks/useWorkflows";
 import { TerminalOutput } from "./TerminalOutput";
+import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
 
 interface Props {
@@ -59,6 +60,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
   const [loading, setLoading] = useState<false | "generic" | string>(false);
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const { showToast } = useToast();
 
   const status = getStatusInfo(w.state);
   const { pct, total, filled } = progressInfo(w);
@@ -77,7 +79,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
         await fn();
         onRefresh();
       } catch (e) {
-        alert(e instanceof Error ? e.message : "Action failed");
+        showToast(e instanceof Error ? e.message : "Action failed");
       } finally {
         setLoading(false);
       }

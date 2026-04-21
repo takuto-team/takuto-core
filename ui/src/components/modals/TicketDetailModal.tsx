@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { apiJson, apiPost } from "../../api/client";
 import type { TicketPreview, ImproveResponse } from "../../api/types";
 import { MarkdownPreview } from "../MarkdownPreview";
+import { useToast } from "../../hooks/useToast";
 
 const IMPROVE_TIMEOUT_SECS = 300;
 
@@ -40,6 +41,7 @@ export function TicketDetailModal({
   const [countdown, setCountdown] = useState(IMPROVE_TIMEOUT_SECS);
   const abortRef = useRef<AbortController | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { showToast } = useToast();
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
@@ -93,7 +95,7 @@ export function TicketDetailModal({
       abortRef.current = null;
       if (!res.ok) {
         const text = await res.text();
-        alert(text || "Failed to improve ticket description");
+        showToast(text || "Failed to improve ticket description");
         return;
       }
       const data: ImproveResponse = await res.json();
@@ -109,7 +111,7 @@ export function TicketDetailModal({
     } catch (e) {
       abortRef.current = null;
       if (e instanceof Error && e.name !== "AbortError") {
-        alert("Failed to improve ticket description");
+        showToast("Failed to improve ticket description");
       }
     } finally {
       setImproving(false);
@@ -159,7 +161,7 @@ export function TicketDetailModal({
       });
       onSaved?.();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to save");
+      showToast(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSaving(false);
     }

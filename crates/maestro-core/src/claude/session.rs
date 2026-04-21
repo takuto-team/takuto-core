@@ -167,12 +167,20 @@ async fn run_claude_session(
                 "Claude Code session finished"
             );
 
-            if !output.success() {
+            if !output.success() && output.stdout.trim().is_empty() {
                 return Err(MaestroError::Claude(format!(
                     "Claude Code exited with code {}: {}",
                     output.exit_code,
                     output.stderr.lines().take(5).collect::<Vec<_>>().join("\n")
                 )));
+            }
+
+            if !output.success() {
+                warn!(
+                    exit_code = output.exit_code,
+                    stdout_len = output.stdout.len(),
+                    "Claude Code exited with non-zero code but produced output — using output"
+                );
             }
 
             if output.stdout.trim().is_empty() {

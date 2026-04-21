@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { apiJson, apiPost } from "../api/client";
 import type { ConfigResponse } from "../api/types";
+import { useToast } from "../hooks/useToast";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useWorkflows } from "../hooks/useWorkflows";
 import { usePolling } from "../hooks/usePolling";
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export function Dashboard({ onLogout, authEnabled }: Props) {
+  const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, dismissError, fetchWorkflows, handleEvent } = useWorkflows();
   const { connected } = useWebSocket(handleEvent);
@@ -98,7 +100,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       setDetailModal(null);
       fetchWorkflows();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to start workflow");
+      showToast(e instanceof Error ? e.message : "Failed to start workflow");
     }
   }, [detailModal, fetchWorkflows]);
 
@@ -117,7 +119,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         setShowPaste(false);
         fetchWorkflows();
       } catch (e) {
-        alert(e instanceof Error ? e.message : "Failed to start workflow");
+        showToast(e instanceof Error ? e.message : "Failed to start workflow");
       }
     },
     [fetchWorkflows]
