@@ -38,7 +38,7 @@ endif
 # Resolve the actual image name for the maestro service (compose may prefix with project name).
 MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
 
-.PHONY: build up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build
+.PHONY: build build-local up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build
 
 ui-build:
 	@echo "Building React dashboard..."
@@ -52,6 +52,17 @@ ifeq ($(HAS_COMPOSE),1)
 else
 	@echo "NOTE: docker/podman compose not available — skipping container image build."
 endif
+
+build-local:
+	@if command -v docker >/dev/null 2>&1 && ! docker --version 2>&1 | grep -qi podman; then \
+		echo "Building with Docker..."; \
+		docker build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test .; \
+	elif command -v podman >/dev/null 2>&1; then \
+		echo "Building with Podman..."; \
+		podman build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test .; \
+	else \
+		echo "ERROR: Neither docker nor podman found." >&2; exit 1; \
+	fi
 
 up:
 	@if [ ! -f config.toml ]; then \
