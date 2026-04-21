@@ -24,6 +24,9 @@ SECURITY_ASSESSMENT_CONTAINER.md
 /ui/node_modules/
 /ui/dist/
 
+# Distribution repository (nested git repo)
+/maestro-releases/
+
 # tmp folder
 /tmp
 
