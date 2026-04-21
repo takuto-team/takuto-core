@@ -144,14 +144,10 @@ RUN set -eux; \
       tar -xzf /tmp/fcli.tar.gz -C /tmp; \
       install -m 0755 /tmp/fcli /usr/local/bin/fcli; \
       rm -rf /tmp/fcli /tmp/fcli.tar.gz; \
-    elif [ "$ARCH" = "arm64" ]; then \
-      /usr/local/cargo/bin/cargo install \
-        --git https://github.com/morphet81/figma-cli --tag "${FCLI_VERSION}" \
-        --locked --root /usr/local; \
     else \
-      echo "Unsupported arch: $ARCH"; exit 1; \
+      echo "WARN: fcli prebuilt binary not available for $ARCH — skipping (Figma features unavailable)"; \
     fi; \
-    fcli --version
+    if command -v fcli >/dev/null 2>&1; then fcli --version; fi
 
 # lokalise2 — Lokalise CLI v2 (Go). Prebuilt tarballs for both Linux arches
 # published to GitHub releases. Binary lands at /usr/local/bin/lokalise2.
