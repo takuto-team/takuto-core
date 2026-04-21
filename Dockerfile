@@ -130,24 +130,22 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && /usr/local/cargo/bin/cargo --version \
     && /usr/local/cargo/bin/rustc --version
 
-# figma-cli (`fcli`) — Rust CLI, available to every container using this image
-# (workflows, editor, terminal). amd64: prebuilt release tarball. arm64: no
-# prebuilt binary exists, so we build from source using the Rust toolchain
-# baked above. `build-essential`, `libssl-dev`, and `pkg-config` are already
-# installed above for mise.
+# figma-cli (`fcli`) — optional Rust CLI for Figma integration.
+# amd64: prebuilt release tarball. Other architectures: skipped (Figma features unavailable).
+# Non-fatal: the build continues without fcli if the download fails.
 ARG FCLI_VERSION=v0.2.0
-RUN set -eux; \
-    ARCH=$(dpkg --print-architecture); \
+RUN ARCH=$(dpkg --print-architecture); \
     if [ "$ARCH" = "amd64" ]; then \
       TARBALL="fcli-${FCLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"; \
-      curl -fsSL "https://github.com/morphet81/figma-cli/releases/download/${FCLI_VERSION}/${TARBALL}" -o /tmp/fcli.tar.gz; \
-      tar -xzf /tmp/fcli.tar.gz -C /tmp; \
-      install -m 0755 /tmp/fcli /usr/local/bin/fcli; \
-      rm -rf /tmp/fcli /tmp/fcli.tar.gz; \
+      curl -fsSL "https://github.com/morphet81/figma-cli/releases/download/${FCLI_VERSION}/${TARBALL}" -o /tmp/fcli.tar.gz \
+      && tar -xzf /tmp/fcli.tar.gz -C /tmp \
+      && install -m 0755 /tmp/fcli /usr/local/bin/fcli \
+      && rm -rf /tmp/fcli /tmp/fcli.tar.gz \
+      && fcli --version \
+      || echo "WARN: fcli install failed on $ARCH — Figma features unavailable"; \
     else \
-      echo "WARN: fcli prebuilt binary not available for $ARCH — skipping (Figma features unavailable)"; \
-    fi; \
-    if command -v fcli >/dev/null 2>&1; then fcli --version; fi
+      echo "WARN: fcli prebuilt binary not available for $ARCH — skipping"; \
+    fi
 
 # lokalise2 — Lokalise CLI v2 (Go). Prebuilt tarballs for both Linux arches
 # published to GitHub releases. Binary lands at /usr/local/bin/lokalise2.
