@@ -36,11 +36,6 @@ if [ "$(id -u)" = "0" ]; then
     chown_maestro_tree /home/maestro/.aws
     chown_maestro_tree /workspace
 
-    # Optional ./skills: baked in image + host bind at /opt/maestro/project-skills-host (see docker-compose).
-    if ! /usr/local/bin/merge-project-skills.sh; then
-        echo "[maestro] WARNING: merge-project-skills.sh failed" >&2
-    fi
-
     if [ "${1:-}" != "setup" ] && [ "${1:-}" != "test-workflow" ]; then
         if iptables -L -n >/dev/null 2>&1; then
             echo "NET_ADMIN capability detected, applying egress rules..."
@@ -122,7 +117,7 @@ if [ "${1:-}" = "setup" ]; then
 
     echo "=== Maestro Setup ==="
     echo "Required: GitHub CLI + agent provider ($agent_provider). Atlassian CLI (acli) required only when ticketing_system = jira (current: $ticketing_system)."
-    echo "Optional: add a gitignored ./skills folder at the Maestro repo root (merged on start); other tools via [docker] build_commands / compose_up_commands in config.toml."
+    echo "Optional: install additional tools via [docker] build_commands / compose_up_commands in config.toml."
     echo ""
 
     # Step 1: GitHub (required — uses browser OAuth via --network=host)

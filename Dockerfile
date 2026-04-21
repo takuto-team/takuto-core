@@ -240,18 +240,6 @@ RUN npm install -g figma-cli || echo "WARN: figma-cli install failed, Figma feat
 COPY docker/egress-rules.sh /usr/local/bin/egress-rules.sh
 RUN chmod +x /usr/local/bin/egress-rules.sh
 
-# Merge optional ./skills from build context into image (empty if missing or empty dir).
-# Bind-mount only `./skills`, not the repo root: `source=.` would make BuildKit walk/hash
-# `target/`, `.git/`, etc. (host paths still visible to bind mounts) — very slow and grows with every build.
-RUN mkdir -p /opt/maestro/project-skills-baked /opt/maestro/project-skills-host
-RUN --mount=type=bind,source=skills,target=/ctx/skills \
-    if [ -d /ctx/skills ] && find /ctx/skills -mindepth 1 ! -name '.gitkeep' -print -quit | grep -q .; then \
-      cp -a /ctx/skills/. /opt/maestro/project-skills-baked/ \
-      && rm -f /opt/maestro/project-skills-baked/.gitkeep; \
-    fi
-
-COPY docker/merge-project-skills.sh /usr/local/bin/merge-project-skills.sh
-RUN chmod 0755 /usr/local/bin/merge-project-skills.sh
 
 # Copy Maestro binary from builder (see builder stage: binary staged under `/out` for cache-friendly builds)
 COPY --from=builder /out/maestro /usr/local/bin/maestro

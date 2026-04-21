@@ -25,11 +25,9 @@ services:
       # External workflow steps: copy workflows/*.example.toml → workflows/ticket.toml (etc.) on the host;
       # config paths are relative to /etc/maestro/ (next to mounted config.toml).
       - ./workflows:/etc/maestro/workflows:ro
-      # Optional gitignored ./skills — merged into ~/.claude/skills and ~/.cursor/skills* on start (overrides same name on volumes).
-      - ./skills:/opt/maestro/project-skills-host:ro
       # Custom environment variables (optional)
       - ./maestro.env:/etc/maestro/env:ro
-      # Persistent auth + skills state for maestro user
+      # Persistent state for maestro user
       - maestro-data:/home/maestro/.maestro
       - claude-auth:/home/maestro/.claude
       - cursor-auth:/home/maestro/.cursor

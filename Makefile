@@ -47,7 +47,6 @@ ui-build:
 build: ui-build
 	@echo "Building Rust workspace..."
 	cargo build
-	@mkdir -p skills
 ifeq ($(HAS_COMPOSE),1)
 	$(COMPOSE) $(COMPOSE_FILES) build || (echo "ERROR: Image build failed. Check the output above." >&2; exit 1)
 else
@@ -91,7 +90,6 @@ ifeq ($(IS_PODMAN),1)
 		--security-opt=label=disable \
 		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
 		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
 		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
 		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
@@ -121,7 +119,6 @@ else
 		--network host \
 		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
 		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
 		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
 		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
@@ -171,7 +168,6 @@ ifeq ($(IS_PODMAN),1)
 		--entrypoint /bin/bash \
 		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
 		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/skills":/opt/maestro/project-skills-host:ro \
 		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
 		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
