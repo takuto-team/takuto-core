@@ -406,10 +406,16 @@ fn gh_auth_recover_expired_token() -> bool {
 /// (the app can run without Jira integration).
 pub fn preflight(config: &Config) -> Result<PreflightResult> {
     eprintln!("[maestro preflight] Checking GitHub CLI (gh)…");
-    // Use `gh auth token` rather than `gh auth status`: the latter exits non-zero when *any*
-    // listed account has an invalid token (e.g. an expired GitHub App installation token), even
-    // if the active account is perfectly valid. `gh auth token` checks only the active user.
-    if !auth_cmd_ok("gh", &["auth", "token", "-h", "github.com"]) {
+    // Two-stage check:
+    // 1. `gh auth token` — does a token exist? (reads from hosts.yml, no network call)
+    // 2. `gh api user` — is it actually valid? (catches expired `ghs_` installation tokens)
+    //
+    // `gh auth token` alone is insufficient: it exits 0 even for expired GitHub App
+    // installation tokens (`ghs_`), which then fail at runtime with HTTP 401.
+    let token_exists = auth_cmd_ok("gh", &["auth", "token", "-h", "github.com"]);
+    let token_valid = token_exists && auth_cmd_ok("gh", &["api", "user"]);
+
+    if !token_valid {
         // Attempt recovery: if the active gh user has an expired token (common with GitHub App
         // installation tokens that expire hourly), switch to any user with a personal token.
         if !gh_auth_recover_expired_token() {
