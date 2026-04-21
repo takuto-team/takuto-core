@@ -101,11 +101,11 @@ fi
 # --- Setup mode ---
 if [ "${1:-}" = "setup" ]; then
     # Read [agent] provider from config (default: claude).
-    agent_provider=$(grep -E '^\s*provider\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d ' ' || true)
+    agent_provider=$(grep -E '^\s*provider\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' | tr -d ' ' || true)
     agent_provider="${agent_provider:-claude}"
 
     # Read [general] ticketing_system from config (default: none).
-    ticketing_system=$(grep -E '^\s*ticketing_system\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d ' ' | tr '[:upper:]' '[:lower:]' || true)
+    ticketing_system=$(grep -E '^\s*ticketing_system\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' | tr -d ' ' | tr '[:upper:]' '[:lower:]' || true)
     ticketing_system="${ticketing_system:-none}"
 
     # Ensure TERM is set so readline-based CLIs (claude, gh, etc.) show interactive prompts.
@@ -149,8 +149,8 @@ if [ "${1:-}" = "setup" ]; then
     if [ "$ticketing_system" != "jira" ]; then
         echo "Atlassian CLI auth skipped (not needed for ticketing_system = $ticketing_system)."
     else
-        jira_site=$(grep -E '^\s*site\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
-        jira_email=$(grep -E '^\s*email\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
+        jira_site=$(grep -E '^\s*site\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' || true)
+        jira_email=$(grep -E '^\s*email\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' || true)
 
         acli_auth() {
             if [ -z "$jira_site" ] || [ -z "$jira_email" ]; then
@@ -247,7 +247,7 @@ if [ "${1:-}" = "setup" ]; then
     if [[ $REPLY =~ ^[sS]$ ]]; then
         echo "Skipped repository clone."
     else
-        repo_url=$(grep -E '^\s*repo_url\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' || true)
+        repo_url=$(grep -E '^\s*repo_url\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' || true)
 
         if [ -z "$repo_url" ]; then
             echo "WARNING: No repo_url found in $CONFIG_FILE. Skipping clone."
