@@ -133,13 +133,13 @@ if [ "${1:-}" = "setup" ]; then
         echo "GitHub CLI: authentication is required."
         gh auth login
     fi
-    # gh auth status exits non-zero when ANY account (even inactive bots) has issues.
-    # With pipefail, we can't pipe directly. Capture output first, then grep.
-    _gh_status=$(gh auth status 2>&1 || true)
-    if ! echo "$_gh_status" | grep -qi "logged in"; then
+    # Verify the personal account is authenticated. gh auth token succeeds when
+    # at least one active account can produce a token — bot accounts that fail
+    # don't affect this check.
+    if ! gh auth token >/dev/null 2>&1; then
         echo "ERROR: GitHub CLI authentication failed or was not completed."
         echo "       gh auth status output:"
-        echo "$_gh_status" | sed 's/^/       /'
+        gh auth status 2>&1 | sed 's/^/       /' || true
         exit 1
     fi
     echo ""
