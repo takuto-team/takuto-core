@@ -65,15 +65,17 @@ build-local:
 	fi
 
 up:
-	@if [ ! -f config.toml ]; then \
-		echo "ERROR: config.toml not found. Copy config.toml.example to config.toml and fill in your settings." >&2; \
+	@if [ ! -f .maestro/config.toml ]; then \
+		echo "ERROR: .maestro/config.toml not found." >&2; \
+		echo "       mkdir -p .maestro && cp config.toml.example .maestro/config.toml" >&2; \
 		exit 1; \
 	fi
-	@if [ ! -f maestro.env ]; then \
-		echo "WARNING: maestro.env not found — creating empty file."; \
-		echo "         Add API tokens and secrets to maestro.env (see maestro.env.example)."; \
-		touch maestro.env; \
+	@if [ ! -f .maestro/maestro.env ]; then \
+		echo "WARNING: .maestro/maestro.env not found — creating empty file."; \
+		echo "         Add API tokens and secrets (see maestro.env.example)."; \
+		touch .maestro/maestro.env; \
 	fi
+	@mkdir -p .maestro/workflows
 	$(COMPOSE) $(COMPOSE_FILES) up -d || (echo "ERROR: Failed to start containers. Run 'make logs' for details." >&2; exit 1)
 ifeq ($(DIND),1)
 	@$(MAKE) --no-print-directory load-worker
@@ -83,14 +85,15 @@ down:
 	$(COMPOSE) $(COMPOSE_FILES) down
 
 setup:
-	@if [ ! -f config.toml ]; then \
-		echo "ERROR: config.toml not found. Copy config.toml.example to config.toml and fill in your settings." >&2; \
+	@if [ ! -f .maestro/config.toml ]; then \
+		echo "ERROR: .maestro/config.toml not found." >&2; \
+		echo "       mkdir -p .maestro && cp config.toml.example .maestro/config.toml" >&2; \
 		exit 1; \
 	fi
-	@if [ ! -f maestro.env ]; then \
-		echo "WARNING: maestro.env not found — creating empty file."; \
-		echo "         Add API tokens and secrets to maestro.env (see maestro.env.example)."; \
-		touch maestro.env; \
+	@if [ ! -f .maestro/maestro.env ]; then \
+		echo "WARNING: .maestro/maestro.env not found — creating empty file."; \
+		echo "         Add API tokens and secrets (see maestro.env.example)."; \
+		touch .maestro/maestro.env; \
 	fi
 ifeq ($(IS_PODMAN),1)
 	@P=$(PROJECT_NAME); \
@@ -99,9 +102,9 @@ ifeq ($(IS_PODMAN),1)
 	podman run --rm -it \
 		--network=host \
 		--security-opt=label=disable \
-		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
-		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$$(pwd)/.maestro/config.toml":/etc/maestro/config.toml:ro \
+		-v "$$(pwd)/.maestro/workflows":/etc/maestro/workflows:ro \
+		-v "$$(pwd)/.maestro/maestro.env":/etc/maestro/env:ro \
 		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
 		-v "$${P}_cursor-auth":/home/maestro/.cursor \
@@ -128,9 +131,9 @@ else
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
 	docker run --rm -it \
 		--network host \
-		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
-		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$$(pwd)/.maestro/config.toml":/etc/maestro/config.toml:ro \
+		-v "$$(pwd)/.maestro/workflows":/etc/maestro/workflows:ro \
+		-v "$$(pwd)/.maestro/maestro.env":/etc/maestro/env:ro \
 		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
 		-v "$${P}_cursor-auth":/home/maestro/.cursor \
@@ -177,9 +180,9 @@ ifeq ($(IS_PODMAN),1)
 	podman run --rm -it --user maestro \
 		--security-opt=label=disable \
 		--entrypoint /bin/bash \
-		-v "$$(pwd)/config.toml":/etc/maestro/config.toml:ro \
-		-v "$$(pwd)/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/maestro.env":/etc/maestro/env:ro \
+		-v "$$(pwd)/.maestro/config.toml":/etc/maestro/config.toml:ro \
+		-v "$$(pwd)/.maestro/workflows":/etc/maestro/workflows:ro \
+		-v "$$(pwd)/.maestro/maestro.env":/etc/maestro/env:ro \
 		-v "$${P}_maestro-data":/home/maestro/.maestro \
 		-v "$${P}_claude-auth":/home/maestro/.claude \
 		-v "$${P}_cursor-auth":/home/maestro/.cursor \

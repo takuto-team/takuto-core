@@ -21,12 +21,12 @@ services:
       - label=disable
     volumes:
       # Configuration file
-      - ./config.toml:/etc/maestro/config.toml:ro
+      - ./.maestro/config.toml:/etc/maestro/config.toml:ro
       # External workflow steps: copy workflows/*.example.toml → workflows/ticket.toml (etc.) on the host;
       # config paths are relative to /etc/maestro/ (next to mounted config.toml).
-      - ./workflows:/etc/maestro/workflows:ro
+      - ./.maestro/workflows:/etc/maestro/workflows:ro
       # Custom environment variables (optional)
-      - ./maestro.env:/etc/maestro/env:ro
+      - ./.maestro/maestro.env:/etc/maestro/env:ro
       # Persistent state for maestro user
       - maestro-data:/home/maestro/.maestro
       - claude-auth:/home/maestro/.claude
