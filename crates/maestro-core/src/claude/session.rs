@@ -167,20 +167,22 @@ async fn run_claude_session(
                 "Claude Code session finished"
             );
 
-            if !output.success() && output.stdout.trim().is_empty() {
+            if !output.success() {
+                // Include both stderr and parsed stdout in the error — Claude may
+                // have produced diagnostic output before failing.
+                let stderr_snippet = output.stderr.lines().take(5).collect::<Vec<_>>().join("\n");
+                let stdout_snippet = parse_stream_json_output(&output.stdout);
+                let detail = if !stdout_snippet.is_empty() {
+                    stdout_snippet
+                } else if !stderr_snippet.is_empty() {
+                    stderr_snippet
+                } else {
+                    "(no output)".to_string()
+                };
                 return Err(MaestroError::Claude(format!(
                     "Claude Code exited with code {}: {}",
-                    output.exit_code,
-                    output.stderr.lines().take(5).collect::<Vec<_>>().join("\n")
+                    output.exit_code, detail
                 )));
-            }
-
-            if !output.success() {
-                warn!(
-                    exit_code = output.exit_code,
-                    stdout_len = output.stdout.len(),
-                    "Claude Code exited with non-zero code but produced output — using output"
-                );
             }
 
             if output.stdout.trim().is_empty() {
