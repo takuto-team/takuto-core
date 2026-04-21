@@ -214,11 +214,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
 
 # openvscode-server — browser-based VS Code for manual worktree editing via dashboard
 ARG OPENVSCODE_VERSION=1.109.5
-RUN set -eux; \
-    ARCH="$(dpkg --print-architecture)"; \
-    curl -fsSL "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v${OPENVSCODE_VERSION}/openvscode-server-v${OPENVSCODE_VERSION}-linux-${ARCH}.tar.gz" \
-      | tar -xz -C /opt \
-    && ln -s "/opt/openvscode-server-v${OPENVSCODE_VERSION}-linux-${ARCH}/bin/openvscode-server" /usr/local/bin/openvscode-server
+RUN ARCH="$(dpkg --print-architecture)" \
+    && curl -fSL --retry 3 --retry-delay 5 \
+       "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v${OPENVSCODE_VERSION}/openvscode-server-v${OPENVSCODE_VERSION}-linux-${ARCH}.tar.gz" \
+       -o /tmp/openvscode.tar.gz \
+    && tar -xzf /tmp/openvscode.tar.gz -C /opt \
+    && ln -s "/opt/openvscode-server-v${OPENVSCODE_VERSION}-linux-${ARCH}/bin/openvscode-server" /usr/local/bin/openvscode-server \
+    && rm -f /tmp/openvscode.tar.gz
 
 # Install AWS CLI (optional, for CodeArtifact npm registry auth)
 RUN apt-get update && apt-get install -y --no-install-recommends unzip \
