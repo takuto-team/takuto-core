@@ -36,3 +36,5 @@ SECURITY_ASSESSMENT_CONTAINER.md
 
 # Custom gitleaks config
 .gitleaks.toml
+
+.maestro
