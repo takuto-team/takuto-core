@@ -218,13 +218,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
     && rm -rf /var/lib/apt/lists/*
 
 # openvscode-server — browser-based VS Code for manual worktree editing via dashboard
+# Release tarballs use x64/arm64/armhf, not dpkg's amd64/arm64.
 ARG OPENVSCODE_VERSION=1.109.5
 RUN ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in amd64) VS_ARCH=x64 ;; arm64) VS_ARCH=arm64 ;; *) echo "Unsupported arch: $ARCH" && exit 1 ;; esac \
     && curl -fSL --retry 3 --retry-delay 5 \
-       "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v${OPENVSCODE_VERSION}/openvscode-server-v${OPENVSCODE_VERSION}-linux-${ARCH}.tar.gz" \
+       "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v${OPENVSCODE_VERSION}/openvscode-server-v${OPENVSCODE_VERSION}-linux-${VS_ARCH}.tar.gz" \
        -o /tmp/openvscode.tar.gz \
     && tar -xzf /tmp/openvscode.tar.gz -C /opt \
-    && ln -s "/opt/openvscode-server-v${OPENVSCODE_VERSION}-linux-${ARCH}/bin/openvscode-server" /usr/local/bin/openvscode-server \
+    && ln -s "/opt/openvscode-server-v${OPENVSCODE_VERSION}-linux-${VS_ARCH}/bin/openvscode-server" /usr/local/bin/openvscode-server \
     && rm -f /tmp/openvscode.tar.gz
 
 # Install AWS CLI (optional, for CodeArtifact npm registry auth)
