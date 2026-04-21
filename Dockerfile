@@ -261,7 +261,7 @@ RUN mkdir -p /workspace \
 RUN mkdir -p /etc/maestro/examples/workflows
 COPY config.toml.example /etc/maestro/examples/config.toml.example
 COPY maestro.env.example /etc/maestro/examples/maestro.env.example
-COPY workflows/*.example.toml /etc/maestro/examples/workflows/
+COPY workflows/ticket.example.toml workflows/review.example.toml workflows/merge_base.example.toml /etc/maestro/examples/workflows/
 
 # Create non-root user (Claude Code refuses --dangerously-skip-permissions as root).
 # Default UID 999; override MAESTRO_UID via compose for host engine sockets. Group `maestro` gets the next free GID.
