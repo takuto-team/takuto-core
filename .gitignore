@@ -38,3 +38,5 @@ SECURITY_ASSESSMENT_CONTAINER.md
 .gitleaks.toml
 
 .maestro
+
+.playwright-mcp
