@@ -221,33 +221,65 @@ load-worker: ## Load worker image into DinD
 	podman exec maestro-dind docker tag "$$IMAGE" maestro:latest
 
 # ── Push multi-arch image to registry ──────────────────────────────────────────
-# Requires: docker login ghcr.io (see README)
-# One-time builder setup: docker buildx create --name multiarch --use
+# Works with Docker (buildx) or Podman (manifest).
+# Docker: one-time setup: docker buildx create --name multiarch --use
+# Auth: docker login ghcr.io / podman login ghcr.io
 VERSION := $(shell cat VERSION)
+HAS_BUILDX := $(shell docker buildx version >/dev/null 2>&1 && echo 1 || echo 0)
 
 push: ## Build + push multi-arch image (amd64 + arm64)
+ifeq ($(HAS_BUILDX),1)
 	docker buildx build \
 		--platform linux/amd64,linux/arm64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
 		-t $(REGISTRY):$(VERSION) \
 		-t $(REGISTRY):latest \
 		--push .
+else
+	podman manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
+	podman build \
+		--platform linux/amd64,linux/arm64 \
+		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--manifest $(REGISTRY):$(VERSION) .
+	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
+	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
+endif
 
 push-arm64: ## Build + push arm64 image only
+ifeq ($(HAS_BUILDX),1)
 	docker buildx build \
 		--platform linux/arm64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
 		-t $(REGISTRY):$(VERSION) \
 		-t $(REGISTRY):latest \
 		--push .
+else
+	podman manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
+	podman build \
+		--platform linux/arm64 \
+		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--manifest $(REGISTRY):$(VERSION) .
+	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
+	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
+endif
 
 push-amd64: ## Build + push amd64 image only
+ifeq ($(HAS_BUILDX),1)
 	docker buildx build \
 		--platform linux/amd64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
 		-t $(REGISTRY):$(VERSION) \
 		-t $(REGISTRY):latest \
 		--push .
+else
+	podman manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
+	podman build \
+		--platform linux/amd64 \
+		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--manifest $(REGISTRY):$(VERSION) .
+	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
+	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
+endif
 
 clean-dind: ## Clean up DinD dangling images and volumes
 	@echo "Cleaning up DinD dangling images and volumes..."; \
