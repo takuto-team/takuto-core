@@ -283,8 +283,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends sudo \
 RUN mkdir -p /home/maestro/.local/share/mise/shims \
     /home/maestro/.cache/mise \
     /home/maestro/.config/mise \
-    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config
+    /home/maestro/.npm \
+    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config /home/maestro/.npm
 
+ENV NPM_CONFIG_CACHE=/home/maestro/.npm
 ENV MISE_DATA_DIR=/home/maestro/.local/share/mise
 ENV MISE_CACHE_DIR=/home/maestro/.cache/mise
 ENV MISE_CONFIG_DIR=/home/maestro/.config/mise
