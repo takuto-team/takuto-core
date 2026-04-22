@@ -27,9 +27,10 @@ COPY --from=ui-builder /ui/dist/ ui/dist/
 
 # BuildKit cache mounts: persist downloaded crates + `target/` between `docker compose build` runs.
 # Copy the binary to `/out` so it exists in the image layer (the mounted `/app/target` is not part of the layer).
+ARG TARGETARCH
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,target=/app/target,sharing=locked \
+    --mount=type=cache,target=/app/target,id=rust-target-${TARGETARCH},sharing=locked \
     mkdir -p /out \
     && echo "=== cargo build --release (first build often takes 10–20+ minutes; rebuilds reuse BuildKit cache) ===" \
     && cargo build --release \
