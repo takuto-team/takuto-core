@@ -288,15 +288,20 @@ RUN mkdir -p /home/maestro/.local/share/mise/shims \
     /home/maestro/.cache/mise \
     /home/maestro/.config/mise \
     /home/maestro/.npm \
-    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config /home/maestro/.npm
+    /home/maestro/.npm-global/lib \
+    /home/maestro/.npm-global/bin \
+    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config /home/maestro/.npm /home/maestro/.npm-global
 
+# npm cache dir (for npx and package installs)
 ENV NPM_CONFIG_CACHE=/home/maestro/.npm
+# npm global prefix — redirects `npm install -g` and npx global installs away from root-owned /usr/local
+ENV NPM_CONFIG_PREFIX=/home/maestro/.npm-global
 ENV MISE_DATA_DIR=/home/maestro/.local/share/mise
 ENV MISE_CACHE_DIR=/home/maestro/.cache/mise
 ENV MISE_CONFIG_DIR=/home/maestro/.config/mise
 ENV MISE_TRUST_ALL_CONFIGS=1
 ENV MISE_YES=1
-ENV PATH="/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV PATH="/home/maestro/.npm-global/bin:/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 RUN printf '%s\n' \
     'export MISE_DATA_DIR=/home/maestro/.local/share/mise' \

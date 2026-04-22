@@ -280,9 +280,9 @@ impl ContainerRunner {
             shell_parts.push(shell_escape(a));
         }
         let restore = r#"if [ ! -f "$HOME/.claude.json" ]; then b=$(ls -t "$HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1); [ -n "$b" ] && cp "$b" "$HOME/.claude.json"; fi"#;
-        // Ensure npm cache and mise dirs are owned by maestro (shared volumes start root-owned).
+        // Ensure npm/mise dirs are owned by maestro (shared volumes start root-owned).
         // Uses passwordless sudo bash (granted in /etc/sudoers.d/maestro-hook-bash).
-        let fix_perms = r#"sudo -n bash -c 'for d in "$HOME/.npm" "$HOME/.cache/mise" "$HOME/.local/share/mise"; do [ -d "$d" ] && chown -R "$(id -u):$(id -g)" "$d"; done' 2>/dev/null || true"#;
+        let fix_perms = r#"sudo -n bash -c 'for d in "$HOME/.npm" "$HOME/.npm-global" "$HOME/.cache/mise" "$HOME/.local/share/mise"; do [ -d "$d" ] && chown -R "$(id -u):$(id -g)" "$d"; done' 2>/dev/null || true"#;
         let cmd = format!("{restore}; {fix_perms}; exec {}", shell_parts.join(" "));
         docker_args.push("sh".into());
         docker_args.push("-c".into());
