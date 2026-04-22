@@ -335,12 +335,20 @@ if [ -n "${DOCKER_HOST:-}" ] && [[ "$DOCKER_HOST" == tcp://* ]]; then
         sleep 1
     done
 
-    # After daemon is ready, check worker image
-    WORKER_IMAGE="${MAESTRO_WORKER_IMAGE:-maestro:latest}"
+    # After daemon is ready, ensure worker image is available.
+    # Priority: MAESTRO_WORKER_IMAGE env > MAESTRO_REGISTRY_IMAGE (baked into image) > maestro:latest
+    WORKER_IMAGE="${MAESTRO_WORKER_IMAGE:-${MAESTRO_REGISTRY_IMAGE:-maestro:latest}}"
     if ! docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
-        echo "[maestro] WARNING: Worker image '$WORKER_IMAGE' not found on DinD." >&2
-        echo "[maestro]          Workflow isolation requires the worker image. Run: make load-worker" >&2
-        echo "[maestro]          Falling back to local execution." >&2
+        echo "[maestro] Worker image '$WORKER_IMAGE' not found on DinD, pulling..."
+        if docker pull "$WORKER_IMAGE"; then
+            echo "[maestro] Worker image '$WORKER_IMAGE' pulled successfully."
+            # Also tag as maestro:latest so discover_worker_image fallback works
+            docker tag "$WORKER_IMAGE" maestro:latest 2>/dev/null || true
+        else
+            echo "[maestro] WARNING: Failed to pull '$WORKER_IMAGE'." >&2
+            echo "[maestro]          Workflow isolation requires the worker image." >&2
+            echo "[maestro]          Falling back to local execution." >&2
+        fi
     fi
 fi
 

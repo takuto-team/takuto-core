@@ -46,6 +46,9 @@ LABEL org.opencontainers.image.licenses="FSL-1.1-ALv2"
 LABEL org.opencontainers.image.title="Maestro"
 LABEL org.opencontainers.image.description="Automated workflow orchestration for AI coding agents"
 
+# Registry image name — used by entrypoint to auto-pull the worker image into DinD.
+ENV MAESTRO_REGISTRY_IMAGE=ghcr.io/morphet81/maestro:${MAESTRO_VERSION}
+
 # Match host UID for rootless Podman API sockets (often mode 0600 — only the user matters). Set in compose `.env` and rebuild.
 # Do not force the primary GID to match the host: macOS "staff" is often GID 20, which is `dialout` on Debian and already exists.
 ARG MAESTRO_UID=999

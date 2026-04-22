@@ -314,26 +314,36 @@ impl ContainerRunner {
         prune_dangling_images().await;
     }
 
-    /// Auto-detect the worker image by inspecting the running Maestro container.
+    /// Auto-detect the worker image by inspecting the running Maestro container,
+    /// falling back to the `MAESTRO_REGISTRY_IMAGE` env var (baked into the Docker image).
     pub async fn discover_worker_image() -> Option<String> {
+        // Try docker inspect first (works when running inside compose with container_name: maestro)
         let output = tokio::process::Command::new("docker")
             .args(["inspect", "maestro", "--format", "{{.Config.Image}}"])
             .output()
             .await
-            .ok()?;
+            .ok();
 
-        if !output.status.success() {
-            warn!("docker inspect maestro failed — cannot auto-detect worker image");
-            return None;
+        if let Some(output) = output {
+            if output.status.success() {
+                let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !image.is_empty() {
+                    info!(image = %image, "Discovered worker image from running Maestro container");
+                    return Some(image);
+                }
+            }
         }
 
-        let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if image.is_empty() {
-            None
-        } else {
-            info!(image = %image, "Discovered worker image from running Maestro container");
-            Some(image)
+        // Fall back to MAESTRO_REGISTRY_IMAGE (set at build time in the Dockerfile)
+        if let Ok(image) = std::env::var("MAESTRO_REGISTRY_IMAGE") {
+            if !image.is_empty() {
+                info!(image = %image, "Using MAESTRO_REGISTRY_IMAGE as worker image");
+                return Some(image);
+            }
         }
+
+        warn!("Cannot auto-detect worker image — docker inspect failed and MAESTRO_REGISTRY_IMAGE not set");
+        None
     }
 }
 
