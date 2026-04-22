@@ -1860,7 +1860,11 @@ async fn run_merge_base_steps(
             runner
         })
     } else {
-        None
+        return Err(MaestroError::Config(
+            "Docker daemon is not available. DinD is required for workflow isolation. \
+             Ensure DOCKER_HOST is set and the DinD sidecar is running."
+                .into(),
+        ));
     };
 
     let cfg = config.read().await;
@@ -2614,7 +2618,11 @@ async fn run_pr_review_steps(
             runner
         })
     } else {
-        None
+        return Err(MaestroError::Config(
+            "Docker daemon is not available. DinD is required for workflow isolation. \
+             Ensure DOCKER_HOST is set and the DinD sidecar is running."
+                .into(),
+        ));
     };
 
     let cfg = config.read().await;
@@ -3036,7 +3044,7 @@ async fn run_workflow_steps(
         }
     }
 
-    // Construct container runner for workflow isolation when DinD is available
+    // Construct container runner for workflow isolation — DinD is required
     let container_runner = if ContainerRunner::is_available() {
         let cfg = config.read().await;
         let image = if cfg.general.worker_image.is_empty() {
@@ -3063,7 +3071,11 @@ async fn run_workflow_steps(
             runner
         })
     } else {
-        None
+        return Err(MaestroError::Config(
+            "Docker daemon is not available. DinD is required for workflow isolation. \
+             Ensure DOCKER_HOST is set and the DinD sidecar is running."
+                .into(),
+        ));
     };
 
     let cfg = config.read().await;

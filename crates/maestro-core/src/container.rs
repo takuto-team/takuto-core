@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::workflow::engine::WorkflowEvent;
 
@@ -174,7 +174,7 @@ impl ContainerRunner {
     pub fn is_available() -> bool {
         *DOCKER_AVAILABLE.get_or_init(|| {
             if std::env::var("DOCKER_HOST").unwrap_or_default().is_empty() {
-                info!("DOCKER_HOST not set — container isolation disabled");
+                error!("DOCKER_HOST not set — DinD is required; workflows will fail");
                 return false;
             }
             let ok = std::process::Command::new("docker")
@@ -187,7 +187,7 @@ impl ContainerRunner {
             if ok {
                 info!("Docker daemon reachable — container isolation enabled");
             } else {
-                warn!("docker info failed — container isolation disabled");
+                error!("docker info failed — DinD is required; workflows will fail");
             }
             ok
         })
