@@ -347,8 +347,8 @@ if [ -n "${DOCKER_HOST:-}" ] && [[ "$DOCKER_HOST" == tcp://* ]]; then
             docker tag "$WORKER_IMAGE" maestro:latest 2>/dev/null || true
         else
             echo "[maestro] WARNING: Failed to pull '$WORKER_IMAGE'." >&2
-            echo "[maestro]          Workflow isolation requires the worker image." >&2
-            echo "[maestro]          Falling back to local execution." >&2
+            echo "[maestro]          Workflow isolation requires the worker image in DinD." >&2
+            echo "[maestro]          Run 'make load-worker' to load the local image, or check MAESTRO_WORKER_IMAGE." >&2
         fi
     fi
 fi

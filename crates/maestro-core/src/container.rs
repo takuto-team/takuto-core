@@ -318,7 +318,7 @@ impl ContainerRunner {
     }
 
     /// Auto-detect the worker image by inspecting the running Maestro container,
-    /// falling back to the `MAESTRO_REGISTRY_IMAGE` env var (baked into the Docker image).
+    /// falling back to a locally-present `maestro:latest`, then `MAESTRO_REGISTRY_IMAGE`.
     pub async fn discover_worker_image() -> Option<String> {
         // Try docker inspect first (works when running inside compose with container_name: maestro)
         let output = tokio::process::Command::new("docker")
@@ -331,10 +331,42 @@ impl ContainerRunner {
             if output.status.success() {
                 let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !image.is_empty() {
-                    info!(image = %image, "Discovered worker image from running Maestro container");
-                    return Some(image);
+                    // Verify the image actually exists in DinD before using it — the name from
+                    // docker inspect may point to a registry tag (e.g. ghcr.io/…:dev) that was
+                    // never pulled into DinD (local dev builds).
+                    let exists = tokio::process::Command::new("docker")
+                        .args(["image", "inspect", &image])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .await
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    if exists {
+                        info!(image = %image, "Discovered worker image from running Maestro container");
+                        return Some(image);
+                    }
+                    info!(
+                        image = %image,
+                        "Image from docker inspect not present in DinD — trying maestro:latest"
+                    );
                 }
             }
+        }
+
+        // Check if maestro:latest is present locally in DinD (e.g. loaded via `make load-worker`).
+        // This is the correct image for local development builds.
+        let local_latest = tokio::process::Command::new("docker")
+            .args(["image", "inspect", "maestro:latest"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if local_latest {
+            info!("Using local maestro:latest as worker image");
+            return Some("maestro:latest".to_string());
         }
 
         // Fall back to MAESTRO_REGISTRY_IMAGE (set at build time in the Dockerfile)
@@ -345,7 +377,7 @@ impl ContainerRunner {
             }
         }
 
-        warn!("Cannot auto-detect worker image — docker inspect failed and MAESTRO_REGISTRY_IMAGE not set");
+        warn!("Cannot auto-detect worker image — docker inspect failed, maestro:latest not found, and MAESTRO_REGISTRY_IMAGE not set");
         None
     }
 }
