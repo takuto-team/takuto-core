@@ -311,12 +311,13 @@ if [ ! -f /etc/maestro/env ]; then
 fi
 
 echo "[maestro] Running auth preflight..."
-if ! /usr/local/bin/maestro --config "$CONFIG_FILE" preflight; then
-    echo "[maestro] Preflight failed. Run 'make setup' to complete authentication." >&2
-    echo "[maestro] Retrying in 30s — use 'make bash' to authenticate manually in the meantime." >&2
-    sleep 30
-    exit 1
+PREFLIGHT_ERROR=""
+if ! PREFLIGHT_OUT=$(/usr/local/bin/maestro --config "$CONFIG_FILE" preflight 2>&1); then
+    PREFLIGHT_ERROR="$PREFLIGHT_OUT"
+    echo "[maestro] Preflight failed: $PREFLIGHT_ERROR" >&2
+    echo "[maestro] Starting web server in degraded mode — open http://localhost:8080 for details." >&2
 fi
+export MAESTRO_PREFLIGHT_ERROR="$PREFLIGHT_ERROR"
 
 # When using a DinD sidecar (DOCKER_HOST=tcp://...), wait for the daemon.
 # Compose depends_on + healthcheck handles most of this, but a brief poll

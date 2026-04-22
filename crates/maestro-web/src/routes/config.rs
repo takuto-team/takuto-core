@@ -23,6 +23,9 @@ pub struct ConfigResponse {
     pub ticketing_system: String,
     /// `true` when a GitHub App is fully configured (`[github]` section has all required fields).
     pub github_app_configured: bool,
+    /// Non-empty when preflight failed at startup (e.g. GitHub CLI not authenticated).
+    /// The UI shows a blocking error banner when this is set.
+    pub preflight_error: Option<String>,
 }
 
 pub async fn get_version() -> Json<serde_json::Value> {
@@ -38,6 +41,7 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
         config: config.redacted_for_api_clone(),
         jira_available: state.jira_available.load(Ordering::Relaxed),
         ticketing_system: state.ticketing_system.to_string(),
+        preflight_error: state.preflight_error.clone(),
     })
 }
 

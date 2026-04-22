@@ -52,4 +52,7 @@ pub struct AppState {
     pub terminal_ports: Arc<RwLock<HashMap<String, (u16, String)>>>,
     /// Active run command processes, keyed by ticket_key.
     pub run_commands: RunCommandsMap,
+    /// Non-empty when preflight failed at startup (e.g. `gh` not authenticated).
+    /// Exposed via `GET /api/config` so the UI can show a blocking error banner.
+    pub preflight_error: Option<String>,
 }

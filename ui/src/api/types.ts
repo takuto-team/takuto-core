@@ -96,6 +96,7 @@ export interface ConfigResponse {
   jira_available: boolean;
   ticketing_system: string;
   github_app_configured: boolean;
+  preflight_error?: string | null;
   [key: string]: unknown;
 }
 

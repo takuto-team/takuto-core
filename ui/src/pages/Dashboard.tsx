@@ -155,6 +155,23 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         onLogout={onLogout}
       />
 
+      {/* Preflight error banner */}
+      {config?.preflight_error && (
+        <div className="bg-red-950/80 border-b border-red-700 px-4 py-3 text-red-200">
+          <div className="max-w-7xl mx-auto flex items-start gap-3">
+            <span className="text-red-400 text-lg leading-none mt-0.5">⚠</span>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-red-300 text-sm">Maestro is not ready — authentication required</p>
+              <p className="text-xs text-red-300/80 mt-1 font-mono break-all">{config.preflight_error}</p>
+              <p className="text-xs text-red-300/70 mt-1">
+                Run <code className="bg-red-900/50 px-1 rounded">make setup</code> (or{" "}
+                <code className="bg-red-900/50 px-1 rounded">maestro auth</code>) to authenticate, then restart.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Dry mode banner */}
       {dryMode && (
         <div className="bg-amber-900/30 border-b border-amber-700/50 px-4 py-2 text-center text-xs text-amber-300">

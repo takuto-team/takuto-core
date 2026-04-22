@@ -292,6 +292,13 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let polling_paused_for_gh = polling_paused.clone();
     let cancel_token_for_gh = cancel_token.clone();
+    let preflight_error = std::env::var("MAESTRO_PREFLIGHT_ERROR")
+        .ok()
+        .filter(|s| !s.is_empty());
+    if let Some(ref err) = preflight_error {
+        tracing::warn!(error = %err, "Server starting in degraded mode (preflight failed)");
+    }
+
     let app_state = AppState {
         engine: engine.clone(),
         config: config.clone(),
@@ -310,6 +317,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         run_commands: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
+        preflight_error,
     };
     let app = build_router(app_state);
 
