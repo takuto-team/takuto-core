@@ -210,20 +210,15 @@ RUN curl -fsSL https://cursor.com/install | bash \
 # visual snapshot drift vs local/CI.
 
 # Install acli (Atlassian CLI) via official apt repo
-# acli is only available for amd64; skip entirely on other architectures.
-RUN ARCH="$(dpkg --print-architecture)" \
-    && if [ "$ARCH" = "amd64" ]; then \
-         apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
-         && mkdir -p -m 755 /etc/apt/keyrings \
-         && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
-         && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg \
-         && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/acli-archive-keyring.gpg] https://acli.atlassian.com/linux/deb stable main" \
-              | tee /etc/apt/sources.list.d/acli.list > /dev/null \
-         && apt-get update && apt-get install -y --no-install-recommends acli \
-         && rm -rf /var/lib/apt/lists/*; \
-       else \
-         echo "WARN: acli not available for $ARCH — Jira ticketing features unavailable"; \
-       fi
+RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
+    && mkdir -p -m 755 /etc/apt/keyrings \
+    && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/acli-archive-keyring.gpg] https://acli.atlassian.com/linux/deb stable main" \
+       | tee /etc/apt/sources.list.d/acli.list > /dev/null \
+    && apt-get update \
+    && (apt-get install -y --no-install-recommends acli || echo "WARN: acli not available for $(dpkg --print-architecture)") \
+    && rm -rf /var/lib/apt/lists/*
 
 # openvscode-server — browser-based VS Code for manual worktree editing via dashboard
 # Release tarballs use x64/arm64/armhf, not dpkg's amd64/arm64.
