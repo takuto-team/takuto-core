@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: morphet81/maestro-core-releases
+  IMAGE_NAME: morphet81/maestro
 
 jobs:
   build-and-push:
