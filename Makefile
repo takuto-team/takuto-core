@@ -2,19 +2,6 @@
 #
 # Wraps podman/docker compose with the correct -f flags.
 # DinD sidecar is included by default; set DIND=0 to disable.
-#
-# Usage:
-#   make build         — build the Maestro image
-#   make up            — start Maestro + DinD sidecar
-#   make down          — stop and remove containers
-#   make setup         — interactive first-time auth setup
-#   make test          — smoke test: auth, worktree, agent hello, cleanup
-#   make logs          — tail all container logs
-#   make logs-maestro  — tail only the Maestro container
-#   make ps            — show running containers
-#   make bash          — open a shell inside Maestro as the maestro user
-#   make exec          — open a shell inside Maestro as the maestro user
-#   make restart       — down + up
 
 # Auto-detect compose provider. Prefer podman if present, else docker.
 # Both work identically with explicit -f flags.
@@ -41,13 +28,17 @@ MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.
 # Docker image registry for push targets.
 REGISTRY ?= ghcr.io/morphet81/maestro
 
-.PHONY: build build-local up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build push push-arm64 push-amd64
+.PHONY: help build build-local up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build push push-arm64 push-amd64
+.DEFAULT_GOAL := help
 
-ui-build:
+help: ## Show this help
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+
+ui-build: ## Build the React dashboard
 	@echo "Building React dashboard..."
 	cd ui && npm install --legacy-peer-deps && npm run build
 
-build: ui-build
+build: ui-build ## Build Rust workspace + container image
 	@echo "Building Rust workspace..."
 	cargo build
 ifeq ($(HAS_COMPOSE),1)
@@ -56,7 +47,7 @@ else
 	@echo "NOTE: docker/podman compose not available — skipping container image build."
 endif
 
-build-local:
+build-local: ## Build container image locally (no compose)
 	@if command -v docker >/dev/null 2>&1 && ! docker --version 2>&1 | grep -qi podman; then \
 		echo "Building with Docker..."; \
 		docker build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test .; \
@@ -67,7 +58,7 @@ build-local:
 		echo "ERROR: Neither docker nor podman found." >&2; exit 1; \
 	fi
 
-up:
+up: ## Start Maestro + DinD sidecar
 	@if [ ! -f .maestro/config.toml ]; then \
 		echo "ERROR: .maestro/config.toml not found." >&2; \
 		echo "       mkdir -p .maestro && cp config.toml.example .maestro/config.toml" >&2; \
@@ -84,10 +75,10 @@ ifeq ($(DIND),1)
 	@$(MAKE) --no-print-directory load-worker
 endif
 
-down:
+down: ## Stop and remove containers
 	$(COMPOSE) $(COMPOSE_FILES) down
 
-setup:
+setup: ## Interactive first-time auth setup
 	@if [ ! -f .maestro/config.toml ]; then \
 		echo "ERROR: .maestro/config.toml not found." >&2; \
 		echo "       mkdir -p .maestro && cp config.toml.example .maestro/config.toml" >&2; \
@@ -159,23 +150,23 @@ else
 		"$$IMAGE" setup
 endif
 
-test:
+test: ## Smoke test: auth, worktree, agent hello, cleanup
 ifeq ($(IS_PODMAN),1)
 	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro test-workflow
 else
 	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro test-workflow
 endif
 
-logs:
+logs: ## Tail all container logs
 	$(COMPOSE) $(COMPOSE_FILES) logs -f
 
-logs-maestro:
+logs-maestro: ## Tail only the Maestro container
 	$(COMPOSE) $(COMPOSE_FILES) logs -f maestro
 
-ps:
+ps: ## Show running containers
 	$(COMPOSE) $(COMPOSE_FILES) ps
 
-bash:
+bash: ## Open a shell inside Maestro as the maestro user
 ifeq ($(IS_PODMAN),1)
 	@P=$(PROJECT_NAME); \
 	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro[-_]maestro:" | head -1); \
@@ -209,14 +200,14 @@ else
 	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
 endif
 
-exec:
+exec: ## Open a shell inside Maestro (alias for bash)
 ifeq ($(IS_PODMAN),1)
 	@$(MAKE) bash
 else
 	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
 endif
 
-load-worker:
+load-worker: ## Load worker image into DinD
 	@IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "maestro[-_]maestro" | head -1); \
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run make build first." >&2; exit 1; fi; \
 	echo "Waiting for DinD to be ready..."; \
@@ -234,7 +225,7 @@ load-worker:
 # One-time builder setup: docker buildx create --name multiarch --use
 VERSION := $(shell cat VERSION)
 
-push:
+push: ## Build + push multi-arch image (amd64 + arm64)
 	docker buildx build \
 		--platform linux/amd64,linux/arm64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
@@ -242,7 +233,7 @@ push:
 		-t $(REGISTRY):latest \
 		--push .
 
-push-arm64:
+push-arm64: ## Build + push arm64 image only
 	docker buildx build \
 		--platform linux/arm64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
@@ -250,7 +241,7 @@ push-arm64:
 		-t $(REGISTRY):latest \
 		--push .
 
-push-amd64:
+push-amd64: ## Build + push amd64 image only
 	docker buildx build \
 		--platform linux/amd64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
@@ -258,9 +249,9 @@ push-amd64:
 		-t $(REGISTRY):latest \
 		--push .
 
-clean-dind:
+clean-dind: ## Clean up DinD dangling images and volumes
 	@echo "Cleaning up DinD dangling images and volumes..."; \
 	podman exec maestro-dind docker system prune -f || true; \
 	echo "DinD cleanup complete. Run 'make load-worker' to reload maestro:latest if needed."
 
-restart: down up
+restart: down up ## Restart (down + up)
