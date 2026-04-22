@@ -38,7 +38,10 @@ endif
 # Resolve the actual image name for the maestro service (compose may prefix with project name).
 MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
 
-.PHONY: build build-local up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build
+# Docker image registry for push targets.
+REGISTRY ?= ghcr.io/morphet81/maestro
+
+.PHONY: build build-local up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build push push-arm64 push-amd64
 
 ui-build:
 	@echo "Building React dashboard..."
@@ -225,6 +228,35 @@ load-worker:
 	podman save "$$IMAGE" | podman exec -i maestro-dind docker load; \
 	echo "Tagging as maestro:latest on DinD..."; \
 	podman exec maestro-dind docker tag "$$IMAGE" maestro:latest
+
+# ── Push multi-arch image to registry ──────────────────────────────────────────
+# Requires: docker login ghcr.io (see README)
+# One-time builder setup: docker buildx create --name multiarch --use
+VERSION := $(shell cat VERSION)
+
+push:
+	docker buildx build \
+		--platform linux/amd64,linux/arm64 \
+		--build-arg MAESTRO_VERSION=$(VERSION) \
+		-t $(REGISTRY):$(VERSION) \
+		-t $(REGISTRY):latest \
+		--push .
+
+push-arm64:
+	docker buildx build \
+		--platform linux/arm64 \
+		--build-arg MAESTRO_VERSION=$(VERSION) \
+		-t $(REGISTRY):$(VERSION) \
+		-t $(REGISTRY):latest \
+		--push .
+
+push-amd64:
+	docker buildx build \
+		--platform linux/amd64 \
+		--build-arg MAESTRO_VERSION=$(VERSION) \
+		-t $(REGISTRY):$(VERSION) \
+		-t $(REGISTRY):latest \
+		--push .
 
 clean-dind:
 	@echo "Cleaning up DinD dangling images and volumes..."; \
