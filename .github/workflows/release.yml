@@ -50,10 +50,3 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Ensure package is public
-        run: |
-          gh api --method PUT \
-            /user/packages/container/maestro/visibility \
-            -f visibility=public
-        env:
-          GH_TOKEN: ${{ secrets.DISTRIBUTION_GHCR_TOKEN }}
