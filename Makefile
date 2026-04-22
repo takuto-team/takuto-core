@@ -208,7 +208,7 @@ else
 endif
 
 load-worker: ## Load worker image into DinD
-	@IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "maestro[-_]maestro" | head -1); \
+	@IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$(PROJECT_NAME)[-_]maestro:" | head -1); \
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run make build first." >&2; exit 1; fi; \
 	echo "Waiting for DinD to be ready..."; \
 	for i in $$(seq 1 30); do \
