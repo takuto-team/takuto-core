@@ -335,6 +335,14 @@ if [ -n "${DOCKER_HOST:-}" ] && [[ "$DOCKER_HOST" == tcp://* ]]; then
         sleep 1
     done
 
+    # Fix ownership on shared-auth volumes (fresh volumes start root-owned;
+    # worker containers run as maestro and need write access).
+    MAESTRO_UID=$(id -u)
+    MAESTRO_GID=$(id -g)
+    for dir in npm mise-data mise-cache claude agents gh acli fcli aws vscode playwright-cache; do
+        docker exec maestro-dind chown -R "$MAESTRO_UID:$MAESTRO_GID" "/shared-auth/$dir" 2>/dev/null || true
+    done
+
     # After daemon is ready, ensure worker image is available.
     # Priority: MAESTRO_WORKER_IMAGE env > MAESTRO_REGISTRY_IMAGE (baked into image) > maestro:latest
     WORKER_IMAGE="${MAESTRO_WORKER_IMAGE:-${MAESTRO_REGISTRY_IMAGE:-maestro:latest}}"
