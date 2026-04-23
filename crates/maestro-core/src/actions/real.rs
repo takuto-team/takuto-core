@@ -12,6 +12,7 @@ use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
 use crate::git::worktree_remove;
+use crate::github::gh_cli;
 use crate::github_app::GitHubAppTokenManager;
 use crate::jira::acli;
 use crate::process::{self, CommandOutput};
@@ -20,6 +21,7 @@ pub struct RealActions {
     pub repo_path: PathBuf,
     git_remote: String,
     acli_extra_prefixes: Vec<Vec<String>>,
+    gh_extra_prefixes: Vec<Vec<String>>,
     github_app: Option<Arc<GitHubAppTokenManager>>,
 }
 
@@ -28,12 +30,14 @@ impl RealActions {
         repo_path: PathBuf,
         git_remote: String,
         acli_extra_prefixes: Vec<Vec<String>>,
+        gh_extra_prefixes: Vec<Vec<String>>,
         github_app: Option<Arc<GitHubAppTokenManager>>,
     ) -> Self {
         Self {
             repo_path,
             git_remote,
             acli_extra_prefixes,
+            gh_extra_prefixes,
             github_app,
         }
     }
@@ -73,8 +77,18 @@ impl ExternalActions for RealActions {
 
     async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
         info!(ticket = key, status = status, "Transitioning ticket");
-        let output = process::run_shell_command(
-            &format!("acli jira workitem transition --key {key} --status \"{status}\" --yes"),
+        let output = acli::run_acli_checked(
+            &[
+                "jira",
+                "workitem",
+                "transition",
+                "--key",
+                key,
+                "--status",
+                status,
+                "--yes",
+            ],
+            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -256,13 +270,12 @@ impl ExternalActions for RealActions {
             )));
         }
 
-        // Create PR via gh
-        let escaped_title = title.replace('"', r#"\""#);
-        let escaped_body = body.replace('"', r#"\""#);
-        let output = process::run_shell_command(
-            &format!(
-                "gh pr create --title \"{escaped_title}\" --body \"{escaped_body}\" --base {base} --head {branch}"
-            ),
+        // Create PR via gh (argv, no shell — avoids injection from title/body/branch)
+        let output = gh_cli::run_gh_checked(
+            &[
+                "pr", "create", "--title", title, "--body", body, "--base", base, "--head", branch,
+            ],
+            &self.gh_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -319,10 +332,10 @@ impl ExternalActions for RealActions {
     async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()> {
         if let Some(ref app) = self.github_app {
             return app
-                .configure_git_and_gh_auth(cwd, CancellationToken::new())
+                .configure_git_and_gh_auth(cwd, &self.gh_extra_prefixes, CancellationToken::new())
                 .await;
         }
-        apply_git_identity_from_gh(cwd, CancellationToken::new()).await
+        apply_git_identity_from_gh(cwd, &self.gh_extra_prefixes, CancellationToken::new()).await
     }
 
     async fn get_gh_installation_token(&self, cwd: &Path) -> Option<String> {
@@ -337,7 +350,8 @@ impl ExternalActions for RealActions {
     }
 
     async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool> {
-        gh_request_self_pr_reviewer(cwd, pr_url, CancellationToken::new()).await?;
+        gh_request_self_pr_reviewer(cwd, pr_url, &self.gh_extra_prefixes, CancellationToken::new())
+            .await?;
         Ok(true)
     }
 

@@ -304,9 +304,13 @@ pub async fn update_ticket_description(
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::GitHub => {
-            let repo_url = {
+            let (repo_url, gh_extras, repo_path) = {
                 let config = state.config.read().await;
-                config.git.repo_url.clone()
+                (
+                    config.git.repo_url.clone(),
+                    config.github.gh_extra_argv_prefixes(),
+                    std::path::PathBuf::from(&config.git.repo_path),
+                )
             };
             let owner_repo = parse_github_repo(&repo_url).ok_or_else(|| {
                 (
@@ -324,29 +328,38 @@ pub async fn update_ticket_description(
                     )
                 })?;
 
-            let mut gh_args = vec![
-                "api".to_string(),
-                "--method".to_string(),
-                "PATCH".to_string(),
-                format!("repos/{owner_repo}/issues/{issue_number}"),
-                "--raw-field".to_string(),
-                format!("body={}", body.description),
+            let endpoint = format!("repos/{owner_repo}/issues/{issue_number}");
+            let body_field = format!("body={}", body.description);
+            let mut gh_args: Vec<&str> = vec![
+                "api",
+                "--method",
+                "PATCH",
+                &endpoint,
+                "--raw-field",
+                &body_field,
             ];
+            let title_field;
             if let Some(ref s) = body.summary {
-                gh_args.push("--raw-field".to_string());
-                gh_args.push(format!("title={s}"));
+                title_field = format!("title={s}");
+                gh_args.push("--raw-field");
+                gh_args.push(&title_field);
             }
-            let output = tokio::process::Command::new("gh")
-                .args(&gh_args)
-                .output()
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let output = maestro_core::github::gh_cli::run_gh_checked(
+                &gh_args,
+                &gh_extras,
+                &repo_path,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.success() {
                 return Err((
                     StatusCode::BAD_GATEWAY,
-                    format!("gh api PATCH issues/{issue_number} failed: {stderr}"),
+                    format!(
+                        "gh api PATCH issues/{issue_number} failed: {}",
+                        output.stderr.trim()
+                    ),
                 ));
             }
 

@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use maestro_core::actions::dry_run::DryRunActions;
@@ -209,7 +209,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let (repo_path, git_remote, dry_mode, acli_extras, github_app_mgr) = {
+    let (repo_path, git_remote, dry_mode, acli_extras, gh_extras, github_app_mgr) = {
         let c = config.read().await;
         let mgr = maestro_core::github_app::try_create_token_manager(&c.github);
         (
@@ -217,9 +217,20 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             c.git.remote.clone(),
             c.general.dry_mode,
             c.jira.acli_extra_argv_prefixes(),
+            c.github.gh_extra_argv_prefixes(),
             mgr,
         )
     };
+
+    // Log a warning if wildcard is configured (allows all subcommands for that tool).
+    if maestro_core::jira::acli::has_wildcard(&acli_extras) {
+        warn!("acli_allowed_extra_prefixes contains wildcard \"*\" — all acli subcommands are allowed. \
+               This disables the acli CLI allowlist and is intended for advanced users only.");
+    }
+    if maestro_core::github::gh_cli::has_wildcard(&gh_extras) {
+        warn!("gh_allowed_extra_prefixes contains wildcard \"*\" — all gh subcommands are allowed. \
+               This disables the gh CLI allowlist and is intended for advanced users only.");
+    }
 
     let actions: Arc<dyn ExternalActions> = if dry_mode {
         info!("Running in DRY MODE — no external writes");
@@ -227,6 +238,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             repo_path,
             git_remote,
             acli_extras,
+            gh_extras,
             github_app_mgr,
         ))
     } else {
@@ -234,6 +246,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             repo_path,
             git_remote,
             acli_extras,
+            gh_extras,
             github_app_mgr,
         ))
     };

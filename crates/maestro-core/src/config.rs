@@ -596,6 +596,10 @@ pub struct GitHubAppConfig {
     /// Set **either** this or `app_private_key`, not both.
     #[serde(default)]
     pub app_private_key_path: String,
+    /// Advanced: extra `gh` argv prefix lines (whitespace-separated tokens per line) allowed beyond
+    /// Maestro's built-in GitHub CLI allowlist. Set to `["*"]` to allow all `gh` subcommands.
+    #[serde(default)]
+    pub gh_allowed_extra_prefixes: Vec<String>,
 }
 
 impl GitHubAppConfig {
@@ -606,6 +610,11 @@ impl GitHubAppConfig {
             && self.app_installation_id != 0
             && (!self.app_private_key.trim().is_empty()
                 || !self.app_private_key_path.trim().is_empty())
+    }
+
+    /// Parsed `[github] gh_allowed_extra_prefixes` for argv allowlist checks.
+    pub fn gh_extra_argv_prefixes(&self) -> Vec<Vec<String>> {
+        crate::github::gh_cli::parse_gh_extra_prefixes(&self.gh_allowed_extra_prefixes)
     }
 }
 
@@ -1703,7 +1712,7 @@ step_timeout_secs = 600
             app_id: 0,
             app_installation_id: 42,
             app_private_key: "pem".into(),
-            app_private_key_path: String::new(),
+            ..Default::default()
         };
         assert!(!cfg.is_configured());
     }
@@ -1714,7 +1723,7 @@ step_timeout_secs = 600
             app_id: 99,
             app_installation_id: 0,
             app_private_key: "pem".into(),
-            app_private_key_path: String::new(),
+            ..Default::default()
         };
         assert!(!cfg.is_configured());
     }
@@ -1726,6 +1735,7 @@ step_timeout_secs = 600
             app_installation_id: 42,
             app_private_key: "   ".into(),
             app_private_key_path: "   ".into(),
+            ..Default::default()
         };
         assert!(!cfg.is_configured());
     }
@@ -1736,7 +1746,7 @@ step_timeout_secs = 600
             app_id: 99,
             app_installation_id: 42,
             app_private_key: "-----BEGIN RSA PRIVATE KEY-----".into(),
-            app_private_key_path: String::new(),
+            ..Default::default()
         };
         assert!(cfg.is_configured());
     }
@@ -1746,8 +1756,8 @@ step_timeout_secs = 600
         let cfg = GitHubAppConfig {
             app_id: 99,
             app_installation_id: 42,
-            app_private_key: String::new(),
             app_private_key_path: "/etc/maestro/key.pem".into(),
+            ..Default::default()
         };
         assert!(cfg.is_configured());
     }
@@ -2428,5 +2438,70 @@ step_timeout_secs = 600
         f.write_all(valid_config_toml().as_bytes()).unwrap();
         let config = Config::load(f.path()).unwrap();
         assert!(!config.general.generate_report);
+    }
+
+    // -- gh_allowed_extra_prefixes config tests --
+
+    #[test]
+    fn github_app_config_gh_extra_prefixes_default_empty() {
+        let cfg = GitHubAppConfig::default();
+        assert!(cfg.gh_allowed_extra_prefixes.is_empty());
+        assert!(cfg.gh_extra_argv_prefixes().is_empty());
+    }
+
+    #[test]
+    fn github_app_config_gh_extra_prefixes_parsed() {
+        let cfg = GitHubAppConfig {
+            gh_allowed_extra_prefixes: vec!["pr list".into(), "issue create".into()],
+            ..Default::default()
+        };
+        let parsed = cfg.gh_extra_argv_prefixes();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0], vec!["pr", "list"]);
+        assert_eq!(parsed[1], vec!["issue", "create"]);
+    }
+
+    #[test]
+    fn config_deserialize_gh_extra_prefixes() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            br#"
+[general]
+poll_interval_secs = 30
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+[git]
+base_branch = "main"
+repo_path = "/workspace"
+[commands]
+pre_install = []
+[web]
+port = 8080
+[agent]
+step_timeout_secs = 600
+[github]
+gh_allowed_extra_prefixes = ["pr list", "issue create"]
+"#,
+        )
+        .unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(
+            config.github.gh_allowed_extra_prefixes,
+            vec!["pr list", "issue create"]
+        );
+        let parsed = config.github.gh_extra_argv_prefixes();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0], vec!["pr", "list"]);
+        assert_eq!(parsed[1], vec!["issue", "create"]);
+    }
+
+    #[test]
+    fn config_deserialize_gh_extra_prefixes_absent() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(valid_config_toml().as_bytes()).unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert!(config.github.gh_allowed_extra_prefixes.is_empty());
+        assert!(config.github.gh_extra_argv_prefixes().is_empty());
     }
 }

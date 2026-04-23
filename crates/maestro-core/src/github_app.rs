@@ -336,12 +336,18 @@ impl GitHubAppTokenManager {
     pub async fn configure_git_and_gh_auth(
         &self,
         cwd: &Path,
+        gh_extra_prefixes: &[Vec<String>],
         cancel: CancellationToken,
     ) -> Result<()> {
         // Configure git to use gh as credential helper (for git push).
         // gh reads GH_TOKEN from the environment when present, so no login call is needed.
-        let setup_output =
-            process::run_command("gh", &["auth", "setup-git"], cwd, cancel.child_token()).await?;
+        let setup_output = crate::github::gh_cli::run_gh_checked(
+            &["auth", "setup-git"],
+            gh_extra_prefixes,
+            cwd,
+            cancel.child_token(),
+        )
+        .await?;
         if !setup_output.success() {
             warn!(
                 stderr = %setup_output.stderr.trim(),
@@ -428,7 +434,7 @@ mod tests {
             app_id: 1,
             app_installation_id: 1,
             app_private_key: "inline-pem-content".into(),
-            app_private_key_path: String::new(),
+            ..Default::default()
         };
         assert_eq!(
             GitHubAppTokenManager::resolve_private_key(&cfg).unwrap(),
@@ -443,8 +449,8 @@ mod tests {
         let cfg = GitHubAppConfig {
             app_id: 1,
             app_installation_id: 1,
-            app_private_key: String::new(),
             app_private_key_path: f.path().to_str().unwrap().to_string(),
+            ..Default::default()
         };
         assert_eq!(
             GitHubAppTokenManager::resolve_private_key(&cfg).unwrap(),
@@ -459,6 +465,7 @@ mod tests {
             app_installation_id: 1,
             app_private_key: "inline".into(),
             app_private_key_path: "/some/path".into(),
+            ..Default::default()
         };
         assert!(GitHubAppTokenManager::resolve_private_key(&cfg).is_err());
     }
@@ -474,8 +481,8 @@ mod tests {
         let cfg = GitHubAppConfig {
             app_id: 1,
             app_installation_id: 1,
-            app_private_key: String::new(),
             app_private_key_path: "/nonexistent/key.pem".into(),
+            ..Default::default()
         };
         assert!(GitHubAppTokenManager::resolve_private_key(&cfg).is_err());
     }

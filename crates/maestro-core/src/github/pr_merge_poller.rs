@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 use crate::config::Config;
 use crate::workflow::engine::{WorkflowEngine, WorkflowEvent};
 
+use super::gh_cli;
 use super::parse_pr_url;
 
 pub struct PrMergePoller {
@@ -92,13 +93,21 @@ impl PrMergePoller {
             "Checking PR merge status for eligible workflows"
         );
 
+        let (repo_path, gh_extras) = {
+            let config = self.config.read().await;
+            (
+                std::path::PathBuf::from(&config.git.repo_path),
+                config.github.gh_extra_argv_prefixes(),
+            )
+        };
+
         for (ticket_key, owner_repo, pr_number) in eligible {
             // Check cancellation between API calls to exit promptly.
             if self.cancel_token.is_cancelled() {
                 return;
             }
 
-            match check_pr_merged(&owner_repo, pr_number).await {
+            match check_pr_merged(&owner_repo, pr_number, &gh_extras, &repo_path).await {
                 Ok(true) => {
                     info!(
                         ticket = %ticket_key,
@@ -157,25 +166,27 @@ impl PrMergePoller {
 }
 
 /// Check whether a GitHub PR has been merged using `gh api`.
-async fn check_pr_merged(owner_repo: &str, pr_number: u64) -> Result<bool, String> {
-    let output = tokio::process::Command::new("gh")
-        .args([
-            "api",
-            &format!("repos/{owner_repo}/pulls/{pr_number}"),
-            "--jq",
-            ".merged",
-        ])
-        .output()
-        .await
-        .map_err(|e| format!("failed to spawn gh: {e}"))?;
+async fn check_pr_merged(
+    owner_repo: &str,
+    pr_number: u64,
+    gh_extra_prefixes: &[Vec<String>],
+    cwd: &std::path::Path,
+) -> Result<bool, String> {
+    let endpoint = format!("repos/{owner_repo}/pulls/{pr_number}");
+    let output = gh_cli::run_gh_checked(
+        &["api", &endpoint, "--jq", ".merged"],
+        gh_extra_prefixes,
+        cwd,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .map_err(|e| format!("gh api failed: {e}"))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gh api failed: {stderr}"));
+    if !output.success() {
+        return Err(format!("gh api failed: {}", output.stderr.trim()));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed = stdout.trim();
+    let trimmed = output.stdout.trim();
     match trimmed {
         "true" => Ok(true),
         "false" => Ok(false),

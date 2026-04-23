@@ -23,9 +23,13 @@ pub struct GithubIssueRow {
 pub async fn list_github_issues(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<GithubIssueRow>>, (StatusCode, String)> {
-    let repo_url = {
+    let (repo_url, gh_extras, repo_path) = {
         let config = state.config.read().await;
-        config.git.repo_url.clone()
+        (
+            config.git.repo_url.clone(),
+            config.github.gh_extra_argv_prefixes(),
+            std::path::PathBuf::from(&config.git.repo_path),
+        )
     };
 
     let owner_repo = parse_github_repo(&repo_url).ok_or_else(|| {
@@ -38,7 +42,7 @@ pub async fn list_github_issues(
         )
     })?;
 
-    let issues = maestro_core::github::fetch_open_issues(&owner_repo)
+    let issues = maestro_core::github::fetch_open_issues(&owner_repo, &gh_extras, &repo_path)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 

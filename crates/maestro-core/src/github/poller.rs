@@ -80,6 +80,8 @@ impl GitHubPoller {
         // DryRunActions, but local workflow state (worktrees, steps_log) is still created.
         // This matches the Jira poller's behaviour: dry_mode affects side-effects, not polling.
         let dry_mode = config.general.dry_mode;
+        let gh_extras = config.github.gh_extra_argv_prefixes();
+        let repo_path = std::path::PathBuf::from(&config.git.repo_path);
         drop(config);
 
         let owner_repo = parse_github_repo(&repo_url).ok_or_else(|| {
@@ -113,7 +115,7 @@ impl GitHubPoller {
         // Note: unlike the Jira poller (which supports `jql_filter` and `item_types`),
         // the GitHub poller currently fetches all open issues without label/milestone
         // filtering. A future `[github] label_filter` config option could narrow this.
-        let issues = fetch_open_issues(&owner_repo).await?;
+        let issues = fetch_open_issues(&owner_repo, &gh_extras, &repo_path).await?;
 
         if issues.is_empty() {
             info!("No open GitHub issues found");

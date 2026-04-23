@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+pub mod gh_cli;
 pub mod poller;
 pub mod pr_merge_poller;
 
@@ -65,30 +66,37 @@ pub struct GitHubIssue {
 ///
 /// Shared by both the GitHub poller (auto-starting workflows) and the
 /// `GET /api/github/issues` route (dashboard issue picker).
-pub async fn fetch_open_issues(owner_repo: &str) -> crate::error::Result<Vec<GitHubIssue>> {
-    let output = tokio::process::Command::new("gh")
-        .args([
+pub async fn fetch_open_issues(
+    owner_repo: &str,
+    gh_extra_prefixes: &[Vec<String>],
+    cwd: &std::path::Path,
+) -> crate::error::Result<Vec<GitHubIssue>> {
+    let endpoint = format!("repos/{owner_repo}/issues");
+    let output = gh_cli::run_gh_checked(
+        &[
             "api",
             "--method",
             "GET",
-            &format!("repos/{owner_repo}/issues"),
+            &endpoint,
             "--field",
             "state=open",
             "--field",
             "per_page=50",
-        ])
-        .output()
-        .await
-        .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
+        ],
+        gh_extra_prefixes,
+        cwd,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.success() {
         return Err(crate::error::MaestroError::Config(format!(
-            "gh api repos/{owner_repo}/issues failed: {stderr}"
+            "gh api repos/{owner_repo}/issues failed: {}",
+            output.stderr.trim()
         )));
     }
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+    let json: serde_json::Value = serde_json::from_str(output.stdout.trim())
         .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
 
     let issues = json
