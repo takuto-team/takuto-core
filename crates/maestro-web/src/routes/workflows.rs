@@ -123,6 +123,10 @@ pub struct WorkflowSummary {
     pub terminal_url: Option<String>,
     /// Configured run commands (from `[[run_commands]]` in config), with current running status.
     pub run_commands: Vec<RunCommandStatus>,
+    /// Whether report generation is enabled in config (`[general] generate_report`).
+    pub generate_report: bool,
+    /// Whether a generated report file exists at `lore/reports/<key>_report.md` in the worktree.
+    pub has_report: bool,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -148,6 +152,13 @@ fn can_open_editor(w: &Workflow) -> bool {
     !w.state.is_active()
         && w.worktree_path.as_ref().is_some_and(|p| p.exists())
         && ContainerRunner::is_available()
+}
+
+fn has_report_file(w: &Workflow) -> bool {
+    w.worktree_path.as_ref().is_some_and(|p| {
+        p.join(format!("lore/reports/{}_report.md", w.ticket_key))
+            .exists()
+    })
 }
 
 fn can_resume_from_error(w: &Workflow) -> bool {
@@ -241,6 +252,8 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 can_resume_from_error: can_resume_from_error(w),
                 terminal_url: None,
                 run_commands,
+                generate_report: cfg.general.generate_report,
+                has_report: has_report_file(w),
             }
         })
         .collect();
@@ -315,6 +328,8 @@ pub async fn get_workflow(
             let run_cmds_state = state.run_commands.read().await;
             build_run_commands_status(&cfg.run_commands, run_cmds_state.get(&ticket_key))
         },
+        generate_report: cfg.general.generate_report,
+        has_report: has_report_file(w),
     }))
 }
 
@@ -472,6 +487,36 @@ async fn cleanup_run_commands(state: &AppState, ticket_key: &str) {
         drop(run_cmds);
         container::stop_all_run_commands(ticket_key).await;
     }
+}
+
+/// Return the generated report markdown for a workflow (from `lore/reports/<key>_report.md` in the worktree).
+pub async fn get_workflow_report(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<WorkflowReportResponse>, StatusCode> {
+    let workflows = state.engine.workflows.read().await;
+    let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let worktree_path = w
+        .worktree_path
+        .as_ref()
+        .ok_or(StatusCode::NOT_FOUND)?
+        .clone();
+    let ticket_key = w.ticket_key.clone();
+    drop(workflows);
+
+    let report_path = worktree_path.join(format!("lore/reports/{ticket_key}_report.md"));
+    if !report_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let content =
+        std::fs::read_to_string(&report_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(WorkflowReportResponse { content }))
+}
+
+#[derive(Serialize)]
+pub struct WorkflowReportResponse {
+    pub content: String,
 }
 
 #[derive(Deserialize)]

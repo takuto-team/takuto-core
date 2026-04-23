@@ -173,6 +173,7 @@ mod tests {
             ticketing_available: true,
             ticketing_system: crate::config::TicketingSystem::Jira,
             last_session_id: None,
+            description_session_id: None,
         }
     }
 

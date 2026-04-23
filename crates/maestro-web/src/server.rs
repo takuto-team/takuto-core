@@ -94,6 +94,10 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::stop_run_command),
         )
         .route(
+            "/workflows/{id}/report",
+            get(routes::workflows::get_workflow_report),
+        )
+        .route(
             "/workflows/start-manual",
             post(routes::workflows::start_manual_workflow),
         )

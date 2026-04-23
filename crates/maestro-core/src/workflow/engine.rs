@@ -13,7 +13,9 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::actions::traits::ExternalActions;
-use crate::agent_prompt::headless_instructions_suffix;
+use crate::agent_prompt::{
+    headless_instructions_suffix, report_consolidation_prompt, report_injection_suffix,
+};
 use crate::claude::session::ClaudeSession;
 use crate::config::{
     AgentStepConfig, AiAgentProvider, Config, TicketingSystem, cursor_model_for_cli,
@@ -1932,6 +1934,7 @@ async fn run_merge_base_steps(
         &skill_paths,
         None,
         false,
+        false, // no report injection for merge-base
     )
     .await?;
 
@@ -2000,6 +2003,9 @@ async fn run_agent_step_sequence(
     skill_search_paths: &[PathBuf],
     initial_session_id: Option<String>,
     is_snapshot_resume: bool,
+    // When true, each agent step prompt gets the report-generation injection suffix.
+    // Pass `false` for the consolidation step (which already has its own dedicated prompt).
+    inject_report: bool,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = initial_session_id;
@@ -2314,7 +2320,12 @@ async fn run_agent_step_sequence(
 
                 let interpolated = interpolate_agent_prompt(&final_effective_prompt, interp_vars);
                 let headless = headless_instructions_suffix(ai_stream_provider);
-                let full_prompt = format!("{interpolated}\n\n{headless}");
+                let full_prompt = if inject_report {
+                    let report_suffix = report_injection_suffix(ticket_key);
+                    format!("{interpolated}\n\n{report_suffix}\n\n{headless}")
+                } else {
+                    format!("{interpolated}\n\n{headless}")
+                };
 
                 let relay_label = match phase {
                     AgentRunPhase::Main => format!(
@@ -2700,6 +2711,7 @@ async fn run_pr_review_steps(
         &skill_paths,
         None,
         false,
+        false, // no report injection for PR review
     )
     .await?;
 
@@ -3490,6 +3502,13 @@ async fn run_workflow_steps(
         None
     };
 
+    // Read generate_report once before the agent sequence — avoids acquiring the config lock
+    // on every step iteration and lets us pass the correct value to each call site.
+    let generate_report = {
+        let c = config.read().await;
+        c.general.generate_report
+    };
+
     let last_agent_output = run_agent_step_sequence(
         ticket_key,
         &worktree_path,
@@ -3514,12 +3533,65 @@ async fn run_workflow_steps(
         &skill_paths,
         resume_session,
         is_resume,
+        generate_report, // inject report suffix into each agent step when enabled
     )
     .await?;
 
     // Agent sequence finished — no engine-driven PR (open a PR from an agent step if required).
     check_cancelled(cancel_token)?;
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
+
+    // ── Report consolidation step (when generate_report is enabled) ──────────
+    if generate_report {
+        let report_path = worktree_path.join(format!("lore/reports/{ticket_key}_report.md"));
+        if report_path.exists() {
+            info!(ticket = %ticket_key, "Running report consolidation step");
+            let consolidation_prompt = report_consolidation_prompt(ticket_key);
+            let consolidation_step = AgentStepConfig {
+                name: "Consolidate report".to_string(),
+                prompt: consolidation_prompt,
+                repeat: 1,
+                skills: Vec::new(),
+                resume_previous: false,
+                when: crate::config::StepAvailability::Always,
+                commands: Vec::new(),
+            };
+            let consolidation_steps = vec![consolidation_step];
+            let _consolidation_result = run_agent_step_sequence(
+                ticket_key,
+                &worktree_path,
+                &interp_vars,
+                &consolidation_steps,
+                1,
+                AgentRunPhase::Main,
+                ai_stream_provider,
+                cursor_cli.as_str(),
+                cursor_model_pass,
+                claude_model.as_deref(),
+                timeout,
+                workflows,
+                event_tx,
+                cancel_token,
+                log_writer,
+                agent_run_semaphore.clone(),
+                container_runner.as_ref(),
+                &[], // no prior steps to skip
+                false,
+                config,
+                &skill_paths,
+                None,  // fresh session for consolidation
+                false, // not a snapshot resume
+                false, // no report injection for consolidation — it has its own dedicated prompt
+            )
+            .await;
+            // Consolidation failure is non-fatal — log and continue
+            if let Err(ref e) = _consolidation_result {
+                warn!(ticket = %ticket_key, error = %e, "Report consolidation step failed (non-fatal)");
+            }
+        } else {
+            info!(ticket = %ticket_key, "Report generation enabled but no report file found — skipping consolidation");
+        }
+    }
 
     let pr_url = resolve_pr_url(&worktree_path, last_agent_output.as_deref());
 

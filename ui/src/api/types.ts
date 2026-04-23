@@ -46,6 +46,8 @@ export interface WorkflowSummary {
   can_resume_from_error: boolean;
   terminal_url: string | null;
   run_commands: RunCommandStatus[];
+  generate_report: boolean;
+  has_report: boolean;
 }
 
 export interface RunCommandStatus {

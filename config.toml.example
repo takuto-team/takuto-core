@@ -106,6 +106,10 @@ max_concurrent_workflows = 1
 max_active_workflows = 0
 # Dashboard **+** manual starts: max such workflows that are not **Done**, **Stopped**, or **Error** at once. **0** = no limit.
 # max_concurrent_manual_workflows = 2
+# When true, each agent step appends findings to lore/reports/<item-key>_report.md
+# and a final consolidation step produces a polished summary. The Report button
+# on the dashboard shows the result. Default: false (no report overhead).
+# generate_report = false
 log_level = "info"
 # Optional: load step lists from standalone TOML files (paths relative to this config file's directory).
 # Copy **workflows/*.example.toml** → **workflows/ticket.toml** (etc.); real **workflows/*.toml** are gitignored.

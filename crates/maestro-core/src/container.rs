@@ -327,30 +327,30 @@ impl ContainerRunner {
             .await
             .ok();
 
-        if let Some(output) = output {
-            if output.status.success() {
-                let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !image.is_empty() {
-                    // Verify the image actually exists in DinD before using it — the name from
-                    // docker inspect may point to a registry tag (e.g. ghcr.io/…:dev) that was
-                    // never pulled into DinD (local dev builds).
-                    let exists = tokio::process::Command::new("docker")
-                        .args(["image", "inspect", &image])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .await
-                        .map(|s| s.success())
-                        .unwrap_or(false);
-                    if exists {
-                        info!(image = %image, "Discovered worker image from running Maestro container");
-                        return Some(image);
-                    }
-                    info!(
-                        image = %image,
-                        "Image from docker inspect not present in DinD — trying maestro:latest"
-                    );
+        if let Some(output) = output
+            && output.status.success()
+        {
+            let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !image.is_empty() {
+                // Verify the image actually exists in DinD before using it — the name from
+                // docker inspect may point to a registry tag (e.g. ghcr.io/…:dev) that was
+                // never pulled into DinD (local dev builds).
+                let exists = tokio::process::Command::new("docker")
+                    .args(["image", "inspect", &image])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if exists {
+                    info!(image = %image, "Discovered worker image from running Maestro container");
+                    return Some(image);
                 }
+                info!(
+                    image = %image,
+                    "Image from docker inspect not present in DinD — trying maestro:latest"
+                );
             }
         }
 
@@ -370,14 +370,16 @@ impl ContainerRunner {
         }
 
         // Fall back to MAESTRO_REGISTRY_IMAGE (set at build time in the Dockerfile)
-        if let Ok(image) = std::env::var("MAESTRO_REGISTRY_IMAGE") {
-            if !image.is_empty() {
-                info!(image = %image, "Using MAESTRO_REGISTRY_IMAGE as worker image");
-                return Some(image);
-            }
+        if let Ok(image) = std::env::var("MAESTRO_REGISTRY_IMAGE")
+            && !image.is_empty()
+        {
+            info!(image = %image, "Using MAESTRO_REGISTRY_IMAGE as worker image");
+            return Some(image);
         }
 
-        warn!("Cannot auto-detect worker image — docker inspect failed, maestro:latest not found, and MAESTRO_REGISTRY_IMAGE not set");
+        warn!(
+            "Cannot auto-detect worker image — docker inspect failed, maestro:latest not found, and MAESTRO_REGISTRY_IMAGE not set"
+        );
         None
     }
 }
@@ -1661,9 +1663,8 @@ pub async fn start_run_command(
 
     // Shell command: source env, then run the user command.
     // No `exec` prefix — the command may use shell builtins like `cd`.
-    let script = format!(
-        "[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; {command}"
-    );
+    let script =
+        format!("[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a; {command}");
     args.push("bash".into());
     args.push("-lc".into());
     args.push(script);
@@ -1710,12 +1711,7 @@ pub async fn is_run_command_running(ticket_key: &str, cmd_index: usize) -> bool 
 async fn get_run_command_exit_error(container_name: &str) -> Option<String> {
     // Try docker inspect for exit code — may fail if container already removed by --rm.
     let inspect = tokio::process::Command::new("docker")
-        .args([
-            "inspect",
-            "--format",
-            "{{.State.ExitCode}}",
-            container_name,
-        ])
+        .args(["inspect", "--format", "{{.State.ExitCode}}", container_name])
         .output()
         .await
         .ok()?;

@@ -106,7 +106,11 @@ async fn run_description_session(
                 None,
                 // System prompt is only effective on a fresh session; on resume the existing
                 // session already has its system prompt — inject it into the user message instead.
-                if resume_id.is_some() { None } else { system_prompt },
+                if resume_id.is_some() {
+                    None
+                } else {
+                    system_prompt
+                },
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -174,10 +178,10 @@ technically precise. Add acceptance criteria if none are present. Keep the origi
         summary = body.summary,
         description = body.description,
     );
-    if let Some(extra) = &body.prompt {
-        if !extra.trim().is_empty() {
-            prompt.push_str(&format!("\n\n**Additional instructions:** {extra}"));
-        }
+    if let Some(extra) = &body.prompt
+        && !extra.trim().is_empty()
+    {
+        prompt.push_str(&format!("\n\n**Additional instructions:** {extra}"));
     }
 
     let output =
@@ -273,8 +277,7 @@ pub async fn prompt_ticket(
         description = body.ticket_description,
     );
 
-    let output =
-        run_description_session(&state, &key, &prompt, Some(PROMPT_SYSTEM_PROMPT)).await?;
+    let output = run_description_session(&state, &key, &prompt, Some(PROMPT_SYSTEM_PROMPT)).await?;
 
     Ok(Json(PromptTicketResponse { response: output }))
 }

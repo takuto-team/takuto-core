@@ -5,6 +5,45 @@
 
 use crate::config::AiAgentProvider;
 
+/// Instructions injected into each agent step prompt when `generate_report` is enabled.
+/// Directs the agent to append a summary section for this step to the report file.
+pub fn report_injection_suffix(item_key: &str) -> String {
+    format!(
+        "REPORT GENERATION: After completing this step, append a summary section to the file \
+         `lore/reports/{item_key}_report.md`. Create the file and parent directories if they do not exist. \
+         **Append** — never overwrite prior content in the file.\n\n\
+         Your section MUST include these three parts:\n\
+         1. **Key findings** — What you discovered or produced in this step.\n\
+         2. **Issues encountered** — Problems, blockers, or anomalies (write \"None\" if there were none).\n\
+         3. **Decisions taken** — Choices you made and their rationale.\n\n\
+         Format each section with a Markdown heading (## Step: <step name>) followed by the three bullet groups.\n\n\
+         EXCLUSIONS — do NOT include any of the following in the report:\n\
+         - Commit hashes or SHAs\n\
+         - Raw test-runner output (e.g., full Jest/Vitest/cargo test logs)\n\
+         - Mechanical or noisy data not useful for human review"
+    )
+}
+
+/// Prompt for the final consolidation step that rewrites the per-step report into a polished summary.
+pub fn report_consolidation_prompt(item_key: &str) -> String {
+    format!(
+        "Read the file `lore/reports/{item_key}_report.md` which contains per-step summaries \
+         from the preceding workflow steps.\n\n\
+         Consolidate them into a single, coherent, well-structured report that covers the entire \
+         workflow execution. The consolidated report should:\n\
+         - Have a clear title (# Workflow Report: {item_key})\n\
+         - Summarize key findings, issues, and decisions across all steps\n\
+         - Be organized by theme rather than by step (merge related items)\n\
+         - Use proper Markdown formatting (headings, lists, bold for emphasis)\n\
+         - Be concise but comprehensive — a reader should understand what happened without reading logs\n\n\
+         **Replace** the entire contents of `lore/reports/{item_key}_report.md` with the consolidated report.\n\n\
+         EXCLUSIONS — the consolidated report must NOT contain:\n\
+         - Commit hashes or SHAs\n\
+         - Raw test-runner output\n\
+         - Mechanical or noisy data not useful for human review"
+    )
+}
+
 /// Provider-specific instructions appended after interpolated user prompts.
 pub fn headless_instructions_suffix(provider: AiAgentProvider) -> &'static str {
     match provider {
@@ -27,5 +66,55 @@ pub fn headless_instructions_suffix(provider: AiAgentProvider) -> &'static str {
              `.maestro/outcome.toml` with `pr_url = \"<url>\"`. \
              Maestro aligns git commits with `gh` and requests the same account as PR reviewer when a URL is recorded (may fail if that account opened the PR)."
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_injection_suffix_contains_item_key() {
+        let suffix = report_injection_suffix("PROJ-42");
+        assert!(suffix.contains("lore/reports/PROJ-42_report.md"));
+        assert!(suffix.contains("Key findings"));
+        assert!(suffix.contains("Issues encountered"));
+        assert!(suffix.contains("Decisions taken"));
+    }
+
+    #[test]
+    fn report_injection_suffix_excludes_commit_shas() {
+        let suffix = report_injection_suffix("X-1");
+        assert!(suffix.contains("Commit hashes"));
+        assert!(suffix.contains("EXCLUSIONS"));
+    }
+
+    #[test]
+    fn report_consolidation_prompt_contains_item_key() {
+        let prompt = report_consolidation_prompt("PROJ-42");
+        assert!(prompt.contains("lore/reports/PROJ-42_report.md"));
+        assert!(prompt.contains("Consolidate"));
+        assert!(prompt.contains("Replace"));
+    }
+
+    #[test]
+    fn report_consolidation_prompt_excludes_noisy_data() {
+        let prompt = report_consolidation_prompt("X-1");
+        assert!(prompt.contains("EXCLUSIONS"));
+        assert!(prompt.contains("Commit hashes"));
+    }
+
+    #[test]
+    fn headless_claude_suffix_not_empty() {
+        let s = headless_instructions_suffix(AiAgentProvider::Claude);
+        assert!(!s.is_empty());
+        assert!(s.contains("headless"));
+    }
+
+    #[test]
+    fn headless_cursor_suffix_not_empty() {
+        let s = headless_instructions_suffix(AiAgentProvider::Cursor);
+        assert!(!s.is_empty());
+        assert!(s.contains("headless"));
     }
 }

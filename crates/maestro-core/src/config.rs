@@ -513,6 +513,11 @@ pub struct GeneralConfig {
     /// Interval in seconds for polling PR merge status via the GitHub API (`0` disables polling). Default: 60.
     #[serde(default = "default_pr_merge_poll_interval")]
     pub pr_merge_poll_interval_secs: u64,
+    /// When `true`, each agent step prompt includes instructions to append findings to
+    /// `lore/reports/<item-key>_report.md` and a final consolidation step produces a polished
+    /// summary after all custom steps complete. Default `false`.
+    #[serde(default)]
+    pub generate_report: bool,
 }
 
 /// How linked Jira issues are included in `{ticket_context}` for agent prompts.
@@ -852,6 +857,7 @@ impl Default for GeneralConfig {
             merge_base_workflow_steps_file: String::new(),
             ticketing_system: TicketingSystem::None,
             pr_merge_poll_interval_secs: default_pr_merge_poll_interval(),
+            generate_report: false,
         }
     }
 }
@@ -2371,5 +2377,53 @@ step_timeout_secs = 600
             s.contains("unknown field") || s.contains("Unknown field"),
             "expected unknown field error: {s}"
         );
+    }
+
+    // -- generate_report --
+
+    #[test]
+    fn generate_report_defaults_to_false() {
+        let config = Config::default();
+        assert!(!config.general.generate_report);
+    }
+
+    #[test]
+    fn generate_report_true_from_toml() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            br#"
+[general]
+generate_report = true
+poll_interval_secs = 30
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+repo_path = "/workspace"
+
+[commands]
+pre_install = []
+
+[web]
+port = 8080
+
+[agent]
+step_timeout_secs = 600
+"#,
+        )
+        .unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert!(config.general.generate_report);
+    }
+
+    #[test]
+    fn generate_report_false_when_omitted() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(valid_config_toml().as_bytes()).unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert!(!config.general.generate_report);
     }
 }

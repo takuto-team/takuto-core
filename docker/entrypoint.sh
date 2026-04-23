@@ -120,8 +120,8 @@ if [ "${1:-}" = "setup" ]; then
     echo "Optional: install additional tools via [docker] build_commands / compose_up_commands in config.toml."
     echo ""
 
-    # Step 1: GitHub (required)
-    echo "--- Step 1/4: GitHub CLI (required) ---"
+    # Step 1: GitHub (required — uses browser OAuth via --network=host)
+    echo "--- Step 1/5: GitHub CLI (required) ---"
     if gh auth status >/dev/null 2>&1; then
         echo "GitHub CLI: already authenticated."
         read -p "Re-authenticate? [y/N] " -n 1 -r
@@ -145,7 +145,7 @@ if [ "${1:-}" = "setup" ]; then
     echo ""
 
     # Step 2: Atlassian (required for jira ticketing_system — manual API token, no port needed)
-    echo "--- Step 2/4: Atlassian CLI $([ "$ticketing_system" = "jira" ] && echo "(required)" || echo "(skipped — ticketing_system = $ticketing_system)") ---"
+    echo "--- Step 2/5: Atlassian CLI $([ "$ticketing_system" = "jira" ] && echo "(required)" || echo "(skipped — ticketing_system = $ticketing_system)") ---"
     if [ "$ticketing_system" != "jira" ]; then
         echo "Atlassian CLI auth skipped (not needed for ticketing_system = $ticketing_system)."
     else
@@ -196,7 +196,7 @@ if [ "${1:-}" = "setup" ]; then
     echo ""
 
     # Step 3: Agent provider auth (required — determined by [agent] provider in config)
-    echo "--- Step 3/4: Agent provider — $agent_provider (required) ---"
+    echo "--- Step 3/5: Agent provider — $agent_provider (required) ---"
     if [ "$agent_provider" = "claude" ]; then
         if ! command -v claude >/dev/null 2>&1; then
             echo "ERROR: claude CLI not found on PATH."
@@ -241,7 +241,7 @@ if [ "${1:-}" = "setup" ]; then
     echo ""
 
     # Step 4: Repository (optional)
-    echo "--- Step 4/4: Repository (optional) ---"
+    echo "--- Step 4/5: Repository (optional) ---"
     read -p "Clone or refresh repository from config? [Y/s=skip] " -r
     echo
     if [[ $REPLY =~ ^[sS]$ ]]; then
@@ -270,6 +270,59 @@ if [ "${1:-}" = "setup" ]; then
         fi
         git config --global --add safe.directory /workspace
     fi
+    echo ""
+
+    # Step 5: Report generation (optional)
+    echo "--- Step 5/5: Report generation (optional) ---"
+    current_gen_report=$(grep -E '^\s*generate_report\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *\([a-z]*\).*/\1/' | tr -d ' ' || true)
+    current_gen_report="${current_gen_report:-false}"
+    echo ""
+    echo "When enabled, each workflow step's agent documents key findings in a"
+    echo "cumulative report file. A final consolidation step produces a polished"
+    echo "summary viewable from the dashboard."
+    echo ""
+    echo "Trade-off: slightly longer workflow execution time (one extra agent step)."
+    echo ""
+    echo "Current setting: generate_report = $current_gen_report"
+    echo ""
+    while true; do
+        read -p "Enable report generation? [y/n/d=details] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if grep -qE '^\s*generate_report\s*=' "$CONFIG_FILE" 2>/dev/null; then
+                sed -i 's/^\(\s*generate_report\s*=\s*\).*/\1true/' "$CONFIG_FILE" 2>/dev/null || \
+                    echo "NOTE: Could not update config.toml (read-only mount?). Add 'generate_report = true' under [general] manually."
+            else
+                sed -i '/^\[general\]/a generate_report = true' "$CONFIG_FILE" 2>/dev/null || \
+                    echo "NOTE: Could not update config.toml (read-only mount?). Add 'generate_report = true' under [general] manually."
+            fi
+            echo "Report generation enabled."
+            break
+        elif [[ $REPLY =~ ^[Nn]$ ]]; then
+            if grep -qE '^\s*generate_report\s*=' "$CONFIG_FILE" 2>/dev/null; then
+                sed -i 's/^\(\s*generate_report\s*=\s*\).*/\1false/' "$CONFIG_FILE" 2>/dev/null || true
+            fi
+            echo "Report generation disabled (default)."
+            break
+        elif [[ $REPLY =~ ^[Dd]$ ]]; then
+            echo ""
+            echo "=== Report Generation Details ==="
+            echo ""
+            echo "Per-step injection (appended to each agent step prompt):"
+            echo "  The agent is instructed to append a summary section to"
+            echo "  lore/reports/<item-key>_report.md with:"
+            echo "    • Key findings — what the agent discovered or produced"
+            echo "    • Issues encountered — problems, blockers, or anomalies"
+            echo "    • Decisions taken — choices made and their rationale"
+            echo "  Excludes: commit SHAs, raw test output, and noisy data."
+            echo ""
+            echo "Consolidation step (runs after all custom steps):"
+            echo "  A final agent step reads the per-step entries and rewrites"
+            echo "  the file into a coherent, well-structured summary organized"
+            echo "  by theme rather than by step."
+            echo ""
+        fi
+    done
     echo ""
 
     echo "=== Setup complete ==="

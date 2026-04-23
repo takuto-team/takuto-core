@@ -220,7 +220,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           onSaved={fetchWorkflows}
         />
       )}
-      {reportKey && workflows[reportKey] && (
+      {reportKey && workflows[reportKey] && workflows[reportKey].generate_report && workflows[reportKey].has_report && (
         <ReportModal workflow={workflows[reportKey]} onClose={() => setReportKey(null)} />
       )}
       {showNoJira && (
