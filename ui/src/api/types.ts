@@ -148,3 +148,7 @@ export interface ImproveResponse {
   improved_description: string;
   improved_summary?: string;
 }
+
+export interface PromptResponse {
+  response: string;
+}

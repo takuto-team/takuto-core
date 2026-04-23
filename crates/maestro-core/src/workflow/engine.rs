@@ -124,6 +124,9 @@ pub struct Workflow {
     pub ticketing_system: TicketingSystem,
     /// Last Claude/Cursor session ID for `--resume` across container restarts.
     pub last_session_id: Option<String>,
+    /// Persistent session ID shared by "Improve with AI" and "Ask AI" for this workflow,
+    /// so context is maintained across multiple description-editing interactions.
+    pub description_session_id: Option<String>,
 }
 
 impl Workflow {
@@ -158,6 +161,7 @@ impl Workflow {
             ticketing_available,
             ticketing_system,
             last_session_id: None,
+            description_session_id: None,
         }
     }
 
@@ -228,6 +232,7 @@ impl Workflow {
             ticketing_available,
             ticketing_system,
             last_session_id: rec.last_session_id,
+            description_session_id: rec.description_session_id,
         }
     }
 }
@@ -259,6 +264,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
         started_manually: w.started_manually,
         jira_available: w.jira_available,
         last_session_id: w.last_session_id.clone(),
+        description_session_id: w.description_session_id.clone(),
         ticketing_system: w.ticketing_system,
     }
 }

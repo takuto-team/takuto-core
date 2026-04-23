@@ -111,6 +111,10 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::tickets::improve_ticket),
         )
         .route(
+            "/tickets/{key}/prompt",
+            post(routes::tickets::prompt_ticket),
+        )
+        .route(
             "/tickets/{key}/update-description",
             post(routes::tickets::update_ticket_description),
         )

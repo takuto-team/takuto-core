@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use maestro_core::claude::session::ClaudeSession;
-use maestro_core::config::TicketingSystem;
+use maestro_core::config::{AiAgentProvider, TicketingSystem, cursor_model_for_cli};
+use maestro_core::cursor::session::CursorSession;
 use maestro_core::jira::client::JiraClient;
 
 use crate::routes::github::parse_github_repo;
@@ -31,6 +32,9 @@ Do not add any preamble, commentary, explanation, or closing remarks.";
 pub struct ImproveTicketBody {
     pub description: String,
     pub summary: String,
+    /// Optional extra instructions from the user (e.g. "add acceptance criteria").
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -52,6 +56,98 @@ pub struct UpdateDescriptionBody {
 /// Maximum allowed length for the ticket description in an improve request (100 KB).
 const MAX_IMPROVE_DESCRIPTION_LEN: usize = 100 * 1024;
 
+/// Run a description-editing AI session (improve / prompt) using the configured provider.
+///
+/// Reads the workflow's `description_session_id` to resume the shared conversation, then
+/// writes the new session ID back so the next call continues in the same context.
+/// Falls back gracefully when the ticket has no associated workflow in the map.
+async fn run_description_session(
+    state: &AppState,
+    ticket_key: &str,
+    prompt: &str,
+    system_prompt: Option<&str>,
+) -> Result<String, (StatusCode, String)> {
+    // Snapshot the config fields we need before any await point.
+    let (provider, model, cursor_cli, cursor_model) = {
+        let cfg = state.config.read().await;
+        (
+            cfg.agent.provider,
+            if cfg.agent.model.trim().is_empty() {
+                None
+            } else {
+                Some(cfg.agent.model.trim().to_string())
+            },
+            cfg.agent.cursor_cli.clone(),
+            cfg.agent.cursor_model.clone(),
+        )
+    };
+
+    // Read the persisted description session ID for this workflow (if any).
+    let resume_id: Option<String> = {
+        let wf = state.engine.workflows.read().await;
+        wf.get(ticket_key)
+            .and_then(|w| w.description_session_id.clone())
+    };
+
+    let worktree = std::env::temp_dir();
+    let cancel = CancellationToken::new();
+
+    // Run with the configured provider.
+    let (session_id, output) = match provider {
+        AiAgentProvider::Claude => {
+            let sess = ClaudeSession::run_prompt(
+                &worktree,
+                prompt,
+                cancel,
+                300,
+                None,
+                model.as_deref(),
+                resume_id.as_deref(),
+                None,
+                // System prompt is only effective on a fresh session; on resume the existing
+                // session already has its system prompt — inject it into the user message instead.
+                if resume_id.is_some() { None } else { system_prompt },
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            (sess.session_id, sess.output)
+        }
+        AiAgentProvider::Cursor => {
+            let effective_model = cursor_model_for_cli(&cursor_model);
+            let sess = CursorSession::run_prompt(
+                &cursor_cli,
+                &worktree,
+                prompt,
+                cancel,
+                300,
+                None,
+                if effective_model == "Auto" {
+                    None
+                } else {
+                    Some(effective_model)
+                },
+                resume_id.as_deref(),
+                None,
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            (sess.session_id, sess.output)
+        }
+    };
+
+    // Persist the session ID back to the workflow so the next call resumes it.
+    {
+        let mut wf = state.engine.workflows.write().await;
+        if let Some(w) = wf.get_mut(ticket_key) {
+            w.description_session_id = Some(session_id);
+        }
+    }
+    // Best-effort snapshot so the session survives a restart.
+    let _ = state.engine.sync_workflow_snapshot().await;
+
+    Ok(output)
+}
+
 /// `POST /api/tickets/{key}/improve` — run a headless Claude session to improve the ticket description.
 pub async fn improve_ticket(
     State(state): State<AppState>,
@@ -69,13 +165,7 @@ pub async fn improve_ticket(
         ));
     }
 
-    let model = {
-        let config = state.config.read().await;
-        let m = config.agent.model.trim().to_string();
-        if m.is_empty() { None } else { Some(m) }
-    };
-
-    let prompt = format!(
+    let mut prompt = format!(
         "Improve the following ticket description. Make it clearer, more actionable, and \
 technically precise. Add acceptance criteria if none are present. Keep the original intent intact.\n\n\
 **Ticket:** {key} — {summary}\n\n\
@@ -84,42 +174,109 @@ technically precise. Add acceptance criteria if none are present. Keep the origi
         summary = body.summary,
         description = body.description,
     );
+    if let Some(extra) = &body.prompt {
+        if !extra.trim().is_empty() {
+            prompt.push_str(&format!("\n\n**Additional instructions:** {extra}"));
+        }
+    }
 
-    // Use the system temp dir rather than a hardcoded "/tmp" for portability.
-    let worktree = std::env::temp_dir();
-
-    let session = ClaudeSession::run_prompt(
-        &worktree,
-        &prompt,
-        CancellationToken::new(),
-        300, // 5 minutes — generous for a single LLM generation
-        None,
-        model.as_deref(),
-        None,
-        None,
-        Some(IMPROVE_SYSTEM_PROMPT),
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let output =
+        run_description_session(&state, &key, &prompt, Some(IMPROVE_SYSTEM_PROMPT)).await?;
 
     // Parse "Title\n---\nDescription" format from AI output.
     let (improved_summary, improved_description) =
-        if let Some((before, after)) = session.output.split_once("\n---\n") {
+        if let Some((before, after)) = output.split_once("\n---\n") {
             let title = before.trim().to_string();
             let desc = after.trim().to_string();
             if title.is_empty() {
-                (None, session.output.clone())
+                (None, output.clone())
             } else {
                 (Some(title), desc)
             }
         } else {
-            (None, session.output.clone())
+            (None, output.clone())
         };
 
     Ok(Json(ImproveTicketResponse {
         improved_description,
         improved_summary,
     }))
+}
+
+/// Maximum allowed length for the user prompt in a prompt request (10 KB).
+const MAX_PROMPT_LEN: usize = 10 * 1024;
+
+const PROMPT_SYSTEM_PROMPT: &str = "\
+You are a technical assistant helping a user refine a software ticket. \
+The user will provide custom instructions; answer them directly. \
+Use Markdown formatting. You may use Mermaid diagram blocks (```mermaid) when \
+a visual diagram would clarify your answer. \
+Do not add any preamble, commentary, or closing remarks — output only the requested content.";
+
+#[derive(Deserialize)]
+pub struct PromptTicketBody {
+    pub prompt: String,
+    pub ticket_title: String,
+    pub ticket_description: String,
+}
+
+#[derive(Serialize)]
+pub struct PromptTicketResponse {
+    pub response: String,
+}
+
+/// `POST /api/tickets/{key}/prompt` — run a headless Claude session with a custom user prompt and ticket context.
+pub async fn prompt_ticket(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    Json(body): Json<PromptTicketBody>,
+) -> Result<Json<PromptTicketResponse>, (StatusCode, String)> {
+    // Validate prompt is not empty
+    if body.prompt.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Prompt must not be empty".to_string(),
+        ));
+    }
+
+    // Validate prompt length
+    if body.prompt.len() > MAX_PROMPT_LEN {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "Prompt exceeds maximum allowed length ({} bytes, limit {})",
+                body.prompt.len(),
+                MAX_PROMPT_LEN
+            ),
+        ));
+    }
+
+    // Validate description length (same limit as improve endpoint)
+    if body.ticket_description.len() > MAX_IMPROVE_DESCRIPTION_LEN {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "Ticket description exceeds maximum allowed length ({} bytes, limit {})",
+                body.ticket_description.len(),
+                MAX_IMPROVE_DESCRIPTION_LEN
+            ),
+        ));
+    }
+
+    let prompt = format!(
+        "{user_prompt}\n\n\
+         **Ticket:** {key} — {title}\n\n\
+         **Current description:**\n{description}",
+        user_prompt = body.prompt,
+        key = key,
+        title = body.ticket_title,
+        description = body.ticket_description,
+    );
+
+    let output =
+        run_description_session(&state, &key, &prompt, Some(PROMPT_SYSTEM_PROMPT)).await?;
+
+    Ok(Json(PromptTicketResponse { response: output }))
 }
 
 /// `POST /api/tickets/{key}/update-description` — persist the improved description to the ticketing system.

@@ -3,8 +3,10 @@
 
 import { useState, useEffect, useRef } from "react";
 import { apiJson, apiPost } from "../../api/client";
-import type { TicketPreview, ImproveResponse } from "../../api/types";
+import type { TicketPreview } from "../../api/types";
 import { MarkdownPreview } from "../MarkdownPreview";
+import { AiPromptPanel } from "../AiPromptPanel";
+import { DiffView } from "../DiffView";
 import { useToast } from "../../hooks/useToast";
 
 const IMPROVE_TIMEOUT_SECS = 300;
@@ -13,6 +15,12 @@ function formatCountdown(secs: number): string {
   const m = Math.floor(secs / 60);
   const s = secs % 60;
   return `${m}:${String(s).padStart(2, "0")} remaining until timeout`;
+}
+
+interface PendingImprovement {
+  originalDescription: string;
+  improvedDescription: string;
+  improvedSummary?: string;
 }
 
 interface Props {
@@ -51,11 +59,11 @@ export function TicketDetailModal({
   const [sideBySide, setSideBySide] = useState(false);
   const [debouncedText, setDebouncedText] = useState("");
   const [saving, setSaving] = useState(false);
+  const [prompting, setPrompting] = useState(false);
+  const [pendingImprovement, setPendingImprovement] =
+    useState<PendingImprovement | null>(null);
 
   useEffect(() => {
-    // No-ticketing mode: description comes from the workflow (initialDescription prop).
-    // GitHub mode: description comes from the workflow (cached issue body).
-    // Only Jira mode needs to fetch from the preview API.
     if (initialDescription || ticketingSystem === "none" || ticketingSystem === "github") return;
     apiJson<TicketPreview>(`/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`)
       .then((data) => setMarkdown(data.description_markdown || ""))
@@ -69,7 +77,6 @@ export function TicketDetailModal({
     return () => clearTimeout(id);
   }, [editText]);
 
-  // Cleanup abort/countdown on unmount
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
@@ -101,16 +108,12 @@ export function TicketDetailModal({
         showToast(text || "Failed to improve ticket description");
         return;
       }
-      const data: ImproveResponse = await res.json();
-      setMarkdown(data.improved_description);
-      if (data.improved_summary) {
-        setEditTitle(data.improved_summary);
-      }
-      if (!editMode) {
-        setEditText(data.improved_description);
-        setDebouncedText(data.improved_description);
-        setEditMode(true);
-      }
+      const data = await res.json() as { improved_description: string; improved_summary?: string };
+      setPendingImprovement({
+        originalDescription: markdown,
+        improvedDescription: data.improved_description,
+        improvedSummary: data.improved_summary,
+      });
     } catch (e) {
       abortRef.current = null;
       if (e instanceof Error && e.name !== "AbortError") {
@@ -133,6 +136,33 @@ export function TicketDetailModal({
       clearInterval(countdownRef.current);
       countdownRef.current = null;
     }
+  };
+
+  const handleConfirmImprovement = () => {
+    if (!pendingImprovement) return;
+    const { improvedDescription, improvedSummary } = pendingImprovement;
+    setEditText(improvedDescription);
+    setDebouncedText(improvedDescription);
+    if (improvedSummary) setEditTitle(improvedSummary);
+    setPendingImprovement(null);
+    if (!editMode) {
+      setActiveTab("write");
+      setSideBySide(false);
+      setEditMode(true);
+    }
+  };
+
+  const handleDiscardImprovement = () => {
+    setPendingImprovement(null);
+  };
+
+  /** Called by AiPromptPanel when the AI returns an improved version. */
+  const handleImprovement = (
+    originalDescription: string,
+    improvedDescription: string,
+    improvedSummary?: string
+  ) => {
+    setPendingImprovement({ originalDescription, improvedDescription, improvedSummary });
   };
 
   const handleStartEdit = () => {
@@ -183,12 +213,15 @@ export function TicketDetailModal({
 
   const editDirty = editMode && (editText !== markdown || editTitle !== summary);
 
+  // When a diff is pending, widen the modal like side-by-side edit mode.
+  const isWide = sideBySide || pendingImprovement !== null;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="bg-gray-900 border border-gray-700 rounded-xl w-full mx-4 flex flex-col relative transition-[max-width] duration-300 ease-in-out"
         style={{
-          maxWidth: sideBySide
+          maxWidth: isWide
             ? "min(2580px, calc(100vw - 48px))"
             : "min(1280px, calc(100vw - 24px))",
           height: "calc(100vh - 48px)",
@@ -214,7 +247,7 @@ export function TicketDetailModal({
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
           <div className="min-w-0 flex-1">
             <span className="font-mono text-xs text-blue-400">{ticketKey}</span>
-            {editMode ? (
+            {editMode && !pendingImprovement ? (
               <input
                 type="text"
                 value={editTitle}
@@ -222,7 +255,9 @@ export function TicketDetailModal({
                 className="block w-full mt-1 bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-lg font-medium text-white"
               />
             ) : (
-              <h3 className="text-lg font-medium text-white truncate">{summary}</h3>
+              <h3 className="text-lg font-medium text-white truncate">
+                {pendingImprovement?.improvedSummary ?? summary}
+              </h3>
             )}
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 cursor-pointer text-xl flex-shrink-0 ml-4">
@@ -230,8 +265,31 @@ export function TicketDetailModal({
           </button>
         </div>
 
-        {/* Edit banner — always visible in edit mode; buttons disabled until content changes */}
-        {editMode && (
+        {/* Diff review banner */}
+        {pendingImprovement && (
+          <div className="border-b px-4 py-2 flex items-center justify-between bg-purple-900/20 border-purple-700/30">
+            <span className="text-xs text-purple-300">
+              Review AI changes — confirm to enter edit mode with the updated description
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={handleDiscardImprovement}
+                className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+              >
+                Discard
+              </button>
+              <button
+                onClick={handleConfirmImprovement}
+                className="text-xs px-3 py-1 rounded-lg bg-green-700 text-white hover:bg-green-600 cursor-pointer"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Edit banner — only in edit mode and not while reviewing a diff */}
+        {editMode && !pendingImprovement && (
           <div className={`border-b px-4 py-2 flex items-center justify-between ${editDirty ? "bg-blue-900/20 border-blue-700/30" : "bg-gray-800/30 border-gray-800"}`}>
             <span className={`text-xs ${editDirty ? "text-blue-300" : "text-gray-500"}`}>
               {editDirty ? "Description modified — save to update the ticket" : "Editing description"}
@@ -254,8 +312,8 @@ export function TicketDetailModal({
           </div>
         )}
 
-        {/* Tab bar — only visible in edit mode */}
-        {editMode && (
+        {/* Tab bar — only visible in edit mode and not while reviewing a diff */}
+        {editMode && !pendingImprovement && (
           <div className="flex items-center px-6 py-2 border-b border-gray-800 gap-2">
             {!sideBySide && (
               <div className="flex gap-1">
@@ -294,11 +352,16 @@ export function TicketDetailModal({
         )}
 
         {/* Content area */}
-        <div className={`flex-1 min-h-0 ${editMode && sideBySide ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
+        <div className={`flex-1 min-h-0 ${(editMode && sideBySide) || pendingImprovement ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
           {loading ? (
             <div className="flex-1 overflow-y-auto p-6">
               <p className="text-gray-500 text-sm">Loading description...</p>
             </div>
+          ) : pendingImprovement ? (
+            <DiffView
+              oldText={pendingImprovement.originalDescription}
+              newText={pendingImprovement.improvedDescription}
+            />
           ) : editMode ? (
             sideBySide ? (
               <>
@@ -335,40 +398,69 @@ export function TicketDetailModal({
           )}
         </div>
 
+        {/* AI Prompt Panel — hidden while reviewing a diff */}
+        {!loading && !pendingImprovement && (
+          <AiPromptPanel
+            ticketKey={ticketKey}
+            ticketTitle={editMode ? editTitle : summary}
+            ticketDescription={editMode ? editText : markdown}
+            disabled={improving}
+            onLoadingChange={setPrompting}
+            onImprovement={handleImprovement}
+          />
+        )}
+
         {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-gray-800 gap-3">
           <div className="flex gap-2">
-            <button
-              onClick={handleImprove}
-              disabled={improving || editMode}
-              className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
-            >
-              {improving ? "Improving..." : "Improve with AI"}
-            </button>
-            {!editMode && (
-              <button
-                onClick={handleStartEdit}
-                className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-              >
-                Edit
-              </button>
+            {!pendingImprovement && (
+              <>
+                <button
+                  onClick={handleImprove}
+                  disabled={improving || editMode || prompting}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
+                >
+                  {improving ? "Improving..." : "Improve with AI"}
+                </button>
+                {!editMode && (
+                  <button
+                    onClick={handleStartEdit}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+                  >
+                    Edit
+                  </button>
+                )}
+              </>
             )}
           </div>
           <div className="flex gap-2">
             <button
-              onClick={editMode ? handleCancelEdit : onClose}
+              onClick={
+                pendingImprovement
+                  ? handleDiscardImprovement
+                  : editMode
+                  ? handleCancelEdit
+                  : onClose
+              }
               className="text-xs px-4 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
             >
-              {editMode ? "Cancel" : "Close"}
+              {pendingImprovement ? "Discard" : editMode ? "Cancel" : "Close"}
             </button>
-            {showStartButton && onStart && (
+            {pendingImprovement ? (
+              <button
+                onClick={handleConfirmImprovement}
+                className="text-xs px-4 py-1.5 rounded-lg bg-green-700 text-white hover:bg-green-600 cursor-pointer"
+              >
+                Confirm
+              </button>
+            ) : showStartButton && onStart ? (
               <button
                 onClick={onStart}
                 className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
               >
                 Start
               </button>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
