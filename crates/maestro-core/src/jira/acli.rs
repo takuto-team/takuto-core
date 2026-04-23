@@ -28,8 +28,20 @@ fn argv_starts_with(argv: &[&str], prefix: &[&str]) -> bool {
     argv.iter().zip(prefix.iter()).all(|(a, p)| *a == *p)
 }
 
-/// Returns true if `argv` is allowed by built-in prefixes or any entry in `extra_prefixes`.
+/// Returns `true` if the extra prefixes list contains a wildcard `["*"]` entry.
+pub fn has_wildcard(extra_prefixes: &[Vec<String>]) -> bool {
+    extra_prefixes
+        .iter()
+        .any(|p| p.len() == 1 && p[0] == "*")
+}
+
+/// Returns true if `argv` is allowed by built-in prefixes, extra prefixes, or wildcard `["*"]`.
 pub fn acli_argv_allowed(argv: &[&str], extra_prefixes: &[Vec<String>]) -> bool {
+    // Wildcard `["*"]` allows everything.
+    if has_wildcard(extra_prefixes) {
+        return true;
+    }
+
     for p in BUILTIN_PREFIXES {
         if argv_starts_with(argv, p) {
             return true;
@@ -244,6 +256,36 @@ mod tests {
     fn parse_extra_prefixes_empty_input() {
         assert!(parse_acli_extra_prefixes(&[]).is_empty());
         assert!(parse_acli_extra_prefixes(&["".into(), "  ".into()]).is_empty());
+    }
+
+    // ── Wildcard `"*"` tests ────────────────────────────────────────
+
+    #[test]
+    fn wildcard_allows_any_acli_command() {
+        let extra = vec![vec!["*".into()]];
+        assert!(acli_argv_allowed(
+            &["confluence", "content", "list"],
+            &extra
+        ));
+        assert!(acli_argv_allowed(
+            &["jira", "workitem", "delete", "--key", "X"],
+            &extra
+        ));
+    }
+
+    #[test]
+    fn wildcard_allows_empty_acli_argv() {
+        let extra = vec![vec!["*".into()]];
+        assert!(acli_argv_allowed(&[], &extra));
+    }
+
+    #[test]
+    fn wildcard_only_when_exact_star_token() {
+        let extra = vec![vec!["*foo".into()]];
+        assert!(!acli_argv_allowed(
+            &["confluence", "content", "list"],
+            &extra
+        ));
     }
 
     #[tokio::test]
