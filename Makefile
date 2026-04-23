@@ -1,15 +1,25 @@
 # Maestro — container management shortcuts
 #
-# Wraps podman/docker compose with the correct -f flags.
+# Wraps docker/podman compose with the correct -f flags.
 # DinD sidecar is included by default; set DIND=0 to disable.
+#
+# Container engine: defaults to docker (fallback to podman if docker not found).
+# Override on the command line:
+#   make PODMAN=1 <target>   — force podman
+#   make DOCKER=1 <target>   — force docker
+ifdef PODMAN
+  _ENGINE := podman
+else ifdef DOCKER
+  _ENGINE := docker
+else
+  _ENGINE := $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
+endif
 
-# Auto-detect compose provider. Prefer podman if present, else docker.
-# Both work identically with explicit -f flags.
-COMPOSE := $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose")
+IS_PODMAN := $(shell [ "$(_ENGINE)" = "podman" ] && echo 1 || echo 0)
+COMPOSE := $(_ENGINE) compose
 # Verify the detected compose command actually works (the docker CLI may lack the compose plugin).
 HAS_COMPOSE := $(shell $(COMPOSE) version >/dev/null 2>&1 && echo 1 || echo 0)
 
-IS_PODMAN := $(shell command -v podman >/dev/null 2>&1 && echo 1 || echo 0)
 # Detect standalone podman-compose binary (needs --podman-run-args for -it).
 PODMAN_COMPOSE_BIN := $(shell command -v podman-compose 2>/dev/null)
 # Project name = current directory name (matches podman-compose volume naming convention).
@@ -32,7 +42,14 @@ REGISTRY ?= ghcr.io/morphet81/maestro
 .DEFAULT_GOAL := help
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "  \033[1mMaestro — container management shortcuts\033[0m"
+	@echo ""
+	@echo "  \033[1mEngine\033[0m  defaults to docker — use PODMAN=1 to force podman"
+	@echo ""
+	@echo "  \033[1mTargets\033[0m"
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	@echo ""
 
 ui-build: ## Build the React dashboard
 	@echo "Building React dashboard..."
@@ -48,15 +65,12 @@ else
 endif
 
 build-local: ## Build container image locally (no compose)
-	@if command -v docker >/dev/null 2>&1 && ! docker --version 2>&1 | grep -qi podman; then \
-		echo "Building with Docker..."; \
-		docker build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test .; \
-	elif command -v podman >/dev/null 2>&1; then \
-		echo "Building with Podman..."; \
-		podman build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test .; \
-	else \
-		echo "ERROR: Neither docker nor podman found." >&2; exit 1; \
-	fi
+	@echo "Building with $(_ENGINE)..."
+ifeq ($(HAS_BUILDX),1)
+	$(_ENGINE) buildx build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test --load .
+else
+	DOCKER_BUILDKIT=1 $(_ENGINE) build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test .
+endif
 
 up: ## Start Maestro + DinD sidecar
 	@if [ ! -f .maestro/config.toml ]; then \
@@ -206,24 +220,24 @@ else
 endif
 
 load-worker: ## Load worker image into DinD
-	@IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$(PROJECT_NAME)[-_]maestro:" | head -1); \
+	@IMAGE=$$($(_ENGINE) images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$(PROJECT_NAME)[-_]maestro:" | head -1); \
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run make build first." >&2; exit 1; fi; \
 	echo "Waiting for DinD to be ready..."; \
 	for i in $$(seq 1 30); do \
-		if podman exec maestro-dind docker info >/dev/null 2>&1; then break; fi; \
+		if $(_ENGINE) exec maestro-dind docker info >/dev/null 2>&1; then break; fi; \
 		sleep 1; \
 	done; \
 	echo "Loading $$IMAGE into DinD..."; \
-	podman save "$$IMAGE" | podman exec -i maestro-dind docker load; \
+	$(_ENGINE) save "$$IMAGE" | $(_ENGINE) exec -i maestro-dind docker load; \
 	echo "Tagging as maestro:latest on DinD..."; \
-	podman exec maestro-dind docker tag "$$IMAGE" maestro:latest
+	$(_ENGINE) exec maestro-dind docker tag "$$IMAGE" maestro:latest
 
 # ── Push multi-arch image to registry ──────────────────────────────────────────
 # Works with Docker (buildx) or Podman (manifest).
 # Docker: one-time setup: docker buildx create --name multiarch --use
 # Auth: docker login ghcr.io / podman login ghcr.io
 VERSION := $(shell cat VERSION)
-HAS_BUILDX := $(shell docker buildx version >/dev/null 2>&1 && echo 1 || echo 0)
+HAS_BUILDX := $(shell $(_ENGINE) buildx version >/dev/null 2>&1 && echo 1 || echo 0)
 
 push: ## Build + push multi-arch image (amd64 + arm64)
 ifeq ($(HAS_BUILDX),1)
@@ -234,13 +248,13 @@ ifeq ($(HAS_BUILDX),1)
 		-t $(REGISTRY):latest \
 		--push .
 else
-	podman manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
-	podman build \
+	$(_ENGINE) manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
+	$(_ENGINE) build \
 		--platform linux/amd64,linux/arm64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
 		--manifest $(REGISTRY):$(VERSION) .
-	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
-	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
+	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
+	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
 endif
 
 push-arm64: ## Build + push arm64 image only
@@ -252,13 +266,13 @@ ifeq ($(HAS_BUILDX),1)
 		-t $(REGISTRY):latest \
 		--push .
 else
-	podman manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
-	podman build \
+	$(_ENGINE) manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
+	$(_ENGINE) build \
 		--platform linux/arm64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
 		--manifest $(REGISTRY):$(VERSION) .
-	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
-	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
+	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
+	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
 endif
 
 push-amd64: ## Build + push amd64 image only
@@ -270,18 +284,18 @@ ifeq ($(HAS_BUILDX),1)
 		-t $(REGISTRY):latest \
 		--push .
 else
-	podman manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
-	podman build \
+	$(_ENGINE) manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
+	$(_ENGINE) build \
 		--platform linux/amd64 \
 		--build-arg MAESTRO_VERSION=$(VERSION) \
 		--manifest $(REGISTRY):$(VERSION) .
-	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
-	podman manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
+	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
+	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
 endif
 
 clean-dind: ## Clean up DinD dangling images and volumes
 	@echo "Cleaning up DinD dangling images and volumes..."; \
-	podman exec maestro-dind docker system prune -f || true; \
+	$(_ENGINE) exec maestro-dind docker system prune -f || true; \
 	echo "DinD cleanup complete. Run 'make load-worker' to reload maestro:latest if needed."
 
 restart: down up ## Restart (down + up)

@@ -203,18 +203,13 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                   <span className="font-mono">{duration}</span>
                 </span>
               )}
-              {w.generate_report && (
+              {w.has_report && (
                 <button
                   onClick={() => onReport(w.ticket_key)}
-                  disabled={!w.has_report}
-                  className={`text-xs transition-colors ${
-                    w.has_report
-                      ? "text-gray-500 hover:text-gray-300 cursor-pointer"
-                      : "text-gray-700 cursor-not-allowed"
-                  }`}
-                  title={w.has_report ? "View workflow report" : "Report not yet generated"}
+                  className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
+                  title="View workflow report"
                 >
-                  Report
+                  Show Report
                 </button>
               )}
             </div>
