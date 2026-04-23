@@ -142,6 +142,10 @@ if [ "${1:-}" = "setup" ]; then
         gh auth status 2>&1 | sed 's/^/       /' || true
         exit 1
     fi
+    # Rewrite SSH GitHub URLs to HTTPS so gh credential helper handles auth.
+    # Applied here (after GitHub auth) so Step 4 repo clone also uses HTTPS.
+    gh auth setup-git 2>/dev/null || true
+    git config --global url."https://github.com/".insteadOf "git@github.com:" 2>/dev/null || true
     echo ""
 
     # Step 2: Atlassian (required for jira ticketing_system — manual API token, no port needed)
