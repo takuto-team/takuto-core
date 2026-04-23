@@ -5,6 +5,28 @@ Automated Jira ticket handler that drives **Claude Code** or **Cursor Agent** in
 
 ## Security and operations
 
+> **⚠ Maestro runs AI agents autonomously and unattended.** Before going live, make sure the mitigations below are in place. A misconfigured setup can result in unreviewed code being pushed to protected branches or sensitive Jira data being over-shared with the AI model.
+
+### Branch protection (required)
+
+Agents push branches and open PRs — they never commit directly to `main` or your release branches. Enforce this at the Git host level so it holds even if the agent misbehaves:
+
+- **GitHub:** enable branch protection rules on `main` (and any other long-lived branches): require at least one human approving review before merge, enable status checks, and disable direct pushes.
+- **GitLab:** use protected branches with "Maintainer" merge access and require approval rules.
+
+Without branch protection, a prompt-injection attack embedded in a Jira ticket description could instruct the agent to force-push or merge without review.
+
+### Scoped Jira tokens (required)
+
+Use a dedicated Jira service account or a scoped API token, not your personal admin credentials:
+
+- Grant only **Browse Projects**, **Create Issues** (for comment/transition), and **Assign Issues** on the target project(s). Revoke write access to unrelated projects.
+- Rotate the token if Maestro's container or its volumes are ever compromised.
+
+Using an admin token means a successful prompt-injection attack can read or modify any Jira project on your instance.
+
+### Other mitigations
+
 - **Untrusted Jira text** (descriptions, linked issues) is embedded in AI prompts as **`{ticket_context}`**. Treat it like user-supplied content: use **Jira permissions**, **branch protection**, and **human code review**. Maestro adds explicit **UNTRUSTED_JIRA** framing and optional **`[jira]`** limits (`linked_items_in_prompt`, byte caps); that **reduces** prompt-injection risk but does not remove it.
 - **`acli`** invocations are **allowlisted** to Jira workitem read/search/assign/transition (plus `jira auth status` in preflight). Extend only with **`[jira] acli_allowed_extra_prefixes`** if you understand the risk.
 - **Dashboard `PUT /api/config`** only accepts **`web`** (login) and **`general.max_concurrent_workflows`** / **`max_active_workflows`** — **strict JSON**; anything else returns **400**. Change Jira, git, agent steps, install commands, etc. in **`config.toml`** and **restart** Maestro.
