@@ -94,8 +94,8 @@ dry_mode = false
 # "jira"   — poll Jira for To Do tickets; requires Atlassian CLI (acli) auth (run make setup).
 # "github" — poll GitHub Issues from git.repo_url; no Atlassian auth required.
 ticketing_system = "none"
-# Start with Jira polling paused (same as dashboard **Pause polling**). Use **Resume polling** after startup to pick up To Do tickets without editing config again.
-# pause_jira_polling_on_startup = true
+# Set to false to start with Jira polling paused (same as dashboard **Pause polling**). Use **Resume polling** after startup to pick up To Do tickets without editing config again.
+# auto_polling = false
 poll_interval_secs = 60
 # Interval (seconds) for polling GitHub to check whether workflow PRs have been merged. 0 disables.
 pr_merge_poll_interval_secs = 60

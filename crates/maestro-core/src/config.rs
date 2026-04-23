@@ -482,9 +482,9 @@ pub struct GeneralConfig {
     pub dry_mode: bool,
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
-    /// When **`true`**, Jira polling starts in the same **paused** state as **Pause polling** on the dashboard (no **`poll_once`** until **Resume polling** or **`POST /api/polling/resume`**). Not persisted when toggled at runtime; restart re-reads this flag from **`config.toml`**.
-    #[serde(default)]
-    pub pause_jira_polling_on_startup: bool,
+    /// When **`true`** (default), Jira polling starts automatically on startup. Set to **`false`** to start in the same **paused** state as **Pause polling** on the dashboard (no **`poll_once`** until **Resume polling** or **`POST /api/polling/resume`**). Not persisted when toggled at runtime; restart re-reads this flag from **`config.toml`**.
+    #[serde(default = "default_auto_polling")]
+    pub auto_polling: bool,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_workflows: u32,
     /// Max **visible** workflows on the dashboard (rows still in the map: **Done**, paused, stopped, error, in-progress all count). `0` means use **`max_concurrent_workflows`**.
@@ -799,6 +799,9 @@ pub fn validate_cors_origin(origin: &str) -> std::result::Result<String, String>
 fn default_poll_interval() -> u64 {
     60
 }
+fn default_auto_polling() -> bool {
+    true
+}
 fn default_max_concurrent() -> u32 {
     1
 }
@@ -846,7 +849,7 @@ impl Default for GeneralConfig {
         Self {
             dry_mode: false,
             poll_interval_secs: default_poll_interval(),
-            pause_jira_polling_on_startup: false,
+            auto_polling: true,
             max_concurrent_workflows: default_max_concurrent(),
             max_active_workflows: 0,
             max_concurrent_manual_workflows: 0,
@@ -1314,7 +1317,7 @@ mod tests {
         r#"
 [general]
 dry_mode = true
-pause_jira_polling_on_startup = true
+auto_polling = false
 poll_interval_secs = 30
 max_concurrent_workflows = 2
 
@@ -1343,7 +1346,7 @@ step_timeout_secs = 600
         f.write_all(valid_config_toml().as_bytes()).unwrap();
         let config = Config::load(f.path()).unwrap();
         assert!(config.general.dry_mode);
-        assert!(config.general.pause_jira_polling_on_startup);
+        assert!(!config.general.auto_polling);
         assert_eq!(config.general.poll_interval_secs, 30);
         assert_eq!(config.jira.project_keys, vec!["PROJ", "CORE"]);
     }
@@ -1358,7 +1361,7 @@ step_timeout_secs = 600
     fn test_defaults() {
         let config = Config::default();
         assert!(!config.general.dry_mode);
-        assert!(!config.general.pause_jira_polling_on_startup);
+        assert!(config.general.auto_polling);
         assert_eq!(config.general.poll_interval_secs, 60);
         assert_eq!(config.web.port, 8080);
         assert!(!config.web.dashboard_auth_enabled());
