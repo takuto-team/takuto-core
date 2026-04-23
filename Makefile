@@ -16,8 +16,13 @@ else
 endif
 
 IS_PODMAN := $(shell [ "$(_ENGINE)" = "podman" ] && echo 1 || echo 0)
-COMPOSE := $(_ENGINE) compose
-# Verify the detected compose command actually works (the docker CLI may lack the compose plugin).
+# Prefer the compose plugin (<engine> compose); fall back to the standalone binary (<engine>-compose).
+_COMPOSE_PLUGIN := $(shell $(_ENGINE) compose version >/dev/null 2>&1 && echo 1 || echo 0)
+ifeq ($(_COMPOSE_PLUGIN),1)
+  COMPOSE := $(_ENGINE) compose
+else
+  COMPOSE := $(_ENGINE)-compose
+endif
 HAS_COMPOSE := $(shell $(COMPOSE) version >/dev/null 2>&1 && echo 1 || echo 0)
 
 # Detect standalone podman-compose binary (needs --podman-run-args for -it).
@@ -38,7 +43,7 @@ MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.
 # Docker image registry for push targets.
 REGISTRY ?= ghcr.io/morphet81/maestro
 
-.PHONY: help build build-local up down setup test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build push push-arm64 push-amd64
+.PHONY: help build build-local start stop auth test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build push push-arm64 push-amd64
 .DEFAULT_GOAL := help
 
 help: ## Show this help
@@ -72,7 +77,7 @@ else
 	DOCKER_BUILDKIT=1 $(_ENGINE) build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test .
 endif
 
-up: ## Start Maestro + DinD sidecar
+start: ## Start Maestro + DinD sidecar
 	@if [ ! -f .maestro/config.toml ]; then \
 		echo "ERROR: .maestro/config.toml not found." >&2; \
 		echo "       mkdir -p .maestro && cp config.toml.example .maestro/config.toml" >&2; \
@@ -89,10 +94,10 @@ ifeq ($(DIND),1)
 	@$(MAKE) --no-print-directory load-worker
 endif
 
-down: ## Stop and remove containers
+stop: ## Stop and remove containers
 	$(COMPOSE) $(COMPOSE_FILES) down
 
-setup: ## Interactive first-time auth setup
+auth: ## Interactive first-time auth setup
 	@if [ ! -f .maestro/config.toml ]; then \
 		echo "ERROR: .maestro/config.toml not found." >&2; \
 		echo "       mkdir -p .maestro && cp config.toml.example .maestro/config.toml" >&2; \
@@ -298,4 +303,4 @@ clean-dind: ## Clean up DinD dangling images and volumes
 	$(_ENGINE) exec maestro-dind docker system prune -f || true; \
 	echo "DinD cleanup complete. Run 'make load-worker' to reload maestro:latest if needed."
 
-restart: down up ## Restart (down + up)
+restart: stop start ## Restart (stop + start)
