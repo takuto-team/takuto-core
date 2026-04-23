@@ -94,7 +94,6 @@ ifeq ($(IS_PODMAN),1)
 	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro[-_]maestro:" | head -1); \
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
 	podman run --rm -it \
-		--network=host \
 		--security-opt=label=disable \
 		-v "$$(pwd)/.maestro/config.toml":/etc/maestro/config.toml:ro \
 		-v "$$(pwd)/.maestro/workflows":/etc/maestro/workflows:ro \
@@ -124,7 +123,6 @@ else
 	IMAGE=$$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[-_]maestro:|^maestro[-_]maestro:" | head -1); \
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
 	docker run --rm -it \
-		--network host \
 		-v "$$(pwd)/.maestro/config.toml":/etc/maestro/config.toml:ro \
 		-v "$$(pwd)/.maestro/workflows":/etc/maestro/workflows:ro \
 		-v "$$(pwd)/.maestro/maestro.env":/etc/maestro/env:ro \

@@ -120,7 +120,7 @@ if [ "${1:-}" = "setup" ]; then
     echo "Optional: install additional tools via [docker] build_commands / compose_up_commands in config.toml."
     echo ""
 
-    # Step 1: GitHub (required — uses browser OAuth via --network=host)
+    # Step 1: GitHub (required)
     echo "--- Step 1/4: GitHub CLI (required) ---"
     if gh auth status >/dev/null 2>&1; then
         echo "GitHub CLI: already authenticated."
@@ -232,7 +232,7 @@ if [ "${1:-}" = "setup" ]; then
         if [ -n "${CURSOR_API_KEY:-}" ]; then
             echo "Cursor Agent: CURSOR_API_KEY is set in environment, skipping interactive login."
         else
-            echo "Cursor Agent: authentication is required (browser OAuth via --network=host)."
+            echo "Cursor Agent: authentication is required. Run 'make setup' to authenticate."
             agent login
         fi
     else
