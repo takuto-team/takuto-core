@@ -224,12 +224,16 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Log a warning if wildcard is configured (allows all subcommands for that tool).
     if maestro_core::jira::acli::has_wildcard(&acli_extras) {
-        warn!("acli_allowed_extra_prefixes contains wildcard \"*\" — all acli subcommands are allowed. \
-               This disables the acli CLI allowlist and is intended for advanced users only.");
+        warn!(
+            "acli_allowed_extra_prefixes contains wildcard \"*\" — all acli subcommands are allowed. \
+               This disables the acli CLI allowlist and is intended for advanced users only."
+        );
     }
     if maestro_core::github::gh_cli::has_wildcard(&gh_extras) {
-        warn!("gh_allowed_extra_prefixes contains wildcard \"*\" — all gh subcommands are allowed. \
-               This disables the gh CLI allowlist and is intended for advanced users only.");
+        warn!(
+            "gh_allowed_extra_prefixes contains wildcard \"*\" — all gh subcommands are allowed. \
+               This disables the gh CLI allowlist and is intended for advanced users only."
+        );
     }
 
     let actions: Arc<dyn ExternalActions> = if dry_mode {

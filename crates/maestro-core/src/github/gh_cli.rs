@@ -62,9 +62,7 @@ fn argv_starts_with(argv: &[&str], prefix: &[&str]) -> bool {
 
 /// Returns `true` if the extra prefixes list contains a wildcard `["*"]` entry.
 pub fn has_wildcard(extra_prefixes: &[Vec<String>]) -> bool {
-    extra_prefixes
-        .iter()
-        .any(|p| p.len() == 1 && p[0] == "*")
+    extra_prefixes.iter().any(|p| p.len() == 1 && p[0] == "*")
 }
 
 /// Returns `true` if `argv` is allowed by built-in prefixes, extra prefixes, or wildcard.
@@ -257,10 +255,7 @@ mod tests {
     #[test]
     fn extra_prefix_allows_custom_command() {
         let extra = vec![vec!["repo".into(), "view".into()]];
-        assert!(gh_argv_allowed(
-            &["repo", "view", "owner/repo"],
-            &extra
-        ));
+        assert!(gh_argv_allowed(&["repo", "view", "owner/repo"], &extra));
     }
 
     #[test]

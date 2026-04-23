@@ -30,9 +30,7 @@ fn argv_starts_with(argv: &[&str], prefix: &[&str]) -> bool {
 
 /// Returns `true` if the extra prefixes list contains a wildcard `["*"]` entry.
 pub fn has_wildcard(extra_prefixes: &[Vec<String>]) -> bool {
-    extra_prefixes
-        .iter()
-        .any(|p| p.len() == 1 && p[0] == "*")
+    extra_prefixes.iter().any(|p| p.len() == 1 && p[0] == "*")
 }
 
 /// Returns true if `argv` is allowed by built-in prefixes, extra prefixes, or wildcard `["*"]`.

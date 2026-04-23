@@ -350,8 +350,13 @@ impl ExternalActions for RealActions {
     }
 
     async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool> {
-        gh_request_self_pr_reviewer(cwd, pr_url, &self.gh_extra_prefixes, CancellationToken::new())
-            .await?;
+        gh_request_self_pr_reviewer(
+            cwd,
+            pr_url,
+            &self.gh_extra_prefixes,
+            CancellationToken::new(),
+        )
+        .await?;
         Ok(true)
     }
 
