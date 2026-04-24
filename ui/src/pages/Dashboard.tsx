@@ -88,7 +88,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     []
   );
 
-  const handleStartWorkflow = useCallback(async () => {
+  const handleAddToDashboard = useCallback(async () => {
     if (!detailModal) return;
     try {
       const res = await apiPost("/api/workflows/start-manual", {
@@ -103,7 +103,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       setDetailModal(null);
       fetchWorkflows();
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "Failed to start workflow");
+      showToast(e instanceof Error ? e.message : "Failed to add workflow");
     }
   }, [detailModal, fetchWorkflows]);
 
@@ -122,7 +122,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         setShowPaste(false);
         fetchWorkflows();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Failed to start workflow");
+        showToast(e instanceof Error ? e.message : "Failed to add workflow");
       }
     },
     [fetchWorkflows]
@@ -215,7 +215,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           description={detailModal.description}
           ticketingSystem={ticketingSystem}
           showStartButton={detailModal.showStart}
-          onStart={handleStartWorkflow}
+          onStart={handleAddToDashboard}
           onClose={() => setDetailModal(null)}
           onSaved={fetchWorkflows}
         />

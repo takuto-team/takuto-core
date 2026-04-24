@@ -34,7 +34,7 @@ export function WorkflowGrid({
     return (
       <div className="text-center py-16">
         <p className="text-gray-500 text-sm mb-4">
-          No workflows yet. Click the button below to start a workflow.
+          No workflows yet. Click the button below to add a workflow.
         </p>
         {canAddWorkflow && (
           <button

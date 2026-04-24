@@ -33,12 +33,13 @@ const COLOR_HEX: Record<string, { bg: string; text: string; border: string; bgFa
   blue:   { bg: "#3b82f6", text: "#60a5fa", border: "rgba(59,130,246,0.2)", bgFaint: "rgba(59,130,246,0.15)" },
 };
 
-function getStatusInfo(state: string): StatusInfo {
+function getStatusInfo(state: string, canStart?: boolean): StatusInfo {
   const s = state.toLowerCase();
   if (s === "done" || s.startsWith("completed")) return { label: "Completed", color: "green" };
   if (s.startsWith("error")) return { label: "Error", color: "red" };
   if (s === "paused") return { label: "Paused", color: "yellow" };
   if (s === "stopped") return { label: "Stopped", color: "gray" };
+  if (s === "pending" && canStart) return { label: "Pending", color: "gray" };
   return { label: "Running", color: "blue" };
 }
 
@@ -65,10 +66,11 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
   const { showToast } = useToast();
 
-  const status = getStatusInfo(w.state);
+  const status = getStatusInfo(w.state, w.can_start);
   const { pct, total, filled } = progressInfo(w);
   const prUrl = w.pr_url?.trim() || "";
   const isTerminal = ["Completed", "Error", "Stopped"].includes(status.label);
+  const isPending = status.label === "Pending" && w.can_start;
   const isActive = status.label === "Running" || status.label === "Paused";
 
   const duration = isTerminal && w.started_at && w.updated_at
@@ -134,6 +136,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
   else if (status.label === "Error") stepLabel = "Failed at step";
   else if (status.label === "Paused") stepLabel = "Paused at step";
   else if (status.label === "Stopped") stepLabel = "Stopped at step";
+  else if (isPending) stepLabel = "Added to dashboard";
 
   let stateDisplay = w.state;
   if (status.label === "Completed") stateDisplay = "All steps passed";
@@ -220,8 +223,37 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
           </div>
         </div>
 
-        {/* Actions — reorganized by row for finished workflows */}
-        {isTerminal ? (
+        {/* Actions — three layout states: pending (not started), terminal, running/paused */}
+        {isPending ? (
+          /* Pending (added to dashboard, not yet started) — Start + nav + delete */
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap gap-2">
+              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
+                Show description
+              </ActionBtn>
+              {w.jira_available && (
+                <ActionBtn variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
+                  Go to ticket
+                </ActionBtn>
+              )}
+              {w.ticketing_system === "github" && (
+                <ActionBtn variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
+                  Go to issue
+                </ActionBtn>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <ActionBtn variant="primary" onClick={() => withLoading(doAction("start"))}>
+                <PlayIcon /> Start
+              </ActionBtn>
+              {w.can_delete && (
+                <ActionBtn variant="danger" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
+                  Delete
+                </ActionBtn>
+              )}
+            </div>
+          </div>
+        ) : isTerminal ? (
           <div className="flex flex-col gap-2">
             {/* Row 1: Navigation actions */}
             <div className="flex flex-wrap gap-2">

@@ -458,7 +458,7 @@ export function TicketDetailModal({
                 onClick={onStart}
                 className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
               >
-                Start
+                Add to Dashboard
               </button>
             ) : null}
           </div>

@@ -33,6 +33,7 @@ export interface WorkflowSummary {
   can_merge_base: boolean;
   can_mark_done: boolean;
   can_delete: boolean;
+  can_start: boolean;
   progress_percent: number;
   progress_steps_total: number;
   started_manually: boolean;
