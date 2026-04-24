@@ -95,8 +95,11 @@ pub struct WorkflowSummary {
     pub can_merge_base: bool,
     /// **Mark as Done** is allowed (workflow state is **Done**).
     pub can_mark_done: bool,
-    /// **Delete** is allowed when the workflow is not **running** (`WorkflowState::is_active` is false).
+    /// **Delete** is allowed when the workflow is not **running** (`WorkflowState::is_active` is false),
+    /// or when the workflow is on the dashboard but the driver has not been started yet.
     pub can_delete: bool,
+    /// **Start** is allowed (workflow on dashboard but driver not yet spawned).
+    pub can_start: bool,
     /// Step-based progress 0–100 (see `dashboard_progress` in maestro-core).
     pub progress_percent: u8,
     /// Estimated step count for the current phase (discrete progress segments / `N` in `k/N`).
@@ -159,6 +162,10 @@ fn has_report_file(w: &Workflow) -> bool {
         p.join(format!("lore/reports/{}_report.md", w.ticket_key))
             .exists()
     })
+}
+
+fn can_start_workflow(w: &Workflow) -> bool {
+    matches!(w.state, WorkflowState::Pending) && !w.driver_started
 }
 
 fn can_resume_from_error(w: &Workflow) -> bool {
@@ -238,7 +245,8 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 can_address_pr_comments,
                 can_merge_base,
                 can_mark_done,
-                can_delete: !w.state.is_active(),
+                can_delete: !w.state.is_active() || can_start_workflow(w),
+                can_start: can_start_workflow(w),
                 progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
                 progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
                 started_manually,
@@ -304,7 +312,8 @@ pub async fn get_workflow(
         can_address_pr_comments,
         can_merge_base,
         can_mark_done,
-        can_delete: !w.state.is_active(),
+        can_delete: !w.state.is_active() || can_start_workflow(w),
+        can_start: can_start_workflow(w),
         progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
         progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
         started_manually,
@@ -534,6 +543,26 @@ pub struct StartManualWorkflowResponse {
     pub ticket_key: String,
 }
 
+/// Start the agent pipeline for a workflow that was added to the dashboard.
+pub async fn start_workflow_from_dashboard(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .engine
+        .start_pending_workflow(&id)
+        .await
+        .map(|_| StatusCode::OK)
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                (StatusCode::NOT_FOUND, msg)
+            } else {
+                (StatusCode::CONFLICT, msg)
+            }
+        })
+}
+
 /// Start a ticket workflow from the dashboard (same pipeline as the poller). Respects **`[general] max_concurrent_manual_workflows`**.
 ///
 /// When Jira is unavailable (`jira_available = false`), `ticket_key` may be empty — a synthetic
@@ -614,7 +643,7 @@ pub async fn start_manual_workflow(
 
     let workflow_id = state
         .engine
-        .start_workflow(ticket_key.clone(), ticket_summary, true, description)
+        .add_to_dashboard(ticket_key.clone(), ticket_summary, true, description)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1365,5 +1394,35 @@ mod tests {
             .await
             .expect("task should exit within 1 second")
             .expect("task should not panic");
+    }
+
+    /// Build a minimal `Workflow` in `Pending` state with the given `driver_started` value.
+    fn wf_pending(driver_started: bool) -> Workflow {
+        let mut w = Workflow::new(
+            "T-1".into(),
+            "summary".into(),
+            true,
+            false,
+            maestro_core::config::TicketingSystem::None,
+        );
+        w.driver_started = driver_started;
+        w
+    }
+
+    #[test]
+    fn can_start_pending_not_started() {
+        assert!(can_start_workflow(&wf_pending(false)));
+    }
+
+    #[test]
+    fn can_start_false_when_started() {
+        assert!(!can_start_workflow(&wf_pending(true)));
+    }
+
+    #[test]
+    fn can_start_false_when_not_pending() {
+        let mut w = wf_pending(false);
+        w.state = WorkflowState::Done;
+        assert!(!can_start_workflow(&w));
     }
 }
