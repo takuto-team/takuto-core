@@ -25,6 +25,19 @@ Use a dedicated Jira service account or a scoped API token, not your personal ad
 
 Using an admin token means a successful prompt-injection attack can read or modify any Jira project on your instance.
 
+### Scoped GitHub token (recommended)
+
+Use a **fine-grained personal access token** (PAT) scoped to the target repository instead of a classic token or your personal `gh` session. Grant only what Maestro needs:
+
+| Permission    | Access      | Used for                                                                                  |
+|---------------|-------------|-------------------------------------------------------------------------------------------|
+| Contents      | Read & write | `git push` (branch push before `gh pr create`)                                           |
+| Pull requests | Read & write | `gh pr create`, `gh pr edit --add-reviewer`, PR merge polling                            |
+| Metadata      | Read        | Required base permission for all fine-grained tokens                                      |
+| Issues        | Read & write | Only if `ticketing_system = "github"` — Maestro polls issues and patches descriptions via `gh api PATCH repos/.../issues/{n}` |
+
+To authenticate with a PAT: `gh auth login --with-token <<< "<your-token>"` inside the container (via `maestro auth`).
+
 ### Other mitigations
 
 - **Untrusted Jira text** (descriptions, linked issues) is embedded in AI prompts as **`{ticket_context}`**. Treat it like user-supplied content: use **Jira permissions**, **branch protection**, and **human code review**. Maestro adds explicit **UNTRUSTED_JIRA** framing and optional **`[jira]`** limits (`linked_items_in_prompt`, byte caps); that **reduces** prompt-injection risk but does not remove it.
