@@ -46,8 +46,8 @@ impl JiraClient {
 
     async fn acli(&self, args: &[&str]) -> Result<CommandOutput> {
         info!(args = ?args, "Running acli command");
-        let output = process::run_command("acli", args, &self.repo_path, CancellationToken::new())
-            .await?;
+        let output =
+            process::run_command("acli", args, &self.repo_path, CancellationToken::new()).await?;
         if !output.success() {
             info!(
                 exit_code = output.exit_code,

@@ -2419,5 +2419,4 @@ step_timeout_secs = 600
         let config = Config::load(f.path()).unwrap();
         assert!(!config.general.generate_report);
     }
-
 }

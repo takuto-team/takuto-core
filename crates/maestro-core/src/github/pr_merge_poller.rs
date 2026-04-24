@@ -12,8 +12,8 @@ use tracing::{debug, info, warn};
 use crate::config::Config;
 use crate::workflow::engine::{WorkflowEngine, WorkflowEvent};
 
-use crate::process;
 use super::parse_pr_url;
+use crate::process;
 
 pub struct PrMergePoller {
     pub config: Arc<RwLock<Config>>,
