@@ -343,7 +343,8 @@ pub async fn update_ticket_description(
                 gh_args.push("--raw-field");
                 gh_args.push(&title_field);
             }
-            let output = maestro_core::github::gh_cli::run_gh(
+            let output = maestro_core::process::run_command(
+                "gh",
                 &gh_args,
                 &repo_path,
                 tokio_util::sync::CancellationToken::new(),

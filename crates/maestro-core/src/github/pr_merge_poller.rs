@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 use crate::config::Config;
 use crate::workflow::engine::{WorkflowEngine, WorkflowEvent};
 
-use super::gh_cli;
+use crate::process;
 use super::parse_pr_url;
 
 pub struct PrMergePoller {
@@ -169,7 +169,8 @@ async fn check_pr_merged(
     cwd: &std::path::Path,
 ) -> Result<bool, String> {
     let endpoint = format!("repos/{owner_repo}/pulls/{pr_number}");
-    let output = gh_cli::run_gh(
+    let output = process::run_command(
+        "gh",
         &["api", &endpoint, "--jq", ".merged"],
         cwd,
         tokio_util::sync::CancellationToken::new(),

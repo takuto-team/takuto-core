@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::error::{MaestroError, Result};
-use crate::github::gh_cli;
+use crate::process;
 
 #[derive(Debug, Deserialize)]
 struct GhUser {
@@ -37,7 +37,7 @@ pub async fn github_commit_identity(
 }
 
 async fn fetch_gh_user(cwd: &Path, cancel: CancellationToken) -> Result<GhUser> {
-    let out = gh_cli::run_gh(&["api", "user"], cwd, cancel).await?;
+    let out = process::run_command("gh", &["api", "user"], cwd, cancel).await?;
     if !out.success() {
         return Err(MaestroError::Git(format!(
             "gh api user failed: {}",
@@ -109,7 +109,8 @@ pub async fn gh_request_self_pr_reviewer(
 
     let u = fetch_gh_user(cwd, cancel.child_token()).await?;
 
-    let out = gh_cli::run_gh(
+    let out = process::run_command(
+        "gh",
         &["pr", "edit", pr_url, "--add-reviewer", u.login.as_str()],
         cwd,
         cancel.child_token(),

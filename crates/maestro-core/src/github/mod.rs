@@ -1,7 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-pub mod gh_cli;
 pub mod poller;
 pub mod pr_merge_poller;
 
@@ -71,7 +70,8 @@ pub async fn fetch_open_issues(
     cwd: &std::path::Path,
 ) -> crate::error::Result<Vec<GitHubIssue>> {
     let endpoint = format!("repos/{owner_repo}/issues");
-    let output = gh_cli::run_gh(
+    let output = crate::process::run_command(
+        "gh",
         &[
             "api",
             "--method",

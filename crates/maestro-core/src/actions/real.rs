@@ -12,7 +12,7 @@ use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
 use crate::git::worktree_remove;
-use crate::github::gh_cli;
+
 use crate::github_app::GitHubAppTokenManager;
 use crate::process::{self, CommandOutput};
 
@@ -264,7 +264,8 @@ impl ExternalActions for RealActions {
         }
 
         // Create PR via gh (argv, no shell — avoids injection from title/body/branch)
-        let output = gh_cli::run_gh(
+        let output = process::run_command(
+            "gh",
             &[
                 "pr", "create", "--title", title, "--body", body, "--base", base, "--head", branch,
             ],

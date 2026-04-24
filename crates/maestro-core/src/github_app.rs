@@ -340,7 +340,8 @@ impl GitHubAppTokenManager {
     ) -> Result<()> {
         // Configure git to use gh as credential helper (for git push).
         // gh reads GH_TOKEN from the environment when present, so no login call is needed.
-        let setup_output = crate::github::gh_cli::run_gh(
+        let setup_output = crate::process::run_command(
+            "gh",
             &["auth", "setup-git"],
             cwd,
             cancel.child_token(),
