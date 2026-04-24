@@ -22,10 +22,9 @@ struct GhUser {
 /// Returns `(display_name, noreply_email)` for git commits, matching the logged-in `gh` account.
 pub async fn github_commit_identity(
     cwd: &Path,
-    gh_extra_prefixes: &[Vec<String>],
     cancel: CancellationToken,
 ) -> Result<(String, String)> {
-    let u = fetch_gh_user(cwd, gh_extra_prefixes, cancel).await?;
+    let u = fetch_gh_user(cwd, cancel).await?;
     let display_name = u
         .name
         .as_ref()
@@ -37,12 +36,8 @@ pub async fn github_commit_identity(
     Ok((display_name, email))
 }
 
-async fn fetch_gh_user(
-    cwd: &Path,
-    gh_extra_prefixes: &[Vec<String>],
-    cancel: CancellationToken,
-) -> Result<GhUser> {
-    let out = gh_cli::run_gh_checked(&["api", "user"], gh_extra_prefixes, cwd, cancel).await?;
+async fn fetch_gh_user(cwd: &Path, cancel: CancellationToken) -> Result<GhUser> {
+    let out = gh_cli::run_gh(&["api", "user"], cwd, cancel).await?;
     if !out.success() {
         return Err(MaestroError::Git(format!(
             "gh api user failed: {}",
@@ -60,13 +55,8 @@ async fn fetch_gh_user(
 }
 
 /// Sets `user.name` and `user.email` locally in `cwd` so commits match the `gh` account.
-pub async fn apply_git_identity_from_gh(
-    cwd: &Path,
-    gh_extra_prefixes: &[Vec<String>],
-    cancel: CancellationToken,
-) -> Result<()> {
-    let (name, email) =
-        github_commit_identity(cwd, gh_extra_prefixes, cancel.child_token()).await?;
+pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -> Result<()> {
+    let (name, email) = github_commit_identity(cwd, cancel.child_token()).await?;
 
     let name_out = crate::process::run_command(
         "git",
@@ -110,7 +100,6 @@ pub async fn apply_git_identity_from_gh(
 pub async fn gh_request_self_pr_reviewer(
     cwd: &Path,
     pr_url: &str,
-    gh_extra_prefixes: &[Vec<String>],
     cancel: CancellationToken,
 ) -> Result<()> {
     let pr_url = pr_url.trim();
@@ -118,11 +107,10 @@ pub async fn gh_request_self_pr_reviewer(
         return Err(MaestroError::Git("empty PR URL".into()));
     }
 
-    let u = fetch_gh_user(cwd, gh_extra_prefixes, cancel.child_token()).await?;
+    let u = fetch_gh_user(cwd, cancel.child_token()).await?;
 
-    let out = gh_cli::run_gh_checked(
+    let out = gh_cli::run_gh(
         &["pr", "edit", pr_url, "--add-reviewer", u.login.as_str()],
-        gh_extra_prefixes,
         cwd,
         cancel.child_token(),
     )

@@ -93,12 +93,9 @@ impl PrMergePoller {
             "Checking PR merge status for eligible workflows"
         );
 
-        let (repo_path, gh_extras) = {
+        let repo_path = {
             let config = self.config.read().await;
-            (
-                std::path::PathBuf::from(&config.git.repo_path),
-                config.github.gh_extra_argv_prefixes(),
-            )
+            std::path::PathBuf::from(&config.git.repo_path)
         };
 
         for (ticket_key, owner_repo, pr_number) in eligible {
@@ -107,7 +104,7 @@ impl PrMergePoller {
                 return;
             }
 
-            match check_pr_merged(&owner_repo, pr_number, &gh_extras, &repo_path).await {
+            match check_pr_merged(&owner_repo, pr_number, &repo_path).await {
                 Ok(true) => {
                     info!(
                         ticket = %ticket_key,
@@ -169,13 +166,11 @@ impl PrMergePoller {
 async fn check_pr_merged(
     owner_repo: &str,
     pr_number: u64,
-    gh_extra_prefixes: &[Vec<String>],
     cwd: &std::path::Path,
 ) -> Result<bool, String> {
     let endpoint = format!("repos/{owner_repo}/pulls/{pr_number}");
-    let output = gh_cli::run_gh_checked(
+    let output = gh_cli::run_gh(
         &["api", &endpoint, "--jq", ".merged"],
-        gh_extra_prefixes,
         cwd,
         tokio_util::sync::CancellationToken::new(),
     )

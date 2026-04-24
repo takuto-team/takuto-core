@@ -304,11 +304,10 @@ pub async fn update_ticket_description(
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::GitHub => {
-            let (repo_url, gh_extras, repo_path) = {
+            let (repo_url, repo_path) = {
                 let config = state.config.read().await;
                 (
                     config.git.repo_url.clone(),
-                    config.github.gh_extra_argv_prefixes(),
                     std::path::PathBuf::from(&config.git.repo_path),
                 )
             };
@@ -344,9 +343,8 @@ pub async fn update_ticket_description(
                 gh_args.push("--raw-field");
                 gh_args.push(&title_field);
             }
-            let output = maestro_core::github::gh_cli::run_gh_checked(
+            let output = maestro_core::github::gh_cli::run_gh(
                 &gh_args,
-                &gh_extras,
                 &repo_path,
                 tokio_util::sync::CancellationToken::new(),
             )

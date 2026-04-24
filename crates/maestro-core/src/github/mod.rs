@@ -68,11 +68,10 @@ pub struct GitHubIssue {
 /// `GET /api/github/issues` route (dashboard issue picker).
 pub async fn fetch_open_issues(
     owner_repo: &str,
-    gh_extra_prefixes: &[Vec<String>],
     cwd: &std::path::Path,
 ) -> crate::error::Result<Vec<GitHubIssue>> {
     let endpoint = format!("repos/{owner_repo}/issues");
-    let output = gh_cli::run_gh_checked(
+    let output = gh_cli::run_gh(
         &[
             "api",
             "--method",
@@ -83,7 +82,6 @@ pub async fn fetch_open_issues(
             "--field",
             "per_page=50",
         ],
-        gh_extra_prefixes,
         cwd,
         tokio_util::sync::CancellationToken::new(),
     )

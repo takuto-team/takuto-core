@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use maestro_core::actions::dry_run::DryRunActions;
@@ -209,40 +209,22 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let (repo_path, git_remote, dry_mode, gh_extras, github_app_mgr) = {
+    let (repo_path, git_remote, dry_mode, github_app_mgr) = {
         let c = config.read().await;
         let mgr = maestro_core::github_app::try_create_token_manager(&c.github);
         (
             PathBuf::from(&c.git.repo_path),
             c.git.remote.clone(),
             c.general.dry_mode,
-            c.github.gh_extra_argv_prefixes(),
             mgr,
         )
     };
 
-    if maestro_core::github::gh_cli::has_wildcard(&gh_extras) {
-        warn!(
-            "gh_allowed_extra_prefixes contains wildcard \"*\" — all gh subcommands are allowed. \
-               This disables the gh CLI allowlist and is intended for advanced users only."
-        );
-    }
-
     let actions: Arc<dyn ExternalActions> = if dry_mode {
         info!("Running in DRY MODE — no external writes");
-        Arc::new(DryRunActions::new(
-            repo_path,
-            git_remote,
-            gh_extras,
-            github_app_mgr,
-        ))
+        Arc::new(DryRunActions::new(repo_path, git_remote, github_app_mgr))
     } else {
-        Arc::new(RealActions::new(
-            repo_path,
-            git_remote,
-            gh_extras,
-            github_app_mgr,
-        ))
+        Arc::new(RealActions::new(repo_path, git_remote, github_app_mgr))
     };
 
     let ticketing_system = config.read().await.general.ticketing_system;

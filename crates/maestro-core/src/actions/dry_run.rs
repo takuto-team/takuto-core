@@ -18,7 +18,6 @@ use crate::process::{self, CommandOutput};
 pub struct DryRunActions {
     pub repo_path: PathBuf,
     git_remote: String,
-    gh_extra_prefixes: Vec<Vec<String>>,
     github_app: Option<Arc<GitHubAppTokenManager>>,
 }
 
@@ -26,13 +25,11 @@ impl DryRunActions {
     pub fn new(
         repo_path: PathBuf,
         git_remote: String,
-        gh_extra_prefixes: Vec<Vec<String>>,
         github_app: Option<Arc<GitHubAppTokenManager>>,
     ) -> Self {
         Self {
             repo_path,
             git_remote,
-            gh_extra_prefixes,
             github_app,
         }
     }
@@ -255,14 +252,14 @@ impl ExternalActions for DryRunActions {
                 "Configuring GitHub App bot identity (dry mode — local git config, executes normally)"
             );
             return app
-                .configure_git_and_gh_auth(cwd, &self.gh_extra_prefixes, CancellationToken::new())
+                .configure_git_and_gh_auth(cwd, CancellationToken::new())
                 .await;
         }
         info!(
             cwd = %cwd.display(),
             "Aligning git author with gh (dry mode — local git config, executes normally)"
         );
-        apply_git_identity_from_gh(cwd, &self.gh_extra_prefixes, CancellationToken::new()).await
+        apply_git_identity_from_gh(cwd, CancellationToken::new()).await
     }
 
     async fn get_gh_installation_token(&self, cwd: &Path) -> Option<String> {
