@@ -16,6 +16,8 @@ use maestro_core::actions::dry_run::DryRunActions;
 use maestro_core::actions::real::RealActions;
 use maestro_core::actions::traits::ExternalActions;
 use maestro_core::config::{Config, TicketingSystem};
+use maestro_core::config_watcher::ConfigWatcher;
+use maestro_core::config_writer::ConfigWriter;
 use maestro_core::docker_hooks;
 use maestro_core::github::poller::GitHubPoller;
 use maestro_core::github::pr_merge_poller::PrMergePoller;
@@ -288,6 +290,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!(error = %err, "Server starting in degraded mode (preflight failed)");
     }
 
+    // Config writer — only available when the config file path is known.
+    let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());
+    let config_writer = Arc::new(ConfigWriter::new(config_path.clone()));
+
     let app_state = AppState {
         engine: engine.clone(),
         config: config.clone(),
@@ -307,6 +313,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::collections::HashMap::new(),
         )),
         preflight_error,
+        config_path: config_path.clone(),
+        config_writer: Some(config_writer.clone()),
     };
     let app = build_router(app_state);
 
@@ -340,6 +348,16 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let pr_merge_poller = PrMergePoller::new(config.clone(), engine.clone(), cancel_token.clone());
 
+    // Config file watcher — polls for external edits to config.toml and
+    // hot-swaps the in-memory config when a valid change is detected.
+    let config_watcher = ConfigWatcher::new(
+        config_path,
+        config.clone(),
+        config_writer.last_write_epoch_ms().clone(),
+        cancel_token.clone(),
+    );
+    let config_watcher_task = tokio::spawn(async move { config_watcher.run().await });
+
     tokio::select! {
         _ = async {
             match ticketing_system {
@@ -368,6 +386,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         _ = snapshot_task => {
             info!("Workflow snapshot syncer stopped");
+        }
+        _ = config_watcher_task => {
+            info!("Config file watcher stopped");
         }
         result = async {
             let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
