@@ -33,10 +33,9 @@ pub async fn list_todo_tickets_manual(
     let repo_path = PathBuf::from(&config.git.repo_path);
     let project_keys = config.jira.project_keys.clone();
     let jql_filter = config.jira.jql_filter.clone();
-    let acli_extras = config.jira.acli_extra_argv_prefixes();
     drop(config);
 
-    let client = JiraClient::new(repo_path, acli_extras);
+    let client = JiraClient::new(repo_path);
     let tickets = client
         .list_todo_tickets_by_rank(&project_keys, &jql_filter)
         .await
@@ -68,10 +67,9 @@ pub async fn get_ticket_preview(
     }
     let repo_path = PathBuf::from(&config.git.repo_path);
     let project_keys = config.jira.project_keys.clone();
-    let acli_extras = config.jira.acli_extra_argv_prefixes();
     drop(config);
 
-    let client = JiraClient::new(repo_path, acli_extras);
+    let client = JiraClient::new(repo_path);
     let preview = client
         .get_ticket_description_preview(&key, &project_keys)
         .await

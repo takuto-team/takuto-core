@@ -377,14 +377,11 @@ pub async fn update_ticket_description(
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::Jira => {
-            let (repo_path, acli_extras) = {
+            let repo_path = {
                 let config = state.config.read().await;
-                (
-                    PathBuf::from(&config.git.repo_path),
-                    config.jira.acli_extra_argv_prefixes(),
-                )
+                PathBuf::from(&config.git.repo_path)
             };
-            let client = JiraClient::new(repo_path, acli_extras);
+            let client = JiraClient::new(repo_path);
             client
                 .update_description(&key, &body.description)
                 .await

@@ -14,13 +14,11 @@ use crate::error::{MaestroError, Result};
 use crate::git::worktree_remove;
 use crate::github::gh_cli;
 use crate::github_app::GitHubAppTokenManager;
-use crate::jira::acli;
 use crate::process::{self, CommandOutput};
 
 pub struct RealActions {
     pub repo_path: PathBuf,
     git_remote: String,
-    acli_extra_prefixes: Vec<Vec<String>>,
     gh_extra_prefixes: Vec<Vec<String>>,
     github_app: Option<Arc<GitHubAppTokenManager>>,
 }
@@ -29,14 +27,12 @@ impl RealActions {
     pub fn new(
         repo_path: PathBuf,
         git_remote: String,
-        acli_extra_prefixes: Vec<Vec<String>>,
         gh_extra_prefixes: Vec<Vec<String>>,
         github_app: Option<Arc<GitHubAppTokenManager>>,
     ) -> Self {
         Self {
             repo_path,
             git_remote,
-            acli_extra_prefixes,
             gh_extra_prefixes,
             github_app,
         }
@@ -50,7 +46,8 @@ impl ExternalActions for RealActions {
             ticket = key,
             "Assigning ticket to current Jira user (acli @me)"
         );
-        let output = acli::run_acli_checked(
+        let output = process::run_command(
+            "acli",
             &[
                 "jira",
                 "workitem",
@@ -61,7 +58,6 @@ impl ExternalActions for RealActions {
                 "@me",
                 "--yes",
             ],
-            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -77,7 +73,8 @@ impl ExternalActions for RealActions {
 
     async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
         info!(ticket = key, status = status, "Transitioning ticket");
-        let output = acli::run_acli_checked(
+        let output = process::run_command(
+            "acli",
             &[
                 "jira",
                 "workitem",
@@ -88,7 +85,6 @@ impl ExternalActions for RealActions {
                 status,
                 "--yes",
             ],
-            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -104,7 +100,8 @@ impl ExternalActions for RealActions {
 
     async fn unassign_ticket(&self, key: &str) -> Result<()> {
         info!(ticket = key, "Unassigning ticket");
-        let output = acli::run_acli_checked(
+        let output = process::run_command(
+            "acli",
             &[
                 "jira",
                 "workitem",
@@ -114,7 +111,6 @@ impl ExternalActions for RealActions {
                 "--remove-assignee",
                 "--yes",
             ],
-            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )
@@ -130,7 +126,8 @@ impl ExternalActions for RealActions {
 
     async fn get_ticket_details(&self, key: &str) -> Result<String> {
         info!(ticket = key, "Retrieving ticket details");
-        let output = acli::run_acli_checked(
+        let output = process::run_command(
+            "acli",
             &[
                 "jira",
                 "workitem",
@@ -140,7 +137,6 @@ impl ExternalActions for RealActions {
                 "--fields",
                 "key,issuetype,summary,status,assignee,description",
             ],
-            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )

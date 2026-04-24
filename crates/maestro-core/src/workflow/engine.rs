@@ -2486,11 +2486,7 @@ async fn sync_jira_for_resume(
             let c = config.read().await;
             PathBuf::from(&c.git.repo_path)
         };
-        let acli_extras = {
-            let c = config.read().await;
-            c.jira.acli_extra_argv_prefixes()
-        };
-        let jira_client = JiraClient::new(repo_path, acli_extras);
+        let jira_client = JiraClient::new(repo_path);
         match jira_client
             .get_ticket_details(ticket_key, &project_keys)
             .await
@@ -2932,11 +2928,7 @@ async fn run_workflow_steps(
 
             check_cancelled(cancel_token)?;
 
-            let acli_extras = {
-                let c = config.read().await;
-                c.jira.acli_extra_argv_prefixes()
-            };
-            let jira_client = JiraClient::new(repo_path.clone(), acli_extras);
+            let jira_client = JiraClient::new(repo_path.clone());
             let detail = match jira_client
                 .get_ticket_details(ticket_key, &project_keys)
                 .await

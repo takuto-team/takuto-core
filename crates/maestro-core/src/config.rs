@@ -557,9 +557,6 @@ pub struct JiraConfig {
     /// Max UTF-8 bytes per linked issue description when mode is `full` (`0` = unlimited).
     #[serde(default)]
     pub linked_issue_description_max_bytes: usize,
-    /// Advanced: extra `acli` argv prefix lines (whitespace-separated tokens per line) allowed beyond Maestro's built-in Jira read/assign/transition list.
-    #[serde(default)]
-    pub acli_allowed_extra_prefixes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -890,15 +887,7 @@ impl Default for JiraConfig {
             linked_items_in_prompt: LinkedItemsPromptMode::default(),
             ticket_context_max_description_bytes: 0,
             linked_issue_description_max_bytes: 0,
-            acli_allowed_extra_prefixes: Vec::new(),
         }
-    }
-}
-
-impl JiraConfig {
-    /// Parsed `[jira] acli_allowed_extra_prefixes` for argv allowlist checks.
-    pub fn acli_extra_argv_prefixes(&self) -> Vec<Vec<String>> {
-        crate::jira::acli::parse_acli_extra_prefixes(&self.acli_allowed_extra_prefixes)
     }
 }
 

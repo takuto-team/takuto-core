@@ -209,26 +209,18 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let (repo_path, git_remote, dry_mode, acli_extras, gh_extras, github_app_mgr) = {
+    let (repo_path, git_remote, dry_mode, gh_extras, github_app_mgr) = {
         let c = config.read().await;
         let mgr = maestro_core::github_app::try_create_token_manager(&c.github);
         (
             PathBuf::from(&c.git.repo_path),
             c.git.remote.clone(),
             c.general.dry_mode,
-            c.jira.acli_extra_argv_prefixes(),
             c.github.gh_extra_argv_prefixes(),
             mgr,
         )
     };
 
-    // Log a warning if wildcard is configured (allows all subcommands for that tool).
-    if maestro_core::jira::acli::has_wildcard(&acli_extras) {
-        warn!(
-            "acli_allowed_extra_prefixes contains wildcard \"*\" — all acli subcommands are allowed. \
-               This disables the acli CLI allowlist and is intended for advanced users only."
-        );
-    }
     if maestro_core::github::gh_cli::has_wildcard(&gh_extras) {
         warn!(
             "gh_allowed_extra_prefixes contains wildcard \"*\" — all gh subcommands are allowed. \
@@ -241,7 +233,6 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(DryRunActions::new(
             repo_path,
             git_remote,
-            acli_extras,
             gh_extras,
             github_app_mgr,
         ))
@@ -249,7 +240,6 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(RealActions::new(
             repo_path,
             git_remote,
-            acli_extras,
             gh_extras,
             github_app_mgr,
         ))

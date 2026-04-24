@@ -28,7 +28,7 @@ Using an admin token means a successful prompt-injection attack can read or modi
 ### Other mitigations
 
 - **Untrusted Jira text** (descriptions, linked issues) is embedded in AI prompts as **`{ticket_context}`**. Treat it like user-supplied content: use **Jira permissions**, **branch protection**, and **human code review**. Maestro adds explicit **UNTRUSTED_JIRA** framing and optional **`[jira]`** limits (`linked_items_in_prompt`, byte caps); that **reduces** prompt-injection risk but does not remove it.
-- **`acli`** invocations are **allowlisted** to Jira workitem read/search/assign/transition (plus `jira auth status` in preflight). Extend only with **`[jira] acli_allowed_extra_prefixes`** if you understand the risk.
+- **`acli`** (Atlassian CLI) and **`gh`** (GitHub CLI) run without an engine-level allowlist — scope is governed entirely by the token permissions you configure. Grant only the minimum scopes your workflow needs.
 - **Dashboard `PUT /api/config`** only accepts **`web`** (login) and **`general.max_concurrent_workflows`** / **`max_active_workflows`** — **strict JSON**; anything else returns **400**. Change Jira, git, agent steps, install commands, etc. in **`config.toml`** and **restart** Maestro.
 
 

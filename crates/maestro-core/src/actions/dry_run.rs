@@ -13,13 +13,11 @@ use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
 use crate::git::worktree_remove;
 use crate::github_app::GitHubAppTokenManager;
-use crate::jira::acli;
 use crate::process::{self, CommandOutput};
 
 pub struct DryRunActions {
     pub repo_path: PathBuf,
     git_remote: String,
-    acli_extra_prefixes: Vec<Vec<String>>,
     gh_extra_prefixes: Vec<Vec<String>>,
     github_app: Option<Arc<GitHubAppTokenManager>>,
 }
@@ -28,14 +26,12 @@ impl DryRunActions {
     pub fn new(
         repo_path: PathBuf,
         git_remote: String,
-        acli_extra_prefixes: Vec<Vec<String>>,
         gh_extra_prefixes: Vec<Vec<String>>,
         github_app: Option<Arc<GitHubAppTokenManager>>,
     ) -> Self {
         Self {
             repo_path,
             git_remote,
-            acli_extra_prefixes,
             gh_extra_prefixes,
             github_app,
         }
@@ -71,7 +67,8 @@ impl ExternalActions for DryRunActions {
             ticket = key,
             "Retrieving ticket details (dry mode — read-only, executes normally)"
         );
-        let output = acli::run_acli_checked(
+        let output = process::run_command(
+            "acli",
             &[
                 "jira",
                 "workitem",
@@ -81,7 +78,6 @@ impl ExternalActions for DryRunActions {
                 "--fields",
                 "key,issuetype,summary,status,assignee,description",
             ],
-            &self.acli_extra_prefixes,
             &self.repo_path,
             CancellationToken::new(),
         )

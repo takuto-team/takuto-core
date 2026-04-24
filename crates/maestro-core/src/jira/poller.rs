@@ -108,10 +108,9 @@ impl JiraPoller {
         let repo_path = PathBuf::from(&config.git.repo_path);
         let project_keys = config.jira.project_keys.clone();
         let item_types = config.jira.item_types.clone();
-        let acli_extras = config.jira.acli_extra_argv_prefixes();
         drop(config);
 
-        let client = JiraClient::new(repo_path, acli_extras);
+        let client = JiraClient::new(repo_path);
         let tickets = client.list_todo_tickets(&project_keys, &item_types).await?;
 
         if tickets.is_empty() {

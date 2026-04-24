@@ -5,9 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::acli;
 use crate::error::{MaestroError, Result};
-use crate::process::CommandOutput;
+use crate::process::{self, CommandOutput};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JiraTicket {
@@ -38,27 +37,17 @@ pub struct TicketDescriptionPreview {
 
 pub struct JiraClient {
     pub repo_path: std::path::PathBuf,
-    acli_extra_prefixes: Vec<Vec<String>>,
 }
 
 impl JiraClient {
-    pub fn new(repo_path: std::path::PathBuf, acli_extra_prefixes: Vec<Vec<String>>) -> Self {
-        Self {
-            repo_path,
-            acli_extra_prefixes,
-        }
+    pub fn new(repo_path: std::path::PathBuf) -> Self {
+        Self { repo_path }
     }
 
-    /// Run an allowlisted `acli` command with explicit args (no shell interpretation).
     async fn acli(&self, args: &[&str]) -> Result<CommandOutput> {
         info!(args = ?args, "Running acli command");
-        let output = acli::run_acli_checked(
-            args,
-            &self.acli_extra_prefixes,
-            &self.repo_path,
-            CancellationToken::new(),
-        )
-        .await?;
+        let output = process::run_command("acli", args, &self.repo_path, CancellationToken::new())
+            .await?;
         if !output.success() {
             info!(
                 exit_code = output.exit_code,
