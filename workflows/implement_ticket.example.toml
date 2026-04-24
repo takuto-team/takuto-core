@@ -1,42 +1,30 @@
-# Example: main ticket pipeline — copy to `ticket.toml` and configure in config.toml:
+# Example: main ticket pipeline.
+#
+# Copy to `implement_ticket.toml` (alongside config.toml) and configure:
 #   [general]
-#   ticket_workflow_steps_file = "workflows/ticket.toml"
+#   ticket_workflow_steps_file = "workflows/implement_ticket.toml"
 #
-# Each step is an [[agent_steps]] table. Steps run in order.
+# Format: top-level `name`, optional `depends_on`, and `[[steps]]` entries.
 #
-# A step is either an **agent step** (prompt/skills) or a **command step** (commands).
-# The two modes are mutually exclusive: a step cannot have both `prompt` and `commands`.
+# Step fields:
+#   name     = "Human-readable step name"  (shown in dashboard)
+#   prompt   = """Multi-line prompt sent to the agent."""
+#   repeat   = 1        # How many times to re-run this step (default 1).
+#   when     = "always" # "always" | "ticketing" | "no_ticketing"
+#   skills   = [...]    # Optional: [{ name = "skill-name", args = ["--flag"] }]
+#   commands = [...]    # Command step (mutually exclusive with prompt/skills).
 #
-# Agent step fields:
-#   name    = "Human-readable step name"  (shown in dashboard)
-#   prompt  = """Multi-line prompt sent to the agent."""
-#   repeat  = 1          # How many times to re-run this step (default 1).
-#                        # Use repeat = 2 for a review/fix loop.
-#   when    = "always"   # Eligibility filter:
-#                        #   "always"       – run unconditionally (default)
-#                        #   "ticketing"    – only when a ticketing system (Jira/GitHub) is configured
-#                        #   "no_ticketing" – only when no ticketing system is configured
-#   skills  = [...]      # Optional list of Claude Code /skills to inject before the prompt.
-#                        # Each entry: { name = "skill-name" } or { name = "skill-name", args = ["--flag"] }
-#                        # Skills are loaded from the `skills/` directory next to the Maestro binary.
-#
-# Command step fields:
-#   name     = "Human-readable step name"
-#   commands = ["cmd1", "cmd2"]   # Shell commands executed sequentially via `bash -c`.
-#   repeat   = 1                  # The entire command list runs `repeat` times.
-#   when     = "always"           # Same eligibility filter as agent steps.
-#
-# Available prompt placeholders (replaced at runtime, work in both prompt and commands):
-#   {description}          – ticket/issue description text
-#   {ticket_context}       – formatted summary: key, title, description, acceptance criteria
-#   {base_branch}          – the target branch for this PR (e.g. main, develop)
-#   {ticket_type}          – ticket type label (e.g. Bug, Story, Task)
-#   {acceptance_criteria}  – acceptance criteria field, if available from the ticketing system
+# Available prompt placeholders:
+#   {description}         – ticket/issue description text
+#   {ticket_context}      – formatted summary: key, title, description, acceptance criteria
+#   {base_branch}         – target branch for this PR (e.g. main, develop)
+#   {ticket_type}         – ticket type label (e.g. Bug, Story, Task)
+#   {acceptance_criteria} – acceptance criteria field, if available
+
+name = "Implement Ticket"
 
 # ── Step 1a: Implement (no ticketing system) ────────────────────────────────
-# Shown only when no Jira/GitHub ticketing system is configured.
-# The description is passed directly in the prompt via {description}.
-[[agent_steps]]
+[[steps]]
 name = "Implement ticket"
 prompt = """
 Follow the instructions provided below:
@@ -58,9 +46,7 @@ when = "no_ticketing"
 repeat = 1
 
 # ── Step 1b: Implement (with ticketing system) ───────────────────────────────
-# Shown only when a Jira or GitHub ticketing system is configured.
-# The full ticket context is loaded into the agent's system prompt automatically.
-[[agent_steps]]
+[[steps]]
 name = "Implement ticket"
 prompt = """
 Follow the instructions in the system prompt.
@@ -82,7 +68,7 @@ when = "ticketing"
 repeat = 1
 
 # ── Step 2: Review changes ───────────────────────────────────────────────────
-[[agent_steps]]
+[[steps]]
 name = "Review changes"
 prompt = """
 Ticket context:
@@ -104,7 +90,7 @@ Do not create a PR.
 repeat = 2
 
 # ── Step 3: Commit changes ───────────────────────────────────────────────────
-[[agent_steps]]
+[[steps]]
 name = "Commit changes"
 prompt = """
 Review all uncommitted changes and organize them into logical, meaningful commits.
@@ -117,9 +103,7 @@ Do not create a PR.
 repeat = 1
 
 # ── Step 4: Lint and test ────────────────────────────────────────────────────
-# This is an agent step — the AI runs lint/test and fixes issues interactively.
-# Replace the commands below with whatever is appropriate for your stack.
-[[agent_steps]]
+[[steps]]
 name = "Lint and test"
 prompt = """
 Run your project's linting tool and fix all reported issues. Do not suppress warnings or add
@@ -138,21 +122,8 @@ Do not create a PR.
 """
 repeat = 1
 
-# ── Alternative: command step for deterministic lint/test ────────────────────
-# Use a command step when the check is mechanical and should not consume AI tokens.
-# Uncomment the block below and remove the agent step above to use it.
-#
-# [[agent_steps]]
-# name = "Lint and test"
-# commands = [
-#   "npm run lint --fix",
-#   "npm run format",
-#   "npm test"
-# ]
-# repeat = 1
-
 # ── Step 5: Create PR ────────────────────────────────────────────────────────
-[[agent_steps]]
+[[steps]]
 name = "Create PR"
 prompt = """
 Ticket context:
@@ -163,5 +134,8 @@ branch name, or ticket ID.
 
 If new features or configurations have been added, document them clearly in the PR description.
 """
-skills = [{ name = "create-pr", args = ["--no-draft"] }]
+
+[[steps.skills]]
+name = "create-pr"
+args = ["--no-draft"]
 repeat = 1

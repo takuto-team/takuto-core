@@ -1,25 +1,22 @@
-# Example: PR review loop — copy to `review.toml` and configure in config.toml:
+# Example: PR review loop (Address PR Comments).
+#
+# Copy to `address_pr_comments.toml` (alongside config.toml) and configure:
 #   [general]
-#   review_workflow_steps_file = "workflows/review.toml"
+#   review_workflow_steps_file = "workflows/address_pr_comments.toml"
 #
-# Each step is a [[review_agent_steps]] table. Steps run in order.
+# Format: top-level `name`, optional `depends_on`, and `[[steps]]` entries.
+# See implement_ticket.example.toml for full field reference.
 #
-# A step is either an **agent step** (prompt/skills) or a **command step** (commands).
-# See ticket.example.toml for full field reference.
-#
-# Agent step fields:
-#   name, prompt, repeat, when, skills, resume_previous
-#
-# Command step fields:
-#   name, commands, repeat, when
-#
-# Available prompt placeholders (replaced at runtime, work in both prompt and commands):
+# Available prompt placeholders:
 #   {pr_url}          – URL of the pull request being reviewed
 #   {ticket_context}  – formatted summary: key, title, description, acceptance criteria
 #   {base_branch}     – the target branch for this PR (e.g. main, develop)
 
+name = "Address PR Comments"
+depends_on = ["implement_ticket"]
+
 # ── Step 1: Fix review comments ──────────────────────────────────────────────
-[[review_agent_steps]]
+[[steps]]
 name = "Fix review comments"
 prompt = """
 Pull request URL: {pr_url}
@@ -35,8 +32,7 @@ Do not bypass linting or tests while making fixes.
 repeat = 1
 
 # ── Step 2: Lint and test ────────────────────────────────────────────────────
-# Replace the commands below with whatever is appropriate for your stack.
-[[review_agent_steps]]
+[[steps]]
 name = "Lint and test"
 prompt = """
 Run your project's linting tool and fix all reported issues. Do not suppress warnings or add

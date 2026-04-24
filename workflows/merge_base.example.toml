@@ -1,25 +1,22 @@
-# Example: merge base branch workflow — copy to `merge_base.toml` and configure in config.toml:
+# Example: merge base branch workflow.
+#
+# Copy to `merge_base.toml` (alongside config.toml) and configure:
 #   [general]
 #   merge_base_workflow_steps_file = "workflows/merge_base.toml"
 #
-# Each step is a [[merge_base_agent_steps]] table. Steps run in order.
+# Format: top-level `name`, optional `depends_on`, and `[[steps]]` entries.
+# See implement_ticket.example.toml for full field reference.
 #
-# A step is either an **agent step** (prompt/skills) or a **command step** (commands).
-# See ticket.example.toml for full field reference.
-#
-# Agent step fields:
-#   name, prompt, repeat, when, skills, resume_previous
-#
-# Command step fields:
-#   name, commands, repeat, when
-#
-# Available prompt placeholders (replaced at runtime, work in both prompt and commands):
+# Available prompt placeholders:
 #   {base_branch}     – the target branch to merge from (e.g. main, develop)
 #   {pr_url}          – URL of the open pull request
 #   {ticket_context}  – formatted summary: key, title, description, acceptance criteria
 
+name = "Merge Base Branch"
+depends_on = ["implement_ticket"]
+
 # ── Step 1: Merge base branch ────────────────────────────────────────────────
-[[merge_base_agent_steps]]
+[[steps]]
 name = "Merge base branch"
 prompt = """
 Fetch the latest `{base_branch}` from remote and merge it into the current branch.

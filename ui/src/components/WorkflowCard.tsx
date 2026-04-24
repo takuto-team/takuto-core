@@ -227,7 +227,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
 
         {/* Actions — three layout states: pending (not started), terminal, running/paused */}
         {isPending ? (
-          /* Pending (added to dashboard, not yet started) — Start + nav + delete */
+          /* Pending (added to dashboard, not yet started) */
           <div className="flex flex-col gap-2">
             <div className="flex flex-wrap gap-2">
               <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
@@ -243,17 +243,27 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                   Go to issue
                 </ActionBtn>
               )}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <ActionBtn variant="primary" onClick={() => withLoading(doAction("start"))}>
-                <PlayIcon /> Start
-              </ActionBtn>
               {w.can_delete && (
-                <ActionBtn variant="danger" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
+                <ActionBtn variant="danger" className="ml-auto" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
                   Delete
                 </ActionBtn>
               )}
             </div>
+            {workflowDefs.length > 0 ? (
+              <WorkflowDefButtons
+                definitions={workflowDefs}
+                runStates={w.workflow_def_runs || {}}
+                ticketKey={w.ticket_key}
+                onRefresh={onRefresh}
+                onPendingStart={() => withLoading(doAction("start"))}
+              />
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <ActionBtn variant="primary" onClick={() => withLoading(doAction("start"))}>
+                  <PlayIcon /> Start
+                </ActionBtn>
+              </div>
+            )}
           </div>
         ) : isTerminal ? (
           <div className="flex flex-col gap-2">
@@ -357,6 +367,9 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                   <PlayIcon /> Resume
                 </ActionBtn>
               )}
+              <ActionBtn variant="danger" className="ml-auto" onClick={() => confirmAction("Stop", "stop", doAction("stop"))}>
+                Stop
+              </ActionBtn>
             </div>
             {workflowDefs.length > 0 && (
               <WorkflowDefButtons
@@ -644,11 +657,13 @@ function ActionBtn({
   onClick,
   children,
   title,
+  className,
 }: {
   variant: "primary" | "secondary" | "success" | "danger";
   onClick: () => void;
   children: React.ReactNode;
   title?: string;
+  className?: string;
 }) {
   const cls = {
     primary: "wf-btn-primary",
@@ -657,7 +672,7 @@ function ActionBtn({
     danger: "wf-btn-danger",
   }[variant];
   return (
-    <button onClick={onClick} title={title} className={`action-btn ${cls}`}>
+    <button onClick={onClick} title={title} className={`action-btn ${cls}${className ? ` ${className}` : ""}`}>
       {children}
     </button>
   );

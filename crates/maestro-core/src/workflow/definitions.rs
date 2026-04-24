@@ -148,7 +148,7 @@ pub fn discover_workflows(dir: &Path) -> DiscoveryResult {
             .map(|e| e.path())
             .filter(|p| {
                 p.extension()
-                    .is_some_and(|ext| ext == "yml" || ext == "yaml")
+                    .is_some_and(|ext| ext == "yml" || ext == "yaml" || ext == "toml")
             })
             .collect(),
         Err(e) => {
@@ -242,12 +242,14 @@ pub fn discover_workflows(dir: &Path) -> DiscoveryResult {
     DiscoveryResult { workflows }
 }
 
-/// Parse a single `.yml` file into a [`WorkflowYaml`].
+/// Parse a single `.yml` or `.toml` file into a [`WorkflowYaml`].
 fn parse_workflow_file(path: &Path) -> std::result::Result<WorkflowYaml, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
-    let wf: WorkflowYaml =
-        serde_yaml::from_str(&content).map_err(|e| format!("Invalid YAML schema: {e}"))?;
+    let wf: WorkflowYaml = match path.extension().and_then(|e| e.to_str()) {
+        Some("toml") => toml::from_str(&content).map_err(|e| format!("Invalid TOML schema: {e}"))?,
+        _ => serde_yaml::from_str(&content).map_err(|e| format!("Invalid YAML schema: {e}"))?,
+    };
 
     // Validate required fields
     if wf.name.trim().is_empty() {

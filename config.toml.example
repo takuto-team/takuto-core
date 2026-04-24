@@ -111,11 +111,12 @@ max_active_workflows = 0
 # on the dashboard shows the result. Default: false (no report overhead).
 # generate_report = false
 log_level = "info"
-# Optional: load step lists from standalone TOML files (paths relative to this config file's directory).
-# Copy **workflows/*.example.toml** → **workflows/ticket.toml** (etc.); real **workflows/*.toml** are gitignored.
+# Optional: load step lists from standalone files (paths relative to this config file's directory).
+# Copy **workflows/*.example.toml** → e.g. **workflows/implement_ticket.toml**; real **workflows/*.toml** are gitignored.
+# Format: top-level `name`, optional `depends_on`, and [[steps]] entries.
 # When set, inline [[agent_steps]] / [[review_agent_steps]] / [[merge_base_agent_steps]] in this file are ignored.
-# ticket_workflow_steps_file = "workflows/ticket.toml"
-# review_workflow_steps_file = "workflows/review.toml"
+# ticket_workflow_steps_file = "workflows/implement_ticket.toml"
+# review_workflow_steps_file = "workflows/address_pr_comments.toml"
 # merge_base_workflow_steps_file = "workflows/merge_base.toml"
 # Docker image for isolated workflow containers. Default: auto-detected from this Maestro instance.
 # worker_image = "maestro:latest"
