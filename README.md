@@ -36,7 +36,10 @@ Use a **fine-grained personal access token** (PAT) scoped to the target reposito
 | Metadata      | Read        | Required base permission for all fine-grained tokens                                      |
 | Issues        | Read & write | Only if `ticketing_system = "github"` — Maestro polls issues and patches descriptions via `gh api PATCH repos/.../issues/{n}` |
 
-To authenticate with a PAT: `gh auth login --with-token <<< "<your-token>"` inside the container (via `maestro auth`).
+To use a PAT, pick one of two approaches:
+
+- **During `maestro auth`:** when prompted by the `gh` interactive login, paste the token.
+- **Via `maestro.env`:** add `GH_TOKEN=<your-token>` — `gh` picks this up automatically, no interactive login needed.
 
 ### Other mitigations
 
