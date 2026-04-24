@@ -8,6 +8,8 @@ pub mod actions;
 pub mod agent_prompt;
 pub mod claude;
 pub mod config;
+pub mod config_watcher;
+pub mod config_writer;
 pub mod container;
 pub mod cursor;
 pub mod docker_hooks;

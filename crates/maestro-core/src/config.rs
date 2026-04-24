@@ -1014,6 +1014,18 @@ impl Config {
         }
     }
 
+    /// Parse a `Config` from a TOML string without loading from disk.
+    ///
+    /// Useful for tests and scenarios where the config content is already in
+    /// memory. Applies validation but **not** external workflow step files
+    /// (those require a filesystem path).
+    pub fn load_from_str(toml_content: &str) -> Result<Self> {
+        let mut config: Config = toml::from_str(toml_content)?;
+        config.web.normalize_cors_origins();
+        config.validate()?;
+        Ok(config)
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Err(MaestroError::ConfigNotFound(path.to_path_buf()));

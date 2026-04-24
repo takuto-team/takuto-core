@@ -46,6 +46,9 @@ clap = { version = "4", features = ["derive", "env"] }
 # JWT / GitHub App authentication
 jsonwebtoken = "9"
 
+# File system utilities
+fs2 = "0.4"
+
 # Unix process management
 libc = "0.2"
 
