@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -61,6 +62,9 @@ pub struct PersistedWorkflowRecord {
     /// default to `true` (driver was running).
     #[serde(default = "default_driver_started")]
     pub driver_started: bool,
+    /// Status of each dynamic workflow definition run for this ticket.
+    #[serde(default)]
+    pub workflow_def_runs: HashMap<String, crate::workflow::definitions::WorkflowDefRunState>,
 }
 
 fn default_jira_available() -> bool {
@@ -214,6 +218,7 @@ mod tests {
             description_session_id: None,
             ticketing_system: crate::config::TicketingSystem::None,
             driver_started: false,
+            workflow_def_runs: HashMap::new(),
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: PersistedWorkflowRecord = serde_json::from_str(&json).unwrap();

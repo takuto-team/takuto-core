@@ -132,6 +132,9 @@ pub struct Workflow {
     /// `true` once the workflow driver task has been spawned. `false` when added
     /// to the dashboard but not yet started by the user.
     pub driver_started: bool,
+    /// Status of each dynamic workflow definition run for this ticket.
+    /// Keys are workflow definition filenames (without .yml), values are run states.
+    pub workflow_def_runs: HashMap<String, crate::workflow::definitions::WorkflowDefRunState>,
 }
 
 impl Workflow {
@@ -168,6 +171,7 @@ impl Workflow {
             last_session_id: None,
             description_session_id: None,
             driver_started: false,
+            workflow_def_runs: HashMap::new(),
         }
     }
 
@@ -240,6 +244,7 @@ impl Workflow {
             last_session_id: rec.last_session_id,
             description_session_id: rec.description_session_id,
             driver_started: rec.driver_started,
+            workflow_def_runs: rec.workflow_def_runs,
         }
     }
 }
@@ -274,6 +279,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
         description_session_id: w.description_session_id.clone(),
         ticketing_system: w.ticketing_system,
         driver_started: w.driver_started,
+        workflow_def_runs: w.workflow_def_runs.clone(),
     }
 }
 
@@ -343,6 +349,8 @@ pub struct WorkflowEngine {
     pub jira_available: Arc<AtomicBool>,
     /// Which ticketing system is configured for this engine run.
     pub ticketing_system: TicketingSystem,
+    /// Directory containing dynamic workflow definition YAML files, resolved at construction time.
+    pub workflows_dir: PathBuf,
 }
 
 impl WorkflowEngine {
@@ -352,6 +360,7 @@ impl WorkflowEngine {
         max_concurrent_workflows: usize,
         jira_available: Arc<AtomicBool>,
         ticketing_system: TicketingSystem,
+        workflows_dir: PathBuf,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         let permits = max_concurrent_workflows.max(1);
@@ -364,6 +373,7 @@ impl WorkflowEngine {
             suppress_cancelled_as_error: Arc::new(AtomicBool::new(false)),
             jira_available,
             ticketing_system,
+            workflows_dir,
         }
     }
 
@@ -1590,6 +1600,584 @@ impl WorkflowEngine {
             let _ = tx.send(event);
         });
     }
+
+    /// Start running a specific workflow definition for a ticket.
+    pub async fn start_workflow_def(&self, ticket_key: &str, def_name: &str) -> Result<()> {
+        use crate::workflow::definitions::{
+            WorkflowDefRunState, are_dependencies_met, discover_workflows,
+        };
+
+        // Discover workflow definitions from the workflows directory
+        let discovery = discover_workflows(&self.workflows_dir);
+        let def = discovery
+            .workflows
+            .iter()
+            .find(|w| w.filename == def_name)
+            .ok_or_else(|| {
+                MaestroError::Config(format!(
+                    "Workflow definition '{}' not found in {}",
+                    def_name,
+                    self.workflows_dir.display()
+                ))
+            })?;
+
+        if !def.valid {
+            return Err(MaestroError::Config(format!(
+                "Workflow definition '{}' is invalid: {}",
+                def_name,
+                def.error.as_deref().unwrap_or("unknown error")
+            )));
+        }
+
+        // Extract needed data under read lock, then release
+        let (
+            workflow_id,
+            worktree_path,
+            ticket_summary,
+            ticket_description,
+            ticket_type,
+            run_states,
+        ) = {
+            let wf_map = self.workflows.read().await;
+            let w = wf_map.get(ticket_key).ok_or_else(|| {
+                MaestroError::Config(format!("Workflow not found: {ticket_key}"))
+            })?;
+
+            let wt = w.worktree_path.clone().ok_or_else(|| {
+                MaestroError::Config("No worktree path on this workflow".into())
+            })?;
+
+            if !wt.exists() {
+                return Err(MaestroError::Config(format!(
+                    "Worktree directory no longer exists: {}",
+                    wt.display()
+                )));
+            }
+
+            // Check if already running this definition
+            if let Some(state) = w.workflow_def_runs.get(def_name) {
+                if matches!(state, WorkflowDefRunState::Running) {
+                    return Err(MaestroError::Config(format!(
+                        "Workflow definition '{}' is already running for {}",
+                        def_name, ticket_key
+                    )));
+                }
+            }
+
+            (
+                w.id.clone(),
+                wt,
+                w.ticket_summary.clone(),
+                w.ticket_description.clone(),
+                w.ticket_type.clone(),
+                w.workflow_def_runs.clone(),
+            )
+        };
+
+        // Check dependencies
+        if !are_dependencies_met(def_name, &discovery.workflows, &run_states) {
+            return Err(MaestroError::Config(format!(
+                "Dependencies not met for workflow definition '{}'",
+                def_name
+            )));
+        }
+
+        // Set the run state to Running under write lock and assign a fresh cancel token.
+        // CancellationToken never un-cancels, so a prior stop/interrupt/shutdown would make
+        // the definition driver exit instantly at `check_cancelled` even though the parent
+        // workflow may now allow this action.
+        let (display, cancel_token) = {
+            let mut wf_map = self.workflows.write().await;
+            let w = wf_map.get_mut(ticket_key).ok_or_else(|| {
+                MaestroError::Config(format!("Workflow not found: {ticket_key}"))
+            })?;
+            w.cancel_token = CancellationToken::new();
+            w.workflow_def_runs
+                .insert(def_name.to_string(), WorkflowDefRunState::Running);
+            w.updated_at = Utc::now();
+            (w.status_display(), w.cancel_token.clone())
+        };
+
+        // Broadcast update event
+        self.broadcast_event(WorkflowEvent {
+            event_type: "workflow_updated".to_string(),
+            workflow_id: workflow_id.clone(),
+            ticket_key: ticket_key.to_string(),
+            state: display,
+            timestamp: Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+            progress_percent: None,
+            progress_steps_total: None,
+            forwarded_port: None,
+            pr_merged: None,
+        });
+
+        // Clone values for the spawned task
+        let engine_config = self.config.clone();
+        let engine_workflows = self.workflows.clone();
+        let engine_actions = self.actions.clone();
+        let engine_event_tx = self.event_tx.clone();
+        let agent_sem = self.agent_run_semaphore.clone();
+        let suppress = self.suppress_cancelled_as_error.clone();
+        let ticket = ticket_key.to_string();
+        let def_name_owned = def_name.to_string();
+        let steps = def.steps.clone();
+
+        tokio::spawn(async move {
+            drive_workflow_def(
+                ticket,
+                def_name_owned,
+                steps,
+                worktree_path,
+                ticket_summary,
+                ticket_description,
+                ticket_type,
+                engine_config,
+                engine_workflows,
+                engine_actions,
+                engine_event_tx,
+                cancel_token,
+                agent_sem,
+                suppress,
+            )
+            .await;
+        });
+
+        Ok(())
+    }
+
+    /// Reset a workflow definition run from Error to Idle and start it again.
+    pub async fn retry_workflow_def(&self, ticket_key: &str, def_name: &str) -> Result<()> {
+        use crate::workflow::definitions::WorkflowDefRunState;
+
+        // Reset the state from Error to Idle
+        {
+            let mut wf_map = self.workflows.write().await;
+            let w = wf_map.get_mut(ticket_key).ok_or_else(|| {
+                MaestroError::Config(format!("Workflow not found: {ticket_key}"))
+            })?;
+
+            match w.workflow_def_runs.get(def_name) {
+                Some(WorkflowDefRunState::Error { .. }) => {
+                    w.workflow_def_runs
+                        .insert(def_name.to_string(), WorkflowDefRunState::Idle);
+                }
+                Some(state) => {
+                    return Err(MaestroError::Config(format!(
+                        "Cannot retry workflow definition '{}': current state is '{}', expected 'error'",
+                        def_name,
+                        state.display_name()
+                    )));
+                }
+                None => {
+                    return Err(MaestroError::Config(format!(
+                        "Workflow definition '{}' has no run state for {}",
+                        def_name, ticket_key
+                    )));
+                }
+            }
+        }
+
+        self.start_workflow_def(ticket_key, def_name).await
+    }
+
+    /// Start a background task that periodically scans the workflows directory for changes
+    /// and broadcasts a `workflow_definitions_changed` event when the file list changes.
+    pub fn start_definitions_watcher(&self, cancel_token: CancellationToken) {
+        let workflows_dir = self.workflows_dir.clone();
+        let event_tx = self.event_tx.clone();
+
+        tokio::spawn(async move {
+            let mut last_snapshot: Option<Vec<(String, std::time::SystemTime)>> = None;
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
+            loop {
+                tokio::select! {
+                    _ = cancel_token.cancelled() => break,
+                    _ = interval.tick() => {
+                        let current = scan_definitions_dir(&workflows_dir);
+                        let changed = match &last_snapshot {
+                            None => true,
+                            Some(prev) => prev != &current,
+                        };
+                        if changed {
+                            if last_snapshot.is_some() {
+                                // Only broadcast after the first scan (skip initial)
+                                let _ = event_tx.send(WorkflowEvent {
+                                    event_type: "workflow_definitions_changed".to_string(),
+                                    workflow_id: String::new(),
+                                    ticket_key: String::new(),
+                                    state: String::new(),
+                                    timestamp: Utc::now(),
+                                    error: None,
+                                    step_name: None,
+                                    output_line: None,
+                                    stream: None,
+                                    progress_percent: None,
+                                    progress_steps_total: None,
+                                    forwarded_port: None,
+                                    pr_merged: None,
+                                });
+                                info!("Workflow definitions directory changed, notified clients");
+                            }
+                            last_snapshot = Some(current);
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// Scan the definitions directory and return a sorted list of `(filename, modified_time)` tuples
+/// for change detection.
+fn scan_definitions_dir(dir: &Path) -> Vec<(String, std::time::SystemTime)> {
+    let mut entries = Vec::new();
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return entries;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str());
+        if ext == Some("yml") || ext == Some("yaml") {
+            if let Ok(meta) = path.metadata() {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty() {
+                    entries.push((name, meta.modified().unwrap_or(std::time::UNIX_EPOCH)));
+                }
+            }
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drive_workflow_def(
+    ticket_key: String,
+    def_name: String,
+    steps: Vec<AgentStepConfig>,
+    worktree_path: PathBuf,
+    ticket_summary: String,
+    ticket_description: String,
+    ticket_type: String,
+    config: Arc<RwLock<Config>>,
+    workflows: Arc<RwLock<HashMap<String, Workflow>>>,
+    actions: Arc<dyn ExternalActions>,
+    event_tx: broadcast::Sender<WorkflowEvent>,
+    cancel_token: CancellationToken,
+    agent_run_semaphore: Arc<Semaphore>,
+    suppress_cancelled_as_error: Arc<AtomicBool>,
+) {
+    use crate::workflow::definitions::WorkflowDefRunState;
+
+    info!(ticket = %ticket_key, def = %def_name, "Workflow definition driver started");
+
+    let log_dir = {
+        let cfg = config.read().await;
+        PathBuf::from(&cfg.git.repo_path).join("logs")
+    };
+    let log_writer = Arc::new(WorkflowLogWriter::new(&log_dir, &ticket_key).await);
+
+    let result = run_workflow_def_steps(
+        &ticket_key,
+        &def_name,
+        &steps,
+        &worktree_path,
+        &ticket_summary,
+        &ticket_description,
+        &ticket_type,
+        &config,
+        &workflows,
+        &actions,
+        &event_tx,
+        &cancel_token,
+        &log_writer,
+        &agent_run_semaphore,
+    )
+    .await;
+
+    // Always clean up worker containers regardless of success/failure
+    ContainerRunner::cleanup_for_ticket(&ticket_key).await;
+
+    let workflow_id = {
+        let wf = workflows.read().await;
+        wf.get(&ticket_key).map(|w| w.id.clone()).unwrap_or_default()
+    };
+
+    match result {
+        Ok(()) => {
+            // Set state to Completed
+            {
+                let mut wf_map = workflows.write().await;
+                if let Some(w) = wf_map.get_mut(&ticket_key) {
+                    w.workflow_def_runs
+                        .insert(def_name.clone(), WorkflowDefRunState::Completed);
+                    w.updated_at = Utc::now();
+                }
+            }
+
+            info!(ticket = %ticket_key, def = %def_name, "Workflow definition completed");
+
+            let _ = event_tx.send(WorkflowEvent {
+                event_type: "workflow_updated".to_string(),
+                workflow_id,
+                ticket_key: ticket_key.clone(),
+                state: {
+                    let wf = workflows.read().await;
+                    wf.get(&ticket_key)
+                        .map(|w| w.status_display())
+                        .unwrap_or_default()
+                },
+                timestamp: Utc::now(),
+                error: None,
+                step_name: None,
+                output_line: None,
+                stream: None,
+                progress_percent: None,
+                progress_steps_total: None,
+                forwarded_port: None,
+                pr_merged: None,
+            });
+        }
+        Err(e) => {
+            if matches!(e, MaestroError::Cancelled)
+                && suppress_cancelled_as_error.load(Ordering::SeqCst)
+            {
+                info!(
+                    ticket = %ticket_key,
+                    def = %def_name,
+                    "Workflow def driver cancelled during shutdown; state preserved for resume"
+                );
+                return;
+            }
+
+            // When the user explicitly stops a workflow, the cancel token fires and
+            // the parent workflow state transitions to Stopped before the driver
+            // processes the cancellation. Do not overwrite the def run state with
+            // Error when the workflow was intentionally stopped or removed.
+            if matches!(e, MaestroError::Cancelled) {
+                let snapshot = {
+                    let wf = workflows.read().await;
+                    wf.get(&ticket_key).map(|w| w.state.clone())
+                };
+                match snapshot {
+                    None => {
+                        info!(
+                            ticket = %ticket_key,
+                            def = %def_name,
+                            "Workflow def driver cancelled; row no longer in map"
+                        );
+                        return;
+                    }
+                    Some(WorkflowState::Stopped) => {
+                        info!(
+                            ticket = %ticket_key,
+                            def = %def_name,
+                            "Workflow def driver cancelled; left in Stopped (operator stop)"
+                        );
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
+            error!(ticket = %ticket_key, def = %def_name, error = %e, "Workflow definition failed");
+            log_writer
+                .write(&format!("WORKFLOW DEF '{}' FAILED: {e}", def_name))
+                .await;
+
+            {
+                let mut wf_map = workflows.write().await;
+                if let Some(w) = wf_map.get_mut(&ticket_key) {
+                    w.workflow_def_runs.insert(
+                        def_name.clone(),
+                        WorkflowDefRunState::Error {
+                            message: e.to_string(),
+                        },
+                    );
+                    w.updated_at = Utc::now();
+                }
+            }
+
+            let _ = event_tx.send(WorkflowEvent {
+                event_type: "workflow_updated".to_string(),
+                workflow_id,
+                ticket_key: ticket_key.clone(),
+                state: {
+                    let wf = workflows.read().await;
+                    wf.get(&ticket_key)
+                        .map(|w| w.status_display())
+                        .unwrap_or_default()
+                },
+                timestamp: Utc::now(),
+                error: Some(e.to_string()),
+                step_name: None,
+                output_line: None,
+                stream: None,
+                progress_percent: None,
+                progress_steps_total: None,
+                forwarded_port: None,
+                pr_merged: None,
+            });
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_workflow_def_steps(
+    ticket_key: &str,
+    def_name: &str,
+    steps: &[AgentStepConfig],
+    worktree_path: &Path,
+    ticket_summary: &str,
+    ticket_description: &str,
+    ticket_type: &str,
+    config: &Arc<RwLock<Config>>,
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    actions: &Arc<dyn ExternalActions>,
+    event_tx: &broadcast::Sender<WorkflowEvent>,
+    cancel_token: &CancellationToken,
+    log_writer: &Arc<WorkflowLogWriter>,
+    agent_run_semaphore: &Arc<Semaphore>,
+) -> Result<()> {
+    let ticket = crate::jira::client::JiraTicket {
+        key: ticket_key.to_string(),
+        summary: ticket_summary.to_string(),
+        description: ticket_description.to_string(),
+        item_type: ticket_type.to_string(),
+        status: String::new(),
+        linked_items: Vec::new(),
+    };
+    let jira_cfg = {
+        let c = config.read().await;
+        c.jira.clone()
+    };
+    let ticket_context = build_ticket_context(&ticket, &jira_cfg);
+    let acceptance_criteria = extract_acceptance_criteria(&ticket.description);
+    let acceptance_criteria_str = format_acceptance_criteria_block(&acceptance_criteria);
+
+    let mut interp_vars: HashMap<String, String> = HashMap::new();
+    interp_vars.insert("ticket_key".into(), ticket_key.to_string());
+    interp_vars.insert("ticket_summary".into(), ticket_summary.to_string());
+    interp_vars.insert("ticket_description".into(), ticket_description.to_string());
+    interp_vars.insert("description".into(), ticket_description.to_string());
+    interp_vars.insert("ticket_type".into(), ticket_type.to_string());
+    interp_vars.insert("acceptance_criteria".into(), acceptance_criteria_str);
+    interp_vars.insert("ticket_context".into(), ticket_context);
+    interp_vars.insert("pr_url".into(), {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .and_then(|w| w.pr_url.clone())
+            .unwrap_or_default()
+    });
+    {
+        let cfg = config.read().await;
+        interp_vars.insert("base_branch".into(), cfg.git.base_branch.clone());
+    }
+
+    // Construct container runner for isolation
+    let container_runner = if ContainerRunner::is_available() {
+        let cfg = config.read().await;
+        let image = if cfg.general.worker_image.is_empty() {
+            drop(cfg);
+            ContainerRunner::discover_worker_image()
+                .await
+                .unwrap_or_else(|| "maestro:latest".to_string())
+        } else {
+            let img = cfg.general.worker_image.clone();
+            drop(cfg);
+            img
+        };
+        let gh_token = actions.get_gh_installation_token(worktree_path).await;
+        let runner = ContainerRunner::new(ticket_key, worktree_path, &image);
+        Some(if let Some(token) = gh_token {
+            runner.with_gh_token(token)
+        } else {
+            runner
+        })
+    } else {
+        return Err(MaestroError::Config(
+            "Docker daemon is not available. DinD is required for workflow isolation. \
+             Ensure DOCKER_HOST is set and the DinD sidecar is running."
+                .into(),
+        ));
+    };
+
+    let cfg = config.read().await;
+    let timeout = cfg.agent.step_timeout_secs;
+    let claude_model = if cfg.agent.model.is_empty() {
+        None
+    } else {
+        Some(cfg.agent.model.clone())
+    };
+    let cursor_model_buf = cfg.agent.cursor_model.clone();
+    let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
+    let ai_stream_provider = cfg.agent.provider;
+    let cursor_cli = cfg.agent.cursor_cli.clone();
+    let ticketing_avail = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| w.ticketing_available)
+            .unwrap_or(false)
+    };
+    let filtered_steps: Vec<_> = steps
+        .iter()
+        .filter(|s| s.available_for(ticketing_avail))
+        .cloned()
+        .collect();
+    drop(cfg);
+
+    let skill_paths = build_skill_search_paths(worktree_path, ai_stream_provider);
+
+    wait_if_paused(workflows, ticket_key, cancel_token).await?;
+    check_cancelled(cancel_token)?;
+
+    let prior_steps: Vec<StepLog> = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| w.steps_log.clone())
+            .unwrap_or_default()
+    };
+
+    let _last_agent_output = run_agent_step_sequence(
+        ticket_key,
+        worktree_path,
+        &interp_vars,
+        &filtered_steps,
+        1, // single pass
+        AgentRunPhase::Main,
+        ai_stream_provider,
+        &cursor_cli,
+        cursor_model_pass,
+        claude_model.as_deref(),
+        timeout,
+        workflows,
+        event_tx,
+        cancel_token,
+        log_writer,
+        agent_run_semaphore.clone(),
+        container_runner.as_ref(),
+        &prior_steps,
+        false, // do not skip prior successes — always run all steps
+        config,
+        &skill_paths,
+        None,  // no initial session id
+        false, // not a snapshot resume
+        false, // no report injection
+    )
+    .await?;
+
+    info!(ticket = %ticket_key, def = %def_name, "Workflow definition steps completed");
+
+    Ok(())
 }
 
 // Agent session parameters are inherently numerous.

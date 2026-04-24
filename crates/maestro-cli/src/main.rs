@@ -245,12 +245,21 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let max_concurrent = config.read().await.general.max_concurrent_workflows as usize;
+    let workflows_dir = {
+        let c = config.read().await;
+        let config_file_dir = cli.config.parent().unwrap_or_else(|| std::path::Path::new("."));
+        maestro_core::config::resolve_config_relative_path(
+            config_file_dir,
+            &c.general.workflow_definitions_dir,
+        )
+    };
     let engine = Arc::new(WorkflowEngine::new(
         config.clone(),
         actions.clone(),
         max_concurrent,
         jira_available.clone(),
         ticketing_system,
+        workflows_dir,
     ));
 
     match engine.restore_persisted_workflows().await {
@@ -267,6 +276,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let cancel_token = CancellationToken::new();
+
+    // Start the background workflow definitions directory watcher.
+    engine.start_definitions_watcher(cancel_token.clone());
+
     let start_polling_paused = !config.read().await.general.auto_polling;
     let polling_paused = Arc::new(AtomicBool::new(start_polling_paused));
     if start_polling_paused {

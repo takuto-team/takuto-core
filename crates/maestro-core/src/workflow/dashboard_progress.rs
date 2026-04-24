@@ -175,6 +175,7 @@ mod tests {
             last_session_id: None,
             description_session_id: None,
             driver_started: true,
+            workflow_def_runs: std::collections::HashMap::new(),
         }
     }
 
