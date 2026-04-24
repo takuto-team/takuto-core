@@ -1,6 +1,8 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+use std::collections::HashMap;
+
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -11,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use maestro_core::container::{self, ContainerRunner};
 use maestro_core::jira::ticket_browse_url;
 use maestro_core::workflow::dashboard_progress;
+use maestro_core::workflow::definitions::{DiscoveredWorkflow, discover_workflows};
 use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow, WorkflowEvent};
 use maestro_core::workflow::state::WorkflowState;
 use maestro_core::workflow::step::StepLog;
@@ -130,6 +133,8 @@ pub struct WorkflowSummary {
     pub generate_report: bool,
     /// Whether a generated report file exists at `lore/reports/<key>_report.md` in the worktree.
     pub has_report: bool,
+    /// Status of each dynamic workflow definition run for this ticket: def_name -> state display name.
+    pub workflow_def_runs: HashMap<String, String>,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -176,6 +181,13 @@ fn can_resume_from_error(w: &Workflow) -> bool {
 }
 
 // `TicketingSystem` implements `Display`, so use `.to_string()` directly.
+
+fn workflow_def_runs_display(w: &Workflow) -> HashMap<String, String> {
+    w.workflow_def_runs
+        .iter()
+        .map(|(k, v)| (k.clone(), v.display_name().to_string()))
+        .collect()
+}
 
 fn extract_error(state: &WorkflowState) -> Option<String> {
     match state {
@@ -262,6 +274,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 run_commands,
                 generate_report: cfg.general.generate_report,
                 has_report: has_report_file(w),
+                workflow_def_runs: workflow_def_runs_display(w),
             }
         })
         .collect();
@@ -339,6 +352,7 @@ pub async fn get_workflow(
         },
         generate_report: cfg.general.generate_report,
         has_report: has_report_file(w),
+        workflow_def_runs: workflow_def_runs_display(w),
     }))
 }
 
@@ -1174,6 +1188,41 @@ pub async fn stop_run_command(
     container::stop_run_command(&ticket_key, index).await;
 
     Ok(StatusCode::OK)
+}
+
+/// List all discovered workflow definitions from the workflows directory.
+pub async fn list_workflow_definitions(
+    State(state): State<AppState>,
+) -> Json<Vec<DiscoveredWorkflow>> {
+    let dir = state.engine.workflows_dir.clone();
+    let result = discover_workflows(&dir);
+    Json(result.workflows)
+}
+
+/// Start a specific workflow definition for a ticket.
+pub async fn run_workflow_def(
+    State(state): State<AppState>,
+    Path((id, def_name)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .engine
+        .start_workflow_def(&id, &def_name)
+        .await
+        .map(|()| StatusCode::ACCEPTED)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+/// Retry a failed workflow definition for a ticket (resets Error -> Idle, then starts).
+pub async fn retry_workflow_def(
+    State(state): State<AppState>,
+    Path((id, def_name)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .engine
+        .retry_workflow_def(&id, &def_name)
+        .await
+        .map(|()| StatusCode::ACCEPTED)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
 }
 
 #[cfg(test)]

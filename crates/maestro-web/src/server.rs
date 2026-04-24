@@ -102,6 +102,18 @@ pub fn build_router(state: AppState) -> Router {
             get(routes::workflows::get_workflow_report),
         )
         .route(
+            "/workflow-definitions",
+            get(routes::workflows::list_workflow_definitions),
+        )
+        .route(
+            "/workflows/{id}/run-workflow/{def}",
+            post(routes::workflows::run_workflow_def),
+        )
+        .route(
+            "/workflows/{id}/retry-workflow/{def}",
+            post(routes::workflows::retry_workflow_def),
+        )
+        .route(
             "/workflows/start-manual",
             post(routes::workflows::start_manual_workflow),
         )
