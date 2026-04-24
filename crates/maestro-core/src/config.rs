@@ -518,6 +518,14 @@ pub struct GeneralConfig {
     /// summary after all custom steps complete. Default `false`.
     #[serde(default)]
     pub generate_report: bool,
+    /// Directory containing dynamic workflow definition YAML files. Relative to the config file
+    /// directory, or absolute. Default `"workflows"`.
+    #[serde(default = "default_workflow_definitions_dir")]
+    pub workflow_definitions_dir: String,
+}
+
+fn default_workflow_definitions_dir() -> String {
+    "workflows".to_string()
 }
 
 /// How linked Jira issues are included in `{ticket_context}` for agent prompts.
@@ -858,6 +866,7 @@ impl Default for GeneralConfig {
             ticketing_system: TicketingSystem::None,
             pr_merge_poll_interval_secs: default_pr_merge_poll_interval(),
             generate_report: false,
+            workflow_definitions_dir: default_workflow_definitions_dir(),
         }
     }
 }
@@ -905,7 +914,7 @@ impl Default for WebConfig {
     }
 }
 
-fn resolve_config_relative_path(config_file_dir: &Path, rel: &str) -> PathBuf {
+pub fn resolve_config_relative_path(config_file_dir: &Path, rel: &str) -> PathBuf {
     let t = rel.trim();
     if t.is_empty() {
         return PathBuf::new();

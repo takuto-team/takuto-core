@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 pub mod dashboard_progress;
+pub mod definitions;
 pub mod engine;
 pub mod log_writer;
 pub mod outcome;
