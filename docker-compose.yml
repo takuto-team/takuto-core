@@ -20,8 +20,9 @@ services:
     security_opt:
       - label=disable
     volumes:
-      # Configuration file
-      - ./.maestro/config.toml:/etc/maestro/config.toml:ro
+      # Configuration file (read-write: dashboard and setup wizard persist
+      # changes via the Config API layer; see AGENTS.md "Config persistence")
+      - ./.maestro/config.toml:/etc/maestro/config.toml:rw
       # External workflow steps: copy workflows/*.example.toml → workflows/ticket.toml (etc.) on the host;
       # config paths are relative to /etc/maestro/ (next to mounted config.toml).
       - ./.maestro/workflows:/etc/maestro/workflows:ro
