@@ -128,6 +128,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
+        .route("/config/reload", post(routes::config::reload_config))
         .route("/polling", get(routes::polling::get_polling_status))
         .route("/polling/pause", post(routes::polling::pause_polling))
         .route("/polling/resume", post(routes::polling::resume_polling))

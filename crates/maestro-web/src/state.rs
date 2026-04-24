@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -9,6 +10,7 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use maestro_core::config::{Config, TicketingSystem};
+use maestro_core::config_writer::ConfigWriter;
 use maestro_core::workflow::engine::WorkflowEngine;
 
 /// Port forwarding map: ticket_key → list of `(container_port, host_port)` pairs.
@@ -55,4 +57,9 @@ pub struct AppState {
     /// Non-empty when preflight failed at startup (e.g. `gh` not authenticated).
     /// Exposed via `GET /api/config` so the UI can show a blocking error banner.
     pub preflight_error: Option<String>,
+    /// Path to the config file on disk (for reload and persistence operations).
+    pub config_path: PathBuf,
+    /// Writer for atomic config persistence. `None` when the config file is not
+    /// writable (e.g., the path is not set or the filesystem is read-only).
+    pub config_writer: Option<Arc<ConfigWriter>>,
 }
