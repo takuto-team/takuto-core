@@ -174,6 +174,7 @@ mod tests {
             ticketing_system: crate::config::TicketingSystem::Jira,
             last_session_id: None,
             description_session_id: None,
+            driver_started: true,
         }
     }
 

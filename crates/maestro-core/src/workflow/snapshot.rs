@@ -57,9 +57,17 @@ pub struct PersistedWorkflowRecord {
     /// old snapshots without this field get `TicketingSystem::None`.
     #[serde(default)]
     pub ticketing_system: crate::config::TicketingSystem,
+    /// Whether the workflow driver was spawned. Old snapshots without this field
+    /// default to `true` (driver was running).
+    #[serde(default = "default_driver_started")]
+    pub driver_started: bool,
 }
 
 fn default_jira_available() -> bool {
+    true
+}
+
+fn default_driver_started() -> bool {
     true
 }
 
@@ -175,4 +183,71 @@ pub fn remove_workflow_snapshot(repo_path: &Path) -> crate::error::Result<()> {
         fs::remove_file(&path)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::state::WorkflowState;
+
+    #[test]
+    fn driver_started_round_trips_through_snapshot() {
+        let rec = PersistedWorkflowRecord {
+            id: "id".into(),
+            ticket_key: "X-1".into(),
+            ticket_summary: "s".into(),
+            ticket_description: String::new(),
+            ticket_type: "Task".into(),
+            state: WorkflowState::Pending,
+            started_at: Utc::now(),
+            updated_at: Utc::now(),
+            steps_log: vec![],
+            branch_name: String::new(),
+            worktree_path: None,
+            pr_url: None,
+            pr_merged: false,
+            terminal_lines: vec![],
+            current_step_label: None,
+            started_manually: true,
+            jira_available: true,
+            last_session_id: None,
+            description_session_id: None,
+            ticketing_system: crate::config::TicketingSystem::None,
+            driver_started: false,
+        };
+        let json = serde_json::to_string(&rec).unwrap();
+        let back: PersistedWorkflowRecord = serde_json::from_str(&json).unwrap();
+        assert!(!back.driver_started);
+    }
+
+    #[test]
+    fn missing_driver_started_defaults_to_true() {
+        // Simulate an old snapshot without driver_started field
+        let json = r#"{
+            "id": "id",
+            "ticket_key": "X-1",
+            "ticket_summary": "s",
+            "ticket_description": "",
+            "ticket_type": "Task",
+            "state": "Pending",
+            "started_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "steps_log": [],
+            "branch_name": "",
+            "worktree_path": null,
+            "pr_url": null,
+            "pr_merged": false,
+            "terminal_lines": [],
+            "current_step_label": null,
+            "started_manually": true,
+            "jira_available": true,
+            "last_session_id": null,
+            "description_session_id": null
+        }"#;
+        let rec: PersistedWorkflowRecord = serde_json::from_str(json).unwrap();
+        assert!(
+            rec.driver_started,
+            "old snapshots must default driver_started to true"
+        );
+    }
 }

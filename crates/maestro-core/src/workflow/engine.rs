@@ -129,6 +129,9 @@ pub struct Workflow {
     /// Persistent session ID shared by "Improve with AI" and "Ask AI" for this workflow,
     /// so context is maintained across multiple description-editing interactions.
     pub description_session_id: Option<String>,
+    /// `true` once the workflow driver task has been spawned. `false` when added
+    /// to the dashboard but not yet started by the user.
+    pub driver_started: bool,
 }
 
 impl Workflow {
@@ -164,6 +167,7 @@ impl Workflow {
             ticketing_system,
             last_session_id: None,
             description_session_id: None,
+            driver_started: false,
         }
     }
 
@@ -235,6 +239,7 @@ impl Workflow {
             ticketing_system,
             last_session_id: rec.last_session_id,
             description_session_id: rec.description_session_id,
+            driver_started: rec.driver_started,
         }
     }
 }
@@ -268,6 +273,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
         last_session_id: w.last_session_id.clone(),
         description_session_id: w.description_session_id.clone(),
         ticketing_system: w.ticketing_system,
+        driver_started: w.driver_started,
     }
 }
 
@@ -425,12 +431,12 @@ impl WorkflowEngine {
     /// Remove a workflow from the dashboard when it is not **running** (see [`WorkflowState::is_active`]).
     /// Best-effort worktree removal; no Jira transitions. Cancels the driver token if a paused task is still attached.
     pub async fn delete_workflow(&self, ticket_key: &str) -> Result<()> {
-        let (worktree_path, cancel_token, branch_name) = {
+        let (worktree_path, cancel_token, branch_name, jira_available, driver_started) = {
             let map = self.workflows.read().await;
             let w = map
                 .get(ticket_key)
                 .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
-            if w.state.is_active() {
+            if w.state.is_active() && w.driver_started {
                 return Err(MaestroError::Config(format!(
                     "Cannot delete workflow while it is running (current: {})",
                     w.state
@@ -440,6 +446,8 @@ impl WorkflowEngine {
                 w.worktree_path.clone(),
                 w.cancel_token.clone(),
                 w.branch_name.clone(),
+                w.jira_available,
+                w.driver_started,
             )
         };
 
@@ -470,6 +478,19 @@ impl WorkflowEngine {
         }
 
         self.best_effort_git_worktree_prune().await;
+
+        // Unstarted workflows had Jira assign+transition at add-to-dashboard time.
+        // Revert: unassign and move back to To Do.
+        if jira_available && !driver_started {
+            let actions = self.actions.clone();
+            let key = ticket_key.to_string();
+            if let Err(e) = actions.unassign_ticket(&key).await {
+                warn!(ticket = %key, error = %e, "Failed to unassign ticket on delete (best-effort)");
+            }
+            if let Err(e) = actions.transition_ticket(&key, "To Do").await {
+                warn!(ticket = %key, error = %e, "Failed to transition ticket back to To Do on delete (best-effort)");
+            }
+        }
 
         self.workflows.write().await.remove(ticket_key);
 
@@ -583,6 +604,8 @@ impl WorkflowEngine {
             let pr_bundle = pr_review_restore_bundle(&rec);
             let merge_bundle = merge_base_restore_bundle(&rec);
             let state_display = rec.state.to_string();
+            let is_unstarted_pending =
+                matches!(rec.state, WorkflowState::Pending) && !rec.driver_started;
             let wf = Workflow::from_persisted_record(rec);
             let cancel_token = wf.cancel_token.clone();
 
@@ -592,6 +615,13 @@ impl WorkflowEngine {
             // but don't need a driver — they're idle until the user clicks an action (retry, delete, etc.).
             if is_terminal {
                 info!(ticket = %ticket_key, state = %state_display, "Restored terminal workflow (no driver)");
+                continue;
+            }
+
+            // Unstarted Pending workflows (added to dashboard but never started) are restored
+            // without a driver, like terminal states. The user must click "Start" on the dashboard.
+            if is_unstarted_pending {
+                info!(ticket = %ticket_key, "Restored unstarted Pending workflow (no driver)");
                 continue;
             }
 
@@ -742,6 +772,7 @@ impl WorkflowEngine {
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
         }
+        workflow.driver_started = true;
         let id = workflow.id.clone();
         let cancel_token = workflow.cancel_token.clone();
 
@@ -758,6 +789,118 @@ impl WorkflowEngine {
         let agent_sem = self.agent_run_semaphore.clone();
         let suppress = self.suppress_cancelled_as_error.clone();
         let ticket = ticket_key.clone();
+
+        tokio::spawn(async move {
+            drive_workflow(
+                ticket,
+                engine_config,
+                engine_workflows,
+                engine_actions,
+                engine_event_tx,
+                cancel_token,
+                agent_sem,
+                suppress,
+            )
+            .await;
+        });
+
+        Ok(id)
+    }
+
+    /// Add a workflow to the dashboard without spawning the driver.
+    /// For Jira tickets, assigns the ticket and transitions to In Progress (best-effort).
+    pub async fn add_to_dashboard(
+        &self,
+        ticket_key: String,
+        ticket_summary: String,
+        started_manually: bool,
+        ticket_description: Option<String>,
+    ) -> Result<String> {
+        let jira = self.jira_available.load(Ordering::Relaxed);
+        let mut workflow = Workflow::new(
+            ticket_key.clone(),
+            ticket_summary,
+            started_manually,
+            jira,
+            self.ticketing_system,
+        );
+        if let Some(desc) = ticket_description {
+            workflow.ticket_description = desc;
+        }
+        // driver_started stays false (set by Workflow::new)
+        let id = workflow.id.clone();
+
+        self.workflows
+            .write()
+            .await
+            .insert(ticket_key.clone(), workflow);
+
+        // Best-effort Jira assign + transition (same as the driver does, but earlier)
+        if jira {
+            let actions = self.actions.clone();
+            let key = ticket_key.clone();
+            // Spawn a task so the HTTP handler doesn't block on slow Jira calls
+            tokio::spawn(async move {
+                if let Err(e) = actions.assign_ticket(&key).await {
+                    warn!(ticket = %key, error = %e, "Failed to assign ticket at add-to-dashboard (best-effort)");
+                }
+                if let Err(e) = actions.transition_ticket(&key, "In Progress").await {
+                    warn!(ticket = %key, error = %e, "Failed to transition ticket at add-to-dashboard (best-effort)");
+                }
+            });
+        }
+
+        // Broadcast event so the dashboard updates
+        self.broadcast_event(WorkflowEvent {
+            event_type: "workflow_updated".to_string(),
+            workflow_id: id.clone(),
+            ticket_key: ticket_key.clone(),
+            state: "Pending".to_string(),
+            timestamp: Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+            progress_percent: Some(0),
+            progress_steps_total: None,
+            forwarded_port: None,
+            pr_merged: None,
+        });
+
+        Ok(id)
+    }
+
+    /// Start the driver for a workflow that was added to the dashboard but not yet started.
+    pub async fn start_pending_workflow(&self, ticket_key: &str) -> Result<String> {
+        let (id, cancel_token) = {
+            let mut map = self.workflows.write().await;
+            let w = map
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+            if w.driver_started {
+                return Err(MaestroError::Config(format!(
+                    "Workflow {ticket_key} has already been started"
+                )));
+            }
+            if !matches!(w.state, WorkflowState::Pending) {
+                return Err(MaestroError::Config(format!(
+                    "Cannot start workflow in state: {}",
+                    w.state
+                )));
+            }
+            w.driver_started = true;
+            w.updated_at = Utc::now();
+            (w.id.clone(), w.cancel_token.clone())
+        };
+
+        // Spawn the workflow driver task
+        let engine_config = self.config.clone();
+        let engine_workflows = self.workflows.clone();
+        let engine_actions = self.actions.clone();
+        let engine_event_tx = self.event_tx.clone();
+        let agent_sem = self.agent_run_semaphore.clone();
+        let suppress = self.suppress_cancelled_as_error.clone();
+        let ticket = ticket_key.to_string();
 
         tokio::spawn(async move {
             drive_workflow(
