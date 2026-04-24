@@ -338,6 +338,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
             )}
             <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />
             {w.run_commands && w.run_commands.length > 0 && (
+
               <RunCommands
                 ticketKey={w.ticket_key}
                 commands={w.run_commands}
@@ -377,6 +378,7 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                 runStates={w.workflow_def_runs || {}}
                 ticketKey={w.ticket_key}
                 onRefresh={onRefresh}
+                mainRunning={isActive}
               />
             )}
             <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />

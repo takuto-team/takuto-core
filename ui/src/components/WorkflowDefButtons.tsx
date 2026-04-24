@@ -13,6 +13,8 @@ interface WorkflowDefButtonsProps {
   onRefresh: () => void;
   /** When set (pending workflow), clicking an idle+ready button calls this instead of run-workflow. */
   onPendingStart?: () => void;
+  /** When true, all buttons are disabled (main pipeline is actively running). */
+  mainRunning?: boolean;
 }
 
 /** Topological sort of definitions based on depends_on. Falls back to alphabetical. */
@@ -83,7 +85,7 @@ function LockIcon() {
   );
 }
 
-export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefresh, onPendingStart }: WorkflowDefButtonsProps) {
+export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefresh, onPendingStart, mainRunning }: WorkflowDefButtonsProps) {
   const { showToast } = useToast();
   const [loadingDef, setLoadingDef] = useState<string | null>(null);
 
@@ -139,9 +141,9 @@ export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefres
               return (
                 <span
                   key={def.filename}
-                  className="action-btn wf-btn-primary opacity-75 cursor-default inline-flex items-center gap-1"
+                  className="action-btn wf-btn-primary opacity-75 cursor-default inline-flex items-center justify-between gap-2"
                 >
-                  <SpinnerIcon /> {def.name}
+                  {def.name} <SpinnerIcon />
                 </span>
               );
             }
@@ -150,7 +152,7 @@ export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefres
               return (
                 <span
                   key={def.filename}
-                  className="action-btn wf-btn-success cursor-default"
+                  className="action-btn wf-btn-success cursor-default inline-flex items-center gap-1"
                 >
                   <CheckIcon /> {def.name}
                 </span>
@@ -158,6 +160,16 @@ export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefres
             }
 
             if (state === "error") {
+              if (mainRunning) {
+                return (
+                  <span
+                    key={def.filename}
+                    className="action-btn wf-btn-danger opacity-50 cursor-not-allowed inline-flex items-center gap-1"
+                  >
+                    <XIcon /> {def.name}
+                  </span>
+                );
+              }
               return (
                 <button
                   key={def.filename}
@@ -172,15 +184,15 @@ export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefres
             }
 
             // idle state
-            if (!met) {
-              const waiting = unmetDeps(def);
+            if (!met || mainRunning) {
+              const waiting = !met ? unmetDeps(def) : [];
               return (
                 <span
                   key={def.filename}
                   className="action-btn wf-btn-secondary opacity-50 cursor-not-allowed inline-flex items-center gap-1"
-                  title={`Waiting for: ${waiting.join(", ")}`}
+                  title={!met ? `Waiting for: ${waiting.join(", ")}` : undefined}
                 >
-                  <LockIcon /> {def.name}
+                  {!met && <LockIcon />} {def.name}
                 </span>
               );
             }
