@@ -18,8 +18,8 @@
 //! treated as self-triggered and suppressed.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use tokio::sync::RwLock;
@@ -183,9 +183,7 @@ fn log_restart_required_field_changes(current: &Config, new: &Config) {
         );
     }
     if current.web.cors_origins != new.web.cors_origins {
-        tracing::warn!(
-            "web.cors_origins changed — restart required to take effect"
-        );
+        tracing::warn!("web.cors_origins changed — restart required to take effect");
     }
 }
 
@@ -314,13 +312,8 @@ step_timeout_secs = 600
         let config = Arc::new(RwLock::new(Config::load(&path).unwrap()));
         let cancel = CancellationToken::new();
 
-        let watcher = ConfigWatcher::new(
-            path,
-            config,
-            Arc::new(AtomicU64::new(0)),
-            cancel.clone(),
-        )
-        .with_poll_interval(Duration::from_millis(50));
+        let watcher = ConfigWatcher::new(path, config, Arc::new(AtomicU64::new(0)), cancel.clone())
+            .with_poll_interval(Duration::from_millis(50));
 
         let handle = tokio::spawn(async move { watcher.run().await });
 
