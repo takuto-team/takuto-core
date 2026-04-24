@@ -247,7 +247,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let max_concurrent = config.read().await.general.max_concurrent_workflows as usize;
     let workflows_dir = {
         let c = config.read().await;
-        let config_file_dir = cli.config.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let config_file_dir = cli
+            .config
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
         maestro_core::config::resolve_config_relative_path(
             config_file_dir,
             &c.general.workflow_definitions_dir,

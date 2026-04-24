@@ -95,10 +95,11 @@ pub struct DiscoveryResult {
 // ── Execution state tracking ────────────────────────────────────────────────
 
 /// Run state for a workflow definition within a specific ticket workflow.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum WorkflowDefRunState {
     /// Not yet started.
+    #[default]
     Idle,
     /// Currently executing steps.
     Running,
@@ -120,12 +121,6 @@ impl WorkflowDefRunState {
             Self::Completed => "completed",
             Self::Error { .. } => "error",
         }
-    }
-}
-
-impl Default for WorkflowDefRunState {
-    fn default() -> Self {
-        Self::Idle
     }
 }
 
@@ -181,10 +176,7 @@ pub fn discover_workflows(dir: &Path) -> DiscoveryResult {
         }
 
         // Skip .example.yml files — they are templates, not active workflows
-        let full_name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let full_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         if full_name.contains(".example.") {
             continue;
         }
@@ -252,11 +244,10 @@ pub fn discover_workflows(dir: &Path) -> DiscoveryResult {
 
 /// Parse a single `.yml` file into a [`WorkflowYaml`].
 fn parse_workflow_file(path: &Path) -> std::result::Result<WorkflowYaml, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read file: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
-    let wf: WorkflowYaml = serde_yaml::from_str(&content)
-        .map_err(|e| format!("Invalid YAML schema: {e}"))?;
+    let wf: WorkflowYaml =
+        serde_yaml::from_str(&content).map_err(|e| format!("Invalid YAML schema: {e}"))?;
 
     // Validate required fields
     if wf.name.trim().is_empty() {
@@ -299,10 +290,7 @@ fn convert_single_step(
                 workflow_filename
             ));
         }
-        let name = ys
-            .name
-            .clone()
-            .unwrap_or_else(|| run_cmd.clone());
+        let name = ys.name.clone().unwrap_or_else(|| run_cmd.clone());
         return Ok(AgentStepConfig {
             name,
             prompt: String::new(),
@@ -315,9 +303,10 @@ fn convert_single_step(
     }
 
     // Full form
-    let name = ys.name.clone().unwrap_or_else(|| {
-        format!("Step {}", index + 1)
-    });
+    let name = ys
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("Step {}", index + 1));
 
     let prompt = ys.prompt.clone().unwrap_or_default();
     let commands = ys.commands.clone().unwrap_or_default();
@@ -373,7 +362,7 @@ fn parse_step_availability(when: Option<&str>) -> StepAvailability {
 /// Validate dependency references and detect circular dependencies.
 ///
 /// Workflows with missing or circular dependencies are marked as invalid.
-fn validate_dependencies(workflows: &mut Vec<DiscoveredWorkflow>) {
+fn validate_dependencies(workflows: &mut [DiscoveredWorkflow]) {
     // Build a set of valid filenames (owned Strings to avoid borrow conflict)
     let valid_filenames: HashSet<String> = workflows
         .iter()
@@ -445,7 +434,8 @@ fn detect_cycles(dep_map: &HashMap<String, Vec<String>>) -> HashSet<String> {
         Black,
     }
 
-    let mut colors: HashMap<&str, Color> = dep_map.keys().map(|k| (k.as_str(), Color::White)).collect();
+    let mut colors: HashMap<&str, Color> =
+        dep_map.keys().map(|k| (k.as_str(), Color::White)).collect();
     let mut in_cycle: HashSet<String> = HashSet::new();
 
     fn dfs(
@@ -513,11 +503,9 @@ pub fn are_dependencies_met(
         return true;
     }
 
-    wf.depends_on.iter().all(|dep| {
-        run_states
-            .get(dep)
-            .is_some_and(|s| s.is_completed())
-    })
+    wf.depends_on
+        .iter()
+        .all(|dep| run_states.get(dep).is_some_and(|s| s.is_completed()))
 }
 
 /// Compute a topological ordering of valid workflows for display purposes.
@@ -647,7 +635,11 @@ depends_on:
         let result = discover_workflows(dir.path());
         assert_eq!(result.workflows.len(), 2);
 
-        let test_wf = result.workflows.iter().find(|w| w.filename == "test").unwrap();
+        let test_wf = result
+            .workflows
+            .iter()
+            .find(|w| w.filename == "test")
+            .unwrap();
         assert!(test_wf.valid);
         assert_eq!(test_wf.depends_on, vec!["build"]);
     }
@@ -670,11 +662,13 @@ depends_on:
         let result = discover_workflows(dir.path());
         assert_eq!(result.workflows.len(), 1);
         assert!(!result.workflows[0].valid);
-        assert!(result.workflows[0]
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("Missing dependency"));
+        assert!(
+            result.workflows[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Missing dependency")
+        );
     }
 
     #[test]
@@ -706,10 +700,13 @@ depends_on:
         let result = discover_workflows(dir.path());
         assert_eq!(result.workflows.len(), 2);
         assert!(result.workflows.iter().all(|w| !w.valid));
-        assert!(result
-            .workflows
-            .iter()
-            .all(|w| w.error.as_ref().unwrap().contains("Circular dependency")));
+        assert!(
+            result.workflows.iter().all(|w| w
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Circular dependency"))
+        );
     }
 
     #[test]
@@ -733,10 +730,18 @@ steps:
         let result = discover_workflows(dir.path());
         assert_eq!(result.workflows.len(), 2);
 
-        let bad = result.workflows.iter().find(|w| w.filename == "bad").unwrap();
+        let bad = result
+            .workflows
+            .iter()
+            .find(|w| w.filename == "bad")
+            .unwrap();
         assert!(!bad.valid);
 
-        let good = result.workflows.iter().find(|w| w.filename == "good").unwrap();
+        let good = result
+            .workflows
+            .iter()
+            .find(|w| w.filename == "good")
+            .unwrap();
         assert!(good.valid);
     }
 

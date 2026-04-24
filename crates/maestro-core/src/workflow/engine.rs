@@ -1639,13 +1639,14 @@ impl WorkflowEngine {
             run_states,
         ) = {
             let wf_map = self.workflows.read().await;
-            let w = wf_map.get(ticket_key).ok_or_else(|| {
-                MaestroError::Config(format!("Workflow not found: {ticket_key}"))
-            })?;
+            let w = wf_map
+                .get(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
 
-            let wt = w.worktree_path.clone().ok_or_else(|| {
-                MaestroError::Config("No worktree path on this workflow".into())
-            })?;
+            let wt = w
+                .worktree_path
+                .clone()
+                .ok_or_else(|| MaestroError::Config("No worktree path on this workflow".into()))?;
 
             if !wt.exists() {
                 return Err(MaestroError::Config(format!(
@@ -1655,13 +1656,13 @@ impl WorkflowEngine {
             }
 
             // Check if already running this definition
-            if let Some(state) = w.workflow_def_runs.get(def_name) {
-                if matches!(state, WorkflowDefRunState::Running) {
-                    return Err(MaestroError::Config(format!(
-                        "Workflow definition '{}' is already running for {}",
-                        def_name, ticket_key
-                    )));
-                }
+            if let Some(state) = w.workflow_def_runs.get(def_name)
+                && matches!(state, WorkflowDefRunState::Running)
+            {
+                return Err(MaestroError::Config(format!(
+                    "Workflow definition '{}' is already running for {}",
+                    def_name, ticket_key
+                )));
             }
 
             (
@@ -1688,9 +1689,9 @@ impl WorkflowEngine {
         // workflow may now allow this action.
         let (display, cancel_token) = {
             let mut wf_map = self.workflows.write().await;
-            let w = wf_map.get_mut(ticket_key).ok_or_else(|| {
-                MaestroError::Config(format!("Workflow not found: {ticket_key}"))
-            })?;
+            let w = wf_map
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
             w.cancel_token = CancellationToken::new();
             w.workflow_def_runs
                 .insert(def_name.to_string(), WorkflowDefRunState::Running);
@@ -1756,9 +1757,9 @@ impl WorkflowEngine {
         // Reset the state from Error to Idle
         {
             let mut wf_map = self.workflows.write().await;
-            let w = wf_map.get_mut(ticket_key).ok_or_else(|| {
-                MaestroError::Config(format!("Workflow not found: {ticket_key}"))
-            })?;
+            let w = wf_map
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
 
             match w.workflow_def_runs.get(def_name) {
                 Some(WorkflowDefRunState::Error { .. }) => {
@@ -1842,16 +1843,16 @@ fn scan_definitions_dir(dir: &Path) -> Vec<(String, std::time::SystemTime)> {
     for entry in read_dir.flatten() {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str());
-        if ext == Some("yml") || ext == Some("yaml") {
-            if let Ok(meta) = path.metadata() {
-                let name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                if !name.is_empty() {
-                    entries.push((name, meta.modified().unwrap_or(std::time::UNIX_EPOCH)));
-                }
+        if (ext == Some("yml") || ext == Some("yaml"))
+            && let Ok(meta) = path.metadata()
+        {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            if !name.is_empty() {
+                entries.push((name, meta.modified().unwrap_or(std::time::UNIX_EPOCH)));
             }
         }
     }
@@ -1909,7 +1910,9 @@ async fn drive_workflow_def(
 
     let workflow_id = {
         let wf = workflows.read().await;
-        wf.get(&ticket_key).map(|w| w.id.clone()).unwrap_or_default()
+        wf.get(&ticket_key)
+            .map(|w| w.id.clone())
+            .unwrap_or_default()
     };
 
     match result {
