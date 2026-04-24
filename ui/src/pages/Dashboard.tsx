@@ -161,11 +161,12 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           <div className="max-w-7xl mx-auto flex items-start gap-3">
             <span className="text-red-400 text-lg leading-none mt-0.5">⚠</span>
             <div className="flex-1 min-w-0">
-              <p className="font-semibold text-red-300 text-sm">Maestro is not ready — authentication required</p>
-              <p className="text-xs text-red-300/80 mt-1 font-mono break-all">{config.preflight_error}</p>
+              <p className="font-semibold text-red-300 text-sm">Maestro is not ready — setup required</p>
+              {config.preflight_error.split("\n").map((line, i) => (
+                <p key={i} className="text-xs text-red-300/80 mt-1 font-mono break-all">{line}</p>
+              ))}
               <p className="text-xs text-red-300/70 mt-1">
-                Run <code className="bg-red-900/50 px-1 rounded">make setup</code> (or{" "}
-                <code className="bg-red-900/50 px-1 rounded">maestro auth</code>) to authenticate, then restart.
+                Run <code className="bg-red-900/50 px-1 rounded">docker compose run --rm -it maestro setup</code> to complete setup, then restart.
               </p>
             </div>
           </div>

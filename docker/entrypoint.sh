@@ -412,13 +412,19 @@ fi
 
 echo "[maestro] Running docker startup hooks (compose_up_commands)..."
 if ! /usr/local/bin/maestro --config "$CONFIG_FILE" docker-hooks startup; then
-    exit 1
+    HOOK_ERR="Docker startup hooks (compose_up_commands) failed — check logs for details."
+    MAESTRO_PREFLIGHT_ERROR="${MAESTRO_PREFLIGHT_ERROR:+${MAESTRO_PREFLIGHT_ERROR}
+}${HOOK_ERR}"
+    export MAESTRO_PREFLIGHT_ERROR
+    echo "[maestro] WARNING: Startup hooks failed — continuing in degraded mode." >&2
 fi
 
 if [ ! -d "/workspace/.git" ]; then
-    echo "ERROR: No repository found at /workspace."
-    echo "       Run: docker compose run --rm -it maestro setup"
-    exit 1
+    REPO_ERR="No repository found at /workspace. Run: docker compose run --rm -it maestro setup"
+    MAESTRO_PREFLIGHT_ERROR="${MAESTRO_PREFLIGHT_ERROR:+${MAESTRO_PREFLIGHT_ERROR}
+}${REPO_ERR}"
+    export MAESTRO_PREFLIGHT_ERROR
+    echo "[maestro] WARNING: No repository at /workspace — starting in degraded mode." >&2
 fi
 
 export HOME="/home/maestro"
