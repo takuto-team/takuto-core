@@ -49,6 +49,7 @@ export interface WorkflowSummary {
   run_commands: RunCommandStatus[];
   generate_report: boolean;
   has_report: boolean;
+  workflow_def_runs: Record<string, string>;
 }
 
 export interface RunCommandStatus {
@@ -71,6 +72,7 @@ export interface WorkflowEvent {
   progress_steps_total?: number;
   forwarded_port?: [number, number];
   pr_merged?: boolean;
+  workflow_def_name?: string;
 }
 
 export interface ConfigResponse {
@@ -145,6 +147,15 @@ export interface MarkDoneOutcome {
   worktree_ok: boolean;
   jira_error?: string;
   worktree_error?: string;
+}
+
+export interface WorkflowDefinition {
+  filename: string;
+  name: string;
+  steps: unknown[];
+  depends_on: string[];
+  valid: boolean;
+  error?: string;
 }
 
 export interface ImproveResponse {

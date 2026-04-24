@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import type { WorkflowSummary } from "../api/types";
+import type { WorkflowSummary, WorkflowDefinition } from "../api/types";
 import type { TerminalState, DynamicForwards } from "../hooks/useWorkflows";
 import { WorkflowCard } from "./WorkflowCard";
 
@@ -10,6 +10,7 @@ interface Props {
   orderKeys: string[];
   terminalStates: Record<string, TerminalState>;
   dynamicForwards: DynamicForwards;
+  workflowDefs: WorkflowDefinition[];
   onRefresh: () => void;
   onShowDescription: (ticketKey: string, summary: string, description?: string) => void;
   onReport: (ticketKey: string) => void;
@@ -22,6 +23,7 @@ export function WorkflowGrid({
   orderKeys,
   terminalStates,
   dynamicForwards,
+  workflowDefs,
   onRefresh,
   onShowDescription,
   onReport,
@@ -56,6 +58,7 @@ export function WorkflowGrid({
           workflow={w}
           terminalState={terminalStates[w.ticket_key]}
           dynamicForwards={dynamicForwards[w.ticket_key] || []}
+          workflowDefs={workflowDefs}
           onRefresh={onRefresh}
           onShowDescription={onShowDescription}
           onReport={onReport}

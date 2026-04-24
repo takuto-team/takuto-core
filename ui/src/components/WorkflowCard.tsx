@@ -3,9 +3,10 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { api, apiPost } from "../api/client";
-import type { WorkflowSummary, RunCommandStatus } from "../api/types";
+import type { WorkflowSummary, WorkflowDefinition, RunCommandStatus } from "../api/types";
 import type { TerminalState } from "../hooks/useWorkflows";
 import { TerminalOutput } from "./TerminalOutput";
+import { WorkflowDefButtons } from "./WorkflowDefButtons";
 import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
 
@@ -13,6 +14,7 @@ interface Props {
   workflow: WorkflowSummary;
   terminalState?: TerminalState;
   dynamicForwards: [number, number][];
+  workflowDefs: WorkflowDefinition[];
   onRefresh: () => void;
   onShowDescription: (ticketKey: string, summary: string, description?: string) => void;
   onReport: (ticketKey: string) => void;
@@ -60,7 +62,7 @@ function formatDuration(start: Date, end: Date): string {
   return `${s}s`;
 }
 
-export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, onRefresh, onShowDescription, onReport }: Props) {
+export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, workflowDefs, onRefresh, onShowDescription, onReport }: Props) {
   const [loading, setLoading] = useState<false | "generic" | string>(false);
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
@@ -316,6 +318,14 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                 <ActionBtn variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</ActionBtn>
               )}
             </div>
+            {workflowDefs.length > 0 && (
+              <WorkflowDefButtons
+                definitions={workflowDefs}
+                runStates={w.workflow_def_runs || {}}
+                ticketKey={w.ticket_key}
+                onRefresh={onRefresh}
+              />
+            )}
             <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />
             {w.run_commands && w.run_commands.length > 0 && (
               <RunCommands
@@ -348,6 +358,14 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                 </ActionBtn>
               )}
             </div>
+            {workflowDefs.length > 0 && (
+              <WorkflowDefButtons
+                definitions={workflowDefs}
+                runStates={w.workflow_def_runs || {}}
+                ticketKey={w.ticket_key}
+                onRefresh={onRefresh}
+              />
+            )}
             <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />
           </>
         )}

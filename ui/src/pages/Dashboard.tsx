@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { apiJson, apiPost } from "../api/client";
-import type { ConfigResponse } from "../api/types";
+import type { ConfigResponse, WorkflowDefinition, WorkflowEvent } from "../api/types";
 import { useToast } from "../hooks/useToast";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useWorkflows } from "../hooks/useWorkflows";
@@ -28,17 +28,50 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, dismissError, fetchWorkflows, handleEvent } = useWorkflows();
-  const { connected } = useWebSocket(handleEvent);
+  const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
+  const defsFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchWorkflowDefs = useCallback(() => {
+    apiJson<WorkflowDefinition[]>("/api/workflow-definitions")
+      .then(setWorkflowDefs)
+      .catch(() => {});
+  }, []);
+
+  // Fetch definitions on mount
+  useEffect(() => {
+    fetchWorkflowDefs();
+  }, [fetchWorkflowDefs]);
+
+  // Wrap handleEvent to also re-fetch definitions on relevant events
+  const handleEventWithDefs = useCallback(
+    (evt: WorkflowEvent) => {
+      handleEvent(evt);
+
+      // Re-fetch definitions when definitions change or workflows update (debounced)
+      if (
+        evt.event_type === "workflow_definitions_changed" ||
+        evt.event_type === "workflow_updated" ||
+        evt.event_type === "step_completed"
+      ) {
+        if (defsFetchTimer.current) clearTimeout(defsFetchTimer.current);
+        defsFetchTimer.current = setTimeout(fetchWorkflowDefs, 500);
+      }
+    },
+    [handleEvent, fetchWorkflowDefs]
+  );
+
+  const { connected } = useWebSocket(handleEventWithDefs);
   const prevConnected = useRef(false);
   const polling = usePolling();
 
-  // Re-fetch workflows on WebSocket reconnect (connected: false → true)
+  // Re-fetch workflows and definitions on WebSocket reconnect (connected: false → true)
   useEffect(() => {
     if (connected && !prevConnected.current) {
       fetchWorkflows();
+      fetchWorkflowDefs();
     }
     prevConnected.current = connected;
-  }, [connected, fetchWorkflows]);
+  }, [connected, fetchWorkflows, fetchWorkflowDefs]);
 
   // Modal state
   const [showPicker, setShowPicker] = useState(false);
@@ -187,6 +220,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           orderKeys={orderKeys}
           terminalStates={terminalStates}
           dynamicForwards={dynamicForwards}
+          workflowDefs={workflowDefs}
           onRefresh={fetchWorkflows}
           onShowDescription={handleShowDescription}
           onReport={setReportKey}
