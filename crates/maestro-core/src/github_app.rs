@@ -338,15 +338,34 @@ impl GitHubAppTokenManager {
         cwd: &Path,
         cancel: CancellationToken,
     ) -> Result<()> {
-        // Configure git to use gh as credential helper (for git push).
-        // gh reads GH_TOKEN from the environment when present, so no login call is needed.
-        let setup_output =
-            crate::process::run_command("gh", &["auth", "setup-git"], cwd, cancel.child_token())
-                .await?;
-        if !setup_output.success() {
+        // Install a git credential helper that reads GH_TOKEN from the subprocess environment.
+        // We do NOT use `gh auth setup-git` because it requires an active `gh` session
+        // (gh auth login), which is intentionally skipped when a GitHub App is configured.
+        //
+        // The helper is a shell function:
+        //   !f() { echo protocol=https; echo host=github.com;
+        //          echo username=x-access-token; echo "password=$GH_TOKEN"; }; f
+        //
+        // Git passes this to `sh -c` when credentials are needed. GH_TOKEN is inherited
+        // from the git subprocess environment (injected by gh_token_env() in RealActions).
+        let helper =
+            "!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f";
+        let cred_out = crate::process::run_command(
+            "git",
+            &[
+                "config",
+                "--global",
+                "credential.https://github.com.helper",
+                helper,
+            ],
+            cwd,
+            cancel.child_token(),
+        )
+        .await?;
+        if !cred_out.success() {
             warn!(
-                stderr = %setup_output.stderr.trim(),
-                "gh auth setup-git returned non-zero (credential helper may not be fully configured)"
+                stderr = %cred_out.stderr.trim(),
+                "git config credential.helper failed — git fetch/push may not authenticate"
             );
         }
 
