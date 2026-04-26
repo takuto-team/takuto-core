@@ -269,10 +269,12 @@ if [ "${1:-}" = "setup" ]; then
             echo "         Add repo_url under [git] in your config.toml."
         else
             # When a GitHub App is configured, `gh` is not authenticated interactively.
-            # Generate an installation token via the maestro CLI and authenticate gh with it,
-            # then use `gh repo clone` — same code path as personal auth.
-            # Using embedded-URL credentials (https://x-access-token:TOKEN@...) is unreliable
-            # when a stale gh credential helper is already configured in ~/.gitconfig.
+            # Generate an installation token and use plain `git clone` with the token embedded
+            # in the HTTPS URL. We pass `-c credential.helper=""` to git so that any credential
+            # helper already present in ~/.gitconfig (e.g. from a prior `gh auth setup-git` run)
+            # cannot intercept and override the embedded token.
+            # NOTE: `gh repo clone` is NOT used here — it goes via GraphQL which rejects
+            # App installation tokens with "could not resolve to a repository".
             do_clone() {
                 local target="$1"
                 if [ "$github_app_id" != "0" ]; then
@@ -287,9 +289,15 @@ if [ "${1:-}" = "setup" ]; then
                         echo "ERROR: GitHub App token was empty. Check [github] config."
                         return 1
                     fi
-                    printf '%s' "$app_token" | gh auth login --with-token
+                    # Strip protocol/host prefix and .git suffix to get owner/repo
+                    local owner_repo
+                    owner_repo=$(printf '%s' "$repo_url" \
+                        | sed 's|https://github\.com/||;s|http://github\.com/||;s|git@github\.com:||;s|\.git$||')
+                    git -c credential.helper="" \
+                        clone "https://x-access-token:${app_token}@github.com/${owner_repo}.git" "$target"
+                else
+                    gh repo clone "$repo_url" "$target"
                 fi
-                gh repo clone "$repo_url" "$target"
             }
 
             if [ -d "/workspace/.git" ]; then
