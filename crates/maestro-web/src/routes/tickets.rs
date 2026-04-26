@@ -471,8 +471,8 @@ mod tests {
 
     use tokio::sync::RwLock;
 
-    use maestro_core::config::{Config, TicketingSystem};
     use maestro_core::actions::dry_run::DryRunActions;
+    use maestro_core::config::{Config, TicketingSystem};
     use maestro_core::workflow::engine::{Workflow, WorkflowEngine};
 
     /// Build a minimal `AppState` for testing `update_ticket_description` in `None` mode.
