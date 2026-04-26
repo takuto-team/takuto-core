@@ -120,32 +120,43 @@ if [ "${1:-}" = "setup" ]; then
     echo "Optional: install additional tools via [docker] build_commands / compose_up_commands in config.toml."
     echo ""
 
-    # Step 1: GitHub (required — uses browser OAuth via --network=host)
-    echo "--- Step 1/5: GitHub CLI (required) ---"
-    if gh auth status >/dev/null 2>&1; then
-        echo "GitHub CLI: already authenticated."
-        read -p "Re-authenticate? [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Step 1: GitHub (required unless a GitHub App is configured)
+    # Read [github] app_id from config — non-zero means GitHub App auth is used at runtime,
+    # so interactive gh auth login is not needed.
+    github_app_id=$(grep -E '^\s*app_id\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || true)
+    github_app_id="${github_app_id:-0}"
+    echo "--- Step 1/5: GitHub CLI $([ "$github_app_id" != "0" ] && echo "(skipped — GitHub App configured)" || echo "(required)") ---"
+    if [ "$github_app_id" != "0" ]; then
+        echo "GitHub App detected (app_id = $github_app_id). Skipping gh auth login."
+        echo "Tokens will be generated automatically at runtime via the GitHub App."
+        # Still configure git to use HTTPS for cloning so Step 4 works without SSH keys.
+        git config --global url."https://github.com/".insteadOf "git@github.com:" 2>/dev/null || true
+    else
+        if gh auth status >/dev/null 2>&1; then
+            echo "GitHub CLI: already authenticated."
+            read -p "Re-authenticate? [y/N] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                gh auth login
+            fi
+        else
+            echo "GitHub CLI: authentication is required."
             gh auth login
         fi
-    else
-        echo "GitHub CLI: authentication is required."
-        gh auth login
+        # Verify the personal account is authenticated. gh auth token succeeds when
+        # at least one active account can produce a token — bot accounts that fail
+        # don't affect this check.
+        if ! gh auth token >/dev/null 2>&1; then
+            echo "ERROR: GitHub CLI authentication failed or was not completed."
+            echo "       gh auth status output:"
+            gh auth status 2>&1 | sed 's/^/       /' || true
+            exit 1
+        fi
+        # Rewrite SSH GitHub URLs to HTTPS so gh credential helper handles auth.
+        # Applied here (after GitHub auth) so Step 4 repo clone also uses HTTPS.
+        gh auth setup-git 2>/dev/null || true
+        git config --global url."https://github.com/".insteadOf "git@github.com:" 2>/dev/null || true
     fi
-    # Verify the personal account is authenticated. gh auth token succeeds when
-    # at least one active account can produce a token — bot accounts that fail
-    # don't affect this check.
-    if ! gh auth token >/dev/null 2>&1; then
-        echo "ERROR: GitHub CLI authentication failed or was not completed."
-        echo "       gh auth status output:"
-        gh auth status 2>&1 | sed 's/^/       /' || true
-        exit 1
-    fi
-    # Rewrite SSH GitHub URLs to HTTPS so gh credential helper handles auth.
-    # Applied here (after GitHub auth) so Step 4 repo clone also uses HTTPS.
-    gh auth setup-git 2>/dev/null || true
-    git config --global url."https://github.com/".insteadOf "git@github.com:" 2>/dev/null || true
     echo ""
 
     # Step 2: Atlassian (required for jira ticketing_system — manual API token, no port needed)

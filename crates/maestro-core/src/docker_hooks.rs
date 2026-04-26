@@ -408,24 +408,30 @@ fn gh_auth_recover_expired_token() -> bool {
 /// GitHub and AI-provider auth remain hard errors; acli auth is a soft-fail
 /// (the app can run without Jira integration).
 pub fn preflight(config: &Config) -> Result<PreflightResult> {
-    eprintln!("[maestro preflight] Checking GitHub CLI (gh)…");
-    // Two-stage check:
-    // 1. `gh auth token` — does a token exist? (reads from hosts.yml, no network call)
-    // 2. `gh api user` — is it actually valid? (catches expired `ghs_` installation tokens)
-    //
-    // `gh auth token` alone is insufficient: it exits 0 even for expired GitHub App
-    // installation tokens (`ghs_`), which then fail at runtime with HTTP 401.
-    let token_exists = auth_cmd_ok("gh", &["auth", "token", "-h", "github.com"]);
-    let token_valid = token_exists && auth_cmd_ok("gh", &["api", "user"]);
+    // When a GitHub App is fully configured, runtime tokens are generated automatically
+    // via the App's private key — no interactive gh auth is needed or expected.
+    if config.github.is_configured() {
+        eprintln!("[maestro preflight] GitHub App configured (app_id = {}); skipping gh auth check.", config.github.app_id);
+    } else {
+        eprintln!("[maestro preflight] Checking GitHub CLI (gh)…");
+        // Two-stage check:
+        // 1. `gh auth token` — does a token exist? (reads from hosts.yml, no network call)
+        // 2. `gh api user` — is it actually valid? (catches expired `ghs_` installation tokens)
+        //
+        // `gh auth token` alone is insufficient: it exits 0 even for expired GitHub App
+        // installation tokens (`ghs_`), which then fail at runtime with HTTP 401.
+        let token_exists = auth_cmd_ok("gh", &["auth", "token", "-h", "github.com"]);
+        let token_valid = token_exists && auth_cmd_ok("gh", &["api", "user"]);
 
-    if !token_valid {
-        // Attempt recovery: if the active gh user has an expired token (common with GitHub App
-        // installation tokens that expire hourly), switch to any user with a personal token.
-        if !gh_auth_recover_expired_token() {
-            return Err(MaestroError::Config(
-                "GitHub CLI (gh) is not authenticated. Run: docker compose run --rm -it maestro setup"
-                    .to_string(),
-            ));
+        if !token_valid {
+            // Attempt recovery: if the active gh user has an expired token (common with GitHub App
+            // installation tokens that expire hourly), switch to any user with a personal token.
+            if !gh_auth_recover_expired_token() {
+                return Err(MaestroError::Config(
+                    "GitHub CLI (gh) is not authenticated. Run: docker compose run --rm -it maestro setup"
+                        .to_string(),
+                ));
+            }
         }
     }
 
