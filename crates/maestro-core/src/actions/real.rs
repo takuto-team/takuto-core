@@ -34,6 +34,21 @@ impl RealActions {
             github_app,
         }
     }
+
+    /// Return `[("GH_TOKEN", token)]` when a GitHub App is configured, otherwise empty.
+    /// Used to inject credentials into git/gh subprocesses spawned in the main process.
+    async fn gh_token_env(&self) -> Vec<(String, String)> {
+        let Some(app) = &self.github_app else {
+            return vec![];
+        };
+        match app.get_installation_token(&self.repo_path).await {
+            Ok(token) => vec![("GH_TOKEN".to_string(), token)],
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to get GitHub App token for env injection");
+                vec![]
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -162,12 +177,17 @@ impl ExternalActions for RealActions {
         worktree_remove::clear_worktree_path_for_recreate(&self.repo_path, &worktree_path).await?;
 
         let remote = &self.git_remote;
-        // Fetch the base branch from the configured remote to ensure it's available locally
+        // Fetch the base branch from the configured remote to ensure it's available locally.
+        // Inject GH_TOKEN so git's credential helper (gh) can authenticate via the GitHub App.
         info!(base = base, remote = %remote, "Fetching base branch from git remote");
-        let fetch_output = process::run_shell_command(
+        let token_env = self.gh_token_env().await;
+        let token_env_refs: Vec<(&str, &str)> =
+            token_env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let fetch_output = process::run_shell_command_with_env(
             &format!("git fetch {remote} {base}"),
             &self.repo_path,
             CancellationToken::new(),
+            &token_env_refs,
         )
         .await?;
         if !fetch_output.success() {
@@ -249,11 +269,16 @@ impl ExternalActions for RealActions {
         );
 
         let remote = &self.git_remote;
-        // Push branch first
-        let push_output = process::run_shell_command(
+        let token_env = self.gh_token_env().await;
+        let token_env_refs: Vec<(&str, &str)> =
+            token_env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+
+        // Push branch first — inject GH_TOKEN for credential helper auth.
+        let push_output = process::run_shell_command_with_env(
             &format!("git push -u {remote} {branch}"),
             &self.repo_path,
             CancellationToken::new(),
+            &token_env_refs,
         )
         .await?;
         if !push_output.success() {
@@ -264,13 +289,14 @@ impl ExternalActions for RealActions {
         }
 
         // Create PR via gh (argv, no shell — avoids injection from title/body/branch)
-        let output = process::run_command(
+        let output = process::run_command_with_env(
             "gh",
             &[
                 "pr", "create", "--title", title, "--body", body, "--base", base, "--head", branch,
             ],
             &self.repo_path,
             CancellationToken::new(),
+            &token_env_refs,
         )
         .await?;
         if !output.success() {
@@ -343,6 +369,10 @@ impl ExternalActions for RealActions {
     }
 
     async fn request_github_self_as_pr_reviewer(&self, cwd: &Path, pr_url: &str) -> Result<bool> {
+        // GitHub App bot accounts cannot be added as reviewers — skip silently.
+        if self.github_app.is_some() {
+            return Ok(false);
+        }
         gh_request_self_pr_reviewer(cwd, pr_url, CancellationToken::new()).await?;
         Ok(true)
     }
