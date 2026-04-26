@@ -414,12 +414,16 @@ pub async fn update_ticket_description(
                 ));
             }
 
-            // Update in-memory summary (for dashboard card title) but NOT description —
-            // GitHub is the authoritative source; next "Show description" fetches fresh.
-            if let Some(ref s) = body.summary {
+            // Update in-memory description (and optionally summary) so the next
+            // `GET /api/workflows` returns the freshly saved value — prevents the
+            // dashboard from showing stale text when the user reopens the modal.
+            {
                 let mut workflows = state.engine.workflows.write().await;
                 if let Some(wf) = workflows.get_mut(&key) {
-                    wf.ticket_summary = s.clone();
+                    wf.ticket_description = body.description.clone();
+                    if let Some(ref s) = body.summary {
+                        wf.ticket_summary = s.clone();
+                    }
                 }
                 drop(workflows);
                 let _ = state.engine.sync_workflow_snapshot().await;
@@ -438,12 +442,16 @@ pub async fn update_ticket_description(
                 .await
                 .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 
-            // Update in-memory summary (for dashboard card title) but NOT description —
-            // Jira is the authoritative source; next "Show description" fetches fresh.
-            if let Some(ref s) = body.summary {
+            // Update in-memory description (and optionally summary) so the next
+            // `GET /api/workflows` returns the freshly saved value — prevents the
+            // dashboard from showing stale text when the user reopens the modal.
+            {
                 let mut workflows = state.engine.workflows.write().await;
                 if let Some(wf) = workflows.get_mut(&key) {
-                    wf.ticket_summary = s.clone();
+                    wf.ticket_description = body.description.clone();
+                    if let Some(ref s) = body.summary {
+                        wf.ticket_summary = s.clone();
+                    }
                 }
                 drop(workflows);
                 let _ = state.engine.sync_workflow_snapshot().await;
@@ -451,5 +459,132 @@ pub async fn update_ticket_description(
 
             Ok(Json(serde_json::json!({})))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use tokio::sync::RwLock;
+
+    use maestro_core::config::{Config, TicketingSystem};
+    use maestro_core::actions::dry_run::DryRunActions;
+    use maestro_core::workflow::engine::{Workflow, WorkflowEngine};
+
+    /// Build a minimal `AppState` for testing `update_ticket_description` in `None` mode.
+    fn test_app_state_none() -> AppState {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
+            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
+        );
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let engine = Arc::new(WorkflowEngine::new(
+            config.clone(),
+            actions,
+            1,
+            jira_available.clone(),
+            TicketingSystem::None,
+            std::env::temp_dir(),
+        ));
+        AppState {
+            engine,
+            config,
+            polling_paused: Arc::new(AtomicBool::new(false)),
+            jira_available,
+            ticketing_system: TicketingSystem::None,
+            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
+            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
+            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
+            run_commands: Arc::new(RwLock::new(HashMap::new())),
+            preflight_error: None,
+            config_path: std::env::temp_dir().join("config.toml"),
+            config_writer: None,
+        }
+    }
+
+    /// Inserts a workflow with the given key, summary, and description into the engine.
+    async fn insert_workflow(engine: &WorkflowEngine, key: &str, summary: &str, description: &str) {
+        let mut wf = Workflow::new(
+            key.to_string(),
+            summary.to_string(),
+            false,
+            false,
+            TicketingSystem::None,
+        );
+        wf.ticket_description = description.to_string();
+        engine.workflows.write().await.insert(key.to_string(), wf);
+    }
+
+    /// Saving a description (without summary) updates `ticket_description` in memory.
+    #[tokio::test]
+    async fn update_description_none_mode_updates_description() {
+        let state = test_app_state_none();
+        insert_workflow(&state.engine, "T-1", "Old Summary", "Old description").await;
+
+        let result = update_ticket_description(
+            State(state.clone()),
+            Path("T-1".to_string()),
+            Json(UpdateDescriptionBody {
+                description: "New description".to_string(),
+                summary: None,
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        let workflows = state.engine.workflows.read().await;
+        let wf = workflows.get("T-1").expect("workflow should exist");
+        assert_eq!(wf.ticket_description, "New description");
+        // Summary should remain unchanged when not provided.
+        assert_eq!(wf.ticket_summary, "Old Summary");
+    }
+
+    /// Saving a description and summary updates both in memory.
+    #[tokio::test]
+    async fn update_description_none_mode_updates_both() {
+        let state = test_app_state_none();
+        insert_workflow(&state.engine, "T-2", "Old Summary", "Old description").await;
+
+        let result = update_ticket_description(
+            State(state.clone()),
+            Path("T-2".to_string()),
+            Json(UpdateDescriptionBody {
+                description: "New description".to_string(),
+                summary: Some("New Summary".to_string()),
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        let workflows = state.engine.workflows.read().await;
+        let wf = workflows.get("T-2").expect("workflow should exist");
+        assert_eq!(wf.ticket_description, "New description");
+        assert_eq!(wf.ticket_summary, "New Summary");
+    }
+
+    /// Saving a description for a non-existent workflow succeeds without error.
+    #[tokio::test]
+    async fn update_description_none_mode_missing_workflow() {
+        let state = test_app_state_none();
+        // No workflow inserted — the key "T-3" does not exist.
+
+        let result = update_ticket_description(
+            State(state.clone()),
+            Path("T-3".to_string()),
+            Json(UpdateDescriptionBody {
+                description: "Some description".to_string(),
+                summary: None,
+            }),
+        )
+        .await;
+
+        // Should succeed (no-op for the in-memory update).
+        assert!(result.is_ok());
     }
 }
