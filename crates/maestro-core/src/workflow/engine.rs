@@ -2253,6 +2253,17 @@ async fn bootstrap_new_workflow(
     let mut step_log = StepLog::new("Create Worktree".to_string());
     check_cancelled(cancel_token)?;
 
+    // Configure the git credential helper (gh auth setup-git) on the repo root BEFORE
+    // fetching, so `git fetch` can authenticate via the GitHub App token.
+    // The local git identity (user.name/email) is configured again on the worktree after creation.
+    if let Err(e) = actions.configure_git_author_from_github(&repo_path).await {
+        warn!(
+            ticket = %ticket_key,
+            error = %e,
+            "Could not configure git credential helper before fetch; git fetch may fail"
+        );
+    }
+
     let branch_name =
         git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type);
     let cfg = config.read().await;
