@@ -11,8 +11,6 @@ interface WorkflowDefButtonsProps {
   runStates: Record<string, string>;
   ticketKey: string;
   onRefresh: () => void;
-  /** When set (pending workflow), clicking an idle+ready button calls this instead of run-workflow. */
-  onPendingStart?: () => void;
   /** When true, all buttons are disabled (main pipeline is actively running). */
   mainRunning?: boolean;
 }
@@ -85,7 +83,7 @@ function LockIcon() {
   );
 }
 
-export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefresh, onPendingStart, mainRunning }: WorkflowDefButtonsProps) {
+export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefresh, mainRunning }: WorkflowDefButtonsProps) {
   const { showToast } = useToast();
   const [loadingDef, setLoadingDef] = useState<string | null>(null);
 
@@ -201,7 +199,7 @@ export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefres
               <button
                 key={def.filename}
                 className="action-btn wf-btn-primary inline-flex items-center gap-1"
-                onClick={() => onPendingStart ? onPendingStart() : handleRun(def)}
+                onClick={() => handleRun(def)}
                 disabled={isLoading}
               >
                 {isLoading ? <SpinnerIcon /> : null} {def.name}

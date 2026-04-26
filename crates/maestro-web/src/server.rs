@@ -66,10 +66,6 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::delete_workflow),
         )
         .route(
-            "/workflows/{id}/start",
-            post(routes::workflows::start_workflow_from_dashboard),
-        )
-        .route(
             "/workflows/{id}/open-editor",
             post(routes::workflows::open_editor),
         )

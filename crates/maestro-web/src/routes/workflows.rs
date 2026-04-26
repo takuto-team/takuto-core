@@ -557,25 +557,6 @@ pub struct StartManualWorkflowResponse {
     pub ticket_key: String,
 }
 
-/// Start the agent pipeline for a workflow that was added to the dashboard.
-pub async fn start_workflow_from_dashboard(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    state
-        .engine
-        .start_pending_workflow(&id)
-        .await
-        .map(|_| StatusCode::OK)
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                (StatusCode::NOT_FOUND, msg)
-            } else {
-                (StatusCode::CONFLICT, msg)
-            }
-        })
-}
 
 /// Start a ticket workflow from the dashboard (same pipeline as the poller). Respects **`[general] max_concurrent_manual_workflows`**.
 ///

@@ -249,20 +249,13 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                 </ActionBtn>
               )}
             </div>
-            {workflowDefs.length > 0 ? (
+            {workflowDefs.length > 0 && (
               <WorkflowDefButtons
                 definitions={workflowDefs}
                 runStates={w.workflow_def_runs || {}}
                 ticketKey={w.ticket_key}
                 onRefresh={onRefresh}
-                onPendingStart={() => withLoading(doAction("start"))}
               />
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                <ActionBtn variant="primary" onClick={() => withLoading(doAction("start"))}>
-                  <PlayIcon /> Start
-                </ActionBtn>
-              </div>
             )}
           </div>
         ) : isTerminal ? (
