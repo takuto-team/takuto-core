@@ -269,28 +269,27 @@ if [ "${1:-}" = "setup" ]; then
             echo "         Add repo_url under [git] in your config.toml."
         else
             # When a GitHub App is configured, `gh` is not authenticated interactively.
-            # Generate an installation token via the maestro CLI and clone over HTTPS.
-            # Otherwise fall back to `gh repo clone` (uses personal gh auth).
+            # Generate an installation token via the maestro CLI and authenticate gh with it,
+            # then use `gh repo clone` — same code path as personal auth.
+            # Using embedded-URL credentials (https://x-access-token:TOKEN@...) is unreliable
+            # when a stale gh credential helper is already configured in ~/.gitconfig.
             do_clone() {
                 local target="$1"
                 if [ "$github_app_id" != "0" ]; then
                     echo "GitHub App configured — generating installation token for clone..."
                     local app_token
-                    if ! app_token=$(/usr/local/bin/maestro --config "$CONFIG_FILE" github-app-token 2>&1); then
-                        echo "ERROR: Could not generate GitHub App installation token:"
-                        echo "       $app_token"
+                    if ! app_token=$(/usr/local/bin/maestro --config "$CONFIG_FILE" github-app-token 2>/dev/null); then
+                        echo "ERROR: Could not generate GitHub App installation token."
                         echo "       Check [github] app_id, app_installation_id, and app_private_key/app_private_key_path in config.toml."
                         return 1
                     fi
-                    # Normalize repo_url to owner/repo (strip host, .git suffix)
-                    local owner_repo
-                    owner_repo=$(printf '%s' "$repo_url" \
-                        | sed 's|https://github\.com/||;s|git@github\.com:||;s|\.git$||')
-                    local clone_url="https://x-access-token:${app_token}@github.com/${owner_repo}.git"
-                    git clone "$clone_url" "$target"
-                else
-                    gh repo clone "$repo_url" "$target"
+                    if [ -z "$app_token" ]; then
+                        echo "ERROR: GitHub App token was empty. Check [github] config."
+                        return 1
+                    fi
+                    printf '%s' "$app_token" | gh auth login --with-token
                 fi
+                gh repo clone "$repo_url" "$target"
             }
 
             if [ -d "/workspace/.git" ]; then
