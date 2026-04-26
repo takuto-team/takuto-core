@@ -241,7 +241,7 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 
 **Container passthrough:** `gh` auth configured by `gh auth login --with-token` propagates to DinD worker containers via the shared `/shared-auth/gh` volume. `GH_TOKEN` is also in `PASSTHROUGH_ENV` (`container.rs`) as a fallback for environments that set it externally.
 
-**Required GitHub App permissions:** `contents` (write), `pull_requests` (write), `metadata` (read).
+**Required GitHub App permissions:** `contents` (write), `pull_requests` (write), `issues` (read), `metadata` (read).
 
 ---
 
