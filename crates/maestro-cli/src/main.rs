@@ -50,6 +50,9 @@ enum Commands {
     },
     /// Verify GitHub, Atlassian, and provider-specific auth before starting the server.
     Preflight,
+    /// Generate a GitHub App installation token and print it to stdout.
+    /// Used by the setup script to clone the repository when no personal gh auth is present.
+    GithubAppToken,
 }
 
 #[derive(Parser)]
@@ -140,12 +143,60 @@ fn run_preflight(config_path: &std::path::Path) -> ExitCode {
     }
 }
 
+async fn run_github_app_token(config_path: &std::path::Path) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config {}: {e}", config_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mgr = match maestro_core::github_app::try_create_token_manager(&config.github) {
+        Some(mgr) => mgr,
+        None => {
+            eprintln!("GitHub App not configured — set [github] app_id, app_installation_id, and app_private_key/app_private_key_path in config.toml.");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Use the config file's directory as cwd for the curl invocation; fall back to /tmp.
+    let cwd = config_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+
+    match mgr.get_installation_token(&cwd).await {
+        Ok(token) => {
+            println!("{token}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Failed to get GitHub App installation token: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match &cli.command {
         Some(Commands::DockerHooks { phase }) => run_docker_hooks(&cli.config, *phase),
         Some(Commands::Preflight) => run_preflight(&cli.config),
+        Some(Commands::GithubAppToken) => {
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(run_github_app_token(&cli.config)),
+                Err(e) => {
+                    eprintln!("Failed to start async runtime: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         None => match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()

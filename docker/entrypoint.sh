@@ -267,23 +267,50 @@ if [ "${1:-}" = "setup" ]; then
         if [ -z "$repo_url" ]; then
             echo "WARNING: No repo_url found in $CONFIG_FILE. Skipping clone."
             echo "         Add repo_url under [git] in your config.toml."
-        elif [ -d "/workspace/.git" ]; then
-            echo "Repository already cloned at /workspace."
-            read -p "Re-clone from $repo_url? This will delete the existing workspace. [y/N] " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
-                gh repo clone "$repo_url" /workspace
-            fi
         else
-            if [ "$(ls -A /workspace 2>/dev/null)" ]; then
-                echo "Workspace is not empty but has no git repo. Cleaning..."
-                rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
+            # When a GitHub App is configured, `gh` is not authenticated interactively.
+            # Generate an installation token via the maestro CLI and clone over HTTPS.
+            # Otherwise fall back to `gh repo clone` (uses personal gh auth).
+            do_clone() {
+                local target="$1"
+                if [ "$github_app_id" != "0" ]; then
+                    echo "GitHub App configured — generating installation token for clone..."
+                    local app_token
+                    if ! app_token=$(/usr/local/bin/maestro --config "$CONFIG_FILE" github-app-token 2>&1); then
+                        echo "ERROR: Could not generate GitHub App installation token:"
+                        echo "       $app_token"
+                        echo "       Check [github] app_id, app_installation_id, and app_private_key/app_private_key_path in config.toml."
+                        return 1
+                    fi
+                    # Normalize repo_url to owner/repo (strip host, .git suffix)
+                    local owner_repo
+                    owner_repo=$(printf '%s' "$repo_url" \
+                        | sed 's|https://github\.com/||;s|git@github\.com:||;s|\.git$||')
+                    local clone_url="https://x-access-token:${app_token}@github.com/${owner_repo}.git"
+                    git clone "$clone_url" "$target"
+                else
+                    gh repo clone "$repo_url" "$target"
+                fi
+            }
+
+            if [ -d "/workspace/.git" ]; then
+                echo "Repository already cloned at /workspace."
+                read -p "Re-clone from $repo_url? This will delete the existing workspace. [y/N] " -n 1 -r
+                echo
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
+                    do_clone /workspace
+                fi
+            else
+                if [ "$(ls -A /workspace 2>/dev/null)" ]; then
+                    echo "Workspace is not empty but has no git repo. Cleaning..."
+                    rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
+                fi
+                echo "Cloning $repo_url into /workspace..."
+                do_clone /workspace
             fi
-            echo "Cloning $repo_url into /workspace..."
-            gh repo clone "$repo_url" /workspace
+            git config --global --add safe.directory /workspace
         fi
-        git config --global --add safe.directory /workspace
     fi
     echo ""
 
