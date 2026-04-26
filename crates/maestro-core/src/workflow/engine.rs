@@ -2823,7 +2823,7 @@ async fn run_workflow_def_steps(
             .unwrap_or_default()
     };
 
-    let _last_agent_output = run_agent_step_sequence(
+    let last_agent_output = run_agent_step_sequence(
         ticket_key,
         worktree_path,
         &interp_vars,
@@ -2852,6 +2852,17 @@ async fn run_workflow_def_steps(
     .await?;
 
     info!(ticket = %ticket_key, def = %def_name, "Workflow definition steps completed");
+
+    // Extract PR URL from outcome.toml or MAESTRO_PR_URL marker in agent output,
+    // then transition the workflow to Done.
+    let resolved = resolve_pr_url(worktree_path, last_agent_output.as_deref());
+    if let Some(ref url) = resolved {
+        let mut wf = workflows.write().await;
+        if let Some(w) = wf.get_mut(ticket_key) {
+            w.pr_url = Some(url.clone());
+        }
+    }
+    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config).await;
 
     Ok(())
 }
