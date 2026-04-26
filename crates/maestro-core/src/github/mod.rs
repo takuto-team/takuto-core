@@ -65,12 +65,19 @@ pub struct GitHubIssue {
 ///
 /// Shared by both the GitHub poller (auto-starting workflows) and the
 /// `GET /api/github/issues` route (dashboard issue picker).
+///
+/// When `gh_token` is `Some`, it is injected as `GH_TOKEN` so the call works
+/// with a GitHub App installation token even if `gh auth` was never set up.
 pub async fn fetch_open_issues(
     owner_repo: &str,
     cwd: &std::path::Path,
+    gh_token: Option<&str>,
 ) -> crate::error::Result<Vec<GitHubIssue>> {
     let endpoint = format!("repos/{owner_repo}/issues");
-    let output = crate::process::run_command(
+    let env: Vec<(&str, &str)> = gh_token
+        .map(|t| vec![("GH_TOKEN", t)])
+        .unwrap_or_default();
+    let output = crate::process::run_command_with_env(
         "gh",
         &[
             "api",
@@ -84,6 +91,7 @@ pub async fn fetch_open_issues(
         ],
         cwd,
         tokio_util::sync::CancellationToken::new(),
+        &env,
     )
     .await?;
 

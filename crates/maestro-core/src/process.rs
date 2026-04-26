@@ -92,6 +92,16 @@ impl ProcessHandle {
         cwd: &Path,
         cancel_token: CancellationToken,
     ) -> Result<Self> {
+        Self::spawn_with_env(program, args, cwd, cancel_token, &[]).await
+    }
+
+    pub async fn spawn_with_env(
+        program: &str,
+        args: &[&str],
+        cwd: &Path,
+        cancel_token: CancellationToken,
+        extra_env: &[(&str, &str)],
+    ) -> Result<Self> {
         let mut cmd = Command::new(program);
         cmd.args(args)
             .current_dir(cwd)
@@ -99,6 +109,9 @@ impl ProcessHandle {
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .kill_on_drop(true);
+        for (key, val) in extra_env {
+            cmd.env(key, val);
+        }
         set_process_group(&mut cmd);
         let child = cmd.spawn()?;
 
@@ -360,6 +373,18 @@ pub async fn run_command(
     cancel_token: CancellationToken,
 ) -> Result<CommandOutput> {
     let handle = ProcessHandle::spawn(program, args, cwd, cancel_token).await?;
+    handle.wait_with_output().await
+}
+
+pub async fn run_command_with_env(
+    program: &str,
+    args: &[&str],
+    cwd: &Path,
+    cancel_token: CancellationToken,
+    extra_env: &[(&str, &str)],
+) -> Result<CommandOutput> {
+    let handle =
+        ProcessHandle::spawn_with_env(program, args, cwd, cancel_token, extra_env).await?;
     handle.wait_with_output().await
 }
 

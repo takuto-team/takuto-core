@@ -110,11 +110,16 @@ impl GitHubPoller {
 
         let slots_available = max_active - visible_count;
 
-        // Fetch open issues via `gh api`.
+        // Fetch open issues via `gh api`, injecting the GitHub App token when configured.
         // Note: unlike the Jira poller (which supports `jql_filter` and `item_types`),
         // the GitHub poller currently fetches all open issues without label/milestone
         // filtering. A future `[github] label_filter` config option could narrow this.
-        let issues = fetch_open_issues(&owner_repo, &repo_path).await?;
+        let gh_token = self
+            .engine
+            .actions
+            .get_gh_installation_token(&repo_path)
+            .await;
+        let issues = fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref()).await?;
 
         if issues.is_empty() {
             info!("No open GitHub issues found");

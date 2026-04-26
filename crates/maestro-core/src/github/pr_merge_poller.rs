@@ -98,13 +98,19 @@ impl PrMergePoller {
             std::path::PathBuf::from(&config.git.repo_path)
         };
 
+        let gh_token = self
+            .engine
+            .actions
+            .get_gh_installation_token(&repo_path)
+            .await;
+
         for (ticket_key, owner_repo, pr_number) in eligible {
             // Check cancellation between API calls to exit promptly.
             if self.cancel_token.is_cancelled() {
                 return;
             }
 
-            match check_pr_merged(&owner_repo, pr_number, &repo_path).await {
+            match check_pr_merged(&owner_repo, pr_number, &repo_path, gh_token.as_deref()).await {
                 Ok(true) => {
                     info!(
                         ticket = %ticket_key,
@@ -167,13 +173,18 @@ async fn check_pr_merged(
     owner_repo: &str,
     pr_number: u64,
     cwd: &std::path::Path,
+    gh_token: Option<&str>,
 ) -> Result<bool, String> {
     let endpoint = format!("repos/{owner_repo}/pulls/{pr_number}");
-    let output = process::run_command(
+    let env: Vec<(&str, &str)> = gh_token
+        .map(|t| vec![("GH_TOKEN", t)])
+        .unwrap_or_default();
+    let output = process::run_command_with_env(
         "gh",
         &["api", &endpoint, "--jq", ".merged"],
         cwd,
         tokio_util::sync::CancellationToken::new(),
+        &env,
     )
     .await
     .map_err(|e| format!("gh api failed: {e}"))?;
