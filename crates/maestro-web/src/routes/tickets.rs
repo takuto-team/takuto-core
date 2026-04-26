@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use maestro_core::claude::session::ClaudeSession;
 use maestro_core::config::{AiAgentProvider, TicketingSystem, cursor_model_for_cli};
+use maestro_core::container::ContainerRunner;
 use maestro_core::cursor::session::CursorSession;
 use maestro_core::jira::client::JiraClient;
 
@@ -68,7 +69,7 @@ async fn run_description_session(
     system_prompt: Option<&str>,
 ) -> Result<String, (StatusCode, String)> {
     // Snapshot the config fields we need before any await point.
-    let (provider, model, cursor_cli, cursor_model) = {
+    let (provider, model, cursor_cli, cursor_model, improve_timeout, worker_image, repo_path) = {
         let cfg = state.config.read().await;
         (
             cfg.agent.provider,
@@ -79,6 +80,9 @@ async fn run_description_session(
             },
             cfg.agent.cursor_cli.clone(),
             cfg.agent.cursor_model.clone(),
+            cfg.agent.improve_timeout_secs,
+            cfg.general.worker_image.clone(),
+            std::path::PathBuf::from(&cfg.git.repo_path),
         )
     };
 
@@ -92,6 +96,39 @@ async fn run_description_session(
     let worktree = std::env::temp_dir();
     let cancel = CancellationToken::new();
 
+    // Build an ephemeral container runner so the AI agent never runs in the main container.
+    // Falls back to None only when DinD is genuinely unavailable (dev/test env).
+    let container_runner: Option<ContainerRunner> = if ContainerRunner::is_available() {
+        let image = if worker_image.is_empty() {
+            ContainerRunner::discover_worker_image()
+                .await
+                .unwrap_or_else(|| "maestro:latest".to_string())
+        } else {
+            worker_image
+        };
+        let gh_token = state
+            .engine
+            .actions
+            .get_gh_installation_token(&repo_path)
+            .await;
+        let runner = ContainerRunner::new(
+            &format!("improve-{ticket_key}"),
+            &worktree,
+            &image,
+        );
+        Some(if let Some(token) = gh_token {
+            runner.with_gh_token(token)
+        } else {
+            runner
+        })
+    } else {
+        tracing::warn!(
+            ticket = %ticket_key,
+            "DinD not available — running improve/prompt session directly in main container"
+        );
+        None
+    };
+
     // Run with the configured provider.
     let (session_id, output) = match provider {
         AiAgentProvider::Claude => {
@@ -99,11 +136,11 @@ async fn run_description_session(
                 &worktree,
                 prompt,
                 cancel,
-                300,
-                None,
+                improve_timeout,
+                None, // line_tx
                 model.as_deref(),
                 resume_id.as_deref(),
-                None,
+                container_runner.as_ref(),
                 // System prompt is only effective on a fresh session; on resume the existing
                 // session already has its system prompt — inject it into the user message instead.
                 if resume_id.is_some() {
@@ -123,15 +160,15 @@ async fn run_description_session(
                 &worktree,
                 prompt,
                 cancel,
-                300,
-                None,
+                improve_timeout,
+                None, // line_tx
                 if effective_model == "Auto" {
                     None
                 } else {
                     Some(effective_model)
                 },
                 resume_id.as_deref(),
-                None,
+                container_runner.as_ref(),
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

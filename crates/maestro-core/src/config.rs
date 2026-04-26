@@ -55,9 +55,16 @@ pub struct AgentConfig {
     /// Timeout per agent session (applies to all providers).
     #[serde(default = "default_step_timeout")]
     pub step_timeout_secs: u64,
+    /// Timeout in seconds for "Improve with AI" / "Prompt ticket" sessions. Default 300.
+    #[serde(default = "default_improve_timeout")]
+    pub improve_timeout_secs: u64,
     /// Model override (e.g. `"claude-opus-4-6"`). Empty = provider default.
     #[serde(default)]
     pub model: String,
+}
+
+fn default_improve_timeout() -> u64 {
+    300
 }
 
 fn default_cursor_cli() -> String {
@@ -88,6 +95,7 @@ impl Default for AgentConfig {
             cursor_cli: default_cursor_cli(),
             cursor_model: default_cursor_model(),
             step_timeout_secs: default_step_timeout(),
+            improve_timeout_secs: default_improve_timeout(),
             model: String::new(),
         }
     }

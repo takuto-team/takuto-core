@@ -250,6 +250,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           description={detailModal.description}
           ticketingSystem={ticketingSystem}
           showStartButton={detailModal.showStart}
+          improveTimeoutSecs={config?.agent?.improve_timeout_secs}
           onStart={handleAddToDashboard}
           onClose={() => setDetailModal(null)}
           onSaved={fetchWorkflows}

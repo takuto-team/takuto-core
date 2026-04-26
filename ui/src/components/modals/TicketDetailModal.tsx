@@ -9,7 +9,7 @@ import { AiPromptPanel } from "../AiPromptPanel";
 import { DiffView } from "../DiffView";
 import { useToast } from "../../hooks/useToast";
 
-const IMPROVE_TIMEOUT_SECS = 300;
+const DEFAULT_IMPROVE_TIMEOUT_SECS = 300;
 
 function formatCountdown(secs: number): string {
   const m = Math.floor(secs / 60);
@@ -29,6 +29,8 @@ interface Props {
   description?: string;
   ticketingSystem: string;
   showStartButton: boolean;
+  /** Timeout in seconds for "Improve with AI" sessions, from server config. */
+  improveTimeoutSecs?: number;
   onStart?: () => void;
   onClose: () => void;
   /** Called after a successful save so the parent can refresh workflow data. */
@@ -41,6 +43,7 @@ export function TicketDetailModal({
   description: initialDescription,
   ticketingSystem,
   showStartButton,
+  improveTimeoutSecs = DEFAULT_IMPROVE_TIMEOUT_SECS,
   onStart,
   onClose,
   onSaved,
@@ -49,9 +52,10 @@ export function TicketDetailModal({
   const [loading, setLoading] = useState(!initialDescription && ticketingSystem !== "none");
   const [editTitle, setEditTitle] = useState(summary);
   const [improving, setImproving] = useState(false);
-  const [countdown, setCountdown] = useState(IMPROVE_TIMEOUT_SECS);
+  const [countdown, setCountdown] = useState(improveTimeoutSecs);
   const abortRef = useRef<AbortController | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const improveStartRef = useRef<number | null>(null);
   const { showToast } = useToast();
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
@@ -86,12 +90,14 @@ export function TicketDetailModal({
 
   const handleImprove = async () => {
     setImproving(true);
-    setCountdown(IMPROVE_TIMEOUT_SECS);
+    improveStartRef.current = Date.now();
+    setCountdown(improveTimeoutSecs);
 
     if (countdownRef.current) clearInterval(countdownRef.current);
     countdownRef.current = setInterval(() => {
-      setCountdown((prev) => Math.max(0, prev - 1));
-    }, 1000);
+      const elapsed = (Date.now() - (improveStartRef.current ?? Date.now())) / 1000;
+      setCountdown(Math.max(0, Math.round(improveTimeoutSecs - elapsed)));
+    }, 500);
 
     abortRef.current = new AbortController();
     try {

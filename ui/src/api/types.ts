@@ -84,6 +84,10 @@ export interface ConfigResponse {
     ticketing_system: string;
     [key: string]: unknown;
   };
+  agent?: {
+    improve_timeout_secs?: number;
+    [key: string]: unknown;
+  };
   jira: {
     project_keys: string[];
     site: string;
