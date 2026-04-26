@@ -190,7 +190,10 @@ async fn check_pr_merged(
     .map_err(|e| format!("gh api failed: {e}"))?;
 
     if !output.success() {
-        return Err(format!("gh api failed: {}", output.stderr.trim()));
+        return Err(format!(
+            "gh api failed: {}",
+            crate::github::gh_api_error_message(output.stderr.trim(), "Pull requests: Read")
+        ));
     }
 
     let trimmed = output.stdout.trim();

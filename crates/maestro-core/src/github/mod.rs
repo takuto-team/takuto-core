@@ -61,6 +61,30 @@ pub struct GitHubIssue {
     pub body: String,
 }
 
+/// Translate a raw `gh api` error message into a user-friendly string.
+///
+/// GitHub returns "Resource not accessible by integration (HTTP 403)" when the
+/// GitHub App installation is missing the required permission for the endpoint.
+/// This turns that opaque message into an actionable instruction.
+pub fn gh_api_error_message(raw_stderr: &str, required_permission: &str) -> String {
+    if raw_stderr.contains("Resource not accessible by integration")
+        || (raw_stderr.contains("403") && raw_stderr.contains("integration"))
+    {
+        format!(
+            "GitHub App is missing the '{required_permission}' permission. \
+             Go to your GitHub App settings → Permissions & events → set \
+             '{required_permission}' to Read (or Write), save, then re-approve \
+             the installation on your account/org."
+        )
+    } else if raw_stderr.contains("401") || raw_stderr.contains("Bad credentials") {
+        "GitHub authentication failed. The GitHub App token may be invalid or expired. \
+         Check that app_id, app_installation_id, and the private key are correct in config.toml."
+            .to_string()
+    } else {
+        raw_stderr.to_string()
+    }
+}
+
 /// Fetch open GitHub issues using `gh api`. Returns issues as key/summary/body.
 ///
 /// Shared by both the GitHub poller (auto-starting workflows) and the
@@ -98,7 +122,7 @@ pub async fn fetch_open_issues(
     if !output.success() {
         return Err(crate::error::MaestroError::Config(format!(
             "gh api repos/{owner_repo}/issues failed: {}",
-            output.stderr.trim()
+            gh_api_error_message(output.stderr.trim(), "Issues: Read")
         )));
     }
 
