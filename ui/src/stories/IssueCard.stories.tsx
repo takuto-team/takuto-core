@@ -184,6 +184,7 @@ export const Completed: Story = {
       progress_percent: 100,
       progress_steps_total: 5,
       pr_url: "https://github.com/org/repo/pull/42",
+      has_report: true,
       terminal_lines: [
         { text: "All steps completed successfully.", stream: "stdout" },
         { text: "PR created: https://github.com/org/repo/pull/42", stream: "stdout" },
