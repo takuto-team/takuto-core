@@ -163,7 +163,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
 
         {/* Delete button — top-right corner */}
         {w.can_delete && (
-          <div className="absolute top-1 right-1 z-10">
+          <div className="absolute top-1 left-1 z-10">
             <DeleteIconButton onClick={() => confirmAction("Delete", "delete", doAction("delete"))} />
           </div>
         )}
