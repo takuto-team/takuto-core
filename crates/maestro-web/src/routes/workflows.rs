@@ -436,38 +436,6 @@ pub async fn stop_workflow(
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
 }
 
-/// Run the configured **`[[review_agent_steps]]`** sequence in the existing worktree (requires **Done** + PR URL).
-pub async fn address_pr_comments(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    // Stop any running run commands — the workflow is transitioning back to active
-    cleanup_run_commands(&state, &id).await;
-
-    state
-        .engine
-        .start_pr_review_workflow(&id)
-        .await
-        .map(|()| StatusCode::ACCEPTED)
-        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
-}
-
-/// Run the configured **`[[merge_base_agent_steps]]`** sequence in the existing worktree (requires **Done** + PR URL).
-pub async fn merge_base_branch(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    // Stop any running run commands — the workflow is transitioning back to active
-    cleanup_run_commands(&state, &id).await;
-
-    state
-        .engine
-        .start_merge_base_workflow(&id)
-        .await
-        .map(|()| StatusCode::ACCEPTED)
-        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
-}
-
 /// Jira transition to configured **Done** status and remove worktree; removes the workflow on full success.
 pub async fn mark_work_done(
     State(state): State<AppState>,

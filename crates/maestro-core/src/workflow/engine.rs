@@ -53,12 +53,6 @@ pub struct MarkDoneOutcome {
     pub workflow_removed: bool,
 }
 
-#[derive(Clone, Copy)]
-enum AgentRunPhase {
-    Main,
-    PrReview,
-    MergeBase,
-}
 
 /// A single line of terminal output stored on the workflow for persistence
 /// across page reloads. Populated by spawn_output_relay after humanizing.
@@ -281,58 +275,6 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
         driver_started: w.driver_started,
         workflow_def_runs: w.workflow_def_runs.clone(),
     }
-}
-
-type SecondaryDriverBundle = (String, PathBuf, String, String, String);
-
-/// PR-review driver needs these when restoring from snapshot.
-fn pr_review_restore_bundle(rec: &PersistedWorkflowRecord) -> Option<SecondaryDriverBundle> {
-    let in_pr = matches!(rec.state, WorkflowState::AddressingPrComments { .. })
-        || matches!(
-            &rec.state,
-            WorkflowState::Paused { source_state }
-                if matches!(source_state.as_ref(), WorkflowState::AddressingPrComments { .. })
-        );
-    if !in_pr {
-        return None;
-    }
-    let pr = rec.pr_url.as_deref()?.trim();
-    if pr.is_empty() {
-        return None;
-    }
-    let wt = rec.worktree_path.clone()?;
-    Some((
-        pr.to_string(),
-        wt,
-        rec.ticket_summary.clone(),
-        rec.ticket_description.clone(),
-        rec.ticket_type.clone(),
-    ))
-}
-
-/// Merge-base-branch driver needs the same bundle shape when restoring from snapshot.
-fn merge_base_restore_bundle(rec: &PersistedWorkflowRecord) -> Option<SecondaryDriverBundle> {
-    let in_merge = matches!(rec.state, WorkflowState::MergingBaseBranch { .. })
-        || matches!(
-            &rec.state,
-            WorkflowState::Paused { source_state }
-                if matches!(source_state.as_ref(), WorkflowState::MergingBaseBranch { .. })
-        );
-    if !in_merge {
-        return None;
-    }
-    let pr = rec.pr_url.as_deref()?.trim();
-    if pr.is_empty() {
-        return None;
-    }
-    let wt = rec.worktree_path.clone()?;
-    Some((
-        pr.to_string(),
-        wt,
-        rec.ticket_summary.clone(),
-        rec.ticket_description.clone(),
-        rec.ticket_type.clone(),
-    ))
 }
 
 pub struct WorkflowEngine {
@@ -611,8 +553,6 @@ impl WorkflowEngine {
                     rec.state,
                     WorkflowState::Stopped | WorkflowState::Error { .. }
                 );
-            let pr_bundle = pr_review_restore_bundle(&rec);
-            let merge_bundle = merge_base_restore_bundle(&rec);
             let state_display = rec.state.to_string();
             let is_unstarted_pending =
                 matches!(rec.state, WorkflowState::Pending) && !rec.driver_started;
@@ -642,72 +582,7 @@ impl WorkflowEngine {
             let agent_sem = self.agent_run_semaphore.clone();
             let suppress = self.suppress_cancelled_as_error.clone();
 
-            if let Some((pr_url, worktree_path, ticket_summary, ticket_description, ticket_type)) =
-                pr_bundle
             {
-                if !worktree_path.exists() {
-                    warn!(
-                        ticket = %ticket_key,
-                        path = %worktree_path.display(),
-                        "PR review restore: worktree missing — no driver spawned, user can retry"
-                    );
-                    continue;
-                }
-
-                tokio::spawn(async move {
-                    drive_pr_review_workflow(
-                        ticket_key,
-                        pr_url,
-                        worktree_path,
-                        ticket_summary,
-                        ticket_description,
-                        ticket_type,
-                        engine_config,
-                        engine_workflows,
-                        engine_actions,
-                        engine_event_tx,
-                        cancel_token,
-                        agent_sem,
-                        suppress,
-                    )
-                    .await;
-                });
-            } else if let Some((
-                pr_url,
-                worktree_path,
-                ticket_summary,
-                ticket_description,
-                ticket_type,
-            )) = merge_bundle
-            {
-                if !worktree_path.exists() {
-                    warn!(
-                        ticket = %ticket_key,
-                        path = %worktree_path.display(),
-                        "Merge base restore: worktree missing — no driver spawned, user can retry"
-                    );
-                    continue;
-                }
-
-                tokio::spawn(async move {
-                    drive_merge_base_workflow(
-                        ticket_key,
-                        pr_url,
-                        worktree_path,
-                        ticket_summary,
-                        ticket_description,
-                        ticket_type,
-                        engine_config,
-                        engine_workflows,
-                        engine_actions,
-                        engine_event_tx,
-                        cancel_token,
-                        agent_sem,
-                        suppress,
-                    )
-                    .await;
-                });
-            } else {
                 use crate::workflow::definitions::{WorkflowDefRunState, discover_workflows};
 
                 // Find defs that were running when the server stopped, and re-spawn their drivers.
@@ -1289,225 +1164,6 @@ impl WorkflowEngine {
         }
     }
 
-    /// Start the secondary PR-comment agent workflow (requires **Done** + `pr_url` + existing worktree).
-    pub async fn start_pr_review_workflow(&self, ticket_key: &str) -> Result<()> {
-        let (
-            cancel_token,
-            worktree_path,
-            pr_url,
-            ticket_summary,
-            ticket_description,
-            ticket_type,
-            workflow_id,
-            display,
-        ) = {
-            let mut wf_map = self.workflows.write().await;
-            let w = wf_map
-                .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
-
-            if !matches!(w.state, WorkflowState::Done) {
-                return Err(MaestroError::Config(format!(
-                    "Workflow must be Done before addressing PR comments (current: {})",
-                    w.state
-                )));
-            }
-
-            let pr = w
-                .pr_url
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| MaestroError::Config("No PR URL on this workflow".into()))?;
-
-            let wt = w
-                .worktree_path
-                .clone()
-                .ok_or_else(|| MaestroError::Config("No worktree path on this workflow".into()))?;
-
-            if !wt.exists() {
-                return Err(MaestroError::Config(format!(
-                    "Worktree directory no longer exists: {}",
-                    wt.display()
-                )));
-            }
-
-            w.state = WorkflowState::AddressingPrComments { pass: 1 };
-            w.current_step_label = Some("Starting PR review".to_string());
-            w.updated_at = Utc::now();
-            // New phase must not reuse the main ticket driver's token: `CancellationToken` never
-            // un-cancels, so a prior stop/interrupt/shutdown would make PR review exit instantly at
-            // `check_cancelled` even though the workflow row is back to **Done** and the UI allows
-            // this action.
-            w.cancel_token = CancellationToken::new();
-            let display = w.status_display();
-            let workflow_id = w.id.clone();
-            (
-                w.cancel_token.clone(),
-                wt,
-                pr.to_string(),
-                w.ticket_summary.clone(),
-                w.ticket_description.clone(),
-                w.ticket_type.clone(),
-                workflow_id,
-                display,
-            )
-        };
-
-        self.broadcast_event(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
-            workflow_id,
-            ticket_key: ticket_key.to_string(),
-            state: display,
-            timestamp: Utc::now(),
-            error: None,
-            step_name: None,
-            output_line: None,
-            stream: None,
-            progress_percent: None,
-            progress_steps_total: None,
-            forwarded_port: None,
-            pr_merged: None,
-        });
-
-        let engine_config = self.config.clone();
-        let engine_workflows = self.workflows.clone();
-        let engine_actions = self.actions.clone();
-        let engine_event_tx = self.event_tx.clone();
-        let agent_sem = self.agent_run_semaphore.clone();
-        let suppress = self.suppress_cancelled_as_error.clone();
-        let ticket = ticket_key.to_string();
-
-        tokio::spawn(async move {
-            drive_pr_review_workflow(
-                ticket,
-                pr_url,
-                worktree_path,
-                ticket_summary,
-                ticket_description,
-                ticket_type,
-                engine_config,
-                engine_workflows,
-                engine_actions,
-                engine_event_tx,
-                cancel_token,
-                agent_sem,
-                suppress,
-            )
-            .await;
-        });
-
-        Ok(())
-    }
-
-    /// Start the merge-base-branch agent workflow (requires **Done** + `pr_url` + existing worktree).
-    pub async fn start_merge_base_workflow(&self, ticket_key: &str) -> Result<()> {
-        let (
-            cancel_token,
-            worktree_path,
-            pr_url,
-            ticket_summary,
-            ticket_description,
-            ticket_type,
-            workflow_id,
-            display,
-        ) = {
-            let mut wf_map = self.workflows.write().await;
-            let w = wf_map
-                .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
-
-            if !matches!(w.state, WorkflowState::Done) {
-                return Err(MaestroError::Config(format!(
-                    "Workflow must be Done before merging base branch (current: {})",
-                    w.state
-                )));
-            }
-
-            let pr = w
-                .pr_url
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| MaestroError::Config("No PR URL on this workflow".into()))?;
-
-            let wt = w
-                .worktree_path
-                .clone()
-                .ok_or_else(|| MaestroError::Config("No worktree path on this workflow".into()))?;
-
-            if !wt.exists() {
-                return Err(MaestroError::Config(format!(
-                    "Worktree directory no longer exists: {}",
-                    wt.display()
-                )));
-            }
-
-            w.state = WorkflowState::MergingBaseBranch { pass: 1 };
-            w.current_step_label = Some("Starting merge base branch".to_string());
-            w.updated_at = Utc::now();
-            // Same as **Address PR Comments** — fresh token so a previously cancelled main driver
-            // token cannot abort merge-base immediately.
-            w.cancel_token = CancellationToken::new();
-            let display = w.status_display();
-            let workflow_id = w.id.clone();
-            (
-                w.cancel_token.clone(),
-                wt,
-                pr.to_string(),
-                w.ticket_summary.clone(),
-                w.ticket_description.clone(),
-                w.ticket_type.clone(),
-                workflow_id,
-                display,
-            )
-        };
-
-        self.broadcast_event(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
-            workflow_id,
-            ticket_key: ticket_key.to_string(),
-            state: display,
-            timestamp: Utc::now(),
-            error: None,
-            step_name: None,
-            output_line: None,
-            stream: None,
-            progress_percent: None,
-            progress_steps_total: None,
-            forwarded_port: None,
-            pr_merged: None,
-        });
-
-        let engine_config = self.config.clone();
-        let engine_workflows = self.workflows.clone();
-        let engine_actions = self.actions.clone();
-        let engine_event_tx = self.event_tx.clone();
-        let agent_sem = self.agent_run_semaphore.clone();
-        let suppress = self.suppress_cancelled_as_error.clone();
-        let ticket = ticket_key.to_string();
-
-        tokio::spawn(async move {
-            drive_merge_base_workflow(
-                ticket,
-                pr_url,
-                worktree_path,
-                ticket_summary,
-                ticket_description,
-                ticket_type,
-                engine_config,
-                engine_workflows,
-                engine_actions,
-                engine_event_tx,
-                cancel_token,
-                agent_sem,
-                suppress,
-            )
-            .await;
-        });
-
-        Ok(())
-    }
 
     /// Jira **Done** transition (configured status name) and remove worktree; remove workflow from the map only if both succeed.
     pub async fn mark_work_done(&self, ticket_key: &str) -> Result<MarkDoneOutcome> {
@@ -2829,7 +2485,6 @@ async fn run_workflow_def_steps(
         &interp_vars,
         &filtered_steps,
         1, // single pass
-        AgentRunPhase::Main,
         ai_stream_provider,
         &cursor_cli,
         cursor_model_pass,
@@ -2867,117 +2522,6 @@ async fn run_workflow_def_steps(
     Ok(())
 }
 
-// Agent session parameters are inherently numerous.
-#[allow(clippy::too_many_arguments)]
-async fn drive_pr_review_workflow(
-    ticket_key: String,
-    pr_url: String,
-    worktree_path: PathBuf,
-    ticket_summary: String,
-    ticket_description: String,
-    ticket_type: String,
-    config: Arc<RwLock<Config>>,
-    workflows: Arc<RwLock<HashMap<String, Workflow>>>,
-    actions: Arc<dyn ExternalActions>,
-    event_tx: broadcast::Sender<WorkflowEvent>,
-    cancel_token: CancellationToken,
-    agent_run_semaphore: Arc<Semaphore>,
-    suppress_cancelled_as_error: Arc<AtomicBool>,
-) {
-    info!(ticket = %ticket_key, "PR review workflow driver started");
-
-    let log_dir = {
-        let cfg = config.read().await;
-        PathBuf::from(&cfg.git.repo_path).join("logs")
-    };
-    let log_writer = Arc::new(WorkflowLogWriter::new(&log_dir, &ticket_key).await);
-
-    let result = run_pr_review_steps(
-        &ticket_key,
-        &pr_url,
-        &worktree_path,
-        &ticket_summary,
-        &ticket_description,
-        &ticket_type,
-        &config,
-        &workflows,
-        &actions,
-        &event_tx,
-        &cancel_token,
-        &log_writer,
-        &agent_run_semaphore,
-    )
-    .await;
-
-    // Always clean up worker containers regardless of success/failure
-    ContainerRunner::cleanup_for_ticket(&ticket_key).await;
-
-    if let Err(e) = result {
-        if matches!(e, MaestroError::Cancelled)
-            && suppress_cancelled_as_error.load(Ordering::SeqCst)
-        {
-            info!(
-                ticket = %ticket_key,
-                "PR review driver cancelled during shutdown; state preserved for resume"
-            );
-            return;
-        }
-
-        if matches!(e, MaestroError::Cancelled) {
-            let snapshot = {
-                let wf = workflows.read().await;
-                wf.get(&ticket_key).map(|w| w.state.clone())
-            };
-            match snapshot {
-                None => {
-                    info!(
-                        ticket = %ticket_key,
-                        "PR review driver cancelled; row no longer in map"
-                    );
-                    return;
-                }
-                Some(WorkflowState::Stopped) => {
-                    info!(
-                        ticket = %ticket_key,
-                        "PR review driver cancelled; left in Stopped (operator stop)"
-                    );
-                    return;
-                }
-                _ => {}
-            }
-        }
-
-        error!(ticket = %ticket_key, error = %e, "PR review workflow failed");
-        log_writer.write(&format!("PR REVIEW FAILED: {e}")).await;
-        let mut wf = workflows.write().await;
-        if let Some(workflow) = wf.get_mut(&ticket_key) {
-            let source = Box::new(workflow.state.clone());
-            workflow.current_step_label = None;
-            workflow.state = WorkflowState::Error {
-                source_state: source,
-                message: e.to_string(),
-            };
-            workflow.updated_at = Utc::now();
-        }
-
-        let _ = event_tx.send(WorkflowEvent {
-            event_type: "workflow_error".to_string(),
-            workflow_id: String::new(),
-            ticket_key: ticket_key.clone(),
-            state: "Error".to_string(),
-            timestamp: Utc::now(),
-            error: Some(e.to_string()),
-            step_name: None,
-            output_line: None,
-            stream: None,
-            progress_percent: None,
-            progress_steps_total: None,
-            forwarded_port: None,
-            pr_merged: None,
-        });
-    }
-}
-
 /// Check whether a step with the given label already succeeded in a prior run.
 fn step_already_succeeded(steps_log: &[StepLog], step_label: &str) -> bool {
     steps_log
@@ -2985,264 +2529,6 @@ fn step_already_succeeded(steps_log: &[StepLog], step_label: &str) -> bool {
         .any(|s| s.step_name == step_label && s.status == StepStatus::Success)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn drive_merge_base_workflow(
-    ticket_key: String,
-    pr_url: String,
-    worktree_path: PathBuf,
-    ticket_summary: String,
-    ticket_description: String,
-    ticket_type: String,
-    config: Arc<RwLock<Config>>,
-    workflows: Arc<RwLock<HashMap<String, Workflow>>>,
-    actions: Arc<dyn ExternalActions>,
-    event_tx: broadcast::Sender<WorkflowEvent>,
-    cancel_token: CancellationToken,
-    agent_run_semaphore: Arc<Semaphore>,
-    suppress_cancelled_as_error: Arc<AtomicBool>,
-) {
-    info!(ticket = %ticket_key, "Merge base branch workflow driver started");
-
-    let log_dir = {
-        let cfg = config.read().await;
-        PathBuf::from(&cfg.git.repo_path).join("logs")
-    };
-    let log_writer = Arc::new(WorkflowLogWriter::new(&log_dir, &ticket_key).await);
-
-    let result = run_merge_base_steps(
-        &ticket_key,
-        &pr_url,
-        &worktree_path,
-        &ticket_summary,
-        &ticket_description,
-        &ticket_type,
-        &config,
-        &workflows,
-        &actions,
-        &event_tx,
-        &cancel_token,
-        &log_writer,
-        &agent_run_semaphore,
-    )
-    .await;
-
-    ContainerRunner::cleanup_for_ticket(&ticket_key).await;
-
-    if let Err(e) = result {
-        if matches!(e, MaestroError::Cancelled)
-            && suppress_cancelled_as_error.load(Ordering::SeqCst)
-        {
-            info!(
-                ticket = %ticket_key,
-                "Merge base driver cancelled during shutdown; state preserved for resume"
-            );
-            return;
-        }
-
-        if matches!(e, MaestroError::Cancelled) {
-            let snapshot = {
-                let wf = workflows.read().await;
-                wf.get(&ticket_key).map(|w| w.state.clone())
-            };
-            match snapshot {
-                None => {
-                    info!(
-                        ticket = %ticket_key,
-                        "Merge base driver cancelled; row no longer in map"
-                    );
-                    return;
-                }
-                Some(WorkflowState::Stopped) => {
-                    info!(
-                        ticket = %ticket_key,
-                        "Merge base driver cancelled; left in Stopped (operator stop)"
-                    );
-                    return;
-                }
-                _ => {}
-            }
-        }
-
-        error!(ticket = %ticket_key, error = %e, "Merge base branch workflow failed");
-        log_writer.write(&format!("MERGE BASE FAILED: {e}")).await;
-        let mut wf = workflows.write().await;
-        if let Some(workflow) = wf.get_mut(&ticket_key) {
-            let source = Box::new(workflow.state.clone());
-            workflow.current_step_label = None;
-            workflow.state = WorkflowState::Error {
-                source_state: source,
-                message: e.to_string(),
-            };
-            workflow.updated_at = Utc::now();
-        }
-
-        let _ = event_tx.send(WorkflowEvent {
-            event_type: "workflow_error".to_string(),
-            workflow_id: String::new(),
-            ticket_key: ticket_key.clone(),
-            state: "Error".to_string(),
-            timestamp: Utc::now(),
-            error: Some(e.to_string()),
-            step_name: None,
-            output_line: None,
-            stream: None,
-            progress_percent: None,
-            progress_steps_total: None,
-            forwarded_port: None,
-            pr_merged: None,
-        });
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_merge_base_steps(
-    ticket_key: &str,
-    pr_url: &str,
-    worktree_path: &Path,
-    ticket_summary: &str,
-    ticket_description: &str,
-    ticket_type: &str,
-    config: &Arc<RwLock<Config>>,
-    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
-    actions: &Arc<dyn ExternalActions>,
-    event_tx: &broadcast::Sender<WorkflowEvent>,
-    cancel_token: &CancellationToken,
-    log_writer: &Arc<WorkflowLogWriter>,
-    agent_run_semaphore: &Arc<Semaphore>,
-) -> Result<()> {
-    let ticket = crate::jira::client::JiraTicket {
-        key: ticket_key.to_string(),
-        summary: ticket_summary.to_string(),
-        description: ticket_description.to_string(),
-        item_type: ticket_type.to_string(),
-        status: String::new(),
-        linked_items: Vec::new(),
-    };
-    let jira_cfg = {
-        let c = config.read().await;
-        c.jira.clone()
-    };
-    let ticket_context = build_ticket_context(&ticket, &jira_cfg);
-    let acceptance_criteria = extract_acceptance_criteria(&ticket.description);
-    let acceptance_criteria_str = format_acceptance_criteria_block(&acceptance_criteria);
-
-    let cfg = config.read().await;
-    let base_branch = cfg.git.base_branch.clone();
-    drop(cfg);
-
-    let mut interp_vars: HashMap<String, String> = HashMap::new();
-    interp_vars.insert("ticket_key".into(), ticket_key.to_string());
-    interp_vars.insert("ticket_summary".into(), ticket_summary.to_string());
-    interp_vars.insert("ticket_description".into(), ticket_description.to_string());
-    interp_vars.insert("description".into(), ticket_description.to_string());
-    interp_vars.insert("ticket_type".into(), ticket_type.to_string());
-    interp_vars.insert("acceptance_criteria".into(), acceptance_criteria_str);
-    interp_vars.insert("ticket_context".into(), ticket_context);
-    interp_vars.insert("pr_url".into(), pr_url.to_string());
-    interp_vars.insert("base_branch".into(), base_branch);
-
-    let container_runner = if ContainerRunner::is_available() {
-        let cfg = config.read().await;
-        let image = if cfg.general.worker_image.is_empty() {
-            drop(cfg);
-            ContainerRunner::discover_worker_image()
-                .await
-                .unwrap_or_else(|| "maestro:latest".to_string())
-        } else {
-            let img = cfg.general.worker_image.clone();
-            drop(cfg);
-            img
-        };
-        let gh_token = actions.get_gh_installation_token(worktree_path).await;
-        let runner = ContainerRunner::new(ticket_key, worktree_path, &image);
-        Some(if let Some(token) = gh_token {
-            runner.with_gh_token(token)
-        } else {
-            runner
-        })
-    } else {
-        return Err(MaestroError::Config(
-            "Docker daemon is not available. DinD is required for workflow isolation. \
-             Ensure DOCKER_HOST is set and the DinD sidecar is running."
-                .into(),
-        ));
-    };
-
-    let cfg = config.read().await;
-    let timeout = cfg.agent.step_timeout_secs;
-    let claude_model = if cfg.agent.model.is_empty() {
-        None
-    } else {
-        Some(cfg.agent.model.clone())
-    };
-    let cursor_model_buf = cfg.agent.cursor_model.clone();
-    let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
-    let ai_stream_provider = cfg.agent.provider;
-    let cursor_cli = cfg.agent.cursor_cli.clone();
-    let ticketing_avail = {
-        let wf = workflows.read().await;
-        wf.get(ticket_key)
-            .map(|w| w.ticketing_available)
-            .unwrap_or(false)
-    };
-    let steps: Vec<_> = cfg
-        .resolved_merge_base_agent_steps()
-        .into_iter()
-        .filter(|s| s.available_for(ticketing_avail))
-        .collect();
-    drop(cfg);
-
-    let skill_paths = build_skill_search_paths(worktree_path, ai_stream_provider);
-
-    wait_if_paused(workflows, ticket_key, cancel_token).await?;
-    check_cancelled(cancel_token)?;
-
-    let prior_steps: Vec<StepLog> = {
-        let wf = workflows.read().await;
-        wf.get(ticket_key)
-            .map(|w| w.steps_log.clone())
-            .unwrap_or_default()
-    };
-    let _last_agent_output = run_agent_step_sequence(
-        ticket_key,
-        worktree_path,
-        &interp_vars,
-        &steps,
-        1, // single pass
-        AgentRunPhase::MergeBase,
-        ai_stream_provider,
-        cursor_cli.as_str(),
-        cursor_model_pass,
-        claude_model.as_deref(),
-        timeout,
-        workflows,
-        event_tx,
-        cancel_token,
-        log_writer,
-        agent_run_semaphore.clone(),
-        container_runner.as_ref(),
-        &prior_steps,
-        false,
-        config,
-        &skill_paths,
-        None,
-        false,
-        false, // no report injection for merge-base
-    )
-    .await?;
-
-    let mut complete_log = StepLog::new("Merge base branch complete".to_string());
-    complete_log
-        .output
-        .push("Base branch merge agent steps finished.".to_string());
-    complete_log.complete(StepStatus::Success);
-    add_step_log(workflows, ticket_key, complete_log).await;
-
-    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config).await;
-    info!(ticket = %ticket_key, "Merge base branch workflow completed");
-
-    Ok(())
-}
 
 /// Build skill search paths: worktree project-level, then user-level (provider-dependent).
 fn build_skill_search_paths(worktree_path: &Path, provider: AiAgentProvider) -> Vec<PathBuf> {
@@ -3261,8 +2547,7 @@ fn build_skill_search_paths(worktree_path: &Path, provider: AiAgentProvider) -> 
     paths
 }
 
-/// `apply_prior_success_skip`: enabled for the main **AddressingTicket** flow (resume after restart);
-/// disabled for **PR review** and **merge-base** so each dashboard action runs the full step list.
+/// `apply_prior_success_skip`: enabled for the main **AddressingTicket** flow (resume after restart).
 ///
 /// `initial_session_id`: when restoring from a snapshot, the last Claude/Cursor session ID so the
 /// first re-executed step can use `--resume` instead of starting a fresh conversation.
@@ -3276,7 +2561,6 @@ async fn run_agent_step_sequence(
     interp_vars: &HashMap<String, String>,
     steps: &[AgentStepConfig],
     outer_loops: u8,
-    phase: AgentRunPhase,
     ai_stream_provider: AiAgentProvider,
     cursor_cli: &str,
     cursor_model_pass: &str,
@@ -3289,8 +2573,7 @@ async fn run_agent_step_sequence(
     agent_run_semaphore: Arc<Semaphore>,
     container_runner: Option<&ContainerRunner>,
     prior_steps_log: &[StepLog],
-    // If true (main ticket flow): skip agent steps already Success in prior_steps_log (restart resume).
-    // If false (PR review / merge-base): always run — dashboard may trigger the flow repeatedly.
+    // If true: skip agent steps already Success in prior_steps_log (restart resume).
     apply_prior_success_skip: bool,
     config: &Arc<RwLock<Config>>,
     skill_search_paths: &[PathBuf],
@@ -3323,11 +2606,7 @@ async fn run_agent_step_sequence(
                 } else {
                     format!("{} (run {}/{})", step.name, r, step_repeat)
                 };
-                let step_label = match phase {
-                    AgentRunPhase::Main => step_label_core.clone(),
-                    AgentRunPhase::PrReview => format!("[PR review] {step_label_core}"),
-                    AgentRunPhase::MergeBase => format!("[Merge base] {step_label_core}"),
-                };
+                let step_label = step_label_core.clone();
 
                 // Skip steps that already succeeded in a prior run (main flow only — resume after restart).
                 // The original Success entry is already in steps_log from the snapshot — don't add a duplicate.
@@ -3339,41 +2618,15 @@ async fn run_agent_step_sequence(
 
                 let _agent_slot = acquire_agent_slot(&agent_run_semaphore, cancel_token).await?;
 
-                match phase {
-                    AgentRunPhase::Main => {
-                        transition_to_agent_step(
-                            workflows,
-                            event_tx,
-                            ticket_key,
-                            outer,
-                            &step_label,
-                            config,
-                        )
-                        .await;
-                    }
-                    AgentRunPhase::PrReview => {
-                        transition_to_pr_review_step(
-                            workflows,
-                            event_tx,
-                            ticket_key,
-                            outer,
-                            &step_label,
-                            config,
-                        )
-                        .await;
-                    }
-                    AgentRunPhase::MergeBase => {
-                        transition_to_merge_base_step(
-                            workflows,
-                            event_tx,
-                            ticket_key,
-                            outer,
-                            &step_label,
-                            config,
-                        )
-                        .await;
-                    }
-                }
+                transition_to_agent_step(
+                    workflows,
+                    event_tx,
+                    ticket_key,
+                    outer,
+                    &step_label,
+                    config,
+                )
+                .await;
 
                 let is_last_run_of_outer_cycle = step_idx + 1 == num_steps && r == step_repeat;
 
@@ -3390,32 +2643,14 @@ async fn run_agent_step_sequence(
                         .write_step(&step_label, "Starting command step")
                         .await;
 
-                    let relay_label = match phase {
-                        AgentRunPhase::Main => format!(
-                            "{} · step {}/{} · run {}/{}",
-                            step.name,
-                            step_idx + 1,
-                            num_steps,
-                            r,
-                            step_repeat
-                        ),
-                        AgentRunPhase::PrReview => format!(
-                            "[PR review] {} · step {}/{} · run {}/{}",
-                            step.name,
-                            step_idx + 1,
-                            num_steps,
-                            r,
-                            step_repeat
-                        ),
-                        AgentRunPhase::MergeBase => format!(
-                            "[Merge base] {} · step {}/{} · run {}/{}",
-                            step.name,
-                            step_idx + 1,
-                            num_steps,
-                            r,
-                            step_repeat
-                        ),
-                    };
+                    let relay_label = format!(
+                        "{} · step {}/{} · run {}/{}",
+                        step.name,
+                        step_idx + 1,
+                        num_steps,
+                        r,
+                        step_repeat
+                    );
                     let line_tx = spawn_output_relay(
                         event_tx,
                         ticket_key,
@@ -3620,32 +2855,14 @@ async fn run_agent_step_sequence(
                     format!("{interpolated}\n\n{headless}")
                 };
 
-                let relay_label = match phase {
-                    AgentRunPhase::Main => format!(
-                        "{} · step {}/{} · run {}/{}",
-                        step.name,
-                        step_idx + 1,
-                        num_steps,
-                        r,
-                        step_repeat
-                    ),
-                    AgentRunPhase::PrReview => format!(
-                        "[PR review] {} · step {}/{} · run {}/{}",
-                        step.name,
-                        step_idx + 1,
-                        num_steps,
-                        r,
-                        step_repeat
-                    ),
-                    AgentRunPhase::MergeBase => format!(
-                        "[Merge base] {} · step {}/{} · run {}/{}",
-                        step.name,
-                        step_idx + 1,
-                        num_steps,
-                        r,
-                        step_repeat
-                    ),
-                };
+                let relay_label = format!(
+                    "{} · step {}/{} · run {}/{}",
+                    step.name,
+                    step_idx + 1,
+                    num_steps,
+                    r,
+                    step_repeat
+                );
                 let line_tx = spawn_output_relay(
                     event_tx,
                     ticket_key,
@@ -3751,233 +2968,6 @@ async fn acquire_agent_slot(
     }
 }
 
-// Agent session parameters are inherently numerous.
-#[allow(clippy::too_many_arguments)]
-async fn run_pr_review_steps(
-    ticket_key: &str,
-    pr_url: &str,
-    worktree_path: &Path,
-    ticket_summary: &str,
-    ticket_description: &str,
-    ticket_type: &str,
-    config: &Arc<RwLock<Config>>,
-    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
-    actions: &Arc<dyn ExternalActions>,
-    event_tx: &broadcast::Sender<WorkflowEvent>,
-    cancel_token: &CancellationToken,
-    log_writer: &Arc<WorkflowLogWriter>,
-    agent_run_semaphore: &Arc<Semaphore>,
-) -> Result<()> {
-    let ticket = crate::jira::client::JiraTicket {
-        key: ticket_key.to_string(),
-        summary: ticket_summary.to_string(),
-        description: ticket_description.to_string(),
-        item_type: ticket_type.to_string(),
-        status: String::new(),
-        linked_items: Vec::new(),
-    };
-    let jira_cfg = {
-        let c = config.read().await;
-        c.jira.clone()
-    };
-    let ticket_context = build_ticket_context(&ticket, &jira_cfg);
-    let acceptance_criteria = extract_acceptance_criteria(&ticket.description);
-    let acceptance_criteria_str = format_acceptance_criteria_block(&acceptance_criteria);
-
-    let mut interp_vars: HashMap<String, String> = HashMap::new();
-    interp_vars.insert("ticket_key".into(), ticket_key.to_string());
-    interp_vars.insert("ticket_summary".into(), ticket_summary.to_string());
-    interp_vars.insert("ticket_description".into(), ticket_description.to_string());
-    interp_vars.insert("description".into(), ticket_description.to_string());
-    interp_vars.insert("ticket_type".into(), ticket_type.to_string());
-    interp_vars.insert("acceptance_criteria".into(), acceptance_criteria_str);
-    interp_vars.insert("ticket_context".into(), ticket_context);
-    interp_vars.insert("pr_url".into(), pr_url.to_string());
-    {
-        let cfg = config.read().await;
-        interp_vars.insert("base_branch".into(), cfg.git.base_branch.clone());
-    }
-
-    // Construct container runner for PR review isolation
-    let container_runner = if ContainerRunner::is_available() {
-        let cfg = config.read().await;
-        let image = if cfg.general.worker_image.is_empty() {
-            drop(cfg);
-            ContainerRunner::discover_worker_image()
-                .await
-                .unwrap_or_else(|| "maestro:latest".to_string())
-        } else {
-            let img = cfg.general.worker_image.clone();
-            drop(cfg);
-            img
-        };
-        let gh_token = actions.get_gh_installation_token(worktree_path).await;
-        let runner = ContainerRunner::new(ticket_key, worktree_path, &image);
-        Some(if let Some(token) = gh_token {
-            runner.with_gh_token(token)
-        } else {
-            runner
-        })
-    } else {
-        return Err(MaestroError::Config(
-            "Docker daemon is not available. DinD is required for workflow isolation. \
-             Ensure DOCKER_HOST is set and the DinD sidecar is running."
-                .into(),
-        ));
-    };
-
-    let cfg = config.read().await;
-    let outer_loops = cfg.review_sequence_outer_loops();
-    let timeout = cfg.agent.step_timeout_secs;
-    let claude_model = if cfg.agent.model.is_empty() {
-        None
-    } else {
-        Some(cfg.agent.model.clone())
-    };
-    let cursor_model_buf = cfg.agent.cursor_model.clone();
-    let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
-    let ai_stream_provider = cfg.agent.provider;
-    let cursor_cli = cfg.agent.cursor_cli.clone();
-    let ticketing_avail = {
-        let wf = workflows.read().await;
-        wf.get(ticket_key)
-            .map(|w| w.ticketing_available)
-            .unwrap_or(false)
-    };
-    let steps: Vec<_> = cfg
-        .resolved_review_agent_steps()
-        .into_iter()
-        .filter(|s| s.available_for(ticketing_avail))
-        .collect();
-    drop(cfg);
-
-    let skill_paths = build_skill_search_paths(worktree_path, ai_stream_provider);
-
-    wait_if_paused(workflows, ticket_key, cancel_token).await?;
-    check_cancelled(cancel_token)?;
-
-    let step_log_start = workflows
-        .read()
-        .await
-        .get(ticket_key)
-        .map(|w| w.steps_log.len())
-        .unwrap_or(0);
-
-    // PR review: do not skip steps that succeeded on an earlier dashboard run — operators may re-run
-    // **Address PR comments** arbitrarily. (`prior_steps_log` is still passed for a uniform API; skips are off.)
-    let pr_prior_steps: Vec<StepLog> = {
-        let wf = workflows.read().await;
-        wf.get(ticket_key)
-            .map(|w| w.steps_log.clone())
-            .unwrap_or_default()
-    };
-    let last_agent_output = run_agent_step_sequence(
-        ticket_key,
-        worktree_path,
-        &interp_vars,
-        &steps,
-        outer_loops,
-        AgentRunPhase::PrReview,
-        ai_stream_provider,
-        cursor_cli.as_str(),
-        cursor_model_pass,
-        claude_model.as_deref(),
-        timeout,
-        workflows,
-        event_tx,
-        cancel_token,
-        log_writer,
-        agent_run_semaphore.clone(),
-        container_runner.as_ref(),
-        &pr_prior_steps,
-        false,
-        config,
-        &skill_paths,
-        None,
-        false,
-        false, // no report injection for PR review
-    )
-    .await?;
-
-    check_cancelled(cancel_token)?;
-    wait_if_paused(workflows, ticket_key, cancel_token).await?;
-
-    {
-        let wf = workflows.read().await;
-        if let Some(w) = wf.get(ticket_key) {
-            let failed_steps: Vec<_> = w.steps_log[step_log_start..]
-                .iter()
-                .filter(|s| s.status == StepStatus::Failed)
-                .map(|s| s.step_name.as_str())
-                .collect();
-
-            if !failed_steps.is_empty() {
-                warn!(
-                    ticket = %ticket_key,
-                    steps = ?failed_steps,
-                    "PR review finished with failed steps"
-                );
-                let mut summary = StepLog::new("PR review summary".to_string());
-                summary.output.push(format!(
-                    "One or more PR review steps failed: {}",
-                    failed_steps.join(", ")
-                ));
-                summary.complete(StepStatus::Success);
-                drop(wf);
-                add_step_log(workflows, ticket_key, summary).await;
-            }
-        }
-    }
-
-    let resolved = resolve_pr_url(worktree_path, last_agent_output.as_deref());
-    let mut complete_log = StepLog::new("PR review complete".to_string());
-    if let Some(ref url) = resolved {
-        complete_log.output.push(format!("Recorded PR URL: {url}"));
-        let mut wf = workflows.write().await;
-        if let Some(w) = wf.get_mut(ticket_key) {
-            w.pr_url = Some(url.clone());
-        }
-        drop(wf);
-        match actions
-            .request_github_self_as_pr_reviewer(worktree_path, url)
-            .await
-        {
-            Ok(true) => {
-                complete_log
-                    .output
-                    .push("Requested review from the authenticated GitHub user (`gh`)".to_string());
-            }
-            Ok(false) => {
-                complete_log.output.push(
-                    "[DRY] Would request review from the authenticated GitHub user (`gh`)"
-                        .to_string(),
-                );
-            }
-            Err(e) => {
-                warn!(
-                    ticket = %ticket_key,
-                    pr = %url,
-                    error = %e,
-                    "Could not add authenticated user as PR reviewer after PR review"
-                );
-                complete_log
-                    .output
-                    .push(format!("[SKIP] PR reviewer request: {e}"));
-            }
-        }
-    } else {
-        complete_log.output.push(
-            "PR review agent steps finished. No new PR URL in outcome or stdout.".to_string(),
-        );
-    }
-    complete_log.complete(StepStatus::Success);
-    add_step_log(workflows, ticket_key, complete_log).await;
-
-    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config).await;
-    info!(ticket = %ticket_key, "PR review workflow completed");
-
-    Ok(())
-}
 
 fn truncate_utf8_by_bytes(s: &str, max_bytes: usize) -> String {
     if max_bytes == 0 || s.len() <= max_bytes {
@@ -4211,98 +3201,6 @@ async fn transition_to_agent_step(
         let mut wf = workflows.write().await;
         if let Some(workflow) = wf.get_mut(ticket_key) {
             workflow.state = WorkflowState::AddressingTicket { pass };
-            workflow.current_step_label = Some(step_label.to_string());
-            workflow.updated_at = Utc::now();
-            Some((workflow.id.clone(), workflow.status_display()))
-        } else {
-            None
-        }
-    };
-    if let Some((id, display)) = updated {
-        let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
-        let _ = event_tx.send(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
-            workflow_id: id,
-            ticket_key: ticket_key.to_string(),
-            state: display,
-            timestamp: Utc::now(),
-            error: None,
-            step_name: None,
-            output_line: None,
-            stream: None,
-            progress_percent: dash.map(|(p, _)| p),
-            progress_steps_total: dash.map(|(_, t)| t),
-            forwarded_port: None,
-            pr_merged: None,
-        });
-    }
-}
-
-async fn transition_to_pr_review_step(
-    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
-    event_tx: &broadcast::Sender<WorkflowEvent>,
-    ticket_key: &str,
-    pass: u8,
-    step_label: &str,
-    config: &Arc<RwLock<Config>>,
-) {
-    info!(
-        ticket = %ticket_key,
-        pass,
-        step = %step_label,
-        "PR review agent step (state + dashboard label)"
-    );
-
-    let updated = {
-        let mut wf = workflows.write().await;
-        if let Some(workflow) = wf.get_mut(ticket_key) {
-            workflow.state = WorkflowState::AddressingPrComments { pass };
-            workflow.current_step_label = Some(step_label.to_string());
-            workflow.updated_at = Utc::now();
-            Some((workflow.id.clone(), workflow.status_display()))
-        } else {
-            None
-        }
-    };
-    if let Some((id, display)) = updated {
-        let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
-        let _ = event_tx.send(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
-            workflow_id: id,
-            ticket_key: ticket_key.to_string(),
-            state: display,
-            timestamp: Utc::now(),
-            error: None,
-            step_name: None,
-            output_line: None,
-            stream: None,
-            progress_percent: dash.map(|(p, _)| p),
-            progress_steps_total: dash.map(|(_, t)| t),
-            forwarded_port: None,
-            pr_merged: None,
-        });
-    }
-}
-
-async fn transition_to_merge_base_step(
-    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
-    event_tx: &broadcast::Sender<WorkflowEvent>,
-    ticket_key: &str,
-    pass: u8,
-    step_label: &str,
-    config: &Arc<RwLock<Config>>,
-) {
-    info!(
-        ticket = %ticket_key,
-        pass,
-        step = %step_label,
-        "Merge base branch agent step (state + dashboard label)"
-    );
-
-    let updated = {
-        let mut wf = workflows.write().await;
-        if let Some(workflow) = wf.get_mut(ticket_key) {
-            workflow.state = WorkflowState::MergingBaseBranch { pass };
             workflow.current_step_label = Some(step_label.to_string());
             workflow.updated_at = Utc::now();
             Some((workflow.id.clone(), workflow.status_display()))

@@ -294,16 +294,6 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
               <ActionBtn variant="primary" onClick={() => confirmAction("Retry from 0", "retry", doAction("retry"))}>
                 Retry from 0
               </ActionBtn>
-              {w.can_merge_base && (
-                <ActionBtn variant="primary" onClick={() => withLoading(doAction("merge-base-branch"))}>
-                  Merge Base Branch
-                </ActionBtn>
-              )}
-              {w.can_address_pr_comments && (
-                <ActionBtn variant="primary" onClick={() => withLoading(doAction("address-pr-comments"))}>
-                  Address PR Comments
-                </ActionBtn>
-              )}
             </div>
             {/* Row 3: Destructive / lifecycle */}
             <div className="flex flex-wrap gap-2">

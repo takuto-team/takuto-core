@@ -63,23 +63,13 @@ fn in_flight_partial_credit(w: &Workflow) -> bool {
     }
 }
 
-/// Expected number of `steps_log` rows for the current phase.
+/// Expected number of `steps_log` rows for the current workflow.
 ///
-/// When the workflow is in a **subflow** (`AddressingPrComments` / `MergingBaseBranch`),
-/// return only that subflow's step count — not the main ticket total.
+/// Since agent steps now come from dynamic YAML workflow definitions (not static config),
+/// we estimate the total from bootstrap steps + the number of already-logged steps +
+/// a small buffer for remaining work.
 pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
-    let ticketing = w.ticketing_available;
-    match &w.state {
-        WorkflowState::AddressingPrComments { .. } => {
-            return pr_subflow_steps(cfg, ticketing).max(1);
-        }
-        WorkflowState::MergingBaseBranch { .. } => {
-            return merge_base_subflow_steps(cfg, ticketing).max(1);
-        }
-        _ => {}
-    }
-
-    // Main ticket pipeline
+    // Bootstrap steps:
     // Assign + Retrieve only run when Jira (acli) is available — GitHub Issues skips them.
     // Jira: 3 steps (Assign + Retrieve + Worktree). GitHub/none: 1 step (Worktree only).
     let mut t: u32 = if w.jira_available { 3 } else { 1 };
@@ -97,42 +87,22 @@ pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
         t += 1;
     }
 
-    let steps: Vec<_> = cfg
-        .resolved_agent_steps()
-        .into_iter()
-        .filter(|s| s.available_for(ticketing))
-        .collect();
-    let loops = cfg.agent_sequence_outer_loops() as u32;
-    let per_loop: u32 = steps.iter().map(|s| s.repeat as u32).sum();
-    t += loops.saturating_mul(per_loop.max(1));
+    // For agent steps, use the current steps_log count as a lower bound.
+    // If the workflow is still in progress, add a small buffer so the progress bar
+    // doesn't hit 100% prematurely.
+    let logged = w.steps_log.len() as u32;
+    let in_progress = !w.state.is_terminal();
+    let agent_estimate = if in_progress {
+        logged.saturating_sub(t) + 2 // at least 2 more steps expected
+    } else {
+        logged.saturating_sub(t)
+    };
+    t += agent_estimate.max(1);
 
     // "Workflow complete" row after agent sequence
     t += 1;
 
     t.max(1)
-}
-
-fn pr_subflow_steps(cfg: &Config, ticketing_available: bool) -> u32 {
-    let steps: Vec<_> = cfg
-        .resolved_review_agent_steps()
-        .into_iter()
-        .filter(|s| s.available_for(ticketing_available))
-        .collect();
-    let loops = cfg.review_sequence_outer_loops() as u32;
-    let per: u32 = steps.iter().map(|s| s.repeat as u32).sum();
-    // Agent steps + "PR review summary" + "PR review complete"
-    loops.saturating_mul(per.max(1)) + 2
-}
-
-fn merge_base_subflow_steps(cfg: &Config, ticketing_available: bool) -> u32 {
-    let steps: Vec<_> = cfg
-        .resolved_merge_base_agent_steps()
-        .into_iter()
-        .filter(|s| s.available_for(ticketing_available))
-        .collect();
-    let per: u32 = steps.iter().map(|s| s.repeat as u32).sum();
-    // Agent steps + "Merge base branch complete"
-    per.max(1) + 1
 }
 
 #[cfg(test)]
@@ -203,49 +173,20 @@ mod tests {
     }
 
     #[test]
-    fn command_steps_counted_in_total() {
-        use crate::config::AgentStepConfig;
-        use crate::config::StepAvailability;
-
-        let w = wf_with(WorkflowState::AddressingTicket { pass: 1 }, vec![], None);
-
-        // Config with a mix of agent and command steps
-        let mut cfg = Config::default();
-        cfg.agent_steps = vec![
-            AgentStepConfig {
-                name: "Implement".into(),
-                prompt: "Do stuff".into(),
-                repeat: 1,
-                skills: Vec::new(),
-                resume_previous: false,
-                when: StepAvailability::Always,
-                commands: Vec::new(),
-            },
-            AgentStepConfig {
-                name: "Run lint".into(),
-                prompt: String::new(),
-                repeat: 1,
-                skills: Vec::new(),
-                resume_previous: false,
-                when: StepAvailability::Always,
-                commands: vec!["npm run lint".into()],
-            },
-            AgentStepConfig {
-                name: "Run tests".into(),
-                prompt: String::new(),
-                repeat: 2,
-                skills: Vec::new(),
-                resume_previous: false,
-                when: StepAvailability::Always,
-                commands: vec!["npm test".into()],
-            },
+    fn in_progress_workflow_estimates_more_steps() {
+        let logs = vec![
+            StepLog::new("Assign ticket".into()),
+            StepLog::new("Retrieve details".into()),
+            StepLog::new("Create worktree".into()),
+            StepLog::new("Implement".into()),
         ];
-
+        let w = wf_with(WorkflowState::AddressingTicket { pass: 1 }, logs, None);
+        let cfg = Config::default();
         let total = estimated_step_total(&w, &cfg);
-        // 3 (jira steps) + 1 (implement) + 1 (lint) + 2 (tests × repeat 2) + 1 (workflow complete) = 8
-        assert_eq!(
-            total, 8,
-            "command steps should be counted the same as agent steps"
+        // Should be > steps_log.len() since workflow is still in progress
+        assert!(
+            total > 4,
+            "expected estimate to exceed logged steps for in-progress workflow, got {total}"
         );
     }
 }

@@ -50,14 +50,6 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::resume_from_error),
         )
         .route(
-            "/workflows/{id}/address-pr-comments",
-            post(routes::workflows::address_pr_comments),
-        )
-        .route(
-            "/workflows/{id}/merge-base-branch",
-            post(routes::workflows::merge_base_branch),
-        )
-        .route(
             "/workflows/{id}/mark-done",
             post(routes::workflows::mark_work_done),
         )

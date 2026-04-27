@@ -8,8 +8,6 @@ use std::path::{Path, PathBuf};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use tracing::warn;
-
 use crate::error::{MaestroError, Result};
 
 /// Which CLI implements ticket implementation / review / fix steps.
@@ -107,27 +105,6 @@ fn default_agent_step_repeat() -> u8 {
     1
 }
 
-/// Ticket pipeline steps loaded from a standalone TOML file (`[[agent_steps]]` only).
-#[derive(Debug, Deserialize)]
-struct TicketWorkflowStepsFile {
-    #[serde(default)]
-    agent_steps: Vec<AgentStepConfig>,
-}
-
-/// PR review steps loaded from a standalone TOML file (`[[review_agent_steps]]` only).
-#[derive(Debug, Deserialize)]
-struct ReviewWorkflowStepsFile {
-    #[serde(default)]
-    review_agent_steps: Vec<AgentStepConfig>,
-}
-
-/// Merge-base steps loaded from a standalone TOML file (`[[merge_base_agent_steps]]` only).
-#[derive(Debug, Deserialize)]
-struct MergeBaseWorkflowStepsFile {
-    #[serde(default)]
-    merge_base_agent_steps: Vec<AgentStepConfig>,
-}
-
 /// A skill reference in a workflow step — resolved at runtime into a `--system-prompt` (Claude)
 /// or a `/skill args` invocation (Cursor).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -197,105 +174,6 @@ impl AgentStepConfig {
     pub fn is_command_step(&self) -> bool {
         !self.commands.is_empty()
     }
-}
-
-/// Built-in agent steps when `[[agent_steps]]` is omitted or empty (generic prompts, no slash-commands).
-pub fn default_agent_steps() -> Vec<AgentStepConfig> {
-    vec![
-        AgentStepConfig {
-            name: "Implement ticket".to_string(),
-            prompt: "Implement this Jira ticket following the project's conventions.\n\nTicket context:\n{ticket_context}\n\nAdd or update tests as appropriate.".to_string(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: Vec::new(),
-        },
-        AgentStepConfig {
-            name: "Review changes".to_string(),
-            prompt: "Review all uncommitted changes for correctness, security, and code style. Fix any issues."
-                .to_string(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: Vec::new(),
-        },
-    ]
-}
-
-/// Built-in steps for **`[[merge_base_agent_steps]]`** when that list is empty.
-pub fn default_merge_base_agent_steps() -> Vec<AgentStepConfig> {
-    vec![AgentStepConfig {
-        name: "Merge base branch".to_string(),
-        prompt: "Fetch the latest base branch (`{base_branch}`) from remote and merge it into the current branch.\n\
-            Resolve any conflicts — prefer the current branch's changes for new code, but keep the base branch's \
-            changes for configuration and dependency files unless they conflict with this ticket's work.\n\
-            Run lint and tests after the merge. Commit the merge and push."
-            .to_string(),
-        repeat: 1,
-        skills: Vec::new(),
-        resume_previous: false,
-        when: StepAvailability::Always,
-        commands: Vec::new(),
-    }]
-}
-
-/// Built-in steps for **`[[review_agent_steps]]`** when that list is empty (PR comment loop after main flow is Done).
-pub fn default_review_agent_steps() -> Vec<AgentStepConfig> {
-    vec![AgentStepConfig {
-        name: "Address PR feedback".to_string(),
-        prompt: "Pull request URL: {pr_url}\n\nTicket context:\n{ticket_context}\n\nUse GitHub tooling (e.g. `gh pr view`, `gh api` for review comments) to find unresolved PR feedback. Address each item with code changes, commit, and push updates to the PR branch."
-            .to_string(),
-        repeat: 1,
-        skills: Vec::new(),
-        resume_previous: false,
-        when: StepAvailability::Always,
-        commands: Vec::new(),
-    }]
-}
-
-/// Replace `{variable}` placeholders using `vars`. Unknown names are left unchanged.
-/// Validate a list of agent/command steps, reporting errors with the given `list_name`
-/// (e.g. `"agent_steps"`, `"review_agent_steps"`).
-fn validate_step_list(steps: &[AgentStepConfig], list_name: &str) -> Result<()> {
-    for step in steps {
-        if step.name.trim().is_empty() {
-            return Err(MaestroError::Config(format!(
-                "Each [[{list_name}]] entry must have a non-empty name"
-            )));
-        }
-        if step.is_command_step() {
-            // Command step: reject if prompt or skills are also set.
-            if !step.prompt.trim().is_empty() {
-                return Err(MaestroError::Config(format!(
-                    "Step {:?} in [[{list_name}]]: cannot specify both `commands` and `prompt` (mutually exclusive)",
-                    step.name
-                )));
-            }
-            if !step.skills.is_empty() {
-                return Err(MaestroError::Config(format!(
-                    "Step {:?} in [[{list_name}]]: cannot specify both `commands` and `skills` (skills are agent-only)",
-                    step.name
-                )));
-            }
-        } else {
-            // Agent step: require prompt or skills.
-            if step.prompt.trim().is_empty() && step.skills.is_empty() {
-                return Err(MaestroError::Config(format!(
-                    "Step {:?} in [[{list_name}]] must have a non-empty `prompt` and/or at least one `skill`",
-                    step.name
-                )));
-            }
-        }
-        if step.repeat < 1 {
-            return Err(MaestroError::Config(format!(
-                "Step {:?} in [[{list_name}]]: repeat must be at least 1",
-                step.name
-            )));
-        }
-    }
-    Ok(())
 }
 
 pub fn interpolate_agent_prompt(template: &str, vars: &HashMap<String, String>) -> String {
@@ -383,15 +261,6 @@ pub struct Config {
     /// started/stopped from the workflow card.
     #[serde(default)]
     pub run_commands: Vec<RunCommandConfig>,
-    /// Ordered AI prompt steps (`[[agent_steps]]`). Empty → [`default_agent_steps`].
-    #[serde(default)]
-    pub agent_steps: Vec<AgentStepConfig>,
-    /// PR review loop (`[[review_agent_steps]]`) after main flow is Done. Empty → [`default_review_agent_steps`].
-    #[serde(default)]
-    pub review_agent_steps: Vec<AgentStepConfig>,
-    /// Merge base branch loop (`[[merge_base_agent_steps]]`) after main flow is Done. Empty → [`default_merge_base_agent_steps`].
-    #[serde(default)]
-    pub merge_base_agent_steps: Vec<AgentStepConfig>,
 }
 
 /// A user-defined run command that can be launched from the dashboard after a workflow completes.
@@ -508,15 +377,6 @@ pub struct GeneralConfig {
     /// Docker image for workflow worker containers. Empty = auto-detect from running Maestro container.
     #[serde(default)]
     pub worker_image: String,
-    /// Load **`[[agent_steps]]`** from this file (relative to the main config directory, or absolute). Empty = use inline **`agent_steps`** in `config.toml`.
-    #[serde(default)]
-    pub ticket_workflow_steps_file: String,
-    /// Load **`[[review_agent_steps]]`** from this file. Empty = use inline **`review_agent_steps`** in `config.toml`.
-    #[serde(default)]
-    pub review_workflow_steps_file: String,
-    /// Load **`[[merge_base_agent_steps]]`** from this file. Empty = use inline **`merge_base_agent_steps`** in `config.toml`.
-    #[serde(default)]
-    pub merge_base_workflow_steps_file: String,
     /// Which ticketing system drives workflow automation. Default `none` (no ticketing integration).
     #[serde(default)]
     pub ticketing_system: TicketingSystem,
@@ -870,9 +730,6 @@ impl Default for GeneralConfig {
             max_concurrent_manual_workflows: 0,
             log_level: default_log_level(),
             worker_image: String::new(),
-            ticket_workflow_steps_file: String::new(),
-            review_workflow_steps_file: String::new(),
-            merge_base_workflow_steps_file: String::new(),
             ticketing_system: TicketingSystem::None,
             pr_merge_poll_interval_secs: default_pr_merge_poll_interval(),
             generate_report: false,
@@ -938,104 +795,6 @@ pub fn resolve_config_relative_path(config_file_dir: &Path, rel: &str) -> PathBu
 }
 
 impl Config {
-    /// After deserializing `config.toml`, replace step lists from optional per-workflow TOML files.
-    pub fn apply_workflow_step_files(&mut self, config_file_dir: &Path) -> Result<()> {
-        if !self.general.ticket_workflow_steps_file.trim().is_empty() {
-            let p = resolve_config_relative_path(
-                config_file_dir,
-                &self.general.ticket_workflow_steps_file,
-            );
-            if !p.is_file() {
-                warn!(
-                    path = %p.display(),
-                    "[general] ticket_workflow_steps_file not found — ignored (workflows are now defined as YAML files)"
-                );
-            } else {
-                let raw = std::fs::read_to_string(&p)?;
-                let file: TicketWorkflowStepsFile = toml::from_str(&raw)?;
-                self.agent_steps = file.agent_steps;
-            }
-        }
-
-        if !self.general.review_workflow_steps_file.trim().is_empty() {
-            let p = resolve_config_relative_path(
-                config_file_dir,
-                &self.general.review_workflow_steps_file,
-            );
-            if !p.is_file() {
-                warn!(
-                    path = %p.display(),
-                    "[general] review_workflow_steps_file not found — ignored (workflows are now defined as YAML files)"
-                );
-            } else {
-                let raw = std::fs::read_to_string(&p)?;
-                let file: ReviewWorkflowStepsFile = toml::from_str(&raw)?;
-                self.review_agent_steps = file.review_agent_steps;
-            }
-        }
-
-        if !self
-            .general
-            .merge_base_workflow_steps_file
-            .trim()
-            .is_empty()
-        {
-            let p = resolve_config_relative_path(
-                config_file_dir,
-                &self.general.merge_base_workflow_steps_file,
-            );
-            if !p.is_file() {
-                warn!(
-                    path = %p.display(),
-                    "[general] merge_base_workflow_steps_file not found — ignored (workflows are now defined as YAML files)"
-                );
-            } else {
-                let raw = std::fs::read_to_string(&p)?;
-                let file: MergeBaseWorkflowStepsFile = toml::from_str(&raw)?;
-                self.merge_base_agent_steps = file.merge_base_agent_steps;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Outer loop count for the agent step sequence. Always `1` — use each step's `repeat` for multiple runs.
-    pub fn agent_sequence_outer_loops(&self) -> u8 {
-        1
-    }
-
-    /// Steps to run each outer loop (configured or [`default_agent_steps`]).
-    pub fn resolved_agent_steps(&self) -> Vec<AgentStepConfig> {
-        if self.agent_steps.is_empty() {
-            default_agent_steps()
-        } else {
-            self.agent_steps.clone()
-        }
-    }
-
-    /// When `review_agent_steps` is empty, the built-in review sequence runs once per **Address PR comments** run (use per-step `repeat` in `[[review_agent_steps]]` for more).
-    pub fn review_sequence_outer_loops(&self) -> u8 {
-        1
-    }
-
-    /// Steps for the PR-comment workflow (configured or [`default_review_agent_steps`]).
-    pub fn resolved_review_agent_steps(&self) -> Vec<AgentStepConfig> {
-        if self.review_agent_steps.is_empty() {
-            default_review_agent_steps()
-        } else {
-            self.review_agent_steps.clone()
-        }
-    }
-
-    /// Steps for the merge-base-branch workflow (configured or [`default_merge_base_agent_steps`]).
-    pub fn resolved_merge_base_agent_steps(&self) -> Vec<AgentStepConfig> {
-        if self.merge_base_agent_steps.is_empty() {
-            default_merge_base_agent_steps()
-        } else {
-            self.merge_base_agent_steps.clone()
-        }
-    }
-
     /// Parse a `Config` from a TOML string without loading from disk.
     ///
     /// Useful for tests and scenarios where the config content is already in
@@ -1055,8 +814,6 @@ impl Config {
 
         let content = std::fs::read_to_string(path)?;
         let mut config: Config = toml::from_str(&content)?;
-        let base = path.parent().unwrap_or_else(|| Path::new("."));
-        config.apply_workflow_step_files(base)?;
         config.web.normalize_cors_origins();
         config.validate()?;
         Ok(config)
@@ -1165,10 +922,6 @@ impl Config {
                 }
             }
         }
-
-        validate_step_list(&self.agent_steps, "agent_steps")?;
-        validate_step_list(&self.review_agent_steps, "review_agent_steps")?;
-        validate_step_list(&self.merge_base_agent_steps, "merge_base_agent_steps")?;
 
         if self.agent.step_timeout_secs == 0 {
             return Err(MaestroError::Config(
@@ -1470,58 +1223,6 @@ step_timeout_secs = 600
     }
 
     #[test]
-    fn resolved_agent_steps_default_when_empty() {
-        let config = Config::default();
-        assert_eq!(config.agent_steps.len(), 0);
-        let steps = config.resolved_agent_steps();
-        assert_eq!(steps.len(), 2);
-        assert_eq!(steps[0].name, "Implement ticket");
-        assert_eq!(steps[0].repeat, 1);
-        assert_eq!(steps[1].name, "Review changes");
-        assert_eq!(steps[1].repeat, 1);
-    }
-
-    #[test]
-    fn agent_sequence_outer_loops_is_always_one() {
-        let config = Config::default();
-        assert_eq!(config.agent_sequence_outer_loops(), 1);
-
-        let mut custom = Config::default();
-        custom.agent_steps.push(AgentStepConfig {
-            name: "Only".into(),
-            prompt: "x".into(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: Vec::new(),
-        });
-        assert_eq!(custom.agent_sequence_outer_loops(), 1);
-    }
-
-    #[test]
-    fn review_sequence_outer_loops_and_defaults() {
-        let config = Config::default();
-        assert_eq!(config.review_sequence_outer_loops(), 1);
-        let steps = config.resolved_review_agent_steps();
-        assert_eq!(steps.len(), 1);
-        assert_eq!(steps[0].name, "Address PR feedback");
-        assert!(steps[0].prompt.contains("{pr_url}"));
-
-        let mut custom = Config::default();
-        custom.review_agent_steps.push(AgentStepConfig {
-            name: "R".into(),
-            prompt: "p".into(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: Vec::new(),
-        });
-        assert_eq!(custom.review_sequence_outer_loops(), 1);
-    }
-
-    #[test]
     fn test_pre_install_string_compat() {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(
@@ -1582,101 +1283,6 @@ step_timeout_secs = 600
             config.commands.pre_install,
             vec!["echo a".to_string(), "echo b".to_string()]
         );
-    }
-
-    #[test]
-    fn test_load_agent_steps_toml() {
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(
-            br#"
-[general]
-poll_interval_secs = 30
-
-[jira]
-project_keys = ["X"]
-item_types = ["Task"]
-
-[git]
-base_branch = "main"
-repo_path = "/workspace"
-
-[commands]
-pre_install = []
-
-[web]
-port = 8080
-
-[agent]
-step_timeout_secs = 600
-
-[[agent_steps]]
-name = "Plan"
-prompt = "Plan work for {ticket_key}"
-repeat = 2
-
-[[agent_steps]]
-name = "Build"
-prompt = "Implement {ticket_summary}"
-"#,
-        )
-        .unwrap();
-        let config = Config::load(f.path()).unwrap();
-        assert_eq!(config.agent_steps.len(), 2);
-        assert_eq!(config.agent_steps[0].name, "Plan");
-        assert_eq!(config.agent_steps[0].repeat, 2);
-        assert_eq!(config.agent_steps[1].name, "Build");
-        assert_eq!(config.agent_steps[1].repeat, 1);
-    }
-
-    #[test]
-    fn test_load_ticket_steps_from_external_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let steps_path = dir.path().join("ticket-steps.toml");
-        std::fs::write(
-            &steps_path,
-            br#"[[agent_steps]]
-name = "From file"
-prompt = "Do {ticket_key}"
-repeat = 1
-"#,
-        )
-        .unwrap();
-
-        let main_path = dir.path().join("config.toml");
-        std::fs::write(
-            &main_path,
-            format!(
-                r#"
-[general]
-poll_interval_secs = 30
-max_concurrent_workflows = 1
-ticket_workflow_steps_file = "{}"
-
-[jira]
-project_keys = ["X"]
-item_types = ["Task"]
-
-[git]
-base_branch = "main"
-repo_path = "/workspace"
-
-[commands]
-pre_install = []
-
-[web]
-port = 8080
-
-[agent]
-step_timeout_secs = 600
-"#,
-                steps_path.file_name().unwrap().to_str().unwrap()
-            ),
-        )
-        .unwrap();
-
-        let config = Config::load(&main_path).unwrap();
-        assert_eq!(config.agent_steps.len(), 1);
-        assert_eq!(config.agent_steps[0].name, "From file");
     }
 
     #[test]
@@ -1804,267 +1410,6 @@ step_timeout_secs = 600
             commands: Vec::new(),
         };
         assert!(!step.is_command_step());
-    }
-
-    #[test]
-    fn default_agent_steps_are_not_command_steps() {
-        for step in default_agent_steps() {
-            assert!(
-                !step.is_command_step(),
-                "default step {:?} should not be a command step",
-                step.name
-            );
-        }
-        for step in default_review_agent_steps() {
-            assert!(!step.is_command_step());
-        }
-        for step in default_merge_base_agent_steps() {
-            assert!(!step.is_command_step());
-        }
-    }
-
-    #[test]
-    fn validate_accepts_command_only_step() {
-        let mut config = Config::default();
-        config.agent_steps.push(AgentStepConfig {
-            name: "Lint".into(),
-            prompt: String::new(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: vec!["npm run lint".into()],
-        });
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_step_with_both_prompt_and_commands() {
-        let mut config = Config::default();
-        config.agent_steps.push(AgentStepConfig {
-            name: "Bad".into(),
-            prompt: "do stuff".into(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: vec!["npm test".into()],
-        });
-        let err = config.validate().unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("cannot specify both")
-                && msg.contains("commands")
-                && msg.contains("prompt"),
-            "unexpected error: {msg}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_step_with_both_skills_and_commands() {
-        let mut config = Config::default();
-        config.agent_steps.push(AgentStepConfig {
-            name: "Bad".into(),
-            prompt: String::new(),
-            repeat: 1,
-            skills: vec![SkillRef {
-                name: "my-skill".into(),
-                args: Vec::new(),
-            }],
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: vec!["npm test".into()],
-        });
-        let err = config.validate().unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("cannot specify both")
-                && msg.contains("commands")
-                && msg.contains("skills"),
-            "unexpected error: {msg}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_step_with_no_prompt_no_skills_no_commands() {
-        let mut config = Config::default();
-        config.agent_steps.push(AgentStepConfig {
-            name: "Empty".into(),
-            prompt: String::new(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: Vec::new(),
-        });
-        let err = config.validate().unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("must have"), "unexpected error: {msg}");
-    }
-
-    #[test]
-    fn validate_command_step_in_review_steps() {
-        let mut config = Config::default();
-        config.review_agent_steps.push(AgentStepConfig {
-            name: "Run checks".into(),
-            prompt: String::new(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: vec!["cargo test".into()],
-        });
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn validate_command_step_in_merge_base_steps() {
-        let mut config = Config::default();
-        config.merge_base_agent_steps.push(AgentStepConfig {
-            name: "Run checks".into(),
-            prompt: String::new(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: vec!["cargo test".into()],
-        });
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_load_command_step_from_toml() {
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(
-            br#"
-[general]
-poll_interval_secs = 30
-
-[jira]
-project_keys = ["X"]
-item_types = ["Task"]
-
-[git]
-base_branch = "main"
-repo_path = "/workspace"
-
-[commands]
-pre_install = []
-
-[web]
-port = 8080
-
-[agent]
-step_timeout_secs = 600
-
-[[agent_steps]]
-name = "Implement"
-prompt = "Do {ticket_key}"
-
-[[agent_steps]]
-name = "Lint and format"
-commands = [
-  "npm run lint --fix",
-  "npm run format"
-]
-
-[[agent_steps]]
-name = "Run tests"
-commands = ["npm test"]
-repeat = 2
-"#,
-        )
-        .unwrap();
-        let config = Config::load(f.path()).unwrap();
-        assert_eq!(config.agent_steps.len(), 3);
-
-        // First step is a normal agent step
-        assert!(!config.agent_steps[0].is_command_step());
-        assert_eq!(config.agent_steps[0].prompt, "Do {ticket_key}");
-
-        // Second step is a command step
-        assert!(config.agent_steps[1].is_command_step());
-        assert_eq!(
-            config.agent_steps[1].commands,
-            vec!["npm run lint --fix", "npm run format"]
-        );
-        assert!(config.agent_steps[1].prompt.is_empty());
-
-        // Third step is a command step with repeat
-        assert!(config.agent_steps[2].is_command_step());
-        assert_eq!(config.agent_steps[2].commands, vec!["npm test"]);
-        assert_eq!(config.agent_steps[2].repeat, 2);
-    }
-
-    #[test]
-    fn test_load_command_step_from_external_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let steps_path = dir.path().join("ticket-steps.toml");
-        std::fs::write(
-            &steps_path,
-            br#"[[agent_steps]]
-name = "Lint"
-commands = ["npm run lint"]
-"#,
-        )
-        .unwrap();
-
-        let main_path = dir.path().join("config.toml");
-        std::fs::write(
-            &main_path,
-            format!(
-                r#"
-[general]
-poll_interval_secs = 30
-max_concurrent_workflows = 1
-ticket_workflow_steps_file = "{}"
-
-[jira]
-project_keys = ["X"]
-item_types = ["Task"]
-
-[git]
-base_branch = "main"
-repo_path = "/workspace"
-
-[commands]
-pre_install = []
-
-[web]
-port = 8080
-
-[agent]
-step_timeout_secs = 600
-"#,
-                steps_path.file_name().unwrap().to_str().unwrap()
-            ),
-        )
-        .unwrap();
-
-        let config = Config::load(&main_path).unwrap();
-        assert_eq!(config.agent_steps.len(), 1);
-        assert!(config.agent_steps[0].is_command_step());
-        assert_eq!(config.agent_steps[0].commands, vec!["npm run lint"]);
-    }
-
-    #[test]
-    fn validate_rejects_prompt_and_commands_in_review_steps() {
-        let mut config = Config::default();
-        config.review_agent_steps.push(AgentStepConfig {
-            name: "Bad".into(),
-            prompt: "do stuff".into(),
-            repeat: 1,
-            skills: Vec::new(),
-            resume_previous: false,
-            when: StepAvailability::Always,
-            commands: vec!["npm test".into()],
-        });
-        let err = config.validate().unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("cannot specify both") && msg.contains("review_agent_steps"),
-            "unexpected error: {msg}"
-        );
     }
 
     // -- CORS origin tests --

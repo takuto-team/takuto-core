@@ -29,8 +29,6 @@ export interface WorkflowSummary {
   steps_log: StepLog[];
   error: string | null;
   terminal_lines: TerminalLine[];
-  can_address_pr_comments: boolean;
-  can_merge_base: boolean;
   can_mark_done: boolean;
   can_delete: boolean;
   can_start: boolean;
