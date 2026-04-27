@@ -14,6 +14,10 @@ import { Button } from "./Button";
 import { Label } from "./Label";
 import { StatusBadge, getStatusInfo } from "./StatusBadge";
 import { DeleteIconButton } from "./DeleteIconButton";
+import { PauseIconButton } from "./PauseIconButton";
+import { StopIconButton } from "./StopIconButton";
+import { RestartIconButton } from "./RestartIconButton";
+import { ResumeIconButton } from "./ResumeIconButton";
 
 interface Props {
   workflow: WorkflowSummary;
@@ -67,7 +71,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
   const isPending = status.label === "Pending" && w.can_start;
   const isActive = status.label === "Running" || status.label === "Paused";
 
-  const duration = isTerminal && w.started_at && w.updated_at
+  const duration = isTerminal && status.label !== "Error" && w.started_at && w.updated_at
     ? formatDuration(new Date(w.started_at), new Date(w.updated_at))
     : null;
 
@@ -209,7 +213,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         </button>
 
         {/* Progress frame with Report button */}
-        <div className="bg-gray-800/50 rounded-lg px-3 py-2.5 relative">
+        <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative">
           <div className="flex items-center justify-between">
             <div className="text-xs text-gray-500">{stepLabel}</div>
             <div className="flex items-center gap-2">
@@ -227,6 +231,21 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
                 >
                   Show Report
                 </button>
+              )}
+              {status.label === "Error" && (
+                <RestartIconButton onClick={() => withLoading(doAction("retry"))} />
+              )}
+              {status.label === "Error" && w.can_resume_from_error && (
+                <ResumeIconButton onClick={() => withLoading(doAction("resume-from-error"))} title="Retry from last failure" />
+              )}
+              {isActive && status.label === "Running" && (
+                <PauseIconButton onClick={() => withLoading(doAction("pause"))} />
+              )}
+              {isActive && status.label === "Paused" && (
+                <ResumeIconButton onClick={() => withLoading(doAction("resume"))} />
+              )}
+              {isActive && (
+                <StopIconButton onClick={() => confirmAction("Stop", "stop", doAction("stop"))} />
               )}
             </div>
           </div>
@@ -264,32 +283,30 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         ) : isTerminal ? (
           <div className="flex flex-col gap-2">
             {/* Row 1: Navigation actions */}
-            <div className="flex flex-wrap gap-2">
-              {w.can_open_editor && (
-                <>
-                  {w.editor_url ? (
-                    <a href={w.editor_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
-                      Editor &#x2197;
-                    </a>
-                  ) : (
-                    <Button variant="secondary" onClick={() => withLoading(openEditor, "Setting up a secure connection to an editor")}>Open Editor</Button>
-                  )}
-                  {w.terminal_url ? (
-                    <a href={w.terminal_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
-                      Terminal &#x2197;
-                    </a>
-                  ) : (
-                    <Button variant="secondary" onClick={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}>Open Terminal</Button>
-                  )}
-                </>
-              )}
-            </div>
-{/* Row 3: Destructive / lifecycle */}
-            <div className="flex flex-wrap gap-2">
-{w.editor_url && (
+            {w.can_open_editor && (
+              <div className="flex flex-wrap gap-2">
+                {w.editor_url ? (
+                  <a href={w.editor_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
+                    Editor &#x2197;
+                  </a>
+                ) : (
+                  <Button variant="secondary" onClick={() => withLoading(openEditor, "Setting up a secure connection to an editor")}>Open Editor</Button>
+                )}
+                {w.terminal_url ? (
+                  <a href={w.terminal_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
+                    Terminal &#x2197;
+                  </a>
+                ) : (
+                  <Button variant="secondary" onClick={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}>Open Terminal</Button>
+                )}
+              </div>
+            )}
+            {/* Row 3: Destructive / lifecycle */}
+            {w.editor_url && (
+              <div className="flex flex-wrap gap-2">
                 <Button variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</Button>
-              )}
-            </div>
+              </div>
+            )}
             {workflowDefs.length > 0 && (
               <WorkflowDefButtons
                 definitions={workflowDefs}
@@ -309,23 +326,8 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
             )}
           </div>
         ) : (
-          /* Running / Paused actions — flat list */
+          /* Running / Paused actions */
           <>
-            <div className="flex flex-wrap gap-2">
-              {status.label === "Running" && (
-                <Button variant="primary" onClick={() => withLoading(doAction("pause"))} title="Pause">
-                  <PauseIcon /> Pause
-                </Button>
-              )}
-              {status.label === "Paused" && (
-                <Button variant="primary" onClick={() => withLoading(doAction("resume"))} title="Resume">
-                  <PlayIcon /> Resume
-                </Button>
-              )}
-              <Button variant="danger" className="ml-auto" onClick={() => confirmAction("Stop", "stop", doAction("stop"))}>
-                Stop
-              </Button>
-            </div>
             {workflowDefs.length > 0 && (
               <WorkflowDefButtons
                 definitions={workflowDefs}
@@ -470,8 +472,10 @@ function PortMappings({ apiMappings, dynamicForwards }: { apiMappings: [number, 
   return (
     <>
       <div className="border-t border-gray-800/60" />
-      <div className="flex flex-wrap gap-2">
-        {merged.map(([cp, hp]) => (
+      <div>
+        <div className="text-xs text-gray-500 mb-1.5">Port mappings</div>
+        <div className="flex flex-wrap gap-2">
+          {merged.map(([cp, hp]) => (
           <a
             key={`${cp}-${hp}`}
             href={`http://localhost:${hp}`}
@@ -483,6 +487,7 @@ function PortMappings({ apiMappings, dynamicForwards }: { apiMappings: [number, 
             {cp} &rarr; localhost:{hp}
           </a>
         ))}
+        </div>
       </div>
     </>
   );
@@ -539,6 +544,8 @@ function RunCommands({
   return (
     <>
       <div className="border-t border-gray-800/60" />
+      <div>
+        <div className="text-xs text-gray-500 mb-1.5">Commands</div>
       <div className="flex flex-col gap-1.5">
         {commands.map((cmd) => (
           <div key={cmd.index} className="flex items-center gap-2 flex-wrap">
@@ -596,6 +603,7 @@ function RunCommands({
           </div>
         ))}
       </div>
+      </div>
     </>
   );
 }
@@ -626,14 +634,6 @@ function ExternalLinkIcon({ className }: { className?: string }) {
 }
 
 
-
-function PauseIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6" />
-    </svg>
-  );
-}
 
 function PlayIcon() {
   return (
