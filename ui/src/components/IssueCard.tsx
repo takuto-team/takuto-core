@@ -213,7 +213,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           className="flex items-center gap-1.5 group text-left w-full min-w-0 cursor-pointer"
         >
           <span className="text-sm font-medium text-white group-hover:text-gray-400 transition-colors truncate min-w-0">{w.ticket_summary}</span>
-          <ExternalLinkIcon className="flex-shrink-0 w-3 h-3 text-gray-600 group-hover:text-gray-400 transition-colors" />
+          <ExternalLinkIcon className="flex-shrink-0 w-3 h-3 text-white group-hover:text-gray-400 transition-colors" />
         </button>
 
         {/* Progress frame with Report button */}
