@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use tracing::warn;
+
 use crate::error::{MaestroError, Result};
 
 /// Which CLI implements ticket implementation / review / fix steps.
@@ -944,14 +946,15 @@ impl Config {
                 &self.general.ticket_workflow_steps_file,
             );
             if !p.is_file() {
-                return Err(MaestroError::Config(format!(
-                    "[general] ticket_workflow_steps_file is not a file: {}",
-                    p.display()
-                )));
+                warn!(
+                    path = %p.display(),
+                    "[general] ticket_workflow_steps_file not found — ignored (workflows are now defined as YAML files)"
+                );
+            } else {
+                let raw = std::fs::read_to_string(&p)?;
+                let file: TicketWorkflowStepsFile = toml::from_str(&raw)?;
+                self.agent_steps = file.agent_steps;
             }
-            let raw = std::fs::read_to_string(&p)?;
-            let file: TicketWorkflowStepsFile = toml::from_str(&raw)?;
-            self.agent_steps = file.agent_steps;
         }
 
         if !self.general.review_workflow_steps_file.trim().is_empty() {
@@ -960,14 +963,15 @@ impl Config {
                 &self.general.review_workflow_steps_file,
             );
             if !p.is_file() {
-                return Err(MaestroError::Config(format!(
-                    "[general] review_workflow_steps_file is not a file: {}",
-                    p.display()
-                )));
+                warn!(
+                    path = %p.display(),
+                    "[general] review_workflow_steps_file not found — ignored (workflows are now defined as YAML files)"
+                );
+            } else {
+                let raw = std::fs::read_to_string(&p)?;
+                let file: ReviewWorkflowStepsFile = toml::from_str(&raw)?;
+                self.review_agent_steps = file.review_agent_steps;
             }
-            let raw = std::fs::read_to_string(&p)?;
-            let file: ReviewWorkflowStepsFile = toml::from_str(&raw)?;
-            self.review_agent_steps = file.review_agent_steps;
         }
 
         if !self
@@ -981,14 +985,15 @@ impl Config {
                 &self.general.merge_base_workflow_steps_file,
             );
             if !p.is_file() {
-                return Err(MaestroError::Config(format!(
-                    "[general] merge_base_workflow_steps_file is not a file: {}",
-                    p.display()
-                )));
+                warn!(
+                    path = %p.display(),
+                    "[general] merge_base_workflow_steps_file not found — ignored (workflows are now defined as YAML files)"
+                );
+            } else {
+                let raw = std::fs::read_to_string(&p)?;
+                let file: MergeBaseWorkflowStepsFile = toml::from_str(&raw)?;
+                self.merge_base_agent_steps = file.merge_base_agent_steps;
             }
-            let raw = std::fs::read_to_string(&p)?;
-            let file: MergeBaseWorkflowStepsFile = toml::from_str(&raw)?;
-            self.merge_base_agent_steps = file.merge_base_agent_steps;
         }
 
         Ok(())
