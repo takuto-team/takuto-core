@@ -210,9 +210,9 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         {/* Summary — click to view/edit description */}
         <button
           onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}
-          className="flex items-center gap-1.5 group text-left w-full min-w-0"
+          className="flex items-center gap-1.5 group text-left w-full min-w-0 cursor-pointer"
         >
-          <span className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors truncate min-w-0">{w.ticket_summary}</span>
+          <span className="text-sm font-medium text-gray-400 group-hover:text-white transition-colors truncate min-w-0">{w.ticket_summary}</span>
           <ExternalLinkIcon className="flex-shrink-0 w-3 h-3 text-gray-600 group-hover:text-gray-400 transition-colors" />
         </button>
 
