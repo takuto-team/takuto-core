@@ -10,7 +10,7 @@ import { WorkflowDefButtons } from "./WorkflowDefButtons";
 import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { Button } from "./Button";
-import { Label } from "./Label";
+import { Label, type LabelVariant } from "./Label";
 
 interface Props {
   workflow: WorkflowSummary;
@@ -26,6 +26,14 @@ interface StatusInfo {
   label: string;
   color: string;
 }
+
+const COLOR_TO_VARIANT: Record<string, LabelVariant> = {
+  green: "success",
+  red:   "danger",
+  yellow:"warning",
+  gray:  "default",
+  blue:  "info",
+};
 
 /** Map color keys to concrete Tailwind color hex values — avoids dynamic class names
  *  that Tailwind v4 would purge at build time. */
@@ -189,7 +197,17 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
             ) : (
               <span className="font-mono text-sm font-medium" style={{ color: (COLOR_HEX[status.color] || COLOR_HEX.blue).text }}>{w.ticket_key}</span>
             )}
-            <StatusBadge status={status} />
+            <Label
+              variant={COLOR_TO_VARIANT[status.color] ?? "info"}
+              icon={
+                status.label === "Completed" ? <CheckIcon /> :
+                status.label === "Error" ? <XIcon /> :
+                status.label === "Running" ? <span className="w-1.5 h-1.5 rounded-full animate-pulse bg-current" /> :
+                undefined
+              }
+            >
+              {status.label}
+            </Label>
           </div>
           {prUrl && (
             <div className="flex-shrink-0">
@@ -638,21 +656,6 @@ function ExternalLinkIcon({ className }: { className?: string }) {
   );
 }
 
-function StatusBadge({ status }: { status: StatusInfo }) {
-  const { label, color } = status;
-  const c = COLOR_HEX[color] || COLOR_HEX.blue;
-  return (
-    <span
-      className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full"
-      style={{ backgroundColor: c.bgFaint, color: c.text, borderWidth: 1, borderColor: c.border }}
-    >
-      {label === "Completed" && <CheckIcon />}
-      {label === "Error" && <XIcon />}
-      {label === "Running" && <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: c.text }} />}
-      {label}
-    </span>
-  );
-}
 
 function CheckIcon() {
   return (

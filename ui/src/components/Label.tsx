@@ -15,14 +15,16 @@ const STYLES: Record<LabelVariant, { bg: string; text: string; border: string }>
 interface LabelProps {
   variant?: LabelVariant;
   href?: string;
+  icon?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
 }
 
-export function Label({ variant = "default", href, children, className }: LabelProps) {
+export function Label({ variant = "default", href, icon, children, className }: LabelProps) {
   const { bg, text, border } = STYLES[variant];
   const base = `inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full${className ? ` ${className}` : ""}`;
   const style = { backgroundColor: bg, color: text, borderWidth: 1, borderColor: border };
+  const content = <>{icon}{children}</>;
 
   if (href) {
     return (
@@ -33,14 +35,14 @@ export function Label({ variant = "default", href, children, className }: LabelP
         className={`${base} hover:brightness-125 transition-[filter] cursor-pointer`}
         style={style}
       >
-        {children}
+        {content}
       </a>
     );
   }
 
   return (
     <span className={base} style={style}>
-      {children}
+      {content}
     </span>
   );
 }
