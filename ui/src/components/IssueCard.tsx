@@ -175,7 +175,19 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         {/* Header: ticket key + status badge + PR links */}
         <div className="flex items-center justify-between gap-3 min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span className="font-mono text-sm font-medium" style={{ color: (COLOR_HEX[status.color] || COLOR_HEX.blue).text }}>{w.ticket_key}</span>
+            {w.jira_browse_url ? (
+              <a
+                href={w.jira_browse_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-sm font-medium hover:underline"
+                style={{ color: (COLOR_HEX[status.color] || COLOR_HEX.blue).text }}
+              >
+                {w.ticket_key}
+              </a>
+            ) : (
+              <span className="font-mono text-sm font-medium" style={{ color: (COLOR_HEX[status.color] || COLOR_HEX.blue).text }}>{w.ticket_key}</span>
+            )}
             <StatusBadge status={status} />
           </div>
           {prUrl && (
@@ -195,8 +207,14 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           )}
         </div>
 
-        {/* Summary */}
-        <h3 className="text-sm font-medium text-gray-200 truncate">{w.ticket_summary}</h3>
+        {/* Summary — click to view/edit description */}
+        <button
+          onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}
+          className="flex items-center gap-1.5 group text-left w-full min-w-0"
+        >
+          <span className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors truncate min-w-0">{w.ticket_summary}</span>
+          <ExternalLinkIcon className="flex-shrink-0 w-3 h-3 text-gray-600 group-hover:text-gray-400 transition-colors" />
+        </button>
 
         {/* Progress frame with Report button */}
         <div className="bg-gray-800/50 rounded-lg px-3 py-2.5 relative">
@@ -243,19 +261,6 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
               </div>
             )}
             <div className="flex flex-wrap gap-2">
-              <Button variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
-                Show description
-              </Button>
-              {w.jira_available && (
-                <Button variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
-                  Go to ticket
-                </Button>
-              )}
-              {w.ticketing_system === "github" && (
-                <Button variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
-                  Go to issue
-                </Button>
-              )}
               {w.can_delete && (
                 <Button variant="danger" className="ml-auto" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
                   Delete
@@ -275,9 +280,6 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           <div className="flex flex-col gap-2">
             {/* Row 1: Navigation actions */}
             <div className="flex flex-wrap gap-2">
-              <Button variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
-                Show description
-              </Button>
               {w.can_open_editor && (
                 <>
                   {w.editor_url ? (
@@ -346,14 +348,6 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           /* Running / Paused actions — flat list */
           <>
             <div className="flex flex-wrap gap-2">
-              {!w.jira_available ? null : (
-                <Button variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
-                  Go to ticket
-                </Button>
-              )}
-              <Button variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
-                Show description
-              </Button>
               {status.label === "Running" && (
                 <Button variant="primary" onClick={() => withLoading(doAction("pause"))} title="Pause">
                   <PauseIcon /> Pause
@@ -640,9 +634,9 @@ function CopyIcon() {
   );
 }
 
-function ExternalLinkIcon() {
+function ExternalLinkIcon({ className }: { className?: string }) {
   return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <svg className={className ?? "w-3 h-3"} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
     </svg>
   );
