@@ -198,28 +198,32 @@ impl ExternalActions for RealActions {
         }
 
         // Create worktree from <remote>/<base>.
-        // Suppress git hooks (-c core.hooksPath=/dev/null) so a post-checkout hook that runs
-        // `mise install` doesn't fail with permission errors in the main container — mise is
-        // run later in an isolated worker container that has the correct volume mounts.
-        let output = process::run_shell_command(
+        // IMPORTANT: use run_shell_command_with_env (plain sh, no mise exec wrapper) so that
+        // mise does NOT try to install tools before the git command runs — the main container
+        // lacks write access to /usr/local/rustup/tmp/ and would fail.  Tools are installed
+        // later inside an isolated worker container that has the correct volume mounts.
+        // Also suppress git hooks (-c core.hooksPath=/dev/null) for the same reason.
+        let output = process::run_shell_command_with_env(
             &format!(
                 "git -c core.hooksPath=/dev/null worktree add -b {branch} {} {remote}/{base}",
                 worktree_path.display()
             ),
             &self.repo_path,
             CancellationToken::new(),
+            &[],
         )
         .await?;
 
         if !output.success() {
             // Branch might already exist, try without -b
-            let output2 = process::run_shell_command(
+            let output2 = process::run_shell_command_with_env(
                 &format!(
                     "git -c core.hooksPath=/dev/null worktree add {} {branch}",
                     worktree_path.display()
                 ),
                 &self.repo_path,
                 CancellationToken::new(),
+                &[],
             )
             .await?;
             if !output2.success() {
