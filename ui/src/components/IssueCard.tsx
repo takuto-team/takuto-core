@@ -12,6 +12,7 @@ import { ConfirmModal } from "./modals/ConfirmModal";
 import { Button } from "./Button";
 import { Label } from "./Label";
 import { StatusBadge, getStatusInfo } from "./StatusBadge";
+import { DeleteIconButton } from "./DeleteIconButton";
 
 interface Props {
   workflow: WorkflowSummary;
@@ -160,6 +161,13 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           </div>
         )}
 
+        {/* Delete button — top-right corner */}
+        {w.can_delete && (
+          <div className="absolute top-3 right-3 z-10">
+            <DeleteIconButton onClick={() => confirmAction("Delete", "delete", doAction("delete"))} />
+          </div>
+        )}
+
         {/* Header: ticket key + status badge + PR links */}
         <div className="flex items-center justify-between gap-3 min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -242,13 +250,6 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
                 {w.branch_name}
               </div>
             )}
-            <div className="flex flex-wrap gap-2">
-              {w.can_delete && (
-                <Button variant="danger" className="ml-auto" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
-                  Delete
-                </Button>
-              )}
-            </div>
             {workflowDefs.length > 0 && (
               <WorkflowDefButtons
                 definitions={workflowDefs}
@@ -297,11 +298,6 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
               {w.can_mark_done && (
                 <Button variant="success" onClick={() => confirmAction("Mark as Done", "mark-done", doAction("mark-done"))}>
                   Mark as Done
-                </Button>
-              )}
-              {w.can_delete && (
-                <Button variant="danger" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
-                  Delete
                 </Button>
               )}
               {w.editor_url && (
