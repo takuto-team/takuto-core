@@ -5,11 +5,11 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { api, apiPost } from "../api/client";
 import type { WorkflowSummary, WorkflowDefinition, RunCommandStatus } from "../api/types";
 import type { TerminalState } from "../hooks/useWorkflows";
-import { TerminalOutput } from "./TerminalOutput";
 import { WorkflowDefButtons } from "./WorkflowDefButtons";
 import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { DeleteConfirmModal } from "./modals/DeleteConfirmModal";
+import { ConsoleOutputModal } from "./modals/ConsoleOutputModal";
 import { Button } from "./Button";
 import { Label } from "./Label";
 import { StatusBadge, getStatusInfo } from "./StatusBadge";
@@ -61,7 +61,8 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
   const [loading, setLoading] = useState<false | "generic" | string>(false);
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [portMenuOpen, setPortMenuOpen] = useState(false);
   const { showToast } = useToast();
 
   const status = getStatusInfo(w.state, w.can_start);
@@ -71,7 +72,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
   const isPending = status.label === "Pending" && w.can_start;
   const isActive = status.label === "Running" || status.label === "Paused";
 
-  const duration = isTerminal && status.label !== "Error" && w.started_at && w.updated_at
+  const duration = isTerminal && status.label !== "Error" && status.label !== "Completed" && status.label !== "Stopped" && w.started_at && w.updated_at
     ? formatDuration(new Date(w.started_at), new Date(w.updated_at))
     : null;
 
@@ -156,6 +157,14 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
   );
   const hasTerminalLines = effectiveTs && effectiveTs.lines.length > 0;
 
+  const mergedPorts: [number, number][] = (() => {
+    const dynPorts = new Set(dynamicForwards.map(([cp]) => cp));
+    return [
+      ...(w.editor_port_mappings || []).filter(([cp]) => !dynPorts.has(cp)),
+      ...dynamicForwards,
+    ];
+  })();
+
   return (
     <>
       <div className={`workflow-card border ${borderClass} transition-colors ${status.label === "Stopped" ? "opacity-60 hover:opacity-80" : ""} relative`}>
@@ -206,7 +215,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         {/* Summary — click to view/edit description */}
         <button
           onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}
-          className="flex items-center gap-1.5 group text-left w-full min-w-0 cursor-pointer"
+          className="flex items-center leading-none gap-1.5 group text-left w-full min-w-0 cursor-pointer"
         >
           <span className="text-sm font-medium text-white group-hover:text-gray-400 transition-colors truncate min-w-0">{w.ticket_summary}</span>
           <ExternalLinkIcon className="flex-shrink-0 w-3 h-3 text-white group-hover:text-gray-400 transition-colors" />
@@ -217,12 +226,10 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           <div className="flex items-center justify-between">
             <div className="text-xs text-gray-500">{stepLabel}</div>
             <div className="flex items-center gap-2">
-              {duration && (
-                <span className="flex items-center gap-1 text-xs text-gray-400">
-                  <ClockIcon />
-                  <span className="font-mono">{duration}</span>
-                </span>
-              )}
+              <span className={`flex items-center leading-none gap-1 text-xs text-gray-400 ${!duration ? "invisible" : ""}`}>
+                <ClockIcon />
+                <span className="font-mono">{duration ?? "0s"}</span>
+              </span>
               {w.has_report && (
                 <button
                   onClick={() => onReport(w.ticket_key)}
@@ -232,10 +239,10 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
                   Show Report
                 </button>
               )}
-              {status.label === "Error" && (
+              {(status.label === "Error" || status.label === "Completed" || status.label === "Stopped") && (
                 <RestartIconButton onClick={() => withLoading(doAction("retry"))} />
               )}
-              {status.label === "Error" && w.can_resume_from_error && (
+              {(status.label === "Error" || status.label === "Stopped") && w.can_resume_from_error && (
                 <ResumeIconButton onClick={() => withLoading(doAction("resume-from-error"))} title="Retry from last failure" />
               )}
               {isActive && status.label === "Running" && (
@@ -255,11 +262,9 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           </div>
         </div>
 
-        {/* Actions — three layout states: pending (not started), terminal, running/paused */}
-        {isPending ? (
-          /* Pending (added to dashboard, not yet started) */
-          <div className="flex flex-col gap-2">
-            {/* Show worktree status while being prepared */}
+        {/* Status-specific actions */}
+        {isPending && (
+          <>
             {w.branch_name && !w.worktree_path && (
               <div className="text-xs text-gray-500 flex items-center gap-1.5">
                 <span className="inline-block w-2 h-2 rounded-full bg-gray-500 animate-pulse" />
@@ -271,97 +276,95 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
                 {w.branch_name}
               </div>
             )}
-            {workflowDefs.length > 0 && (
-              <WorkflowDefButtons
-                definitions={workflowDefs}
-                runStates={w.workflow_def_runs || {}}
-                ticketKey={w.ticket_key}
-                onRefresh={onRefresh}
-              />
-            )}
-          </div>
-        ) : isTerminal ? (
-          <div className="flex flex-col gap-2">
-            {/* Row 1: Navigation actions */}
-            {w.can_open_editor && (
-              <div className="flex flex-wrap gap-2">
-                {w.editor_url ? (
-                  <a href={w.editor_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
-                    Editor &#x2197;
-                  </a>
-                ) : (
-                  <Button variant="secondary" onClick={() => withLoading(openEditor, "Setting up a secure connection to an editor")}>Open Editor</Button>
-                )}
-                {w.terminal_url ? (
-                  <a href={w.terminal_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
-                    Terminal &#x2197;
-                  </a>
-                ) : (
-                  <Button variant="secondary" onClick={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}>Open Terminal</Button>
-                )}
-              </div>
-            )}
-            {/* Row 3: Destructive / lifecycle */}
-            {w.editor_url && (
-              <div className="flex flex-wrap gap-2">
-                <Button variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</Button>
-              </div>
-            )}
-            {workflowDefs.length > 0 && (
-              <WorkflowDefButtons
-                definitions={workflowDefs}
-                runStates={w.workflow_def_runs || {}}
-                ticketKey={w.ticket_key}
-                onRefresh={onRefresh}
-              />
-            )}
-            <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />
-            {w.run_commands && w.run_commands.length > 0 && (
-
-              <RunCommands
-                ticketKey={w.ticket_key}
-                commands={w.run_commands}
-                withLoading={withLoading}
-              />
-            )}
-          </div>
-        ) : (
-          /* Running / Paused actions */
-          <>
-            {workflowDefs.length > 0 && (
-              <WorkflowDefButtons
-                definitions={workflowDefs}
-                runStates={w.workflow_def_runs || {}}
-                ticketKey={w.ticket_key}
-                onRefresh={onRefresh}
-                mainRunning={isActive}
-              />
-            )}
-            <PortMappings apiMappings={w.editor_port_mappings} dynamicForwards={dynamicForwards} />
           </>
         )}
+        {isTerminal && w.can_open_editor && (
+          <div className="flex flex-wrap gap-2">
+            {w.editor_url ? (
+              <a href={w.editor_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
+                Editor &#x2197;
+              </a>
+            ) : (
+              <Button variant="secondary" onClick={() => withLoading(openEditor, "Setting up a secure connection to an editor")}>Open Editor</Button>
+            )}
+            {w.terminal_url ? (
+              <a href={w.terminal_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
+                Terminal &#x2197;
+              </a>
+            ) : (
+              <Button variant="secondary" onClick={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}>Open Terminal</Button>
+            )}
+          </div>
+        )}
+        {isTerminal && w.editor_url && (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</Button>
+          </div>
+        )}
 
-        {/* Terminal output — always shown for active; collapsible for terminal states */}
-        {isActive && <TerminalOutput state={effectiveTs} />}
-        {isTerminal && hasTerminalLines && (
-          <div>
-            <div className="border-t border-gray-800/60 mb-2" />
+        {/* Always-visible sections */}
+        {workflowDefs.length > 0 && (
+          <WorkflowDefButtons
+            definitions={workflowDefs}
+            runStates={w.workflow_def_runs || {}}
+            ticketKey={w.ticket_key}
+            onRefresh={onRefresh}
+            mainRunning={isActive}
+          />
+        )}
+        {w.run_commands && w.run_commands.length > 0 && (
+          <RunCommands
+            ticketKey={w.ticket_key}
+            commands={w.run_commands}
+            withLoading={withLoading}
+          />
+        )}
+
+        {/* Console output button — always visible, disabled until workflow has run */}
+        <div className="border-t border-gray-800/60" />
+        <button
+          onClick={hasTerminalLines ? () => setConsoleOpen(true) : undefined}
+          disabled={!hasTerminalLines}
+          className={`flex items-center leading-none gap-1 text-xs transition-colors ${
+            hasTerminalLines
+              ? "text-gray-500 hover:text-gray-300 cursor-pointer"
+              : "text-gray-700 cursor-not-allowed"
+          }`}
+        >
+          <TerminalIcon />
+          Show console output
+        </button>
+
+        {/* Port mappings indicator — bottom-right corner */}
+        {mergedPorts.length > 0 && (
+          <div className="absolute bottom-3 right-3 z-10">
+            {portMenuOpen && (
+              <>
+                <div className="fixed inset-0" onClick={() => setPortMenuOpen(false)} />
+                <div className="absolute bottom-full mb-2 right-0 bg-gray-800 border border-gray-700 rounded-lg py-1.5 shadow-xl z-20 min-w-[180px]">
+                  <div className="px-3 py-1 text-xs text-gray-500 font-medium border-b border-gray-700/60 mb-1">Port mappings</div>
+                  {mergedPorts.map(([cp, hp]) => (
+                    <a
+                      key={`${cp}-${hp}`}
+                      href={`http://localhost:${hp}`}
+                      target="_blank"
+                      rel="noopener"
+                      className="flex items-center leading-none gap-2 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                    >
+                      <PortIcon />
+                      {cp} → localhost:{hp}
+                    </a>
+                  ))}
+                </div>
+              </>
+            )}
             <button
-              onClick={() => setTerminalCollapsed(!terminalCollapsed)}
-              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
+              onClick={() => setPortMenuOpen((o) => !o)}
+              title="Port mappings"
+              className="text-blue-400 cursor-pointer animate-pulse-slow"
             >
-              <svg
-                className={`w-3.5 h-3.5 transition-transform ${terminalCollapsed ? "" : "rotate-180"}`}
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
-              {terminalCollapsed ? "Show logs" : "Hide logs"}
+              <MonitorIcon />
             </button>
-            {!terminalCollapsed && <TerminalOutput state={effectiveTs} />}
           </div>
         )}
       </div>
@@ -376,6 +379,10 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           }}
           onCancel={() => setConfirm(null)}
         />
+      )}
+
+      {consoleOpen && effectiveTs && (
+        <ConsoleOutputModal state={effectiveTs} onClose={() => setConsoleOpen(false)} />
       )}
 
       {deleteConfirmOpen && (
@@ -458,45 +465,19 @@ function ComputerIcon() {
   );
 }
 
-/* ── Port mappings ── */
-
-function PortMappings({ apiMappings, dynamicForwards }: { apiMappings: [number, number][]; dynamicForwards: [number, number][] }) {
-  // Merge API mappings + dynamic forwards, deduplicating by container port (dynamic wins)
-  const dynPorts = new Set(dynamicForwards.map(([cp]) => cp));
-  const merged: [number, number][] = [
-    ...apiMappings.filter(([cp]) => !dynPorts.has(cp)),
-    ...dynamicForwards,
-  ];
-  if (merged.length === 0) return null;
-
-  return (
-    <>
-      <div className="border-t border-gray-800/60" />
-      <div>
-        <div className="text-xs text-gray-500 mb-1.5">Port mappings</div>
-        <div className="flex flex-wrap gap-2">
-          {merged.map(([cp, hp]) => (
-          <a
-            key={`${cp}-${hp}`}
-            href={`http://localhost:${hp}`}
-            target="_blank"
-            rel="noopener"
-            className="action-btn wf-btn-secondary inline-flex items-center gap-1"
-          >
-            <PortIcon />
-            {cp} &rarr; localhost:{hp}
-          </a>
-        ))}
-        </div>
-      </div>
-    </>
-  );
-}
-
 function PortIcon() {
   return (
     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+    </svg>
+  );
+}
+
+function MonitorIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <rect x="2" y="3" width="20" height="14" rx="2" strokeLinejoin="round" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 21h8M12 17v4" />
     </svg>
   );
 }
@@ -639,6 +620,15 @@ function PlayIcon() {
   return (
     <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
       <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+function TerminalIcon() {
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3" />
+      <rect x="3" y="3" width="18" height="18" rx="2" strokeLinejoin="round" />
     </svg>
   );
 }

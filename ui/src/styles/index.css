@@ -46,7 +46,7 @@ body {
 
 /* Action button base */
 .action-btn {
-  @apply text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors cursor-pointer inline-flex items-center gap-1;
+  @apply text-xs font-medium px-3 h-7 rounded-lg border transition-colors cursor-pointer inline-flex items-center leading-none gap-1 shrink-0;
 }
 
 /* 4-category button palette (matches vanilla JS redesign) */
@@ -79,6 +79,15 @@ body {
 .connection-dot {
   @apply w-1.5 h-1.5 rounded-full;
   background-color: #374151;
+}
+
+/* Slow pulse for port mapping indicator */
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.animate-pulse-slow {
+  animation: pulse-slow 3s ease-in-out infinite;
 }
 
 /* Toast slide-in animation */
