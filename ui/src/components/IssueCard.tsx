@@ -10,6 +10,7 @@ import { WorkflowDefButtons } from "./WorkflowDefButtons";
 import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { Button } from "./Button";
+import { Label } from "./Label";
 
 interface Props {
   workflow: WorkflowSummary;
@@ -191,18 +192,13 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
             <StatusBadge status={status} />
           </div>
           {prUrl && (
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {w.pr_merged && (
-                <span className="text-xs text-purple-400/80">Merged</span>
-              )}
-              <a
+            <div className="flex-shrink-0">
+              <Label
+                variant={w.pr_merged ? "purple" : "info"}
                 href={prUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="action-btn wf-btn-secondary inline-flex items-center gap-1"
               >
-                Show PR &#x2197;
-              </a>
+                PR #{prUrl.match(/\/(\d+)\/?$/)?.[1] ?? ""}
+              </Label>
             </div>
           )}
         </div>
