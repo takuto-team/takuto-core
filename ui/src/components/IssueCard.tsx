@@ -383,7 +383,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
       {deleteConfirmOpen && (
         <DeleteConfirmModal
           ticketKey={w.ticket_key}
-          showMarkDone={w.ticketing_system === "jira" || w.ticketing_system === "github"}
+          showMarkDone={(w.ticketing_system === "jira" || w.ticketing_system === "github") && w.can_mark_done}
           onMarkDoneAndDelete={() => {
             setDeleteConfirmOpen(false);
             withLoading(async () => {

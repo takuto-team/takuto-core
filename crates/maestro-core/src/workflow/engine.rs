@@ -25,6 +25,7 @@ use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
 use crate::error::{MaestroError, Result};
 use crate::git;
+use crate::github;
 use crate::jira::client::JiraClient;
 use crate::process::OutputLine;
 
@@ -1187,9 +1188,14 @@ impl WorkflowEngine {
 
     /// Jira **Done** transition (configured status name) and remove worktree; remove workflow from the map only if both succeed.
     pub async fn mark_work_done(&self, ticket_key: &str) -> Result<MarkDoneOutcome> {
-        let done_status = {
+        let (done_status, repo_url, repo_path, ticketing_system) = {
             let c = self.config.read().await;
-            c.jira.done_status.clone()
+            (
+                c.jira.done_status.clone(),
+                c.git.repo_url.clone(),
+                c.git.repo_path.clone(),
+                c.general.ticketing_system,
+            )
         };
 
         let (worktree_path, branch_name) = {
@@ -1208,15 +1214,30 @@ impl WorkflowEngine {
 
         let mut jira_ok = true;
         let mut jira_error = None;
-        if self.jira_available.load(Ordering::Relaxed)
-            && let Err(e) = self
+        if self.jira_available.load(Ordering::Relaxed) {
+            // Jira mode: transition ticket to the configured done status.
+            if let Err(e) = self
                 .actions
                 .transition_ticket(ticket_key, done_status.trim())
                 .await
-        {
-            jira_ok = false;
-            jira_error = Some(e.to_string());
-            warn!(ticket = %ticket_key, error = %e, "Jira transition to Done failed");
+            {
+                jira_ok = false;
+                jira_error = Some(e.to_string());
+                warn!(ticket = %ticket_key, error = %e, "Jira transition to Done failed");
+            }
+        } else if ticketing_system == TicketingSystem::GitHub {
+            // GitHub mode: close the corresponding issue via `gh api`.
+            let cwd = worktree_path
+                .as_deref()
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| Path::new(&repo_path));
+            if let Err(e) =
+                close_github_issue(ticket_key, &repo_url, cwd, self.actions.as_ref()).await
+            {
+                jira_ok = false;
+                jira_error = Some(e.to_string());
+                warn!(ticket = %ticket_key, error = %e, "GitHub issue close failed");
+            }
         }
 
         // Clean up any worker containers for this workflow
@@ -3520,4 +3541,59 @@ fn extract_acceptance_criteria(description: &str) -> Vec<String> {
     }
 
     criteria
+}
+
+/// Parse a GitHub issue number from a `GH-{n}` ticket key.
+/// Returns `None` when the key is not in that format.
+fn parse_gh_issue_number(ticket_key: &str) -> Option<u64> {
+    ticket_key.strip_prefix("GH-").and_then(|n| n.parse().ok())
+}
+
+/// Close a GitHub issue via `gh api PATCH repos/{owner_repo}/issues/{number}`.
+///
+/// Uses the GitHub App installation token when one is available (GitHub App configured);
+/// falls back to the ambient `gh` auth otherwise.
+async fn close_github_issue(
+    ticket_key: &str,
+    repo_url: &str,
+    cwd: &Path,
+    actions: &dyn crate::actions::traits::ExternalActions,
+) -> Result<()> {
+    let issue_number = parse_gh_issue_number(ticket_key).ok_or_else(|| {
+        MaestroError::Config(format!(
+            "Cannot close GitHub issue: '{ticket_key}' is not a GH-{{number}} key"
+        ))
+    })?;
+    let owner_repo =
+        crate::github::parse_github_repo(repo_url).ok_or_else(|| {
+            MaestroError::Config(format!(
+                "Cannot close GitHub issue: failed to parse owner/repo from '{repo_url}'"
+            ))
+        })?;
+
+    let gh_token = actions.get_gh_installation_token(cwd).await;
+    let env: Vec<(&str, &str)> = gh_token
+        .as_deref()
+        .map(|t| vec![("GH_TOKEN", t)])
+        .unwrap_or_default();
+    let endpoint = format!("repos/{owner_repo}/issues/{issue_number}");
+    let output = crate::process::run_command_with_env(
+        "gh",
+        &["api", "--method", "PATCH", &endpoint, "--field", "state=closed"],
+        cwd,
+        CancellationToken::new(),
+        &env,
+    )
+    .await
+    .map_err(|e| MaestroError::Config(format!("gh api PATCH issue failed: {e}")))?;
+
+    if !output.success() {
+        return Err(MaestroError::Config(crate::github::gh_api_error_message(
+            output.stderr.trim(),
+            "Issues: Write",
+        )));
+    }
+
+    info!(ticket = %ticket_key, issue = %issue_number, owner_repo = %owner_repo, "GitHub issue closed");
+    Ok(())
 }
