@@ -70,6 +70,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
   const prUrl = w.pr_url?.trim() || "";
   const isTerminal = ["Completed", "Error", "Stopped"].includes(status.label);
   const isPending = status.label === "Pending" && w.can_start;
+  const isPreparingWorktree = isPending && !!w.branch_name && !w.worktree_path;
   const isActive = status.label === "Running" || status.label === "Paused";
 
   const duration = isTerminal && status.label !== "Error" && status.label !== "Completed" && status.label !== "Stopped" && w.started_at && w.updated_at
@@ -221,63 +222,57 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           <ExternalLinkIcon className="flex-shrink-0 w-3 h-3 text-white group-hover:text-gray-400 transition-colors" />
         </button>
 
-        {/* Progress frame with Report button */}
-        <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative">
-          <div className="flex items-center justify-between">
-            <div className="text-xs text-gray-500">{stepLabel}</div>
-            <div className="flex items-center gap-2">
-              <span className={`flex items-center leading-none gap-1 text-xs text-gray-400 ${!duration ? "invisible" : ""}`}>
-                <ClockIcon />
-                <span className="font-mono">{duration ?? "0s"}</span>
-              </span>
-              {w.has_report && (
-                <button
-                  onClick={() => onReport(w.ticket_key)}
-                  className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
-                  title="View workflow report"
-                >
-                  Show Report
-                </button>
-              )}
-              {(status.label === "Error" || status.label === "Completed" || status.label === "Stopped") && (
-                <RestartIconButton onClick={() => withLoading(doAction("retry"))} />
-              )}
-              {(status.label === "Error" || status.label === "Stopped") && w.can_resume_from_error && (
-                <ResumeIconButton onClick={() => withLoading(doAction("resume-from-error"))} title="Retry from last failure" />
-              )}
-              {isActive && status.label === "Running" && (
-                <PauseIconButton onClick={() => withLoading(doAction("pause"))} />
-              )}
-              {isActive && status.label === "Paused" && (
-                <ResumeIconButton onClick={() => withLoading(doAction("resume"))} />
-              )}
-              {isActive && (
-                <StopIconButton onClick={() => confirmAction("Stop", "stop", doAction("stop"))} />
-              )}
+        {/* Progress frame */}
+        <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative h-[80px] flex flex-col justify-center">
+          {isPreparingWorktree ? (
+            <div className="flex items-center leading-none gap-2 text-xs text-gray-500">
+              <span className="inline-block w-2 h-2 rounded-full bg-gray-500 animate-pulse flex-shrink-0" />
+              Preparing worktree&hellip;
             </div>
-          </div>
-          <div className="text-sm font-mono text-gray-300 mt-0.5">{stateDisplay}</div>
-          <div className="mt-2">
-            <ProgressBar pct={pct} total={total} filled={filled} color={status.color} />
-          </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-gray-500">{stepLabel}</div>
+                <div className="flex items-center gap-2">
+                  <span className={`flex items-center leading-none gap-1 text-xs text-gray-400 ${!duration ? "invisible" : ""}`}>
+                    <ClockIcon />
+                    <span className="font-mono">{duration ?? "0s"}</span>
+                  </span>
+                  {w.has_report && (
+                    <button
+                      onClick={() => onReport(w.ticket_key)}
+                      className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
+                      title="View workflow report"
+                    >
+                      Show Report
+                    </button>
+                  )}
+                  {(status.label === "Error" || status.label === "Completed" || status.label === "Stopped") && (
+                    <RestartIconButton onClick={() => withLoading(doAction("retry"))} />
+                  )}
+                  {(status.label === "Error" || status.label === "Stopped") && w.can_resume_from_error && (
+                    <ResumeIconButton onClick={() => withLoading(doAction("resume-from-error"))} title="Retry from last failure" />
+                  )}
+                  {isActive && status.label === "Running" && (
+                    <PauseIconButton onClick={() => withLoading(doAction("pause"))} />
+                  )}
+                  {isActive && status.label === "Paused" && (
+                    <ResumeIconButton onClick={() => withLoading(doAction("resume"))} />
+                  )}
+                  {isActive && (
+                    <StopIconButton onClick={() => confirmAction("Stop", "stop", doAction("stop"))} />
+                  )}
+                </div>
+              </div>
+              <div className="text-sm font-mono text-gray-300 mt-0.5">{stateDisplay}</div>
+              <div className="mt-2">
+                <ProgressBar pct={pct} total={total} filled={filled} color={status.color} />
+              </div>
+            </>
+          )}
         </div>
 
         {/* Status-specific actions */}
-        {isPending && (
-          <>
-            {w.branch_name && !w.worktree_path && (
-              <div className="text-xs text-gray-500 flex items-center gap-1.5">
-                <span className="inline-block w-2 h-2 rounded-full bg-gray-500 animate-pulse" />
-                Preparing worktree&hellip;
-              </div>
-            )}
-            {w.worktree_path && (
-              <div className="text-xs text-gray-400 font-mono truncate" title={w.worktree_path}>
-                {w.branch_name}
-              </div>
-            )}
-          </>
-        )}
         {isTerminal && w.can_open_editor && (
           <div className="flex flex-wrap gap-2">
             {w.editor_url ? (
