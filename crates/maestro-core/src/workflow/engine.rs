@@ -129,6 +129,10 @@ pub struct Workflow {
     /// Status of each dynamic workflow definition run for this ticket.
     /// Keys are workflow definition filenames (without .yml), values are run states.
     pub workflow_def_runs: HashMap<String, crate::workflow::definitions::WorkflowDefRunState>,
+    /// `true` once the full bootstrap (mise install + hooks) has completed for this workflow.
+    /// When `false`, the next workflow-def start must run bootstrap even if a worktree exists
+    /// (the worktree was pre-created at ticket-add time but setup has not run yet).
+    pub worktree_bootstrapped: bool,
 }
 
 impl Workflow {
@@ -166,6 +170,7 @@ impl Workflow {
             description_session_id: None,
             driver_started: false,
             workflow_def_runs: HashMap::new(),
+            worktree_bootstrapped: false,
         }
     }
 
@@ -239,6 +244,7 @@ impl Workflow {
             description_session_id: rec.description_session_id,
             driver_started: rec.driver_started,
             workflow_def_runs: rec.workflow_def_runs,
+            worktree_bootstrapped: rec.worktree_bootstrapped,
         }
     }
 }
@@ -274,6 +280,7 @@ fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRecord {
         ticketing_system: w.ticketing_system,
         driver_started: w.driver_started,
         workflow_def_runs: w.workflow_def_runs.clone(),
+        worktree_bootstrapped: w.worktree_bootstrapped,
     }
 }
 
@@ -818,6 +825,19 @@ impl WorkflowEngine {
             pr_merged: None,
         });
 
+        // Pre-create the git worktree in the background so it is ready before the user
+        // starts a workflow def.  Failure is non-fatal — bootstrap will create it on first run.
+        {
+            let actions = self.actions.clone();
+            let config = self.config.clone();
+            let workflows = self.workflows.clone();
+            let event_tx = self.event_tx.clone();
+            let key = ticket_key.clone();
+            tokio::spawn(async move {
+                prepare_worktree_for_ticket(&key, &config, &workflows, &actions, &event_tx).await;
+            });
+        }
+
         Ok(id)
     }
 
@@ -1320,8 +1340,15 @@ impl WorkflowEngine {
                 .get(ticket_key)
                 .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
 
-            // If no worktree exists yet, bootstrap will create one (Pending workflow, first run).
-            let maybe_wt = w.worktree_path.as_ref().filter(|p| p.exists()).cloned();
+            // Only skip bootstrap entirely (resume path) when the full bootstrap — including
+            // mise install and hooks — has already completed.  A pre-created worktree (created
+            // at ticket-add time, worktree_bootstrapped == false) still needs bootstrap to run
+            // mise install and project hooks; it just skips the git-worktree-add step.
+            let maybe_wt = if w.worktree_bootstrapped {
+                w.worktree_path.as_ref().filter(|p| p.exists()).cloned()
+            } else {
+                None
+            };
 
             // Check if already running this definition
             if let Some(state) = w.workflow_def_runs.get(def_name)
@@ -1741,6 +1768,98 @@ async fn drive_workflow_def(
 /// mise/install/pre-workflow setup commands.
 ///
 /// Called by `drive_workflow_def` when the workflow has no existing worktree (first run).
+/// Pre-create the git worktree immediately when a ticket is added to the dashboard.
+///
+/// This is a best-effort background operation.  Failures are logged as warnings; the full
+/// bootstrap that runs when a workflow def starts will create the worktree if needed.
+async fn prepare_worktree_for_ticket(
+    ticket_key: &str,
+    config: &Arc<RwLock<Config>>,
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    actions: &Arc<dyn ExternalActions>,
+    event_tx: &broadcast::Sender<WorkflowEvent>,
+) {
+    let (repo_path, base_branch) = {
+        let cfg = config.read().await;
+        (
+            PathBuf::from(&cfg.git.repo_path),
+            cfg.git.base_branch.clone(),
+        )
+    };
+
+    // Configure git credentials before fetching.
+    if let Err(e) = actions.configure_git_author_from_github(&repo_path).await {
+        warn!(
+            ticket = %ticket_key,
+            error = %e,
+            "Failed to configure git credentials for worktree pre-creation"
+        );
+    }
+
+    // Use "Task" as the default item type at add time (Jira details not fetched yet).
+    let item_type = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| w.ticket_type.clone())
+            .unwrap_or_else(|| "Task".to_string())
+    };
+    let branch_name = git::worktree::branch_name_for_ticket(ticket_key, &item_type);
+
+    match actions.create_worktree(&branch_name, &base_branch).await {
+        Ok(worktree_path) => {
+            // Configure git identity on the new worktree.
+            if let Err(e) = actions.configure_git_author_from_github(&worktree_path).await {
+                warn!(
+                    ticket = %ticket_key,
+                    error = %e,
+                    "Failed to configure git author on pre-created worktree"
+                );
+            }
+
+            info!(
+                ticket = %ticket_key,
+                path = %worktree_path.display(),
+                branch = %branch_name,
+                "Worktree pre-created at ticket-add time"
+            );
+
+            let workflow_id = {
+                let mut wf = workflows.write().await;
+                if let Some(w) = wf.get_mut(ticket_key) {
+                    w.worktree_path = Some(worktree_path.clone());
+                    w.branch_name = branch_name.clone();
+                    w.id.clone()
+                } else {
+                    return; // Workflow was removed before task finished.
+                }
+            };
+
+            let _ = event_tx.send(WorkflowEvent {
+                event_type: "workflow_updated".to_string(),
+                workflow_id,
+                ticket_key: ticket_key.to_string(),
+                state: "Pending".to_string(),
+                timestamp: Utc::now(),
+                error: None,
+                step_name: None,
+                output_line: None,
+                stream: None,
+                progress_percent: Some(0),
+                progress_steps_total: None,
+                forwarded_port: None,
+                pr_merged: None,
+            });
+        }
+        Err(e) => {
+            warn!(
+                ticket = %ticket_key,
+                error = %e,
+                "Failed to pre-create worktree at ticket-add time; bootstrap will create it when workflow starts"
+            );
+        }
+    }
+}
+
 /// Returns `(worktree_path, ticket_detail)`.
 #[allow(clippy::too_many_arguments)]
 async fn bootstrap_new_workflow(
@@ -1755,15 +1874,6 @@ async fn bootstrap_new_workflow(
 ) -> Result<(PathBuf, crate::jira::client::JiraTicket)> {
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
     check_cancelled(cancel_token)?;
-
-    // Clear any stale worktree / branch from a previous failed attempt.
-    {
-        let mut wf = workflows.write().await;
-        if let Some(w) = wf.get_mut(ticket_key) {
-            w.worktree_path = None;
-            w.branch_name.clear();
-        }
-    }
 
     let jira_available = {
         let wf = workflows.read().await;
@@ -1897,7 +2007,7 @@ async fn bootstrap_new_workflow(
         }
     };
 
-    // Step 2: Create git worktree.
+    // Step 2: Create git worktree (skip if pre-created at ticket-add time).
     transition(
         workflows,
         event_tx,
@@ -1906,42 +2016,78 @@ async fn bootstrap_new_workflow(
         config,
     )
     .await;
-    let mut step_log = StepLog::new("Create Worktree".to_string());
     check_cancelled(cancel_token)?;
 
-    // Configure the git credential helper (gh auth setup-git) on the repo root BEFORE
-    // fetching, so `git fetch` can authenticate via the GitHub App token.
-    // The local git identity (user.name/email) is configured again on the worktree after creation.
-    if let Err(e) = actions.configure_git_author_from_github(&repo_path).await {
-        warn!(
-            ticket = %ticket_key,
-            error = %e,
-            "Could not configure git credential helper before fetch; git fetch may fail"
-        );
-    }
+    // Check whether a worktree was already pre-created when the ticket was added.
+    let pre_created = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).and_then(|w| {
+            w.worktree_path
+                .as_ref()
+                .filter(|p| p.exists())
+                .map(|p| (p.clone(), w.branch_name.clone()))
+        })
+    };
 
-    let branch_name =
-        git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type);
-    let cfg = config.read().await;
-    let base_branch = cfg.git.base_branch.clone();
-    drop(cfg);
-
-    let worktree_path = actions.create_worktree(&branch_name, &base_branch).await?;
-
+    let (worktree_path, branch_name) = if let Some((existing_path, existing_branch)) = pre_created
     {
-        let mut wf = workflows.write().await;
-        if let Some(workflow) = wf.get_mut(ticket_key) {
-            workflow.branch_name = branch_name.clone();
-            workflow.worktree_path = Some(worktree_path.clone());
-        }
-    }
+        // Re-use the pre-created worktree; skip git fetch + worktree add.
+        info!(
+            ticket = %ticket_key,
+            path = %existing_path.display(),
+            branch = %existing_branch,
+            "Using pre-created worktree (created at ticket-add time)"
+        );
+        let mut step_log = StepLog::new("Create Worktree".to_string());
+        step_log.output.push(format!("Branch: {existing_branch}"));
+        step_log
+            .output
+            .push(format!("Worktree: {}", existing_path.display()));
+        step_log
+            .output
+            .push("(pre-created at ticket-add time)".to_string());
+        step_log.complete(StepStatus::Success);
+        add_step_log(workflows, ticket_key, step_log).await;
+        (existing_path, existing_branch)
+    } else {
+        // Full worktree creation path.
+        let mut step_log = StepLog::new("Create Worktree".to_string());
 
-    step_log.output.push(format!("Branch: {branch_name}"));
-    step_log
-        .output
-        .push(format!("Worktree: {}", worktree_path.display()));
-    step_log.complete(StepStatus::Success);
-    add_step_log(workflows, ticket_key, step_log).await;
+        // Configure the git credential helper (gh auth setup-git) on the repo root BEFORE
+        // fetching, so `git fetch` can authenticate via the GitHub App token.
+        if let Err(e) = actions.configure_git_author_from_github(&repo_path).await {
+            warn!(
+                ticket = %ticket_key,
+                error = %e,
+                "Could not configure git credential helper before fetch; git fetch may fail"
+            );
+        }
+
+        let branch_name =
+            git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type);
+        let cfg = config.read().await;
+        let base_branch = cfg.git.base_branch.clone();
+        drop(cfg);
+
+        let worktree_path = actions.create_worktree(&branch_name, &base_branch).await?;
+
+        {
+            let mut wf = workflows.write().await;
+            if let Some(workflow) = wf.get_mut(ticket_key) {
+                workflow.branch_name = branch_name.clone();
+                workflow.worktree_path = Some(worktree_path.clone());
+            }
+        }
+
+        step_log.output.push(format!("Branch: {branch_name}"));
+        step_log
+            .output
+            .push(format!("Worktree: {}", worktree_path.display()));
+        step_log.complete(StepStatus::Success);
+        add_step_log(workflows, ticket_key, step_log).await;
+
+        (worktree_path, branch_name)
+    };
 
     // Align git author with the authenticated GitHub CLI user.
     match actions
@@ -1963,6 +2109,7 @@ async fn bootstrap_new_workflow(
             );
         }
     }
+    let _ = branch_name; // used in step_log, suppress unused warning
 
     // Build container runner for setup commands (mise, pre-install, install, pre-workflow).
     let container_runner = if ContainerRunner::is_available() {
@@ -2357,6 +2504,14 @@ async fn bootstrap_new_workflow(
                     return Err(MaestroError::Git(msg));
                 }
             }
+        }
+    }
+
+    // Mark bootstrap as fully complete so future def runs skip it entirely (resume path).
+    {
+        let mut wf = workflows.write().await;
+        if let Some(w) = wf.get_mut(ticket_key) {
+            w.worktree_bootstrapped = true;
         }
     }
 

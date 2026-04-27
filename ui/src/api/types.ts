@@ -48,6 +48,8 @@ export interface WorkflowSummary {
   generate_report: boolean;
   has_report: boolean;
   workflow_def_runs: Record<string, string>;
+  /** Absolute path of the git worktree on disk. Absent while being pre-created in the background. */
+  worktree_path?: string;
 }
 
 export interface RunCommandStatus {

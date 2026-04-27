@@ -290,7 +290,11 @@ RUN mkdir -p /home/maestro/.local/share/mise/shims \
     /home/maestro/.npm \
     /home/maestro/.npm-global/lib \
     /home/maestro/.npm-global/bin \
-    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config /home/maestro/.npm /home/maestro/.npm-global
+    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config /home/maestro/.npm /home/maestro/.npm-global \
+    # Transfer rustup/cargo ownership so maestro can install toolchain versions at runtime.
+    # (The image ships a pre-installed stable toolchain, but a project's .mise.toml may
+    # request a different version; rustup needs to write to RUSTUP_HOME/tmp/ for that.)
+    && chown -R maestro:maestro /usr/local/rustup /usr/local/cargo
 
 # npm cache dir (for npx and package installs)
 ENV NPM_CONFIG_CACHE=/home/maestro/.npm

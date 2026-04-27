@@ -135,6 +135,10 @@ pub struct WorkflowSummary {
     pub has_report: bool,
     /// Status of each dynamic workflow definition run for this ticket: def_name -> state display name.
     pub workflow_def_runs: HashMap<String, String>,
+    /// Absolute path of the git worktree on disk, if it exists.
+    /// `None` while the worktree is still being pre-created in the background.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -275,6 +279,11 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 generate_report: cfg.general.generate_report,
                 has_report: has_report_file(w),
                 workflow_def_runs: workflow_def_runs_display(w),
+                worktree_path: w
+                    .worktree_path
+                    .as_ref()
+                    .filter(|p| p.exists())
+                    .and_then(|p| p.to_str().map(str::to_string)),
             }
         })
         .collect();
@@ -353,6 +362,11 @@ pub async fn get_workflow(
         generate_report: cfg.general.generate_report,
         has_report: has_report_file(w),
         workflow_def_runs: workflow_def_runs_display(w),
+        worktree_path: w
+            .worktree_path
+            .as_ref()
+            .filter(|p| p.exists())
+            .and_then(|p| p.to_str().map(str::to_string)),
     }))
 }
 

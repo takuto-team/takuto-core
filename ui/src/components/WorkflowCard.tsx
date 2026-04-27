@@ -229,6 +229,18 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
         {isPending ? (
           /* Pending (added to dashboard, not yet started) */
           <div className="flex flex-col gap-2">
+            {/* Show worktree status while being prepared */}
+            {w.branch_name && !w.worktree_path && (
+              <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                <span className="inline-block w-2 h-2 rounded-full bg-gray-500 animate-pulse" />
+                Preparing worktree&hellip;
+              </div>
+            )}
+            {w.worktree_path && (
+              <div className="text-xs text-gray-400 font-mono truncate" title={w.worktree_path}>
+                {w.branch_name}
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
               <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
                 Show description

@@ -65,6 +65,11 @@ pub struct PersistedWorkflowRecord {
     /// Status of each dynamic workflow definition run for this ticket.
     #[serde(default)]
     pub workflow_def_runs: HashMap<String, crate::workflow::definitions::WorkflowDefRunState>,
+    /// `true` once the full bootstrap (mise install + hooks) has completed for this workflow.
+    /// When `false`, the next workflow-def start must run bootstrap even if a worktree already
+    /// exists (worktree was pre-created at ticket-add time but setup has not run yet).
+    #[serde(default)]
+    pub worktree_bootstrapped: bool,
 }
 
 fn default_jira_available() -> bool {
