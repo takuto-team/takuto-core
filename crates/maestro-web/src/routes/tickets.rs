@@ -364,6 +364,14 @@ pub async fn update_ticket_description(
                     )
                 })?;
 
+            // Inject GitHub App installation token when configured so `gh api`
+            // works without personal user authentication.
+            let gh_token = state
+                .engine
+                .actions
+                .get_gh_installation_token(&repo_path)
+                .await;
+
             let endpoint = format!("repos/{owner_repo}/issues/{issue_number}");
             let body_field = format!("body={}", body.description);
             let mut gh_args: Vec<&str> = vec![
@@ -380,11 +388,18 @@ pub async fn update_ticket_description(
                 gh_args.push("--raw-field");
                 gh_args.push(&title_field);
             }
-            let output = maestro_core::process::run_command(
+            let gh_token_ref: &str = gh_token.as_deref().unwrap_or("");
+            let extra_env: &[(&str, &str)] = if gh_token.is_some() {
+                &[("GH_TOKEN", gh_token_ref)]
+            } else {
+                &[]
+            };
+            let output = maestro_core::process::run_command_with_env(
                 "gh",
                 &gh_args,
                 &repo_path,
                 tokio_util::sync::CancellationToken::new(),
+                extra_env,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
