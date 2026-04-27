@@ -254,6 +254,31 @@ export const WithPortMappings: Story = {
   },
 };
 
+export const CompletedWithRunCommands: Story = {
+  name: "Completed (run commands: done / pending / disabled)",
+  args: {
+    ...defaultProps,
+    workflow: {
+      ...baseWorkflow,
+      state: "Done",
+      can_start: false,
+      can_delete: true,
+      can_mark_done: true,
+      progress_percent: 100,
+      progress_steps_total: 5,
+      pr_url: "https://github.com/org/repo/pull/42",
+      terminal_lines: [
+        { text: "All steps completed successfully.", stream: "stdout" },
+      ],
+      run_commands: [
+        { index: 0, name: "Dev server", running: true, forwarded_port: [3000, 13000] },
+        { index: 1, name: "Storybook", running: false, forwarded_port: null },
+        { index: 2, name: "E2E tests", running: false, forwarded_port: null, disabled: true },
+      ],
+    },
+  },
+};
+
 export const GitHubTicketing: Story = {
   name: "Pending (GitHub Issues)",
   args: {

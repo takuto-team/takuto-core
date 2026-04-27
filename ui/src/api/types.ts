@@ -57,6 +57,7 @@ export interface RunCommandStatus {
   name: string;
   running: boolean;
   forwarded_port: [number, number] | null;
+  disabled?: boolean;
 }
 
 export interface WorkflowEvent {
