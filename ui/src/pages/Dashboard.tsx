@@ -121,13 +121,13 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     []
   );
 
-  const handleAddToDashboard = useCallback(async () => {
+  const handleAddToDashboard = useCallback(async (description: string, summary: string) => {
     if (!detailModal) return;
     try {
       const res = await apiPost("/api/workflows/start-manual", {
         ticket_key: detailModal.key,
-        ticket_summary: detailModal.summary,
-        ticket_description: detailModal.description || "",
+        ticket_summary: summary,
+        ticket_description: description,
       });
       if (!res.ok) {
         const text = await res.text();

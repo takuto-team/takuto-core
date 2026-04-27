@@ -31,7 +31,7 @@ interface Props {
   showStartButton: boolean;
   /** Timeout in seconds for "Improve with AI" sessions, from server config. */
   improveTimeoutSecs?: number;
-  onStart?: () => void;
+  onStart?: (description: string, summary: string) => void;
   onClose: () => void;
   /** Called after a successful save so the parent can refresh workflow data. */
   onSaved?: () => void;
@@ -461,7 +461,7 @@ export function TicketDetailModal({
               </button>
             ) : showStartButton && onStart ? (
               <button
-                onClick={onStart}
+                onClick={() => onStart(editMode ? editText : markdown, editMode ? editTitle : summary)}
                 className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
               >
                 Add to Dashboard
