@@ -168,13 +168,12 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
                 href={w.jira_browse_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-sm font-medium hover:underline"
-                style={{ color: (COLOR_HEX[status.color] || COLOR_HEX.blue).text }}
+                className="font-mono text-sm font-medium text-blue-400 hover:underline"
               >
                 {w.ticket_key}
               </a>
             ) : (
-              <span className="font-mono text-sm font-medium" style={{ color: (COLOR_HEX[status.color] || COLOR_HEX.blue).text }}>{w.ticket_key}</span>
+              <span className="font-mono text-sm font-medium text-blue-400">{w.ticket_key}</span>
             )}
             <StatusBadge status={status} />
           </div>
