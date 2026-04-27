@@ -284,18 +284,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
                 </>
               )}
             </div>
-            {/* Row 2: Workflow actions */}
-            <div className="flex flex-wrap gap-2">
-              {w.can_resume_from_error && (
-                <Button variant="primary" onClick={() => confirmAction("Retry from last failure", "resume-from-error", doAction("resume-from-error"))}>
-                  Retry from last failure
-                </Button>
-              )}
-              <Button variant="primary" onClick={() => confirmAction("Retry from 0", "retry", doAction("retry"))}>
-                Retry from 0
-              </Button>
-            </div>
-            {/* Row 3: Destructive / lifecycle */}
+{/* Row 3: Destructive / lifecycle */}
             <div className="flex flex-wrap gap-2">
 {w.editor_url && (
                 <Button variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</Button>
