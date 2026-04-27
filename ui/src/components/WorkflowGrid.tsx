@@ -3,7 +3,7 @@
 
 import type { WorkflowSummary, WorkflowDefinition } from "../api/types";
 import type { TerminalState, DynamicForwards } from "../hooks/useWorkflows";
-import { WorkflowCard } from "./WorkflowCard";
+import { IssueCard } from "./IssueCard";
 
 interface Props {
   workflows: Record<string, WorkflowSummary>;
@@ -53,7 +53,7 @@ export function WorkflowGrid({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
       {list.map((w) => (
-        <WorkflowCard
+        <IssueCard
           key={w.ticket_key}
           workflow={w}
           terminalState={terminalStates[w.ticket_key]}

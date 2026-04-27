@@ -9,6 +9,7 @@ import { TerminalOutput } from "./TerminalOutput";
 import { WorkflowDefButtons } from "./WorkflowDefButtons";
 import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
+import { Button } from "./Button";
 
 interface Props {
   workflow: WorkflowSummary;
@@ -62,7 +63,7 @@ function formatDuration(start: Date, end: Date): string {
   return `${s}s`;
 }
 
-export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, workflowDefs, onRefresh, onShowDescription, onReport }: Props) {
+export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, workflowDefs, onRefresh, onShowDescription, onReport }: Props) {
   const [loading, setLoading] = useState<false | "generic" | string>(false);
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
@@ -242,23 +243,23 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
               </div>
             )}
             <div className="flex flex-wrap gap-2">
-              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
+              <Button variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
                 Show description
-              </ActionBtn>
+              </Button>
               {w.jira_available && (
-                <ActionBtn variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
+                <Button variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
                   Go to ticket
-                </ActionBtn>
+                </Button>
               )}
               {w.ticketing_system === "github" && (
-                <ActionBtn variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
+                <Button variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
                   Go to issue
-                </ActionBtn>
+                </Button>
               )}
               {w.can_delete && (
-                <ActionBtn variant="danger" className="ml-auto" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
+                <Button variant="danger" className="ml-auto" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
                   Delete
-                </ActionBtn>
+                </Button>
               )}
             </div>
             {workflowDefs.length > 0 && (
@@ -274,9 +275,9 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
           <div className="flex flex-col gap-2">
             {/* Row 1: Navigation actions */}
             <div className="flex flex-wrap gap-2">
-              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
+              <Button variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
                 Show description
-              </ActionBtn>
+              </Button>
               {w.can_open_editor && (
                 <>
                   {w.editor_url ? (
@@ -284,14 +285,14 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
                       Editor &#x2197;
                     </a>
                   ) : (
-                    <ActionBtn variant="secondary" onClick={() => withLoading(openEditor, "Setting up a secure connection to an editor")}>Open Editor</ActionBtn>
+                    <Button variant="secondary" onClick={() => withLoading(openEditor, "Setting up a secure connection to an editor")}>Open Editor</Button>
                   )}
                   {w.terminal_url ? (
                     <a href={w.terminal_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
                       Terminal &#x2197;
                     </a>
                   ) : (
-                    <ActionBtn variant="secondary" onClick={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}>Open Terminal</ActionBtn>
+                    <Button variant="secondary" onClick={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}>Open Terminal</Button>
                   )}
                 </>
               )}
@@ -299,28 +300,28 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
             {/* Row 2: Workflow actions */}
             <div className="flex flex-wrap gap-2">
               {w.can_resume_from_error && (
-                <ActionBtn variant="primary" onClick={() => confirmAction("Retry from last failure", "resume-from-error", doAction("resume-from-error"))}>
+                <Button variant="primary" onClick={() => confirmAction("Retry from last failure", "resume-from-error", doAction("resume-from-error"))}>
                   Retry from last failure
-                </ActionBtn>
+                </Button>
               )}
-              <ActionBtn variant="primary" onClick={() => confirmAction("Retry from 0", "retry", doAction("retry"))}>
+              <Button variant="primary" onClick={() => confirmAction("Retry from 0", "retry", doAction("retry"))}>
                 Retry from 0
-              </ActionBtn>
+              </Button>
             </div>
             {/* Row 3: Destructive / lifecycle */}
             <div className="flex flex-wrap gap-2">
               {w.can_mark_done && (
-                <ActionBtn variant="success" onClick={() => confirmAction("Mark as Done", "mark-done", doAction("mark-done"))}>
+                <Button variant="success" onClick={() => confirmAction("Mark as Done", "mark-done", doAction("mark-done"))}>
                   Mark as Done
-                </ActionBtn>
+                </Button>
               )}
               {w.can_delete && (
-                <ActionBtn variant="danger" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
+                <Button variant="danger" onClick={() => confirmAction("Delete", "delete", doAction("delete"))}>
                   Delete
-                </ActionBtn>
+                </Button>
               )}
               {w.editor_url && (
-                <ActionBtn variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</ActionBtn>
+                <Button variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</Button>
               )}
             </div>
             {workflowDefs.length > 0 && (
@@ -346,26 +347,26 @@ export function WorkflowCard({ workflow: w, terminalState: ts, dynamicForwards, 
           <>
             <div className="flex flex-wrap gap-2">
               {!w.jira_available ? null : (
-                <ActionBtn variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
+                <Button variant="secondary" onClick={() => window.open(w.jira_browse_url, "_blank")}>
                   Go to ticket
-                </ActionBtn>
+                </Button>
               )}
-              <ActionBtn variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
+              <Button variant="secondary" onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}>
                 Show description
-              </ActionBtn>
+              </Button>
               {status.label === "Running" && (
-                <ActionBtn variant="primary" onClick={() => withLoading(doAction("pause"))} title="Pause">
+                <Button variant="primary" onClick={() => withLoading(doAction("pause"))} title="Pause">
                   <PauseIcon /> Pause
-                </ActionBtn>
+                </Button>
               )}
               {status.label === "Paused" && (
-                <ActionBtn variant="primary" onClick={() => withLoading(doAction("resume"))} title="Resume">
+                <Button variant="primary" onClick={() => withLoading(doAction("resume"))} title="Resume">
                   <PlayIcon /> Resume
-                </ActionBtn>
+                </Button>
               )}
-              <ActionBtn variant="danger" className="ml-auto" onClick={() => confirmAction("Stop", "stop", doAction("stop"))}>
+              <Button variant="danger" className="ml-auto" onClick={() => confirmAction("Stop", "stop", doAction("stop"))}>
                 Stop
-              </ActionBtn>
+              </Button>
             </div>
             {workflowDefs.length > 0 && (
               <WorkflowDefButtons
@@ -644,34 +645,6 @@ function ExternalLinkIcon() {
     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
     </svg>
-  );
-}
-
-/* ── Button variants matching the 4-category palette from the redesign ── */
-
-function ActionBtn({
-  variant,
-  onClick,
-  children,
-  title,
-  className,
-}: {
-  variant: "primary" | "secondary" | "success" | "danger";
-  onClick: () => void;
-  children: React.ReactNode;
-  title?: string;
-  className?: string;
-}) {
-  const cls = {
-    primary: "wf-btn-primary",
-    secondary: "wf-btn-secondary",
-    success: "wf-btn-success",
-    danger: "wf-btn-danger",
-  }[variant];
-  return (
-    <button onClick={onClick} title={title} className={`action-btn ${cls}${className ? ` ${className}` : ""}`}>
-      {children}
-    </button>
   );
 }
 
