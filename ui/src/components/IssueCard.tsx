@@ -9,6 +9,7 @@ import { TerminalOutput } from "./TerminalOutput";
 import { WorkflowDefButtons } from "./WorkflowDefButtons";
 import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
+import { DeleteConfirmModal } from "./modals/DeleteConfirmModal";
 import { Button } from "./Button";
 import { Label } from "./Label";
 import { StatusBadge, getStatusInfo } from "./StatusBadge";
@@ -55,6 +56,7 @@ function formatDuration(start: Date, end: Date): string {
 export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, workflowDefs, onRefresh, onShowDescription, onReport }: Props) {
   const [loading, setLoading] = useState<false | "generic" | string>(false);
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
   const { showToast } = useToast();
 
@@ -164,7 +166,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         {/* Delete button — top-right corner */}
         {w.can_delete && (
           <div className="absolute top-1 right-1 translate-x-1/2 -translate-y-1/2 z-10">
-            <DeleteIconButton onClick={() => confirmAction("Delete", "delete", doAction("delete"))} />
+            <DeleteIconButton onClick={() => setDeleteConfirmOpen(true)} />
           </div>
         )}
 
@@ -295,12 +297,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
             </div>
             {/* Row 3: Destructive / lifecycle */}
             <div className="flex flex-wrap gap-2">
-              {w.can_mark_done && (
-                <Button variant="success" onClick={() => confirmAction("Mark as Done", "mark-done", doAction("mark-done"))}>
-                  Mark as Done
-                </Button>
-              )}
-              {w.editor_url && (
+{w.editor_url && (
                 <Button variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</Button>
               )}
             </div>
@@ -387,6 +384,25 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
             withLoading(confirm.fn);
           }}
           onCancel={() => setConfirm(null)}
+        />
+      )}
+
+      {deleteConfirmOpen && (
+        <DeleteConfirmModal
+          ticketKey={w.ticket_key}
+          showMarkDone={w.ticketing_system === "jira" || w.ticketing_system === "github"}
+          onMarkDoneAndDelete={() => {
+            setDeleteConfirmOpen(false);
+            withLoading(async () => {
+              await doAction("mark-done")();
+              await doAction("delete")();
+            });
+          }}
+          onDelete={() => {
+            setDeleteConfirmOpen(false);
+            withLoading(doAction("delete"));
+          }}
+          onCancel={() => setDeleteConfirmOpen(false)}
         />
       )}
     </>
