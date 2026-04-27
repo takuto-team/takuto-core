@@ -22,7 +22,7 @@ interface LabelProps {
 
 export function Label({ variant = "default", href, icon, children, className }: LabelProps) {
   const { bg, text, border } = STYLES[variant];
-  const base = `inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full${className ? ` ${className}` : ""}`;
+  const base = `inline-flex items-center leading-none gap-1 text-xs font-medium px-2 py-0.5 rounded-full${className ? ` ${className}` : ""}`;
   const style = { backgroundColor: bg, color: text, borderWidth: 1, borderColor: border };
   const content = <>{icon}{children}</>;
 

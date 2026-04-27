@@ -27,7 +27,7 @@ export function getStatusInfo(state: string, canStart?: boolean): StatusInfo {
 export function StatusBadge({ status }: { status: StatusInfo }) {
   const color = COLOR_TEXT[status.color];
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-medium" style={{ color }}>
+    <span className="inline-flex items-center leading-none gap-1 text-[10px] font-medium" style={{ color }}>
       {status.label === "Completed" && <CheckIcon />}
       {status.label === "Error"     && <XIcon />}
       {status.label === "Running"   && <span className="w-1.5 h-1.5 rounded-full animate-pulse bg-current" />}
