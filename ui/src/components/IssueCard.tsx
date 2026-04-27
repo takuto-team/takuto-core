@@ -565,14 +565,7 @@ function RunCommands({
       <div className="flex flex-col gap-1.5">
         {commands.map((cmd) => (
           <div key={cmd.index} className="flex items-center gap-2 flex-wrap">
-            {cmd.disabled ? (
-              <span
-                className="action-btn wf-btn-secondary opacity-40 cursor-not-allowed inline-flex items-center gap-1"
-                title="This command is not available"
-              >
-                <PlayIcon /> Run {cmd.name}
-              </span>
-            ) : cmd.running ? (
+            {cmd.running ? (
               <>
                 <button
                   onClick={() => withLoading(stopCmd(cmd.index))}
