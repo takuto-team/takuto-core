@@ -10,7 +10,8 @@ import { WorkflowDefButtons } from "./WorkflowDefButtons";
 import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { Button } from "./Button";
-import { Label, type LabelVariant } from "./Label";
+import { Label } from "./Label";
+import { StatusBadge, getStatusInfo } from "./StatusBadge";
 
 interface Props {
   workflow: WorkflowSummary;
@@ -22,19 +23,6 @@ interface Props {
   onReport: (ticketKey: string) => void;
 }
 
-interface StatusInfo {
-  label: string;
-  color: string;
-}
-
-const COLOR_TO_VARIANT: Record<string, LabelVariant> = {
-  green: "success",
-  red:   "danger",
-  yellow:"warning",
-  gray:  "default",
-  blue:  "info",
-};
-
 /** Map color keys to concrete Tailwind color hex values — avoids dynamic class names
  *  that Tailwind v4 would purge at build time. */
 const COLOR_HEX: Record<string, { bg: string; text: string; border: string; bgFaint: string }> = {
@@ -45,15 +33,6 @@ const COLOR_HEX: Record<string, { bg: string; text: string; border: string; bgFa
   blue:   { bg: "#3b82f6", text: "#60a5fa", border: "rgba(59,130,246,0.2)", bgFaint: "rgba(59,130,246,0.15)" },
 };
 
-function getStatusInfo(state: string, canStart?: boolean): StatusInfo {
-  const s = state.toLowerCase();
-  if (s === "done" || s.startsWith("completed")) return { label: "Completed", color: "green" };
-  if (s.startsWith("error")) return { label: "Error", color: "red" };
-  if (s === "paused") return { label: "Paused", color: "yellow" };
-  if (s === "stopped") return { label: "Stopped", color: "gray" };
-  if (s === "pending" && canStart) return { label: "Pending", color: "gray" };
-  return { label: "Running", color: "blue" };
-}
 
 function progressInfo(w: WorkflowSummary) {
   const pct = Math.max(0, Math.min(100, Math.round(w.progress_percent || 0)));
@@ -197,17 +176,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
             ) : (
               <span className="font-mono text-sm font-medium" style={{ color: (COLOR_HEX[status.color] || COLOR_HEX.blue).text }}>{w.ticket_key}</span>
             )}
-            <Label
-              variant={COLOR_TO_VARIANT[status.color] ?? "info"}
-              icon={
-                status.label === "Completed" ? <CheckIcon /> :
-                status.label === "Error" ? <XIcon /> :
-                status.label === "Running" ? <span className="w-1.5 h-1.5 rounded-full animate-pulse bg-current" /> :
-                undefined
-              }
-            >
-              {status.label}
-            </Label>
+            <StatusBadge status={status} />
           </div>
           {prUrl && (
             <div className="flex-shrink-0">
@@ -657,21 +626,6 @@ function ExternalLinkIcon({ className }: { className?: string }) {
 }
 
 
-function CheckIcon() {
-  return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
-  );
-}
-
-function XIcon() {
-  return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}
 
 function PauseIcon() {
   return (
