@@ -255,7 +255,7 @@ export const WithPortMappings: Story = {
 };
 
 export const CompletedWithRunCommands: Story = {
-  name: "Completed (run commands: done / pending / disabled)",
+  name: "Completed (run commands + workflow defs)",
   args: {
     ...defaultProps,
     workflow: {
@@ -273,9 +273,16 @@ export const CompletedWithRunCommands: Story = {
       run_commands: [
         { index: 0, name: "Dev server", running: true, forwarded_port: [3000, 13000] },
         { index: 1, name: "Storybook", running: false, forwarded_port: null },
-        { index: 2, name: "E2E tests", running: false, forwarded_port: null, disabled: true },
       ],
+      workflow_def_runs: {
+        "address_pr_comments.toml": "completed",
+      },
     },
+    workflowDefs: [
+      { filename: "address_pr_comments.toml", name: "Address PR comments", steps: [], depends_on: [], valid: true },
+      { filename: "merge_base.toml", name: "Merge base", steps: [], depends_on: [], valid: true },
+      { filename: "deploy.toml", name: "Deploy", steps: [], depends_on: ["merge_base.toml"], valid: true },
+    ],
   },
 };
 
