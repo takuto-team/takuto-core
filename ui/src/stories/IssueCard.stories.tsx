@@ -34,16 +34,25 @@ const baseWorkflow: WorkflowSummary = {
   ticketing_system: "jira",
   can_resume_from_error: false,
   terminal_url: null,
-  run_commands: [],
+  run_commands: [
+    { index: 0, name: "Dev server", running: false, forwarded_port: null },
+    { index: 1, name: "Storybook", running: false, forwarded_port: null },
+  ],
   generate_report: false,
   has_report: false,
   workflow_def_runs: {},
   worktree_path: undefined,
 };
 
+const defaultWorkflowDefs = [
+  { filename: "address_pr_comments.toml", name: "Address PR comments", steps: [], depends_on: [], valid: true },
+  { filename: "merge_base.toml", name: "Merge base", steps: [], depends_on: [], valid: true },
+  { filename: "deploy.toml", name: "Deploy", steps: [], depends_on: ["merge_base.toml"], valid: true },
+];
+
 const defaultProps = {
   dynamicForwards: [] as [number, number][],
-  workflowDefs: [],
+  workflowDefs: defaultWorkflowDefs,
   onRefresh: fn(),
   onShowDescription: fn(),
   onReport: fn(),
@@ -124,6 +133,9 @@ export const Running: Story = {
       can_mark_done: false,
       progress_percent: 45,
       progress_steps_total: 5,
+      workflow_def_runs: {
+        "address_pr_comments.toml": "running",
+      },
     },
     terminalState: {
       stepName: "implement",
@@ -146,6 +158,9 @@ export const Paused: Story = {
       can_start: false,
       progress_percent: 60,
       progress_steps_total: 5,
+      workflow_def_runs: {
+        "address_pr_comments.toml": "completed",
+      },
     },
     terminalState: {
       stepName: "review",
@@ -173,6 +188,14 @@ export const Completed: Story = {
         { text: "All steps completed successfully.", stream: "stdout" },
         { text: "PR created: https://github.com/org/repo/pull/42", stream: "stdout" },
       ],
+      run_commands: [
+        { index: 0, name: "Dev server", running: true, forwarded_port: [3000, 13000] },
+        { index: 1, name: "Storybook", running: false, forwarded_port: null },
+      ],
+      workflow_def_runs: {
+        "address_pr_comments.toml": "completed",
+        "merge_base.toml": "completed",
+      },
     },
   },
 };
@@ -194,6 +217,15 @@ export const CompletedMerged: Story = {
       terminal_lines: [
         { text: "PR merged successfully.", stream: "stdout" },
       ],
+      run_commands: [
+        { index: 0, name: "Dev server", running: false, forwarded_port: null },
+        { index: 1, name: "Storybook", running: true, forwarded_port: [6006, 16006] },
+      ],
+      workflow_def_runs: {
+        "address_pr_comments.toml": "completed",
+        "merge_base.toml": "completed",
+        "deploy.toml": "completed",
+      },
     },
   },
 };
@@ -216,6 +248,14 @@ export const Error: Story = {
         { text: "ESLint: 3 errors found", stream: "stderr" },
         { text: "Process exited with code 1", stream: "stderr" },
       ],
+      run_commands: [
+        { index: 0, name: "Dev server", running: false, forwarded_port: null },
+        { index: 1, name: "Storybook", running: false, forwarded_port: null },
+      ],
+      workflow_def_runs: {
+        "address_pr_comments.toml": "error",
+        "merge_base.toml": "completed",
+      },
     },
   },
 };
@@ -233,6 +273,13 @@ export const Stopped: Story = {
       terminal_lines: [
         { text: "Workflow stopped by user.", stream: "stdout" },
       ],
+      run_commands: [
+        { index: 0, name: "Dev server", running: false, forwarded_port: null },
+        { index: 1, name: "Storybook", running: false, forwarded_port: null },
+      ],
+      workflow_def_runs: {
+        "merge_base.toml": "completed",
+      },
     },
   },
 };
@@ -276,13 +323,9 @@ export const CompletedWithRunCommands: Story = {
       ],
       workflow_def_runs: {
         "address_pr_comments.toml": "completed",
+        "merge_base.toml": "running",
       },
     },
-    workflowDefs: [
-      { filename: "address_pr_comments.toml", name: "Address PR comments", steps: [], depends_on: [], valid: true },
-      { filename: "merge_base.toml", name: "Merge base", steps: [], depends_on: [], valid: true },
-      { filename: "deploy.toml", name: "Deploy", steps: [], depends_on: ["merge_base.toml"], valid: true },
-    ],
   },
 };
 
