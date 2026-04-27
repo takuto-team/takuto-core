@@ -1,6 +1,22 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Label } from "../components/Label";
 
+function CheckIcon() {
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function XIcon() {
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  );
+}
+
 const meta = {
   title: "Atoms/Label",
   component: Label,
@@ -66,16 +82,34 @@ export const MergedPrLink: Story = {
   },
 };
 
+export const WithIcon: Story = {
+  args: { variant: "success", children: "Completed", icon: <CheckIcon /> },
+};
+
+export const WithIconDanger: Story = {
+  name: "With icon (danger)",
+  args: { variant: "danger", children: "Error", icon: <XIcon /> },
+};
+
+export const WithIconRunning: Story = {
+  name: "With icon (animated dot)",
+  args: {
+    variant: "info",
+    children: "Running",
+    icon: <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "currentColor", display: "inline-block", animation: "pulse 1.5s infinite" }} />,
+  },
+};
+
 export const AllVariants: Story = {
   args: { variant: "default", children: "Label" },
   render: () => (
     <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
       <Label variant="default">Default</Label>
-      <Label variant="success">Success</Label>
-      <Label variant="danger">Danger</Label>
-      <Label variant="warning">Warning</Label>
-      <Label variant="info">Info</Label>
-      <Label variant="purple">Purple</Label>
+      <Label variant="success" icon={<CheckIcon />}>Completed</Label>
+      <Label variant="danger" icon={<XIcon />}>Error</Label>
+      <Label variant="warning">Paused</Label>
+      <Label variant="info" icon={<span className="w-1.5 h-1.5 rounded-full animate-pulse bg-current" />}>Running</Label>
+      <Label variant="purple">Merged</Label>
     </div>
   ),
 };
