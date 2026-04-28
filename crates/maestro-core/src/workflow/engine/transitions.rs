@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::actions::traits::ExternalActions;
-use crate::config::{Config, TicketingSystem};
+use crate::config::Config;
 use crate::container::ContainerRunner;
 use crate::error::{MaestroError, Result};
 
@@ -31,7 +31,6 @@ pub(crate) struct WorkflowTransitions {
     pub(crate) agent_run_semaphore: Arc<Semaphore>,
     pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
     pub(crate) jira_available: Arc<AtomicBool>,
-    pub(crate) ticketing_system: TicketingSystem,
     pub(crate) workflows_dir: PathBuf,
 }
 
@@ -45,7 +44,6 @@ impl WorkflowTransitions {
         agent_run_semaphore: Arc<Semaphore>,
         suppress_cancelled_as_error: Arc<AtomicBool>,
         jira_available: Arc<AtomicBool>,
-        ticketing_system: TicketingSystem,
         workflows_dir: PathBuf,
     ) -> Self {
         Self {
@@ -56,7 +54,6 @@ impl WorkflowTransitions {
             agent_run_semaphore,
             suppress_cancelled_as_error,
             jira_available,
-            ticketing_system,
             workflows_dir,
         }
     }

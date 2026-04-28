@@ -20,6 +20,7 @@ impl WorkflowRepository {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn get(&self, key: &str) -> Option<Workflow> {
         self.workflows.read().await.get(key).cloned()
     }
@@ -28,6 +29,7 @@ impl WorkflowRepository {
         self.workflows.read().await.keys().cloned().collect()
     }
 
+    #[allow(dead_code)]
     pub async fn insert(&self, w: Workflow) {
         self.workflows
             .write()
@@ -36,6 +38,7 @@ impl WorkflowRepository {
     }
 
     /// Apply a mutation to a workflow. Returns true if found.
+    #[allow(dead_code)]
     pub async fn update(&self, key: &str, f: impl FnOnce(&mut Workflow)) -> bool {
         let mut guard = self.workflows.write().await;
         if let Some(w) = guard.get_mut(key) {
@@ -46,11 +49,13 @@ impl WorkflowRepository {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn remove(&self, key: &str) -> Option<Workflow> {
         self.workflows.write().await.remove(key)
     }
 
     /// Snapshot: returns all workflows as a Vec (cloned, for persistence).
+    #[allow(dead_code)]
     pub async fn snapshot(&self) -> Vec<Workflow> {
         self.workflows.read().await.values().cloned().collect()
     }
@@ -79,6 +84,7 @@ impl WorkflowRepository {
             .count()
     }
 
+    #[allow(dead_code)]
     pub async fn count_manual_toward_cap(&self) -> usize {
         self.workflows
             .read()
@@ -95,6 +101,7 @@ impl WorkflowRepository {
     }
 
     /// Read-locked access for operations that need to inspect many workflows.
+    #[allow(dead_code)]
     pub async fn with_read<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&HashMap<String, Workflow>) -> R,
@@ -104,6 +111,7 @@ impl WorkflowRepository {
     }
 
     /// Write-locked access for batch operations.
+    #[allow(dead_code)]
     pub async fn with_write<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut HashMap<String, Workflow>) -> R,

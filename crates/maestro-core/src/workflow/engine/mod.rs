@@ -14,14 +14,13 @@ mod definitions;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use tokio::sync::{RwLock, Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
 
 use repository::WorkflowRepository;
 use event_bus::WorkflowEventBus;
-use context::WorkflowContext;
 use persistence::WorkflowPersistence;
 use lifecycle::WorkflowLifecycle;
 use transitions::WorkflowTransitions;
@@ -96,8 +95,6 @@ impl WorkflowEngine {
             config.clone(),
             jira_available.clone(),
             ticketing_system.clone(),
-            agent_run_semaphore.clone(),
-            suppress_cancelled_as_error.clone(),
             workflows_dir.clone(),
         );
 
@@ -109,7 +106,6 @@ impl WorkflowEngine {
             agent_run_semaphore.clone(),
             suppress_cancelled_as_error.clone(),
             jira_available.clone(),
-            ticketing_system.clone(),
             workflows_dir.clone(),
         );
 
@@ -128,21 +124,6 @@ impl WorkflowEngine {
             transitions,
             definitions,
         }
-    }
-
-    /// Build a [`WorkflowContext`] snapshot of all shared state needed by driver free functions.
-    pub(crate) fn context(&self) -> Arc<WorkflowContext> {
-        Arc::new(WorkflowContext::new(
-            self.config.clone(),
-            self.repository.clone(),
-            self.event_bus.clone(),
-            self.actions.clone(),
-            self.agent_run_semaphore.clone(),
-            self.suppress_cancelled_as_error.clone(),
-            self.jira_available.clone(),
-            self.ticketing_system.clone(),
-            self.workflows_dir.clone(),
-        ))
     }
 
     /// Convenience accessor for the inner `Arc<RwLock<HashMap<String, Workflow>>>`.
@@ -334,6 +315,7 @@ mod tests {
     use chrono::Utc;
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::atomic::Ordering;
     use tokio_util::sync::CancellationToken;
 
     use crate::config::{Config, TicketingSystem};

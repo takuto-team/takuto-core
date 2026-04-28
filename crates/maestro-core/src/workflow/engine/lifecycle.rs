@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::actions::traits::ExternalActions;
@@ -29,13 +29,10 @@ pub(crate) struct WorkflowLifecycle {
     pub(crate) config: Arc<RwLock<Config>>,
     pub(crate) jira_available: Arc<AtomicBool>,
     pub(crate) ticketing_system: TicketingSystem,
-    pub(crate) agent_run_semaphore: Arc<Semaphore>,
-    pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
     pub(crate) workflows_dir: PathBuf,
 }
 
 impl WorkflowLifecycle {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         repository: Arc<WorkflowRepository>,
         event_bus: Arc<WorkflowEventBus>,
@@ -43,8 +40,6 @@ impl WorkflowLifecycle {
         config: Arc<RwLock<Config>>,
         jira_available: Arc<AtomicBool>,
         ticketing_system: TicketingSystem,
-        agent_run_semaphore: Arc<Semaphore>,
-        suppress_cancelled_as_error: Arc<AtomicBool>,
         workflows_dir: PathBuf,
     ) -> Self {
         Self {
@@ -54,8 +49,6 @@ impl WorkflowLifecycle {
             config,
             jira_available,
             ticketing_system,
-            agent_run_semaphore,
-            suppress_cancelled_as_error,
             workflows_dir,
         }
     }
