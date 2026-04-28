@@ -108,7 +108,7 @@ mod tests {
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut rx = state.engine.subscribe();
-    let receiver_count = state.engine.event_tx.receiver_count();
+    let receiver_count = state.engine.event_subscriber_count();
     info!(
         receivers = receiver_count,
         "WebSocket client connected, subscribed to events"

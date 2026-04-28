@@ -1,0 +1,382 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use chrono::Utc;
+use tokio::sync::{RwLock, Semaphore};
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
+
+use crate::actions::traits::ExternalActions;
+use crate::config::{Config, TicketingSystem};
+use crate::container::ContainerRunner;
+use crate::error::{MaestroError, Result};
+
+use crate::workflow::state::WorkflowState;
+use crate::workflow::step::StepStatus;
+
+use super::event_bus::WorkflowEventBus;
+use super::repository::WorkflowRepository;
+use super::types::WorkflowEvent;
+use super::definitions::WorkflowDefinitionManager;
+
+pub(crate) struct WorkflowTransitions {
+    pub(crate) repository: Arc<WorkflowRepository>,
+    pub(crate) event_bus: Arc<WorkflowEventBus>,
+    pub(crate) actions: Arc<dyn ExternalActions>,
+    pub(crate) config: Arc<RwLock<Config>>,
+    pub(crate) agent_run_semaphore: Arc<Semaphore>,
+    pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
+    pub(crate) jira_available: Arc<AtomicBool>,
+    pub(crate) ticketing_system: TicketingSystem,
+    pub(crate) workflows_dir: PathBuf,
+}
+
+impl WorkflowTransitions {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        repository: Arc<WorkflowRepository>,
+        event_bus: Arc<WorkflowEventBus>,
+        actions: Arc<dyn ExternalActions>,
+        config: Arc<RwLock<Config>>,
+        agent_run_semaphore: Arc<Semaphore>,
+        suppress_cancelled_as_error: Arc<AtomicBool>,
+        jira_available: Arc<AtomicBool>,
+        ticketing_system: TicketingSystem,
+        workflows_dir: PathBuf,
+    ) -> Self {
+        Self {
+            repository,
+            event_bus,
+            actions,
+            config,
+            agent_run_semaphore,
+            suppress_cancelled_as_error,
+            jira_available,
+            ticketing_system,
+            workflows_dir,
+        }
+    }
+
+    pub async fn pause_workflow(&self, ticket_key: &str) -> Result<()> {
+        let (ticket_key_owned, workflow_id) = {
+            let wf_arc = self.repository.inner_arc();
+            let mut workflows = wf_arc.write().await;
+            let workflow = workflows
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+
+            if !workflow.state.is_active() {
+                return Err(MaestroError::Config(format!(
+                    "Cannot pause workflow in state: {}",
+                    workflow.state
+                )));
+            }
+
+            // Cancel the current driver token so the running agent process is killed immediately.
+            workflow.cancel_token.cancel();
+
+            let source = Box::new(workflow.state.clone());
+            workflow.state = WorkflowState::Paused {
+                source_state: source,
+            };
+            workflow.updated_at = Utc::now();
+
+            // Replace the cancel token with a fresh one for the resumed driver.
+            workflow.cancel_token = CancellationToken::new();
+
+            (ticket_key.to_string(), workflow.id.clone())
+        };
+
+        // Force-remove any worker containers for this ticket.
+        ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
+
+        self.event_bus.send(WorkflowEvent {
+            event_type: "workflow_updated".to_string(),
+            workflow_id,
+            ticket_key: ticket_key_owned,
+            state: "Paused".to_string(),
+            timestamp: Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+            progress_percent: None,
+            progress_steps_total: None,
+            forwarded_port: None,
+            pr_merged: None,
+        });
+
+        Ok(())
+    }
+
+    pub async fn resume_workflow(&self, ticket_key: &str) -> Result<()> {
+        use crate::workflow::definitions::{WorkflowDefRunState, discover_workflows};
+
+        let (running_defs, worktree_path, cancel_token) = {
+            let wf_arc = self.repository.inner_arc();
+            let mut workflows = wf_arc.write().await;
+            let workflow = workflows
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+
+            if let WorkflowState::Paused { source_state } = &workflow.state {
+                let restored = *source_state.clone();
+                workflow.state = restored;
+                workflow.updated_at = Utc::now();
+                // Drop Running step-log entries — interrupted steps will re-run.
+                workflow
+                    .steps_log
+                    .retain(|s| s.status != StepStatus::Running);
+
+                let state_line = workflow.status_display();
+                self.event_bus.send(WorkflowEvent {
+                    event_type: "workflow_updated".to_string(),
+                    workflow_id: workflow.id.clone(),
+                    ticket_key: ticket_key.to_string(),
+                    state: state_line,
+                    timestamp: Utc::now(),
+                    error: None,
+                    step_name: None,
+                    output_line: None,
+                    stream: None,
+                    progress_percent: None,
+                    progress_steps_total: None,
+                    forwarded_port: None,
+                    pr_merged: None,
+                });
+
+                let running: Vec<String> = workflow
+                    .workflow_def_runs
+                    .iter()
+                    .filter(|(_, s)| matches!(s, WorkflowDefRunState::Running))
+                    .map(|(n, _)| n.clone())
+                    .collect();
+
+                let wt = workflow.worktree_path.clone().filter(|p| p.exists());
+                (running, wt, workflow.cancel_token.clone())
+            } else {
+                return Err(MaestroError::Config(format!(
+                    "Cannot resume workflow in state: {}",
+                    workflow.state
+                )));
+            }
+        };
+
+        // Re-spawn drive_workflow_def for each def that was running when paused
+        if running_defs.is_empty() {
+            info!(ticket = %ticket_key, "Resumed workflow has no running defs — no driver spawned");
+            return Ok(());
+        }
+
+        let discovery = discover_workflows(&self.workflows_dir);
+        let engine_config = self.config.clone();
+        let engine_workflows = self.repository.inner_arc();
+        let engine_actions = self.actions.clone();
+        let engine_event_tx = self.event_bus.sender().clone();
+        let agent_sem = self.agent_run_semaphore.clone();
+        let suppress = self.suppress_cancelled_as_error.clone();
+
+        for def_name in running_defs {
+            if let Some(def) = discovery.workflows.iter().find(|d| d.filename == def_name) {
+                let steps = def.steps.clone();
+                let ticket = ticket_key.to_string();
+                let def_owned = def_name.clone();
+                let wt = worktree_path.clone();
+                let (ts, td, tt) = {
+                    let wf_arc = self.repository.inner_arc();
+                    let wf = wf_arc.read().await;
+                    wf.get(ticket_key)
+                        .map(|w| {
+                            (
+                                w.ticket_summary.clone(),
+                                w.ticket_description.clone(),
+                                w.ticket_type.clone(),
+                            )
+                        })
+                        .unwrap_or_default()
+                };
+                let ec = engine_config.clone();
+                let ew = engine_workflows.clone();
+                let ea = engine_actions.clone();
+                let et = engine_event_tx.clone();
+                let as_ = agent_sem.clone();
+                let su = suppress.clone();
+                let ct = cancel_token.clone();
+
+                tokio::spawn(async move {
+                    super::driver::drive_workflow_def(ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su)
+                        .await;
+                });
+            } else {
+                warn!(ticket = %ticket_key, def = %def_name, "Running def not found in workflows dir during resume");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn stop_workflow(&self, ticket_key: &str) -> Result<()> {
+        let (ticket_key_owned, workflow_id) = {
+            let wf_arc = self.repository.inner_arc();
+            let mut workflows = wf_arc.write().await;
+            let workflow = workflows
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+
+            workflow.cancel_token.cancel();
+            workflow.current_step_label = None;
+            workflow.state = WorkflowState::Stopped;
+            workflow.updated_at = Utc::now();
+
+            (ticket_key.to_string(), workflow.id.clone())
+        };
+
+        ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
+
+        if self.jira_available.load(Ordering::Relaxed) {
+            let actions = self.actions.clone();
+            let ticket_for_jira = ticket_key_owned.clone();
+
+            tokio::spawn(async move {
+                if let Err(e) = actions.unassign_ticket(&ticket_for_jira).await {
+                    warn!(error = %e, ticket = %ticket_for_jira, "Failed to unassign ticket on stop");
+                }
+                if let Err(e) = actions.transition_ticket(&ticket_for_jira, "To Do").await {
+                    warn!(error = %e, ticket = %ticket_for_jira, "Failed to transition ticket back to To Do on stop");
+                }
+            });
+        }
+
+        self.event_bus.send(WorkflowEvent {
+            event_type: "workflow_updated".to_string(),
+            workflow_id,
+            ticket_key: ticket_key_owned,
+            state: "Stopped".to_string(),
+            timestamp: Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+            progress_percent: None,
+            progress_steps_total: None,
+            forwarded_port: None,
+            pr_merged: None,
+        });
+
+        Ok(())
+    }
+
+    pub async fn retry_workflow(
+        &self,
+        ticket_key: &str,
+        lifecycle: &super::lifecycle::WorkflowLifecycle,
+        definitions: &WorkflowDefinitionManager,
+    ) -> Result<String> {
+        let (ticket_summary, ticket_description) = {
+            let wf_arc = self.repository.inner_arc();
+            let workflows = wf_arc.read().await;
+            let workflow = workflows
+                .get(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+
+            if !workflow.state.is_terminal() {
+                return Err(MaestroError::Config(format!(
+                    "Cannot retry workflow in state: {} (must be Error, Stopped, or Done)",
+                    workflow.state
+                )));
+            }
+
+            (
+                workflow.ticket_summary.clone(),
+                if workflow.ticket_description.is_empty() {
+                    None
+                } else {
+                    Some(workflow.ticket_description.clone())
+                },
+            )
+        };
+
+        // Remove the old workflow
+        self.repository.inner_arc().write().await.remove(ticket_key);
+
+        // Start a fresh one (preserves description for manual/no-Jira workflows)
+        lifecycle
+            .start_workflow(
+                ticket_key.to_string(),
+                ticket_summary,
+                false,
+                ticket_description,
+                definitions,
+            )
+            .await
+    }
+
+    /// Resume a failed or stopped workflow by retrying all Error-state workflow definitions.
+    pub async fn resume_from_error(
+        &self,
+        ticket_key: &str,
+        definitions: &WorkflowDefinitionManager,
+    ) -> Result<()> {
+        use crate::workflow::definitions::WorkflowDefRunState;
+
+        // Collect Error defs and restore the workflow state.
+        let error_defs: Vec<String> = {
+            let wf_arc = self.repository.inner_arc();
+            let mut workflows = wf_arc.write().await;
+            let workflow = workflows
+                .get_mut(ticket_key)
+                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+
+            // Require Error or Stopped state at the workflow level.
+            if !matches!(
+                workflow.state,
+                WorkflowState::Error { .. } | WorkflowState::Stopped
+            ) {
+                return Err(MaestroError::Config(format!(
+                    "Cannot resume workflow in state: {} (must be Error or Stopped)",
+                    workflow.state
+                )));
+            }
+
+            // Collect all defs that are in Error state.
+            let defs: Vec<String> = workflow
+                .workflow_def_runs
+                .iter()
+                .filter(|(_, s)| matches!(s, WorkflowDefRunState::Error { .. }))
+                .map(|(n, _)| n.clone())
+                .collect();
+
+            if defs.is_empty() {
+                return Err(MaestroError::Config(
+                    "No failed workflow definitions to retry. Use the individual def retry buttons."
+                        .to_string(),
+                ));
+            }
+
+            // Reset Error defs to Idle and clear the workflow-level error state.
+            for def_name in &defs {
+                workflow
+                    .workflow_def_runs
+                    .insert(def_name.clone(), WorkflowDefRunState::Idle);
+            }
+            workflow.state = WorkflowState::Pending;
+            workflow.current_step_label = None;
+            workflow.updated_at = Utc::now();
+
+            defs
+        };
+
+        // Re-start each error def via start_workflow_def (handles bootstrap if needed).
+        for def_name in error_defs {
+            if let Err(e) = definitions.start_workflow_def(ticket_key, &def_name).await {
+                warn!(ticket = %ticket_key, def = %def_name, error = %e, "Failed to restart error def");
+            }
+        }
+
+        Ok(())
+    }
+}

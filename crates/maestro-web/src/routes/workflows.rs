@@ -230,7 +230,8 @@ fn build_run_commands_status(
 
 pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowSummary>> {
     let cfg = state.config.read().await;
-    let workflows = state.engine.workflows.read().await;
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
     let dyn_fwd = state.dynamic_forwards.read().await;
     let run_cmds_state = state.run_commands.read().await;
     let mut summaries: Vec<WorkflowSummary> = workflows
@@ -297,7 +298,8 @@ pub async fn get_workflow(
     Path(id): Path<String>,
 ) -> Result<Json<WorkflowSummary>, StatusCode> {
     let cfg = state.config.read().await;
-    let workflows = state.engine.workflows.read().await;
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
     let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
@@ -499,7 +501,8 @@ pub async fn get_workflow_report(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<WorkflowReportResponse>, StatusCode> {
-    let workflows = state.engine.workflows.read().await;
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let worktree_path = w
         .worktree_path
@@ -590,7 +593,8 @@ pub async fn start_manual_workflow(
     };
 
     {
-        let map = state.engine.workflows.read().await;
+        let wf_arc = state.engine.workflows_arc();
+        let map = wf_arc.read().await;
         if map.contains_key(&ticket_key) {
             return Err((
                 StatusCode::CONFLICT,
@@ -649,7 +653,8 @@ pub async fn open_editor(
     Path(id): Path<String>,
 ) -> Result<Json<OpenEditorResponse>, (StatusCode, String)> {
     let cfg = state.config.read().await;
-    let workflows = state.engine.workflows.read().await;
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
         .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
@@ -712,7 +717,7 @@ pub async fn open_editor(
         let scanner_ticket = ticket_key.clone();
         let scanner_spare = info.spare_ports.clone();
         let scanner_vscode = info.vscode_port;
-        let scanner_event_tx = state.engine.event_tx.clone();
+        let scanner_event_tx = state.engine.event_sender();
         let scanner_cancel = tokio_util::sync::CancellationToken::new();
         let scanner_cancel_clone = scanner_cancel.clone();
 
@@ -741,7 +746,7 @@ pub async fn open_editor(
         // events.  This allows the list endpoint to return current port data without
         // per-workflow Docker calls.
         let dyn_fwd = state.dynamic_forwards.clone();
-        let rx = state.engine.event_tx.subscribe();
+        let rx = state.engine.subscribe();
         let tracker_ticket = ticket_key.clone();
         let tracker_cancel = {
             let scanners = state.editor_scanners.read().await;
@@ -902,7 +907,8 @@ pub async fn list_run_commands(
     Path(id): Path<String>,
 ) -> Result<Json<RunCommandsStatusResponse>, (StatusCode, String)> {
     let cfg = state.config.read().await;
-    let workflows = state.engine.workflows.read().await;
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
     let _w = workflows
         .get(&id)
         .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
@@ -954,7 +960,8 @@ pub async fn start_run_command(
     let dynamic_ports = cfg.editor.dynamic_ports;
     drop(cfg);
 
-    let workflows = state.engine.workflows.read().await;
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
         .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
@@ -1036,7 +1043,7 @@ pub async fn start_run_command(
     }
 
     // Start background port scanner for this run command
-    let event_tx = state.engine.event_tx.clone();
+    let event_tx = state.engine.event_sender();
     let ticket_for_scanner = ticket_key.clone();
 
     let run_cmds_map = state.run_commands.clone();
@@ -1126,7 +1133,8 @@ pub async fn stop_run_command(
     State(state): State<AppState>,
     Path((id, index)): Path<(String, usize)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let workflows = state.engine.workflows.read().await;
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
         .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;

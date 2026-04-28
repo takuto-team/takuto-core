@@ -88,7 +88,8 @@ async fn run_description_session(
 
     // Read the persisted description session ID for this workflow (if any).
     let resume_id: Option<String> = {
-        let wf = state.engine.workflows.read().await;
+        let wf_arc = state.engine.workflows_arc();
+        let wf = wf_arc.read().await;
         wf.get(ticket_key)
             .and_then(|w| w.description_session_id.clone())
     };
@@ -178,7 +179,8 @@ async fn run_description_session(
 
     // Persist the session ID back to the workflow so the next call resumes it.
     {
-        let mut wf = state.engine.workflows.write().await;
+        let wf_arc = state.engine.workflows_arc();
+        let mut wf = wf_arc.write().await;
         if let Some(w) = wf.get_mut(ticket_key) {
             w.description_session_id = Some(session_id);
         }
@@ -328,7 +330,8 @@ pub async fn update_ticket_description(
     match state.ticketing_system {
         TicketingSystem::None => {
             // No external ticketing system — persist to the in-memory workflow.
-            let mut workflows = state.engine.workflows.write().await;
+            let wf_arc = state.engine.workflows_arc();
+            let mut workflows = wf_arc.write().await;
             if let Some(wf) = workflows.get_mut(&key) {
                 wf.ticket_description = body.description.clone();
                 if let Some(ref s) = body.summary {
@@ -418,7 +421,8 @@ pub async fn update_ticket_description(
             // `GET /api/workflows` returns the freshly saved value — prevents the
             // dashboard from showing stale text when the user reopens the modal.
             {
-                let mut workflows = state.engine.workflows.write().await;
+                let wf_arc = state.engine.workflows_arc();
+                let mut workflows = wf_arc.write().await;
                 if let Some(wf) = workflows.get_mut(&key) {
                     wf.ticket_description = body.description.clone();
                     if let Some(ref s) = body.summary {
@@ -446,7 +450,8 @@ pub async fn update_ticket_description(
             // `GET /api/workflows` returns the freshly saved value — prevents the
             // dashboard from showing stale text when the user reopens the modal.
             {
-                let mut workflows = state.engine.workflows.write().await;
+                let wf_arc = state.engine.workflows_arc();
+                let mut workflows = wf_arc.write().await;
                 if let Some(wf) = workflows.get_mut(&key) {
                     wf.ticket_description = body.description.clone();
                     if let Some(ref s) = body.summary {
@@ -516,7 +521,7 @@ mod tests {
             TicketingSystem::None,
         );
         wf.ticket_description = description.to_string();
-        engine.workflows.write().await.insert(key.to_string(), wf);
+        engine.workflows_arc().write().await.insert(key.to_string(), wf);
     }
 
     /// Saving a description (without summary) updates `ticket_description` in memory.
@@ -537,7 +542,8 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let workflows = state.engine.workflows.read().await;
+        let wf_arc = state.engine.workflows_arc();
+        let workflows = wf_arc.read().await;
         let wf = workflows.get("T-1").expect("workflow should exist");
         assert_eq!(wf.ticket_description, "New description");
         // Summary should remain unchanged when not provided.
@@ -562,7 +568,8 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let workflows = state.engine.workflows.read().await;
+        let wf_arc = state.engine.workflows_arc();
+        let workflows = wf_arc.read().await;
         let wf = workflows.get("T-2").expect("workflow should exist");
         assert_eq!(wf.ticket_description, "New description");
         assert_eq!(wf.ticket_summary, "New Summary");

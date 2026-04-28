@@ -66,7 +66,8 @@ impl PrMergePoller {
     async fn poll_once(&self) {
         // Collect eligible workflows: have a GitHub PR URL, not already merged.
         let eligible: Vec<(String, String, u64)> = {
-            let workflows = self.engine.workflows.read().await;
+            let wf_arc = self.engine.workflows_arc();
+            let workflows = wf_arc.read().await;
             workflows
                 .values()
                 .filter_map(|w| {
@@ -119,7 +120,8 @@ impl PrMergePoller {
                     );
                     // Update the workflow's pr_merged flag.
                     {
-                        let mut workflows = self.engine.workflows.write().await;
+                        let wf_arc = self.engine.workflows_arc();
+                        let mut workflows = wf_arc.write().await;
                         if let Some(wf) = workflows.get_mut(&ticket_key) {
                             wf.pr_merged = true;
                             wf.updated_at = chrono::Utc::now();
@@ -131,7 +133,8 @@ impl PrMergePoller {
                         workflow_id: String::new(),
                         ticket_key: ticket_key.clone(),
                         state: {
-                            let workflows = self.engine.workflows.read().await;
+                            let wf_arc = self.engine.workflows_arc();
+                            let workflows = wf_arc.read().await;
                             workflows
                                 .get(&ticket_key)
                                 .map(|w| w.status_display())
