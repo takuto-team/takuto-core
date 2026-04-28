@@ -180,12 +180,12 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         {/* Header: ticket key + status badge + PR links */}
         <div className="flex items-center justify-between gap-3 min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            {w.issue_url ? (
+            {(w.issue_url || w.jira_browse_url) ? (
               <a
-                href={w.issue_url}
+                href={w.issue_url || w.jira_browse_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-base font-medium text-blue-400 hover:underline"
+                className="font-mono text-base font-medium text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
               >
                 {w.ticket_key}
               </a>
@@ -206,14 +206,16 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           )}
         </div>
 
-        {/* Summary — click to view/edit description */}
-        <button
-          onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}
-          className="flex items-center leading-none gap-1.5 group text-left w-full min-w-0 cursor-pointer"
-        >
-          <span className="text-sm font-medium text-white group-hover:text-gray-400 transition-colors truncate min-w-0">{w.ticket_summary}</span>
-          <ExternalLinkIcon className="flex-shrink-0 w-3 h-3 text-white group-hover:text-gray-400 transition-colors" />
-        </button>
+        {/* Summary + Show details */}
+        <div className="flex items-center justify-between gap-4 min-w-0">
+          <span className="text-sm font-medium text-white truncate min-w-0">{w.ticket_summary}</span>
+          <button
+            onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}
+            className="flex-shrink-0 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+          >
+            Show details <ExternalLinkIcon className="w-3 h-3" />
+          </button>
+        </div>
 
         {/* Progress frame */}
         <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative h-[80px] flex flex-col justify-center">

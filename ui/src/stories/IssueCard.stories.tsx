@@ -7,7 +7,7 @@ import { ToastProvider } from "../hooks/useToast";
 const baseWorkflow: WorkflowSummary = {
   id: "wf-1",
   ticket_key: "PROJ-123",
-  ticket_summary: "Implement user authentication with OAuth2",
+  ticket_summary: "Implement user authentication with OAuth2 and single sign-on support across all services",
   ticket_description: "Add OAuth2 login flow using GitHub as the identity provider. Include logout, session management, and protected route handling.",
   ticket_type: "Task",
   state: "Pending",
