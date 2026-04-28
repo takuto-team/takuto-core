@@ -1,0 +1,42 @@
+---
+description: >-
+  SOLID, Rust, React/TypeScript, and security coding standards.
+  Apply to every code-writing task in this repository.
+alwaysApply: true
+---
+
+# Coding Standards
+
+Full rules are in **`CODING_STANDARDS.md`** at the repository root. Read it before writing any code.
+
+Key rules reproduced here for quick reference:
+
+## SOLID
+- **SRP** — one file, one reason to change. Split Rust files >~300 lines into a `module/` directory; split React components >~150 lines.
+- **OCP** — add behaviour by adding code (new trait impl, new component), never by patching existing logic paths.
+- **LSP** — every `impl Trait` must honour the full contract. No panics, no silent no-ops.
+- **ISP** — small focused traits/interfaces. Split when a caller uses only part of a trait or prop set.
+- **DIP** — Rust: depend on `Arc<dyn Trait>`. React: receive data via props, not global singletons.
+
+## Rust
+- No `.unwrap()` / `.expect()` outside tests. Use `?`.
+- Never hold a lock guard across `.await`.
+- `pub(crate)` by default; `pub` only at true crate boundaries.
+- `cargo build` → **zero warnings** before committing.
+
+## React / TypeScript
+- `strict: true`. No `any`. All API shapes in `src/api/types.ts`.
+- `useEffect` for side-effects only — never for derived state.
+- `npm run build` → **zero TypeScript errors** before committing.
+
+## Security
+- No hardcoded secrets anywhere. Read from environment variables only.
+- Never interpolate user input into shell strings — use argument arrays.
+- Escape all user-controlled HTML output. No `dangerouslySetInnerHTML`.
+- `cargo audit` + `npm audit` clean before every release.
+
+## Always
+- Read the file before editing it.
+- Minimum viable change — solve the stated problem only.
+- `cargo test --workspace` and `npm run build` green after every change.
+- Update `AGENTS.md` if the change affects documented behaviour.

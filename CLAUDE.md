@@ -10,6 +10,8 @@ Exception: purely local edits where the user has pinned an exact file and no pro
 
 Use **`AGENTS.md`** as the accurate map of architecture, workflows, Claude integration, and HTTP/WebSocket behavior. Use `README.md`, `ARCHITECTURE.md`, and `docs/workflow.md` for human setup, troubleshooting, and diagrams.
 
+Read **`CODING_STANDARDS.md`** before writing any code. It defines the SOLID, Rust, React/TypeScript, and security rules every contributor must follow. These rules are non-negotiable — no exceptions without an inline comment explaining why.
+
 ## Keep `AGENTS.md` current
 
 Whenever you implement changes that affect anything documented in `AGENTS.md` — workflow behavior, Claude integration, config schema, REST/WebSocket contracts, crate layout, Jira polling, or external action boundaries — **update `AGENTS.md` in the same task** so it stays correct.
