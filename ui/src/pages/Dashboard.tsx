@@ -81,6 +81,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     key: string;
     summary: string;
     description?: string;
+    url?: string;
     showStart: boolean;
   } | null>(null);
   const [reportKey, setReportKey] = useState<string | null>(null);
@@ -114,9 +115,9 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   }, [ticketingSystem]);
 
   const handleTicketSelected = useCallback(
-    (key: string, summary: string, description?: string) => {
+    (key: string, summary: string, description?: string, url?: string) => {
       setShowPicker(false);
-      setDetailModal({ key, summary, description, showStart: true });
+      setDetailModal({ key, summary, description, url, showStart: true });
     },
     []
   );
@@ -128,6 +129,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         ticket_key: detailModal.key,
         ticket_summary: summary,
         ticket_description: description,
+        ...(detailModal.url ? { issue_url: detailModal.url } : {}),
       });
       if (!res.ok) {
         const text = await res.text();

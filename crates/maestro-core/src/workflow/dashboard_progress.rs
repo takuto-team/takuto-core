@@ -142,6 +142,7 @@ mod tests {
             jira_available: true,
             ticketing_available: true,
             ticketing_system: crate::config::TicketingSystem::Jira,
+            ticket_url: None,
             last_session_id: None,
             description_session_id: None,
             driver_started: true,

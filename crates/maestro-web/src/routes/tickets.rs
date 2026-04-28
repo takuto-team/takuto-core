@@ -519,6 +519,7 @@ mod tests {
             false,
             false,
             TicketingSystem::None,
+            None,
         );
         wf.ticket_description = description.to_string();
         engine.workflows_arc().write().await.insert(key.to_string(), wf);

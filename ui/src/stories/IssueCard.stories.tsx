@@ -27,6 +27,7 @@ const baseWorkflow: WorkflowSummary = {
   started_manually: true,
   counts_toward_manual_cap: true,
   jira_browse_url: "https://github.com/org/repo/issues/123",
+  issue_url: null,
   can_open_editor: false,
   editor_url: null,
   editor_port_mappings: [],

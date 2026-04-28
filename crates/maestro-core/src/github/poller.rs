@@ -142,6 +142,11 @@ impl GitHubPoller {
                 "Starting workflow for GitHub issue"
             );
 
+            let html_url = if issue.html_url.is_empty() {
+                None
+            } else {
+                Some(issue.html_url.clone())
+            };
             match self
                 .engine
                 .start_workflow(
@@ -149,6 +154,7 @@ impl GitHubPoller {
                     issue.summary.clone(),
                     false,
                     Some(issue.body),
+                    html_url,
                 )
                 .await
             {

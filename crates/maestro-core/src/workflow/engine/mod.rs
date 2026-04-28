@@ -184,8 +184,9 @@ impl WorkflowEngine {
         ticket_summary: String,
         started_manually: bool,
         ticket_description: Option<String>,
+        ticket_url: Option<String>,
     ) -> Result<String> {
-        self.lifecycle.start_workflow(ticket_key, ticket_summary, started_manually, ticket_description, &self.definitions).await
+        self.lifecycle.start_workflow(ticket_key, ticket_summary, started_manually, ticket_description, ticket_url, &self.definitions).await
     }
 
     /// Add a workflow to the dashboard without spawning the driver.
@@ -196,8 +197,9 @@ impl WorkflowEngine {
         ticket_summary: String,
         started_manually: bool,
         ticket_description: Option<String>,
+        ticket_url: Option<String>,
     ) -> Result<String> {
-        self.lifecycle.add_to_dashboard(ticket_key, ticket_summary, started_manually, ticket_description).await
+        self.lifecycle.add_to_dashboard(ticket_key, ticket_summary, started_manually, ticket_description, ticket_url).await
     }
 
     pub async fn get_workflow_ids(&self) -> Vec<String> {
@@ -352,6 +354,7 @@ mod tests {
             jira_available: true,
             ticketing_available: true,
             ticketing_system: TicketingSystem::Jira,
+            ticket_url: None,
             last_session_id: None,
             description_session_id: None,
             driver_started: true,
@@ -727,6 +730,7 @@ mod tests {
             last_session_id: Some("sess-abc".into()),
             description_session_id: Some("desc-xyz".into()),
             ticketing_system: TicketingSystem::GitHub,
+            ticket_url: Some("https://github.com/foo/bar/issues/1".into()),
             driver_started,
             workflow_def_runs: {
                 let mut m = HashMap::new();
@@ -850,6 +854,7 @@ mod tests {
             last_session_id: None,
             description_session_id: None,
             ticketing_system: TicketingSystem::None,
+            ticket_url: None,
             driver_started: true,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
@@ -911,6 +916,7 @@ mod tests {
             last_session_id: Some("session-123".into()),
             description_session_id: Some("desc-456".into()),
             ticketing_system: TicketingSystem::GitHub,
+            ticket_url: Some("https://github.com/org/repo/issues/42".into()),
             driver_started: true,
             workflow_def_runs: def_runs,
             worktree_bootstrapped: true,

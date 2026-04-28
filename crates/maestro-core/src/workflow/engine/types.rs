@@ -93,6 +93,9 @@ pub struct Workflow {
     pub ticketing_available: bool,
     /// Which ticketing system was active when this workflow was created.
     pub ticketing_system: TicketingSystem,
+    /// Direct URL to the ticket in the ticketing system (e.g. GitHub issue URL).
+    /// For Jira workflows this is `None` and the browse URL is computed from the site + key.
+    pub ticket_url: Option<String>,
     /// Last Claude/Cursor session ID for `--resume` across container restarts.
     pub last_session_id: Option<String>,
     /// Persistent session ID shared by "Improve with AI" and "Ask AI" for this workflow,
@@ -117,6 +120,7 @@ impl Workflow {
         started_manually: bool,
         jira_available: bool,
         ticketing_system: TicketingSystem,
+        ticket_url: Option<String>,
     ) -> Self {
         let now = Utc::now();
         let ticketing_available = ticketing_system != TicketingSystem::None;
@@ -141,6 +145,7 @@ impl Workflow {
             jira_available,
             ticketing_available,
             ticketing_system,
+            ticket_url,
             last_session_id: None,
             description_session_id: None,
             driver_started: false,
@@ -215,6 +220,7 @@ impl Workflow {
             jira_available: rec.jira_available,
             ticketing_available,
             ticketing_system,
+            ticket_url: rec.ticket_url,
             last_session_id: rec.last_session_id,
             description_session_id: rec.description_session_id,
             driver_started: rec.driver_started,
@@ -253,6 +259,7 @@ pub(super) fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRec
         last_session_id: w.last_session_id.clone(),
         description_session_id: w.description_session_id.clone(),
         ticketing_system: w.ticketing_system,
+        ticket_url: w.ticket_url.clone(),
         driver_started: w.driver_started,
         workflow_def_runs: w.workflow_def_runs.clone(),
         worktree_bootstrapped: w.worktree_bootstrapped,

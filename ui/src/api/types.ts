@@ -37,6 +37,7 @@ export interface WorkflowSummary {
   started_manually: boolean;
   counts_toward_manual_cap: boolean;
   jira_browse_url: string;
+  issue_url: string | null;
   can_open_editor: boolean;
   editor_url: string | null;
   editor_port_mappings: [number, number][];
@@ -132,6 +133,7 @@ export interface GitHubIssue {
   key: string;
   summary: string;
   body: string;
+  url: string;
 }
 
 export interface OpenEditorResponse {

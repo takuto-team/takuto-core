@@ -27,6 +27,7 @@ function makeWorkflow(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary
     started_manually: false,
     counts_toward_manual_cap: false,
     jira_browse_url: "",
+    issue_url: null,
     can_open_editor: false,
     editor_url: null,
     editor_port_mappings: [],

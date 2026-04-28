@@ -273,7 +273,7 @@ impl WorkflowTransitions {
         lifecycle: &super::lifecycle::WorkflowLifecycle,
         definitions: &WorkflowDefinitionManager,
     ) -> Result<String> {
-        let (ticket_summary, ticket_description) = {
+        let (ticket_summary, ticket_description, ticket_url) = {
             let wf_arc = self.repository.inner_arc();
             let workflows = wf_arc.read().await;
             let workflow = workflows
@@ -294,19 +294,21 @@ impl WorkflowTransitions {
                 } else {
                     Some(workflow.ticket_description.clone())
                 },
+                workflow.ticket_url.clone(),
             )
         };
 
         // Remove the old workflow
         self.repository.inner_arc().write().await.remove(ticket_key);
 
-        // Start a fresh one (preserves description for manual/no-Jira workflows)
+        // Start a fresh one (preserves description and ticket URL for manual/no-Jira workflows)
         lifecycle
             .start_workflow(
                 ticket_key.to_string(),
                 ticket_summary,
                 false,
                 ticket_description,
+                ticket_url,
                 definitions,
             )
             .await

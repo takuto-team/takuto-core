@@ -58,6 +58,10 @@ pub struct PersistedWorkflowRecord {
     /// old snapshots without this field get `TicketingSystem::None`.
     #[serde(default)]
     pub ticketing_system: crate::config::TicketingSystem,
+    /// Direct URL to the ticket in the ticketing system (e.g. GitHub issue HTML URL).
+    /// `None` for Jira workflows and old snapshots without this field.
+    #[serde(default)]
+    pub ticket_url: Option<String>,
     /// Whether the workflow driver was spawned. Old snapshots without this field
     /// default to `true` (driver was running).
     #[serde(default = "default_driver_started")]
@@ -222,6 +226,7 @@ mod tests {
             last_session_id: None,
             description_session_id: None,
             ticketing_system: crate::config::TicketingSystem::None,
+            ticket_url: None,
             driver_started: false,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,

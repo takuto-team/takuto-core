@@ -7,12 +7,12 @@ import type { TodoTicket, GitHubIssue } from "../../api/types";
 
 interface Props {
   ticketingSystem: string;
-  onSelect: (key: string, summary: string, description?: string) => void;
+  onSelect: (key: string, summary: string, description?: string, url?: string) => void;
   onClose: () => void;
 }
 
 export function TicketPickerModal({ ticketingSystem, onSelect, onClose }: Props) {
-  const [tickets, setTickets] = useState<{ key: string; summary: string; body?: string }[]>([]);
+  const [tickets, setTickets] = useState<{ key: string; summary: string; body?: string; url?: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -28,6 +28,7 @@ export function TicketPickerModal({ ticketingSystem, onSelect, onClose }: Props)
             key: t.key,
             summary: t.summary,
             body: "body" in t ? t.body : undefined,
+            url: "url" in t ? t.url : undefined,
           }))
         );
       })
@@ -55,7 +56,7 @@ export function TicketPickerModal({ ticketingSystem, onSelect, onClose }: Props)
           {tickets.map((t) => (
             <button
               key={t.key}
-              onClick={() => onSelect(t.key, t.summary, t.body)}
+              onClick={() => onSelect(t.key, t.summary, t.body, t.url)}
               className="w-full text-left px-4 py-3 rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-3 cursor-pointer"
             >
               <span className="font-mono text-xs text-blue-400 flex-shrink-0">{t.key}</span>

@@ -59,6 +59,7 @@ impl WorkflowLifecycle {
         ticket_summary: String,
         started_manually: bool,
         ticket_description: Option<String>,
+        ticket_url: Option<String>,
         definitions: &WorkflowDefinitionManager,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
@@ -68,6 +69,7 @@ impl WorkflowLifecycle {
             started_manually,
             jira,
             self.ticketing_system,
+            ticket_url,
         );
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
@@ -111,6 +113,7 @@ impl WorkflowLifecycle {
         ticket_summary: String,
         started_manually: bool,
         ticket_description: Option<String>,
+        ticket_url: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
         let mut workflow = Workflow::new(
@@ -119,6 +122,7 @@ impl WorkflowLifecycle {
             started_manually,
             jira,
             self.ticketing_system,
+            ticket_url,
         );
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;

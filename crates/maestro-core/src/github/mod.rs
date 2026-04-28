@@ -59,6 +59,7 @@ pub struct GitHubIssue {
     pub key: String,
     pub summary: String,
     pub body: String,
+    pub html_url: String,
 }
 
 /// Translate a raw `gh api` error message into a user-friendly string.
@@ -145,10 +146,16 @@ pub async fn fetch_open_issues(
                         .and_then(|b| b.as_str())
                         .unwrap_or("")
                         .to_string();
+                    let html_url = v
+                        .get("html_url")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     Some(GitHubIssue {
                         key: format!("GH-{number}"),
                         summary: title,
                         body,
+                        html_url,
                     })
                 })
                 .collect::<Vec<_>>()

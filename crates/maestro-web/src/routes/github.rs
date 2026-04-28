@@ -16,6 +16,7 @@ pub struct GithubIssueRow {
     pub key: String,
     pub summary: String,
     pub body: String,
+    pub url: String,
 }
 
 /// `GET /api/github/issues` — returns open GitHub issues for the configured repo.
@@ -57,6 +58,7 @@ pub async fn list_github_issues(
             key: issue.key,
             summary: issue.summary,
             body: issue.body,
+            url: issue.html_url,
         })
         .collect();
 

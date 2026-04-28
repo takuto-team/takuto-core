@@ -156,7 +156,7 @@ impl JiraPoller {
 
             match self
                 .engine
-                .start_workflow(ticket.key.clone(), ticket.summary.clone(), false, None)
+                .start_workflow(ticket.key.clone(), ticket.summary.clone(), false, None, None)
                 .await
             {
                 Ok(id) => {

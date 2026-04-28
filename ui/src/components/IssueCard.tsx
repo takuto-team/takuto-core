@@ -180,9 +180,9 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         {/* Header: ticket key + status badge + PR links */}
         <div className="flex items-center justify-between gap-3 min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            {w.jira_browse_url ? (
+            {w.issue_url ? (
               <a
-                href={w.jira_browse_url}
+                href={w.issue_url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-mono text-base font-medium text-blue-400 hover:underline"

@@ -113,6 +113,10 @@ pub struct WorkflowSummary {
     pub counts_toward_manual_cap: bool,
     /// Jira **browse** URL from **`[jira] site`** + **`ticket_key`** (dashboard **Go to ticket**).
     pub jira_browse_url: String,
+    /// Direct URL to the issue in the ticketing system. For GitHub workflows, this is the
+    /// `html_url` stored when the workflow was created. For Jira workflows, it is the
+    /// computed browse URL. `None` when no URL is available (e.g. `ticketing_system = none`).
+    pub issue_url: Option<String>,
     /// **Open editor** is allowed (workflow not active, worktree exists, Docker available).
     pub can_open_editor: bool,
     /// Set when an editor container is already running for this workflow.
@@ -182,6 +186,27 @@ fn can_resume_from_error(w: &Workflow) -> bool {
         w.state,
         WorkflowState::Error { .. } | WorkflowState::Stopped
     ) && w.worktree_path.as_ref().is_some_and(|p| p.exists())
+}
+
+/// Compute the canonical issue URL for a workflow.
+///
+/// - If `ticket_url` is `Some`, use it directly (GitHub issues and future providers).
+/// - If `ticket_url` is `None` and the ticketing system is Jira with a configured site,
+///   compute the Jira browse URL.
+/// - Otherwise `None`.
+fn build_issue_url(w: &Workflow, jira_site: &str) -> Option<String> {
+    if let Some(ref url) = w.ticket_url {
+        return Some(url.clone());
+    }
+    if w.ticketing_system == maestro_core::config::TicketingSystem::Jira
+        && !jira_site.is_empty()
+    {
+        let url = ticket_browse_url(jira_site, &w.ticket_key);
+        if !url.is_empty() {
+            return Some(url);
+        }
+    }
+    None
 }
 
 // `TicketingSystem` implements `Display`, so use `.to_string()` directly.
@@ -269,6 +294,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 started_manually,
                 counts_toward_manual_cap,
                 jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
+                issue_url: build_issue_url(w, &cfg.jira.site),
                 can_open_editor: can_open_editor(w),
                 editor_url: None,
                 editor_port_mappings: port_mappings,
@@ -343,6 +369,7 @@ pub async fn get_workflow(
         started_manually,
         counts_toward_manual_cap,
         jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
+        issue_url: build_issue_url(w, &cfg.jira.site),
         can_open_editor: can_open_editor(w),
         editor_url: editor_info.as_ref().map(|e| e.url.clone()),
         editor_port_mappings: port_mappings,
@@ -534,6 +561,10 @@ pub struct StartManualWorkflowBody {
     /// Optional ticket description (used when Jira is unavailable and the user pastes the description).
     #[serde(default)]
     pub ticket_description: Option<String>,
+    /// Direct URL to the issue in the ticketing system (e.g. GitHub issue `html_url`).
+    /// Used so clicking the issue key on the dashboard opens the correct URL for GitHub workflows.
+    #[serde(default)]
+    pub issue_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -622,9 +653,16 @@ pub async fn start_manual_workflow(
         .filter(|s| !s.is_empty())
         .map(String::from);
 
+    let issue_url = body
+        .issue_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
     let workflow_id = state
         .engine
-        .add_to_dashboard(ticket_key.clone(), ticket_summary, true, description)
+        .add_to_dashboard(ticket_key.clone(), ticket_summary, true, description, issue_url)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1424,6 +1462,7 @@ mod tests {
             true,
             false,
             maestro_core::config::TicketingSystem::None,
+            None,
         );
         w.driver_started = driver_started;
         w
