@@ -1,12 +1,14 @@
 # Maestro
 
-**Maestro is an autonomous AI coding pipeline.** It picks up tickets from Jira or GitHub Issues, writes the code, runs your tests and linter, opens a PR — all unattended, inside a secure Docker container, while you focus on what matters.
+**Maestro is an AI coding pipeline that works at your pace.** Let it run autonomously overnight — polling Jira or GitHub Issues, writing code, running tests, opening PRs — or stay in the driver's seat: pick items manually, refine descriptions with AI assistance, and trigger each phase yourself from the dashboard.
 
 ---
 
 ## What you can achieve
 
-- **Go from ticket to PR automatically** — Maestro reads your Jira or GitHub Issues backlog, grabs tickets in "To Do", and drives an AI agent (Claude Code or Cursor) through a fully configurable pipeline: worktree → install → implement → lint/tests → PR.
+- **Fully automated mode** — connect Jira or GitHub Issues and Maestro polls automatically: it picks up "To Do" tickets, assigns them, runs the full AI pipeline (worktree → install → implement → lint/tests → PR), and moves on to the next one.
+- **Manual mode, your pace** — add any ticket or task to the dashboard yourself, refine its description with AI assistance before the agent ever sees it, then trigger each workflow phase when you're ready. No polling, no surprises.
+- **Mix both** — auto-pick routine tasks while manually curating the tricky ones. You control which tickets get the autopilot treatment and which ones you steer yourself.
 - **Run multiple tickets in parallel** — configure how many workflows run concurrently; each gets its own git worktree and isolated environment.
 - **Monitor everything in real time** — a live web dashboard streams terminal output per workflow, shows progress, and lets you pause, resume, retry, or inspect any run.
 - **Jump into any workflow** — open a browser-based VS Code editor and web terminal, pre-configured with your project tools, pointed at the exact worktree the agent is working on.
@@ -20,7 +22,7 @@
 | | IDE assistant (Copilot, Cursor inline) | Maestro |
 |---|---|---|
 | **Where it runs** | Inside your editor, on your machine | Inside Docker, on any machine or server |
-| **Supervision required** | Yes — you approve each step | No — runs unattended overnight |
+| **Supervision required** | Yes — you approve each step | Optional — fully autonomous or manual-trigger, your choice |
 | **Ticketing integration** | None | Jira, GitHub Issues, or standalone |
 | **Pipeline definition** | Single prompt | Multi-step TOML: implement, review, test, PR, deploy |
 | **Concurrent work** | One task at a time | Multiple tickets in parallel |
