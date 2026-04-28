@@ -1,6 +1,8 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { CheckIcon, XIcon } from "./icons";
+
 export interface StatusInfo {
   label: string;
   color: "green" | "red" | "yellow" | "gray" | "blue";
@@ -36,18 +38,3 @@ export function StatusBadge({ status }: { status: StatusInfo }) {
   );
 }
 
-function CheckIcon() {
-  return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
-  );
-}
-
-function XIcon() {
-  return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}

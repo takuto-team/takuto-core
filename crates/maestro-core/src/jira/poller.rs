@@ -14,6 +14,13 @@ use crate::workflow::engine::WorkflowEngine;
 
 use super::client::JiraClient;
 
+// Unit-test note: JiraPoller is tightly coupled to WorkflowEngine and JiraClient
+// (real `acli` process). The key logic branches are:
+//   - `effective_max_active_workflows()`: tested in config.rs
+//   - polling pause/skip: a simple AtomicBool check, not worth testing in isolation
+//   - duplicate key skip: `active_keys.contains(&ticket.key)` — trivial HashSet lookup
+// Integration tests with a mock engine would be the right level for this module.
+
 pub struct JiraPoller {
     pub config: Arc<RwLock<Config>>,
     pub engine: Arc<WorkflowEngine>,

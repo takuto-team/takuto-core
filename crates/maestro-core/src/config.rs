@@ -1798,4 +1798,26 @@ step_timeout_secs = 600
         let config = Config::load(f.path()).unwrap();
         assert!(!config.general.generate_report);
     }
+
+    // -- effective_max_active_workflows --
+
+    #[test]
+    fn effective_max_active_workflows_returns_max_active_when_nonzero() {
+        let general = GeneralConfig {
+            max_active_workflows: 5,
+            max_concurrent_workflows: 3,
+            ..Default::default()
+        };
+        assert_eq!(general.effective_max_active_workflows(), 5);
+    }
+
+    #[test]
+    fn effective_max_active_workflows_falls_back_to_concurrent_when_zero() {
+        let general = GeneralConfig {
+            max_active_workflows: 0,
+            max_concurrent_workflows: 4,
+            ..Default::default()
+        };
+        assert_eq!(general.effective_max_active_workflows(), 4);
+    }
 }

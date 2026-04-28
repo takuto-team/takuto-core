@@ -312,3 +312,162 @@ fn parse_stream_json_output(raw: &str) -> String {
         result_parts.join("")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproduce the argument-building logic from `run_claude_session` to verify flags
+    /// without spawning a real process.
+    fn build_claude_args(
+        prompt: &str,
+        model: Option<&str>,
+        resume_session_id: Option<&str>,
+        system_prompt: Option<&str>,
+    ) -> Vec<String> {
+        // Replicate the effective_prompt / effective_system_prompt logic
+        let effective_prompt;
+        let effective_system_prompt;
+        match (system_prompt, resume_session_id) {
+            (Some(sp), Some(_)) => {
+                effective_prompt =
+                    format!("## Instructions for this step\n\n{sp}\n\n---\n\n{prompt}");
+                effective_system_prompt = None;
+            }
+            (Some(sp), None) => {
+                effective_prompt = prompt.to_string();
+                effective_system_prompt = Some(sp.to_string());
+            }
+            _ => {
+                effective_prompt = prompt.to_string();
+                effective_system_prompt = None;
+            }
+        }
+
+        let mut args = vec![
+            "--dangerously-skip-permissions".to_string(),
+            "--print".to_string(),
+            "--verbose".to_string(),
+            "-p".to_string(),
+            effective_prompt.clone(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+        ];
+
+        if let Some(sp) = &effective_system_prompt {
+            args.push("--system-prompt".to_string());
+            args.push(sp.clone());
+        }
+
+        if let Some(sid) = resume_session_id {
+            args.push("--resume".to_string());
+            args.push(sid.to_string());
+        }
+
+        if let Some(m) = model {
+            if !m.is_empty() {
+                args.push("--model".to_string());
+                args.push(m.to_string());
+            }
+        }
+
+        args
+    }
+
+    #[test]
+    fn claude_args_contain_required_flags() {
+        let args = build_claude_args("fix the bug", None, None, None);
+        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(args.contains(&"--print".to_string()));
+        assert!(args.contains(&"--verbose".to_string()));
+        assert!(args.contains(&"-p".to_string()));
+        assert!(args.contains(&"--output-format".to_string()));
+        assert!(args.contains(&"stream-json".to_string()));
+    }
+
+    #[test]
+    fn claude_args_include_resume_when_session_id_present() {
+        let args = build_claude_args("continue", None, Some("sess-123"), None);
+        assert!(args.contains(&"--resume".to_string()));
+        assert!(args.contains(&"sess-123".to_string()));
+    }
+
+    #[test]
+    fn claude_args_no_resume_when_session_id_absent() {
+        let args = build_claude_args("start fresh", None, None, None);
+        assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn claude_args_include_model_when_non_empty() {
+        let args = build_claude_args("prompt", Some("claude-opus-4-6"), None, None);
+        assert!(args.contains(&"--model".to_string()));
+        assert!(args.contains(&"claude-opus-4-6".to_string()));
+    }
+
+    #[test]
+    fn claude_args_skip_model_when_empty() {
+        let args = build_claude_args("prompt", Some(""), None, None);
+        assert!(!args.contains(&"--model".to_string()));
+    }
+
+    #[test]
+    fn claude_args_system_prompt_on_fresh_session() {
+        let args = build_claude_args("do stuff", None, None, Some("You are a linter"));
+        assert!(args.contains(&"--system-prompt".to_string()));
+        assert!(args.contains(&"You are a linter".to_string()));
+        // Prompt should be the original, not prefixed
+        assert!(args.contains(&"do stuff".to_string()));
+    }
+
+    #[test]
+    fn claude_args_system_prompt_injected_into_prompt_on_resume() {
+        let args = build_claude_args("resume task", None, Some("sess-456"), Some("Be careful"));
+        // --system-prompt should NOT be present on resume
+        assert!(!args.contains(&"--system-prompt".to_string()));
+        // The effective prompt should contain the system prompt content
+        let prompt_idx = args.iter().position(|a| a == "-p").unwrap();
+        let effective_prompt = &args[prompt_idx + 1];
+        assert!(effective_prompt.contains("Be careful"));
+        assert!(effective_prompt.contains("resume task"));
+    }
+
+    // --- parse_stream_json_output ---
+
+    #[test]
+    fn parse_stream_json_extracts_result() {
+        let raw = r#"{"type":"system","subtype":"init"}
+{"type":"result","result":"Hello world","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let parsed = parse_stream_json_output(raw);
+        assert_eq!(parsed, "Hello world");
+    }
+
+    #[test]
+    fn parse_stream_json_extracts_content_block_delta() {
+        let raw = r#"{"type":"content_block_delta","delta":{"text":"chunk1"}}
+{"type":"content_block_delta","delta":{"text":"chunk2"}}"#;
+        let parsed = parse_stream_json_output(raw);
+        assert_eq!(parsed, "chunk1chunk2");
+    }
+
+    #[test]
+    fn parse_stream_json_extracts_assistant_message() {
+        let raw = r#"{"type":"assistant","message":{"content":"assistant output"}}"#;
+        let parsed = parse_stream_json_output(raw);
+        assert_eq!(parsed, "assistant output");
+    }
+
+    #[test]
+    fn parse_stream_json_returns_raw_when_no_recognized_events() {
+        let raw = "just some plain text output";
+        let parsed = parse_stream_json_output(raw);
+        assert_eq!(parsed, raw);
+    }
+
+    #[test]
+    fn parse_stream_json_skips_empty_lines() {
+        let raw = "\n\n{\"type\":\"result\",\"result\":\"ok\"}\n\n";
+        let parsed = parse_stream_json_output(raw);
+        assert_eq!(parsed, "ok");
+    }
+}

@@ -22,9 +22,6 @@ pub trait ExternalActions: Send + Sync {
     async fn remove_worktree(&self, path: &Path) -> Result<()>;
     /// Best-effort **`git branch -D`** in the main repo after worktree removal (no-op if `branch` is empty or already gone).
     async fn delete_local_branch(&self, branch: &str) -> Result<()>;
-    async fn create_pr(&self, title: &str, body: &str, branch: &str, base: &str) -> Result<String>;
-    async fn commit_changes(&self, cwd: &Path, message: &str) -> Result<()>;
-
     /// Set `git config user.name` / `user.email` in `cwd` from `gh api user` (GitHub no-reply email).
     async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()>;
 

@@ -45,3 +45,86 @@ impl StepLog {
         self.error = Some(error);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn step_status_serde_round_trip() {
+        for status in [
+            StepStatus::Running,
+            StepStatus::Success,
+            StepStatus::Failed,
+            StepStatus::Skipped,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let back: StepStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, status);
+        }
+    }
+
+    #[test]
+    fn step_log_new_has_correct_initial_fields() {
+        let log = StepLog::new("Build project".to_string());
+        assert_eq!(log.step_name, "Build project");
+        assert_eq!(log.status, StepStatus::Running);
+        assert!(log.completed_at.is_none());
+        assert!(log.output.is_empty());
+        assert!(log.error.is_none());
+        // started_at should be very recent
+        let elapsed = Utc::now() - log.started_at;
+        assert!(elapsed.num_seconds() < 2);
+    }
+
+    #[test]
+    fn step_log_complete_sets_status_and_timestamp() {
+        let mut log = StepLog::new("Test step".to_string());
+        assert!(log.completed_at.is_none());
+
+        log.complete(StepStatus::Success);
+        assert_eq!(log.status, StepStatus::Success);
+        assert!(log.completed_at.is_some());
+        assert!(log.error.is_none());
+    }
+
+    #[test]
+    fn step_log_fail_sets_error_and_failed_status() {
+        let mut log = StepLog::new("Failing step".to_string());
+
+        log.fail("timeout exceeded".to_string());
+        assert_eq!(log.status, StepStatus::Failed);
+        assert!(log.completed_at.is_some());
+        assert_eq!(log.error.as_deref(), Some("timeout exceeded"));
+    }
+
+    #[test]
+    fn step_log_transition_running_to_success() {
+        let mut log = StepLog::new("Step".to_string());
+        assert_eq!(log.status, StepStatus::Running);
+        log.complete(StepStatus::Success);
+        assert_eq!(log.status, StepStatus::Success);
+    }
+
+    #[test]
+    fn step_log_transition_running_to_failed() {
+        let mut log = StepLog::new("Step".to_string());
+        assert_eq!(log.status, StepStatus::Running);
+        log.fail("crash".to_string());
+        assert_eq!(log.status, StepStatus::Failed);
+    }
+
+    #[test]
+    fn step_log_serde_round_trip() {
+        let mut log = StepLog::new("Serialize me".to_string());
+        log.output.push("line 1".to_string());
+        log.complete(StepStatus::Success);
+
+        let json = serde_json::to_string(&log).unwrap();
+        let back: StepLog = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.step_name, "Serialize me");
+        assert_eq!(back.status, StepStatus::Success);
+        assert_eq!(back.output, vec!["line 1"]);
+        assert!(back.completed_at.is_some());
+    }
+}

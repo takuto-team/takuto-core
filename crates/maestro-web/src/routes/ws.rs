@@ -26,6 +26,86 @@ pub async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use maestro_core::actions::dry_run::DryRunActions;
+    use maestro_core::config::{Config, TicketingSystem};
+    use maestro_core::workflow::engine::WorkflowEngine;
+
+    use crate::server::build_router;
+    use crate::state::AppState;
+
+    fn test_state() -> AppState {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
+            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
+        );
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let engine = Arc::new(WorkflowEngine::new(
+            config.clone(),
+            actions,
+            1,
+            jira_available.clone(),
+            TicketingSystem::None,
+            std::env::temp_dir(),
+        ));
+        AppState {
+            engine,
+            config,
+            polling_paused: Arc::new(AtomicBool::new(false)),
+            jira_available,
+            ticketing_system: TicketingSystem::None,
+            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
+            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
+            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
+            run_commands: Arc::new(RwLock::new(HashMap::new())),
+            preflight_error: None,
+            config_path: std::env::temp_dir().join("config.toml"),
+            config_writer: None,
+        }
+    }
+
+    /// WebSocket upgrade requires a real TCP connection. With tower's `oneshot()`,
+    /// the handler is reached but returns 426 (Upgrade Required) because the upgrade
+    /// cannot complete without a socket. We verify the route exists and the handler
+    /// activates (not 404, not 401).
+    #[tokio::test]
+    async fn ws_route_is_reachable() {
+        let state = test_state();
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/ws")
+                    .header("Host", "localhost")
+                    .header("Connection", "Upgrade")
+                    .header("Upgrade", "websocket")
+                    .header("Sec-WebSocket-Version", "13")
+                    .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 426 confirms the WebSocket handler was reached; the upgrade can't complete
+        // through oneshot (no real TCP socket). The key thing is it's not 404 or 500.
+        assert!(
+            resp.status() == StatusCode::SWITCHING_PROTOCOLS
+                || resp.status() == StatusCode::from_u16(426).unwrap(),
+            "expected 101 or 426, got: {}",
+            resp.status()
+        );
+    }
+}
+
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut rx = state.engine.subscribe();
     let receiver_count = state.engine.event_tx.receiver_count();

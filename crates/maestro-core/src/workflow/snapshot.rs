@@ -224,6 +224,7 @@ mod tests {
             ticketing_system: crate::config::TicketingSystem::None,
             driver_started: false,
             workflow_def_runs: HashMap::new(),
+            worktree_bootstrapped: false,
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: PersistedWorkflowRecord = serde_json::from_str(&json).unwrap();

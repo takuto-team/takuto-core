@@ -218,3 +218,133 @@ fn parse_cursor_stream_json_output(raw: &str) -> String {
         result_parts.join("")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproduce the argument-building logic from `run_cursor_agent_session` to verify flags
+    /// without spawning a real process.
+    fn build_cursor_args(
+        workspace: &str,
+        prompt: &str,
+        model: Option<&str>,
+        resume_session_id: Option<&str>,
+    ) -> Vec<String> {
+        let mut args = vec![
+            "-p".to_string(),
+            prompt.to_string(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--stream-partial-output".to_string(),
+            "--trust".to_string(),
+            "--force".to_string(),
+            "--approve-mcps".to_string(),
+            "--sandbox".to_string(),
+            "disabled".to_string(),
+            "--workspace".to_string(),
+            workspace.to_string(),
+        ];
+
+        if let Some(m) = model {
+            if !m.is_empty() {
+                args.push("--model".to_string());
+                args.push(m.to_string());
+            }
+        }
+
+        if let Some(sid) = resume_session_id {
+            args.push("--resume".to_string());
+            args.push(sid.to_string());
+        }
+
+        args
+    }
+
+    #[test]
+    fn cursor_args_contain_required_flags() {
+        let args = build_cursor_args("/workspace/project", "do work", None, None);
+        assert!(args.contains(&"-p".to_string()));
+        assert!(args.contains(&"--output-format".to_string()));
+        assert!(args.contains(&"stream-json".to_string()));
+        assert!(args.contains(&"--stream-partial-output".to_string()));
+        assert!(args.contains(&"--trust".to_string()));
+        assert!(args.contains(&"--force".to_string()));
+        assert!(args.contains(&"--approve-mcps".to_string()));
+        assert!(args.contains(&"--sandbox".to_string()));
+        assert!(args.contains(&"disabled".to_string()));
+        assert!(args.contains(&"--workspace".to_string()));
+        assert!(args.contains(&"/workspace/project".to_string()));
+    }
+
+    #[test]
+    fn cursor_args_include_resume_when_session_id_present() {
+        let args = build_cursor_args("/ws", "prompt", None, Some("cur-session-1"));
+        assert!(args.contains(&"--resume".to_string()));
+        assert!(args.contains(&"cur-session-1".to_string()));
+    }
+
+    #[test]
+    fn cursor_args_no_resume_when_session_id_absent() {
+        let args = build_cursor_args("/ws", "prompt", None, None);
+        assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn cursor_args_include_model_when_non_empty() {
+        let args = build_cursor_args("/ws", "prompt", Some("gpt-4.1"), None);
+        assert!(args.contains(&"--model".to_string()));
+        assert!(args.contains(&"gpt-4.1".to_string()));
+    }
+
+    #[test]
+    fn cursor_args_skip_model_when_empty() {
+        let args = build_cursor_args("/ws", "prompt", Some(""), None);
+        assert!(!args.contains(&"--model".to_string()));
+    }
+
+    // --- parse_cursor_stream_json_output ---
+
+    #[test]
+    fn parse_cursor_stream_extracts_result() {
+        let raw = r#"{"type":"result","result":"Done!"}"#;
+        let parsed = parse_cursor_stream_json_output(raw);
+        assert_eq!(parsed, "Done!");
+    }
+
+    #[test]
+    fn parse_cursor_stream_extracts_assistant_string_content() {
+        let raw = r#"{"type":"assistant","message":{"content":"assistant text"}}"#;
+        let parsed = parse_cursor_stream_json_output(raw);
+        assert_eq!(parsed, "assistant text");
+    }
+
+    #[test]
+    fn parse_cursor_stream_extracts_assistant_array_content() {
+        let raw = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"part1"},{"type":"text","text":"part2"}]}}"#;
+        let parsed = parse_cursor_stream_json_output(raw);
+        assert_eq!(parsed, "part1part2");
+    }
+
+    #[test]
+    fn parse_cursor_stream_skips_non_text_array_items() {
+        let raw = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"123"},{"type":"text","text":"only this"}]}}"#;
+        let parsed = parse_cursor_stream_json_output(raw);
+        assert_eq!(parsed, "only this");
+    }
+
+    #[test]
+    fn parse_cursor_stream_returns_raw_when_no_events() {
+        let raw = "plain output with no json";
+        let parsed = parse_cursor_stream_json_output(raw);
+        assert_eq!(parsed, raw);
+    }
+
+    #[test]
+    fn parse_cursor_stream_skips_empty_result() {
+        let raw = r#"{"type":"result","result":""}"#;
+        let parsed = parse_cursor_stream_json_output(raw);
+        // Empty result is skipped, so we get the raw back
+        assert_eq!(parsed, raw);
+    }
+}

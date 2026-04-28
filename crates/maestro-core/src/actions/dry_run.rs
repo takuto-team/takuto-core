@@ -189,62 +189,6 @@ impl ExternalActions for DryRunActions {
         )))
     }
 
-    async fn create_pr(
-        &self,
-        title: &str,
-        _body: &str,
-        branch: &str,
-        _base: &str,
-    ) -> Result<String> {
-        info!(
-            title = title,
-            branch = branch,
-            remote = %self.git_remote,
-            "[DRY] Would push branch to remote and create pull request"
-        );
-        Ok(format!("https://dry-run/pr/{branch}"))
-    }
-
-    async fn commit_changes(&self, cwd: &Path, message: &str) -> Result<()> {
-        info!(
-            cwd = %cwd.display(),
-            message = message,
-            "Committing changes (dry mode — local operation, executes normally)"
-        );
-
-        let add_output =
-            process::run_shell_command("git add -A", cwd, CancellationToken::new()).await?;
-        if !add_output.success() {
-            return Err(MaestroError::Git(format!(
-                "Failed to stage changes: {}",
-                add_output.stderr
-            )));
-        }
-
-        let status_output =
-            process::run_shell_command("git diff --cached --quiet", cwd, CancellationToken::new())
-                .await?;
-        if status_output.success() {
-            info!("No changes to commit");
-            return Ok(());
-        }
-
-        let escaped_message = message.replace('"', r#"\""#);
-        let commit_output = process::run_shell_command(
-            &format!("git commit -m \"{escaped_message}\""),
-            cwd,
-            CancellationToken::new(),
-        )
-        .await?;
-        if !commit_output.success() {
-            return Err(MaestroError::Git(format!(
-                "Failed to commit: {}",
-                commit_output.stderr
-            )));
-        }
-        Ok(())
-    }
-
     async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()> {
         if let Some(ref app) = self.github_app {
             info!(

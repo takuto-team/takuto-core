@@ -16,6 +16,11 @@ use maestro_core::workflow::engine::WorkflowEngine;
 /// Port forwarding map: ticket_key → list of `(container_port, host_port)` pairs.
 /// Includes both static Docker `-p` mappings (seeded at editor open) and dynamic
 /// socat forwards (tracked by the event subscriber).
+///
+/// Unit-test note: `DynamicForwardsMap` is a type alias with no custom methods;
+/// merge/dedup logic lives in `routes/workflows.rs` (`track_port_forwards` and
+/// the list/detail handlers). Port dedup and "dynamic wins on conflict" are tested
+/// at the route level, not here.
 pub type DynamicForwardsMap = Arc<RwLock<HashMap<String, Vec<(u16, u16)>>>>;
 
 /// State for a single active run command.

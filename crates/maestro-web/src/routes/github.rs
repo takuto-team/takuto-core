@@ -62,3 +62,75 @@ pub async fn list_github_issues(
 
     Ok(Json(rows))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use maestro_core::actions::dry_run::DryRunActions;
+    use maestro_core::config::{Config, TicketingSystem};
+    use maestro_core::workflow::engine::WorkflowEngine;
+
+    use crate::server::build_router;
+    use crate::state::AppState;
+
+    fn test_state() -> AppState {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
+            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
+        );
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let engine = Arc::new(WorkflowEngine::new(
+            config.clone(),
+            actions,
+            1,
+            jira_available.clone(),
+            TicketingSystem::None,
+            std::env::temp_dir(),
+        ));
+        AppState {
+            engine,
+            config,
+            polling_paused: Arc::new(AtomicBool::new(false)),
+            jira_available,
+            ticketing_system: TicketingSystem::None,
+            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
+            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
+            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
+            run_commands: Arc::new(RwLock::new(HashMap::new())),
+            preflight_error: None,
+            config_path: std::env::temp_dir().join("config.toml"),
+            config_writer: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_github_issues_returns_error_when_repo_url_empty() {
+        // Default config has an empty repo_url, so parse_github_repo returns None → 400.
+        let state = test_state();
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/api/github/issues")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            text.contains("Cannot parse GitHub owner/repo"),
+            "expected parse error, got: {text}"
+        );
+    }
+}

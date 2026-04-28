@@ -5,6 +5,7 @@ import { useState } from "react";
 import { apiPost } from "../api/client";
 import type { WorkflowDefinition } from "../api/types";
 import { useToast } from "../hooks/useToast";
+import { SpinnerIcon, CheckIcon, XIcon, LockIcon } from "./icons";
 
 interface WorkflowDefButtonsProps {
   definitions: WorkflowDefinition[];
@@ -47,40 +48,6 @@ function topoSort(defs: WorkflowDefinition[]): WorkflowDefinition[] {
     return [...defs].sort((a, b) => a.name.localeCompare(b.name));
   }
   return sorted;
-}
-
-function SpinnerIcon() {
-  return (
-    <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
-  );
-}
-
-function XIcon() {
-  return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <rect x="5" y="11" width="14" height="10" rx="2" />
-      <path d="M8 11V7a4 4 0 118 0v4" />
-    </svg>
-  );
 }
 
 export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefresh, mainRunning }: WorkflowDefButtonsProps) {

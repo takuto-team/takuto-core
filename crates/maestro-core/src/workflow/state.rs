@@ -12,11 +12,13 @@ pub enum WorkflowState {
     AddressingTicket {
         pass: u8,
     },
-    /// Secondary PR-comment workflow after main flow reached Done (uses `[[review_agent_steps]]`).
+    /// Legacy state — retained for `workflow_snapshot.json` backward compatibility only.
+    /// Not driven by the engine.
     AddressingPrComments {
         pass: u8,
     },
-    /// Merge base branch workflow after main flow reached Done (uses `[[merge_base_agent_steps]]`).
+    /// Legacy state — retained for `workflow_snapshot.json` backward compatibility only.
+    /// Not driven by the engine.
     MergingBaseBranch {
         pass: u8,
     },

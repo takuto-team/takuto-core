@@ -152,3 +152,139 @@ pub async fn dashboard_auth_middleware(
     }
     next.run(request).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn web_config_with_auth() -> WebConfig {
+        WebConfig {
+            dashboard_username: "admin".to_string(),
+            dashboard_password: "secret123".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sign_session_produces_non_empty_token() {
+        let token = sign_session("admin", "secret123");
+        assert!(token.is_some());
+        let token = token.unwrap();
+        assert!(!token.is_empty());
+        assert!(token.contains('.'));
+    }
+
+    #[test]
+    fn verify_session_cookie_accepts_valid_token() {
+        let web = web_config_with_auth();
+        let token = sign_session("admin", "secret123").unwrap();
+        assert!(verify_session_cookie(&token, &web));
+    }
+
+    #[test]
+    fn verify_session_cookie_rejects_unknown_token() {
+        let web = web_config_with_auth();
+        assert!(!verify_session_cookie("bogus.deadbeef", &web));
+    }
+
+    #[test]
+    fn verify_session_cookie_rejects_wrong_password_signature() {
+        let web = web_config_with_auth();
+        let token = sign_session("admin", "wrong_password").unwrap();
+        assert!(!verify_session_cookie(&token, &web));
+    }
+
+    #[test]
+    fn verify_session_cookie_rejects_wrong_username() {
+        let web = web_config_with_auth();
+        // Sign with the right password but wrong username — HMAC matches (same password)
+        // but the `sub` claim won't match the configured `dashboard_username`.
+        let token = sign_session("hacker", "secret123").unwrap();
+        assert!(!verify_session_cookie(&token, &web));
+    }
+
+    #[test]
+    fn verify_session_cookie_rejects_empty_value() {
+        let web = web_config_with_auth();
+        assert!(!verify_session_cookie("", &web));
+    }
+
+    #[test]
+    fn verify_session_cookie_false_when_auth_disabled() {
+        let web = WebConfig::default(); // empty username + password
+        assert!(!web.dashboard_auth_enabled());
+        let token = sign_session("admin", "").unwrap();
+        assert!(!verify_session_cookie(&token, &web));
+    }
+
+    #[test]
+    fn credentials_match_returns_true_for_correct_creds() {
+        let web = web_config_with_auth();
+        assert!(credentials_match(&web, "admin", "secret123"));
+    }
+
+    #[test]
+    fn credentials_match_returns_false_for_wrong_password() {
+        let web = web_config_with_auth();
+        assert!(!credentials_match(&web, "admin", "wrong"));
+    }
+
+    #[test]
+    fn credentials_match_returns_false_for_wrong_username() {
+        let web = web_config_with_auth();
+        assert!(!credentials_match(&web, "hacker", "secret123"));
+    }
+
+    #[test]
+    fn credentials_match_returns_false_when_auth_disabled() {
+        let web = WebConfig::default();
+        assert!(!credentials_match(&web, "", ""));
+    }
+
+    #[test]
+    fn session_cookie_from_headers_extracts_value() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            "other=x; maestro_session=abc123.def456; foo=bar"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            session_cookie_from_headers(&headers),
+            Some("abc123.def456")
+        );
+    }
+
+    #[test]
+    fn session_cookie_from_headers_returns_none_when_missing() {
+        let headers = HeaderMap::new();
+        assert!(session_cookie_from_headers(&headers).is_none());
+    }
+
+    #[test]
+    fn session_authorized_true_when_auth_disabled() {
+        let web = WebConfig::default();
+        let headers = HeaderMap::new();
+        assert!(session_authorized(&headers, &web));
+    }
+
+    #[test]
+    fn session_authorized_false_when_auth_enabled_no_cookie() {
+        let web = web_config_with_auth();
+        let headers = HeaderMap::new();
+        assert!(!session_authorized(&headers, &web));
+    }
+
+    #[test]
+    fn session_authorized_true_with_valid_cookie() {
+        let web = web_config_with_auth();
+        let token = sign_session("admin", "secret123").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("maestro_session={token}").parse().unwrap(),
+        );
+        assert!(session_authorized(&headers, &web));
+    }
+}

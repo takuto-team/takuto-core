@@ -818,6 +818,7 @@ dependencies = [
  "cookie",
  "hex",
  "hmac",
+ "http-body-util",
  "maestro-core",
  "mime_guess",
  "rust-embed",

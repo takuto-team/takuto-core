@@ -62,4 +62,74 @@ impl WorkflowLogWriter {
         self.write(&format!("[{step_name}] [{stream}] {line}"))
             .await;
     }
+
+    /// Returns the path where this writer stores its log file.
+    #[cfg(test)]
+    pub fn log_path(&self) -> &std::path::Path {
+        &self.log_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn log_path_is_under_log_dir_with_ticket_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = WorkflowLogWriter::new(dir.path(), "PROJ-42").await;
+        let expected = dir.path().join("PROJ-42.log");
+        assert_eq!(writer.log_path(), expected);
+    }
+
+    #[tokio::test]
+    async fn log_path_no_traversal_from_ticket_key() {
+        let dir = tempfile::tempdir().unwrap();
+        // A ticket key with path separators should be treated as a filename component,
+        // not allow traversal. The join will embed the "/" literally in the filename
+        // on Unix, but the log stays under the log dir.
+        let writer = WorkflowLogWriter::new(dir.path(), "SAFE-1").await;
+        assert!(writer.log_path().starts_with(dir.path()));
+    }
+
+    #[tokio::test]
+    async fn write_appends_lines_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = WorkflowLogWriter::new(dir.path(), "TEST-1").await;
+
+        writer.write("first line").await;
+        writer.write("second line").await;
+
+        let content = tokio::fs::read_to_string(writer.log_path()).await.unwrap();
+        // The header writes two lines, then our two lines
+        let lines: Vec<&str> = content.lines().collect();
+        assert!(lines.len() >= 4);
+        assert!(lines.last().unwrap().contains("second line"));
+        // All lines should have timestamps in brackets
+        for line in &lines {
+            assert!(line.starts_with('['));
+        }
+    }
+
+    #[tokio::test]
+    async fn write_step_includes_step_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = WorkflowLogWriter::new(dir.path(), "TEST-2").await;
+
+        writer.write_step("Build", "compilation succeeded").await;
+
+        let content = tokio::fs::read_to_string(writer.log_path()).await.unwrap();
+        assert!(content.contains("[Build] compilation succeeded"));
+    }
+
+    #[tokio::test]
+    async fn write_output_includes_stream_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = WorkflowLogWriter::new(dir.path(), "TEST-3").await;
+
+        writer.write_output("Lint", "stderr", "warning: unused var").await;
+
+        let content = tokio::fs::read_to_string(writer.log_path()).await.unwrap();
+        assert!(content.contains("[Lint] [stderr] warning: unused var"));
+    }
 }

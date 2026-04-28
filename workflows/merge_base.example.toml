@@ -1,8 +1,7 @@
 # Example: merge base branch workflow.
 #
-# Copy to `merge_base.toml` (alongside config.toml) and configure:
-#   [general]
-#   merge_base_workflow_steps_file = "workflows/merge_base.toml"
+# Copy to `merge_base.toml` alongside your other workflow files.
+# No config.toml key needed — workflows are discovered automatically from the workflows/ directory.
 #
 # Format: top-level `name`, optional `depends_on`, and `[[steps]]` entries.
 # See implement_ticket.example.toml for full field reference.

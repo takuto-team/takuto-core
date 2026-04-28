@@ -605,3 +605,233 @@ fn parse_linked_item(json_str: &str) -> Result<LinkedItem> {
         link_type: String::new(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- parse_ticket_list ---
+
+    #[test]
+    fn parse_ticket_list_basic() {
+        let json = r#"[
+            {
+                "key": "PROJ-1",
+                "fields": {
+                    "summary": "Fix login",
+                    "description": "Some description",
+                    "issuetype": { "name": "Bug" },
+                    "status": { "name": "To Do" }
+                }
+            }
+        ]"#;
+        let tickets = parse_ticket_list(json, "Task").unwrap();
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].key, "PROJ-1");
+        assert_eq!(tickets[0].summary, "Fix login");
+        assert_eq!(tickets[0].item_type, "Bug");
+        assert_eq!(tickets[0].status, "To Do");
+        assert_eq!(tickets[0].description, "Some description");
+    }
+
+    #[test]
+    fn parse_ticket_list_uses_default_type_when_missing() {
+        let json = r#"[{ "key": "PROJ-2", "fields": { "summary": "Task" } }]"#;
+        let tickets = parse_ticket_list(json, "Story").unwrap();
+        assert_eq!(tickets[0].item_type, "Story");
+    }
+
+    #[test]
+    fn parse_ticket_list_skips_empty_keys() {
+        let json = r#"[{ "key": "", "fields": { "summary": "No key" } }]"#;
+        let tickets = parse_ticket_list(json, "Task").unwrap();
+        assert!(tickets.is_empty());
+    }
+
+    #[test]
+    fn parse_ticket_list_empty_array() {
+        let tickets = parse_ticket_list("[]", "Task").unwrap();
+        assert!(tickets.is_empty());
+    }
+
+    #[test]
+    fn parse_ticket_list_invalid_json() {
+        assert!(parse_ticket_list("not json", "Task").is_err());
+    }
+
+    // --- parse_ticket_detail ---
+
+    #[test]
+    fn parse_ticket_detail_full() {
+        let json = r#"{
+            "key": "PROJ-10",
+            "fields": {
+                "summary": "Implement feature",
+                "description": "Build the feature",
+                "issuetype": { "name": "Story" },
+                "status": { "name": "In Progress" }
+            }
+        }"#;
+        let ticket = parse_ticket_detail(json).unwrap();
+        assert_eq!(ticket.key, "PROJ-10");
+        assert_eq!(ticket.summary, "Implement feature");
+        assert_eq!(ticket.item_type, "Story");
+        assert_eq!(ticket.status, "In Progress");
+        assert_eq!(ticket.description, "Build the feature");
+        assert!(ticket.linked_items.is_empty());
+    }
+
+    #[test]
+    fn parse_ticket_detail_missing_fields_uses_defaults() {
+        let json = r#"{ "key": "PROJ-99" }"#;
+        let ticket = parse_ticket_detail(json).unwrap();
+        assert_eq!(ticket.key, "PROJ-99");
+        assert_eq!(ticket.summary, "");
+        assert_eq!(ticket.item_type, "Task");
+        assert_eq!(ticket.status, "");
+        assert_eq!(ticket.description, "");
+    }
+
+    #[test]
+    fn parse_ticket_detail_empty_description() {
+        let json = r#"{
+            "key": "PROJ-5",
+            "fields": { "summary": "No desc", "description": null }
+        }"#;
+        let ticket = parse_ticket_detail(json).unwrap();
+        assert_eq!(ticket.description, "");
+    }
+
+    // --- extract_description_text ---
+
+    #[test]
+    fn extract_description_text_string() {
+        let val = serde_json::json!({ "description": "plain text desc" });
+        assert_eq!(extract_description_text(&val), "plain text desc");
+    }
+
+    #[test]
+    fn extract_description_text_adf() {
+        let val = serde_json::json!({
+            "description": {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            { "type": "text", "text": "Hello " },
+                            { "type": "text", "text": "World" }
+                        ]
+                    }
+                ]
+            }
+        });
+        assert_eq!(extract_description_text(&val), "Hello World");
+    }
+
+    #[test]
+    fn extract_description_text_missing() {
+        let val = serde_json::json!({ "summary": "no description field" });
+        assert_eq!(extract_description_text(&val), "");
+    }
+
+    #[test]
+    fn extract_description_text_null() {
+        let val = serde_json::json!({ "description": null });
+        assert_eq!(extract_description_text(&val), "");
+    }
+
+    // --- extract_linked_keys ---
+
+    #[test]
+    fn extract_linked_keys_outward_and_inward() {
+        let json = r#"{
+            "fields": {
+                "issuelinks": [
+                    {
+                        "type": { "name": "Blocks", "outward": "blocks", "inward": "is blocked by" },
+                        "outwardIssue": { "key": "PROJ-20" }
+                    },
+                    {
+                        "type": { "name": "Relates", "outward": "relates to", "inward": "relates to" },
+                        "inwardIssue": { "key": "PROJ-30" }
+                    }
+                ]
+            }
+        }"#;
+        let keys = extract_linked_keys(json);
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], ("PROJ-20".to_string(), "blocks".to_string()));
+        assert_eq!(keys[1], ("PROJ-30".to_string(), "relates to".to_string()));
+    }
+
+    #[test]
+    fn extract_linked_keys_no_links() {
+        let json = r#"{ "fields": {} }"#;
+        let keys = extract_linked_keys(json);
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn extract_linked_keys_invalid_json() {
+        let keys = extract_linked_keys("not json");
+        assert!(keys.is_empty());
+    }
+
+    // --- dedupe_tickets_preserve_order ---
+
+    #[test]
+    fn dedupe_preserves_first_occurrence() {
+        let mut tickets = vec![
+            JiraTicket {
+                key: "A-1".into(),
+                summary: "first".into(),
+                description: String::new(),
+                item_type: "Task".into(),
+                status: "To Do".into(),
+                linked_items: vec![],
+            },
+            JiraTicket {
+                key: "B-2".into(),
+                summary: "second".into(),
+                description: String::new(),
+                item_type: "Task".into(),
+                status: "To Do".into(),
+                linked_items: vec![],
+            },
+            JiraTicket {
+                key: "A-1".into(),
+                summary: "duplicate".into(),
+                description: String::new(),
+                item_type: "Task".into(),
+                status: "To Do".into(),
+                linked_items: vec![],
+            },
+        ];
+        dedupe_tickets_preserve_order(&mut tickets);
+        assert_eq!(tickets.len(), 2);
+        assert_eq!(tickets[0].key, "A-1");
+        assert_eq!(tickets[0].summary, "first");
+        assert_eq!(tickets[1].key, "B-2");
+    }
+
+    // --- parse_linked_item ---
+
+    #[test]
+    fn parse_linked_item_basic() {
+        let json = r#"{
+            "key": "OTHER-5",
+            "fields": {
+                "summary": "Related task",
+                "description": "Details here",
+                "status": { "name": "Done" }
+            }
+        }"#;
+        let item = parse_linked_item(json).unwrap();
+        assert_eq!(item.key, "OTHER-5");
+        assert_eq!(item.summary, "Related task");
+        assert_eq!(item.description, "Details here");
+        assert_eq!(item.status, "Done");
+        assert_eq!(item.link_type, ""); // set by caller
+    }
+}

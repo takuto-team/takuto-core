@@ -1,0 +1,234 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import { useWorkflows } from "./useWorkflows";
+import type { WorkflowSummary, WorkflowEvent } from "../api/types";
+
+function makeWorkflow(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary {
+  return {
+    id: "uuid-1",
+    ticket_key: "TEST-1",
+    ticket_summary: "Test ticket",
+    ticket_description: "",
+    ticket_type: "Story",
+    state: "AddressingTicket",
+    started_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:01:00Z",
+    branch_name: "feat/test-1",
+    pr_url: null,
+    pr_merged: false,
+    steps_log: [],
+    error: null,
+    terminal_lines: [],
+    can_mark_done: false,
+    can_delete: false,
+    can_start: false,
+    progress_percent: 50,
+    progress_steps_total: 4,
+    started_manually: false,
+    counts_toward_manual_cap: false,
+    jira_browse_url: "",
+    can_open_editor: false,
+    editor_url: null,
+    editor_port_mappings: [],
+    jira_available: true,
+    ticketing_system: "jira",
+    can_resume_from_error: false,
+    terminal_url: null,
+    run_commands: [],
+    generate_report: false,
+    has_report: false,
+    workflow_def_runs: {},
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn());
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function mockFetchWorkflows(workflows: WorkflowSummary[]) {
+  (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+    new Response(JSON.stringify(workflows), { status: 200 })
+  );
+}
+
+describe("useWorkflows", () => {
+  it("fetches and populates workflows on mount", async () => {
+    const wf1 = makeWorkflow({ ticket_key: "TEST-1" });
+    const wf2 = makeWorkflow({ ticket_key: "TEST-2", id: "uuid-2" });
+    mockFetchWorkflows([wf1, wf2]);
+
+    const { result } = renderHook(() => useWorkflows());
+
+    await vi.waitFor(() => {
+      expect(Object.keys(result.current.workflows)).toHaveLength(2);
+    });
+
+    expect(result.current.workflows["TEST-1"].ticket_key).toBe("TEST-1");
+    expect(result.current.workflows["TEST-2"].ticket_key).toBe("TEST-2");
+    expect(result.current.orderKeys).toEqual(["TEST-1", "TEST-2"]);
+  });
+
+  it("workflow_updated event updates the correct entry", async () => {
+    const wf1 = makeWorkflow({ ticket_key: "TEST-1", progress_percent: 25 });
+    mockFetchWorkflows([wf1]);
+
+    const { result } = renderHook(() => useWorkflows());
+
+    await vi.waitFor(() => {
+      expect(result.current.workflows["TEST-1"]).toBeDefined();
+    });
+
+    const event: WorkflowEvent = {
+      event_type: "workflow_updated",
+      workflow_id: "uuid-1",
+      ticket_key: "TEST-1",
+      state: "AddressingTicket",
+      progress_percent: 75,
+    };
+
+    act(() => {
+      result.current.handleEvent(event);
+    });
+
+    expect(result.current.workflows["TEST-1"].progress_percent).toBe(75);
+  });
+
+  it("workflow_removed event removes the entry", async () => {
+    const wf1 = makeWorkflow({ ticket_key: "TEST-1" });
+    mockFetchWorkflows([wf1]);
+
+    const { result } = renderHook(() => useWorkflows());
+
+    await vi.waitFor(() => {
+      expect(result.current.workflows["TEST-1"]).toBeDefined();
+    });
+
+    act(() => {
+      result.current.handleEvent({
+        event_type: "workflow_removed",
+        workflow_id: "uuid-1",
+        ticket_key: "TEST-1",
+        state: "",
+      });
+    });
+
+    expect(result.current.workflows["TEST-1"]).toBeUndefined();
+    expect(result.current.orderKeys).not.toContain("TEST-1");
+  });
+
+  it("port_forwarded event updates dynamic forwards", async () => {
+    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1" })]);
+
+    const { result } = renderHook(() => useWorkflows());
+
+    await vi.waitFor(() => {
+      expect(result.current.workflows["TEST-1"]).toBeDefined();
+    });
+
+    act(() => {
+      result.current.handleEvent({
+        event_type: "port_forwarded",
+        workflow_id: "uuid-1",
+        ticket_key: "TEST-1",
+        state: "",
+        forwarded_port: [3000, 9100],
+      });
+    });
+
+    expect(result.current.dynamicForwards["TEST-1"]).toEqual([[3000, 9100]]);
+  });
+
+  it("port_unforwarded event removes the forward", async () => {
+    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1" })]);
+
+    const { result } = renderHook(() => useWorkflows());
+
+    await vi.waitFor(() => {
+      expect(result.current.workflows["TEST-1"]).toBeDefined();
+    });
+
+    // Add a port
+    act(() => {
+      result.current.handleEvent({
+        event_type: "port_forwarded",
+        workflow_id: "uuid-1",
+        ticket_key: "TEST-1",
+        state: "",
+        forwarded_port: [3000, 9100],
+      });
+    });
+
+    expect(result.current.dynamicForwards["TEST-1"]).toHaveLength(1);
+
+    // Remove it
+    act(() => {
+      result.current.handleEvent({
+        event_type: "port_unforwarded",
+        workflow_id: "uuid-1",
+        ticket_key: "TEST-1",
+        state: "",
+        forwarded_port: [3000, 9100],
+      });
+    });
+
+    expect(result.current.dynamicForwards["TEST-1"]).toHaveLength(0);
+  });
+
+  it("new keys from refetch are appended, not re-sorted", async () => {
+    const wf1 = makeWorkflow({ ticket_key: "TEST-1" });
+    const fetchFn = fetch as ReturnType<typeof vi.fn>;
+    // First fetch: only TEST-1
+    fetchFn.mockResolvedValueOnce(
+      new Response(JSON.stringify([wf1]), { status: 200 })
+    );
+
+    const { result } = renderHook(() => useWorkflows());
+
+    await vi.waitFor(() => {
+      expect(result.current.orderKeys).toEqual(["TEST-1"]);
+    });
+
+    // Second fetch: TEST-1 + TEST-2
+    const wf2 = makeWorkflow({ ticket_key: "TEST-2", id: "uuid-2" });
+    fetchFn.mockResolvedValueOnce(
+      new Response(JSON.stringify([wf1, wf2]), { status: 200 })
+    );
+
+    await act(async () => {
+      await result.current.fetchWorkflows();
+    });
+
+    // TEST-2 should be appended
+    expect(result.current.orderKeys).toEqual(["TEST-1", "TEST-2"]);
+  });
+
+  it("step_output appends terminal lines", async () => {
+    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1" })]);
+
+    const { result } = renderHook(() => useWorkflows());
+
+    await vi.waitFor(() => {
+      expect(result.current.workflows["TEST-1"]).toBeDefined();
+    });
+
+    act(() => {
+      result.current.handleEvent({
+        event_type: "step_output",
+        workflow_id: "uuid-1",
+        ticket_key: "TEST-1",
+        state: "",
+        output_line: "Hello world",
+        stream: "stdout",
+      });
+    });
+
+    const lines = result.current.terminalStates["TEST-1"]?.lines;
+    expect(lines).toBeDefined();
+    expect(lines![lines!.length - 1].text).toBe("Hello world");
+  });
+});
