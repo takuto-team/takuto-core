@@ -62,7 +62,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
   const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
-  const [portMenuOpen, setPortMenuOpen] = useState(false);
+  const [openMenu, setOpenMenu] = useState<"port" | "editor" | "terminal" | null>(null);
   const { showToast } = useToast();
 
   const status = getStatusInfo(w.state, w.can_start);
@@ -272,31 +272,6 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           )}
         </div>
 
-        {/* Status-specific actions */}
-        {isTerminal && w.can_open_editor && (
-          <div className="flex flex-wrap gap-2">
-            {w.editor_url ? (
-              <a href={w.editor_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
-                Editor &#x2197;
-              </a>
-            ) : (
-              <Button variant="secondary" onClick={() => withLoading(openEditor, "Setting up a secure connection to an editor")}>Open Editor</Button>
-            )}
-            {w.terminal_url ? (
-              <a href={w.terminal_url} target="_blank" rel="noopener" className="action-btn wf-btn-secondary inline-flex items-center gap-1">
-                Terminal &#x2197;
-              </a>
-            ) : (
-              <Button variant="secondary" onClick={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}>Open Terminal</Button>
-            )}
-          </div>
-        )}
-        {isTerminal && w.editor_url && (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="danger" onClick={() => withLoading(closeEditor)}>Close editor</Button>
-          </div>
-        )}
-
         {/* Always-visible sections */}
         {workflowDefs.length > 0 && (
           <WorkflowDefButtons
@@ -330,36 +305,131 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
           Show console output
         </button>
 
-        {/* Port mappings indicator — bottom-right corner */}
-        {mergedPorts.length > 0 && (
-          <div className="absolute bottom-3 right-3 z-10">
-            {portMenuOpen && (
-              <>
-                <div className="fixed inset-0" onClick={() => setPortMenuOpen(false)} />
-                <div className="absolute bottom-full mb-2 right-0 bg-gray-800 border border-gray-700 rounded-lg py-1.5 shadow-xl z-20 min-w-[180px]">
-                  <div className="px-3 py-1 text-xs text-gray-500 font-medium border-b border-gray-700/60 mb-1">Port mappings</div>
-                  {mergedPorts.map(([cp, hp]) => (
-                    <a
-                      key={`${cp}-${hp}`}
-                      href={`http://localhost:${hp}`}
-                      target="_blank"
-                      rel="noopener"
-                      className="flex items-center leading-none gap-2 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                    >
-                      <PortIcon />
-                      {cp} → localhost:{hp}
-                    </a>
-                  ))}
-                </div>
-              </>
+        {/* Bottom-right icons: editor, terminal, port mappings */}
+        {(mergedPorts.length > 0 || (isTerminal && w.can_open_editor)) && (
+          <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2">
+
+            {/* Editor icon */}
+            {isTerminal && w.can_open_editor && (
+              <div className="relative">
+                {openMenu === "editor" && w.editor_url && (
+                  <>
+                    <div className="fixed inset-0" onClick={() => setOpenMenu(null)} />
+                    <div className="absolute bottom-full mb-2 right-0 bg-gray-800 border border-gray-700 rounded-lg py-1.5 shadow-xl z-20 min-w-[160px]">
+                      <div className="px-3 py-1 text-xs text-gray-500 font-medium border-b border-gray-700/60 mb-1">Editor</div>
+                      <a
+                        href={w.editor_url}
+                        target="_blank"
+                        rel="noopener"
+                        className="flex items-center leading-none gap-2 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                        onClick={() => setOpenMenu(null)}
+                      >
+                        <ExternalLinkIcon />
+                        Open in browser
+                      </a>
+                      <button
+                        onClick={() => { setOpenMenu(null); withLoading(closeEditor); }}
+                        className="flex w-full items-center leading-none gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-gray-700 hover:text-red-300 transition-colors"
+                      >
+                        <StopSquareIcon />
+                        Stop editor
+                      </button>
+                    </div>
+                  </>
+                )}
+                <button
+                  onClick={() => {
+                    if (w.editor_url) {
+                      setOpenMenu((o) => o === "editor" ? null : "editor");
+                    } else {
+                      withLoading(openEditor, "Setting up a secure connection to an editor");
+                    }
+                  }}
+                  title={w.editor_url ? "Editor (open)" : "Open editor"}
+                  className={`cursor-pointer transition-colors ${w.editor_url ? "text-green-400" : "text-gray-500 hover:text-gray-300"}`}
+                >
+                  <EditorIcon />
+                </button>
+              </div>
             )}
-            <button
-              onClick={() => setPortMenuOpen((o) => !o)}
-              title="Port mappings"
-              className="text-blue-400 cursor-pointer animate-pulse-slow"
-            >
-              <MonitorIcon />
-            </button>
+
+            {/* Terminal icon */}
+            {isTerminal && w.can_open_editor && (
+              <div className="relative">
+                {openMenu === "terminal" && w.terminal_url && (
+                  <>
+                    <div className="fixed inset-0" onClick={() => setOpenMenu(null)} />
+                    <div className="absolute bottom-full mb-2 right-0 bg-gray-800 border border-gray-700 rounded-lg py-1.5 shadow-xl z-20 min-w-[160px]">
+                      <div className="px-3 py-1 text-xs text-gray-500 font-medium border-b border-gray-700/60 mb-1">Terminal</div>
+                      <a
+                        href={w.terminal_url}
+                        target="_blank"
+                        rel="noopener"
+                        className="flex items-center leading-none gap-2 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                        onClick={() => setOpenMenu(null)}
+                      >
+                        <ExternalLinkIcon />
+                        Open in browser
+                      </a>
+                      <button
+                        onClick={() => { setOpenMenu(null); withLoading(closeEditor); }}
+                        className="flex w-full items-center leading-none gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-gray-700 hover:text-red-300 transition-colors"
+                      >
+                        <StopSquareIcon />
+                        Stop terminal
+                      </button>
+                    </div>
+                  </>
+                )}
+                <button
+                  onClick={() => {
+                    if (w.terminal_url) {
+                      setOpenMenu((o) => o === "terminal" ? null : "terminal");
+                    } else {
+                      withLoading(openTerminal, "Setting up a secure connection to a terminal");
+                    }
+                  }}
+                  title={w.terminal_url ? "Terminal (open)" : "Open terminal"}
+                  className={`cursor-pointer transition-colors ${w.terminal_url ? "text-green-400" : "text-gray-500 hover:text-gray-300"}`}
+                >
+                  <TerminalIcon className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Port mappings icon */}
+            {mergedPorts.length > 0 && (
+              <div className="relative">
+                {openMenu === "port" && (
+                  <>
+                    <div className="fixed inset-0" onClick={() => setOpenMenu(null)} />
+                    <div className="absolute bottom-full mb-2 right-0 bg-gray-800 border border-gray-700 rounded-lg py-1.5 shadow-xl z-20 min-w-[180px]">
+                      <div className="px-3 py-1 text-xs text-gray-500 font-medium border-b border-gray-700/60 mb-1">Port mappings</div>
+                      {mergedPorts.map(([cp, hp]) => (
+                        <a
+                          key={`${cp}-${hp}`}
+                          href={`http://localhost:${hp}`}
+                          target="_blank"
+                          rel="noopener"
+                          className="flex items-center leading-none gap-2 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                        >
+                          <PortIcon />
+                          {cp} → localhost:{hp}
+                        </a>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <button
+                  onClick={() => setOpenMenu((o) => o === "port" ? null : "port")}
+                  title="Port mappings"
+                  className="text-green-400 cursor-pointer"
+                >
+                  <MonitorIcon />
+                </button>
+              </div>
+            )}
+
           </div>
         )}
       </div>
@@ -619,11 +689,19 @@ function PlayIcon() {
   );
 }
 
-function TerminalIcon() {
+function TerminalIcon({ className }: { className?: string }) {
   return (
-    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <svg className={className ?? "w-3 h-3"} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3" />
       <rect x="3" y="3" width="18" height="18" rx="2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function EditorIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
     </svg>
   );
 }

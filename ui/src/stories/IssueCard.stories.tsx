@@ -286,19 +286,67 @@ export const Stopped: Story = {
 };
 
 export const WithPortMappings: Story = {
-  name: "Running (with port mappings)",
+  name: "Done (with port mappings)",
   args: {
     ...defaultProps,
     workflow: {
       ...baseWorkflow,
-      state: "Running",
+      state: "Done",
+      can_start: false,
+      can_delete: true,
       can_open_editor: true,
       editor_url: "https://editor.example.com",
       editor_port_mappings: [[3000, 13000], [5173, 15173]] as [number, number][],
-      progress_percent: 30,
+      progress_percent: 100,
       progress_steps_total: 3,
     },
     dynamicForwards: [[8080, 18080]] as [number, number][],
+  },
+};
+
+export const WithEditorButtons: Story = {
+  name: "Done (editor+terminal icons, not yet open)",
+  args: {
+    ...defaultProps,
+    workflow: {
+      ...baseWorkflow,
+      state: "Done",
+      can_start: false,
+      can_delete: true,
+      can_mark_done: true,
+      can_open_editor: true,
+      editor_url: null,
+      terminal_url: null,
+      progress_percent: 100,
+      progress_steps_total: 5,
+      pr_url: "https://github.com/org/repo/pull/55",
+      terminal_lines: [
+        { text: "All steps completed successfully.", stream: "stdout" },
+      ],
+    },
+  },
+};
+
+export const WithEditorOpen: Story = {
+  name: "Done (editor + terminal open, icons green)",
+  args: {
+    ...defaultProps,
+    workflow: {
+      ...baseWorkflow,
+      state: "Done",
+      can_start: false,
+      can_delete: true,
+      can_mark_done: true,
+      can_open_editor: true,
+      editor_url: "https://editor.example.com/session/abc123",
+      terminal_url: "https://terminal.example.com/session/abc123",
+      progress_percent: 100,
+      progress_steps_total: 5,
+      pr_url: "https://github.com/org/repo/pull/55",
+      terminal_lines: [
+        { text: "All steps completed successfully.", stream: "stdout" },
+      ],
+    },
   },
 };
 
