@@ -10,7 +10,6 @@ import { useToast } from "../hooks/useToast";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { DeleteConfirmModal } from "./modals/DeleteConfirmModal";
 import { ConsoleOutputModal } from "./modals/ConsoleOutputModal";
-import { Button } from "./Button";
 import { Label } from "./Label";
 import { StatusBadge, getStatusInfo } from "./StatusBadge";
 import { DeleteIconButton } from "./DeleteIconButton";
