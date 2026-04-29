@@ -34,8 +34,9 @@ SECURITY_ASSESSMENT_CONTAINER.md
 # tmp folder
 /tmp
 
-# Custom gitleaks config
+# Custom gitleaks config and reports
 .gitleaks.toml
+gitleak-report.json
 
 .maestro
 
