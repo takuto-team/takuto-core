@@ -107,7 +107,15 @@ export interface ConfigResponse {
   ticketing_system: string;
   github_app_configured: boolean;
   preflight_error?: string | null;
+  repo_exists: boolean;
   [key: string]: unknown;
+}
+
+export interface GitHubRepo {
+  full_name: string;
+  description: string;
+  private: boolean;
+  html_url: string;
 }
 
 export interface PollingStatus {

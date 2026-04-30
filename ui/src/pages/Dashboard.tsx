@@ -16,6 +16,9 @@ import { TicketPickerModal } from "../components/modals/TicketPickerModal";
 import { TicketDetailModal } from "../components/modals/TicketDetailModal";
 import { PasteDescriptionModal } from "../components/modals/PasteDescriptionModal";
 import { ReportModal } from "../components/modals/ReportModal";
+import { RepoPickerModal } from "../components/modals/RepoPickerModal";
+import { CloneProgressModal } from "../components/modals/CloneProgressModal";
+import { ConfirmModal } from "../components/modals/ConfirmModal";
 import { NoJiraAlertModal } from "../components/modals/NoJiraAlertModal";
 import { SystemErrorAlert } from "../components/SystemErrorAlert";
 
@@ -46,6 +49,21 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   const handleEventWithDefs = useCallback(
     (evt: WorkflowEvent) => {
       handleEvent(evt);
+
+      // Handle repo clone progress events
+      if (evt.event_type === "repo_clone_progress") {
+        if (evt.state === "success") {
+          setCloneState((prev) =>
+            prev ? { ...prev, status: "success" } : null
+          );
+        } else if (evt.state === "error") {
+          setCloneState((prev) =>
+            prev
+              ? { ...prev, status: "error", error: evt.error || "Clone failed" }
+              : null
+          );
+        }
+      }
 
       // Re-fetch definitions when definitions change or workflows update (debounced)
       if (
@@ -85,6 +103,13 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     showStart: boolean;
   } | null>(null);
   const [reportKey, setReportKey] = useState<string | null>(null);
+  const [showRepoPicker, setShowRepoPicker] = useState(false);
+  const [cloneState, setCloneState] = useState<{
+    repoName: string;
+    status: "cloning" | "success" | "error";
+    error?: string;
+  } | null>(null);
+  const [overwriteConfirm, setOverwriteConfirm] = useState<string | null>(null);
 
   // Load config
   useEffect(() => {
@@ -170,6 +195,78 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     setDetailModal({ key, summary, description: desc, showStart: false });
   }, [ticketingSystem]);
 
+  const handleSetupProject = useCallback(() => {
+    setShowRepoPicker(true);
+  }, []);
+
+  const handleRepoSelected = useCallback(async (fullName: string) => {
+    setShowRepoPicker(false);
+    setCloneState({ repoName: fullName, status: "cloning" });
+
+    try {
+      const res = await apiPost("/api/repos/clone", { full_name: fullName, force: false });
+      if (res.status === 409) {
+        const text = await res.text();
+        if (text.includes("repository_exists")) {
+          setCloneState(null);
+          setOverwriteConfirm(fullName);
+        } else {
+          setCloneState({ repoName: fullName, status: "error", error: text });
+        }
+      } else if (!res.ok) {
+        const text = await res.text();
+        setCloneState({ repoName: fullName, status: "error", error: text || `HTTP ${res.status}` });
+      }
+      // If 202, wait for WebSocket events to update clone status
+    } catch (e) {
+      setCloneState({
+        repoName: fullName,
+        status: "error",
+        error: e instanceof Error ? e.message : "Failed to start clone",
+      });
+    }
+  }, []);
+
+  const handleCloneDone = useCallback(() => {
+    setCloneState(null);
+    // Re-fetch config to update repo_exists
+    apiJson<ConfigResponse>("/api/config")
+      .then(setConfig)
+      .catch(() => {});
+    fetchWorkflows();
+  }, [fetchWorkflows]);
+
+  const handleCloneRetry = useCallback(() => {
+    if (cloneState) {
+      handleRepoSelected(cloneState.repoName);
+    }
+  }, [cloneState, handleRepoSelected]);
+
+  const handleOverwriteConfirm = useCallback(async () => {
+    const fullName = overwriteConfirm;
+    if (!fullName) return;
+    setOverwriteConfirm(null);
+    setCloneState({ repoName: fullName, status: "cloning" });
+    try {
+      const res = await apiPost("/api/repos/clone", { full_name: fullName, force: true });
+      if (!res.ok && res.status !== 202) {
+        const errText = await res.text();
+        setCloneState({ repoName: fullName, status: "error", error: errText });
+      }
+    } catch (e) {
+      setCloneState({
+        repoName: fullName,
+        status: "error",
+        error: e instanceof Error ? e.message : "Failed to start clone",
+      });
+    }
+  }, [overwriteConfirm]);
+
+  const handleOverwriteCancel = useCallback(() => {
+    setOverwriteConfirm(null);
+    setShowRepoPicker(true);
+  }, []);
+
   const workflowList = Object.values(workflows);
 
   return (
@@ -228,6 +325,8 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           onReport={setReportKey}
           onAddWorkflow={handleAddWorkflow}
           canAddWorkflow={true}
+          repoExists={config?.repo_exists ?? true}
+          onSetupProject={handleSetupProject}
         />
       </main>
 
@@ -260,6 +359,30 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       )}
       {reportKey && workflows[reportKey] && workflows[reportKey].generate_report && workflows[reportKey].has_report && (
         <ReportModal workflow={workflows[reportKey]} onClose={() => setReportKey(null)} />
+      )}
+      {showRepoPicker && (
+        <RepoPickerModal
+          onSelect={handleRepoSelected}
+          onClose={() => setShowRepoPicker(false)}
+        />
+      )}
+      {cloneState && (
+        <CloneProgressModal
+          repoName={cloneState.repoName}
+          status={cloneState.status}
+          error={cloneState.error}
+          onDone={handleCloneDone}
+          onRetry={handleCloneRetry}
+          onCancel={cloneState.status === "cloning" ? () => setCloneState(null) : undefined}
+        />
+      )}
+      {overwriteConfirm && (
+        <ConfirmModal
+          title="Overwrite Repository?"
+          message="A repository already exists. Overwriting will delete the current repository and clone the selected one in its place."
+          onConfirm={handleOverwriteConfirm}
+          onCancel={handleOverwriteCancel}
+        />
       )}
       {showNoJira && (
         <NoJiraAlertModal

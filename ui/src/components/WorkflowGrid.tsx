@@ -16,6 +16,8 @@ interface Props {
   onReport: (ticketKey: string) => void;
   onAddWorkflow: () => void;
   canAddWorkflow: boolean;
+  repoExists: boolean;
+  onSetupProject?: () => void;
 }
 
 export function WorkflowGrid({
@@ -29,10 +31,30 @@ export function WorkflowGrid({
   onReport,
   onAddWorkflow,
   canAddWorkflow,
+  repoExists,
+  onSetupProject,
 }: Props) {
   const list = orderKeys.map((k) => workflows[k]).filter(Boolean);
 
   if (list.length === 0) {
+    // No repo cloned yet — show project setup prompt
+    if (!repoExists && onSetupProject) {
+      return (
+        <div className="text-center py-16">
+          <p className="text-gray-500 text-sm mb-4">
+            No project configured. Set up a project to get started.
+          </p>
+          <button
+            onClick={onSetupProject}
+            className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
+          >
+            Setup a New Project
+          </button>
+        </div>
+      );
+    }
+
+    // Repo exists but no workflows
     return (
       <div className="text-center py-16">
         <p className="text-gray-500 text-sm mb-4">
