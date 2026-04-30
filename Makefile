@@ -43,7 +43,7 @@ MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.
 # Docker image registry for push targets.
 REGISTRY ?= ghcr.io/morphet81/maestro
 
-.PHONY: help build build-local start stop auth test logs logs-maestro ps bash exec restart load-worker clean-dind ui-build push push-arm64 push-amd64
+.PHONY: help build build-local start stop auth test logs logs-maestro ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64
 .DEFAULT_GOAL := help
 
 help: ## Show this help
@@ -223,6 +223,18 @@ ifeq ($(IS_PODMAN),1)
 else
 	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
 endif
+
+worker-bash: ## Open a bash shell inside the running worker container for a ticket (usage: make worker-bash GH-45)
+	$(eval _KEY := $(filter-out $@,$(MAKECMDGOALS)))
+	@if [ -z "$(_KEY)" ]; then echo "ERROR: Ticket key required. Usage: make worker-bash GH-45" >&2; exit 1; fi; \
+	SANITIZED=$$(echo "$(_KEY)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g'); \
+	CONTAINER=$$($(_ENGINE) exec maestro-dind docker ps --filter "name=maestro-worker-$${SANITIZED}-" --format '{{.Names}}' | head -1); \
+	if [ -z "$$CONTAINER" ]; then echo "ERROR: No running worker container found for $(_KEY). Is a step currently executing?" >&2; exit 1; fi; \
+	echo "Opening bash in $$CONTAINER..."; \
+	exec $(_ENGINE) exec -it maestro-dind docker exec -it "$$CONTAINER" bash
+
+%:
+	@:
 
 load-worker: ## Load worker image into DinD
 	@IMAGE=$$($(_ENGINE) images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$(PROJECT_NAME)[-_]maestro:" | head -1); \
