@@ -44,10 +44,10 @@ cp maestro.env.example maestro.env
 ```
 
 Edit `config.toml`:
-- Set `[git] repo_url` to your repository
 - Set `[general] ticketing_system` to `"jira"`, `"github"`, or `"none"`
 - For Jira: fill in `[jira] site`, `project_keys`, `email`
-- For GitHub Issues: the repo in `[git] repo_url` is used automatically
+- For GitHub Issues: the repo is detected from the cloned repository's git remote
+- Clone your repository via the dashboard "Setup a New Project" button, or manually into `/workspace`
 
 ### 2. Build
 
@@ -205,7 +205,6 @@ Full configuration in `config.toml`. See `config.toml.example` for annotated def
 |-----|---------|-------------|
 | `base_branch` | `"main"` | Branch to create worktrees from |
 | `remote` | `"origin"` | Git remote name |
-| `repo_url` | `""` | Git repository URL (cloned during setup) |
 | `repo_path` | `"/workspace"` | Path inside container |
 
 ### `[commands]`

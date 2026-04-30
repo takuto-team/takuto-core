@@ -2,7 +2,7 @@
 # entrypoint.sh — Container entrypoint for Maestro
 #
 # Modes:
-#   setup  — required: GitHub + Atlassian auth; optional: Claude, Cursor, repo clone
+#   setup  — required: GitHub + Atlassian auth; optional: Claude, Cursor, report generation
 #   (default) — egress rules, preflight, compose_up_commands, start Maestro
 #
 # Root performs privileged work, then re-execs as maestro (see id -u check).
@@ -117,7 +117,7 @@ if [ "${1:-}" = "setup" ]; then
 
     echo "=== Maestro Setup ==="
     echo "Required: GitHub CLI + agent provider ($agent_provider). Atlassian CLI (acli) required only when ticketing_system = jira (current: $ticketing_system)."
-    echo "Optional: install additional tools via [docker] build_commands / compose_up_commands in config.toml."
+    echo "Repository cloning is now handled via the dashboard (POST /api/repos/clone)."
     echo ""
 
     # Step 1: GitHub (required unless a GitHub App is configured)
@@ -125,7 +125,7 @@ if [ "${1:-}" = "setup" ]; then
     # so interactive gh auth login is not needed.
     github_app_id=$(grep -E '^\s*app_id\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || true)
     github_app_id="${github_app_id:-0}"
-    echo "--- Step 1/5: GitHub CLI $([ "$github_app_id" != "0" ] && echo "(skipped — GitHub App configured)" || echo "(required)") ---"
+    echo "--- Step 1/4: GitHub CLI $([ "$github_app_id" != "0" ] && echo "(skipped — GitHub App configured)" || echo "(required)") ---"
     if [ "$github_app_id" != "0" ]; then
         echo "GitHub App detected (app_id = $github_app_id). Skipping gh auth login."
         echo "Tokens will be generated automatically at runtime via the GitHub App."
@@ -160,7 +160,7 @@ if [ "${1:-}" = "setup" ]; then
     echo ""
 
     # Step 2: Atlassian (required for jira ticketing_system — manual API token, no port needed)
-    echo "--- Step 2/5: Atlassian CLI $([ "$ticketing_system" = "jira" ] && echo "(required)" || echo "(skipped — ticketing_system = $ticketing_system)") ---"
+    echo "--- Step 2/4: Atlassian CLI $([ "$ticketing_system" = "jira" ] && echo "(required)" || echo "(skipped — ticketing_system = $ticketing_system)") ---"
     if [ "$ticketing_system" != "jira" ]; then
         echo "Atlassian CLI auth skipped (not needed for ticketing_system = $ticketing_system)."
     else
@@ -211,7 +211,7 @@ if [ "${1:-}" = "setup" ]; then
     echo ""
 
     # Step 3: Agent provider auth (required — determined by [agent] provider in config)
-    echo "--- Step 3/5: Agent provider — $agent_provider (required) ---"
+    echo "--- Step 3/4: Agent provider — $agent_provider (required) ---"
     if [ "$agent_provider" = "claude" ]; then
         if ! command -v claude >/dev/null 2>&1; then
             echo "ERROR: claude CLI not found on PATH."
@@ -255,77 +255,8 @@ if [ "${1:-}" = "setup" ]; then
     fi
     echo ""
 
-    # Step 4: Repository (optional)
-    echo "--- Step 4/5: Repository (optional) ---"
-    read -p "Clone or refresh repository from config? [Y/s=skip] " -r
-    echo
-    if [[ $REPLY =~ ^[sS]$ ]]; then
-        echo "Skipped repository clone."
-    else
-        repo_url=$(grep -E '^\s*repo_url\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' || true)
-
-        if [ -z "$repo_url" ]; then
-            echo "WARNING: No repo_url found in $CONFIG_FILE. Skipping clone."
-            echo "         Add repo_url under [git] in your config.toml."
-        else
-            # When a GitHub App is configured, `gh` is not authenticated interactively.
-            # Replicate exactly what configure_git_and_gh_auth does at runtime:
-            #   1. Install a global git credential helper that reads GH_TOKEN from env.
-            #   2. Export GH_TOKEN as the installation token.
-            #   3. Run plain `git clone https://github.com/owner/repo.git` — git calls
-            #      the helper, the helper echoes GH_TOKEN as the password.
-            # This is the same mechanism used by worker containers at runtime.
-            do_clone() {
-                local target="$1"
-                if [ "$github_app_id" != "0" ]; then
-                    echo "GitHub App configured — generating installation token for clone..."
-                    local app_token
-                    if ! app_token=$(/usr/local/bin/maestro --config "$CONFIG_FILE" github-app-token 2>/dev/null); then
-                        echo "ERROR: Could not generate GitHub App installation token."
-                        echo "       Check [github] app_id, app_installation_id, and app_private_key/app_private_key_path in config.toml."
-                        return 1
-                    fi
-                    if [ -z "$app_token" ]; then
-                        echo "ERROR: GitHub App token was empty. Check [github] config."
-                        return 1
-                    fi
-                    # Install the same credential helper that configure_git_and_gh_auth uses at
-                    # runtime so git reads the token from the GH_TOKEN env var.
-                    git config --global credential.https://github.com.helper \
-                        '!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
-                    # Strip protocol/host prefix and .git suffix to get a clean HTTPS URL.
-                    local owner_repo
-                    owner_repo=$(printf '%s' "$repo_url" \
-                        | sed 's|https://github\.com/||;s|http://github\.com/||;s|git@github\.com:||;s|\.git$||')
-                    GH_TOKEN="$app_token" git clone "https://github.com/${owner_repo}.git" "$target"
-                else
-                    gh repo clone "$repo_url" "$target"
-                fi
-            }
-
-            if [ -d "/workspace/.git" ]; then
-                echo "Repository already cloned at /workspace."
-                read -p "Re-clone from $repo_url? This will delete the existing workspace. [y/N] " -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
-                    do_clone /workspace
-                fi
-            else
-                if [ "$(ls -A /workspace 2>/dev/null)" ]; then
-                    echo "Workspace is not empty but has no git repo. Cleaning..."
-                    rm -rf /workspace/*  /workspace/.[!.]* 2>/dev/null || true
-                fi
-                echo "Cloning $repo_url into /workspace..."
-                do_clone /workspace
-            fi
-            git config --global --add safe.directory /workspace
-        fi
-    fi
-    echo ""
-
-    # Step 5: Report generation (optional)
-    echo "--- Step 5/5: Report generation (optional) ---"
+    # Step 4: Report generation (optional)
+    echo "--- Step 4/4: Report generation (optional) ---"
     current_gen_report=$(grep -E '^\s*generate_report\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*= *\([a-z]*\).*/\1/' | tr -d ' ' || true)
     current_gen_report="${current_gen_report:-false}"
     echo ""
