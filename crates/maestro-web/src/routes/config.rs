@@ -29,6 +29,8 @@ pub struct ConfigResponse {
     pub preflight_error: Option<String>,
     /// `true` when the config file is writable (ConfigWriter is available).
     pub config_writable: bool,
+    /// `true` when a git repository exists at the configured `git.repo_path`.
+    pub repo_exists: bool,
 }
 
 pub async fn get_version() -> Json<serde_json::Value> {
@@ -39,6 +41,7 @@ pub async fn get_version() -> Json<serde_json::Value> {
 
 pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     let config = state.config.read().await;
+    let repo_path = config.git.repo_path.clone();
     Json(ConfigResponse {
         github_app_configured: config.github.is_configured(),
         config: config.redacted_for_api_clone(),
@@ -46,6 +49,7 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
         ticketing_system: state.ticketing_system.to_string(),
         preflight_error: state.preflight_error.clone(),
         config_writable: state.config_writer.is_some(),
+        repo_exists: std::path::Path::new(&repo_path).join(".git").exists(),
     })
 }
 
@@ -167,6 +171,7 @@ mod tests {
             preflight_error: None,
             config_path: std::env::temp_dir().join("config.toml"),
             config_writer: None,
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -200,6 +205,7 @@ mod tests {
             preflight_error: None,
             config_path: std::env::temp_dir().join("config.toml"),
             config_writer: None,
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -221,6 +227,9 @@ mod tests {
         assert_eq!(json["jira_available"], false);
         assert_eq!(json["config_writable"], false);
         assert_eq!(json["ticketing_system"], "none");
+        // repo_exists should be present (value depends on the test environment)
+        assert!(json.get("repo_exists").is_some());
+        assert!(json["repo_exists"].is_boolean());
     }
 
     #[tokio::test]

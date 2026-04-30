@@ -67,4 +67,6 @@ pub struct AppState {
     /// Writer for atomic config persistence. `None` when the config file is not
     /// writable (e.g., the path is not set or the filesystem is read-only).
     pub config_writer: Option<Arc<ConfigWriter>>,
+    /// `true` while an async `POST /api/repos/clone` operation is in progress.
+    pub clone_in_progress: Arc<AtomicBool>,
 }

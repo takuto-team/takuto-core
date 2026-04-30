@@ -384,6 +384,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         preflight_error,
         config_path: config_path.clone(),
         config_writer: Some(config_writer.clone()),
+        clone_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     let app = build_router(app_state);
 

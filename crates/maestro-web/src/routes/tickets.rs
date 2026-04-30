@@ -345,17 +345,25 @@ pub async fn update_ticket_description(
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::GitHub => {
-            let (repo_url, repo_path) = {
+            let (repo_path, remote) = {
                 let config = state.config.read().await;
                 (
-                    config.git.repo_url.clone(),
                     std::path::PathBuf::from(&config.git.repo_path),
+                    config.git.remote.clone(),
                 )
             };
-            let owner_repo = parse_github_repo(&repo_url).ok_or_else(|| {
+            let remote_url = maestro_core::git::remote::resolve_remote_url(&repo_path, &remote)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("Cannot resolve git remote URL: {e}"),
+                    )
+                })?;
+            let owner_repo = parse_github_repo(&remote_url).ok_or_else(|| {
                 (
                     StatusCode::BAD_REQUEST,
-                    format!("Cannot parse GitHub owner/repo from git.repo_url: {repo_url:?}"),
+                    format!("Cannot parse GitHub owner/repo from git remote URL: {remote_url:?}"),
                 )
             })?;
             let issue_number: u64 = key
@@ -509,6 +517,7 @@ mod tests {
             preflight_error: None,
             config_path: std::env::temp_dir().join("config.toml"),
             config_writer: None,
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
         }
     }
 

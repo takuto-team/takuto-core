@@ -289,12 +289,12 @@ impl WorkflowLifecycle {
         persistence: &WorkflowPersistence,
         broadcast_event: impl Fn(WorkflowEvent),
     ) -> Result<MarkDoneOutcome> {
-        let (done_status, repo_url, repo_path, ticketing_system) = {
+        let (done_status, repo_path, remote, ticketing_system) = {
             let c = self.config.read().await;
             (
                 c.jira.done_status.clone(),
-                c.git.repo_url.clone(),
                 c.git.repo_path.clone(),
+                c.git.remote.clone(),
                 c.general.ticketing_system,
             )
         };
@@ -333,13 +333,31 @@ impl WorkflowLifecycle {
                 .as_deref()
                 .filter(|p| p.exists())
                 .unwrap_or_else(|| Path::new(&repo_path));
-            if let Err(e) =
-                super::driver::close_github_issue(ticket_key, &repo_url, cwd, self.actions.as_ref())
-                    .await
+            match crate::git::remote::resolve_remote_url(
+                std::path::Path::new(&repo_path),
+                &remote,
+            )
+            .await
             {
-                jira_ok = false;
-                jira_error = Some(e.to_string());
-                warn!(ticket = %ticket_key, error = %e, "GitHub issue close failed");
+                Ok(remote_url) => {
+                    if let Err(e) = super::driver::close_github_issue(
+                        ticket_key,
+                        &remote_url,
+                        cwd,
+                        self.actions.as_ref(),
+                    )
+                    .await
+                    {
+                        jira_ok = false;
+                        jira_error = Some(e.to_string());
+                        warn!(ticket = %ticket_key, error = %e, "GitHub issue close failed");
+                    }
+                }
+                Err(e) => {
+                    jira_ok = false;
+                    jira_error = Some(format!("Cannot resolve git remote URL: {e}"));
+                    warn!(ticket = %ticket_key, error = %e, "GitHub issue close: failed to resolve remote URL");
+                }
             }
         }
 

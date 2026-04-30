@@ -444,8 +444,6 @@ pub struct GitConfig {
     /// Git remote name for fetch, worktree base ref, and push (default `origin`).
     #[serde(default = "default_git_remote")]
     pub remote: String,
-    #[serde(default)]
-    pub repo_url: String,
     #[serde(default = "default_repo_path")]
     pub repo_path: String,
 }
@@ -763,7 +761,6 @@ impl Default for GitConfig {
         Self {
             base_branch: default_base_branch(),
             remote: default_git_remote(),
-            repo_url: String::new(),
             repo_path: default_repo_path(),
         }
     }

@@ -115,6 +115,11 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/github/issues", get(routes::github::list_github_issues))
         .route(
+            "/github/repos",
+            get(routes::repos::list_github_repos),
+        )
+        .route("/repos/clone", post(routes::repos::clone_repo))
+        .route(
             "/tickets/{key}/improve",
             post(routes::tickets::improve_ticket),
         )

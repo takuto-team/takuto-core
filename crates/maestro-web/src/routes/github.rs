@@ -24,20 +24,27 @@ pub struct GithubIssueRow {
 pub async fn list_github_issues(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<GithubIssueRow>>, (StatusCode, String)> {
-    let (repo_url, repo_path) = {
+    let (repo_path, remote) = {
         let config = state.config.read().await;
         (
-            config.git.repo_url.clone(),
             std::path::PathBuf::from(&config.git.repo_path),
+            config.git.remote.clone(),
         )
     };
-
-    let owner_repo = parse_github_repo(&repo_url).ok_or_else(|| {
+    let remote_url = maestro_core::git::remote::resolve_remote_url(&repo_path, &remote)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Cannot resolve git remote URL: {e}. Is a repository cloned?"),
+            )
+        })?;
+    let owner_repo = parse_github_repo(&remote_url).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
             format!(
-                "Cannot parse GitHub owner/repo from git.repo_url: {repo_url:?}. \
-                 Expected format: https://github.com/owner/repo or owner/repo"
+                "Cannot parse GitHub owner/repo from git remote URL: {remote_url:?}. \
+                 Expected a GitHub URL (https://github.com/owner/repo)"
             ),
         )
     })?;
@@ -85,8 +92,14 @@ mod tests {
     use crate::server::build_router;
     use crate::state::AppState;
 
-    fn test_state() -> AppState {
-        let config = Arc::new(RwLock::new(Config::default()));
+    fn test_state_no_repo() -> AppState {
+        // Use a config with repo_path pointing to a temp dir that is NOT a git repo.
+        let mut cfg = Config::default();
+        cfg.git.repo_path = std::env::temp_dir()
+            .join("maestro-test-no-repo")
+            .to_string_lossy()
+            .to_string();
+        let config = Arc::new(RwLock::new(cfg));
         let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
             DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
         );
@@ -112,13 +125,14 @@ mod tests {
             preflight_error: None,
             config_path: std::env::temp_dir().join("config.toml"),
             config_writer: None,
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
         }
     }
 
     #[tokio::test]
-    async fn list_github_issues_returns_error_when_repo_url_empty() {
-        // Default config has an empty repo_url, so parse_github_repo returns None → 400.
-        let state = test_state();
+    async fn list_github_issues_returns_error_when_no_git_repo() {
+        // Config has repo_path pointing to a non-git directory, so resolve_remote_url fails → 400.
+        let state = test_state_no_repo();
         let app = build_router(state);
         let resp = app
             .oneshot(
@@ -132,8 +146,8 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8_lossy(&body);
         assert!(
-            text.contains("Cannot parse GitHub owner/repo"),
-            "expected parse error, got: {text}"
+            text.contains("Cannot resolve git remote URL"),
+            "expected remote resolve error, got: {text}"
         );
     }
 }

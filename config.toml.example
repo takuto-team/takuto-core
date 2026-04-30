@@ -22,7 +22,7 @@ dry_mode = false
 # Ticketing system that drives workflow automation.
 # "none"   — no ticketing integration; start workflows manually from the dashboard (default).
 # "jira"   — poll Jira for To Do tickets; requires Atlassian CLI (acli) auth (run make setup).
-# "github" — poll GitHub Issues from git.repo_url; no Atlassian auth required.
+# "github" — poll GitHub Issues from the git remote; no Atlassian auth required.
 ticketing_system = "none"
 # Set to false to start with Jira polling paused (same as dashboard **Pause polling**). Use **Resume polling** after startup to pick up To Do tickets without editing config again.
 # auto_polling = false
@@ -63,7 +63,6 @@ email = "you@company.com"
 base_branch = "main"
 # Git remote for fetch, worktree base ref, and push (default: origin)
 remote = "origin"
-repo_url = "https://github.com/org/repo.git"
 repo_path = "/workspace"
 
 # --- GitHub App authentication (optional) ---

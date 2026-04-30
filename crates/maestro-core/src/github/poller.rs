@@ -73,8 +73,7 @@ impl GitHubPoller {
     async fn poll_once(&self) -> crate::error::Result<()> {
         let config = self.config.read().await;
 
-        // Derive owner/repo from git.repo_url (e.g. "https://github.com/owner/repo" or "owner/repo")
-        let repo_url = config.git.repo_url.clone();
+        let remote = config.git.remote.clone();
         let max_active = config.general.effective_max_active_workflows() as usize;
         // In dry mode, external GitHub API writes (issue comments, etc.) are skipped by
         // DryRunActions, but local workflow state (worktrees, steps_log) is still created.
@@ -83,9 +82,17 @@ impl GitHubPoller {
         let repo_path = std::path::PathBuf::from(&config.git.repo_path);
         drop(config);
 
-        let owner_repo = parse_github_repo(&repo_url).ok_or_else(|| {
+        let remote_url = match crate::git::remote::resolve_remote_url(&repo_path, &remote).await {
+            Ok(url) => url,
+            Err(e) => {
+                warn!(error = %e, "GitHub poller: cannot resolve git remote URL — skipping poll cycle");
+                return Ok(());
+            }
+        };
+
+        let owner_repo = parse_github_repo(&remote_url).ok_or_else(|| {
             crate::error::MaestroError::Config(format!(
-                "Cannot parse GitHub owner/repo from git.repo_url: {repo_url:?}. \
+                "Cannot parse GitHub owner/repo from git remote URL: {remote_url:?}. \
                  Expected format: https://github.com/owner/repo or owner/repo"
             ))
         })?;
