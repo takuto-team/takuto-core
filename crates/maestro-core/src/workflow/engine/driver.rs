@@ -12,13 +12,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::actions::traits::ExternalActions;
-use crate::agent_prompt::{
-    headless_instructions_suffix, report_injection_suffix,
-};
+use crate::agent_prompt::{headless_instructions_suffix, report_injection_suffix};
 use crate::claude::session::ClaudeSession;
 use crate::config::{
-    AgentStepConfig, AiAgentProvider, Config, cursor_model_for_cli,
-    interpolate_agent_prompt, interpolate_command_template,
+    AgentStepConfig, AiAgentProvider, Config, cursor_model_for_cli, interpolate_agent_prompt,
+    interpolate_command_template,
 };
 use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
@@ -28,9 +26,8 @@ use crate::jira::client::JiraClient;
 use crate::process::OutputLine;
 
 use crate::workflow::helpers::{
-    build_skill_search_paths, build_ticket_context, check_cancelled,
-    extract_acceptance_criteria, format_acceptance_criteria_block, parse_gh_issue_number,
-    step_already_succeeded,
+    build_skill_search_paths, build_ticket_context, check_cancelled, extract_acceptance_criteria,
+    format_acceptance_criteria_block, parse_gh_issue_number, step_already_succeeded,
 };
 use crate::workflow::log_writer::WorkflowLogWriter;
 use crate::workflow::outcome::resolve_pr_url;
@@ -38,7 +35,7 @@ use crate::workflow::state::WorkflowState;
 use crate::workflow::step::{StepLog, StepStatus};
 use crate::workflow::stream_humanize::humanize_agent_stream_line;
 
-use super::types::{Workflow, WorkflowEvent, TerminalLine};
+use super::types::{TerminalLine, Workflow, WorkflowEvent};
 
 /// Maximum number of terminal lines stored per workflow for persistence.
 const TERMINAL_LINES_MAX: usize = 100;
@@ -322,7 +319,10 @@ pub(super) async fn prepare_worktree_for_ticket(
     match actions.create_worktree(&branch_name, &base_branch).await {
         Ok(worktree_path) => {
             // Configure git identity on the new worktree.
-            if let Err(e) = actions.configure_git_author_from_github(&worktree_path).await {
+            if let Err(e) = actions
+                .configure_git_author_from_github(&worktree_path)
+                .await
+            {
                 warn!(
                     ticket = %ticket_key,
                     error = %e,
@@ -543,8 +543,7 @@ pub(super) async fn bootstrap_new_workflow(
         })
     };
 
-    let (worktree_path, branch_name) = if let Some((existing_path, existing_branch)) = pre_created
-    {
+    let (worktree_path, branch_name) = if let Some((existing_path, existing_branch)) = pre_created {
         // Re-use the pre-created worktree; skip git fetch + worktree add.
         info!(
             ticket = %ticket_key,
@@ -648,8 +647,8 @@ pub(super) async fn bootstrap_new_workflow(
             "Container isolation enabled for workflow"
         );
         let gh_token = actions.get_gh_installation_token(&worktree_path).await;
-        let runner = ContainerRunner::new(ticket_key, &worktree_path, &image)
-            .with_isolate_workspace();
+        let runner =
+            ContainerRunner::new(ticket_key, &worktree_path, &image).with_isolate_workspace();
         Some(if let Some(token) = gh_token {
             runner.with_gh_token(token)
         } else {
@@ -714,14 +713,8 @@ pub(super) async fn bootstrap_new_workflow(
                 step_log.output.push("mise install completed".to_string());
                 step_log.complete(StepStatus::Success);
                 add_step_log(workflows, ticket_key, step_log).await;
-                broadcast_step_completed(
-                    event_tx,
-                    ticket_key,
-                    "Mise install",
-                    workflows,
-                    config,
-                )
-                .await;
+                broadcast_step_completed(event_tx, ticket_key, "Mise install", workflows, config)
+                    .await;
             }
             Ok(output) => {
                 let stderr_tail = output
@@ -802,14 +795,8 @@ pub(super) async fn bootstrap_new_workflow(
                     step_log.output.push(format!("{step_name} completed"));
                     step_log.complete(StepStatus::Success);
                     add_step_log(workflows, ticket_key, step_log).await;
-                    broadcast_step_completed(
-                        event_tx,
-                        ticket_key,
-                        &step_name,
-                        workflows,
-                        config,
-                    )
-                    .await;
+                    broadcast_step_completed(event_tx, ticket_key, &step_name, workflows, config)
+                        .await;
                 }
                 Ok(output) => {
                     let stderr_tail = output
@@ -846,10 +833,7 @@ pub(super) async fn bootstrap_new_workflow(
         let mut step_log = StepLog::new("Install Dependencies".to_string());
         info!(command = %install_cmd, "Installing dependencies in worktree");
         log_writer
-            .write_step(
-                "Install Dependencies",
-                &format!("Running: {install_cmd}"),
-            )
+            .write_step("Install Dependencies", &format!("Running: {install_cmd}"))
             .await;
 
         broadcast_step_started(event_tx, ticket_key, "Install Dependencies");
@@ -984,14 +968,8 @@ pub(super) async fn bootstrap_new_workflow(
                     step_log.output.push(format!("{step_name} completed"));
                     step_log.complete(StepStatus::Success);
                     add_step_log(workflows, ticket_key, step_log).await;
-                    broadcast_step_completed(
-                        event_tx,
-                        ticket_key,
-                        &step_name,
-                        workflows,
-                        config,
-                    )
-                    .await;
+                    broadcast_step_completed(event_tx, ticket_key, &step_name, workflows, config)
+                        .await;
                 }
                 Ok(output) => {
                     let stderr_tail = output
@@ -1099,8 +1077,8 @@ pub(super) async fn run_workflow_def_steps(
             img
         };
         let gh_token = actions.get_gh_installation_token(worktree_path).await;
-        let runner = ContainerRunner::new(ticket_key, worktree_path, &image)
-            .with_isolate_workspace();
+        let runner =
+            ContainerRunner::new(ticket_key, worktree_path, &image).with_isolate_workspace();
         Some(if let Some(token) = gh_token {
             runner.with_gh_token(token)
         } else {
@@ -1602,7 +1580,6 @@ pub(super) async fn run_agent_step_sequence(
     Ok(last_agent_output)
 }
 
-
 pub(super) async fn acquire_agent_slot(
     sem: &Arc<Semaphore>,
     cancel_token: &CancellationToken,
@@ -1613,7 +1590,6 @@ pub(super) async fn acquire_agent_slot(
             .map_err(|_| MaestroError::Config("Agent concurrency semaphore closed".to_string())),
     }
 }
-
 
 pub(super) fn broadcast_step_started(
     event_tx: &broadcast::Sender<WorkflowEvent>,
@@ -1896,12 +1872,11 @@ pub(super) async fn close_github_issue(
             "Cannot close GitHub issue: '{ticket_key}' is not a GH-{{number}} key"
         ))
     })?;
-    let owner_repo =
-        crate::github::parse_github_repo(repo_url).ok_or_else(|| {
-            MaestroError::Config(format!(
-                "Cannot close GitHub issue: failed to parse owner/repo from '{repo_url}'"
-            ))
-        })?;
+    let owner_repo = crate::github::parse_github_repo(repo_url).ok_or_else(|| {
+        MaestroError::Config(format!(
+            "Cannot close GitHub issue: failed to parse owner/repo from '{repo_url}'"
+        ))
+    })?;
 
     let gh_token = actions.get_gh_installation_token(cwd).await;
     let env: Vec<(&str, &str)> = gh_token
@@ -1911,7 +1886,14 @@ pub(super) async fn close_github_issue(
     let endpoint = format!("repos/{owner_repo}/issues/{issue_number}");
     let output = crate::process::run_command_with_env(
         "gh",
-        &["api", "--method", "PATCH", &endpoint, "--field", "state=closed"],
+        &[
+            "api",
+            "--method",
+            "PATCH",
+            &endpoint,
+            "--field",
+            "state=closed",
+        ],
         cwd,
         CancellationToken::new(),
         &env,

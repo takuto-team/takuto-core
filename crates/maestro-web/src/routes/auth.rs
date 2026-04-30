@@ -202,9 +202,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"admin","password":"secret123"}"#,
-                    ))
+                    .body(Body::from(r#"{"username":"admin","password":"secret123"}"#))
                     .unwrap(),
             )
             .await
@@ -230,9 +228,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"admin","password":"wrong"}"#,
-                    ))
+                    .body(Body::from(r#"{"username":"admin","password":"wrong"}"#))
                     .unwrap(),
             )
             .await
@@ -260,11 +256,7 @@ mod tests {
         let state = test_state_with_auth();
         let app = build_router(state);
         let resp = app
-            .oneshot(
-                Request::get("/api/config")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -280,9 +272,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"admin","password":"secret123"}"#,
-                    ))
+                    .body(Body::from(r#"{"username":"admin","password":"secret123"}"#))
                     .unwrap(),
             )
             .await

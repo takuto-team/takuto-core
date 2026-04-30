@@ -18,10 +18,10 @@ use crate::error::{MaestroError, Result};
 use crate::workflow::state::WorkflowState;
 use crate::workflow::step::StepStatus;
 
+use super::definitions::WorkflowDefinitionManager;
 use super::event_bus::WorkflowEventBus;
 use super::repository::WorkflowRepository;
 use super::types::WorkflowEvent;
-use super::definitions::WorkflowDefinitionManager;
 
 pub(crate) struct WorkflowTransitions {
     pub(crate) repository: Arc<WorkflowRepository>,
@@ -205,8 +205,10 @@ impl WorkflowTransitions {
                 let ct = cancel_token.clone();
 
                 tokio::spawn(async move {
-                    super::driver::drive_workflow_def(ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su)
-                        .await;
+                    super::driver::drive_workflow_def(
+                        ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su,
+                    )
+                    .await;
                 });
             } else {
                 warn!(ticket = %ticket_key, def = %def_name, "Running def not found in workflows dir during resume");

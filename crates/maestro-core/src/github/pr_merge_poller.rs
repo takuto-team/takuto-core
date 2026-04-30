@@ -179,9 +179,7 @@ async fn check_pr_merged(
     gh_token: Option<&str>,
 ) -> Result<bool, String> {
     let endpoint = format!("repos/{owner_repo}/pulls/{pr_number}");
-    let env: Vec<(&str, &str)> = gh_token
-        .map(|t| vec![("GH_TOKEN", t)])
-        .unwrap_or_default();
+    let env: Vec<(&str, &str)> = gh_token.map(|t| vec![("GH_TOKEN", t)]).unwrap_or_default();
     let output = process::run_command_with_env(
         "gh",
         &["api", &endpoint, "--jq", ".merged"],

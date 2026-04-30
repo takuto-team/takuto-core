@@ -250,10 +250,7 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        assert_eq!(
-            session_cookie_from_headers(&headers),
-            Some("abc123.def456")
-        );
+        assert_eq!(session_cookie_from_headers(&headers), Some("abc123.def456"));
     }
 
     #[test]
@@ -281,10 +278,7 @@ mod tests {
         let web = web_config_with_auth();
         let token = sign_session("admin", "secret123").unwrap();
         let mut headers = HeaderMap::new();
-        headers.insert(
-            COOKIE,
-            format!("maestro_session={token}").parse().unwrap(),
-        );
+        headers.insert(COOKIE, format!("maestro_session={token}").parse().unwrap());
         assert!(session_authorized(&headers, &web));
     }
 }

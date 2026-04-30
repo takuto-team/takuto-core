@@ -1,15 +1,15 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-mod types;
-mod repository;
-mod event_bus;
 mod context;
-mod driver;
-mod persistence;
-mod lifecycle;
-mod transitions;
 mod definitions;
+mod driver;
+mod event_bus;
+mod lifecycle;
+mod persistence;
+mod repository;
+mod transitions;
+mod types;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,18 +19,18 @@ use std::sync::atomic::AtomicBool;
 use tokio::sync::{RwLock, Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
 
-use repository::WorkflowRepository;
-use event_bus::WorkflowEventBus;
-use persistence::WorkflowPersistence;
-use lifecycle::WorkflowLifecycle;
-use transitions::WorkflowTransitions;
 use definitions::WorkflowDefinitionManager;
+use event_bus::WorkflowEventBus;
+use lifecycle::WorkflowLifecycle;
+use persistence::WorkflowPersistence;
+use repository::WorkflowRepository;
+use transitions::WorkflowTransitions;
 
 use crate::actions::traits::ExternalActions;
 use crate::config::{Config, TicketingSystem};
 use crate::error::Result;
 
-pub use types::{Workflow, WorkflowEvent, TerminalLine, MarkDoneOutcome};
+pub use types::{MarkDoneOutcome, TerminalLine, Workflow, WorkflowEvent};
 
 pub struct WorkflowEngine {
     pub config: Arc<RwLock<Config>>,
@@ -94,7 +94,7 @@ impl WorkflowEngine {
             actions.clone(),
             config.clone(),
             jira_available.clone(),
-            ticketing_system.clone(),
+            ticketing_system,
             workflows_dir.clone(),
         );
 
@@ -167,11 +167,13 @@ impl WorkflowEngine {
 
     /// Load snapshot from disk, insert workflows, spawn drivers. Removes the snapshot file on success.
     pub async fn restore_persisted_workflows(&self) -> Result<usize> {
-        self.persistence.restore(
-            &self.workflows_dir,
-            self.agent_run_semaphore.clone(),
-            self.suppress_cancelled_as_error.clone(),
-        ).await
+        self.persistence
+            .restore(
+                &self.workflows_dir,
+                self.agent_run_semaphore.clone(),
+                self.suppress_cancelled_as_error.clone(),
+            )
+            .await
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<WorkflowEvent> {
@@ -186,7 +188,16 @@ impl WorkflowEngine {
         ticket_description: Option<String>,
         ticket_url: Option<String>,
     ) -> Result<String> {
-        self.lifecycle.start_workflow(ticket_key, ticket_summary, started_manually, ticket_description, ticket_url, &self.definitions).await
+        self.lifecycle
+            .start_workflow(
+                ticket_key,
+                ticket_summary,
+                started_manually,
+                ticket_description,
+                ticket_url,
+                &self.definitions,
+            )
+            .await
     }
 
     /// Add a workflow to the dashboard without spawning the driver.
@@ -199,7 +210,15 @@ impl WorkflowEngine {
         ticket_description: Option<String>,
         ticket_url: Option<String>,
     ) -> Result<String> {
-        self.lifecycle.add_to_dashboard(ticket_key, ticket_summary, started_manually, ticket_description, ticket_url).await
+        self.lifecycle
+            .add_to_dashboard(
+                ticket_key,
+                ticket_summary,
+                started_manually,
+                ticket_description,
+                ticket_url,
+            )
+            .await
     }
 
     pub async fn get_workflow_ids(&self) -> Vec<String> {
@@ -223,17 +242,22 @@ impl WorkflowEngine {
     }
 
     pub async fn retry_workflow(&self, ticket_key: &str) -> Result<String> {
-        self.transitions.retry_workflow(ticket_key, &self.lifecycle, &self.definitions).await
+        self.transitions
+            .retry_workflow(ticket_key, &self.lifecycle, &self.definitions)
+            .await
     }
 
     /// Resume a failed or stopped workflow by retrying all Error-state workflow definitions.
     pub async fn resume_from_error(&self, ticket_key: &str) -> Result<()> {
-        self.transitions.resume_from_error(ticket_key, &self.definitions).await
+        self.transitions
+            .resume_from_error(ticket_key, &self.definitions)
+            .await
     }
 
     /// Manual dashboard starts with **`started_manually`** that are not **Done** / **Stopped** / **Error**.
     pub async fn manual_workflows_toward_cap_count(&self) -> usize {
-        self.repository.inner_arc()
+        self.repository
+            .inner_arc()
             .read()
             .await
             .values()
@@ -248,7 +272,9 @@ impl WorkflowEngine {
     /// Remove a workflow from the dashboard when it is not **running** (see [`WorkflowState::is_active`]).
     /// Best-effort worktree removal; no Jira transitions. Cancels the driver token if a paused task is still attached.
     pub async fn delete_workflow(&self, ticket_key: &str) -> Result<()> {
-        self.lifecycle.delete_workflow(ticket_key, &self.persistence).await
+        self.lifecycle
+            .delete_workflow(ticket_key, &self.persistence)
+            .await
     }
 
     /// Jira **Done** transition (configured status name) and remove worktree; remove workflow from the map only if both succeed.
@@ -257,21 +283,24 @@ impl WorkflowEngine {
         let engine_config = Arc::clone(&self.config);
         let ticket_key_owned = ticket_key.to_string();
         let tx = self.event_bus.sender().clone();
-        self.lifecycle.mark_work_done(ticket_key, &self.persistence, move |mut event| {
-            let workflows = engine_workflows.clone();
-            let config = engine_config.clone();
-            let ticket = ticket_key_owned.clone();
-            let tx2 = tx.clone();
-            tokio::spawn(async move {
-                if let Some((pct, total)) =
-                    driver::progress_dashboard_fields_for_ticket(&workflows, &config, &ticket).await
-                {
-                    event.progress_percent = Some(pct);
-                    event.progress_steps_total = Some(total);
-                }
-                let _ = tx2.send(event);
-            });
-        }).await
+        self.lifecycle
+            .mark_work_done(ticket_key, &self.persistence, move |mut event| {
+                let workflows = engine_workflows.clone();
+                let config = engine_config.clone();
+                let ticket = ticket_key_owned.clone();
+                let tx2 = tx.clone();
+                tokio::spawn(async move {
+                    if let Some((pct, total)) =
+                        driver::progress_dashboard_fields_for_ticket(&workflows, &config, &ticket)
+                            .await
+                    {
+                        event.progress_percent = Some(pct);
+                        event.progress_steps_total = Some(total);
+                    }
+                    let _ = tx2.send(event);
+                });
+            })
+            .await
     }
 
     pub fn broadcast_event(&self, mut event: WorkflowEvent) {
@@ -296,12 +325,16 @@ impl WorkflowEngine {
 
     /// Start running a specific workflow definition for a ticket.
     pub async fn start_workflow_def(&self, ticket_key: &str, def_name: &str) -> Result<()> {
-        self.definitions.start_workflow_def(ticket_key, def_name).await
+        self.definitions
+            .start_workflow_def(ticket_key, def_name)
+            .await
     }
 
     /// Reset a workflow definition run from Error to Idle and start it again.
     pub async fn retry_workflow_def(&self, ticket_key: &str, def_name: &str) -> Result<()> {
-        self.definitions.retry_workflow_def(ticket_key, def_name).await
+        self.definitions
+            .retry_workflow_def(ticket_key, def_name)
+            .await
     }
 
     /// Start a background task that periodically scans the workflows directory for changes
@@ -419,10 +452,7 @@ mod tests {
 
     #[test]
     fn display_name_reviewing() {
-        assert_eq!(
-            WorkflowState::Reviewing.display_name(),
-            "Reviewing Changes"
-        );
+        assert_eq!(WorkflowState::Reviewing.display_name(), "Reviewing Changes");
     }
 
     #[test]
@@ -578,9 +608,7 @@ mod tests {
 
     #[test]
     fn occupies_slot_true_for_addressing_ticket() {
-        assert!(
-            WorkflowState::AddressingTicket { pass: 1 }.occupies_concurrency_slot()
-        );
+        assert!(WorkflowState::AddressingTicket { pass: 1 }.occupies_concurrency_slot());
     }
 
     #[test]
@@ -614,19 +642,12 @@ mod tests {
             vec![],
             Some("Implement ticket (cycle 1/3, run 1/1)".into()),
         );
-        assert_eq!(
-            w.status_display(),
-            "Implement ticket (cycle 1/3, run 1/1)"
-        );
+        assert_eq!(w.status_display(), "Implement ticket (cycle 1/3, run 1/1)");
     }
 
     #[test]
     fn status_display_addressing_ticket_fallback_no_label() {
-        let w = wf_with(
-            WorkflowState::AddressingTicket { pass: 1 },
-            vec![],
-            None,
-        );
+        let w = wf_with(WorkflowState::AddressingTicket { pass: 1 }, vec![], None);
         assert_eq!(w.status_display(), "Running agent steps");
     }
 
@@ -704,7 +725,10 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// Build a minimal `PersistedWorkflowRecord` for testing.
-    fn make_persisted_record(state: WorkflowState, driver_started: bool) -> PersistedWorkflowRecord {
+    fn make_persisted_record(
+        state: WorkflowState,
+        driver_started: bool,
+    ) -> PersistedWorkflowRecord {
         let now = Utc::now();
         PersistedWorkflowRecord {
             id: "rec-id".into(),
@@ -750,10 +774,16 @@ mod tests {
         assert_eq!(w.ticket_summary, "Record summary");
         assert_eq!(w.ticket_description, "desc");
         assert_eq!(w.ticket_type, "Bug");
-        assert!(matches!(w.state, WorkflowState::AddressingTicket { pass: 1 }));
+        assert!(matches!(
+            w.state,
+            WorkflowState::AddressingTicket { pass: 1 }
+        ));
         assert_eq!(w.branch_name, "feat/rec-1");
         assert_eq!(w.worktree_path, Some(PathBuf::from("/tmp/wt")));
-        assert_eq!(w.pr_url.as_deref(), Some("https://github.com/foo/bar/pull/42"));
+        assert_eq!(
+            w.pr_url.as_deref(),
+            Some("https://github.com/foo/bar/pull/42")
+        );
         assert!(w.pr_merged);
         assert_eq!(w.terminal_lines.len(), 1);
         assert_eq!(w.terminal_lines[0].text, "hello");
@@ -1012,13 +1042,12 @@ mod tests {
     #[test]
     fn workflow_engine_new_does_not_panic() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> = Arc::new(
-            crate::actions::dry_run::DryRunActions::new(
+        let actions: Arc<dyn ExternalActions> =
+            Arc::new(crate::actions::dry_run::DryRunActions::new(
                 PathBuf::from("/workspace"),
                 "origin".into(),
                 None,
-            ),
-        );
+            ));
         let jira_available = Arc::new(AtomicBool::new(false));
         let engine = WorkflowEngine::new(
             config,
@@ -1037,13 +1066,12 @@ mod tests {
     #[test]
     fn workflow_engine_new_with_higher_concurrency() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> = Arc::new(
-            crate::actions::dry_run::DryRunActions::new(
+        let actions: Arc<dyn ExternalActions> =
+            Arc::new(crate::actions::dry_run::DryRunActions::new(
                 PathBuf::from("/workspace"),
                 "origin".into(),
                 None,
-            ),
-        );
+            ));
         let jira_available = Arc::new(AtomicBool::new(true));
         let engine = WorkflowEngine::new(
             config,

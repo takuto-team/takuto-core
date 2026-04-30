@@ -198,9 +198,7 @@ fn build_issue_url(w: &Workflow, jira_site: &str) -> Option<String> {
     if let Some(ref url) = w.ticket_url {
         return Some(url.clone());
     }
-    if w.ticketing_system == maestro_core::config::TicketingSystem::Jira
-        && !jira_site.is_empty()
-    {
+    if w.ticketing_system == maestro_core::config::TicketingSystem::Jira && !jira_site.is_empty() {
         let url = ticket_browse_url(jira_site, &w.ticket_key);
         if !url.is_empty() {
             return Some(url);
@@ -573,7 +571,6 @@ pub struct StartManualWorkflowResponse {
     pub ticket_key: String,
 }
 
-
 /// Start a ticket workflow from the dashboard (same pipeline as the poller). Respects **`[general] max_concurrent_manual_workflows`**.
 ///
 /// When Jira is unavailable (`jira_available = false`), `ticket_key` may be empty — a synthetic
@@ -662,7 +659,13 @@ pub async fn start_manual_workflow(
 
     let workflow_id = state
         .engine
-        .add_to_dashboard(ticket_key.clone(), ticket_summary, true, description, issue_url)
+        .add_to_dashboard(
+            ticket_key.clone(),
+            ticket_summary,
+            true,
+            description,
+            issue_url,
+        )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

@@ -127,7 +127,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let writer = WorkflowLogWriter::new(dir.path(), "TEST-3").await;
 
-        writer.write_output("Lint", "stderr", "warning: unused var").await;
+        writer
+            .write_output("Lint", "stderr", "warning: unused var")
+            .await;
 
         let content = tokio::fs::read_to_string(writer.log_path()).await.unwrap();
         assert!(content.contains("[Lint] [stderr] warning: unused var"));

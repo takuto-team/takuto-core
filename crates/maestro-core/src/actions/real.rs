@@ -181,8 +181,10 @@ impl ExternalActions for RealActions {
         // Inject GH_TOKEN so git's credential helper (gh) can authenticate via the GitHub App.
         info!(base = base, remote = %remote, "Fetching base branch from git remote");
         let token_env = self.gh_token_env().await;
-        let token_env_refs: Vec<(&str, &str)> =
-            token_env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let token_env_refs: Vec<(&str, &str)> = token_env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let fetch_output = process::run_shell_command_with_env(
             &format!("git fetch {remote} {base}"),
             &self.repo_path,

@@ -117,11 +117,7 @@ async fn run_description_session(
         // per-issue isolation logic (which derives the repo root from the grandparent)
         // does not apply.  The session is already sandboxed in its own ephemeral
         // container; it does not need worktree-level isolation.
-        let runner = ContainerRunner::new(
-            &format!("improve-{ticket_key}"),
-            &worktree,
-            &image,
-        );
+        let runner = ContainerRunner::new(&format!("improve-{ticket_key}"), &worktree, &image);
         Some(if let Some(token) = gh_token {
             runner.with_gh_token(token)
         } else {
@@ -527,7 +523,11 @@ mod tests {
             None,
         );
         wf.ticket_description = description.to_string();
-        engine.workflows_arc().write().await.insert(key.to_string(), wf);
+        engine
+            .workflows_arc()
+            .write()
+            .await
+            .insert(key.to_string(), wf);
     }
 
     /// Saving a description (without summary) updates `ticket_description` in memory.

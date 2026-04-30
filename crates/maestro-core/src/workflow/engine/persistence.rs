@@ -18,10 +18,10 @@ use crate::workflow::snapshot::{
 };
 use crate::workflow::state::WorkflowState;
 
+use super::driver::drive_workflow_def;
 use super::event_bus::WorkflowEventBus;
 use super::repository::WorkflowRepository;
 use super::types::{Workflow, workflow_to_persisted_record};
-use super::driver::drive_workflow_def;
 
 pub(crate) struct WorkflowPersistence {
     pub(crate) repository: Arc<WorkflowRepository>,
@@ -101,7 +101,11 @@ impl WorkflowPersistence {
             let wf = Workflow::from_persisted_record(rec);
             let cancel_token = wf.cancel_token.clone();
 
-            self.repository.inner_arc().write().await.insert(ticket_key.clone(), wf);
+            self.repository
+                .inner_arc()
+                .write()
+                .await
+                .insert(ticket_key.clone(), wf);
 
             // Terminal workflows (Done, Stopped, Error) are restored for dashboard visibility
             // but don't need a driver — they're idle until the user clicks an action (retry, delete, etc.).
@@ -141,8 +145,9 @@ impl WorkflowPersistence {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let worktree =
-                        w.and_then(|w| w.worktree_path.clone()).filter(|p| p.exists());
+                    let worktree = w
+                        .and_then(|w| w.worktree_path.clone())
+                        .filter(|p| p.exists());
                     let (ts, td, tt) = w
                         .map(|w| {
                             (
@@ -163,8 +168,7 @@ impl WorkflowPersistence {
                 let discovery = discover_workflows(workflows_dir);
 
                 for def_name in running_def_names {
-                    if let Some(def) = discovery.workflows.iter().find(|d| d.filename == def_name)
-                    {
+                    if let Some(def) = discovery.workflows.iter().find(|d| d.filename == def_name) {
                         if wt.is_none() {
                             warn!(
                                 ticket = %ticket_key,

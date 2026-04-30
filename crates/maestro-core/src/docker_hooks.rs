@@ -411,7 +411,10 @@ pub fn preflight(config: &Config) -> Result<PreflightResult> {
     // When a GitHub App is fully configured, runtime tokens are generated automatically
     // via the App's private key — no interactive gh auth is needed or expected.
     if config.github.is_configured() {
-        eprintln!("[maestro preflight] GitHub App configured (app_id = {}); skipping gh auth check.", config.github.app_id);
+        eprintln!(
+            "[maestro preflight] GitHub App configured (app_id = {}); skipping gh auth check.",
+            config.github.app_id
+        );
     } else {
         eprintln!("[maestro preflight] Checking GitHub CLI (gh)…");
         // Two-stage check:

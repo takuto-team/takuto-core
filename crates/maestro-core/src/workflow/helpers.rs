@@ -164,7 +164,10 @@ pub(crate) fn step_already_succeeded(steps_log: &[StepLog], step_label: &str) ->
 // ─── Skill search paths ───────────────────────────────────────────────────────
 
 /// Build skill search paths: worktree project-level, then user-level (provider-dependent).
-pub(crate) fn build_skill_search_paths(worktree_path: &Path, provider: AiAgentProvider) -> Vec<PathBuf> {
+pub(crate) fn build_skill_search_paths(
+    worktree_path: &Path,
+    provider: AiAgentProvider,
+) -> Vec<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("MAESTRO_HOME"))
         .unwrap_or_else(|_| "/home/maestro".to_string());

@@ -382,8 +382,7 @@ pub async fn run_shell_command_with_env(
     cancel_token: CancellationToken,
     extra_env: &[(&str, &str)],
 ) -> Result<CommandOutput> {
-    let handle =
-        ProcessHandle::spawn_shell_with_env(command, cwd, cancel_token, extra_env).await?;
+    let handle = ProcessHandle::spawn_shell_with_env(command, cwd, cancel_token, extra_env).await?;
     handle.wait_with_output().await
 }
 
@@ -406,8 +405,7 @@ pub async fn run_command_with_env(
     cancel_token: CancellationToken,
     extra_env: &[(&str, &str)],
 ) -> Result<CommandOutput> {
-    let handle =
-        ProcessHandle::spawn_with_env(program, args, cwd, cancel_token, extra_env).await?;
+    let handle = ProcessHandle::spawn_with_env(program, args, cwd, cancel_token, extra_env).await?;
     handle.wait_with_output().await
 }
 

@@ -16,11 +16,11 @@ use crate::error::{MaestroError, Result};
 
 use crate::workflow::state::WorkflowState;
 
-use super::event_bus::WorkflowEventBus;
-use super::repository::WorkflowRepository;
-use super::types::{Workflow, WorkflowEvent, MarkDoneOutcome};
-use super::persistence::WorkflowPersistence;
 use super::definitions::WorkflowDefinitionManager;
+use super::event_bus::WorkflowEventBus;
+use super::persistence::WorkflowPersistence;
+use super::repository::WorkflowRepository;
+use super::types::{MarkDoneOutcome, Workflow, WorkflowEvent};
 
 pub(crate) struct WorkflowLifecycle {
     pub(crate) repository: Arc<WorkflowRepository>,
@@ -77,7 +77,8 @@ impl WorkflowLifecycle {
         // driver_started stays false until a def is started
         let id = workflow.id.clone();
 
-        self.repository.inner_arc()
+        self.repository
+            .inner_arc()
             .write()
             .await
             .insert(ticket_key.clone(), workflow);
@@ -130,7 +131,8 @@ impl WorkflowLifecycle {
         // driver_started stays false (set by Workflow::new)
         let id = workflow.id.clone();
 
-        self.repository.inner_arc()
+        self.repository
+            .inner_arc()
             .write()
             .await
             .insert(ticket_key.clone(), workflow);
@@ -176,7 +178,10 @@ impl WorkflowLifecycle {
             let event_tx = self.event_bus.sender().clone();
             let key = ticket_key.clone();
             tokio::spawn(async move {
-                super::driver::prepare_worktree_for_ticket(&key, &config, &workflows, &actions, &event_tx).await;
+                super::driver::prepare_worktree_for_ticket(
+                    &key, &config, &workflows, &actions, &event_tx,
+                )
+                .await;
             });
         }
 
@@ -329,7 +334,8 @@ impl WorkflowLifecycle {
                 .filter(|p| p.exists())
                 .unwrap_or_else(|| Path::new(&repo_path));
             if let Err(e) =
-                super::driver::close_github_issue(ticket_key, &repo_url, cwd, self.actions.as_ref()).await
+                super::driver::close_github_issue(ticket_key, &repo_url, cwd, self.actions.as_ref())
+                    .await
             {
                 jira_ok = false;
                 jira_error = Some(e.to_string());

@@ -99,9 +99,7 @@ pub async fn fetch_open_issues(
     gh_token: Option<&str>,
 ) -> crate::error::Result<Vec<GitHubIssue>> {
     let endpoint = format!("repos/{owner_repo}/issues");
-    let env: Vec<(&str, &str)> = gh_token
-        .map(|t| vec![("GH_TOKEN", t)])
-        .unwrap_or_default();
+    let env: Vec<(&str, &str)> = gh_token.map(|t| vec![("GH_TOKEN", t)]).unwrap_or_default();
     let output = crate::process::run_command_with_env(
         "gh",
         &[

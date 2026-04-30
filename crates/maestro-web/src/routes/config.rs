@@ -208,11 +208,7 @@ mod tests {
         let state = test_state();
         let app = build_router(state);
         let resp = app
-            .oneshot(
-                Request::get("/api/config")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -286,9 +282,7 @@ mod tests {
             .oneshot(
                 Request::put("/api/config")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"general":{"max_concurrent_workflows":5}}"#,
-                    ))
+                    .body(Body::from(r#"{"general":{"max_concurrent_workflows":5}}"#))
                     .unwrap(),
             )
             .await

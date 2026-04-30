@@ -48,9 +48,10 @@ pub async fn list_github_issues(
         .get_gh_installation_token(&repo_path)
         .await;
 
-    let issues = maestro_core::github::fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref())
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let issues =
+        maestro_core::github::fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref())
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 
     let rows: Vec<GithubIssueRow> = issues
         .into_iter()

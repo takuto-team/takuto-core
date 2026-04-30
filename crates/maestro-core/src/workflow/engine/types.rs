@@ -27,7 +27,6 @@ pub struct MarkDoneOutcome {
     pub workflow_removed: bool,
 }
 
-
 /// A single line of terminal output stored on the workflow for persistence
 /// across page reloads. Populated by spawn_output_relay after humanizing.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

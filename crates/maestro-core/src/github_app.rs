@@ -348,8 +348,7 @@ impl GitHubAppTokenManager {
         //
         // Git passes this to `sh -c` when credentials are needed. GH_TOKEN is inherited
         // from the git subprocess environment (injected by gh_token_env() in RealActions).
-        let helper =
-            "!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f";
+        let helper = "!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f";
         let cred_out = crate::process::run_command(
             "git",
             &[

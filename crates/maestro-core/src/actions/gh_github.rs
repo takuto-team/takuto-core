@@ -103,7 +103,6 @@ pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -
 // `parse_pr_url` (mentioned in the task spec) is in `github/mod.rs` and already
 // has comprehensive tests there. The GhUser deserialization is validated by the
 // gh API contract. Integration testing requires a real `gh` CLI and GitHub auth.
-
 pub async fn gh_request_self_pr_reviewer(
     cwd: &Path,
     pr_url: &str,

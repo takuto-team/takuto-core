@@ -79,14 +79,7 @@ impl WorkflowDefinitionManager {
         }
 
         // Extract needed data under read lock, then release
-        let (
-            workflow_id,
-            maybe_wt,
-            ticket_summary,
-            ticket_description,
-            ticket_type,
-            run_states,
-        ) = {
+        let (workflow_id, maybe_wt, ticket_summary, ticket_description, ticket_type, run_states) = {
             let wf_arc = self.repository.inner_arc();
             let wf_map = wf_arc.read().await;
             let w = wf_map

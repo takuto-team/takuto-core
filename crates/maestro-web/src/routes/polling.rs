@@ -83,11 +83,7 @@ mod tests {
         let state = test_state();
         let app = build_router(state);
         let resp = app
-            .oneshot(
-                Request::get("/api/polling")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/polling").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -118,11 +114,7 @@ mod tests {
         // Verify via GET.
         let app = build_router(state);
         let resp = app
-            .oneshot(
-                Request::get("/api/polling")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/polling").body(Body::empty()).unwrap())
             .await
             .unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
@@ -162,11 +154,7 @@ mod tests {
         // Verify via GET.
         let app = build_router(state);
         let resp = app
-            .oneshot(
-                Request::get("/api/polling")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/polling").body(Body::empty()).unwrap())
             .await
             .unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();

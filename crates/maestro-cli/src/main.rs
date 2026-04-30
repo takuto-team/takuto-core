@@ -155,7 +155,9 @@ async fn run_github_app_token(config_path: &std::path::Path) -> ExitCode {
     let mgr = match maestro_core::github_app::try_create_token_manager(&config.github) {
         Some(mgr) => mgr,
         None => {
-            eprintln!("GitHub App not configured — set [github] app_id, app_installation_id, and app_private_key/app_private_key_path in config.toml.");
+            eprintln!(
+                "GitHub App not configured — set [github] app_id, app_installation_id, and app_private_key/app_private_key_path in config.toml."
+            );
             return ExitCode::FAILURE;
         }
     };

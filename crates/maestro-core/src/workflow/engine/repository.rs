@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::workflow::state::WorkflowState;
 use super::types::Workflow;
+use crate::workflow::state::WorkflowState;
 
 pub(crate) struct WorkflowRepository {
     workflows: Arc<RwLock<HashMap<String, Workflow>>>,
@@ -31,10 +31,7 @@ impl WorkflowRepository {
 
     #[allow(dead_code)]
     pub async fn insert(&self, w: Workflow) {
-        self.workflows
-            .write()
-            .await
-            .insert(w.ticket_key.clone(), w);
+        self.workflows.write().await.insert(w.ticket_key.clone(), w);
     }
 
     /// Apply a mutation to a workflow. Returns true if found.
