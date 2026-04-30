@@ -333,11 +333,8 @@ impl WorkflowLifecycle {
                 .as_deref()
                 .filter(|p| p.exists())
                 .unwrap_or_else(|| Path::new(&repo_path));
-            match crate::git::remote::resolve_remote_url(
-                std::path::Path::new(&repo_path),
-                &remote,
-            )
-            .await
+            match crate::git::remote::resolve_remote_url(std::path::Path::new(&repo_path), &remote)
+                .await
             {
                 Ok(remote_url) => {
                     if let Err(e) = super::driver::close_github_issue(

@@ -114,10 +114,7 @@ pub fn build_router(state: AppState) -> Router {
             get(routes::jira::get_ticket_preview),
         )
         .route("/github/issues", get(routes::github::list_github_issues))
-        .route(
-            "/github/repos",
-            get(routes::repos::list_github_repos),
-        )
+        .route("/github/repos", get(routes::repos::list_github_repos))
         .route("/repos/clone", post(routes::repos::clone_repo))
         .route(
             "/tickets/{key}/improve",

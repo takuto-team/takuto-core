@@ -247,7 +247,9 @@ fn parse_workflow_file(path: &Path) -> std::result::Result<WorkflowYaml, String>
     let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let wf: WorkflowYaml = match path.extension().and_then(|e| e.to_str()) {
-        Some("toml") => toml::from_str(&content).map_err(|e| format!("Invalid TOML schema: {e}"))?,
+        Some("toml") => {
+            toml::from_str(&content).map_err(|e| format!("Invalid TOML schema: {e}"))?
+        }
         _ => serde_yaml::from_str(&content).map_err(|e| format!("Invalid YAML schema: {e}"))?,
     };
 
