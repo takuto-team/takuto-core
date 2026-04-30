@@ -648,7 +648,8 @@ pub(super) async fn bootstrap_new_workflow(
             "Container isolation enabled for workflow"
         );
         let gh_token = actions.get_gh_installation_token(&worktree_path).await;
-        let runner = ContainerRunner::new(ticket_key, &worktree_path, &image);
+        let runner = ContainerRunner::new(ticket_key, &worktree_path, &image)
+            .with_isolate_workspace();
         Some(if let Some(token) = gh_token {
             runner.with_gh_token(token)
         } else {
@@ -1098,7 +1099,8 @@ pub(super) async fn run_workflow_def_steps(
             img
         };
         let gh_token = actions.get_gh_installation_token(worktree_path).await;
-        let runner = ContainerRunner::new(ticket_key, worktree_path, &image);
+        let runner = ContainerRunner::new(ticket_key, worktree_path, &image)
+            .with_isolate_workspace();
         Some(if let Some(token) = gh_token {
             runner.with_gh_token(token)
         } else {

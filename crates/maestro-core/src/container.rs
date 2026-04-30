@@ -70,6 +70,10 @@ pub struct ContainerRunner {
     /// Overrides the personal `gh` user for bot-attributed commits and PRs without
     /// touching the shared `~/.config/gh/hosts.yml` volume.
     gh_token: Option<String>,
+    /// When `true`, replace the broad `/workspace:/workspace` mount with targeted
+    /// bind mounts for just the worktree path, `.git`, and `.maestro`. This prevents
+    /// a container from accessing any other issue's worktree.
+    isolate_workspace: bool,
 }
 
 static DOCKER_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -151,6 +155,45 @@ const WORKER_VOLUMES: &[&str] = &[
     "/etc/maestro:/etc/maestro:ro",
 ];
 
+/// Build the list of volume mount strings for a Docker container.
+///
+/// When `isolate_workspace` is `true`, the broad `/workspace:/workspace` mount is
+/// replaced with three targeted mounts so the container sees only:
+///   - its own worktree directory (read-write)
+///   - the shared `.git` internals (needed for git operations)
+///   - the shared `.maestro` directory (read-only; contains `.npmrc`, etc.)
+///
+/// All other mounts from [`WORKER_VOLUMES`] (auth volumes, `/etc/maestro`) are preserved.
+///
+/// The repo root is derived as the grandparent of `worktree_path`
+/// (e.g. `/workspace/worktrees/slug` → `/workspace`).
+pub fn build_volume_args(worktree_path: &Path, isolate_workspace: bool) -> Vec<String> {
+    let mut mounts = Vec::new();
+    for v in WORKER_VOLUMES {
+        if isolate_workspace && *v == "/workspace:/workspace" {
+            continue;
+        }
+        mounts.push((*v).to_string());
+    }
+    if isolate_workspace {
+        if let Some(repo_root) = worktree_path.parent().and_then(|p| p.parent()) {
+            let wt = worktree_path.to_string_lossy();
+            let root = repo_root.to_string_lossy();
+            mounts.push(format!("{wt}:{wt}"));
+            mounts.push(format!("{root}/.git:{root}/.git"));
+            mounts.push(format!("{root}/.maestro:{root}/.maestro:ro"));
+        } else {
+            warn!(
+                path = %worktree_path.display(),
+                "Cannot derive repo root from worktree path (need grandparent); \
+                 falling back to full /workspace mount"
+            );
+            mounts.push("/workspace:/workspace".to_string());
+        }
+    }
+    mounts
+}
+
 impl ContainerRunner {
     pub fn new(ticket_key: &str, worktree_path: &Path, image: &str) -> Self {
         Self {
@@ -159,6 +202,7 @@ impl ContainerRunner {
             worktree_path: worktree_path.to_path_buf(),
             step_counter: std::sync::atomic::AtomicU32::new(0),
             gh_token: None,
+            isolate_workspace: false,
         }
     }
 
@@ -166,6 +210,14 @@ impl ContainerRunner {
     /// worker container spawned by this runner.
     pub fn with_gh_token(mut self, token: String) -> Self {
         self.gh_token = Some(token);
+        self
+    }
+
+    /// Enable per-issue workspace isolation. Instead of mounting the full
+    /// `/workspace` volume, only the worktree directory, `.git`, and `.maestro`
+    /// are mounted. This prevents a container from accessing other issues' files.
+    pub fn with_isolate_workspace(mut self) -> Self {
+        self.isolate_workspace = true;
         self
     }
 
@@ -245,9 +297,9 @@ impl ContainerRunner {
             args.push(format!("GH_TOKEN={val}"));
         }
 
-        for v in WORKER_VOLUMES {
+        for mount in build_volume_args(&self.worktree_path, self.isolate_workspace) {
             args.push("-v".into());
-            args.push((*v).into());
+            args.push(mount);
         }
 
         args.push("-w".into());
@@ -558,6 +610,7 @@ pub async fn start_editor(
     setup_commands: &[String],
     startup_commands: &[String],
     git_editor: &str,
+    isolate_workspace: bool,
 ) -> std::result::Result<EditorInfo, String> {
     let name = editor_container_name(ticket_key);
 
@@ -613,10 +666,10 @@ pub async fn start_editor(
         }
     }
 
-    // Volumes
-    for v in WORKER_VOLUMES {
+    // Volumes — use per-issue isolation when enabled
+    for mount in build_volume_args(worktree_path, isolate_workspace) {
         args.push("-v".into());
-        args.push((*v).into());
+        args.push(mount);
     }
 
     // Port mappings: VS Code + spare ports (symmetric — socat listens inside container
@@ -1575,6 +1628,7 @@ pub async fn start_run_command(
     command: &str,
     cmd_index: usize,
     dynamic_ports: usize,
+    isolate_workspace: bool,
 ) -> std::result::Result<Vec<u16>, String> {
     let name = run_command_container_name(ticket_key, cmd_index);
 
@@ -1628,10 +1682,10 @@ pub async fn start_run_command(
         }
     }
 
-    // Volumes
-    for v in WORKER_VOLUMES {
+    // Volumes — use per-issue isolation when enabled
+    for mount in build_volume_args(worktree_path, isolate_workspace) {
         args.push("-v".into());
-        args.push((*v).into());
+        args.push(mount);
     }
 
     // Port mappings — spare ports for socat forwarding
@@ -2278,5 +2332,312 @@ mod tests {
         // -b with just / (empty token after stripping the slash)
         let output = "42 ttyd -p 9150 -b / bash -c ls\n";
         assert_eq!(parse_terminal_auth_from_pgrep(output), None);
+    }
+
+    // ── Per-issue volume isolation tests ──────────────────────────────
+
+    /// Helper: create a runner whose worktree path sits under `/workspace/worktrees/`
+    /// so the repo root can be derived (parent of parent).
+    fn isolated_runner() -> ContainerRunner {
+        ContainerRunner::new(
+            "PROJ-42",
+            &PathBuf::from("/workspace/worktrees/feat-proj-42"),
+            "maestro:latest",
+        )
+        .with_isolate_workspace()
+    }
+
+    /// Helper: create a legacy runner (no isolation).
+    fn legacy_runner() -> ContainerRunner {
+        ContainerRunner::new(
+            "PROJ-42",
+            &PathBuf::from("/workspace/worktrees/feat-proj-42"),
+            "maestro:latest",
+        )
+    }
+
+    // ── Group 1: Legacy mode (no isolation) ──
+
+    #[test]
+    fn legacy_mode_has_workspace_volume() {
+        let r = legacy_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        assert!(
+            has_volume(&args, "/workspace:/workspace"),
+            "Legacy mode must mount /workspace:/workspace"
+        );
+    }
+
+    #[test]
+    fn legacy_mode_no_targeted_worktree_mount() {
+        let r = legacy_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        // No mount of the specific worktree path should appear
+        assert!(
+            !has_volume(
+                &args,
+                "/workspace/worktrees/feat-proj-42:/workspace/worktrees/feat-proj-42"
+            ),
+            "Legacy mode must NOT mount the worktree path separately"
+        );
+    }
+
+    #[test]
+    fn legacy_mode_no_standalone_git_mount() {
+        let r = legacy_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        assert!(
+            !has_volume(&args, "/workspace/.git:/workspace/.git"),
+            "Legacy mode must NOT mount .git separately (it is inside /workspace)"
+        );
+    }
+
+    #[test]
+    fn legacy_wrap_shell_command_has_workspace_volume() {
+        let r = legacy_runner();
+        let (_, args) = r.wrap_shell_command("echo test");
+        assert!(
+            has_volume(&args, "/workspace:/workspace"),
+            "Legacy wrap_shell_command must mount /workspace:/workspace"
+        );
+    }
+
+    // ── Group 2: Isolated mode ──
+
+    #[test]
+    fn isolated_mode_no_full_workspace_mount() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        assert!(
+            !has_volume(&args, "/workspace:/workspace"),
+            "Isolated mode must NOT mount /workspace:/workspace"
+        );
+    }
+
+    #[test]
+    fn isolated_mode_has_worktree_mount() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        assert!(
+            has_volume(
+                &args,
+                "/workspace/worktrees/feat-proj-42:/workspace/worktrees/feat-proj-42"
+            ),
+            "Isolated mode must mount the specific worktree path"
+        );
+    }
+
+    #[test]
+    fn isolated_mode_has_git_dir_mount() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        assert!(
+            has_volume(&args, "/workspace/.git:/workspace/.git"),
+            "Isolated mode must mount .git for git operations"
+        );
+    }
+
+    #[test]
+    fn isolated_mode_has_maestro_dir_mount_ro() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        assert!(
+            has_volume(&args, "/workspace/.maestro:/workspace/.maestro:ro"),
+            "Isolated mode must mount .maestro read-only for npm config"
+        );
+    }
+
+    #[test]
+    fn isolated_mode_auth_volumes_preserved() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        // All /shared-auth/* mounts must still be present
+        for mount in WORKER_VOLUMES {
+            if mount.starts_with("/shared-auth/") || mount.starts_with("/etc/maestro") {
+                assert!(
+                    has_volume(&args, mount),
+                    "Isolated mode must preserve auth volume: {mount}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn isolated_mode_env_vars_unchanged() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        for (k, v) in WORKER_ENV {
+            assert!(
+                has_env(&args, k, v),
+                "Isolated mode must preserve env var {k}={v}"
+            );
+        }
+    }
+
+    #[test]
+    fn isolated_mode_working_directory_correct() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_command("true", &[]);
+        assert_eq!(
+            flag_value(&args, "-w"),
+            Some("/workspace/worktrees/feat-proj-42"),
+            "Isolated mode must keep -w pointing to the worktree path"
+        );
+    }
+
+    #[test]
+    fn isolated_wrap_shell_command_no_full_workspace() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_shell_command("echo test");
+        assert!(
+            !has_volume(&args, "/workspace:/workspace"),
+            "Isolated wrap_shell_command must NOT mount /workspace:/workspace"
+        );
+    }
+
+    #[test]
+    fn isolated_wrap_shell_command_has_targeted_mounts() {
+        let r = isolated_runner();
+        let (_, args) = r.wrap_shell_command("echo test");
+        assert!(
+            has_volume(
+                &args,
+                "/workspace/worktrees/feat-proj-42:/workspace/worktrees/feat-proj-42"
+            ),
+            "Isolated wrap_shell_command must mount worktree"
+        );
+        assert!(
+            has_volume(&args, "/workspace/.git:/workspace/.git"),
+            "Isolated wrap_shell_command must mount .git"
+        );
+        assert!(
+            has_volume(&args, "/workspace/.maestro:/workspace/.maestro:ro"),
+            "Isolated wrap_shell_command must mount .maestro:ro"
+        );
+    }
+
+    // ── Group 3: Builder API ──
+
+    #[test]
+    fn with_isolate_workspace_sets_flag() {
+        let r = ContainerRunner::new(
+            "TEST-1",
+            &PathBuf::from("/workspace/worktrees/test-1"),
+            "maestro:latest",
+        )
+        .with_isolate_workspace();
+        let (_, args) = r.wrap_command("true", &[]);
+        assert!(
+            !has_volume(&args, "/workspace:/workspace"),
+            "with_isolate_workspace must enable isolation"
+        );
+    }
+
+    #[test]
+    fn default_runner_no_isolation() {
+        let r = ContainerRunner::new(
+            "TEST-1",
+            &PathBuf::from("/workspace/worktrees/test-1"),
+            "maestro:latest",
+        );
+        let (_, args) = r.wrap_command("true", &[]);
+        assert!(
+            has_volume(&args, "/workspace:/workspace"),
+            "Default runner must NOT isolate (backward compat)"
+        );
+    }
+
+    #[test]
+    fn gh_token_and_isolate_workspace_composable() {
+        let r = ContainerRunner::new(
+            "TEST-1",
+            &PathBuf::from("/workspace/worktrees/test-1"),
+            "maestro:latest",
+        )
+        .with_gh_token("ghp_token123".to_string())
+        .with_isolate_workspace();
+        let (_, args) = r.wrap_command("true", &[]);
+        // GH_TOKEN must be present
+        assert!(
+            has_env(&args, "GH_TOKEN", "ghp_token123"),
+            "GH_TOKEN must be set when both builders are used"
+        );
+        // Isolation must be active
+        assert!(
+            !has_volume(&args, "/workspace:/workspace"),
+            "Isolation must be active when both builders are used"
+        );
+        assert!(
+            has_volume(
+                &args,
+                "/workspace/worktrees/test-1:/workspace/worktrees/test-1"
+            ),
+            "Worktree mount must be present when both builders are used"
+        );
+    }
+
+    // ── Group 4: build_volume_args helper tests ──
+
+    #[test]
+    fn build_volume_args_legacy_includes_workspace() {
+        let wt = PathBuf::from("/workspace/worktrees/feat-proj-42");
+        let args = build_volume_args(&wt, false);
+        let pairs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        assert!(
+            pairs.contains(&"/workspace:/workspace"),
+            "Legacy build_volume_args must include /workspace:/workspace"
+        );
+    }
+
+    #[test]
+    fn build_volume_args_isolated_replaces_workspace() {
+        let wt = PathBuf::from("/workspace/worktrees/feat-proj-42");
+        let args = build_volume_args(&wt, true);
+        let pairs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        assert!(
+            !pairs.contains(&"/workspace:/workspace"),
+            "Isolated build_volume_args must NOT include /workspace:/workspace"
+        );
+        assert!(
+            pairs.contains(&"/workspace/worktrees/feat-proj-42:/workspace/worktrees/feat-proj-42"),
+            "Isolated build_volume_args must include worktree mount"
+        );
+        assert!(
+            pairs.contains(&"/workspace/.git:/workspace/.git"),
+            "Isolated build_volume_args must include .git mount"
+        );
+        assert!(
+            pairs.contains(&"/workspace/.maestro:/workspace/.maestro:ro"),
+            "Isolated build_volume_args must include .maestro:ro mount"
+        );
+    }
+
+    #[test]
+    fn build_volume_args_isolated_no_duplicate_mounts() {
+        let wt = PathBuf::from("/workspace/worktrees/feat-proj-42");
+        let args = build_volume_args(&wt, true);
+        // Check for duplicate entries
+        let mut seen = std::collections::HashSet::new();
+        for mount in &args {
+            assert!(
+                seen.insert(mount.as_str()),
+                "Duplicate volume mount: {mount}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_volume_args_isolated_shallow_path_falls_back() {
+        // A shallow path like `/tmp` has no grandparent, so isolation cannot
+        // derive the repo root. The function should fall back to the full
+        // `/workspace:/workspace` mount instead of leaving the container
+        // without any workspace volume.
+        let wt = PathBuf::from("/tmp");
+        let args = build_volume_args(&wt, true);
+        let pairs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        assert!(
+            pairs.contains(&"/workspace:/workspace"),
+            "Shallow worktree path must fall back to /workspace:/workspace"
+        );
     }
 }

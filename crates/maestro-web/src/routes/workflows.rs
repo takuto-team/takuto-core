@@ -738,6 +738,7 @@ pub async fn open_editor(
         &setup_commands,
         &startup_commands,
         &git_editor,
+        true, // isolate_workspace: restrict container to this issue's worktree
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -1059,6 +1060,7 @@ pub async fn start_run_command(
         &rc_command,
         index,
         dynamic_ports,
+        true, // isolate_workspace: restrict container to this issue's worktree
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;

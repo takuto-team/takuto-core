@@ -112,6 +112,11 @@ async fn run_description_session(
             .actions
             .get_gh_installation_token(&repo_path)
             .await;
+        // Note: no .with_isolate_workspace() here — the improve session uses a
+        // temp directory, not a real worktree under /workspace/worktrees/, so the
+        // per-issue isolation logic (which derives the repo root from the grandparent)
+        // does not apply.  The session is already sandboxed in its own ephemeral
+        // container; it does not need worktree-level isolation.
         let runner = ContainerRunner::new(
             &format!("improve-{ticket_key}"),
             &worktree,
