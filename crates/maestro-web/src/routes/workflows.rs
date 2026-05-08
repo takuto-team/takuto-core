@@ -18,6 +18,7 @@ use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow, Wo
 use maestro_core::workflow::state::WorkflowState;
 use maestro_core::workflow::step::StepLog;
 
+use crate::session_registry::{SessionRoute, SessionRouteKind};
 use crate::state::{AppState, DynamicForwardsMap};
 
 /// Listen on the workflow event broadcast channel and keep the dynamic-forwards
@@ -720,11 +721,17 @@ pub async fn start_manual_workflow(
 
 #[derive(Serialize)]
 pub struct OpenEditorResponse {
+    /// Browser URL — `/s/<path-token>/?tkn=<connection-token>&folder=<...>`
+    /// when the shared-port proxy is in use (GH-45).
     pub url: String,
     /// Connection token for openvscode-server authentication.
     pub connection_token: String,
     pub vscode_port: u16,
     pub port_mappings: Vec<(u16, u16)>,
+    /// 32-char hex CSPRNG path token registered in the shared-port proxy
+    /// registry so `/s/<path_token>/...` routes to this editor's loopback
+    /// listener (GH-45 acceptance criterion #1, #5).
+    pub path_token: String,
 }
 
 /// Start a browser VS Code editor container for a workflow.
@@ -838,16 +845,49 @@ pub async fn open_editor(
         }
     }
 
+    // GH-45: register a 128-bit CSPRNG path token for this editor session in
+    // the shared-port proxy registry. The browser-facing URL is then a
+    // relative `/s/<path-token>/...` path served from the dashboard origin —
+    // the editor container itself is bound to loopback (see
+    // `loopback_publish_arg` in `start_editor`) and never reachable directly.
+    let path_token = state
+        .path_token_registry
+        .register(SessionRoute {
+            kind: SessionRouteKind::Editor,
+            host_port: container::editor_host_port(info.vscode_port),
+            ticket_key: ticket_key.clone(),
+        })
+        .await;
+    // Use the structured `folder` field from `EditorInfo` directly so the
+    // path-prefixed proxy URL points at the same worktree path the editor
+    // container was launched against. `EditorInfo::url` is intentionally NOT
+    // re-parsed here — that would silently break if `build_editor_url`'s
+    // query-string layout ever changed.
+    let folder = if info.folder.is_empty() {
+        "/".to_string()
+    } else {
+        info.folder.clone()
+    };
+    let proxy_url =
+        container::build_session_editor_url(&path_token, &info.connection_token, &folder);
+
     Ok(Json(OpenEditorResponse {
-        url: info.url,
+        url: proxy_url,
         connection_token: info.connection_token,
         vscode_port: info.vscode_port,
         port_mappings: info.port_mappings,
+        path_token,
     }))
 }
 
 /// Stop and remove the editor container for a workflow.
 pub async fn close_editor(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
+    // GH-45 AC #9: drop the path-token mapping BEFORE the port is torn down
+    // so any in-flight `/s/<token>/...` request gets a clean 404 instead of
+    // a hung connection or — worse — a successful upgrade right as the
+    // backend dies. Both editor and terminal entries for this ticket are
+    // removed because closing the editor implicitly tears down the terminal.
+    let _ = state.path_token_registry.remove_for_ticket(&id).await;
     // Cancel port scanner first so it doesn't try to scan a dying container.
     if let Some(token) = state.editor_scanners.write().await.remove(&id) {
         token.cancel();
@@ -861,10 +901,16 @@ pub async fn close_editor(State(state): State<AppState>, Path(id): Path<String>)
 
 #[derive(Serialize)]
 pub struct OpenTerminalResponse {
+    /// Browser URL — `/s/<path-token>/<ttyd-token>/` when the shared-port
+    /// proxy is in use (GH-45).
     pub url: String,
     /// The raw authentication token (same value embedded in the URL path).
     /// Provided separately so programmatic consumers can use it independently.
     pub credential: String,
+    /// 32-char hex CSPRNG path token registered in the shared-port proxy
+    /// registry so `/s/<path_token>/<ttyd-token>/` routes to this terminal's
+    /// loopback listener (GH-45 acceptance criterion #1, #5).
+    pub path_token: String,
 }
 
 /// Start a web terminal (ttyd) inside the running editor container.
@@ -874,10 +920,32 @@ pub async fn open_terminal(
     Path(id): Path<String>,
 ) -> Result<Json<OpenTerminalResponse>, (StatusCode, String)> {
     // Reuse existing terminal if already recorded in the in-memory map.
-    if let Some((port, token)) = state.terminal_ports.read().await.get(&id) {
+    if let Some((port, token)) = state.terminal_ports.read().await.get(&id).cloned() {
+        // GH-45: re-use the existing path token if one is already registered
+        // for this terminal; otherwise register one now (covers the case of a
+        // terminal that was started before the proxy registry shipped).
+        let path_token = match state
+            .path_token_registry
+            .find_token_for(&id, SessionRouteKind::Terminal)
+            .await
+        {
+            Some(t) => t,
+            None => {
+                state
+                    .path_token_registry
+                    .register(SessionRoute {
+                        kind: SessionRouteKind::Terminal,
+                        host_port: container::editor_host_port(port),
+                        ticket_key: id.clone(),
+                    })
+                    .await
+            }
+        };
+        let url = container::build_session_terminal_url(&path_token, &token);
         return Ok(Json(OpenTerminalResponse {
-            url: container::build_terminal_url(container::editor_host_port(*port), token),
-            credential: token.clone(),
+            url,
+            credential: token,
+            path_token,
         }));
     }
 
@@ -890,15 +958,24 @@ pub async fn open_terminal(
     // Recover from a server restart: ttyd may already be running from a previous session.
     // Ask the container for the actual port and token (via pgrep) rather than trusting the now-empty map.
     if let Some((port, token)) = container::find_running_terminal(&id).await {
-        let url = container::build_terminal_url(container::editor_host_port(port), &token);
         state
             .terminal_ports
             .write()
             .await
             .insert(id.clone(), (port, token.clone()));
+        let path_token = state
+            .path_token_registry
+            .register(SessionRoute {
+                kind: SessionRouteKind::Terminal,
+                host_port: container::editor_host_port(port),
+                ticket_key: id.clone(),
+            })
+            .await;
+        let url = container::build_session_terminal_url(&path_token, &token);
         return Ok(Json(OpenTerminalResponse {
             url,
             credential: token,
+            path_token,
         }));
     }
 
@@ -924,7 +1001,7 @@ pub async fn open_terminal(
             "No spare ports available for terminal.".into(),
         ))?;
 
-    let (url, token) = container::start_terminal(&id, port)
+    let (_legacy_url, token) = container::start_terminal(&id, port)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -933,16 +1010,39 @@ pub async fn open_terminal(
         .write()
         .await
         .insert(id.clone(), (port, token.clone()));
+
+    // GH-45: register a fresh CSPRNG path token so the terminal is reachable
+    // only via `/s/<path-token>/<ttyd-token>/` on the dashboard origin.
+    let path_token = state
+        .path_token_registry
+        .register(SessionRoute {
+            kind: SessionRouteKind::Terminal,
+            host_port: container::editor_host_port(port),
+            ticket_key: id.clone(),
+        })
+        .await;
+    let url = container::build_session_terminal_url(&path_token, &token);
+
     tracing::info!(workflow = %id, port, "Terminal started on port");
 
     Ok(Json(OpenTerminalResponse {
         url,
         credential: token,
+        path_token,
     }))
 }
 
 /// Stop the web terminal for a workflow's editor container.
 pub async fn close_terminal(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
+    // GH-45 AC #9: drop the terminal's path-token mapping BEFORE we tear
+    // down the listener, so any `/s/<token>/...` request mid-flight gets a
+    // clean 404 instead of a hung connection. Editor entries for the same
+    // ticket are intentionally left alone so closing the terminal doesn't
+    // also break the editor.
+    let _ = state
+        .path_token_registry
+        .remove_for_ticket_kind(&id, SessionRouteKind::Terminal)
+        .await;
     state.terminal_ports.write().await.remove(&id);
     container::stop_terminal(&id).await;
     StatusCode::OK
