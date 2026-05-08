@@ -228,10 +228,10 @@ worker-bash: ## Open a bash shell inside the running worker container for a tick
 	$(eval _KEY := $(filter-out $@,$(MAKECMDGOALS)))
 	@if [ -z "$(_KEY)" ]; then echo "ERROR: Ticket key required. Usage: make worker-bash GH-45" >&2; exit 1; fi; \
 	SANITIZED=$$(echo "$(_KEY)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g'); \
-	CONTAINER=$$($(_ENGINE) exec maestro-dind docker ps --filter "name=maestro-worker-$${SANITIZED}-" --format '{{.Names}}' | head -1); \
+	CONTAINER=$$($(COMPOSE) $(COMPOSE_FILES) exec -T dind docker ps --filter "name=maestro-worker-$${SANITIZED}-" --format '{{.Names}}' | head -1); \
 	if [ -z "$$CONTAINER" ]; then echo "ERROR: No running worker container found for $(_KEY). Is a step currently executing?" >&2; exit 1; fi; \
 	echo "Opening bash in $$CONTAINER..."; \
-	exec $(_ENGINE) exec -it maestro-dind docker exec -it "$$CONTAINER" bash
+	exec $(COMPOSE) $(COMPOSE_FILES) exec dind docker exec -it "$$CONTAINER" bash
 
 %:
 	@:
@@ -241,13 +241,13 @@ load-worker: ## Load worker image into DinD
 	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run make build first." >&2; exit 1; fi; \
 	echo "Waiting for DinD to be ready..."; \
 	for i in $$(seq 1 30); do \
-		if $(_ENGINE) exec maestro-dind docker info >/dev/null 2>&1; then break; fi; \
+		if $(COMPOSE) $(COMPOSE_FILES) exec -T dind docker info >/dev/null 2>&1; then break; fi; \
 		sleep 1; \
 	done; \
 	echo "Loading $$IMAGE into DinD..."; \
-	$(_ENGINE) save "$$IMAGE" | $(_ENGINE) exec -i maestro-dind docker load; \
+	$(_ENGINE) save "$$IMAGE" | $(COMPOSE) $(COMPOSE_FILES) exec -T dind docker load; \
 	echo "Tagging as maestro:latest on DinD..."; \
-	$(_ENGINE) exec maestro-dind docker tag "$$IMAGE" maestro:latest
+	$(COMPOSE) $(COMPOSE_FILES) exec -T dind docker tag "$$IMAGE" maestro:latest
 
 # ── Push multi-arch image to registry ──────────────────────────────────────────
 # Works with Docker (buildx) or Podman (manifest).
@@ -312,7 +312,7 @@ endif
 
 clean-dind: ## Clean up DinD dangling images and volumes
 	@echo "Cleaning up DinD dangling images and volumes..."; \
-	$(_ENGINE) exec maestro-dind docker system prune -f || true; \
+	$(COMPOSE) $(COMPOSE_FILES) exec -T dind docker system prune -f || true; \
 	echo "DinD cleanup complete. Run 'make load-worker' to reload maestro:latest if needed."
 
 restart: stop start ## Restart (stop + start)

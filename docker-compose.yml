@@ -3,7 +3,6 @@
 # See .env.example and README.
 services:
   maestro:
-    container_name: maestro
     build:
       context: .
       args:

@@ -372,12 +372,19 @@ impl ContainerRunner {
     /// Auto-detect the worker image by inspecting the running Maestro container,
     /// falling back to a locally-present `maestro:latest`, then `MAESTRO_REGISTRY_IMAGE`.
     pub async fn discover_worker_image() -> Option<String> {
-        // Try docker inspect first (works when running inside compose with container_name: maestro)
-        let output = tokio::process::Command::new("docker")
-            .args(["inspect", "maestro", "--format", "{{.Config.Image}}"])
-            .output()
-            .await
-            .ok();
+        // Inspect the current container by hostname (Docker sets HOSTNAME to the
+        // container ID). This works regardless of the compose project name — no
+        // hardcoded container_name needed.
+        let container_id = std::env::var("HOSTNAME").unwrap_or_default();
+        let output = if !container_id.is_empty() {
+            tokio::process::Command::new("docker")
+                .args(["inspect", &container_id, "--format", "{{.Config.Image}}"])
+                .output()
+                .await
+                .ok()
+        } else {
+            None
+        };
 
         if let Some(output) = output
             && output.status.success()

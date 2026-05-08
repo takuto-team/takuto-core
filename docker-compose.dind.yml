@@ -13,7 +13,6 @@
 
 services:
   dind:
-    container_name: maestro-dind
     image: docker:27-dind
     privileged: true
     ports:
