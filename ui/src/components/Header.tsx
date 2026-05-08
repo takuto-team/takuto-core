@@ -8,35 +8,46 @@ interface Props {
   authEnabled: boolean;
   githubAppConfigured: boolean;
   githubAppInstallationId?: number;
+  githubAppName?: string | null;
+  repoName?: string | null;
+  repoHtmlUrl?: string | null;
+  onChangeRepo?: () => void;
   onLogout: () => void;
 }
 
-export function Header({ connected, authEnabled, githubAppConfigured, githubAppInstallationId, onLogout }: Props) {
+export function Header({ connected, authEnabled, githubAppConfigured, githubAppInstallationId, githubAppName, repoName, repoHtmlUrl, onChangeRepo, onLogout }: Props) {
   return (
     <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
           <div className="flex items-center gap-3">
             <span className="text-lg font-bold tracking-tight text-white">Maestro</span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700">
-              Dashboard
-            </span>
-            {githubAppConfigured && (
-              <span
-                className="inline-flex items-center gap-1.5 text-xs bg-violet-950/60 border border-violet-700/50 text-violet-300 px-2 py-0.5 rounded-full"
-                title="GitHub App bot connected"
-              >
-                {githubAppInstallationId ? (
-                  <img
-                    src={`https://avatars.githubusercontent.com/in/${githubAppInstallationId}?s=28`}
-                    alt=""
-                    className="w-3.5 h-3.5 rounded-full"
-                  />
-                ) : (
-                  <GitHubIcon />
-                )}
-                Bot Connected
-              </span>
+            {repoName && (
+              <>
+                <span className="text-gray-700">|</span>
+                <span className="inline-flex items-baseline gap-2">
+                  {repoHtmlUrl ? (
+                    <a
+                      href={repoHtmlUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-semibold text-blue-400 hover:text-blue-300 transition-colors truncate max-w-48"
+                    >
+                      {repoName}
+                    </a>
+                  ) : (
+                    <span className="text-sm font-semibold text-gray-300 truncate max-w-48">{repoName}</span>
+                  )}
+                  {onChangeRepo && (
+                    <button
+                      onClick={onChangeRepo}
+                      className="text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+                    >
+                      change
+                    </button>
+                  )}
+                </span>
+              </>
             )}
           </div>
 
@@ -49,6 +60,27 @@ export function Header({ connected, authEnabled, githubAppConfigured, githubAppI
               />
               {connected ? "Connected" : "Disconnected"}
             </span>
+
+            {githubAppConfigured && (
+              <>
+                <span className="text-gray-700">|</span>
+                <span
+                  className="inline-flex items-center gap-1.5 text-xs bg-violet-950/60 border border-violet-700/50 text-violet-300 px-2 py-0.5 rounded-full"
+                  title={githubAppName ? `${githubAppName} connected` : "GitHub App connected"}
+                >
+                  {githubAppInstallationId ? (
+                    <img
+                      src={`https://avatars.githubusercontent.com/in/${githubAppInstallationId}?s=28`}
+                      alt=""
+                      className="w-3.5 h-3.5 rounded-full"
+                    />
+                  ) : (
+                    <GitHubIcon />
+                  )}
+                  {githubAppName ? `${githubAppName} connected` : "App Connected"}
+                </span>
+              </>
+            )}
 
             <Link
               to="/config.html"

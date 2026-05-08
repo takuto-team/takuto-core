@@ -461,6 +461,9 @@ pub struct GitHubAppConfig {
     /// The installation ID for the target org/repository.
     #[serde(default)]
     pub app_installation_id: u64,
+    /// Display name of the GitHub App (e.g. `"sous-coder"`). Shown in the dashboard header.
+    #[serde(default)]
+    pub app_name: String,
     /// PEM-encoded RSA private key for signing JWTs (inline content).
     /// Set **either** this or `app_private_key_path`, not both.
     #[serde(default)]
