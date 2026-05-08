@@ -261,6 +261,29 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
     let workflows = wf_arc.read().await;
     let dyn_fwd = state.dynamic_forwards.read().await;
     let run_cmds_state = state.run_commands.read().await;
+    // Build terminal URLs via the path-token registry so the frontend uses
+    // the `/s/<token>/...` proxy path instead of a direct `localhost:<port>` URL.
+    let terminal_ports_snap: Vec<(String, String)> = state
+        .terminal_ports
+        .read()
+        .await
+        .iter()
+        .map(|(k, (_port, ttyd_token))| (k.clone(), ttyd_token.clone()))
+        .collect();
+    let mut terminal_urls: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for (ticket_key, ttyd_token) in &terminal_ports_snap {
+        if let Some(path_token) = state
+            .path_token_registry
+            .find_token_for(ticket_key, crate::session_registry::SessionRouteKind::Terminal)
+            .await
+        {
+            terminal_urls.insert(
+                ticket_key.clone(),
+                container::build_session_terminal_url(&path_token, ttyd_token),
+            );
+        }
+    }
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
         .filter(|w| w.workspace_name == current_ws)
@@ -304,7 +327,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                 jira_available: w.jira_available,
                 ticketing_system: w.ticketing_system.to_string(),
                 can_resume_from_error: can_resume_from_error(w),
-                terminal_url: None,
+                terminal_url: terminal_urls.get(&w.ticket_key).cloned(),
                 run_commands,
                 generate_report: cfg.general.generate_report,
                 has_report: has_report_file(w),
@@ -414,14 +437,22 @@ pub async fn get_workflow(
         jira_available: w.jira_available,
         ticketing_system: w.ticketing_system.to_string(),
         can_resume_from_error: can_resume_from_error(w),
-        terminal_url: state
-            .terminal_ports
-            .read()
-            .await
-            .get(&ticket_key)
-            .map(|(port, token)| {
-                container::build_terminal_url(container::editor_host_port(*port), token)
-            }),
+        terminal_url: {
+            let ttyd_token = state
+                .terminal_ports
+                .read()
+                .await
+                .get(&ticket_key)
+                .map(|(_port, token)| token.clone());
+            match ttyd_token {
+                Some(t) => state
+                    .path_token_registry
+                    .find_token_for(&ticket_key, crate::session_registry::SessionRouteKind::Terminal)
+                    .await
+                    .map(|pt| container::build_session_terminal_url(&pt, &t)),
+                None => None,
+            }
+        },
         run_commands: {
             let run_cmds_state = state.run_commands.read().await;
             build_run_commands_status(&cfg.run_commands, run_cmds_state.get(&ticket_key))
