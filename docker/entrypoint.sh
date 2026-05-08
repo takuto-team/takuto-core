@@ -403,6 +403,10 @@ fi
 export HOME="/home/maestro"
 export USER="maestro"
 
+# Multi-workspace support: repos under /workspaces/ may be cloned by a different
+# user/process. The wildcard safe.directory is necessary inside the container;
+# per-clone safe.directory entries (added in do_clone) only cover new clones.
+# Risk is contained by Docker isolation.
 git config --global --add safe.directory '*'
 gh auth setup-git 2>/dev/null || true
 # Rewrite SSH GitHub URLs to HTTPS so the gh credential helper handles auth.

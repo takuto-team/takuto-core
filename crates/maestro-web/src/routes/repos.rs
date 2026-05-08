@@ -113,10 +113,27 @@ fn normalize_github_url(url: &str) -> String {
     if let Some(path) = url.strip_prefix("git@github.com:") {
         return format!("https://github.com/{}", path.trim_end_matches(".git"));
     }
+    if let Some(path) = url.strip_prefix("ssh://git@github.com/") {
+        return format!("https://github.com/{}", path.trim_end_matches(".git"));
+    }
     url.trim_end_matches(".git").to_string()
 }
 
 use crate::state::AppState;
+use maestro_core::workflow::snapshot::WORKSPACES_DIR;
+
+/// Strip lines from error messages that may contain credentials.
+fn sanitize_clone_error(msg: &str) -> String {
+    msg.lines()
+        .filter(|line| {
+            let lower = line.to_lowercase();
+            !lower.contains("password")
+                && !lower.contains("token")
+                && !lower.contains("credential")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// Drop guard that resets `clone_in_progress` to `false` when the async clone
 /// task finishes — whether it completes normally or panics.
@@ -141,8 +158,6 @@ pub struct RepoListQuery {
     pub q: String,
 }
 
-/// Well-known base directory for project repositories (Docker / devcontainer convention).
-const WORKSPACES_DIR: &str = "/workspaces";
 
 /// `GET /api/github/repos` — list GitHub repos accessible by the authenticated user.
 pub async fn list_github_repos(
@@ -398,7 +413,7 @@ pub async fn clone_repo(
                     ticket_key: "__system__".to_string(),
                     state: "error".to_string(),
                     timestamp: chrono::Utc::now(),
-                    error: Some(e.to_string()),
+                    error: Some(sanitize_clone_error(&e.to_string())),
                     step_name: None,
                     output_line: None,
                     stream: None,
@@ -435,6 +450,25 @@ async fn do_clone(
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // If force, wipe the existing directory before cloning.
     if force && clone_target.exists() {
+        // Don't destroy the active workspace if workflows are running in it.
+        let active_path = state.config.read().await.git.repo_path.clone();
+        if clone_target.to_string_lossy() == active_path {
+            let wf_arc = state.engine.workflows_arc();
+            let workflows = wf_arc.read().await;
+            let has_active = workflows.values().any(|w| {
+                w.workspace_name
+                    == maestro_core::workflow::snapshot::workspace_name_from_repo_path(
+                        std::path::Path::new(&active_path),
+                    )
+                    && w.state.is_active()
+            });
+            if has_active {
+                return Err(
+                    "Cannot overwrite the active workspace while workflows are running. Stop all workflows first."
+                        .into(),
+                );
+            }
+        }
         tokio::fs::remove_dir_all(clone_target).await?;
     }
 
@@ -452,39 +486,50 @@ async fn do_clone(
         .parent()
         .unwrap_or(std::path::Path::new(WORKSPACES_DIR));
 
+    use std::time::Duration;
+    const CLONE_TIMEOUT: Duration = Duration::from_secs(600); // 10 minutes
+
     if let Some(token) = gh_token {
-        // Use git clone with an inline credential helper that echoes the GitHub App
-        // installation token. Plain `git clone` does not read `GH_TOKEN` from the
-        // environment, so we must configure a helper that supplies the token.
-        let credential_helper = format!(
-            "!f() {{ echo protocol=https; echo host=github.com; echo username=x-access-token; echo password={}; }}; f",
-            token
-        );
-        let output = maestro_core::process::run_command(
-            "git",
-            &[
-                "-c",
-                &format!("credential.helper={credential_helper}"),
-                "clone",
-                &clone_url,
-                target,
-            ],
-            parent_dir,
-            tokio_util::sync::CancellationToken::new(),
+        // Use git clone with an inline credential helper that reads the token from
+        // the GH_TOKEN environment variable (not embedded in the command line, so it
+        // stays hidden from process listings).
+        let credential_helper = "!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f";
+        let output = tokio::time::timeout(
+            CLONE_TIMEOUT,
+            maestro_core::process::run_command_with_env(
+                "git",
+                &[
+                    "-c",
+                    &format!("credential.helper={credential_helper}"),
+                    "clone",
+                    &clone_url,
+                    target,
+                ],
+                parent_dir,
+                tokio_util::sync::CancellationToken::new(),
+                &[("GH_TOKEN", &token)],
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| "git clone timed out after 10 minutes")?
+        ?;
         if !output.success() {
             return Err(format!("git clone failed: {}", output.stderr.trim()).into());
         }
     } else {
         // Use gh repo clone
-        let output = maestro_core::process::run_command(
-            "gh",
-            &["repo", "clone", full_name, target],
-            parent_dir,
-            tokio_util::sync::CancellationToken::new(),
+        let output = tokio::time::timeout(
+            CLONE_TIMEOUT,
+            maestro_core::process::run_command(
+                "gh",
+                &["repo", "clone", full_name, target],
+                parent_dir,
+                tokio_util::sync::CancellationToken::new(),
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| "gh repo clone timed out after 10 minutes")?
+        ?;
         if !output.success() {
             return Err(format!("gh repo clone failed: {}", output.stderr.trim()).into());
         }
@@ -597,5 +642,45 @@ mod tests {
         let (status, msg) = result.unwrap_err();
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(msg.contains("already in progress"));
+    }
+
+    #[test]
+    fn normalize_ssh_git_at_url() {
+        assert_eq!(
+            normalize_github_url("git@github.com:owner/repo.git"),
+            "https://github.com/owner/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_ssh_protocol_url() {
+        assert_eq!(
+            normalize_github_url("ssh://git@github.com/owner/repo.git"),
+            "https://github.com/owner/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_https_url_with_git_suffix() {
+        assert_eq!(
+            normalize_github_url("https://github.com/owner/repo.git"),
+            "https://github.com/owner/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_https_url_without_git_suffix() {
+        assert_eq!(
+            normalize_github_url("https://github.com/owner/repo"),
+            "https://github.com/owner/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_non_github_url() {
+        assert_eq!(
+            normalize_github_url("https://gitlab.com/owner/repo.git"),
+            "https://gitlab.com/owner/repo"
+        );
     }
 }

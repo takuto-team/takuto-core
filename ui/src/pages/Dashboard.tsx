@@ -393,7 +393,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           error={cloneState.error}
           onDone={handleCloneDone}
           onRetry={handleCloneRetry}
-          onCancel={cloneState.status === "cloning" ? () => setCloneState(null) : undefined}
+          onCancel={undefined}
         />
       )}
       {overwriteConfirm && (

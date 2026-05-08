@@ -13,8 +13,8 @@ use crate::config::Config;
 use crate::error::Result;
 
 use crate::workflow::snapshot::{
-    self, PersistedWorkflowRecord, read_all_workspace_snapshots, read_workflow_snapshot,
-    workspace_name_from_repo_path, write_all_workspace_snapshots,
+    self, PersistedWorkflowRecord, cleanup_legacy_global_snapshot, read_all_workspace_snapshots,
+    read_workflow_snapshot, workspace_name_from_repo_path, write_all_workspace_snapshots,
 };
 use crate::workflow::state::WorkflowState;
 
@@ -89,6 +89,9 @@ impl WorkflowPersistence {
                 rec.workspace_name = default_ws_name.clone();
             }
         }
+        // Clean up legacy global snapshot after successful migration.
+        cleanup_legacy_global_snapshot(&data_dir);
+
         records.sort_by_key(|r| r.started_at);
 
         let n = records.len();

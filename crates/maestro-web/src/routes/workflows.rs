@@ -321,8 +321,17 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
     Json(summaries)
 }
 
+/// Typed response for cross-workspace workflow counts.
+#[derive(Serialize)]
+pub struct WorkflowCountsResponse {
+    pub running: u32,
+    pub completed: u32,
+    pub errors: u32,
+    pub paused: u32,
+}
+
 /// Cross-workspace workflow counts for the dashboard summary bar.
-pub async fn workflow_counts(State(state): State<AppState>) -> Json<serde_json::Value> {
+pub async fn workflow_counts(State(state): State<AppState>) -> Json<WorkflowCountsResponse> {
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let mut running = 0u32;
@@ -334,10 +343,11 @@ pub async fn workflow_counts(State(state): State<AppState>) -> Json<serde_json::
             WorkflowState::Done => completed += 1,
             WorkflowState::Error { .. } | WorkflowState::Stopped => errors += 1,
             WorkflowState::Paused { .. } => paused += 1,
+            WorkflowState::Pending => {} // Not yet running — don't count
             _ => running += 1,
         }
     }
-    Json(serde_json::json!({ "running": running, "completed": completed, "errors": errors, "paused": paused }))
+    Json(WorkflowCountsResponse { running, completed, errors, paused })
 }
 
 pub async fn get_workflow(
@@ -345,9 +355,15 @@ pub async fn get_workflow(
     Path(id): Path<String>,
 ) -> Result<Json<WorkflowSummary>, StatusCode> {
     let cfg = state.config.read().await;
+    let current_ws = maestro_core::workflow::snapshot::workspace_name_from_repo_path(
+        std::path::Path::new(&cfg.git.repo_path),
+    );
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    if w.workspace_name != current_ws {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
     let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
     let ticket_key = w.ticket_key.clone();

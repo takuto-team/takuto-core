@@ -111,27 +111,17 @@ pub fn workspace_name_from_repo_path(repo_path: &Path) -> String {
 /// 3. `$HOME/.maestro` — local dev fallback
 /// 4. `repo_path/.maestro` — legacy fallback
 pub fn resolve_snapshot_dir(repo_path: &Path) -> PathBuf {
-    if let Ok(dir) = std::env::var("MAESTRO_DATA_DIR")
-        && !dir.is_empty()
-    {
-        return PathBuf::from(dir);
-    }
-    if let Ok(home) = std::env::var("MAESTRO_HOME")
-        && !home.is_empty()
-    {
-        return PathBuf::from(home).join(".maestro");
-    }
-    if let Ok(home) = std::env::var("HOME")
-        && !home.is_empty()
-    {
-        return PathBuf::from(home).join(".maestro");
+    if let Some(dir) = resolve_data_dir() {
+        return dir;
     }
     // Legacy fallback — inside the repo
     repo_path.join(".maestro")
 }
 
 const ACTIVE_WORKSPACE_FILE: &str = "active_workspace";
-const WORKSPACES_BASE: &str = "/workspaces";
+
+/// Well-known base directory for project repositories (Docker / devcontainer convention).
+pub const WORKSPACES_DIR: &str = "/workspaces";
 
 /// Resolve the data directory without needing a repo_path (uses env vars only,
 /// falls back to `$HOME/.maestro`). Returns `None` only when no env var is set.
@@ -179,18 +169,27 @@ pub fn write_active_workspace(name: &str) -> std::io::Result<()> {
 pub fn resolve_active_repo_path() -> Option<String> {
     // 1. Try the persisted active workspace
     if let Some(name) = read_active_workspace() {
-        let p = Path::new(WORKSPACES_BASE).join(&name);
-        if p.join(".git").exists() {
-            return Some(p.to_string_lossy().into_owned());
+        // Reject path traversal in persisted workspace name.
+        if name.contains('/') || name.contains("..") || name.starts_with('.') {
+            tracing::warn!(name = %name, "Ignoring persisted active workspace: invalid name");
+        } else {
+            let p = Path::new(WORKSPACES_DIR).join(&name);
+            if p.join(".git").exists() {
+                return Some(p.to_string_lossy().into_owned());
+            }
         }
     }
     // 2. Fall back to scanning /workspaces/ for any repo
-    let entries = std::fs::read_dir(WORKSPACES_BASE).ok()?;
+    let entries = std::fs::read_dir(WORKSPACES_DIR).ok()?;
     let candidate = entries
         .filter_map(|e| e.ok())
         .filter(|e| e.path().join(".git").exists())
         .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())?;
     let path = candidate.path().to_string_lossy().into_owned();
+    tracing::warn!(
+        selected = %path,
+        "No persisted active workspace found — auto-selecting most recently modified repo"
+    );
     // Persist the auto-selected workspace for next startup
     if let Some(name) = candidate.path().file_name() {
         let _ = write_active_workspace(&name.to_string_lossy());
@@ -373,12 +372,23 @@ pub fn read_all_workspace_snapshots(
                 "Migrating workflows from legacy global snapshot"
             );
             all_records.extend(file.workflows);
-            // Remove the old global file after migration.
-            let _ = fs::remove_file(&global);
         }
     }
 
     Ok(all_records)
+}
+
+/// Remove the legacy global snapshot file after migration.
+/// Should be called by the persistence layer after successfully loading all workspace snapshots.
+pub fn cleanup_legacy_global_snapshot(data_dir: &Path) {
+    let global = data_dir.join(SNAPSHOT_FILENAME);
+    if global.exists() {
+        if let Err(e) = fs::remove_file(&global) {
+            tracing::warn!(path = %global.display(), error = %e, "Failed to remove legacy global snapshot");
+        } else {
+            tracing::info!(path = %global.display(), "Removed legacy global snapshot after migration");
+        }
+    }
 }
 
 /// Write per-workspace snapshots by grouping records by `workspace_name`.
@@ -512,5 +522,27 @@ mod tests {
             rec.driver_started,
             "old snapshots must default driver_started to true"
         );
+    }
+
+    #[test]
+    fn workspace_name_from_normal_path() {
+        assert_eq!(workspace_name_from_repo_path(Path::new("/workspaces/my-repo")), "my-repo");
+    }
+
+    #[test]
+    fn workspace_name_from_trailing_slash() {
+        // Path::file_name returns None for paths ending in /
+        // but PathBuf normalizes trailing slashes
+        assert_eq!(workspace_name_from_repo_path(Path::new("/workspaces/my-repo/")), "my-repo");
+    }
+
+    #[test]
+    fn workspace_name_from_root_path() {
+        assert_eq!(workspace_name_from_repo_path(Path::new("/")), "default");
+    }
+
+    #[test]
+    fn workspace_name_from_single_component() {
+        assert_eq!(workspace_name_from_repo_path(Path::new("workspace")), "workspace");
     }
 }

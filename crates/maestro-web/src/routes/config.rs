@@ -49,11 +49,21 @@ pub async fn get_version() -> Json<serde_json::Value> {
 }
 
 pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
-    let config = state.config.read().await;
-    let active_repo_path = std::path::PathBuf::from(&config.git.repo_path);
-    // repo_exists: the active path has a .git directory.
+    // Clone needed values and release the read lock before any filesystem I/O.
+    let (config_clone, active_repo_path_str, github_configured, app_name_raw) = {
+        let config = state.config.read().await;
+        let path = config.git.repo_path.clone();
+        let gh_configured = config.github.is_configured();
+        let app_name = if gh_configured && !config.github.app_name.is_empty() {
+            Some(config.github.app_name.clone())
+        } else {
+            None
+        };
+        (config.redacted_for_api_clone(), path, gh_configured, app_name)
+    }; // read lock dropped here
+
+    let active_repo_path = std::path::PathBuf::from(&active_repo_path_str);
     let repo_exists = active_repo_path.join(".git").exists();
-    // repo_name: last path component when the active repo lives under /workspaces/.
     let repo_name = if repo_exists {
         active_repo_path
             .file_name()
@@ -66,14 +76,10 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     } else {
         None
     };
-    let github_app_name = if config.github.is_configured() && !config.github.app_name.is_empty() {
-        Some(config.github.app_name.clone())
-    } else {
-        None
-    };
+
     Json(ConfigResponse {
-        github_app_configured: config.github.is_configured(),
-        config: config.redacted_for_api_clone(),
+        github_app_configured: github_configured,
+        config: config_clone,
         jira_available: state.jira_available.load(Ordering::Relaxed),
         ticketing_system: state.ticketing_system.to_string(),
         preflight_error: state.preflight_error.clone(),
@@ -81,7 +87,7 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
         repo_exists,
         repo_name,
         repo_html_url,
-        github_app_name,
+        github_app_name: app_name_raw,
     })
 }
 

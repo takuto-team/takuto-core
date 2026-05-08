@@ -27,7 +27,11 @@ export function WorkspaceSwitcherModal({ onClose, onSwitched, onAddRepo }: Props
   const handleSwitch = async (name: string) => {
     setSwitching(name);
     try {
-      await apiPost("/api/workspaces/switch", { name });
+      const res = await apiPost("/api/workspaces/switch", { name });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
       onSwitched();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to switch workspace");
