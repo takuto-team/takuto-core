@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { apiJson } from "../../api/client";
-import type { GitHubRepo } from "../../api/types";
+import type { GitHubRepo, Workspace } from "../../api/types";
 
 interface Props {
   onSelect: (fullName: string) => void;
@@ -12,6 +12,7 @@ interface Props {
 
 export function RepoPickerModal({ onSelect, onClose }: Props) {
   const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [checkedOut, setCheckedOut] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
@@ -29,6 +30,13 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
       .then((data) => { if (requestIdRef.current === id) setRepos(data); })
       .catch((e) => { if (requestIdRef.current === id) setError(e.message); })
       .finally(() => { if (requestIdRef.current === id) setLoading(false); });
+  }, []);
+
+  // Fetch already-checked-out workspace names on mount.
+  useEffect(() => {
+    apiJson<Workspace[]>("/api/workspaces")
+      .then((ws) => setCheckedOut(new Set(ws.map((w) => w.name))))
+      .catch(() => {});
   }, []);
 
   // Debounced search (also fires immediately on mount with initial empty search)
@@ -75,36 +83,46 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
           {!loading && repos.length === 0 && !error && (
             <p className="text-gray-500 text-sm">No repositories found.</p>
           )}
-          {repos.map((r) => (
-            <div
-              key={r.full_name}
-              className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-gray-800 transition-colors"
-            >
-              <div className="flex-1 min-w-0 mr-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-200 font-medium truncate">
-                    {r.full_name}
-                  </span>
-                  {r.private && (
-                    <span className="text-xs bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded">
-                      Private
+          {repos.map((r) => {
+            const repoName = r.full_name.split("/")[1] ?? r.full_name;
+            const alreadyCloned = checkedOut.has(repoName);
+            return (
+              <div
+                key={r.full_name}
+                className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-gray-800 transition-colors"
+              >
+                <div className="flex-1 min-w-0 mr-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-medium truncate ${alreadyCloned ? "text-gray-500" : "text-gray-200"}`}>
+                      {r.full_name}
                     </span>
+                    {r.private && (
+                      <span className="text-xs bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded flex-shrink-0">
+                        Private
+                      </span>
+                    )}
+                    {alreadyCloned && (
+                      <span className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded flex-shrink-0">
+                        Cloned
+                      </span>
+                    )}
+                  </div>
+                  {r.description && (
+                    <p className="text-xs text-gray-500 truncate mt-0.5">
+                      {r.description}
+                    </p>
                   )}
                 </div>
-                {r.description && (
-                  <p className="text-xs text-gray-500 truncate mt-0.5">
-                    {r.description}
-                  </p>
-                )}
+                <button
+                  onClick={() => onSelect(r.full_name)}
+                  disabled={alreadyCloned}
+                  className="text-sm px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer flex-shrink-0"
+                >
+                  Select
+                </button>
               </div>
-              <button
-                onClick={() => onSelect(r.full_name)}
-                className="text-sm px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer flex-shrink-0"
-              >
-                Select
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

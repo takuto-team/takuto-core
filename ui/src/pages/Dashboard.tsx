@@ -18,6 +18,7 @@ import { PasteDescriptionModal } from "../components/modals/PasteDescriptionModa
 import { ReportModal } from "../components/modals/ReportModal";
 import { RepoPickerModal } from "../components/modals/RepoPickerModal";
 import { CloneProgressModal } from "../components/modals/CloneProgressModal";
+import { WorkspaceSwitcherModal } from "../components/modals/WorkspaceSwitcherModal";
 import { ConfirmModal } from "../components/modals/ConfirmModal";
 import { NoJiraAlertModal } from "../components/modals/NoJiraAlertModal";
 import { SystemErrorAlert } from "../components/SystemErrorAlert";
@@ -30,7 +31,7 @@ interface Props {
 export function Dashboard({ onLogout, authEnabled }: Props) {
   const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, dismissError, fetchWorkflows, handleEvent } = useWorkflows();
+  const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts, dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState } = useWorkflows();
   const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
   const defsFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -82,14 +83,20 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   const prevConnected = useRef(false);
   const polling = usePolling();
 
-  // Re-fetch workflows and definitions on WebSocket reconnect (connected: false → true)
+  // Fetch global counts on mount.
+  useEffect(() => {
+    fetchCounts();
+  }, [fetchCounts]);
+
+  // Re-fetch workflows, definitions, and counts on WebSocket reconnect (connected: false → true)
   useEffect(() => {
     if (connected && !prevConnected.current) {
       fetchWorkflows();
       fetchWorkflowDefs();
+      fetchCounts();
     }
     prevConnected.current = connected;
-  }, [connected, fetchWorkflows, fetchWorkflowDefs]);
+  }, [connected, fetchWorkflows, fetchWorkflowDefs, fetchCounts]);
 
   // Modal state
   const [showPicker, setShowPicker] = useState(false);
@@ -104,6 +111,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   } | null>(null);
   const [reportKey, setReportKey] = useState<string | null>(null);
   const [showRepoPicker, setShowRepoPicker] = useState(false);
+  const [showWorkspaceSwitcher, setShowWorkspaceSwitcher] = useState(false);
   const [cloneState, setCloneState] = useState<{
     repoName: string;
     status: "cloning" | "success" | "error";
@@ -196,7 +204,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   }, [ticketingSystem]);
 
   const handleSetupProject = useCallback(() => {
-    setShowRepoPicker(true);
+    setShowWorkspaceSwitcher(true);
   }, []);
 
   const handleRepoSelected = useCallback(async (fullName: string) => {
@@ -226,6 +234,16 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       });
     }
   }, []);
+
+  const handleWorkspaceSwitched = useCallback(() => {
+    setShowWorkspaceSwitcher(false);
+    resetState();
+    apiJson<ConfigResponse>("/api/config")
+      .then(setConfig)
+      .catch(() => {});
+    fetchWorkflows();
+    fetchCounts();
+  }, [fetchWorkflows, fetchCounts, resetState]);
 
   const handleCloneDone = useCallback(() => {
     setCloneState(null);
@@ -267,8 +285,6 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     setShowRepoPicker(true);
   }, []);
 
-  const workflowList = Object.values(workflows);
-
   return (
     <div className="min-h-screen flex flex-col">
       {/* Polling label at the very top */}
@@ -284,6 +300,10 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         authEnabled={authEnabled}
         githubAppConfigured={githubAppConfigured}
         githubAppInstallationId={githubAppInstallationId}
+        githubAppName={config?.github_app_name}
+        repoName={config?.repo_name}
+        repoHtmlUrl={config?.repo_html_url}
+        onChangeRepo={() => setShowWorkspaceSwitcher(true)}
         onLogout={onLogout}
       />
 
@@ -313,7 +333,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       )}
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
-        <SummaryStats workflows={workflowList} repoName={config?.repo_name} repoHtmlUrl={config?.repo_html_url} />
+        <SummaryStats counts={counts} />
         <WorkflowGrid
           workflows={workflows}
           orderKeys={orderKeys}
@@ -382,6 +402,16 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
           message="A repository already exists. Overwriting will delete the current repository and clone the selected one in its place."
           onConfirm={handleOverwriteConfirm}
           onCancel={handleOverwriteCancel}
+        />
+      )}
+      {showWorkspaceSwitcher && (
+        <WorkspaceSwitcherModal
+          onClose={() => setShowWorkspaceSwitcher(false)}
+          onSwitched={handleWorkspaceSwitched}
+          onAddRepo={() => {
+            setShowWorkspaceSwitcher(false);
+            setShowRepoPicker(true);
+          }}
         />
       )}
       {showNoJira && (

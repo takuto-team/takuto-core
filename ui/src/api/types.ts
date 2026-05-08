@@ -97,6 +97,7 @@ export interface ConfigResponse {
   github: {
     app_id: number;
     app_installation_id: number;
+    app_name?: string;
     [key: string]: unknown;
   };
   web: {
@@ -106,11 +107,25 @@ export interface ConfigResponse {
   jira_available: boolean;
   ticketing_system: string;
   github_app_configured: boolean;
+  github_app_name?: string | null;
   preflight_error?: string | null;
   repo_exists: boolean;
   repo_name?: string | null;
   repo_html_url?: string | null;
   [key: string]: unknown;
+}
+
+export interface Workspace {
+  name: string;
+  html_url?: string | null;
+  active: boolean;
+}
+
+export interface WorkflowCounts {
+  running: number;
+  completed: number;
+  errors: number;
+  paused: number;
 }
 
 export interface GitHubRepo {

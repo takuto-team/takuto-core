@@ -3,7 +3,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { apiJson } from "../api/client";
-import type { WorkflowSummary, WorkflowEvent, TerminalLine } from "../api/types";
+import type { WorkflowSummary, WorkflowEvent, TerminalLine, WorkflowCounts } from "../api/types";
 
 export interface TerminalState {
   stepName: string;
@@ -31,6 +31,7 @@ export function useWorkflows() {
   const [terminalStates, setTerminalStates] = useState<Record<string, TerminalState>>({});
   const [dynamicForwards, setDynamicForwards] = useState<DynamicForwards>({});
   const [systemErrors, setSystemErrors] = useState<SystemError[]>([]);
+  const [counts, setCounts] = useState<WorkflowCounts>({ running: 0, completed: 0, errors: 0, paused: 0 });
   const initialLoadDone = useRef(false);
 
   const fetchWorkflows = useCallback(async () => {
@@ -69,6 +70,15 @@ export function useWorkflows() {
     }
   }, []);
 
+  const fetchCounts = useCallback(async () => {
+    try {
+      const data = await apiJson<WorkflowCounts>("/api/workflows/counts");
+      setCounts(data);
+    } catch {
+      // Silently ignore
+    }
+  }, []);
+
   useEffect(() => {
     fetchWorkflows();
   }, [fetchWorkflows]);
@@ -94,13 +104,15 @@ export function useWorkflows() {
           delete next[ticket_key];
           return next;
         });
+        fetchCounts();
         return;
       }
 
-      // Terminal output events — update terminal state only
+      // Terminal output events — update terminal state only (skip for other-workspace workflows)
       if (event_type === "step_output") {
         setTerminalStates((prev) => {
-          const ts = prev[ticket_key] || { stepName: "", lines: [], completed: false };
+          if (!prev[ticket_key]) return prev;
+          const ts = prev[ticket_key];
           const line: TerminalLine = {
             text: evt.output_line || "",
             stream: evt.stream || "stdout",
@@ -112,14 +124,17 @@ export function useWorkflows() {
       }
 
       if (event_type === "step_started") {
-        setTerminalStates((prev) => ({
-          ...prev,
-          [ticket_key]: {
-            stepName: evt.step_name || "",
-            lines: [],
-            completed: false,
-          },
-        }));
+        setTerminalStates((prev) => {
+          if (!prev[ticket_key]) return prev;
+          return {
+            ...prev,
+            [ticket_key]: {
+              stepName: evt.step_name || "",
+              lines: [],
+              completed: false,
+            },
+          };
+        });
         // Update workflow state to show step name
         setWorkflows((prev) => {
           const wf = prev[ticket_key];
@@ -162,11 +177,12 @@ export function useWorkflows() {
         return;
       }
 
-      // Port forwarding events — update dynamic forwards map
+      // Port forwarding events — update dynamic forwards map (skip unknown workflows)
       if (event_type === "port_forwarded" && evt.forwarded_port) {
         const [cp, hp] = evt.forwarded_port;
         setDynamicForwards((prev) => {
-          const existing = prev[ticket_key] || [];
+          const existing = prev[ticket_key];
+          if (!existing) return prev;
           if (existing.some(([c]) => c === cp)) return prev;
           return { ...prev, [ticket_key]: [...existing, [cp, hp]] };
         });
@@ -185,6 +201,7 @@ export function useWorkflows() {
 
       // Workflow state change — update locally
       let needsRefetch = false;
+      let countsOnly = false;
 
       setWorkflows((prev) => {
         const wf = prev[ticket_key];
@@ -205,18 +222,32 @@ export function useWorkflows() {
           }
           return { ...prev, [ticket_key]: updated };
         }
-        // Unknown workflow — schedule fetch
-        if (ticket_key) needsRefetch = true;
+        // Unknown workflow (likely from another workspace) — refresh global counts only
+        if (ticket_key) countsOnly = true;
         return prev;
       });
 
-      if (needsRefetch) fetchWorkflows();
+      if (needsRefetch) {
+        fetchWorkflows();
+        fetchCounts();
+      } else if (countsOnly) {
+        fetchCounts();
+      }
     },
-    [fetchWorkflows]
+    [fetchWorkflows, fetchCounts]
   );
 
   const dismissError = useCallback((id: number) => {
     setSystemErrors((prev) => prev.filter((e) => e.id !== id));
+  }, []);
+
+  const resetState = useCallback(() => {
+    setWorkflows({});
+    setOrderKeys([]);
+    setTerminalStates({});
+    setDynamicForwards({});
+    setSystemErrors([]);
+    initialLoadDone.current = false;
   }, []);
 
   return {
@@ -225,8 +256,11 @@ export function useWorkflows() {
     terminalStates,
     dynamicForwards,
     systemErrors,
+    counts,
     dismissError,
     fetchWorkflows,
+    fetchCounts,
     handleEvent,
+    resetState,
   };
 }
