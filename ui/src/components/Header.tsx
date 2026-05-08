@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 
 interface Props {
@@ -16,6 +17,20 @@ interface Props {
 }
 
 export function Header({ connected, authEnabled, githubAppConfigured, githubAppInstallationId, githubAppName, repoName, repoHtmlUrl, onChangeRepo, onLogout }: Props) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [menuOpen]);
+
   return (
     <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -82,21 +97,37 @@ export function Header({ connected, authEnabled, githubAppConfigured, githubAppI
               </>
             )}
 
-            <Link
-              to="/config.html"
-              className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
-            >
-              Configuration
-            </Link>
-
-            {authEnabled && (
+            {/* Hamburger menu */}
+            <div className="relative" ref={menuRef}>
               <button
-                onClick={onLogout}
-                className="text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+                onClick={() => setMenuOpen((v) => !v)}
+                className="p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors cursor-pointer"
+                aria-label="Menu"
               >
-                Log out
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
               </button>
-            )}
+              {menuOpen && (
+                <div className="absolute right-0 mt-1 w-40 bg-gray-900 border border-gray-700 rounded-lg shadow-lg py-1 z-50">
+                  <Link
+                    to="/config.html"
+                    className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Configuration
+                  </Link>
+                  {authEnabled && (
+                    <button
+                      onClick={() => { setMenuOpen(false); onLogout(); }}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
+                    >
+                      Log out
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
