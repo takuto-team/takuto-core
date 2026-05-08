@@ -8,6 +8,114 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use tracing::{error, info};
 
+// ── Workspace listing & switching ────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct WorkspaceEntry {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html_url: Option<String>,
+    pub active: bool,
+}
+
+/// `GET /api/workspaces` — list all git repos found under `/workspaces/`.
+pub async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<WorkspaceEntry>> {
+    let active_path = state.config.read().await.git.repo_path.clone();
+    let entries = std::fs::read_dir(WORKSPACES_DIR)
+        .map(|dir| {
+            let mut list: Vec<WorkspaceEntry> = dir
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().join(".git").exists())
+                .map(|e| {
+                    let path = e.path();
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let html_url = read_git_remote_url(&path);
+                    let active = path.to_string_lossy() == active_path.as_str();
+                    WorkspaceEntry { name, html_url, active }
+                })
+                .collect();
+            list.sort_by(|a, b| a.name.cmp(&b.name));
+            list
+        })
+        .unwrap_or_default();
+    Json(entries)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SwitchWorkspaceBody {
+    pub name: String,
+}
+
+/// `POST /api/workspaces/switch` — make a local workspace the active repo.
+pub async fn switch_workspace(
+    State(state): State<AppState>,
+    Json(body): Json<SwitchWorkspaceBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Reject any path-traversal attempt.
+    if body.name.is_empty()
+        || body.name.contains('/')
+        || body.name.contains("..")
+        || body.name.starts_with('.')
+    {
+        return Err((StatusCode::BAD_REQUEST, "Invalid workspace name".to_string()));
+    }
+
+    let workspace_path = std::path::Path::new(WORKSPACES_DIR).join(&body.name);
+    if !workspace_path.join(".git").exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("No git repository found at {}", workspace_path.display()),
+        ));
+    }
+
+    // Flush current workflows to per-workspace snapshots before switching.
+    if let Err(e) = state.engine.sync_workflow_snapshot().await {
+        tracing::warn!(error = %e, "Failed to sync workflow snapshot before workspace switch");
+    }
+
+    let new_path = workspace_path.to_string_lossy().into_owned();
+    {
+        let mut config = state.config.write().await;
+        config.git.repo_path = new_path.clone();
+    }
+    // Persist the active workspace to the data dir (survives rebuilds).
+    if let Err(e) = maestro_core::workflow::snapshot::write_active_workspace(&body.name) {
+        tracing::warn!(error = %e, name = %body.name, "Failed to persist active workspace");
+    }
+    info!(name = %body.name, path = %new_path, "Active workspace switched");
+    Ok(Json(serde_json::json!({ "repo_path": new_path })))
+}
+
+/// Read the `origin` remote URL from `.git/config` and normalise to an HTTPS GitHub URL.
+pub(super) fn read_git_remote_url(repo_path: &std::path::Path) -> Option<String> {
+    let git_config = std::fs::read_to_string(repo_path.join(".git/config")).ok()?;
+    let mut in_origin = false;
+    for line in git_config.lines() {
+        let trimmed = line.trim();
+        if trimmed == r#"[remote "origin"]"# {
+            in_origin = true;
+            continue;
+        }
+        if in_origin {
+            if trimmed.starts_with('[') {
+                break;
+            }
+            if let Some(rest) = trimmed.strip_prefix("url =") {
+                return Some(normalize_github_url(rest.trim()));
+            }
+        }
+    }
+    None
+}
+
+fn normalize_github_url(url: &str) -> String {
+    if let Some(path) = url.strip_prefix("git@github.com:") {
+        return format!("https://github.com/{}", path.trim_end_matches(".git"));
+    }
+    url.trim_end_matches(".git").to_string()
+}
+
 use crate::state::AppState;
 
 /// Drop guard that resets `clone_in_progress` to `false` when the async clone
@@ -248,22 +356,17 @@ pub async fn clone_repo(
         .await;
 
         // On success, update config.git.repo_path to the new clone location and
-        // persist to disk so the engine picks up the correct workspace.
+        // persist the active workspace to the data dir.
         if result.is_ok() {
             let new_path = clone_target.to_string_lossy().into_owned();
-            let config_snapshot = {
+            {
                 let mut config = state_clone.config.write().await;
                 config.git.repo_path = new_path.clone();
-                config.clone()
-            };
-            if let Some(ref writer) = state_clone.config_writer {
-                if let Err(e) = writer.write_config(&config_snapshot) {
-                    tracing::warn!(
-                        error = %e,
-                        path = %new_path,
-                        "repo_path updated in memory but config disk write failed"
-                    );
-                }
+            }
+            if let Some(name) = clone_target.file_name() {
+                let _ = maestro_core::workflow::snapshot::write_active_workspace(
+                    &name.to_string_lossy(),
+                );
             }
         }
 

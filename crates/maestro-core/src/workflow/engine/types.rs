@@ -110,6 +110,9 @@ pub struct Workflow {
     /// When `false`, the next workflow-def start must run bootstrap even if a worktree exists
     /// (the worktree was pre-created at ticket-add time but setup has not run yet).
     pub worktree_bootstrapped: bool,
+    /// Name of the workspace (repo directory name under `/workspaces/`) this workflow belongs to.
+    /// Used for per-workspace snapshot isolation and dashboard filtering.
+    pub workspace_name: String,
 }
 
 impl Workflow {
@@ -120,6 +123,7 @@ impl Workflow {
         jira_available: bool,
         ticketing_system: TicketingSystem,
         ticket_url: Option<String>,
+        workspace_name: String,
     ) -> Self {
         let now = Utc::now();
         let ticketing_available = ticketing_system != TicketingSystem::None;
@@ -150,6 +154,7 @@ impl Workflow {
             driver_started: false,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
+            workspace_name,
         }
     }
 
@@ -225,6 +230,7 @@ impl Workflow {
             driver_started: rec.driver_started,
             workflow_def_runs: rec.workflow_def_runs,
             worktree_bootstrapped: rec.worktree_bootstrapped,
+            workspace_name: rec.workspace_name,
         }
     }
 }
@@ -262,5 +268,6 @@ pub(super) fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRec
         driver_started: w.driver_started,
         workflow_def_runs: w.workflow_def_runs.clone(),
         worktree_bootstrapped: w.worktree_bootstrapped,
+        workspace_name: w.workspace_name.clone(),
     }
 }

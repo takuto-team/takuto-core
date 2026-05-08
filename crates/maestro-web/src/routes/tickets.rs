@@ -530,6 +530,7 @@ mod tests {
             false,
             TicketingSystem::None,
             None,
+            "test-workspace".into(),
         );
         wf.ticket_description = description.to_string();
         engine

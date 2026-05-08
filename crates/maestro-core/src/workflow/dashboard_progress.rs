@@ -148,6 +148,7 @@ mod tests {
             driver_started: true,
             workflow_def_runs: std::collections::HashMap::new(),
             worktree_bootstrapped: false,
+            workspace_name: "test-workspace".into(),
         }
     }
 

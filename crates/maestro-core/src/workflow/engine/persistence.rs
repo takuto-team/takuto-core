@@ -13,8 +13,8 @@ use crate::config::Config;
 use crate::error::Result;
 
 use crate::workflow::snapshot::{
-    self, PersistedWorkflowRecord, read_workflow_snapshot, remove_workflow_snapshot,
-    write_workflow_snapshot,
+    self, PersistedWorkflowRecord, read_all_workspace_snapshots, read_workflow_snapshot,
+    workspace_name_from_repo_path, write_all_workspace_snapshots,
 };
 use crate::workflow::state::WorkflowState;
 
@@ -53,7 +53,7 @@ impl WorkflowPersistence {
         self.sync_from_map().await
     }
 
-    /// Load snapshot from disk, insert workflows, spawn drivers. Removes the snapshot file on success.
+    /// Load snapshots from ALL workspaces, insert workflows, spawn drivers for in-progress ones.
     pub async fn restore(
         &self,
         workflows_dir: &std::path::Path,
@@ -64,26 +64,31 @@ impl WorkflowPersistence {
             let c = self.config.read().await;
             PathBuf::from(&c.git.repo_path)
         };
+        let data_dir = snapshot::resolve_snapshot_dir(&repo_path);
+        let default_ws_name = workspace_name_from_repo_path(&repo_path);
 
         info!(
-            path = %snapshot::snapshot_path(&repo_path).display(),
-            "Looking for workflow snapshot"
+            data_dir = %data_dir.display(),
+            "Loading workflow snapshots from all workspaces"
         );
 
-        let Some(file) = read_workflow_snapshot(&repo_path)? else {
-            return Ok(0);
-        };
-
-        if file.version != snapshot::SNAPSHOT_VERSION {
-            warn!(
-                version = file.version,
-                expected = snapshot::SNAPSHOT_VERSION,
-                "Ignoring workflow snapshot with unsupported version"
-            );
-            return Ok(0);
+        // Try multi-workspace read first; fall back to single-workspace read for first-time migration.
+        let mut records = read_all_workspace_snapshots(&data_dir)?;
+        if records.is_empty() {
+            // Try single-workspace read (handles legacy + global migration).
+            if let Some(file) = read_workflow_snapshot(&repo_path)? {
+                if file.version == snapshot::SNAPSHOT_VERSION {
+                    records = file.workflows;
+                }
+            }
         }
 
-        let mut records = file.workflows;
+        // Backfill workspace_name for any legacy records.
+        for rec in &mut records {
+            if rec.workspace_name.is_empty() {
+                rec.workspace_name = default_ws_name.clone();
+            }
+        }
         records.sort_by_key(|r| r.started_at);
 
         let n = records.len();
@@ -244,17 +249,16 @@ impl WorkflowPersistence {
             }
         }
 
-        remove_workflow_snapshot(&repo_path)?;
         info!(
             count = n,
-            path = %snapshot::snapshot_path(&repo_path).display(),
-            "Restored workflows from snapshot"
+            data_dir = %data_dir.display(),
+            "Restored workflows from snapshots"
         );
 
         Ok(n)
     }
 
-    /// Write `workflow_snapshot.json` and cancel drivers so processes stop, without Jira unassign / **Stopped** (for container restart).
+    /// Write per-workspace snapshots and cancel drivers so processes stop, without Jira unassign / **Stopped** (for container restart).
     pub async fn persist_interrupt(&self) -> Result<()> {
         self.suppress_cancelled_as_error
             .store(true, Ordering::SeqCst);
@@ -263,6 +267,7 @@ impl WorkflowPersistence {
             let c = self.config.read().await;
             PathBuf::from(&c.git.repo_path)
         };
+        let data_dir = snapshot::resolve_snapshot_dir(&repo_path);
 
         let records: Vec<PersistedWorkflowRecord> = {
             let wf_arc = self.repository.inner_arc();
@@ -273,17 +278,14 @@ impl WorkflowPersistence {
             v
         };
 
-        if records.is_empty() {
-            let _ = remove_workflow_snapshot(&repo_path);
-            return Ok(());
+        if !records.is_empty() {
+            write_all_workspace_snapshots(&data_dir, &records)?;
+            info!(
+                count = records.len(),
+                data_dir = %data_dir.display(),
+                "Wrote per-workspace snapshots for resume after restart"
+            );
         }
-
-        write_workflow_snapshot(&repo_path, &records)?;
-        info!(
-            count = records.len(),
-            path = %snapshot::snapshot_path(&repo_path).display(),
-            "Wrote workflow snapshot for resume after restart"
-        );
 
         let keys: Vec<String> = records.iter().map(|r| r.ticket_key.clone()).collect();
         for key in &keys {
@@ -303,12 +305,13 @@ impl WorkflowPersistence {
         Ok(())
     }
 
-    /// Rewrite `workflow_snapshot.json` from the current in-memory map (best-effort).
+    /// Rewrite per-workspace snapshots from the current in-memory map (best-effort).
     async fn sync_from_map(&self) -> Result<()> {
         let repo_path = {
             let c = self.config.read().await;
             PathBuf::from(&c.git.repo_path)
         };
+        let data_dir = snapshot::resolve_snapshot_dir(&repo_path);
 
         let records: Vec<PersistedWorkflowRecord> = {
             let map = self.repository.inner_arc();
@@ -318,11 +321,7 @@ impl WorkflowPersistence {
             v
         };
 
-        if records.is_empty() {
-            let _ = remove_workflow_snapshot(&repo_path);
-        } else {
-            write_workflow_snapshot(&repo_path, &records)?;
-        }
+        write_all_workspace_snapshots(&data_dir, &records)?;
         Ok(())
     }
 

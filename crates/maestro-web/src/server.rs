@@ -28,6 +28,7 @@ pub fn build_router(state: AppState) -> Router {
 
     let api_protected = Router::new()
         .route("/workflows", get(routes::workflows::list_workflows))
+        .route("/workflows/counts", get(routes::workflows::workflow_counts))
         .route("/workflows/{id}", get(routes::workflows::get_workflow))
         .route(
             "/workflows/{id}/pause",
@@ -116,6 +117,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/github/issues", get(routes::github::list_github_issues))
         .route("/github/repos", get(routes::repos::list_github_repos))
         .route("/repos/clone", post(routes::repos::clone_repo))
+        .route("/workspaces", get(routes::repos::list_workspaces))
+        .route("/workspaces/switch", post(routes::repos::switch_workspace))
         .route(
             "/tickets/{key}/improve",
             post(routes::tickets::improve_ticket),

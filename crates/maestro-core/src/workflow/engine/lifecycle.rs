@@ -14,6 +14,7 @@ use crate::config::{Config, TicketingSystem};
 use crate::container::ContainerRunner;
 use crate::error::{MaestroError, Result};
 
+use crate::workflow::snapshot::workspace_name_from_repo_path;
 use crate::workflow::state::WorkflowState;
 
 use super::definitions::WorkflowDefinitionManager;
@@ -63,6 +64,10 @@ impl WorkflowLifecycle {
         definitions: &WorkflowDefinitionManager,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
+        let ws_name = {
+            let c = self.config.read().await;
+            workspace_name_from_repo_path(Path::new(&c.git.repo_path))
+        };
         let mut workflow = Workflow::new(
             ticket_key.clone(),
             ticket_summary,
@@ -70,6 +75,7 @@ impl WorkflowLifecycle {
             jira,
             self.ticketing_system,
             ticket_url,
+            ws_name,
         );
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
@@ -117,6 +123,10 @@ impl WorkflowLifecycle {
         ticket_url: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
+        let ws_name = {
+            let c = self.config.read().await;
+            workspace_name_from_repo_path(Path::new(&c.git.repo_path))
+        };
         let mut workflow = Workflow::new(
             ticket_key.clone(),
             ticket_summary,
@@ -124,6 +134,7 @@ impl WorkflowLifecycle {
             jira,
             self.ticketing_system,
             ticket_url,
+            ws_name,
         );
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;

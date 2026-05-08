@@ -393,6 +393,7 @@ mod tests {
             driver_started: true,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
+            workspace_name: "test-workspace".into(),
         }
     }
 
@@ -762,6 +763,7 @@ mod tests {
                 m
             },
             worktree_bootstrapped: true,
+            workspace_name: "test-workspace".into(),
         }
     }
 
@@ -888,6 +890,7 @@ mod tests {
             driver_started: true,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
+            workspace_name: String::new(),
         };
         let w = Workflow::from_persisted_record(rec);
         assert_eq!(
@@ -950,6 +953,7 @@ mod tests {
             driver_started: true,
             workflow_def_runs: def_runs,
             worktree_bootstrapped: true,
+            workspace_name: "test-workspace".into(),
         };
 
         let json = serde_json::to_string_pretty(&rec).expect("serialize PersistedWorkflowRecord");

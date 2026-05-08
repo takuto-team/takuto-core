@@ -246,6 +246,12 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     maestro_core::license::init_license_tier();
 
+    // Resolve active workspace from the persistent data dir (survives rebuilds).
+    // Ignores git.repo_path from config.toml — workspace selection is stored separately.
+    if let Some(active_path) = maestro_core::workflow::snapshot::resolve_active_repo_path() {
+        config.git.repo_path = active_path;
+    }
+
     info!(dry_mode = config.general.dry_mode, "Maestro starting");
 
     let config = Arc::new(RwLock::new(config));

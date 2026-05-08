@@ -253,12 +253,16 @@ fn build_run_commands_status(
 
 pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowSummary>> {
     let cfg = state.config.read().await;
+    let current_ws = maestro_core::workflow::snapshot::workspace_name_from_repo_path(
+        std::path::Path::new(&cfg.git.repo_path),
+    );
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let dyn_fwd = state.dynamic_forwards.read().await;
     let run_cmds_state = state.run_commands.read().await;
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
+        .filter(|w| w.workspace_name == current_ws)
         .map(|w| {
             let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
             let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
@@ -315,6 +319,25 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
     // Oldest first — matches dashboard stable card order (new workflows last).
     summaries.sort_by(|a, b| a.started_at.cmp(&b.started_at));
     Json(summaries)
+}
+
+/// Cross-workspace workflow counts for the dashboard summary bar.
+pub async fn workflow_counts(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
+    let mut running = 0u32;
+    let mut completed = 0u32;
+    let mut errors = 0u32;
+    let mut paused = 0u32;
+    for w in workflows.values() {
+        match &w.state {
+            WorkflowState::Done => completed += 1,
+            WorkflowState::Error { .. } | WorkflowState::Stopped => errors += 1,
+            WorkflowState::Paused { .. } => paused += 1,
+            _ => running += 1,
+        }
+    }
+    Json(serde_json::json!({ "running": running, "completed": completed, "errors": errors, "paused": paused }))
 }
 
 pub async fn get_workflow(
@@ -1468,6 +1491,7 @@ mod tests {
             false,
             maestro_core::config::TicketingSystem::None,
             None,
+            "test-workspace".into(),
         );
         w.driver_started = driver_started;
         w

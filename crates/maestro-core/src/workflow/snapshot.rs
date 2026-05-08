@@ -74,6 +74,10 @@ pub struct PersistedWorkflowRecord {
     /// exists (worktree was pre-created at ticket-add time but setup has not run yet).
     #[serde(default)]
     pub worktree_bootstrapped: bool,
+    /// Name of the workspace (repo directory name) this workflow belongs to.
+    /// Old snapshots without this field get an empty string (assigned during restore).
+    #[serde(default)]
+    pub workspace_name: String,
 }
 
 fn default_jira_available() -> bool {
@@ -90,7 +94,16 @@ pub struct PersistedTerminalLine {
     pub stream: String,
 }
 
-/// Resolve the directory for storing the workflow snapshot.
+/// Extract the workspace name (repo directory name) from a repo path.
+/// e.g. `/workspaces/my-repo` → `"my-repo"`, `/workspace` → `"workspace"`.
+pub fn workspace_name_from_repo_path(repo_path: &Path) -> String {
+    repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+/// Resolve the base data directory for storing workflow snapshots.
 ///
 /// Priority:
 /// 1. `$MAESTRO_DATA_DIR` — explicit override
@@ -117,8 +130,83 @@ pub fn resolve_snapshot_dir(repo_path: &Path) -> PathBuf {
     repo_path.join(".maestro")
 }
 
+const ACTIVE_WORKSPACE_FILE: &str = "active_workspace";
+const WORKSPACES_BASE: &str = "/workspaces";
+
+/// Resolve the data directory without needing a repo_path (uses env vars only,
+/// falls back to `$HOME/.maestro`). Returns `None` only when no env var is set.
+pub fn resolve_data_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("MAESTRO_DATA_DIR") {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    if let Ok(home) = std::env::var("MAESTRO_HOME") {
+        if !home.is_empty() {
+            return Some(PathBuf::from(home).join(".maestro"));
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return Some(PathBuf::from(home).join(".maestro"));
+        }
+    }
+    None
+}
+
+/// Read the active workspace name from `{data_dir}/active_workspace`.
+/// Returns `None` if the file doesn't exist or is empty.
+pub fn read_active_workspace() -> Option<String> {
+    let data_dir = resolve_data_dir()?;
+    let path = data_dir.join(ACTIVE_WORKSPACE_FILE);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let name = content.trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// Write the active workspace name to `{data_dir}/active_workspace`.
+pub fn write_active_workspace(name: &str) -> std::io::Result<()> {
+    let data_dir = resolve_data_dir()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no data directory available"))?;
+    std::fs::create_dir_all(&data_dir)?;
+    std::fs::write(data_dir.join(ACTIVE_WORKSPACE_FILE), name.trim())?;
+    Ok(())
+}
+
+/// Resolve the repo path for the active workspace. Reads the persisted active
+/// workspace name, falls back to scanning `/workspaces/` for the most recently
+/// modified repo, and returns `/workspaces/{name}` if found.
+pub fn resolve_active_repo_path() -> Option<String> {
+    // 1. Try the persisted active workspace
+    if let Some(name) = read_active_workspace() {
+        let p = Path::new(WORKSPACES_BASE).join(&name);
+        if p.join(".git").exists() {
+            return Some(p.to_string_lossy().into_owned());
+        }
+    }
+    // 2. Fall back to scanning /workspaces/ for any repo
+    let entries = std::fs::read_dir(WORKSPACES_BASE).ok()?;
+    let candidate = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().join(".git").exists())
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())?;
+    let path = candidate.path().to_string_lossy().into_owned();
+    // Persist the auto-selected workspace for next startup
+    if let Some(name) = candidate.path().file_name() {
+        let _ = write_active_workspace(&name.to_string_lossy());
+    }
+    Some(path)
+}
+
+/// Per-workspace snapshot directory: `{data_dir}/workspaces/{workspace_name}/`.
+pub fn resolve_workspace_snapshot_dir(repo_path: &Path) -> PathBuf {
+    let data_dir = resolve_snapshot_dir(repo_path);
+    let ws_name = workspace_name_from_repo_path(repo_path);
+    data_dir.join("workspaces").join(ws_name)
+}
+
 pub fn snapshot_path(repo_path: &Path) -> PathBuf {
-    resolve_snapshot_dir(repo_path).join(SNAPSHOT_FILENAME)
+    resolve_workspace_snapshot_dir(repo_path).join(SNAPSHOT_FILENAME)
 }
 
 /// Legacy snapshot path inside `{repo_path}/.maestro/`.
@@ -130,7 +218,7 @@ pub fn write_workflow_snapshot(
     repo_path: &Path,
     workflows: &[PersistedWorkflowRecord],
 ) -> crate::error::Result<()> {
-    let dir = resolve_snapshot_dir(repo_path);
+    let dir = resolve_workspace_snapshot_dir(repo_path);
     fs::create_dir_all(&dir)?;
     let path = dir.join(SNAPSHOT_FILENAME);
     let tmp = path.with_extension("json.tmp");
@@ -145,8 +233,8 @@ pub fn write_workflow_snapshot(
     Ok(())
 }
 
-/// Read the workflow snapshot, checking the new location first then migrating from the legacy
-/// `{repo_path}/.maestro/` location if needed.
+/// Read the workflow snapshot for a single workspace, checking the per-workspace location first,
+/// then migrating from legacy locations if needed.
 pub fn read_workflow_snapshot(
     repo_path: &Path,
 ) -> crate::error::Result<Option<WorkflowSnapshotFile>> {
@@ -158,21 +246,25 @@ pub fn read_workflow_snapshot(
         return Ok(Some(file));
     }
 
-    // Try the legacy location and migrate if found.
+    // Try the legacy in-repo location and migrate if found.
     let legacy = legacy_snapshot_path(repo_path);
     if legacy != path && legacy.exists() {
         let bytes = fs::read(&legacy)?;
-        let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
+        let mut file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
             .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
+        let ws_name = workspace_name_from_repo_path(repo_path);
+        // Backfill workspace_name for legacy records.
+        for rec in &mut file.workflows {
+            if rec.workspace_name.is_empty() {
+                rec.workspace_name = ws_name.clone();
+            }
+        }
         tracing::info!(
             from = %legacy.display(),
             to = %path.display(),
             "Migrating workflow snapshot from legacy location"
         );
-        // Best-effort migration: copy to the new location and remove the old one.
-        // If the new location is not writable (e.g. volume permissions), still return
-        // the snapshot so workflows are restored — migration will succeed on next write.
-        let dir = resolve_snapshot_dir(repo_path);
+        let dir = resolve_workspace_snapshot_dir(repo_path);
         match fs::create_dir_all(&dir).and_then(|_| fs::write(&path, &bytes)) {
             Ok(()) => {
                 let _ = fs::remove_file(&legacy);
@@ -187,13 +279,166 @@ pub fn read_workflow_snapshot(
         return Ok(Some(file));
     }
 
+    // Try the old global location (pre-workspace-isolation) and migrate.
+    let global = resolve_snapshot_dir(repo_path).join(SNAPSHOT_FILENAME);
+    if global != path && global.exists() {
+        let bytes = fs::read(&global)?;
+        let mut file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
+            .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
+        let ws_name = workspace_name_from_repo_path(repo_path);
+        for rec in &mut file.workflows {
+            if rec.workspace_name.is_empty() {
+                rec.workspace_name = ws_name.clone();
+            }
+        }
+        tracing::info!(
+            from = %global.display(),
+            to = %path.display(),
+            "Migrating workflow snapshot from global location to per-workspace"
+        );
+        let dir = resolve_workspace_snapshot_dir(repo_path);
+        match fs::create_dir_all(&dir).and_then(|_| fs::write(&path, &bytes)) {
+            Ok(()) => {
+                let _ = fs::remove_file(&global);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Could not write snapshot to per-workspace location; using global path"
+                );
+            }
+        }
+        return Ok(Some(file));
+    }
+
     Ok(None)
+}
+
+/// Read all workspace snapshots from `{data_dir}/workspaces/*/workflow_snapshot.json`.
+/// Used at startup to load workflows from all workspaces into memory.
+pub fn read_all_workspace_snapshots(
+    data_dir: &Path,
+) -> crate::error::Result<Vec<PersistedWorkflowRecord>> {
+    let workspaces_dir = data_dir.join("workspaces");
+    let mut all_records = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(&workspaces_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let snap = entry.path().join(SNAPSHOT_FILENAME);
+            if !snap.exists() {
+                continue;
+            }
+            let bytes = match fs::read(&snap) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(path = %snap.display(), error = %e, "Failed to read workspace snapshot");
+                    continue;
+                }
+            };
+            let file: WorkflowSnapshotFile = match serde_json::from_slice(&bytes) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!(path = %snap.display(), error = %e, "Failed to parse workspace snapshot");
+                    continue;
+                }
+            };
+            if file.version != SNAPSHOT_VERSION {
+                tracing::warn!(path = %snap.display(), version = file.version, "Skipping snapshot with unsupported version");
+                continue;
+            }
+            let ws_name = entry
+                .file_name()
+                .to_string_lossy()
+                .into_owned();
+            let mut records = file.workflows;
+            // Backfill workspace_name for any records missing it.
+            for rec in &mut records {
+                if rec.workspace_name.is_empty() {
+                    rec.workspace_name = ws_name.clone();
+                }
+            }
+            all_records.extend(records);
+        }
+    }
+
+    // Also check for a legacy global snapshot at `{data_dir}/workflow_snapshot.json`.
+    let global = data_dir.join(SNAPSHOT_FILENAME);
+    if global.exists() {
+        let bytes = fs::read(&global)?;
+        let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
+            .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
+        if file.version == SNAPSHOT_VERSION && !file.workflows.is_empty() {
+            tracing::info!(
+                count = file.workflows.len(),
+                "Migrating workflows from legacy global snapshot"
+            );
+            all_records.extend(file.workflows);
+            // Remove the old global file after migration.
+            let _ = fs::remove_file(&global);
+        }
+    }
+
+    Ok(all_records)
+}
+
+/// Write per-workspace snapshots by grouping records by `workspace_name`.
+/// Each group is written to `{data_dir}/workspaces/{name}/workflow_snapshot.json`.
+pub fn write_all_workspace_snapshots(
+    data_dir: &Path,
+    workflows: &[PersistedWorkflowRecord],
+) -> crate::error::Result<()> {
+    let mut by_workspace: HashMap<String, Vec<&PersistedWorkflowRecord>> = HashMap::new();
+    for rec in workflows {
+        by_workspace
+            .entry(rec.workspace_name.clone())
+            .or_default()
+            .push(rec);
+    }
+
+    for (ws_name, records) in &by_workspace {
+        if ws_name.is_empty() {
+            continue; // skip records with no workspace (shouldn't happen)
+        }
+        let dir = data_dir.join("workspaces").join(ws_name);
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(SNAPSHOT_FILENAME);
+        let tmp = path.with_extension("json.tmp");
+        let file = WorkflowSnapshotFile {
+            version: SNAPSHOT_VERSION,
+            workflows: records.iter().map(|r| (*r).clone()).collect(),
+        };
+        let json = serde_json::to_string_pretty(&file)
+            .map_err(|e| crate::error::MaestroError::Config(e.to_string()))?;
+        fs::write(&tmp, json)?;
+        fs::rename(&tmp, &path)?;
+    }
+
+    // Clean up snapshot files for workspaces that no longer have any workflows.
+    let workspaces_dir = data_dir.join("workspaces");
+    if let Ok(entries) = fs::read_dir(&workspaces_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let ws_name = entry.file_name().to_string_lossy().into_owned();
+            if !by_workspace.contains_key(&ws_name) {
+                let snap = entry.path().join(SNAPSHOT_FILENAME);
+                if snap.exists() {
+                    let _ = fs::remove_file(&snap);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub fn remove_workflow_snapshot(repo_path: &Path) -> crate::error::Result<()> {
     let path = snapshot_path(repo_path);
     if path.exists() {
         fs::remove_file(&path)?;
+    }
+    // Also clean up the legacy global snapshot if it exists.
+    let global = resolve_snapshot_dir(repo_path).join(SNAPSHOT_FILENAME);
+    if global.exists() && global != path {
+        let _ = fs::remove_file(&global);
     }
     Ok(())
 }
@@ -230,10 +475,12 @@ mod tests {
             driver_started: false,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
+            workspace_name: "my-repo".into(),
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: PersistedWorkflowRecord = serde_json::from_str(&json).unwrap();
         assert!(!back.driver_started);
+        assert_eq!(back.workspace_name, "my-repo");
     }
 
     #[test]
