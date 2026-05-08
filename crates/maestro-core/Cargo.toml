@@ -18,6 +18,8 @@ async-trait = { workspace = true }
 jsonwebtoken = { workspace = true }
 dirs = { workspace = true }
 fs2 = { workspace = true }
+# CSPRNG for session path tokens (≥128 bits of entropy from OS entropy source).
+getrandom = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

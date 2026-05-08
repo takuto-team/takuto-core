@@ -793,6 +793,7 @@ dependencies = [
  "chrono",
  "dirs",
  "fs2",
+ "getrandom 0.3.4",
  "jsonwebtoken",
  "libc",
  "serde",

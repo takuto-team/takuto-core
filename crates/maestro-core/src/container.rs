@@ -479,6 +479,12 @@ pub struct EditorInfo {
     /// Pre-allocated spare host ports for dynamic forwarding (socat-based).
     #[serde(default)]
     pub spare_ports: Vec<u16>,
+    /// Worktree folder path inside the container — same value embedded in
+    /// `url`'s `&folder=` query parameter. Surfaced as a structured field so
+    /// callers (notably the GH-45 shared-port proxy URL builder in
+    /// `routes::workflows::open_editor`) don't have to re-parse `url`.
+    #[serde(default)]
+    pub folder: String,
 }
 
 /// Return the deterministic editor container name for a ticket.
@@ -566,13 +572,58 @@ async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
 
 /// Generate a cryptographically random connection token for editor sessions.
 /// Returns a 32-character lowercase hex string (UUID v4 simple format).
+///
+/// NOTE: This token is consumed by `openvscode-server`'s built-in `?tkn=`
+/// authentication and `ttyd`'s `-b /TOKEN` base-path. It is NOT the
+/// session path token used by the shared-port reverse proxy — see
+/// [`generate_session_path_token`] for that.
 pub fn generate_connection_token() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
+/// Generate a session path token for the shared-port reverse proxy.
+///
+/// Returns a 32-character lowercase hex string encoding 16 bytes (128 bits)
+/// drawn from the operating system's CSPRNG via [`getrandom`]. UUID v4 is
+/// deliberately NOT used here: a v4 UUID has only 122 random bits because
+/// six bits encode the version + variant nibbles, which falls below the
+/// ≥128-bit entropy floor required by GH-45 for the session URL path.
+///
+/// Panicking only on `getrandom` failure is acceptable here because:
+/// - failure means the kernel CSPRNG is unavailable, in which case we have
+///   no business minting URL secrets at all;
+/// - the call site in [`crate::container`] runs on a worker thread, not the
+///   axum request path, so a panic surfaces as a 500 to the caller, not a
+///   silent token reuse.
+pub fn generate_session_path_token() -> String {
+    let mut buf = [0u8; 16];
+    getrandom::fill(&mut buf).expect("OS CSPRNG (getrandom) must be available");
+    let mut out = String::with_capacity(32);
+    for byte in buf {
+        // hex::encode adds a transitive dep we don't need in core. Hand-roll
+        // the 32-char lowercase hex encoding to keep the surface small.
+        out.push(HEX_DIGITS[(byte >> 4) as usize] as char);
+        out.push(HEX_DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
 /// Build the editor URL including the connection token for authentication.
 pub fn build_editor_url(host_port: u16, connection_token: &str, folder: &str) -> String {
     format!("http://localhost:{host_port}/?tkn={connection_token}&folder={folder}")
+}
+
+/// Build the editor URL exposed through the shared-port reverse proxy.
+///
+/// Returns a relative URL of the shape `/s/<path-token>/?tkn=<conn>&folder=<folder>`
+/// so the browser can resolve it against the dashboard origin. The
+/// reverse-proxy strips the `/s/<path-token>` prefix and forwards the
+/// remainder (including the preserved query string) to the loopback
+/// `openvscode-server` listener.
+pub fn build_session_editor_url(path_token: &str, connection_token: &str, folder: &str) -> String {
+    format!("/s/{path_token}/?tkn={connection_token}&folder={folder}")
 }
 
 /// Build the terminal URL including the secret base path for authentication.
@@ -580,6 +631,27 @@ pub fn build_editor_url(host_port: u16, connection_token: &str, folder: &str) ->
 /// are served by ttyd, providing access control equivalent to the editor `?tkn=` pattern.
 pub fn build_terminal_url(host_port: u16, token: &str) -> String {
     format!("http://localhost:{host_port}/{token}/")
+}
+
+/// Build the terminal URL exposed through the shared-port reverse proxy.
+///
+/// Returns a relative URL of the shape `/s/<path-token>/<ttyd-token>/`. The
+/// outer `<path-token>` is consumed by the proxy registry; the inner
+/// `<ttyd-token>` is the existing ttyd `-b /TOKEN` base-path that ttyd itself
+/// validates. Both must match for a request to reach the terminal — the
+/// proxy is the unguessability layer, ttyd is the in-process defence in depth.
+pub fn build_session_terminal_url(path_token: &str, ttyd_token: &str) -> String {
+    format!("/s/{path_token}/{ttyd_token}/")
+}
+
+/// Build a Docker `--publish` argument string that binds a host port to the
+/// loopback interface only.
+///
+/// Format: `127.0.0.1:HOST:CONTAINER`. Used for editor and terminal session
+/// listeners so they are reachable only by the maestro-web reverse proxy,
+/// not by anyone on the LAN. See GH-45 acceptance criterion #10.
+pub fn loopback_publish_arg(host_port: u16, container_port: u16) -> String {
+    format!("127.0.0.1:{host_port}:{container_port}")
 }
 
 /// Parse the `maestro.connection_token` value from a Docker inspect JSON labels string.
@@ -672,13 +744,21 @@ pub async fn start_editor(
         args.push(mount);
     }
 
-    // Port mappings: VS Code + spare ports (symmetric — socat listens inside container
-    // on these ports and forwards to whatever the user's app is listening on).
+    // Port mappings: VS Code and all spare ports are bound to the host
+    // loopback interface only — external traffic must flow through the
+    // maestro-web shared-port reverse proxy at `/s/<path-token>/`. See GH-45
+    // acceptance criterion #10.
+    //
+    // Browsers using `http://localhost:91xx/` continue to resolve through
+    // 127.0.0.1, so this does not break the dynamic port-forwarding UX.
+    // LAN-direct access to user-app dev servers is intentionally removed;
+    // the follow-up to route those through `/s/<token>/forward/<port>/` is
+    // tracked separately and out of scope for GH-45.
     args.push("-p".into());
-    args.push(format!("{vscode_port}:{vscode_port}"));
+    args.push(loopback_publish_arg(vscode_port, vscode_port));
     for &sp in &spare_ports {
         args.push("-p".into());
-        args.push(format!("{sp}:{sp}"));
+        args.push(loopback_publish_arg(sp, sp));
     }
 
     // Working directory
@@ -786,6 +866,7 @@ pub async fn start_editor(
         vscode_port,
         port_mappings,
         spare_ports,
+        folder: folder.into_owned(),
     })
 }
 
@@ -1269,6 +1350,7 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
         vscode_port,
         port_mappings,
         spare_ports,
+        folder,
     })
 }
 
@@ -1688,10 +1770,12 @@ pub async fn start_run_command(
         args.push(mount);
     }
 
-    // Port mappings — spare ports for socat forwarding
+    // Port mappings — spare ports for socat forwarding, bound to host
+    // loopback to keep the run-command listener off LAN. Same rationale as
+    // the editor port binding (see GH-45 #10).
     for &sp in &spare_ports {
         args.push("-p".into());
-        args.push(format!("{sp}:{sp}"));
+        args.push(loopback_publish_arg(sp, sp));
     }
 
     // Working directory
@@ -2183,6 +2267,112 @@ mod tests {
         assert_ne!(t1, t2, "Two generated tokens must be different");
     }
 
+    // ---------------------------------------------------------------------
+    // GH-45: session path token (CSPRNG, ≥128 bits) and loopback publish arg
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn session_path_token_is_32_char_lowercase_hex() {
+        let token = generate_session_path_token();
+        assert_eq!(
+            token.len(),
+            32,
+            "Token must be 32 hex characters (16 bytes)"
+        );
+        assert!(
+            token.chars().all(|c| c.is_ascii_hexdigit()),
+            "Token must be hex: {token}"
+        );
+        assert_eq!(token, token.to_lowercase(), "Token must be lowercase");
+    }
+
+    #[test]
+    fn session_path_token_is_unique() {
+        // Statistical: with 128 bits of entropy, 1024 generations should
+        // produce 1024 distinct values with overwhelming probability.
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1024 {
+            let t = generate_session_path_token();
+            assert!(
+                seen.insert(t),
+                "duplicate token in 1024 generations — entropy too low?"
+            );
+        }
+    }
+
+    #[test]
+    fn session_path_token_is_not_uuid_v4_shape() {
+        // UUID v4 simple has fixed bits at positions 12 (always '4') and 16
+        // (always one of '8','9','a','b'). A pure 16-byte random token must
+        // not impose those constraints. Verify across many samples that we
+        // observe values outside the UUID v4 alphabet at those positions.
+        let mut pos12 = std::collections::HashSet::new();
+        let mut pos16 = std::collections::HashSet::new();
+        for _ in 0..512 {
+            let t = generate_session_path_token();
+            pos12.insert(t.as_bytes()[12]);
+            pos16.insert(t.as_bytes()[16]);
+        }
+        // We expect each set to contain more than 1 distinct hex digit at
+        // those positions — UUID v4 would lock pos12 to b'4' and pos16 to
+        // {b'8',b'9',b'a',b'b'}.
+        assert!(
+            pos12.len() > 1,
+            "position 12 was constant — looks UUID-shaped"
+        );
+        assert!(
+            !(pos12 == [b'4'].into_iter().collect()),
+            "position 12 locked to '4'"
+        );
+        assert!(
+            pos16.len() > 4,
+            "position 16 alphabet too narrow — looks UUID-shaped"
+        );
+    }
+
+    #[test]
+    fn build_session_editor_url_uses_relative_proxy_path() {
+        let url = build_session_editor_url(
+            "0123456789abcdef0123456789abcdef",
+            "deadbeefdeadbeefdeadbeefdeadbeef",
+            "/workspace/proj",
+        );
+        assert_eq!(
+            url,
+            "/s/0123456789abcdef0123456789abcdef/?tkn=deadbeefdeadbeefdeadbeefdeadbeef&folder=/workspace/proj"
+        );
+    }
+
+    #[test]
+    fn build_session_terminal_url_uses_relative_proxy_path() {
+        let url = build_session_terminal_url(
+            "0123456789abcdef0123456789abcdef",
+            "deadbeefdeadbeefdeadbeefdeadbeef",
+        );
+        assert_eq!(
+            url,
+            "/s/0123456789abcdef0123456789abcdef/deadbeefdeadbeefdeadbeefdeadbeef/"
+        );
+    }
+
+    #[test]
+    fn loopback_publish_arg_binds_to_127_0_0_1() {
+        assert_eq!(loopback_publish_arg(9101, 9101), "127.0.0.1:9101:9101");
+        assert_eq!(loopback_publish_arg(9201, 9101), "127.0.0.1:9201:9101");
+    }
+
+    #[test]
+    fn editor_args_publish_to_loopback() {
+        // The vscode_port mapping must use 127.0.0.1:HOST:CONT, not HOST:CONT.
+        // This is enforced by the build helper used in `start_editor`'s arg list.
+        // We check the helper directly because `start_editor` requires Docker.
+        let arg = loopback_publish_arg(9101, 9101);
+        assert!(
+            arg.starts_with("127.0.0.1:"),
+            "must bind to loopback, got {arg}"
+        );
+    }
+
     #[test]
     fn build_editor_url_includes_tkn_param() {
         let url = build_editor_url(9100, "abcdef0123456789abcdef0123456789", "/workspace/proj");
@@ -2227,6 +2417,7 @@ mod tests {
             vscode_port: 9100,
             port_mappings: vec![],
             spare_ports: vec![],
+            folder: "/w".to_string(),
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["connection_token"], "abc");
