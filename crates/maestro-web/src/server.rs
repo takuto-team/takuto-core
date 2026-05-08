@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{any, get, post, put};
 use rust_embed::Embed;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -159,6 +159,16 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .nest("/api", api)
         .route("/ws", get(routes::ws::ws_handler))
+        // GH-45: shared-port reverse proxy for editor and terminal sessions.
+        // `any` so all HTTP methods AND WebSocket upgrades dispatch to the
+        // same handler — `proxy_session` decides HTTP vs WS internally based
+        // on the `Upgrade` / `Connection` headers. The `{*rest}` greedy
+        // wildcard also matches bare `/s/{token}` (single segment) and
+        // `/s/{token}/...` (deeper paths); `proxy_session::parse_session_path`
+        // distinguishes the two cases and emits a 308 redirect for the
+        // trailing-slash-missing form so relative asset URLs from the backend
+        // resolve correctly.
+        .route("/s/{*rest}", any(routes::sessions::proxy_session))
         .fallback(static_handler)
         .layer(cors_layer)
         .with_state(state)

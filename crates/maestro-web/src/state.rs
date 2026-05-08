@@ -13,6 +13,8 @@ use maestro_core::config::{Config, TicketingSystem};
 use maestro_core::config_writer::ConfigWriter;
 use maestro_core::workflow::engine::WorkflowEngine;
 
+use crate::session_registry::PathTokenRegistry;
+
 /// Port forwarding map: ticket_key → list of `(container_port, host_port)` pairs.
 /// Includes both static Docker `-p` mappings (seeded at editor open) and dynamic
 /// socat forwards (tracked by the event subscriber).
@@ -69,4 +71,11 @@ pub struct AppState {
     pub config_writer: Option<Arc<ConfigWriter>>,
     /// `true` while an async `POST /api/repos/clone` operation is in progress.
     pub clone_in_progress: Arc<AtomicBool>,
+    /// Registry of unguessable session path tokens (GH-45 shared-port proxy).
+    /// Maps `{path-token} → SessionRoute` so `/s/{token}/...` requests can be
+    /// dispatched to the right loopback backend (editor or terminal). The
+    /// `routes::sessions::proxy_session` handler reads from this registry on
+    /// every incoming request, and the workflow `open_*` / `close_*` handlers
+    /// register/deregister entries as session containers come and go.
+    pub path_token_registry: PathTokenRegistry,
 }

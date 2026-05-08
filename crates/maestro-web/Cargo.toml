@@ -24,6 +24,9 @@ chrono = { workspace = true }
 time = { workspace = true }
 sha2 = "0.10"
 subtle = "2"
-
-[dev-dependencies]
+# Reverse-proxy plumbing for /s/{token}/* — forwards HTTP requests and tunnels
+# WebSocket upgrades from the shared dashboard listener to per-session backends
+# bound on loopback.
+hyper = { version = "1", features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"

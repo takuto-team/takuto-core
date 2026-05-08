@@ -590,6 +590,7 @@ mod tests {
             config_path: std::env::temp_dir().join("config.toml"),
             config_writer: None,
             clone_in_progress: Arc::new(AtomicBool::new(false)),
+            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
         }
     }
 
