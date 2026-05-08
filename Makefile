@@ -212,9 +212,9 @@ ifeq ($(IS_PODMAN),1)
 		-e MAESTRO_HOME=/home/maestro \
 		-e MAESTRO_DATA_DIR=/home/maestro/.maestro \
 		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
-		"$$IMAGE"
+		"$$IMAGE" -c 'cd /workspaces && exec bash'
 else
-	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
+	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it -w /workspaces maestro bash
 endif
 
 exec: ## Open a shell inside Maestro (alias for bash)

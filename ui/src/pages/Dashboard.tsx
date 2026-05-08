@@ -313,7 +313,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       )}
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
-        <SummaryStats workflows={workflowList} />
+        <SummaryStats workflows={workflowList} repoName={config?.repo_name} repoHtmlUrl={config?.repo_html_url} />
         <WorkflowGrid
           workflows={workflows}
           orderKeys={orderKeys}

@@ -108,6 +108,8 @@ export interface ConfigResponse {
   github_app_configured: boolean;
   preflight_error?: string | null;
   repo_exists: boolean;
+  repo_name?: string | null;
+  repo_html_url?: string | null;
   [key: string]: unknown;
 }
 

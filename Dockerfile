@@ -321,9 +321,10 @@ RUN printf '%s\n' \
 RUN echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /etc/profile.d/maestro-env.sh \
     && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /home/maestro/.bashrc
 
-# Create workspace and log directories with correct ownership
-RUN mkdir -p /workspace /workspace/logs \
-    && chown -R maestro:maestro /workspace
+# Create workspace and log directories with correct ownership.
+# /workspaces is the base directory for user-cloned project repositories.
+RUN mkdir -p /workspace /workspace/logs /workspaces \
+    && chown -R maestro:maestro /workspace /workspaces
 
 WORKDIR /workspace
 

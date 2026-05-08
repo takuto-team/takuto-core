@@ -279,7 +279,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         info!("Running in DRY MODE — no external writes");
         Arc::new(DryRunActions::new(repo_path, git_remote, github_app_mgr))
     } else {
-        Arc::new(RealActions::new(repo_path, git_remote, github_app_mgr))
+        // Pass the live config Arc so RealActions always reads the current
+        // repo_path — a post-clone update takes effect without restart.
+        Arc::new(RealActions::new(config.clone(), git_remote, github_app_mgr))
     };
 
     let ticketing_system = config.read().await.general.ticketing_system;

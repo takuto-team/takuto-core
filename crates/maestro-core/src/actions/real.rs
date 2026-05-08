@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
+use crate::config::Config;
 use crate::error::{MaestroError, Result};
 use crate::git::worktree_remove;
 
@@ -17,22 +19,28 @@ use crate::github_app::GitHubAppTokenManager;
 use crate::process::{self, CommandOutput};
 
 pub struct RealActions {
-    pub repo_path: PathBuf,
+    /// Live config reference — `repo_path` is read on each call so that a
+    /// post-clone update to `config.git.repo_path` is picked up without restart.
+    config: Arc<RwLock<Config>>,
     git_remote: String,
     github_app: Option<Arc<GitHubAppTokenManager>>,
 }
 
 impl RealActions {
     pub fn new(
-        repo_path: PathBuf,
+        config: Arc<RwLock<Config>>,
         git_remote: String,
         github_app: Option<Arc<GitHubAppTokenManager>>,
     ) -> Self {
         Self {
-            repo_path,
+            config,
             git_remote,
             github_app,
         }
+    }
+
+    async fn repo_path(&self) -> PathBuf {
+        PathBuf::from(&self.config.read().await.git.repo_path)
     }
 
     /// Return `[("GH_TOKEN", token)]` when a GitHub App is configured, otherwise empty.
@@ -41,7 +49,8 @@ impl RealActions {
         let Some(app) = &self.github_app else {
             return vec![];
         };
-        match app.get_installation_token(&self.repo_path).await {
+        let repo_path = self.repo_path().await;
+        match app.get_installation_token(&repo_path).await {
             Ok(token) => vec![("GH_TOKEN".to_string(), token)],
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to get GitHub App token for env injection");
@@ -58,6 +67,7 @@ impl ExternalActions for RealActions {
             ticket = key,
             "Assigning ticket to current Jira user (acli @me)"
         );
+        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "acli",
             &[
@@ -70,7 +80,7 @@ impl ExternalActions for RealActions {
                 "@me",
                 "--yes",
             ],
-            &self.repo_path,
+            &repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -85,6 +95,7 @@ impl ExternalActions for RealActions {
 
     async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
         info!(ticket = key, status = status, "Transitioning ticket");
+        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "acli",
             &[
@@ -97,7 +108,7 @@ impl ExternalActions for RealActions {
                 status,
                 "--yes",
             ],
-            &self.repo_path,
+            &repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -112,6 +123,7 @@ impl ExternalActions for RealActions {
 
     async fn unassign_ticket(&self, key: &str) -> Result<()> {
         info!(ticket = key, "Unassigning ticket");
+        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "acli",
             &[
@@ -123,7 +135,7 @@ impl ExternalActions for RealActions {
                 "--remove-assignee",
                 "--yes",
             ],
-            &self.repo_path,
+            &repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -138,6 +150,7 @@ impl ExternalActions for RealActions {
 
     async fn get_ticket_details(&self, key: &str) -> Result<String> {
         info!(ticket = key, "Retrieving ticket details");
+        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "acli",
             &[
@@ -149,7 +162,7 @@ impl ExternalActions for RealActions {
                 "--fields",
                 "key,issuetype,summary,status,assignee,description",
             ],
-            &self.repo_path,
+            &repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -163,8 +176,8 @@ impl ExternalActions for RealActions {
     }
 
     async fn create_worktree(&self, branch: &str, base: &str) -> Result<PathBuf> {
-        let worktree_path = self
-            .repo_path
+        let repo_path = self.repo_path().await;
+        let worktree_path = repo_path
             .join("worktrees")
             .join(branch.replace('/', "-"));
         info!(branch = branch, base = base, path = %worktree_path.display(), "Creating git worktree");
@@ -174,7 +187,7 @@ impl ExternalActions for RealActions {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        worktree_remove::clear_worktree_path_for_recreate(&self.repo_path, &worktree_path).await?;
+        worktree_remove::clear_worktree_path_for_recreate(&repo_path, &worktree_path).await?;
 
         let remote = &self.git_remote;
         // Fetch the base branch from the configured remote to ensure it's available locally.
@@ -187,7 +200,7 @@ impl ExternalActions for RealActions {
             .collect();
         let fetch_output = process::run_shell_command_with_env(
             &format!("git fetch {remote} {base}"),
-            &self.repo_path,
+            &repo_path,
             CancellationToken::new(),
             &token_env_refs,
         )
@@ -210,7 +223,7 @@ impl ExternalActions for RealActions {
                 "git -c core.hooksPath=/dev/null worktree add -b {branch} {} {remote}/{base}",
                 worktree_path.display()
             ),
-            &self.repo_path,
+            &repo_path,
             CancellationToken::new(),
             &[],
         )
@@ -223,7 +236,7 @@ impl ExternalActions for RealActions {
                     "git -c core.hooksPath=/dev/null worktree add {} {branch}",
                     worktree_path.display()
                 ),
-                &self.repo_path,
+                &repo_path,
                 CancellationToken::new(),
                 &[],
             )
@@ -240,7 +253,7 @@ impl ExternalActions for RealActions {
     }
 
     async fn remove_worktree(&self, path: &Path) -> Result<()> {
-        worktree_remove::remove_git_worktree(&self.repo_path, path).await
+        worktree_remove::remove_git_worktree(&self.repo_path().await, path).await
     }
 
     async fn delete_local_branch(&self, branch: &str) -> Result<()> {
@@ -249,10 +262,11 @@ impl ExternalActions for RealActions {
             return Ok(());
         }
         info!(branch = %branch, "Deleting local git branch");
+        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "git",
             &["branch", "-D", branch],
-            &self.repo_path,
+            &repo_path,
             CancellationToken::new(),
         )
         .await?;

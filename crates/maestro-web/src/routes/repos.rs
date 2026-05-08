@@ -33,20 +33,20 @@ pub struct RepoListQuery {
     pub q: String,
 }
 
+/// Well-known base directory for project repositories (Docker / devcontainer convention).
+const WORKSPACES_DIR: &str = "/workspaces";
+
 /// `GET /api/github/repos` — list GitHub repos accessible by the authenticated user.
 pub async fn list_github_repos(
     State(state): State<AppState>,
     Query(query): Query<RepoListQuery>,
 ) -> Result<Json<Vec<GitHubRepoRow>>, (StatusCode, String)> {
-    let repo_path = {
-        let config = state.config.read().await;
-        std::path::PathBuf::from(&config.git.repo_path)
-    };
+    let workspaces = std::path::Path::new(WORKSPACES_DIR);
 
     let gh_token = state
         .engine
         .actions
-        .get_gh_installation_token(&repo_path)
+        .get_gh_installation_token(workspaces)
         .await;
 
     let env: Vec<(&str, &str)> = gh_token
@@ -54,7 +54,11 @@ pub async fn list_github_repos(
         .map(|t| vec![("GH_TOKEN", t)])
         .unwrap_or_default();
 
-    // If a search query is provided, use the search endpoint; otherwise list user repos.
+    // If a search query is provided, use the search endpoint.
+    // For the empty-query case: GitHub App installation tokens cannot call
+    // `user/repos` (returns "Resource not accessible by integration"), so use
+    // `installation/repositories` instead. Fall back to `user/repos` only when
+    // no installation token is available (i.e. plain `gh auth` login).
     let search_query;
     let args: Vec<String> = if !query.q.is_empty() {
         search_query = format!("{} in:name", query.q);
@@ -67,6 +71,16 @@ pub async fn list_github_repos(
             format!("q={search_query}"),
             "--field".to_string(),
             "per_page=50".to_string(),
+        ]
+    } else if gh_token.is_some() {
+        // Installation token: list repos the app installation has access to.
+        vec![
+            "api".to_string(),
+            "installation/repositories".to_string(),
+            "--method".to_string(),
+            "GET".to_string(),
+            "--field".to_string(),
+            "per_page=100".to_string(),
         ]
     } else {
         vec![
@@ -88,7 +102,7 @@ pub async fn list_github_repos(
     let output = maestro_core::process::run_command_with_env(
         "gh",
         &args_refs,
-        &repo_path,
+        workspaces,
         tokio_util::sync::CancellationToken::new(),
         &env,
     )
@@ -117,11 +131,16 @@ pub async fn list_github_repos(
         )
     })?;
 
-    // Handle both /user/repos (returns array) and /search/repositories (returns { items: [...] })
+    // Handle all three response shapes:
+    // - /user/repos              → JSON array
+    // - /search/repositories     → { "items": [...] }
+    // - /installation/repositories → { "repositories": [...] }
     let items = if let Some(arr) = json.as_array() {
         arr.clone()
     } else if let Some(items) = json.get("items").and_then(|v| v.as_array()) {
         items.clone()
+    } else if let Some(repos) = json.get("repositories").and_then(|v| v.as_array()) {
+        repos.clone()
     } else {
         Vec::new()
     };
@@ -158,28 +177,30 @@ pub struct CloneRepoResponse {
     pub status: String,
 }
 
-/// `POST /api/repos/clone` — Clone a GitHub repo into the configured repo_path.
+/// `POST /api/repos/clone` — Clone a GitHub repo into `/workspaces/<repo-name>/`.
 pub async fn clone_repo(
     State(state): State<AppState>,
     Json(body): Json<CloneRepoBody>,
 ) -> Result<(StatusCode, Json<CloneRepoResponse>), (StatusCode, String)> {
     // Validate full_name format: must be "owner/repo" with only safe characters.
-    let valid = {
-        let parts: Vec<&str> = body.full_name.split('/').collect();
-        parts.len() == 2
-            && parts.iter().all(|p| {
-                !p.is_empty()
-                    && p.chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-                    && !p.starts_with('.')
-            })
-    };
+    let parts: Vec<&str> = body.full_name.split('/').collect();
+    let valid = parts.len() == 2
+        && parts.iter().all(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+                && !p.starts_with('.')
+        });
     if !valid {
         return Err((
             StatusCode::BAD_REQUEST,
             "Invalid repository name. Expected format: owner/repo".to_string(),
         ));
     }
+
+    // Derive the clone destination: /workspaces/<repo-name>/
+    let repo_name = parts[1];
+    let clone_target = std::path::PathBuf::from(WORKSPACES_DIR).join(repo_name);
 
     // Atomically claim the clone lock — compare_exchange ensures only one
     // concurrent request can start a clone (no TOCTOU gap).
@@ -194,19 +215,15 @@ pub async fn clone_repo(
         ));
     }
 
-    let repo_path = {
-        let config = state.config.read().await;
-        std::path::PathBuf::from(&config.git.repo_path)
-    };
-
-    // Check if repo already exists — release the lock if we bail out early.
-    if repo_path.join(".git").exists() && !body.force {
+    // Check if a git repo already exists at the clone target — release the lock
+    // if we bail out early.
+    if clone_target.join(".git").exists() && !body.force {
         state.clone_in_progress.store(false, Ordering::Release);
         return Err((
             StatusCode::CONFLICT,
             serde_json::json!({
                 "error": "repository_exists",
-                "message": format!("A repository already exists at {}", repo_path.display())
+                "message": format!("A repository already exists at {}", clone_target.display())
             })
             .to_string(),
         ));
@@ -220,8 +237,35 @@ pub async fn clone_repo(
     // always cleared even if the task panics.
     tokio::spawn(async move {
         let _guard = CloneGuard(state_clone.clone_in_progress.clone());
-        info!(repo = %full_name, force, "Starting async repository clone");
-        let result = do_clone(&state_clone, &full_name, &repo_path, force).await;
+        info!(repo = %full_name, target = %clone_target.display(), force, "Starting async repository clone");
+        let result = do_clone(
+            &state_clone,
+            &full_name,
+            std::path::Path::new(WORKSPACES_DIR),
+            &clone_target,
+            force,
+        )
+        .await;
+
+        // On success, update config.git.repo_path to the new clone location and
+        // persist to disk so the engine picks up the correct workspace.
+        if result.is_ok() {
+            let new_path = clone_target.to_string_lossy().into_owned();
+            let config_snapshot = {
+                let mut config = state_clone.config.write().await;
+                config.git.repo_path = new_path.clone();
+                config.clone()
+            };
+            if let Some(ref writer) = state_clone.config_writer {
+                if let Err(e) = writer.write_config(&config_snapshot) {
+                    tracing::warn!(
+                        error = %e,
+                        path = %new_path,
+                        "repo_path updated in memory but config disk write failed"
+                    );
+                }
+            }
+        }
 
         // Broadcast result via WebSocket and log outcome
         let event = match &result {
@@ -274,30 +318,36 @@ pub async fn clone_repo(
     ))
 }
 
+/// Perform the actual git clone.
+///
+/// `token_cwd` is an existing directory used as the working directory when
+/// fetching the GitHub App installation token (pre-clone).
+/// `clone_target` is the destination directory: `/workspaces/<repo-name>/`.
 async fn do_clone(
     state: &AppState,
     full_name: &str,
-    repo_path: &std::path::Path,
+    token_cwd: &std::path::Path,
+    clone_target: &std::path::Path,
     force: bool,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // If force, remove existing repo
-    if force && repo_path.exists() {
-        tokio::fs::remove_dir_all(repo_path).await?;
-        tokio::fs::create_dir_all(repo_path).await?;
+    // If force, wipe the existing directory before cloning.
+    if force && clone_target.exists() {
+        tokio::fs::remove_dir_all(clone_target).await?;
     }
 
-    // Ensure directory exists
-    if !repo_path.exists() {
-        tokio::fs::create_dir_all(repo_path).await?;
-    }
-
+    // /workspaces is created at image build time and owned by the maestro user.
+    // Use it as cwd for the installation token fetch.
     let gh_token = state
         .engine
         .actions
-        .get_gh_installation_token(repo_path)
+        .get_gh_installation_token(token_cwd)
         .await;
 
     let clone_url = format!("https://github.com/{full_name}.git");
+    let target = clone_target.to_str().unwrap_or(".");
+    let parent_dir = clone_target
+        .parent()
+        .unwrap_or(std::path::Path::new(WORKSPACES_DIR));
 
     if let Some(token) = gh_token {
         // Use git clone with an inline credential helper that echoes the GitHub App
@@ -307,7 +357,6 @@ async fn do_clone(
             "!f() {{ echo protocol=https; echo host=github.com; echo username=x-access-token; echo password={}; }}; f",
             token
         );
-        let target = repo_path.to_str().unwrap_or(".");
         let output = maestro_core::process::run_command(
             "git",
             &[
@@ -317,7 +366,7 @@ async fn do_clone(
                 &clone_url,
                 target,
             ],
-            repo_path.parent().unwrap_or(std::path::Path::new("/")),
+            parent_dir,
             tokio_util::sync::CancellationToken::new(),
         )
         .await?;
@@ -326,11 +375,10 @@ async fn do_clone(
         }
     } else {
         // Use gh repo clone
-        let target = repo_path.to_str().unwrap_or(".");
         let output = maestro_core::process::run_command(
             "gh",
             &["repo", "clone", full_name, target],
-            repo_path.parent().unwrap_or(std::path::Path::new("/")),
+            parent_dir,
             tokio_util::sync::CancellationToken::new(),
         )
         .await?;
@@ -339,12 +387,11 @@ async fn do_clone(
         }
     }
 
-    // Set safe.directory
-    let safe_dir = repo_path.to_str().unwrap_or(".");
+    // Register the cloned directory as a git safe.directory.
     let _ = maestro_core::process::run_command(
         "git",
-        &["config", "--global", "--add", "safe.directory", safe_dir],
-        repo_path,
+        &["config", "--global", "--add", "safe.directory", target],
+        clone_target,
         tokio_util::sync::CancellationToken::new(),
     )
     .await;

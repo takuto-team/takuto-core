@@ -35,6 +35,7 @@ if [ "$(id -u)" = "0" ]; then
     chown_maestro_tree /home/maestro/.npm
     chown_maestro_tree /home/maestro/.aws
     chown_maestro_tree /workspace
+    chown_maestro_tree /workspaces
 
     if [ "${1:-}" != "setup" ] && [ "${1:-}" != "test-workflow" ]; then
         if iptables -L -n >/dev/null 2>&1; then
@@ -398,18 +399,11 @@ if ! /usr/local/bin/maestro --config "$CONFIG_FILE" docker-hooks startup; then
     echo "[maestro] WARNING: Startup hooks failed — continuing in degraded mode." >&2
 fi
 
-if [ ! -d "/workspace/.git" ]; then
-    REPO_ERR="No repository found at /workspace. Run: docker compose run --rm -it maestro setup"
-    MAESTRO_PREFLIGHT_ERROR="${MAESTRO_PREFLIGHT_ERROR:+${MAESTRO_PREFLIGHT_ERROR}
-}${REPO_ERR}"
-    export MAESTRO_PREFLIGHT_ERROR
-    echo "[maestro] WARNING: No repository at /workspace — starting in degraded mode." >&2
-fi
 
 export HOME="/home/maestro"
 export USER="maestro"
 
-git config --global --add safe.directory /workspace
+git config --global --add safe.directory '*'
 gh auth setup-git 2>/dev/null || true
 # Rewrite SSH GitHub URLs to HTTPS so the gh credential helper handles auth.
 # Without this, git-over-SSH fails because no SSH keys are persisted across restarts.

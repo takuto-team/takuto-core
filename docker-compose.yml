@@ -36,8 +36,10 @@ services:
       - gh-auth:/home/maestro/.config/gh
       - acli-auth:/home/maestro/.config/acli
       - fcli-auth:/home/maestro/.config/fcli
-      # Workspace — cloned during setup, persisted across restarts
+      # Legacy single-workspace mount (kept for backward compatibility)
       - workspace:/workspace
+      # Project repositories cloned via the dashboard Setup flow
+      - workspaces:/workspaces
       # npm cache — persisted for the maestro user
       - npm-cache:/home/maestro/.npm
       # mise installs + shims (tool versions from `.mise.toml` / `.tool-versions`)
@@ -75,6 +77,7 @@ volumes:
   acli-auth:
   fcli-auth:
   workspace:
+  workspaces:
   npm-cache:
   mise-data:
   mise-cache:

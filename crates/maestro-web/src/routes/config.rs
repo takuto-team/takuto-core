@@ -31,6 +31,49 @@ pub struct ConfigResponse {
     pub config_writable: bool,
     /// `true` when a git repository exists at the configured `git.repo_path`.
     pub repo_exists: bool,
+    /// Short name of the currently cloned repository (directory name under `/workspaces/`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_name: Option<String>,
+    /// GitHub HTML URL of the currently cloned repository (from `git remote get-url origin`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_html_url: Option<String>,
+}
+
+/// Parse the `origin` remote URL from `.git/config` and convert it to an
+/// `https://github.com/…` HTML URL (handles both HTTPS and SSH remotes).
+fn read_git_remote_url(repo_path: &std::path::Path) -> Option<String> {
+    let git_config = std::fs::read_to_string(repo_path.join(".git/config")).ok()?;
+    // Find the `[remote "origin"]` section and extract the `url =` line.
+    let mut in_origin = false;
+    for line in git_config.lines() {
+        let trimmed = line.trim();
+        if trimmed == r#"[remote "origin"]"# {
+            in_origin = true;
+            continue;
+        }
+        if in_origin {
+            if trimmed.starts_with('[') {
+                break; // moved to next section
+            }
+            if let Some(rest) = trimmed.strip_prefix("url =") {
+                let url = rest.trim();
+                return Some(normalize_github_url(url));
+            }
+        }
+    }
+    None
+}
+
+/// Convert any GitHub remote URL form to an `https://github.com/owner/repo` HTML URL.
+fn normalize_github_url(url: &str) -> String {
+    // SSH form: git@github.com:owner/repo.git
+    if let Some(path) = url.strip_prefix("git@github.com:") {
+        let path = path.trim_end_matches(".git");
+        return format!("https://github.com/{path}");
+    }
+    // HTTPS form: https://github.com/owner/repo.git
+    let url = url.trim_end_matches(".git");
+    url.to_string()
 }
 
 pub async fn get_version() -> Json<serde_json::Value> {
@@ -41,7 +84,24 @@ pub async fn get_version() -> Json<serde_json::Value> {
 
 pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     let config = state.config.read().await;
-    let repo_path = config.git.repo_path.clone();
+    // `repo_exists` scans /workspaces/ for any directory that contains a .git
+    // entry, so it reflects the actual filesystem state rather than a potentially
+    // stale config value.
+    // Scan /workspaces/ for the first directory containing a .git entry.
+    let repo_dir = std::fs::read_dir("/workspaces")
+        .ok()
+        .and_then(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .find(|e| e.path().join(".git").exists())
+        });
+    let repo_exists = repo_dir.is_some();
+    let repo_name = repo_dir
+        .as_ref()
+        .map(|e| e.file_name().to_string_lossy().into_owned());
+    let repo_html_url = repo_dir.as_ref().and_then(|e| {
+        read_git_remote_url(&e.path())
+    });
     Json(ConfigResponse {
         github_app_configured: config.github.is_configured(),
         config: config.redacted_for_api_clone(),
@@ -49,7 +109,9 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
         ticketing_system: state.ticketing_system.to_string(),
         preflight_error: state.preflight_error.clone(),
         config_writable: state.config_writer.is_some(),
-        repo_exists: std::path::Path::new(&repo_path).join(".git").exists(),
+        repo_exists,
+        repo_name,
+        repo_html_url,
     })
 }
 
