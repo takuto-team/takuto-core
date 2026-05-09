@@ -19,6 +19,12 @@ export default defineConfig({
   },
   plugins: [react(), tailwindcss(), VitePWA({
     registerType: "autoUpdate",
+    workbox: {
+      // Don't let the service worker intercept navigations to
+      // /s/<path-token>/...  — those must reach the Axum reverse-proxy
+      // handler, not be served as cached SPA shell (GH-45).
+      navigateFallbackDenylist: [/^\/s\//],
+    },
     manifest: {
       name: "Maestro Dashboard",
       short_name: "Maestro",
@@ -35,7 +41,8 @@ export default defineConfig({
       "/ws": {
         target: "ws://localhost:8080",
         ws: true
-      }
+      },
+      "/s": "http://localhost:8080"
     }
   },
   test: {
