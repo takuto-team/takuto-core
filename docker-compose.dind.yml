@@ -15,9 +15,10 @@ services:
   dind:
     image: docker:27-dind
     privileged: true
-    ports:
-      # DinD worker ports: map to 9200-9300 to avoid conflict with host editor containers (9100-9200)
-      - "9200-9300:9100-9200"
+    # GH-45: editor/terminal ports are no longer published to the host —
+    # the maestro-web shared-port reverse proxy (/s/<path-token>/...) handles
+    # all browser access. Ports are reachable only from within the Compose
+    # network (maestro → dind).
     environment:
       DOCKER_TLS_CERTDIR: ""
     volumes:

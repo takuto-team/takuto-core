@@ -651,14 +651,23 @@ pub fn build_session_terminal_url(path_token: &str, ttyd_token: &str) -> String 
     format!("/s/{path_token}/{ttyd_token}/")
 }
 
-/// Build a Docker `--publish` argument string that binds a host port to the
-/// loopback interface only.
+/// Build a Docker `--publish` argument string for editor/terminal session ports.
 ///
-/// Format: `127.0.0.1:HOST:CONTAINER`. Used for editor and terminal session
-/// listeners so they are reachable only by the maestro-web reverse proxy,
-/// not by anyone on the LAN. See GH-45 acceptance criterion #10.
-pub fn loopback_publish_arg(host_port: u16, container_port: u16) -> String {
-    format!("127.0.0.1:{host_port}:{container_port}")
+/// When running with a local Docker daemon (no `DOCKER_HOST`), binds to the
+/// loopback interface only (`127.0.0.1:HOST:CONTAINER`) so the port is
+/// reachable only by the maestro-web reverse proxy, not by anyone on the LAN.
+///
+/// When running with DinD (`DOCKER_HOST` is set), publishes to all interfaces
+/// (`HOST:CONTAINER`) so the proxy in the maestro container can reach the
+/// port over the Docker Compose network. Direct host access is prevented by
+/// removing the DinD port range from docker-compose.dind.yml — the ports are
+/// only accessible within the Compose network. See GH-45 acceptance criterion #10.
+pub fn session_publish_arg(host_port: u16, container_port: u16) -> String {
+    if std::env::var("DOCKER_HOST").is_ok() {
+        format!("{host_port}:{container_port}")
+    } else {
+        format!("127.0.0.1:{host_port}:{container_port}")
+    }
 }
 
 /// Parse the `maestro.connection_token` value from a Docker inspect JSON labels string.
@@ -762,10 +771,10 @@ pub async fn start_editor(
     // the follow-up to route those through `/s/<token>/forward/<port>/` is
     // tracked separately and out of scope for GH-45.
     args.push("-p".into());
-    args.push(loopback_publish_arg(vscode_port, vscode_port));
+    args.push(session_publish_arg(vscode_port, vscode_port));
     for &sp in &spare_ports {
         args.push("-p".into());
-        args.push(loopback_publish_arg(sp, sp));
+        args.push(session_publish_arg(sp, sp));
     }
 
     // Working directory
@@ -1782,7 +1791,7 @@ pub async fn start_run_command(
     // the editor port binding (see GH-45 #10).
     for &sp in &spare_ports {
         args.push("-p".into());
-        args.push(loopback_publish_arg(sp, sp));
+        args.push(session_publish_arg(sp, sp));
     }
 
     // Working directory
@@ -2363,21 +2372,11 @@ mod tests {
     }
 
     #[test]
-    fn loopback_publish_arg_binds_to_127_0_0_1() {
-        assert_eq!(loopback_publish_arg(9101, 9101), "127.0.0.1:9101:9101");
-        assert_eq!(loopback_publish_arg(9201, 9101), "127.0.0.1:9201:9101");
-    }
-
-    #[test]
-    fn editor_args_publish_to_loopback() {
-        // The vscode_port mapping must use 127.0.0.1:HOST:CONT, not HOST:CONT.
-        // This is enforced by the build helper used in `start_editor`'s arg list.
-        // We check the helper directly because `start_editor` requires Docker.
-        let arg = loopback_publish_arg(9101, 9101);
-        assert!(
-            arg.starts_with("127.0.0.1:"),
-            "must bind to loopback, got {arg}"
-        );
+    fn session_publish_arg_defaults_to_loopback() {
+        // Without DOCKER_HOST, ports bind to loopback only.
+        let arg = session_publish_arg(9101, 9101);
+        assert_eq!(arg, "127.0.0.1:9101:9101");
+        assert_eq!(session_publish_arg(9201, 9101), "127.0.0.1:9201:9101");
     }
 
     #[test]

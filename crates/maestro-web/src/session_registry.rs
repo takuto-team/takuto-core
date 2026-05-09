@@ -56,7 +56,7 @@ pub struct SessionRoute {
     /// The host port the backend listens on. The proxy connects to
     /// `127.0.0.1:host_port` — never to `0.0.0.0` — because backends MUST
     /// bind to loopback (GH-45 acceptance criterion #10, enforced upstream
-    /// in `container::start_editor` via `loopback_publish_arg`).
+    /// in `container::start_editor` via `session_publish_arg`).
     pub host_port: u16,
     /// Workflow this route belongs to — used by `remove_for_ticket` so
     /// `close_editor` / `close_terminal` can drop every route they own

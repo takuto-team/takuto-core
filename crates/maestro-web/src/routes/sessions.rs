@@ -154,20 +154,42 @@ fn is_websocket_upgrade<B>(req: &Request<B>) -> bool {
     has_upgrade_header && has_connection_upgrade
 }
 
+/// The host the reverse proxy connects to for upstream session requests.
+///
+/// When `DOCKER_HOST` is set (DinD mode), the upstream is the Docker host
+/// (e.g. `dind`), reachable over the Compose network. Otherwise, the
+/// upstream is the local loopback. Computed once and cached for the process
+/// lifetime.
+fn upstream_host() -> &'static str {
+    static HOST: OnceLock<String> = OnceLock::new();
+    HOST.get_or_init(|| {
+        std::env::var("DOCKER_HOST")
+            .ok()
+            .and_then(|dh| {
+                dh.strip_prefix("tcp://")
+                    .and_then(|rest| rest.rsplit_once(':'))
+                    .map(|(host, _port)| host.to_string())
+            })
+            .unwrap_or_else(|| "127.0.0.1".to_string())
+    })
+}
+
 /// Rewrite an incoming request URI to point at the backend listener. The
 /// `/s/{token}` prefix is stripped; the remainder of the path (`rest`) and
 /// the original query string are preserved verbatim.
 ///
-/// Returns `None` if the rewritten URI is unparseable (e.g. the caller
-/// passed a malformed `rest` slice). The proxy converts this into a 404
-/// rather than risk forwarding an attacker-controlled URI.
+/// The upstream host is derived from `DOCKER_HOST` (DinD) or defaults to
+/// `127.0.0.1` (local Docker). Returns `None` if the rewritten URI is
+/// unparseable; the proxy converts this into a 404 rather than risk
+/// forwarding an attacker-controlled URI.
 pub fn build_upstream_uri(host_port: u16, rest: &str, query: Option<&str>) -> Option<Uri> {
+    let host = upstream_host();
     let path = if rest.is_empty() { "/" } else { rest };
     let qmark_query = query
         .filter(|q| !q.is_empty())
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    let raw = format!("http://127.0.0.1:{host_port}{path}{qmark_query}");
+    let raw = format!("http://{host}:{host_port}{path}{qmark_query}");
     raw.parse::<Uri>().ok()
 }
 
@@ -180,8 +202,8 @@ fn sanitise_request_headers(req: &mut Request<Body>, host_port: u16, is_upgrade:
             req.headers_mut().remove(*name);
         }
     }
-    let host =
-        HeaderValue::from_str(&format!("127.0.0.1:{host_port}")).expect("host header is ascii");
+    let host = HeaderValue::from_str(&format!("{}:{host_port}", upstream_host()))
+        .expect("host header is ascii");
     req.headers_mut().insert(HOST, host);
 }
 

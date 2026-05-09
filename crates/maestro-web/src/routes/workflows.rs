@@ -879,13 +879,13 @@ pub async fn open_editor(
     // GH-45: register a 128-bit CSPRNG path token for this editor session in
     // the shared-port proxy registry. The browser-facing URL is then a
     // relative `/s/<path-token>/...` path served from the dashboard origin —
-    // the editor container itself is bound to loopback (see
-    // `loopback_publish_arg` in `start_editor`) and never reachable directly.
+    // the editor container itself is not directly reachable from the host
+    // (see `session_publish_arg` in `start_editor`).
     let path_token = state
         .path_token_registry
         .register(SessionRoute {
             kind: SessionRouteKind::Editor,
-            host_port: container::editor_host_port(info.vscode_port),
+            host_port: info.vscode_port,
             ticket_key: ticket_key.clone(),
         })
         .await;
@@ -966,7 +966,7 @@ pub async fn open_terminal(
                     .path_token_registry
                     .register(SessionRoute {
                         kind: SessionRouteKind::Terminal,
-                        host_port: container::editor_host_port(port),
+                        host_port: port,
                         ticket_key: id.clone(),
                     })
                     .await
@@ -998,7 +998,7 @@ pub async fn open_terminal(
             .path_token_registry
             .register(SessionRoute {
                 kind: SessionRouteKind::Terminal,
-                host_port: container::editor_host_port(port),
+                host_port: port,
                 ticket_key: id.clone(),
             })
             .await;
@@ -1048,7 +1048,7 @@ pub async fn open_terminal(
         .path_token_registry
         .register(SessionRoute {
             kind: SessionRouteKind::Terminal,
-            host_port: container::editor_host_port(port),
+            host_port: port,
             ticket_key: id.clone(),
         })
         .await;
