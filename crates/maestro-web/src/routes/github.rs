@@ -115,6 +115,7 @@ mod tests {
         AppState {
             engine,
             config,
+            db: None,
             polling_paused: Arc::new(AtomicBool::new(false)),
             jira_available,
             ticketing_system: TicketingSystem::None,

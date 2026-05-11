@@ -21,6 +21,8 @@ tower-http = { workspace = true }
 rust-embed = { workspace = true }
 mime_guess = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
+rusqlite = { workspace = true }
 time = { workspace = true }
 sha2 = "0.10"
 subtle = "2"
