@@ -24,9 +24,31 @@ pub fn build_router(state: AppState) -> Router {
         .route("/version", get(routes::config::get_version))
         .route("/auth/status", get(routes::auth::auth_status))
         .route("/auth/login", post(routes::auth::login))
-        .route("/auth/logout", post(routes::auth::logout));
+        .route("/auth/logout", post(routes::auth::logout))
+        .route("/auth/register", post(routes::auth::register));
 
     let api_protected = Router::new()
+        // User management routes (admin only).
+        .route("/users/export", get(routes::admin::export_users))
+        .route("/users/import", post(routes::admin::import_users))
+        .route(
+            "/users",
+            get(routes::admin::list_users).post(routes::admin::create_user),
+        )
+        .route(
+            "/users/{id}",
+            get(routes::admin::get_user)
+                .patch(routes::admin::update_user)
+                .delete(routes::admin::delete_user),
+        )
+        .route(
+            "/users/{id}/suspend",
+            post(routes::admin::suspend_user),
+        )
+        .route(
+            "/users/{id}/unsuspend",
+            post(routes::admin::unsuspend_user),
+        )
         .route("/workflows", get(routes::workflows::list_workflows))
         .route("/workflows/counts", get(routes::workflows::workflow_counts))
         .route("/workflows/{id}", get(routes::workflows::get_workflow))
@@ -203,7 +225,13 @@ pub fn build_cors_layer(web_config: &maestro_core::config::WebConfig) -> CorsLay
 
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(header_values))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([header::CONTENT_TYPE])
         .allow_credentials(true)
 }
@@ -353,17 +381,12 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        for m in &["GET", "POST", "PUT", "DELETE"] {
+        for m in &["GET", "POST", "PUT", "PATCH", "DELETE"] {
             assert!(
                 methods.contains(m),
                 "Allow-Methods should include {m}, got: {methods}"
             );
         }
-        // PATCH should not be allowed
-        assert!(
-            !methods.contains("PATCH"),
-            "Allow-Methods should NOT include PATCH, got: {methods}"
-        );
     }
 
     #[tokio::test]
@@ -515,23 +538,23 @@ mod tests {
                     .method(Method::OPTIONS)
                     .uri("/api/health")
                     .header("Origin", "http://localhost:3000")
-                    .header("Access-Control-Request-Method", "PATCH")
+                    .header("Access-Control-Request-Method", "TRACE")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        // PATCH is not in the allowed methods list; the preflight should either
-        // return 403 or omit the allow-methods header that includes PATCH.
+        // TRACE is not in the allowed methods list; the preflight should either
+        // return 403 or omit the allow-methods header that includes TRACE.
         let methods = resp
             .headers()
             .get("access-control-allow-methods")
             .map(|v| v.to_str().unwrap_or("").to_string())
             .unwrap_or_default();
         assert!(
-            !methods.contains("PATCH"),
-            "PATCH should not be in allowed methods: {methods}"
+            !methods.contains("TRACE"),
+            "TRACE should not be in allowed methods: {methods}"
         );
     }
 }
