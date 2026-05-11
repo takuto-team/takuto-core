@@ -263,6 +263,8 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
     let run_cmds_state = state.run_commands.read().await;
     // Build terminal URLs via the path-token registry so the frontend uses
     // the `/s/<token>/...` proxy path instead of a direct `localhost:<port>` URL.
+    // Single-pass bulk lookup: acquire the registry read lock once rather than
+    // N times in a serial loop (avoids O(K²) linear scans at scale).
     let terminal_ports_snap: Vec<(String, String)> = state
         .terminal_ports
         .read()
@@ -270,20 +272,23 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
         .iter()
         .map(|(k, (_port, ttyd_token))| (k.clone(), ttyd_token.clone()))
         .collect();
-    let mut terminal_urls: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for (ticket_key, ttyd_token) in &terminal_ports_snap {
-        if let Some(path_token) = state
-            .path_token_registry
-            .find_token_for(ticket_key, crate::session_registry::SessionRouteKind::Terminal)
-            .await
-        {
-            terminal_urls.insert(
-                ticket_key.clone(),
-                container::build_session_terminal_url(&path_token, ttyd_token),
-            );
-        }
-    }
+    let terminal_urls: HashMap<String, String> = {
+        let registry = state.path_token_registry.inner_read().await;
+        terminal_ports_snap
+            .iter()
+            .filter_map(|(ticket_key, ttyd_token)| {
+                registry
+                    .iter()
+                    .find(|(_, r)| r.ticket_key == *ticket_key && r.kind == SessionRouteKind::Terminal)
+                    .map(|(path_token, _)| {
+                        (
+                            ticket_key.clone(),
+                            container::build_session_terminal_url(path_token, ttyd_token),
+                        )
+                    })
+            })
+            .collect()
+    };
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
         .filter(|w| w.workspace_name == current_ws)
@@ -447,7 +452,7 @@ pub async fn get_workflow(
             match ttyd_token {
                 Some(t) => state
                     .path_token_registry
-                    .find_token_for(&ticket_key, crate::session_registry::SessionRouteKind::Terminal)
+                    .find_token_for(&ticket_key, SessionRouteKind::Terminal)
                     .await
                     .map(|pt| container::build_session_terminal_url(&pt, &t)),
                 None => None,
@@ -876,19 +881,27 @@ pub async fn open_editor(
         }
     }
 
-    // GH-45: register a 128-bit CSPRNG path token for this editor session in
-    // the shared-port proxy registry. The browser-facing URL is then a
-    // relative `/s/<path-token>/...` path served from the dashboard origin —
-    // the editor container itself is not directly reachable from the host
-    // (see `session_publish_arg` in `start_editor`).
-    let path_token = state
-        .path_token_registry
-        .register(SessionRoute {
-            kind: SessionRouteKind::Editor,
-            host_port: info.vscode_port,
-            ticket_key: ticket_key.clone(),
-        })
-        .await;
+    // GH-45: the editor container owns the path token (stored as a label and
+    // used in `--server-base-path`). Register it in the in-memory proxy
+    // registry so the reverse proxy can route `/s/<path-token>/...` requests.
+    // `register_with_token` is idempotent — returns false if already present
+    // (e.g. from a previous `open_editor` call for a still-running container).
+    // Guard: pre-GH-45 containers lack the `maestro.path_token` label and
+    // return an empty string — skip registration to avoid a phantom entry.
+    let path_token = info.path_token.clone();
+    if !path_token.is_empty() {
+        let _ = state
+            .path_token_registry
+            .register_with_token(
+                path_token.clone(),
+                SessionRoute {
+                    kind: SessionRouteKind::Editor,
+                    host_port: info.vscode_port,
+                    ticket_key: ticket_key.clone(),
+                },
+            )
+            .await;
+    }
     // Use the structured `folder` field from `EditorInfo` directly so the
     // path-prefixed proxy URL points at the same worktree path the editor
     // container was launched against. `EditorInfo::url` is intentionally NOT

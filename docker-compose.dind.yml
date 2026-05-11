@@ -10,15 +10,20 @@
 # the internal compose network (no TLS — traffic never leaves the bridge).
 # The `workspace` volume is shared so paths like /workspace/project/... resolve
 # identically for both the Maestro CLI and the DinD daemon.
+#
+# GH-45: Maestro shares the DinD network namespace (`network_mode: service:dind`)
+# so the reverse proxy can reach docker-proxy ports (9100+) via localhost.
+# Port 8080 is published on the `dind` service because the maestro service no
+# longer has its own network interfaces.
 
 services:
   dind:
     image: docker:27-dind
     privileged: true
-    # GH-45: editor/terminal ports are no longer published to the host —
-    # the maestro-web shared-port reverse proxy (/s/<path-token>/...) handles
-    # all browser access. Ports are reachable only from within the Compose
-    # network (maestro → dind).
+    ports:
+      # Maestro's dashboard port — published here because maestro shares this
+      # network namespace via `network_mode: service:dind`.
+      - "${MAESTRO_PORT:-8080}:8080"
     environment:
       DOCKER_TLS_CERTDIR: ""
     volumes:
@@ -50,9 +55,14 @@ services:
       start_period: 5s
 
   maestro:
+    # Share the DinD container's network namespace so the reverse proxy can
+    # reach docker-proxy published ports (editor/terminal) via localhost.
+    # Without this, Docker Desktop for Mac blocks cross-container traffic to
+    # ports that aren't part of the DinD image's original EXPOSE set.
+    network_mode: "service:dind"
+    ports: !reset []
     environment:
-      - DOCKER_HOST=tcp://dind:2375
-      - MAESTRO_DIND_PORT_OFFSET=100
+      - DOCKER_HOST=tcp://127.0.0.1:2375
     depends_on:
       dind:
         condition: service_healthy

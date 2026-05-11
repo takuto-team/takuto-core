@@ -8,7 +8,8 @@
 //!  * `path-token` is the 32-char hex token registered in the
 //!    [`PathTokenRegistry`] when the session was opened.
 //!  * `rest` is forwarded verbatim (with the original query string) to the
-//!    backend listener at `127.0.0.1:<host_port>`.
+//!    upstream backend listener (derived from `DOCKER_HOST` in DinD mode,
+//!    or `127.0.0.1` with local Docker).
 //!
 //! Behaviour required by the GH-45 acceptance criteria:
 //!  * Unknown tokens → `404 Not Found`, empty body, no `kind` echoed back
@@ -35,7 +36,7 @@ use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use hyper_util::rt::TokioExecutor;
 use sha2::{Digest, Sha256};
 
-use crate::session_registry::SessionRoute;
+use crate::session_registry::{SessionRoute, SessionRouteKind};
 use crate::state::AppState;
 
 /// Hop-by-hop headers (RFC 7230 §6.1) that must NOT be forwarded.
@@ -61,9 +62,16 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
 
 /// Process-wide hyper client. Lazily initialised so unit tests that never
 /// hit the network can run without spinning up the executor.
+///
+/// A 5-second connect timeout prevents indefinite hangs when the upstream
+/// host is unreachable (e.g. misconfigured DinD networking).
 fn http_client() -> &'static Client<HttpConnector, Body> {
     static CLIENT: OnceLock<Client<HttpConnector, Body>> = OnceLock::new();
-    CLIENT.get_or_init(|| Client::builder(TokioExecutor::new()).build_http())
+    CLIENT.get_or_init(|| {
+        let mut connector = HttpConnector::new();
+        connector.set_connect_timeout(Some(std::time::Duration::from_secs(5)));
+        Client::builder(TokioExecutor::new()).build(connector)
+    })
 }
 
 /// Short, log-safe identifier for a path token: first 8 hex chars of
@@ -89,20 +97,24 @@ pub fn token_hash_prefix(token: &str) -> String {
 /// Returns `Some((token, Some(rest)))` for `/s/<token>/<rest>` — `rest`
 /// includes the leading slash, e.g. `/` for an empty rest, `/foo/bar` for
 /// a deeper path.
-pub fn parse_session_path(path: &str) -> Option<(String, Option<String>)> {
+///
+/// Returns borrowed slices into `path` to avoid heap allocations on the
+/// proxy hot path — VS Code editor sessions fire dozens of asset
+/// sub-requests in quick succession.
+pub fn parse_session_path(path: &str) -> Option<(&str, Option<&str>)> {
     let after_prefix = path.strip_prefix("/s/")?;
     if after_prefix.is_empty() {
         return None;
     }
     match after_prefix.find('/') {
-        None => Some((after_prefix.to_string(), None)),
+        None => Some((after_prefix, None)),
         Some(idx) => {
             let token = &after_prefix[..idx];
             let rest = &after_prefix[idx..];
             if token.is_empty() {
                 return None;
             }
-            Some((token.to_string(), Some(rest.to_string())))
+            Some((token, Some(rest)))
         }
     }
 }
@@ -121,8 +133,15 @@ fn not_found() -> Response<Body> {
 /// 308 (Permanent Redirect) preserves the request method and body, which
 /// is what we want — relative asset URLs from openvscode-server resolve
 /// against the request URL, so the redirect must be terminal not silent.
-fn redirect_to_trailing_slash(token: &str) -> Response<Body> {
-    let location = format!("/s/{token}/");
+///
+/// The original query string (if any) is preserved so that manually copied
+/// or bookmarked URLs like `/s/{token}?tkn=abc&folder=/x` don't lose their
+/// auth parameters on redirect.
+fn redirect_to_trailing_slash(token: &str, query: Option<&str>) -> Response<Body> {
+    let location = match query {
+        Some(q) if !q.is_empty() => format!("/s/{token}/?{q}"),
+        _ => format!("/s/{token}/"),
+    };
     Response::builder()
         .status(StatusCode::PERMANENT_REDIRECT)
         .header(header::LOCATION, location)
@@ -156,10 +175,14 @@ fn is_websocket_upgrade<B>(req: &Request<B>) -> bool {
 
 /// The host the reverse proxy connects to for upstream session requests.
 ///
-/// When `DOCKER_HOST` is set (DinD mode), the upstream is the Docker host
-/// (e.g. `dind`), reachable over the Compose network. Otherwise, the
-/// upstream is the local loopback. Computed once and cached for the process
-/// lifetime.
+/// When `DOCKER_HOST` is set (DinD mode), the hostname is extracted from
+/// the env var (e.g. `tcp://127.0.0.1:2375` → `127.0.0.1`).  In DinD
+/// mode the maestro container shares the DinD container's network
+/// namespace (`network_mode: service:dind`), so `127.0.0.1` reaches
+/// docker-proxy ports directly — no cross-container routing required.
+///
+/// When `DOCKER_HOST` is unset (local Docker), the upstream is loopback.
+/// Computed once and cached for the process lifetime.
 fn upstream_host() -> &'static str {
     static HOST: OnceLock<String> = OnceLock::new();
     HOST.get_or_init(|| {
@@ -210,13 +233,14 @@ fn sanitise_request_headers(req: &mut Request<Body>, host_port: u16, is_upgrade:
 /// Top-level handler registered at `/s/{*rest}`.
 pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) -> Response<Body> {
     let path = req.uri().path().to_string();
+    let query = req.uri().query().map(|s| s.to_string());
     let (token, rest) = match parse_session_path(&path) {
         Some(parts) => parts,
         None => return not_found(),
     };
 
     let rest = match rest {
-        None => return redirect_to_trailing_slash(&token),
+        None => return redirect_to_trailing_slash(&token, query.as_deref()),
         Some(r) => r,
     };
 
@@ -236,29 +260,93 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
     };
 
     if is_websocket_upgrade(&req) {
-        forward_websocket(req, route, &rest).await
+        forward_websocket(req, route, &rest, &token).await
     } else {
-        forward_http(req, route, &rest).await
+        forward_http(req, route, &rest, &token).await
+    }
+}
+
+/// Rewrite root-relative `Location` headers in 3xx responses so the
+/// browser stays within the `/s/{token}/` proxy namespace.
+///
+/// Without this, upstream backends (openvscode-server, ttyd) that
+/// redirect to `/foo` would send the browser to `http://host:8080/foo`
+/// — bypassing the proxy entirely. By prepending `/s/{token}`, the
+/// redirect keeps going through the reverse proxy.
+fn rewrite_redirect_location(resp: &mut Response<Body>, token: &str) {
+    if !resp.status().is_redirection() {
+        return;
+    }
+    let location = match resp.headers().get(header::LOCATION) {
+        Some(v) => v.clone(),
+        None => return,
+    };
+    let location_str = match location.to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    // Only rewrite root-relative paths (starting with `/`).
+    // Absolute URLs and relative paths are left untouched.
+    if let Some(path) = location_str.strip_prefix('/') {
+        let rewritten = format!("/s/{token}/{path}");
+        if let Ok(val) = HeaderValue::from_str(&rewritten) {
+            resp.headers_mut().insert(header::LOCATION, val);
+        }
+    }
+}
+
+/// Compute the upstream path based on session kind.
+///
+/// Editor sessions use `--server-base-path /s/{token}` so the full prefix
+/// must be preserved. Terminal sessions strip the proxy prefix.
+fn upstream_path_for_kind(kind: SessionRouteKind, token: &str, rest: &str) -> String {
+    match kind {
+        SessionRouteKind::Editor => format!("/s/{token}{rest}"),
+        SessionRouteKind::Terminal => rest.to_string(),
     }
 }
 
 /// Forward a plain HTTP request to the backend.
-async fn forward_http(mut req: Request<Body>, route: SessionRoute, rest: &str) -> Response<Body> {
+///
+/// For **editor** sessions the upstream openvscode-server is launched with
+/// `--server-base-path /s/{token}`, so the full `/s/{token}/…` prefix must be
+/// kept in the forwarded path. For **terminal** (ttyd) sessions the prefix is
+/// stripped — ttyd has no base-path equivalent.
+async fn forward_http(
+    mut req: Request<Body>,
+    route: SessionRoute,
+    rest: &str,
+    token: &str,
+) -> Response<Body> {
     let query = req.uri().query().map(|s| s.to_string());
-    let upstream_uri = match build_upstream_uri(route.host_port, rest, query.as_deref()) {
+    let upstream_path = upstream_path_for_kind(route.kind, token, rest);
+    let upstream_uri = match build_upstream_uri(route.host_port, &upstream_path, query.as_deref()) {
         Some(uri) => uri,
         None => return not_found(),
     };
 
     sanitise_request_headers(&mut req, route.host_port, false);
-    *req.uri_mut() = upstream_uri;
+    *req.uri_mut() = upstream_uri.clone();
+
+    tracing::debug!(
+        kind = route.kind.as_str(),
+        host_port = route.host_port,
+        upstream = %upstream_uri,
+        "session proxy forwarding request"
+    );
 
     match http_client().request(req).await {
         Ok(resp) => {
             // hyper-util returns Response<Incoming>; convert body to axum Body.
             let (parts, body) = resp.into_parts();
             let body = Body::new(body.map_err(axum::Error::new));
-            Response::from_parts(parts, body)
+            let mut response = Response::from_parts(parts, body);
+            // Editor sessions with --server-base-path already emit correct
+            // `/s/{token}/…` redirects — only terminal sessions need rewriting.
+            if route.kind == SessionRouteKind::Terminal {
+                rewrite_redirect_location(&mut response, token);
+            }
+            response
         }
         Err(err) => {
             tracing::warn!(
@@ -279,9 +367,11 @@ async fn forward_websocket(
     mut req: Request<Body>,
     route: SessionRoute,
     rest: &str,
+    token: &str,
 ) -> Response<Body> {
     let query = req.uri().query().map(|s| s.to_string());
-    let upstream_uri = match build_upstream_uri(route.host_port, rest, query.as_deref()) {
+    let upstream_path = upstream_path_for_kind(route.kind, token, rest);
+    let upstream_uri = match build_upstream_uri(route.host_port, &upstream_path, query.as_deref()) {
         Some(uri) => uri,
         None => return not_found(),
     };
@@ -291,7 +381,14 @@ async fn forward_websocket(
     let inbound_upgrade = hyper::upgrade::on(&mut req);
 
     sanitise_request_headers(&mut req, route.host_port, true);
-    *req.uri_mut() = upstream_uri;
+    *req.uri_mut() = upstream_uri.clone();
+
+    tracing::debug!(
+        kind = route.kind.as_str(),
+        host_port = route.host_port,
+        upstream = %upstream_uri,
+        "session proxy forwarding websocket upgrade"
+    );
 
     let mut upstream_resp = match http_client().request(req).await {
         Ok(r) => r,
@@ -354,6 +451,155 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------
+    // Integration tests — full handler through the router
+    // -----------------------------------------------------------------
+
+    mod integration {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode, header};
+        use tokio::sync::RwLock;
+        use tower::ServiceExt;
+
+        use maestro_core::actions::dry_run::DryRunActions;
+        use maestro_core::config::{Config, TicketingSystem};
+        use maestro_core::workflow::engine::WorkflowEngine;
+
+        use crate::server::build_router;
+        use crate::session_registry::{PathTokenRegistry, SessionRoute, SessionRouteKind};
+        use crate::state::AppState;
+
+        fn test_state() -> AppState {
+            let config = Arc::new(RwLock::new(Config::default()));
+            let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
+                DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
+            );
+            let jira_available = Arc::new(AtomicBool::new(false));
+            let engine = Arc::new(WorkflowEngine::new(
+                config.clone(),
+                actions,
+                1,
+                jira_available.clone(),
+                TicketingSystem::None,
+                std::env::temp_dir(),
+            ));
+            AppState {
+                engine,
+                config,
+                polling_paused: Arc::new(AtomicBool::new(false)),
+                jira_available,
+                ticketing_system: TicketingSystem::None,
+                editor_scanners: Arc::new(RwLock::new(HashMap::new())),
+                dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
+                terminal_ports: Arc::new(RwLock::new(HashMap::new())),
+                run_commands: Arc::new(RwLock::new(HashMap::new())),
+                preflight_error: None,
+                config_path: std::env::temp_dir().join("config.toml"),
+                config_writer: None,
+                clone_in_progress: Arc::new(AtomicBool::new(false)),
+                path_token_registry: PathTokenRegistry::new(),
+            }
+        }
+
+        /// Registered token with no upstream listener → 502 Bad Gateway.
+        /// This proves the handler resolved the token, built the upstream URI,
+        /// and attempted forwarding (connection refused ≈ 502).
+        #[tokio::test]
+        async fn proxy_known_token_no_upstream_returns_502() {
+            let state = test_state();
+            let token = state
+                .path_token_registry
+                .register_with_token(
+                    "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
+                    SessionRoute {
+                        kind: SessionRouteKind::Editor,
+                        host_port: 19999, // nothing listens here
+                        ticket_key: "TEST-1".to_string(),
+                    },
+                )
+                .await;
+            assert!(token);
+
+            let app = build_router(state);
+            let resp = app
+                .oneshot(
+                    Request::get("/s/aaaa1111bbbb2222cccc3333dddd4444/")
+                        .header("Host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        }
+
+        /// Unknown token → 404 with empty body (anti-info-leak).
+        #[tokio::test]
+        async fn proxy_unknown_token_returns_404() {
+            let state = test_state();
+            let app = build_router(state);
+            let resp = app
+                .oneshot(
+                    Request::get("/s/deadbeefdeadbeefdeadbeefdeadbeef/foo")
+                        .header("Host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+            let body = http_body_util::BodyExt::collect(resp.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            assert_eq!(body.len(), 0, "404 body must be empty (no info leak)");
+        }
+
+        /// Bare `/s/{token}` (no trailing slash) → 308 redirect to `/s/{token}/`.
+        #[tokio::test]
+        async fn proxy_bare_token_redirects_with_trailing_slash() {
+            let state = test_state();
+            let token_str = "eeee5555ffff6666aaaa7777bbbb8888";
+            state
+                .path_token_registry
+                .register_with_token(
+                    token_str.to_string(),
+                    SessionRoute {
+                        kind: SessionRouteKind::Terminal,
+                        host_port: 19998,
+                        ticket_key: "TEST-2".to_string(),
+                    },
+                )
+                .await;
+
+            let app = build_router(state);
+            let resp = app
+                .oneshot(
+                    Request::get(format!("/s/{token_str}"))
+                        .header("Host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+            let loc = resp
+                .headers()
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert_eq!(loc, format!("/s/{token_str}/"));
+        }
+    }
+
+    // -----------------------------------------------------------------
     // Path parser
     // -----------------------------------------------------------------
 
@@ -368,14 +614,14 @@ mod tests {
     fn parse_session_path_token_with_trailing_slash_returns_slash_rest() {
         let (t, r) = parse_session_path("/s/abcdef/").unwrap();
         assert_eq!(t, "abcdef");
-        assert_eq!(r.as_deref(), Some("/"));
+        assert_eq!(r, Some("/"));
     }
 
     #[test]
     fn parse_session_path_token_with_rest() {
         let (t, r) = parse_session_path("/s/abcdef/foo/bar").unwrap();
         assert_eq!(t, "abcdef");
-        assert_eq!(r.as_deref(), Some("/foo/bar"));
+        assert_eq!(r, Some("/foo/bar"));
     }
 
     #[test]
@@ -396,10 +642,13 @@ mod tests {
     // -----------------------------------------------------------------
 
     #[test]
-    fn build_upstream_uri_strips_prefix_and_targets_loopback() {
+    fn build_upstream_uri_strips_prefix_and_targets_upstream_host() {
         let uri = build_upstream_uri(9101, "/foo", None).unwrap();
         assert_eq!(uri.scheme_str(), Some("http"));
-        assert_eq!(uri.host(), Some("127.0.0.1"));
+        // Use upstream_host() rather than hardcoding 127.0.0.1 — CI
+        // environments that set DOCKER_HOST would cause a false failure
+        // (the OnceLock caches the first caller's result for the process).
+        assert_eq!(uri.host(), Some(upstream_host()));
         assert_eq!(uri.port_u16(), Some(9101));
         assert_eq!(uri.path(), "/foo");
         assert_eq!(uri.query(), None);
@@ -513,8 +762,39 @@ mod tests {
 
     #[test]
     fn redirect_response_targets_trailing_slash_path() {
-        let resp = redirect_to_trailing_slash("0123456789abcdef0123456789abcdef");
+        let resp = redirect_to_trailing_slash("0123456789abcdef0123456789abcdef", None);
         assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        let loc = resp
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(loc, "/s/0123456789abcdef0123456789abcdef/");
+    }
+
+    #[test]
+    fn redirect_preserves_query_string() {
+        let resp = redirect_to_trailing_slash(
+            "0123456789abcdef0123456789abcdef",
+            Some("tkn=abc&folder=/workspace/proj"),
+        );
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        let loc = resp
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(
+            loc,
+            "/s/0123456789abcdef0123456789abcdef/?tkn=abc&folder=/workspace/proj"
+        );
+    }
+
+    #[test]
+    fn redirect_with_empty_query_omits_question_mark() {
+        let resp = redirect_to_trailing_slash("0123456789abcdef0123456789abcdef", Some(""));
         let loc = resp
             .headers()
             .get(header::LOCATION)

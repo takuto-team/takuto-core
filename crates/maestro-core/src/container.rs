@@ -48,15 +48,17 @@ fn sanitize_ticket_key(key: &str) -> String {
 }
 
 /// Return the host-visible port for an editor-range container port.
-/// When running behind DinD with a port offset (MAESTRO_DIND_PORT_OFFSET env var),
-/// the host port differs from the container-internal port by that offset.
-/// Example: with MAESTRO_DIND_PORT_OFFSET=100, container port 9101 → host port 9201.
+///
+/// In both local-Docker and DinD modes, symmetric port mappings mean the
+/// host port equals the container port. This wrapper exists so callers
+/// don't embed that assumption directly.
 pub fn editor_host_port(container_port: u16) -> u16 {
-    let offset: u16 = std::env::var("MAESTRO_DIND_PORT_OFFSET")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    container_port + offset
+    container_port
+}
+
+/// Whether we are running in Docker-in-Docker mode (DOCKER_HOST is set).
+fn is_dind_mode() -> bool {
+    std::env::var("DOCKER_HOST").is_ok()
 }
 
 /// Runs AI agent commands inside isolated Docker containers so each workflow
@@ -492,6 +494,11 @@ pub struct EditorInfo {
     /// `routes::workflows::open_editor`) don't have to re-parse `url`.
     #[serde(default)]
     pub folder: String,
+    /// GH-45: CSPRNG path token for the shared-port reverse proxy. Stored as
+    /// a container label (`maestro.path_token`) so `get_editor_info` can
+    /// return the same token on reconnect, keeping `--server-base-path` in
+    /// sync with the proxy registry.
+    pub path_token: String,
 }
 
 /// Return the deterministic editor container name for a ticket.
@@ -629,8 +636,33 @@ pub fn build_editor_url(host_port: u16, connection_token: &str, folder: &str) ->
 /// reverse-proxy strips the `/s/<path-token>` prefix and forwards the
 /// remainder (including the preserved query string) to the loopback
 /// `openvscode-server` listener.
+///
+/// The `folder` parameter is percent-encoded so paths containing
+/// query-string-unsafe characters (`&`, `#`, `=`, `+`, spaces) don't
+/// break URL parsing.
 pub fn build_session_editor_url(path_token: &str, connection_token: &str, folder: &str) -> String {
-    format!("/s/{path_token}/?tkn={connection_token}&folder={folder}")
+    let encoded_folder = encode_query_value(folder);
+    format!("/s/{path_token}/?tkn={connection_token}&folder={encoded_folder}")
+}
+
+/// Percent-encode a value for safe embedding in a URL query parameter.
+///
+/// Encodes characters that would otherwise break query-string parsing:
+/// `&`, `#`, `=`, `+`, ` `, `?`. Unreserved characters and `/` (common in
+/// folder paths) are left as-is to keep URLs readable.
+fn encode_query_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'&' | b'#' | b'=' | b'+' | b' ' | b'?' | b'%' => {
+                out.push('%');
+                out.push(HEX_DIGITS[(b >> 4) as usize] as char);
+                out.push(HEX_DIGITS[(b & 0x0f) as usize] as char);
+            }
+            _ => out.push(b as char),
+        }
+    }
+    out
 }
 
 /// Build the terminal URL including the secret base path for authentication.
@@ -673,12 +705,20 @@ pub fn session_publish_arg(host_port: u16, container_port: u16) -> String {
 /// Parse the `maestro.connection_token` value from a Docker inspect JSON labels string.
 /// Returns `None` if the label is absent, empty, or the JSON is malformed.
 pub fn parse_connection_token_from_labels(json_str: &str) -> Option<String> {
+    parse_label_value(json_str, "maestro.connection_token")
+}
+
+/// Extract a single label value from a `docker inspect` JSON labels map.
+///
+/// Returns `None` if the JSON is unparseable, the key is absent, or the
+/// value is empty.
+pub fn parse_label_value(json_str: &str, key: &str) -> Option<String> {
     let labels: std::collections::HashMap<String, String> = serde_json::from_str(json_str).ok()?;
-    let token = labels.get("maestro.connection_token")?;
-    if token.is_empty() {
+    let val = labels.get(key)?;
+    if val.is_empty() {
         None
     } else {
-        Some(token.clone())
+        Some(val.clone())
     }
 }
 
@@ -730,6 +770,7 @@ pub async fn start_editor(
     let port_mappings: Vec<(u16, u16)> = Vec::new();
     let spare_ports: Vec<u16> = ports[1..].to_vec();
     let connection_token = generate_connection_token();
+    let path_token = generate_session_path_token();
     info!(ticket = %name, vscode_port, spare_ports = ?spare_ports, "Allocated editor ports");
 
     let mut args: Vec<String> = vec![
@@ -760,21 +801,24 @@ pub async fn start_editor(
         args.push(mount);
     }
 
-    // Port mappings: VS Code and all spare ports are bound to the host
-    // loopback interface only — external traffic must flow through the
-    // maestro-web shared-port reverse proxy at `/s/<path-token>/`. See GH-45
-    // acceptance criterion #10.
+    // In DinD mode, use `--network=host` so the editor process binds
+    // directly to the DinD container's network namespace (shared with
+    // maestro via `network_mode: service:dind`).  This bypasses
+    // docker-proxy, which does not forward cross-container traffic on
+    // Docker Desktop for Mac.
     //
-    // Browsers using `http://localhost:91xx/` continue to resolve through
-    // 127.0.0.1, so this does not break the dynamic port-forwarding UX.
-    // LAN-direct access to user-app dev servers is intentionally removed;
-    // the follow-up to route those through `/s/<token>/forward/<port>/` is
-    // tracked separately and out of scope for GH-45.
-    args.push("-p".into());
-    args.push(session_publish_arg(vscode_port, vscode_port));
-    for &sp in &spare_ports {
+    // In local-Docker mode, publish each port on the host loopback only —
+    // external traffic must flow through the shared-port reverse proxy at
+    // `/s/<path-token>/`.  See GH-45 acceptance criterion #10.
+    if is_dind_mode() {
+        args.push("--network=host".into());
+    } else {
         args.push("-p".into());
-        args.push(session_publish_arg(sp, sp));
+        args.push(session_publish_arg(vscode_port, vscode_port));
+        for &sp in &spare_ports {
+            args.push("-p".into());
+            args.push(session_publish_arg(sp, sp));
+        }
     }
 
     // Working directory
@@ -789,9 +833,19 @@ pub async fn start_editor(
     args.push("--entrypoint".into());
     args.push("".into());
 
-    // Connection token label for get_editor_info() retrieval.
+    // Labels for get_editor_info() retrieval — essential for `--network=host`
+    // containers where `docker port` returns nothing.
     args.push("--label".into());
     args.push(format!("maestro.connection_token={connection_token}"));
+    args.push("--label".into());
+    args.push(format!("maestro.path_token={path_token}"));
+    args.push("--label".into());
+    args.push(format!("maestro.vscode_port={vscode_port}"));
+    if !spare_ports.is_empty() {
+        args.push("--label".into());
+        let sp_csv: String = spare_ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
+        args.push(format!("maestro.spare_ports={sp_csv}"));
+    }
 
     // Image
     args.push(image.into());
@@ -837,7 +891,7 @@ pub async fn start_editor(
     }
 
     script_parts.push(format!(
-        "exec openvscode-server --port {vscode_port} --host 0.0.0.0 --connection-token {connection_token}"
+        "exec openvscode-server --port {vscode_port} --host 0.0.0.0 --connection-token {connection_token} --server-base-path /s/{path_token}"
     ));
 
     let cmd = script_parts.join("; ");
@@ -883,6 +937,7 @@ pub async fn start_editor(
         port_mappings,
         spare_ports,
         folder: folder.into_owned(),
+        path_token,
     })
 }
 
@@ -1286,66 +1341,57 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
     // so the user must close and reopen the editor to get a secure session.
     let connection_token = parse_connection_token_from_labels(labels_json)?;
 
-    // Get ports via docker port
-    let port_output = tokio::process::Command::new("docker")
-        .args(["port", &name])
-        .output()
-        .await
-        .ok()?;
+    // GH-45: path token is required for the shared-port proxy. Containers
+    // without it must be closed and reopened to get a proxied session.
+    let path_token = parse_label_value(labels_json, "maestro.path_token")
+        .unwrap_or_default();
 
-    if !port_output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&port_output.stdout);
-    let mut port_mappings = Vec::new();
-    // Symmetric mappings where both ports are in the editor range (VS Code + spare ports).
-    let mut editor_range_ports: Vec<u16> = Vec::new();
-
-    // Format: "9100/tcp -> 0.0.0.0:9100\n3000/tcp -> 0.0.0.0:9101"
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split("->").collect();
-        if parts.len() != 2 {
-            continue;
-        }
-        let container_part = parts[0].trim(); // "9100/tcp"
-        let host_part = parts[1].trim(); // "0.0.0.0:9100"
-
-        let container_port: u16 = container_part
-            .split('/')
-            .next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let host_port: u16 = host_part
-            .rsplit(':')
-            .next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-
-        if container_port == 0 || host_port == 0 {
-            continue;
-        }
-
-        // Symmetric mapping in editor range → VS Code or spare port.
-        // `docker port` may emit the same mapping twice (IPv4 + IPv6), so dedupe.
-        if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&container_port)
-            && container_port == host_port
-        {
-            if !editor_range_ports.contains(&host_port) {
-                editor_range_ports.push(host_port);
+    // Port discovery: prefer labels (works for both `--network=host` and
+    // `-p` containers) with `docker port` as fallback for pre-label containers.
+    let (vscode_port, spare_ports, port_mappings) =
+        if let Some(vp_str) = parse_label_value(labels_json, "maestro.vscode_port") {
+            let vp: u16 = vp_str.parse().ok()?;
+            let sp: Vec<u16> = parse_label_value(labels_json, "maestro.spare_ports")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            (vp, sp, Vec::new())
+        } else {
+            // Fallback: parse `docker port` output (pre-label containers).
+            let port_output = tokio::process::Command::new("docker")
+                .args(["port", &name])
+                .output()
+                .await
+                .ok()?;
+            if !port_output.status.success() {
+                return None;
             }
-        } else if !(EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&container_port) {
-            // Asymmetric: app port (container) → host port
-            if !port_mappings.contains(&(container_port, host_port)) {
-                port_mappings.push((container_port, host_port));
+            let stdout = String::from_utf8_lossy(&port_output.stdout);
+            let mut pm = Vec::new();
+            let mut erp: Vec<u16> = Vec::new();
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.split("->").collect();
+                if parts.len() != 2 { continue; }
+                let cp: u16 = parts[0].trim().split('/').next()
+                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+                let hp: u16 = parts[1].trim().rsplit(':').next()
+                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+                if cp == 0 || hp == 0 { continue; }
+                if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&cp) && cp == hp {
+                    if !erp.contains(&hp) { erp.push(hp); }
+                } else if !(EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&cp)
+                    && !pm.contains(&(cp, hp))
+                {
+                    pm.push((cp, hp));
+                }
             }
-        }
-    }
-
-    editor_range_ports.sort();
-    // The lowest port in the editor range is VS Code; the rest are spare/dynamic.
-    let vscode_port = *editor_range_ports.first()?;
-    let spare_ports: Vec<u16> = editor_range_ports.into_iter().skip(1).collect();
+            erp.sort();
+            let vp = *erp.first()?;
+            let sp: Vec<u16> = erp.into_iter().skip(1).collect();
+            (vp, sp, pm)
+        };
 
     // Get the working directory to reconstruct the folder URL
     let wd_output = tokio::process::Command::new("docker")
@@ -1367,6 +1413,7 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
         port_mappings,
         spare_ports,
         folder,
+        path_token,
     })
 }
 
@@ -1786,12 +1833,14 @@ pub async fn start_run_command(
         args.push(mount);
     }
 
-    // Port mappings — spare ports for socat forwarding, bound to host
-    // loopback to keep the run-command listener off LAN. Same rationale as
-    // the editor port binding (see GH-45 #10).
-    for &sp in &spare_ports {
-        args.push("-p".into());
-        args.push(session_publish_arg(sp, sp));
+    // Port mappings — see start_editor() for the DinD vs local rationale.
+    if is_dind_mode() {
+        args.push("--network=host".into());
+    } else {
+        for &sp in &spare_ports {
+            args.push("-p".into());
+            args.push(session_publish_arg(sp, sp));
+        }
     }
 
     // Working directory
@@ -2360,6 +2409,22 @@ mod tests {
     }
 
     #[test]
+    fn build_session_editor_url_encodes_special_chars_in_folder() {
+        let url = build_session_editor_url("tok", "conn", "/workspace/my project&foo#bar");
+        assert_eq!(url, "/s/tok/?tkn=conn&folder=/workspace/my%20project%26foo%23bar");
+    }
+
+    #[test]
+    fn encode_query_value_preserves_slashes_and_alphanumerics() {
+        assert_eq!(encode_query_value("/workspace/proj-name"), "/workspace/proj-name");
+    }
+
+    #[test]
+    fn encode_query_value_encodes_query_unsafe_chars() {
+        assert_eq!(encode_query_value("a&b=c#d+e f%g"), "a%26b%3dc%23d%2be%20f%25g");
+    }
+
+    #[test]
     fn build_session_terminal_url_uses_relative_proxy_path() {
         let url = build_session_terminal_url(
             "0123456789abcdef0123456789abcdef",
@@ -2372,11 +2437,17 @@ mod tests {
     }
 
     #[test]
-    fn session_publish_arg_defaults_to_loopback() {
-        // Without DOCKER_HOST, ports bind to loopback only.
+    fn session_publish_arg_format_matches_env() {
         let arg = session_publish_arg(9101, 9101);
-        assert_eq!(arg, "127.0.0.1:9101:9101");
-        assert_eq!(session_publish_arg(9201, 9101), "127.0.0.1:9201:9101");
+        if std::env::var("DOCKER_HOST").is_ok() {
+            // DinD mode: no loopback prefix, just host:container.
+            assert_eq!(arg, "9101:9101");
+            assert_eq!(session_publish_arg(9201, 9101), "9201:9101");
+        } else {
+            // Local Docker: loopback-only binding.
+            assert_eq!(arg, "127.0.0.1:9101:9101");
+            assert_eq!(session_publish_arg(9201, 9101), "127.0.0.1:9201:9101");
+        }
     }
 
     #[test]
@@ -2424,6 +2495,7 @@ mod tests {
             port_mappings: vec![],
             spare_ports: vec![],
             folder: "/w".to_string(),
+            path_token: "deadbeef".to_string(),
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["connection_token"], "abc");
