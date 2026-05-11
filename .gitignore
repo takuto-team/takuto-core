@@ -41,3 +41,4 @@ gitleak-report.json
 .maestro
 
 .playwright-mcp
+.playwright-cli
