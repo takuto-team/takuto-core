@@ -33,6 +33,12 @@ pub enum MaestroError {
     #[error("Workflow cancelled")]
     Cancelled,
 
+    #[error("Database error: {0}")]
+    Database(String),
+
+    #[error("Authentication error: {0}")]
+    Auth(String),
+
     #[error("Config error: {0}")]
     Config(String),
 
@@ -44,6 +50,12 @@ pub enum MaestroError {
 
     #[error(transparent)]
     TomlParse(#[from] toml::de::Error),
+}
+
+impl From<rusqlite::Error> for MaestroError {
+    fn from(e: rusqlite::Error) -> Self {
+        MaestroError::Database(e.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, MaestroError>;

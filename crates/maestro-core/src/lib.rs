@@ -9,6 +9,7 @@ pub mod agent_prompt;
 pub mod claude;
 pub mod config;
 pub mod config_watcher;
+pub mod db;
 pub mod config_writer;
 pub mod container;
 pub mod cursor;
