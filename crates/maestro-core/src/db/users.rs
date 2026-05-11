@@ -14,11 +14,7 @@ use super::models::{User, UserRole};
 ///
 /// If no users exist in the database, the first user is automatically assigned the `admin` role
 /// regardless of the `role` parameter (first-user-becomes-admin).
-pub fn create_user(
-    conn: &rusqlite::Connection,
-    username: &str,
-    role: UserRole,
-) -> Result<User> {
+pub fn create_user(conn: &rusqlite::Connection, username: &str, role: UserRole) -> Result<User> {
     let username = username.trim();
     if username.is_empty() {
         return Err(MaestroError::Auth("Username cannot be empty".into()));
@@ -40,10 +36,10 @@ pub fn create_user(
         params![id, username, effective_role.as_str(), now, now],
     )
     .map_err(|e| {
-        if let rusqlite::Error::SqliteFailure(ref err, _) = e {
-            if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
-                return MaestroError::Auth(format!("Username '{username}' already exists"));
-            }
+        if let rusqlite::Error::SqliteFailure(ref err, _) = e
+            && err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+        {
+            return MaestroError::Auth(format!("Username '{username}' already exists"));
         }
         MaestroError::Database(e.to_string())
     })?;
@@ -109,18 +105,19 @@ pub fn update_user(
         .ok_or_else(|| MaestroError::Auth(format!("User not found: {id}")))?;
 
     // If demoting the last non-suspended admin, reject.
-    if let Some(new_role) = new_role {
-        if existing.role == UserRole::Admin && new_role == UserRole::User {
-            let admin_count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM users WHERE role = 'admin' AND suspended = 0 AND id != ?1",
-                params![id],
-                |r| r.get(0),
-            )?;
-            if admin_count == 0 {
-                return Err(MaestroError::Auth(
-                    "Cannot demote: this is the last non-suspended admin".into(),
-                ));
-            }
+    if let Some(new_role) = new_role
+        && existing.role == UserRole::Admin
+        && new_role == UserRole::User
+    {
+        let admin_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND suspended = 0 AND id != ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+        if admin_count == 0 {
+            return Err(MaestroError::Auth(
+                "Cannot demote: this is the last non-suspended admin".into(),
+            ));
         }
     }
 
@@ -217,7 +214,7 @@ fn row_to_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
     Ok(User {
         id: row.get(0)?,
         username: row.get(1)?,
-        role: UserRole::from_str(&role_str).unwrap_or(UserRole::User),
+        role: role_str.parse().unwrap_or(UserRole::User),
         suspended: suspended_int != 0,
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
@@ -333,10 +330,11 @@ mod tests {
         assert_eq!(admin.role, UserRole::Admin);
         let err = update_user(&conn, &admin.id, None, Some(UserRole::User));
         assert!(err.is_err());
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains("last non-suspended admin"));
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains("last non-suspended admin")
+        );
     }
 
     #[test]
@@ -365,10 +363,11 @@ mod tests {
         assert_eq!(admin.role, UserRole::Admin);
         let err = suspend_user(&conn, &admin.id);
         assert!(err.is_err());
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains("last non-suspended admin"));
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains("last non-suspended admin")
+        );
     }
 
     #[test]

@@ -457,7 +457,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
             },
             None => {
-                tracing::warn!("No data directory resolved — multi-user database unavailable (set MAESTRO_DATA_DIR, MAESTRO_HOME, or HOME)");
+                tracing::warn!(
+                    "No data directory resolved — multi-user database unavailable (set MAESTRO_DATA_DIR, MAESTRO_HOME, or HOME)"
+                );
                 None
             }
         }

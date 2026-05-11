@@ -20,12 +20,16 @@ impl UserRole {
             Self::User => "user",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for UserRole {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "admin" => Some(Self::Admin),
-            "user" => Some(Self::User),
-            _ => None,
+            "admin" => Ok(Self::Admin),
+            "user" => Ok(Self::User),
+            _ => Err(format!("unknown user role: {s}")),
         }
     }
 }
@@ -62,12 +66,16 @@ impl CredentialKind {
             Self::Passkey => "passkey",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for CredentialKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "password" => Some(Self::Password),
-            "passkey" => Some(Self::Passkey),
-            _ => None,
+            "password" => Ok(Self::Password),
+            "passkey" => Ok(Self::Passkey),
+            _ => Err(format!("unknown credential kind: {s}")),
         }
     }
 }

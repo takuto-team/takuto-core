@@ -58,9 +58,8 @@ pub fn verify_user_password(
     user_id: &str,
     password: &str,
 ) -> Result<bool> {
-    let mut stmt = conn.prepare(
-        "SELECT id, data FROM credentials WHERE user_id = ?1 AND kind = 'password'",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, data FROM credentials WHERE user_id = ?1 AND kind = 'password'")?;
     let creds: Vec<(String, Vec<u8>)> = stmt
         .query_map(params![user_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
@@ -115,9 +114,8 @@ pub fn verify_and_consume_recovery_code(
     user_id: &str,
     code: &str,
 ) -> Result<bool> {
-    let mut stmt = conn.prepare(
-        "SELECT id, code_hash FROM recovery_codes WHERE user_id = ?1 AND used = 0",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, code_hash FROM recovery_codes WHERE user_id = ?1 AND used = 0")?;
     let codes: Vec<(String, Vec<u8>)> = stmt
         .query_map(params![user_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
@@ -139,10 +137,7 @@ pub fn verify_and_consume_recovery_code(
 
 /// Delete all sessions for a user (for use on suspend/password change).
 pub fn delete_user_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM sessions WHERE user_id = ?1",
-        params![user_id],
-    )?;
+    conn.execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])?;
     Ok(())
 }
 
@@ -168,12 +163,8 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         schema::run_migrations(&conn).unwrap();
-        let user = crate::db::users::create_user(
-            &conn,
-            "alice",
-            crate::db::models::UserRole::User,
-        )
-        .unwrap();
+        let user = crate::db::users::create_user(&conn, "alice", crate::db::models::UserRole::User)
+            .unwrap();
         (conn, user.id)
     }
 

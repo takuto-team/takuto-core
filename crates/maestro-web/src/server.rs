@@ -41,14 +41,8 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(routes::admin::update_user)
                 .delete(routes::admin::delete_user),
         )
-        .route(
-            "/users/{id}/suspend",
-            post(routes::admin::suspend_user),
-        )
-        .route(
-            "/users/{id}/unsuspend",
-            post(routes::admin::unsuspend_user),
-        )
+        .route("/users/{id}/suspend", post(routes::admin::suspend_user))
+        .route("/users/{id}/unsuspend", post(routes::admin::unsuspend_user))
         .route("/workflows", get(routes::workflows::list_workflows))
         .route("/workflows/counts", get(routes::workflows::workflow_counts))
         .route("/workflows/{id}", get(routes::workflows::get_workflow))

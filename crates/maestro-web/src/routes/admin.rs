@@ -60,10 +60,7 @@ async fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<User, St
 // ---------------------------------------------------------------------------
 
 /// `GET /api/users` -- List all users (admin only).
-pub async fn list_users(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+pub async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if let Err(status) = require_admin(&state, &headers).await {
         return status.into_response();
     }
@@ -119,14 +116,13 @@ pub async fn create_user(
         let user = maestro_core::db::users::create_user(&conn, &body.username, role)?;
 
         let mut codes = None;
-        if let Some(ref password) = body.password {
-            if !password.is_empty() {
-                maestro_core::db::credentials::store_password(&conn, &user.id, password)?;
-                let recovery = maestro_core::db::credentials::generate_recovery_codes(
-                    &conn, &user.id, 8,
-                )?;
-                codes = Some(recovery);
-            }
+        if let Some(ref password) = body.password
+            && !password.is_empty()
+        {
+            maestro_core::db::credentials::store_password(&conn, &user.id, password)?;
+            let recovery =
+                maestro_core::db::credentials::generate_recovery_codes(&conn, &user.id, 8)?;
+            codes = Some(recovery);
         }
 
         Ok::<_, maestro_core::error::MaestroError>(CreateUserResponse {
@@ -197,16 +193,15 @@ pub async fn update_user(
     };
 
     // Admins cannot demote themselves (spec: admin cannot demote their own account).
-    if admin.id == id {
-        if let Some(new_role) = body.role {
-            if new_role != admin.role {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Admins cannot change their own role"})),
-                )
-                    .into_response();
-            }
-        }
+    if admin.id == id
+        && let Some(new_role) = body.role
+        && new_role != admin.role
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Admins cannot change their own role"})),
+        )
+            .into_response();
     }
 
     let db = match state.db.as_ref() {
@@ -216,12 +211,7 @@ pub async fn update_user(
 
     let result = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        maestro_core::db::users::update_user(
-            &conn,
-            &id,
-            body.username.as_deref(),
-            body.role,
-        )
+        maestro_core::db::users::update_user(&conn, &id, body.username.as_deref(), body.role)
     })
     .await;
 
@@ -372,10 +362,7 @@ pub async fn delete_user(
 }
 
 /// `GET /api/users/export` -- Export all users (admin only).
-pub async fn export_users(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+pub async fn export_users(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if let Err(status) = require_admin(&state, &headers).await {
         return status.into_response();
     }
@@ -464,9 +451,9 @@ pub async fn import_users(
         }
 
         // Wrap all inserts in a single transaction for atomicity.
-        let tx = conn.unchecked_transaction().map_err(|e| {
-            maestro_core::error::MaestroError::Database(e.to_string())
-        })?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| maestro_core::error::MaestroError::Database(e.to_string()))?;
 
         let mut created = Vec::new();
         for export in to_create {
@@ -483,13 +470,13 @@ pub async fn import_users(
                     now,
                     now,
                 ],
-            ).map_err(|e| maestro_core::error::MaestroError::Database(e.to_string()))?;
+            )
+            .map_err(|e| maestro_core::error::MaestroError::Database(e.to_string()))?;
             created.push(export.username.clone());
         }
 
-        tx.commit().map_err(|e| {
-            maestro_core::error::MaestroError::Database(e.to_string())
-        })?;
+        tx.commit()
+            .map_err(|e| maestro_core::error::MaestroError::Database(e.to_string()))?;
 
         Ok(ImportSummary { created, skipped })
     })
@@ -574,14 +561,16 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/register")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"admin","password":"secret123"}"#,
-                    ))
+                    .body(Body::from(r#"{"username":"admin","password":"secret123"}"#))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED, "register should succeed");
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "register should succeed"
+        );
 
         // Login to get a session cookie.
         let app = build_router(state.clone());
@@ -589,9 +578,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"admin","password":"secret123"}"#,
-                    ))
+                    .body(Body::from(r#"{"username":"admin","password":"secret123"}"#))
                     .unwrap(),
             )
             .await
@@ -763,9 +750,7 @@ mod tests {
                 Request::post("/api/users")
                     .header("Cookie", &cookie)
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"bob","password":"pass123"}"#,
-                    ))
+                    .body(Body::from(r#"{"username":"bob","password":"pass123"}"#))
                     .unwrap(),
             )
             .await

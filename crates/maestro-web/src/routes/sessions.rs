@@ -240,11 +240,11 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
     };
 
     let rest = match rest {
-        None => return redirect_to_trailing_slash(&token, query.as_deref()),
+        None => return redirect_to_trailing_slash(token, query.as_deref()),
         Some(r) => r,
     };
 
-    let route = match state.path_token_registry.lookup(&token).await {
+    let route = match state.path_token_registry.lookup(token).await {
         Some(r) => r,
         None => {
             // Per the GH-45 description's defense-in-depth recommendations,
@@ -252,7 +252,7 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
             // log levels (anomaly / brute-force-enumeration detection).
             // Logged with the SHA-256 prefix only — never the raw token.
             tracing::warn!(
-                token_hash = %token_hash_prefix(&token),
+                token_hash = %token_hash_prefix(token),
                 "session path token not found"
             );
             return not_found();
@@ -260,9 +260,9 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
     };
 
     if is_websocket_upgrade(&req) {
-        forward_websocket(req, route, &rest, &token).await
+        forward_websocket(req, route, rest, token).await
     } else {
-        forward_http(req, route, &rest, &token).await
+        forward_http(req, route, rest, token).await
     }
 }
 

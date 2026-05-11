@@ -234,8 +234,7 @@ pub async fn register(
         maestro_core::db::credentials::store_password(&conn, &user.id, &password)?;
 
         // Generate recovery codes.
-        let codes =
-            maestro_core::db::credentials::generate_recovery_codes(&conn, &user.id, 8)?;
+        let codes = maestro_core::db::credentials::generate_recovery_codes(&conn, &user.id, 8)?;
 
         Ok(RegisterResponse {
             user_id: user.id,

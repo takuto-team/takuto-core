@@ -76,10 +76,10 @@ impl WorkflowPersistence {
         let mut records = read_all_workspace_snapshots(&data_dir)?;
         if records.is_empty() {
             // Try single-workspace read (handles legacy + global migration).
-            if let Some(file) = read_workflow_snapshot(&repo_path)? {
-                if file.version == snapshot::SNAPSHOT_VERSION {
-                    records = file.workflows;
-                }
+            if let Some(file) = read_workflow_snapshot(&repo_path)?
+                && file.version == snapshot::SNAPSHOT_VERSION
+            {
+                records = file.workflows;
             }
         }
 

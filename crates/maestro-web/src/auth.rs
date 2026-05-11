@@ -178,10 +178,7 @@ pub fn create_db_session(
 }
 
 /// Validate a database session cookie. Returns the `user_id` if valid and not expired.
-pub fn validate_db_session(
-    conn: &rusqlite::Connection,
-    cookie_value: &str,
-) -> Option<String> {
+pub fn validate_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> Option<String> {
     let session_id = cookie_value.strip_prefix(DB_SESSION_PREFIX)?;
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
@@ -257,22 +254,22 @@ pub async fn dashboard_auth_middleware(
 ) -> Response {
     // Try database-backed session validation first.
     if let Some(ref db) = state.db {
-        if let Some(raw_cookie) = session_cookie_from_headers(request.headers()) {
-            if raw_cookie.starts_with(DB_SESSION_PREFIX) {
-                let db = db.clone();
-                let cookie = raw_cookie.to_string();
-                let valid = tokio::task::spawn_blocking(move || {
-                    let conn = db.conn().blocking_lock();
-                    validate_db_session(&conn, &cookie).is_some()
-                })
-                .await
-                .unwrap_or(false);
+        if let Some(raw_cookie) = session_cookie_from_headers(request.headers())
+            && raw_cookie.starts_with(DB_SESSION_PREFIX)
+        {
+            let db = db.clone();
+            let cookie = raw_cookie.to_string();
+            let valid = tokio::task::spawn_blocking(move || {
+                let conn = db.conn().blocking_lock();
+                validate_db_session(&conn, &cookie).is_some()
+            })
+            .await
+            .unwrap_or(false);
 
-                if valid {
-                    return next.run(request).await;
-                }
-                return StatusCode::UNAUTHORIZED.into_response();
+            if valid {
+                return next.run(request).await;
             }
+            return StatusCode::UNAUTHORIZED.into_response();
         }
 
         // Check if DB has users -- if so, require DB auth (no legacy fallback).

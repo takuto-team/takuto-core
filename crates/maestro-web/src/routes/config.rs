@@ -59,7 +59,12 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
         } else {
             None
         };
-        (config.redacted_for_api_clone(), path, gh_configured, app_name)
+        (
+            config.redacted_for_api_clone(),
+            path,
+            gh_configured,
+            app_name,
+        )
     }; // read lock dropped here
 
     let active_repo_path = std::path::PathBuf::from(&active_repo_path_str);
