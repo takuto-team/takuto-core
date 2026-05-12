@@ -40,7 +40,7 @@ export interface WorkflowSummary {
   issue_url: string | null;
   can_open_editor: boolean;
   editor_url: string | null;
-  editor_port_mappings: [number, number][];
+  editor_port_mappings: [number, string][];
   jira_available: boolean;
   ticketing_system: string;
   can_resume_from_error: boolean;
@@ -57,7 +57,7 @@ export interface RunCommandStatus {
   index: number;
   name: string;
   running: boolean;
-  forwarded_port: [number, number] | null;
+  forwarded_port: [number, string] | null;
 }
 
 export interface WorkflowEvent {

@@ -52,7 +52,7 @@ const defaultWorkflowDefs = [
 ];
 
 const defaultProps = {
-  dynamicForwards: [] as [number, number][],
+  dynamicForwards: [] as [number, string][],
   workflowDefs: defaultWorkflowDefs,
   onRefresh: fn(),
   onShowDescription: fn(),
@@ -191,7 +191,7 @@ export const Completed: Story = {
         { text: "PR created: https://github.com/org/repo/pull/42", stream: "stdout" },
       ],
       run_commands: [
-        { index: 0, name: "Dev server", running: true, forwarded_port: [3000, 13000] },
+        { index: 0, name: "Dev server", running: true, forwarded_port: [3000, "/s/dev123/"] },
         { index: 1, name: "Storybook", running: false, forwarded_port: null },
       ],
       workflow_def_runs: {
@@ -221,7 +221,7 @@ export const CompletedMerged: Story = {
       ],
       run_commands: [
         { index: 0, name: "Dev server", running: false, forwarded_port: null },
-        { index: 1, name: "Storybook", running: true, forwarded_port: [6006, 16006] },
+        { index: 1, name: "Storybook", running: true, forwarded_port: [6006, "/s/sb456/"] },
       ],
       workflow_def_runs: {
         "address_pr_comments.toml": "completed",
@@ -297,11 +297,11 @@ export const WithPortMappings: Story = {
       can_delete: true,
       can_open_editor: true,
       editor_url: "https://editor.example.com",
-      editor_port_mappings: [[3000, 13000], [5173, 15173]] as [number, number][],
+      editor_port_mappings: [[3000, "/s/abc111/"], [5173, "/s/abc222/"]] as [number, string][],
       progress_percent: 100,
       progress_steps_total: 3,
     },
-    dynamicForwards: [[8080, 18080]] as [number, number][],
+    dynamicForwards: [[8080, "/s/abc333/"]] as [number, string][],
   },
 };
 
@@ -368,7 +368,7 @@ export const CompletedWithRunCommands: Story = {
         { text: "All steps completed successfully.", stream: "stdout" },
       ],
       run_commands: [
-        { index: 0, name: "Dev server", running: true, forwarded_port: [3000, 13000] },
+        { index: 0, name: "Dev server", running: true, forwarded_port: [3000, "/s/dev789/"] },
         { index: 1, name: "Storybook", running: false, forwarded_port: null },
       ],
       workflow_def_runs: {

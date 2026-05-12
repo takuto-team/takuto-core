@@ -30,8 +30,8 @@ export function RunCommands({
     }
   };
 
-  const copyUrl = (port: number) => {
-    const url = `http://localhost:${port}`;
+  const copyUrl = (proxyUrl: string) => {
+    const url = window.location.origin + proxyUrl;
     navigator.clipboard.writeText(url).catch(() => {
       // Fallback for insecure contexts
       const ta = document.createElement("textarea");
@@ -64,12 +64,12 @@ export function RunCommands({
                     <button
                       onClick={() => copyUrl(cmd.forwarded_port![1])}
                       className="action-btn wf-btn-secondary inline-flex items-center gap-1"
-                      title={`Copy http://localhost:${cmd.forwarded_port[1]}`}
+                      title={`Copy ${window.location.origin}${cmd.forwarded_port[1]}`}
                     >
                       <CopyIcon /> Copy
                     </button>
                     <a
-                      href={`http://localhost:${cmd.forwarded_port[1]}`}
+                      href={cmd.forwarded_port[1]}
                       target="_blank"
                       rel="noopener"
                       className="action-btn wf-btn-secondary inline-flex items-center gap-1"

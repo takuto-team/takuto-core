@@ -21,15 +21,17 @@ use maestro_core::workflow::engine::{MarkDoneOutcome, TerminalLine, Workflow, Wo
 use maestro_core::workflow::state::WorkflowState;
 use maestro_core::workflow::step::StepLog;
 
-use crate::session_registry::{SessionRoute, SessionRouteKind};
-use crate::state::{AppState, DynamicForwardsMap};
+use crate::session_registry::{PathTokenRegistry, SessionRoute, SessionRouteKind};
+use crate::state::{AppState, DynamicForwardsMap, DynamicPortForward};
 
 /// Listen on the workflow event broadcast channel and keep the dynamic-forwards
 /// map in sync for the given ticket.  Runs until `cancel` fires or the channel
 /// closes.
 pub async fn track_port_forwards(
     ticket_key: String,
+    user_id: String,
     dyn_fwd: DynamicForwardsMap,
+    registry: PathTokenRegistry,
     mut rx: broadcast::Receiver<WorkflowEvent>,
     cancel: CancellationToken,
 ) {
@@ -44,15 +46,30 @@ pub async fn track_port_forwards(
                         {
                             let mut map = dyn_fwd.write().await;
                             let list = map.entry(ticket_key.clone()).or_default();
-                            if !list.iter().any(|&(c, _)| c == cp) {
-                                list.push((cp, hp));
+                            if !list.iter().any(|f| f.container_port == cp) {
+                                let path_token = registry.register(SessionRoute {
+                                    kind: SessionRouteKind::DynamicPort,
+                                    host_port: hp,
+                                    ticket_key: ticket_key.clone(),
+                                    user_id: user_id.clone(),
+                                }).await;
+                                let proxy_url = container::build_session_dynamic_port_url(&path_token);
+                                list.push(DynamicPortForward {
+                                    container_port: cp,
+                                    host_port: hp,
+                                    proxy_url,
+                                    path_token,
+                                });
                             }
                         } else if evt.event_type == "port_unforwarded"
                             && let Some((cp, _)) = evt.forwarded_port
                         {
                             let mut map = dyn_fwd.write().await;
-                            if let Some(list) = map.get_mut(&ticket_key) {
-                                list.retain(|&(c, _)| c != cp);
+                            if let Some(list) = map.get_mut(&ticket_key)
+                                && let Some(pos) = list.iter().position(|f| f.container_port == cp)
+                            {
+                                let removed = list.remove(pos);
+                                registry.remove(&removed.path_token).await;
                             }
                         }
                     }
@@ -125,8 +142,8 @@ pub struct WorkflowSummary {
     pub can_open_editor: bool,
     /// Set when an editor container is already running for this workflow.
     pub editor_url: Option<String>,
-    /// `(container_port, host_port)` pairs for user-configured application ports.
-    pub editor_port_mappings: Vec<(u16, u16)>,
+    /// `(container_port, proxy_url)` pairs for user-configured application ports.
+    pub editor_port_mappings: Vec<(u16, String)>,
     /// `true` when Jira (acli) was available when this workflow was created.
     pub jira_available: bool,
     /// Which ticketing system was active when this workflow was created: `"jira"`, `"github"`, or `"none"`.
@@ -256,7 +273,7 @@ fn build_run_commands_status(
         .map(|(i, rc)| {
             let (running, forwarded_port) = if let Some(active) = active_cmds {
                 if let Some(cmd_state) = active.iter().find(|c| c.cmd_index == i) {
-                    (true, cmd_state.forwarded_port)
+                    (true, cmd_state.forwarded_port.as_ref().map(|f| (f.container_port, f.proxy_url.clone())))
                 } else {
                     (false, None)
                 }
@@ -322,7 +339,10 @@ pub async fn list_workflows(
             let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
             // Use the server-side dynamic-forwards cache so that port buttons
             // appear immediately on page load (no per-workflow Docker call).
-            let port_mappings = dyn_fwd.get(&w.ticket_key).cloned().unwrap_or_default();
+            let port_mappings: Vec<(u16, String)> = dyn_fwd
+                .get(&w.ticket_key)
+                .map(|forwards| forwards.iter().map(|f| (f.container_port, f.proxy_url.clone())).collect())
+                .unwrap_or_default();
             let run_commands =
                 build_run_commands_status(&cfg.run_commands, run_cmds_state.get(&w.ticket_key));
             WorkflowSummary {
@@ -439,13 +459,40 @@ pub async fn get_workflow(
     // Fall back to Docker-queried port mappings for editors opened before this
     // Maestro process started (server restart).
     let dyn_fwd = state.dynamic_forwards.read().await;
-    let port_mappings = if let Some(forwards) = dyn_fwd.get(&ticket_key) {
-        forwards.clone()
+    let port_mappings: Vec<(u16, String)> = if let Some(forwards) = dyn_fwd.get(&ticket_key) {
+        forwards.iter().map(|f| (f.container_port, f.proxy_url.clone())).collect()
     } else {
-        editor_info
+        // Fallback: editor opened before this Maestro process started (restart
+        // recovery). Register proxy tokens on the fly and seed the cache so
+        // subsequent calls don't re-register.
+        let raw = editor_info
             .as_ref()
             .map(|e| e.port_mappings.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        drop(dyn_fwd);
+        let mut entries = Vec::new();
+        let mut result = Vec::new();
+        for (cp, hp) in &raw {
+            let path_token = state.path_token_registry.register(SessionRoute {
+                kind: SessionRouteKind::DynamicPort,
+                host_port: *hp,
+                ticket_key: ticket_key.clone(),
+                user_id: auth.user_id.clone(),
+            }).await;
+            let proxy_url = container::build_session_dynamic_port_url(&path_token);
+            result.push((*cp, proxy_url.clone()));
+            entries.push(DynamicPortForward {
+                container_port: *cp,
+                host_port: *hp,
+                proxy_url,
+                path_token,
+            });
+        }
+        if !entries.is_empty() {
+            let mut fwd = state.dynamic_forwards.write().await;
+            fwd.entry(ticket_key.clone()).or_insert(entries);
+        }
+        result
     };
     Ok(Json(WorkflowSummary {
         id: w.id.clone(),
@@ -908,9 +955,26 @@ pub async fn open_editor(
     // Seed the server-side dynamic-forwards map with the static (Docker -p) port
     // mappings so that `GET /api/workflows` returns them immediately (no need to
     // wait for the port scanner or call get_editor_info per-workflow).
+    // Each port gets a proxy token so the frontend uses `/s/{token}/` URLs.
     {
+        let mut entries = Vec::new();
+        for (cp, hp) in &info.port_mappings {
+            let path_token = state.path_token_registry.register(SessionRoute {
+                kind: SessionRouteKind::DynamicPort,
+                host_port: *hp,
+                ticket_key: ticket_key.clone(),
+                user_id: auth.user_id.clone(),
+            }).await;
+            let proxy_url = container::build_session_dynamic_port_url(&path_token);
+            entries.push(DynamicPortForward {
+                container_port: *cp,
+                host_port: *hp,
+                proxy_url,
+                path_token,
+            });
+        }
         let mut fwd = state.dynamic_forwards.write().await;
-        fwd.insert(ticket_key.clone(), info.port_mappings.clone());
+        fwd.insert(ticket_key.clone(), entries);
     }
 
     // Spawn background port scanner if dynamic ports are available.
@@ -954,7 +1018,9 @@ pub async fn open_editor(
             scanners.get(&ticket_key).cloned()
         };
         if let Some(cancel_tok) = tracker_cancel {
-            tokio::spawn(track_port_forwards(tracker_ticket, dyn_fwd, rx, cancel_tok));
+            let registry = state.path_token_registry.clone();
+            let tracker_user_id = auth.user_id.clone();
+            tokio::spawn(track_port_forwards(tracker_ticket, tracker_user_id, dyn_fwd, registry, rx, cancel_tok));
         }
     }
 
@@ -975,6 +1041,7 @@ pub async fn open_editor(
                     kind: SessionRouteKind::Editor,
                     host_port: info.vscode_port,
                     ticket_key: ticket_key.clone(),
+                    user_id: auth.user_id.clone(),
                 },
             )
             .await;
@@ -1069,6 +1136,7 @@ pub async fn open_terminal(
                         kind: SessionRouteKind::Terminal,
                         host_port: port,
                         ticket_key: id.clone(),
+                        user_id: auth.user_id.clone(),
                     })
                     .await
             }
@@ -1101,6 +1169,7 @@ pub async fn open_terminal(
                 kind: SessionRouteKind::Terminal,
                 host_port: port,
                 ticket_key: id.clone(),
+                user_id: auth.user_id.clone(),
             })
             .await;
         let url = container::build_session_terminal_url(&path_token, &token);
@@ -1136,6 +1205,7 @@ pub async fn open_terminal(
             kind: SessionRouteKind::Terminal,
             host_port: port,
             ticket_key: id.clone(),
+            user_id: auth.user_id.clone(),
         })
         .await;
     let url = container::build_session_terminal_url(&path_token, &token);
@@ -1185,8 +1255,8 @@ pub struct RunCommandStatus {
     pub name: String,
     /// Whether the command is currently running.
     pub running: bool,
-    /// Forwarded port `(container_port, host_port)`, if detected.
-    pub forwarded_port: Option<(u16, u16)>,
+    /// Forwarded port `(container_port, proxy_url)`, if detected.
+    pub forwarded_port: Option<(u16, String)>,
 }
 
 /// Response for `GET /api/workflows/{id}/run-commands`.
@@ -1228,7 +1298,7 @@ pub async fn list_run_commands(
         .map(|(i, rc)| {
             let (running, forwarded_port) = if let Some(active) = active_cmds {
                 if let Some(cmd_state) = active.iter().find(|c| c.cmd_index == i) {
-                    (true, cmd_state.forwarded_port)
+                    (true, cmd_state.forwarded_port.as_ref().map(|f| (f.container_port, f.proxy_url.clone())))
                 } else {
                     (false, None)
                 }
@@ -1323,6 +1393,17 @@ pub async fn start_run_command(
         .await
         .unwrap_or_else(|| "maestro:latest".to_string());
 
+    // Pre-register a proxy token so we can pass the base path to the container
+    // as an environment variable. Dev servers (Vite, Next.js, etc.) can use
+    // $MAESTRO_PROXY_BASE to configure their asset base path.
+    let pre_token = state.path_token_registry.register(SessionRoute {
+        kind: SessionRouteKind::DynamicPort,
+        host_port: 0, // placeholder — updated when the port is detected
+        ticket_key: ticket_key.clone(),
+        user_id: auth.user_id.clone(),
+    }).await;
+    let proxy_base = container::build_session_dynamic_port_url(&pre_token);
+
     let spare_ports = container::start_run_command(
         &ticket_key,
         &worktree,
@@ -1331,9 +1412,16 @@ pub async fn start_run_command(
         index,
         dynamic_ports,
         true, // isolate_workspace: restrict container to this issue's worktree
+        &[("MAESTRO_PROXY_BASE", &proxy_base)],
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .map_err(|e| {
+        // Clean up the pre-registered token on failure.
+        let registry = state.path_token_registry.clone();
+        let token = pre_token.clone();
+        tokio::spawn(async move { registry.remove(&token).await; });
+        (StatusCode::INTERNAL_SERVER_ERROR, e)
+    })?;
 
     // Register in state BEFORE spawning background tasks so that events
     // emitted by the scanner/tracker always find an existing map entry
@@ -1374,8 +1462,14 @@ pub async fn start_run_command(
         }
     });
 
-    // Spawn tracker that updates run_commands state on port events
+    // Spawn tracker that updates run_commands state on port events.
+    // The pre-registered proxy token (with host_port=0 placeholder) is
+    // updated when the actual port is detected.
     let mut rx = state.engine.subscribe();
+    let registry = state.path_token_registry.clone();
+    let tracker_user_id = auth.user_id.clone();
+    let tracker_pre_token = pre_token.clone();
+    let tracker_proxy_base = proxy_base.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -1396,17 +1490,39 @@ pub async fn start_run_command(
                             }
                             match event.event_type.as_str() {
                                 "run_command_port_forwarded" => {
-                                    if let Some(fwd) = event.forwarded_port {
+                                    if let Some((cp, hp)) = event.forwarded_port {
+                                        // Update the pre-registered token with the actual port:
+                                        // remove the placeholder, re-register with correct host_port.
+                                        registry.remove(&tracker_pre_token).await;
+                                        registry.register_with_token(
+                                            tracker_pre_token.clone(),
+                                            SessionRoute {
+                                                kind: SessionRouteKind::DynamicPort,
+                                                host_port: hp,
+                                                ticket_key: ticket_for_tracker.clone(),
+                                                user_id: tracker_user_id.clone(),
+                                            },
+                                        ).await;
                                         let mut map = run_cmds_map.write().await;
                                         if let Some(cmd) = map.get_mut(&ticket_for_tracker).and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == index)) {
-                                            cmd.forwarded_port = Some(fwd);
+                                            cmd.forwarded_port = Some(DynamicPortForward {
+                                                container_port: cp,
+                                                host_port: hp,
+                                                proxy_url: tracker_proxy_base.clone(),
+                                                path_token: tracker_pre_token.clone(),
+                                            });
                                         }
                                     }
                                 }
                                 "run_command_port_unforwarded" => {
                                     let mut map = run_cmds_map.write().await;
                                     if let Some(cmd) = map.get_mut(&ticket_for_tracker).and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == index))
-                                        && let Some(gone) = event.forwarded_port && cmd.forwarded_port.map(|f| f.0) == Some(gone.0) {
+                                        && let Some((gone_cp, _)) = event.forwarded_port
+                                        && cmd.forwarded_port.as_ref().map(|f| f.container_port) == Some(gone_cp)
+                                    {
+                                        if let Some(ref fwd) = cmd.forwarded_port {
+                                            registry.remove(&fwd.path_token).await;
+                                        }
                                         cmd.forwarded_port = None;
                                     }
                                 }
@@ -1414,6 +1530,12 @@ pub async fn start_run_command(
                                     // Container exited on its own — clean up state
                                     let mut map = run_cmds_map.write().await;
                                     if let Some(cmds) = map.get_mut(&ticket_for_tracker) {
+                                        // Deregister proxy token before removing state.
+                                        if let Some(cmd) = cmds.iter().find(|c| c.cmd_index == index)
+                                            && let Some(ref fwd) = cmd.forwarded_port
+                                        {
+                                            registry.remove(&fwd.path_token).await;
+                                        }
                                         cmds.retain(|c| c.cmd_index != index);
                                         if cmds.is_empty() {
                                             map.remove(&ticket_for_tracker);
@@ -1455,12 +1577,15 @@ pub async fn stop_run_command(
     let ticket_key = w.ticket_key.clone();
     drop(workflows);
 
-    // Cancel scanner and remove from state
+    // Cancel scanner, deregister proxy token, and remove from state
     {
         let mut run_cmds = state.run_commands.write().await;
         if let Some(cmds) = run_cmds.get_mut(&ticket_key) {
             if let Some(pos) = cmds.iter().position(|c| c.cmd_index == index) {
                 cmds[pos].scanner_cancel.cancel();
+                if let Some(ref fwd) = cmds[pos].forwarded_port {
+                    state.path_token_registry.remove(&fwd.path_token).await;
+                }
                 cmds.remove(pos);
             }
             if cmds.is_empty() {
@@ -1525,6 +1650,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
+    use crate::session_registry::PathTokenRegistry;
+
     /// Create a minimal `WorkflowEvent` for port-forwarding tests.
     fn port_event(
         event_type: &str,
@@ -1549,59 +1676,80 @@ mod tests {
         }
     }
 
-    /// `track_port_forwards` adds ports on `port_forwarded` events.
+    /// Helper: extract `(container_port, host_port)` pairs from the map.
+    fn port_pairs(fwd: &[DynamicPortForward]) -> Vec<(u16, u16)> {
+        fwd.iter().map(|f| (f.container_port, f.host_port)).collect()
+    }
+
+    /// `track_port_forwards` adds ports on `port_forwarded` events and
+    /// registers proxy tokens.
     #[tokio::test]
     async fn track_port_forwards_adds_on_forwarded() {
         let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let registry = PathTokenRegistry::new();
         let (tx, _) = broadcast::channel(16);
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
         let m = map.clone();
+        let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
 
-        // Send a port_forwarded event.
         tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
             .unwrap();
-        // Give the task time to process.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         {
             let fwd = map.read().await;
             let ports = fwd.get("T-1").expect("should have entry");
-            assert_eq!(ports, &[(3000, 9100)]);
+            assert_eq!(port_pairs(ports), vec![(3000, 9100)]);
+            assert!(ports[0].proxy_url.starts_with("/s/"));
+            assert!(!ports[0].path_token.is_empty());
+            // Token should be registered in the registry.
+            assert!(registry.lookup(&ports[0].path_token).await.is_some());
         }
 
         cancel.cancel();
         let _ = handle.await;
     }
 
-    /// `track_port_forwards` removes ports on `port_unforwarded` events.
+    /// `track_port_forwards` removes ports on `port_unforwarded` events and
+    /// deregisters proxy tokens.
     #[tokio::test]
     async fn track_port_forwards_removes_on_unforwarded() {
         let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
-        // Seed with an existing port.
-        map.write()
-            .await
-            .insert("T-1".into(), vec![(3000, 9100), (5000, 9101)]);
+        let registry = PathTokenRegistry::new();
         let (tx, _) = broadcast::channel(16);
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
         let m = map.clone();
+        let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
+
+        // Forward two ports.
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 5000, 9101)).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Capture the token for port 3000 before removal.
+        let token_3000 = {
+            let fwd = map.read().await;
+            fwd.get("T-1").unwrap().iter().find(|f| f.container_port == 3000).unwrap().path_token.clone()
+        };
 
         // Unforward port 3000.
-        tx.send(port_event("port_unforwarded", "T-1", 3000, 9100))
-            .unwrap();
+        tx.send(port_event("port_unforwarded", "T-1", 3000, 9100)).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         {
             let fwd = map.read().await;
             let ports = fwd.get("T-1").expect("should have entry");
-            assert_eq!(ports, &[(5000, 9101)]);
+            assert_eq!(port_pairs(ports), vec![(5000, 9101)]);
+            // Token for 3000 should be deregistered.
+            assert!(registry.lookup(&token_3000).await.is_none());
         }
 
         cancel.cancel();
@@ -1612,15 +1760,16 @@ mod tests {
     #[tokio::test]
     async fn track_port_forwards_ignores_other_tickets() {
         let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let registry = PathTokenRegistry::new();
         let (tx, _) = broadcast::channel(16);
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
         let m = map.clone();
+        let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
 
-        // Send event for a different ticket.
         tx.send(port_event("port_forwarded", "T-2", 3000, 9100))
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1639,30 +1788,25 @@ mod tests {
     #[tokio::test]
     async fn track_port_forwards_deduplicates_by_container_port() {
         let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let registry = PathTokenRegistry::new();
         let (tx, _) = broadcast::channel(16);
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
         let m = map.clone();
+        let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
 
-        // Send the same port twice.
-        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
-            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
-            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
 
         {
             let fwd = map.read().await;
             let ports = fwd.get("T-1").expect("should have entry");
-            assert_eq!(
-                ports.len(),
-                1,
-                "duplicate container port should not be added twice"
-            );
+            assert_eq!(ports.len(), 1, "duplicate container port should not be added twice");
         }
 
         cancel.cancel();
@@ -1673,29 +1817,29 @@ mod tests {
     #[tokio::test]
     async fn track_port_forwards_multiple_ports() {
         let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let registry = PathTokenRegistry::new();
         let (tx, _) = broadcast::channel(16);
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
         let m = map.clone();
+        let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), m, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
 
-        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
-            .unwrap();
-        tx.send(port_event("port_forwarded", "T-1", 5173, 9101))
-            .unwrap();
-        tx.send(port_event("port_forwarded", "T-1", 8080, 9102))
-            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 5173, 9101)).unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 8080, 9102)).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         {
             let fwd = map.read().await;
             let ports = fwd.get("T-1").expect("should have entry");
             assert_eq!(ports.len(), 3);
-            assert!(ports.contains(&(3000, 9100)));
-            assert!(ports.contains(&(5173, 9101)));
-            assert!(ports.contains(&(8080, 9102)));
+            let pairs = port_pairs(ports);
+            assert!(pairs.contains(&(3000, 9100)));
+            assert!(pairs.contains(&(5173, 9101)));
+            assert!(pairs.contains(&(8080, 9102)));
         }
 
         cancel.cancel();
@@ -1706,14 +1850,14 @@ mod tests {
     #[tokio::test]
     async fn track_port_forwards_exits_on_cancel() {
         let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let registry = PathTokenRegistry::new();
         let (tx, _) = broadcast::channel(16);
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), map, rx, cancel.clone()));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), map, registry, rx, cancel.clone()));
 
         cancel.cancel();
-        // Should exit promptly.
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
             .await
             .expect("task should exit within 1 second")
@@ -1724,13 +1868,13 @@ mod tests {
     #[tokio::test]
     async fn track_port_forwards_exits_on_channel_close() {
         let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let registry = PathTokenRegistry::new();
         let (tx, _) = broadcast::channel(16);
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), map, rx, cancel));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), map, registry, rx, cancel));
 
-        // Drop the sender to close the channel.
         drop(tx);
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
             .await

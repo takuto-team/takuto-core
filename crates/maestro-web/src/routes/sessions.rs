@@ -243,27 +243,32 @@ fn sanitise_request_headers(req: &mut Request<Body>, host_port: u16, is_upgrade:
 /// depth, but is no longer the sole gatekeeper.
 pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) -> Response<Body> {
     // --- cookie auth gate (mirrors the /ws inline pattern) ---
-    if let Some(ref db) = state.db {
-        let authed = match session_cookie_from_headers(req.headers()) {
+    // When a user database is configured, extract the authenticated user_id
+    // so we can verify ownership after the route lookup.
+    let auth_user_id: Option<String> = if let Some(ref db) = state.db {
+        let uid = match session_cookie_from_headers(req.headers()) {
             Some(raw) if raw.starts_with("db-") => {
                 let db = db.clone();
                 let cookie = raw.to_string();
                 tokio::task::spawn_blocking(move || {
                     let conn = db.conn().blocking_lock();
-                    validate_db_session(&conn, &cookie).is_some()
+                    validate_db_session(&conn, &cookie)
                 })
                 .await
-                .unwrap_or(false)
+                .unwrap_or(None)
             }
-            _ => false,
+            _ => None,
         };
-        if !authed {
+        if uid.is_none() {
             return Response::builder()
                 .status(StatusCode::UNAUTHORIZED)
                 .body(Body::empty())
                 .expect("401 builder is infallible");
         }
-    }
+        uid
+    } else {
+        None
+    };
 
     let path = req.uri().path().to_string();
     let query = req.uri().query().map(|s| s.to_string());
@@ -291,6 +296,19 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
             return not_found();
         }
     };
+
+    // Verify the authenticated user owns this session route. A valid
+    // session cookie for user A must not grant access to user B's
+    // editor, terminal, or dynamically forwarded port.
+    if let Some(ref uid) = auth_user_id
+        && route.user_id != *uid
+    {
+        tracing::warn!(
+            token_hash = %token_hash_prefix(token),
+            "session route user_id mismatch"
+        );
+        return not_found();
+    }
 
     if is_websocket_upgrade(&req) {
         forward_websocket(req, route, rest, token).await
@@ -328,6 +346,54 @@ fn rewrite_redirect_location(resp: &mut Response<Body>, token: &str) {
     }
 }
 
+/// Rewrite root-relative URLs in text responses from dynamic port backends.
+///
+/// For HTML: rewrites `src="/`, `href="/`, and `from "/` patterns.
+/// For JS/TS: rewrites `from "/`, `import "/`, and `import("/` patterns.
+///
+/// This ensures assets loaded by the initial HTML AND by Vite's runtime
+/// modules (like `@vite/client` importing `/node_modules/...`) go through
+/// the `/s/{token}/…` proxy path instead of hitting the dashboard origin.
+async fn rewrite_dynamic_port_urls(response: Response<Body>, token: &str) -> Response<Body> {
+    let ct = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let is_html = ct.starts_with("text/html");
+    let is_js = ct.starts_with("text/javascript")
+        || ct.starts_with("application/javascript")
+        || ct.starts_with("application/x-javascript");
+    if !is_html && !is_js {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(_) => return Response::from_parts(parts, Body::empty()),
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let prefix = format!("/s/{token}");
+    let mut rewritten = text
+        .replace(r#"from "/"#, &format!(r#"from "{prefix}/"#))
+        .replace(r#"from '/"#, &format!(r#"from '{prefix}/"#))
+        .replace(r#"import "/"#, &format!(r#"import "{prefix}/"#))
+        .replace(r#"import '/"#, &format!(r#"import '{prefix}/"#))
+        .replace(r#"import("/"#, &format!(r#"import("{prefix}/"#))
+        .replace(r#"import('/"#, &format!(r#"import('{prefix}/"#));
+    if is_html {
+        rewritten = rewritten
+            .replace(r#"src="/"#, &format!(r#"src="{prefix}/"#))
+            .replace(r#"href="/"#, &format!(r#"href="{prefix}/"#))
+            .replace(r#"src='/"#, &format!(r#"src='{prefix}/"#))
+            .replace(r#"href='/"#, &format!(r#"href='{prefix}/"#));
+    }
+    let body = Body::from(rewritten);
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, body)
+}
+
 /// Compute the upstream path based on session kind.
 ///
 /// Editor sessions use `--server-base-path /s/{token}` so the full prefix
@@ -335,7 +401,7 @@ fn rewrite_redirect_location(resp: &mut Response<Body>, token: &str) {
 fn upstream_path_for_kind(kind: SessionRouteKind, token: &str, rest: &str) -> String {
     match kind {
         SessionRouteKind::Editor => format!("/s/{token}{rest}"),
-        SessionRouteKind::Terminal => rest.to_string(),
+        SessionRouteKind::Terminal | SessionRouteKind::DynamicPort => rest.to_string(),
     }
 }
 
@@ -376,8 +442,13 @@ async fn forward_http(
             let mut response = Response::from_parts(parts, body);
             // Editor sessions with --server-base-path already emit correct
             // `/s/{token}/…` redirects — only terminal sessions need rewriting.
-            if route.kind == SessionRouteKind::Terminal {
+            if matches!(route.kind, SessionRouteKind::Terminal | SessionRouteKind::DynamicPort) {
                 rewrite_redirect_location(&mut response, token);
+            }
+            // Dynamic port responses: rewrite root-relative URLs in HTML
+            // and JS so the browser loads assets through the proxy.
+            if route.kind == SessionRouteKind::DynamicPort {
+                response = rewrite_dynamic_port_urls(response, token).await;
             }
             response
         }
@@ -552,6 +623,7 @@ mod tests {
                         kind: SessionRouteKind::Editor,
                         host_port: 19999, // nothing listens here
                         ticket_key: "TEST-1".to_string(),
+                        user_id: "test-user".to_string(),
                     },
                 )
                 .await;
@@ -607,6 +679,7 @@ mod tests {
                         kind: SessionRouteKind::Terminal,
                         host_port: 19998,
                         ticket_key: "TEST-2".to_string(),
+                        user_id: "test-user".to_string(),
                     },
                 )
                 .await;
@@ -649,6 +722,7 @@ mod tests {
                         kind: SessionRouteKind::Editor,
                         host_port: 19999,
                         ticket_key: "TEST-1".to_string(),
+                        user_id: "test-user".to_string(),
                     },
                 )
                 .await;
@@ -679,6 +753,7 @@ mod tests {
                         kind: SessionRouteKind::Editor,
                         host_port: 19999,
                         ticket_key: "TEST-1".to_string(),
+                        user_id: "test-user".to_string(),
                     },
                 )
                 .await;
@@ -700,11 +775,20 @@ mod tests {
 
         /// A valid session cookie must pass through to the proxy logic.
         /// Since there's no upstream listener, we expect 502 (Bad Gateway) —
-        /// proving we got past the auth gate.
+        /// proving we got past the auth gate AND ownership check.
         #[tokio::test]
         async fn proxy_allows_with_valid_cookie() {
             let state = crate::test_helpers::test_state_with_db();
             let cookie = crate::test_helpers::register_and_login(&state).await;
+            // Look up the admin user's ID so the route ownership check passes.
+            let admin_user_id = {
+                let db = state.db.as_ref().unwrap();
+                let conn = db.conn().lock().await;
+                maestro_core::db::users::get_user_by_username(&conn, "admin")
+                    .unwrap()
+                    .unwrap()
+                    .id
+            };
             state
                 .path_token_registry
                 .register_with_token(
@@ -713,6 +797,7 @@ mod tests {
                         kind: SessionRouteKind::Editor,
                         host_port: 19999,
                         ticket_key: "TEST-1".to_string(),
+                        user_id: admin_user_id,
                     },
                 )
                 .await;
@@ -729,8 +814,43 @@ mod tests {
                 .await
                 .unwrap();
 
-            // 502 = upstream unreachable, which means auth passed.
+            // 502 = upstream unreachable, which means auth + ownership passed.
             assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        }
+
+        /// A valid session cookie for user A must NOT grant access to user B's
+        /// session route — the proxy returns 404 (same as unknown token).
+        #[tokio::test]
+        async fn proxy_returns_404_when_user_mismatch() {
+            let state = crate::test_helpers::test_state_with_db();
+            let cookie = crate::test_helpers::register_and_login(&state).await;
+            // Register a route owned by a different user.
+            state
+                .path_token_registry
+                .register_with_token(
+                    "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
+                    SessionRoute {
+                        kind: SessionRouteKind::Editor,
+                        host_port: 19999,
+                        ticket_key: "TEST-1".to_string(),
+                        user_id: "other-user-id".to_string(),
+                    },
+                )
+                .await;
+
+            let app = build_router(state);
+            let resp = app
+                .oneshot(
+                    Request::get("/s/aaaa1111bbbb2222cccc3333dddd4444/")
+                        .header("Host", "localhost")
+                        .header("Cookie", &cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         }
     }
 

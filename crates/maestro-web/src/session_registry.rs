@@ -37,6 +37,10 @@ use maestro_core::container::generate_session_path_token;
 pub enum SessionRouteKind {
     Editor,
     Terminal,
+    /// A dynamically forwarded application port (e.g. a dev server started by
+    /// the user). Proxied identically to Terminal — prefix stripped, redirects
+    /// rewritten.
+    DynamicPort,
 }
 
 impl SessionRouteKind {
@@ -45,6 +49,7 @@ impl SessionRouteKind {
         match self {
             SessionRouteKind::Editor => "editor",
             SessionRouteKind::Terminal => "terminal",
+            SessionRouteKind::DynamicPort => "dynamic_port",
         }
     }
 }
@@ -62,6 +67,10 @@ pub struct SessionRoute {
     /// `close_editor` / `close_terminal` can drop every route they own
     /// without iterating the whole registry.
     pub ticket_key: String,
+    /// The user who owns this session. The proxy verifies the authenticated
+    /// user matches before forwarding, so one user cannot access another's
+    /// editor, terminal, or dynamically forwarded ports.
+    pub user_id: String,
 }
 
 /// Thread-safe map from path token → [`SessionRoute`].
@@ -208,6 +217,7 @@ mod tests {
             kind: SessionRouteKind::Editor,
             host_port: port,
             ticket_key: ticket.to_string(),
+            user_id: "test-user".to_string(),
         }
     }
 
@@ -216,6 +226,16 @@ mod tests {
             kind: SessionRouteKind::Terminal,
             host_port: port,
             ticket_key: ticket.to_string(),
+            user_id: "test-user".to_string(),
+        }
+    }
+
+    fn dynamic_port_route(ticket: &str, port: u16) -> SessionRoute {
+        SessionRoute {
+            kind: SessionRouteKind::DynamicPort,
+            host_port: port,
+            ticket_key: ticket.to_string(),
+            user_id: "test-user".to_string(),
         }
     }
 
@@ -443,5 +463,31 @@ mod tests {
     async fn find_token_for_returns_none_on_empty_registry() {
         let reg = PathTokenRegistry::new();
         assert!(reg.find_token_for("A", SessionRouteKind::Editor).await.is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // DynamicPort variant
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dynamic_port_kind_preserved_and_scoped() {
+        let reg = PathTokenRegistry::new();
+        let editor = reg.register(editor_route("A", 9101)).await;
+        let terminal = reg.register(terminal_route("A", 9102)).await;
+        let dyn_tok = reg.register(dynamic_port_route("A", 9103)).await;
+
+        assert_eq!(reg.lookup(&dyn_tok).await.unwrap().kind, SessionRouteKind::DynamicPort);
+
+        // remove_for_ticket_kind(DynamicPort) drops only dynamic port routes.
+        let dropped = reg.remove_for_ticket_kind("A", SessionRouteKind::DynamicPort).await;
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0], dyn_tok);
+        assert!(reg.lookup(&editor).await.is_some());
+        assert!(reg.lookup(&terminal).await.is_some());
+    }
+
+    #[test]
+    fn dynamic_port_kind_as_str() {
+        assert_eq!(SessionRouteKind::DynamicPort.as_str(), "dynamic_port");
     }
 }

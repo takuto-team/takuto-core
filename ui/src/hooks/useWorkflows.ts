@@ -13,8 +13,8 @@ export interface TerminalState {
 
 const TERMINAL_MAX_LINES = 500;
 
-/** Dynamic port forwards from WebSocket events, keyed by ticket_key → [container_port, host_port][] */
-export type DynamicForwards = Record<string, [number, number][]>;
+/** Dynamic port forwards from API, keyed by ticket_key → [container_port, proxy_url][] */
+export type DynamicForwards = Record<string, [number, string][]>;
 
 export interface SystemError {
   id: number;
@@ -60,6 +60,16 @@ export function useWorkflows() {
               lines: w.terminal_lines || [],
               completed: false,
             };
+          }
+        }
+        return next;
+      });
+      // Initialize dynamic forwards from API response (proxy URLs).
+      setDynamicForwards((prev) => {
+        const next = { ...prev };
+        for (const w of list) {
+          if (w.editor_port_mappings && w.editor_port_mappings.length > 0) {
+            next[w.ticket_key] = w.editor_port_mappings;
           }
         }
         return next;
@@ -177,25 +187,9 @@ export function useWorkflows() {
         return;
       }
 
-      // Port forwarding events — update dynamic forwards map (skip unknown workflows)
-      if (event_type === "port_forwarded" && evt.forwarded_port) {
-        const [cp, hp] = evt.forwarded_port;
-        setDynamicForwards((prev) => {
-          const existing = prev[ticket_key];
-          if (!existing) return prev;
-          if (existing.some(([c]) => c === cp)) return prev;
-          return { ...prev, [ticket_key]: [...existing, [cp, hp]] };
-        });
-        return;
-      }
-      if (event_type === "port_unforwarded" && evt.forwarded_port) {
-        const [cp] = evt.forwarded_port;
-        setDynamicForwards((prev) => {
-          const existing = prev[ticket_key];
-          if (!existing) return prev;
-          const filtered = existing.filter(([c]) => c !== cp);
-          return { ...prev, [ticket_key]: filtered };
-        });
+      // Port forwarding events — re-fetch to get proxy URLs from the server.
+      if (event_type === "port_forwarded" || event_type === "port_unforwarded") {
+        fetchWorkflows();
         return;
       }
 

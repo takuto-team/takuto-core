@@ -15,15 +15,23 @@ use maestro_core::workflow::engine::WorkflowEngine;
 
 use crate::session_registry::PathTokenRegistry;
 
-/// Port forwarding map: ticket_key → list of `(container_port, host_port)` pairs.
+/// A single dynamically forwarded port with its proxy metadata.
+#[derive(Debug, Clone)]
+pub struct DynamicPortForward {
+    /// Port inside the container (what the user's app listens on, e.g. 3000).
+    pub container_port: u16,
+    /// Host port that socat forwards to (kept for `SessionRoute` and cleanup).
+    pub host_port: u16,
+    /// Proxy URL: `/s/{path_token}/`.
+    pub proxy_url: String,
+    /// Path token registered in the proxy registry (for deregistration on removal).
+    pub path_token: String,
+}
+
+/// Port forwarding map: ticket_key → list of [`DynamicPortForward`].
 /// Includes both static Docker `-p` mappings (seeded at editor open) and dynamic
 /// socat forwards (tracked by the event subscriber).
-///
-/// Unit-test note: `DynamicForwardsMap` is a type alias with no custom methods;
-/// merge/dedup logic lives in `routes/workflows.rs` (`track_port_forwards` and
-/// the list/detail handlers). Port dedup and "dynamic wins on conflict" are tested
-/// at the route level, not here.
-pub type DynamicForwardsMap = Arc<RwLock<HashMap<String, Vec<(u16, u16)>>>>;
+pub type DynamicForwardsMap = Arc<RwLock<HashMap<String, Vec<DynamicPortForward>>>>;
 
 /// State for a single active run command.
 #[derive(Debug, Clone)]
@@ -34,8 +42,8 @@ pub struct RunCommandState {
     pub name: String,
     /// Cancellation token for the background port scanner.
     pub scanner_cancel: CancellationToken,
-    /// Detected port forwarding: `(container_port, host_port)`.
-    pub forwarded_port: Option<(u16, u16)>,
+    /// Detected port forwarding with proxy URL.
+    pub forwarded_port: Option<DynamicPortForward>,
 }
 
 /// Map of active run commands: `ticket_key → vec of RunCommandState`.

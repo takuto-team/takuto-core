@@ -25,7 +25,7 @@ import { ResumeIconButton } from "./ResumeIconButton";
 interface Props {
   workflow: WorkflowSummary;
   terminalState?: TerminalState;
-  dynamicForwards: [number, number][];
+  dynamicForwards: [number, string][];
   workflowDefs: WorkflowDefinition[];
   onRefresh: () => void;
   onShowDescription: (ticketKey: string, summary: string, description?: string) => void;
@@ -151,7 +151,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
   );
   const hasTerminalLines = effectiveTs && effectiveTs.lines.length > 0;
 
-  const mergedPorts: [number, number][] = (() => {
+  const mergedPorts: [number, string][] = (() => {
     const dynPorts = new Set(dynamicForwards.map(([cp]) => cp));
     return [
       ...(w.editor_port_mappings || []).filter(([cp]) => !dynPorts.has(cp)),
@@ -400,16 +400,16 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
                     <div className="fixed inset-0" onClick={() => setOpenMenu(null)} />
                     <div className="absolute bottom-full mb-2 right-0 bg-gray-800 border border-gray-700 rounded-lg py-1.5 shadow-xl z-20 min-w-[180px]">
                       <div className="px-3 py-1 text-xs text-gray-500 font-medium border-b border-gray-700/60 mb-1">Port mappings</div>
-                      {mergedPorts.map(([cp, hp]) => (
+                      {mergedPorts.map(([cp, proxyUrl]) => (
                         <a
-                          key={`${cp}-${hp}`}
-                          href={`http://localhost:${hp}`}
+                          key={`${cp}-${proxyUrl}`}
+                          href={proxyUrl}
                           target="_blank"
                           rel="noopener"
                           className="flex items-center leading-none gap-2 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                         >
                           <PortIcon />
-                          {cp} → localhost:{hp}
+                          {cp} &rarr; {proxyUrl}
                         </a>
                       ))}
                     </div>

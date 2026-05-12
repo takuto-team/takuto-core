@@ -448,6 +448,7 @@ fn toml_value_to_json(val: &toml::Value) -> serde_json::Value {
 const EDITOR_PORT_MIN: u16 = 9100;
 const EDITOR_PORT_MAX: u16 = 19100;
 
+
 /// Information about a running editor container.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EditorInfo {
@@ -689,6 +690,15 @@ pub fn build_session_terminal_url(path_token: &str, ttyd_token: &str) -> String 
     format!("/s/{path_token}/{ttyd_token}/")
 }
 
+/// Build a relative proxy URL for a dynamically forwarded application port.
+///
+/// Returns `/s/<path-token>/`. Unlike editor/terminal URLs there is no
+/// secondary in-process auth token — the path token (validated by the proxy
+/// registry) and the session cookie are the two access-control layers.
+pub fn build_session_dynamic_port_url(path_token: &str) -> String {
+    format!("/s/{path_token}/")
+}
+
 /// Build a Docker `--publish` argument string for editor/terminal session ports.
 ///
 /// When running with a local Docker daemon (no `DOCKER_HOST`), binds to the
@@ -737,7 +747,7 @@ pub async fn start_editor(
     worktree_path: &Path,
     image: &str,
     _app_ports: &[u16],
-    _dynamic_ports: usize,
+    dynamic_ports: usize,
     theme: &str,
     extensions: &[String],
     settings: &std::collections::HashMap<String, toml::Value>,
@@ -760,15 +770,16 @@ pub async fn start_editor(
         .output()
         .await;
 
-    // Allocate 1 port for the VS Code server. Terminals and dynamic port
-    // forwards each allocate their own single port on demand from the same range.
-    let ports = allocate_editor_ports(1).await.ok_or_else(|| {
+    // Allocate 1 port for VS Code + N spare ports for dynamic port forwarding
+    // (dev servers started by the user inside the container).
+    let total_ports = 1 + dynamic_ports;
+    let ports = allocate_editor_ports(total_ports).await.ok_or_else(|| {
         format!("No free editor ports available (range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
     })?;
 
     let vscode_port = ports[0];
+    let spare_ports: Vec<u16> = ports[1..].to_vec();
     let port_mappings: Vec<(u16, u16)> = Vec::new();
-    let spare_ports: Vec<u16> = Vec::new();
     let connection_token = generate_connection_token();
     let path_token = generate_session_path_token();
     info!(ticket = %name, vscode_port, "Allocated editor port");
@@ -1520,13 +1531,29 @@ pub async fn run_port_scanner(
     let container = editor_container_name(ticket_key);
     let ticket = ticket_key.to_string();
 
-    // Ports to never treat as "new": VS Code and all pre-allocated spare ports (they
-    // are docker-mapped; socat may briefly keep them LISTENing after kill, so never
-    // re-forward them).
+    // Ports to never treat as "new": VS Code and all pre-allocated spare ports
+    // (they are docker-mapped; socat may briefly keep them LISTENing after kill,
+    // so never re-forward them).
     let mut always_ignore: std::collections::HashSet<u16> = std::collections::HashSet::new();
     always_ignore.insert(vscode_port);
     for sp in &spare_ports {
         always_ignore.insert(*sp);
+    }
+
+    // Baseline: ports already listening when the scanner starts (infrastructure
+    // services like the Docker daemon in DinD mode, the Maestro dashboard, etc.).
+    // Only ports that appear AFTER this snapshot are treated as user applications.
+    // This avoids hardcoding a blocklist — users are free to use any port.
+    let baseline = match scan_listening_ports(&container).await {
+        Some(ports) => ports.into_iter().map(|(p, _)| p).collect::<std::collections::HashSet<u16>>(),
+        None => std::collections::HashSet::new(),
+    };
+    if !baseline.is_empty() {
+        info!(
+            ticket = %ticket,
+            baseline_ports = ?baseline,
+            "Port scanner baseline captured — these ports will be ignored"
+        );
     }
 
     // detected_port → spare_port (the host port socat is listening on).
@@ -1555,7 +1582,15 @@ pub async fn run_port_scanner(
 
         // Detect new listening ports → start socat forwarding.
         for &(port, family) in &listening {
-            if always_ignore.contains(&port) || active_forwards.contains_key(&port) {
+            // Skip infrastructure ports: baseline (pre-existing), always_ignore
+            // (VS Code + spare ports), anything in the managed editor port range
+            // (allocated for VS Code, terminals, and socat — not user apps), and
+            // ports already forwarded.
+            if always_ignore.contains(&port)
+                || baseline.contains(&port)
+                || (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&port)
+                || active_forwards.contains_key(&port)
+            {
                 continue;
             }
             if let Some(spare) = available_spares.pop() {
@@ -1774,14 +1809,16 @@ pub struct RunCommandInfo {
 /// Runs the given shell `command` in a dedicated Docker container. Allocates spare
 /// ports from the editor range for dynamic port forwarding (socat). Returns the
 /// allocated spare ports so the caller can start a port scanner.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_run_command(
     ticket_key: &str,
     worktree_path: &Path,
     image: &str,
     command: &str,
     cmd_index: usize,
-    _dynamic_ports: usize,
+    dynamic_ports: usize,
     isolate_workspace: bool,
+    extra_env: &[(&str, &str)],
 ) -> std::result::Result<Vec<u16>, String> {
     let name = run_command_container_name(ticket_key, cmd_index);
 
@@ -1796,8 +1833,9 @@ pub async fn start_run_command(
         .output()
         .await;
 
-    // Allocate 1 port for the run command container.
-    let spare_ports = allocate_editor_ports(1).await.ok_or_else(|| {
+    // Allocate spare ports for dynamic port forwarding (socat).
+    let count = dynamic_ports.max(1);
+    let spare_ports = allocate_editor_ports(count).await.ok_or_else(|| {
         format!(
             "No free ports available for run command (range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})"
         )
@@ -1832,6 +1870,12 @@ pub async fn start_run_command(
             args.push("-e".into());
             args.push(format!("{key}={val}"));
         }
+    }
+
+    // Caller-provided environment (e.g. MAESTRO_PROXY_BASE for dev servers).
+    for (k, v) in extra_env {
+        args.push("-e".into());
+        args.push(format!("{k}={v}"));
     }
 
     // Volumes — use per-issue isolation when enabled
@@ -2026,10 +2070,27 @@ pub async fn run_run_command_port_scanner(
     let container = run_command_container_name(ticket_key, cmd_index);
     let ticket = ticket_key.to_string();
 
-    // Ports to never treat as "new": all pre-allocated spare ports
+    // Ports to never treat as "new": all pre-allocated spare ports.
     let mut always_ignore: std::collections::HashSet<u16> = std::collections::HashSet::new();
     for sp in &spare_ports {
         always_ignore.insert(*sp);
+    }
+
+    // Baseline: ports already listening when the scanner starts. Any port
+    // present before the user's command runs is infrastructure (Docker daemon,
+    // Maestro dashboard, etc.) and must not be forwarded. Only ports that
+    // appear AFTER this snapshot are treated as user applications.
+    let baseline = match scan_listening_ports(&container).await {
+        Some(ports) => ports.into_iter().map(|(p, _)| p).collect::<std::collections::HashSet<u16>>(),
+        None => std::collections::HashSet::new(),
+    };
+    if !baseline.is_empty() {
+        info!(
+            ticket = %ticket,
+            cmd_index,
+            baseline_ports = ?baseline,
+            "Run command port scanner baseline captured"
+        );
     }
 
     let mut active_forwards: HashMap<u16, u16> = HashMap::new();
@@ -2089,7 +2150,11 @@ pub async fn run_run_command_port_scanner(
 
         // Detect new listening ports → start socat forwarding.
         for &(port, family) in &listening {
-            if always_ignore.contains(&port) || active_forwards.contains_key(&port) {
+            if always_ignore.contains(&port)
+                || baseline.contains(&port)
+                || (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&port)
+                || active_forwards.contains_key(&port)
+            {
                 continue;
             }
             if let Some(spare) = available_spares.pop() {

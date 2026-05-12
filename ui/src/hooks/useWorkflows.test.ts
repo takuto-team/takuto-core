@@ -122,14 +122,17 @@ describe("useWorkflows", () => {
     expect(result.current.orderKeys).not.toContain("TEST-1");
   });
 
-  it("port_forwarded event updates dynamic forwards", async () => {
-    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1" })]);
+  it("port_forwarded event triggers re-fetch", async () => {
+    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1", editor_port_mappings: [] })]);
 
     const { result } = renderHook(() => useWorkflows());
 
     await vi.waitFor(() => {
       expect(result.current.workflows["TEST-1"]).toBeDefined();
     });
+
+    // Update mock to return port mappings on next fetch
+    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1", editor_port_mappings: [[3000, "/s/abc123/"]] })]);
 
     act(() => {
       result.current.handleEvent({
@@ -141,32 +144,24 @@ describe("useWorkflows", () => {
       });
     });
 
-    expect(result.current.dynamicForwards["TEST-1"]).toEqual([[3000, 9100]]);
+    // Re-fetch should populate dynamic forwards from API
+    await vi.waitFor(() => {
+      expect(result.current.dynamicForwards["TEST-1"]).toEqual([[3000, "/s/abc123/"]]);
+    });
   });
 
-  it("port_unforwarded event removes the forward", async () => {
-    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1" })]);
+  it("port_unforwarded event triggers re-fetch", async () => {
+    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1", editor_port_mappings: [[3000, "/s/abc123/"]] })]);
 
     const { result } = renderHook(() => useWorkflows());
 
     await vi.waitFor(() => {
-      expect(result.current.workflows["TEST-1"]).toBeDefined();
+      expect(result.current.dynamicForwards["TEST-1"]).toEqual([[3000, "/s/abc123/"]]);
     });
 
-    // Add a port
-    act(() => {
-      result.current.handleEvent({
-        event_type: "port_forwarded",
-        workflow_id: "uuid-1",
-        ticket_key: "TEST-1",
-        state: "",
-        forwarded_port: [3000, 9100],
-      });
-    });
+    // Update mock to return empty mappings on next fetch
+    mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1", editor_port_mappings: [] })]);
 
-    expect(result.current.dynamicForwards["TEST-1"]).toHaveLength(1);
-
-    // Remove it
     act(() => {
       result.current.handleEvent({
         event_type: "port_unforwarded",
@@ -177,7 +172,10 @@ describe("useWorkflows", () => {
       });
     });
 
-    expect(result.current.dynamicForwards["TEST-1"]).toHaveLength(0);
+    // Re-fetch should clear dynamic forwards
+    await vi.waitFor(() => {
+      expect(result.current.dynamicForwards["TEST-1"] ?? []).toHaveLength(0);
+    });
   });
 
   it("new keys from refetch are appended, not re-sorted", async () => {
