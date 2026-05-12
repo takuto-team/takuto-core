@@ -1082,7 +1082,7 @@ pub async fn open_terminal(
     }
 
     // Editor container must be running.
-    let info = container::get_editor_info(&id).await.ok_or((
+    let _info = container::get_editor_info(&id).await.ok_or((
         StatusCode::CONFLICT,
         "Editor container is not running — open the editor first.".into(),
     ))?;
@@ -1111,27 +1111,12 @@ pub async fn open_terminal(
         }));
     }
 
-    // Pick a spare port that is:
-    //  1. Not already allocated to another workflow's terminal.
-    //  2. Not currently listening inside this container (socat dynamic forwards also bind
-    //     spare ports, so ttyd would fail to bind if we picked one socat already holds).
-    let used_by_terminals: Vec<u16> = state
-        .terminal_ports
-        .read()
-        .await
-        .values()
-        .map(|(port, _)| *port)
-        .collect();
-    let in_use = container::listening_ports_in_editor(&id).await;
-    let port = info
-        .spare_ports
-        .iter()
-        .copied()
-        .find(|p| !used_by_terminals.contains(p) && !in_use.contains(p))
-        .ok_or((
-            StatusCode::CONFLICT,
-            "No spare ports available for terminal.".into(),
-        ))?;
+    // Allocate a single port for ttyd from the shared editor port range.
+    let ports = container::allocate_single_port().await.ok_or((
+        StatusCode::CONFLICT,
+        "No free ports available for terminal.".into(),
+    ))?;
+    let port = ports;
 
     let (_legacy_url, token) = container::start_terminal(&id, port)
         .await

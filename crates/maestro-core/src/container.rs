@@ -446,7 +446,7 @@ fn toml_value_to_json(val: &toml::Value) -> serde_json::Value {
 
 /// Port range reserved for editor instances (VS Code + app ports) on the DinD host.
 const EDITOR_PORT_MIN: u16 = 9100;
-const EDITOR_PORT_MAX: u16 = 9200;
+const EDITOR_PORT_MAX: u16 = 10100;
 
 /// Information about a running editor container.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -582,6 +582,12 @@ async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
         }
     }
     None // not enough free ports after retries
+}
+
+/// Allocate a single free port from the editor/terminal port range.
+/// Public so the web layer can allocate terminal ports independently.
+pub async fn allocate_single_port() -> Option<u16> {
+    allocate_editor_ports(1).await.map(|v| v[0])
 }
 
 /// Generate a cryptographically random connection token for editor sessions.
@@ -730,8 +736,8 @@ pub async fn start_editor(
     ticket_key: &str,
     worktree_path: &Path,
     image: &str,
-    app_ports: &[u16],
-    dynamic_ports: usize,
+    _app_ports: &[u16],
+    _dynamic_ports: usize,
     theme: &str,
     extensions: &[String],
     settings: &std::collections::HashMap<String, toml::Value>,
@@ -754,24 +760,18 @@ pub async fn start_editor(
         .output()
         .await;
 
-    // Allocate ports: 1 for VS Code + N spare ports for all forwarding (via socat).
-    // NOTE: `app_ports` config is no longer used for Docker port mappings. Instead, the
-    // port scanner detects listening ports inside the container and forwards them via
-    // socat on spare ports. This works regardless of whether the app binds to 0.0.0.0
-    // or 127.0.0.1 (unlike Docker's port forwarding which only reaches 0.0.0.0). To keep
-    // enough headroom, we allocate `app_ports.len() + dynamic_ports` spare ports.
-    let spare_count = app_ports.len() + dynamic_ports;
-    let needed = 1 + spare_count;
-    let ports = allocate_editor_ports(needed).await.ok_or_else(|| {
-        format!("No free editor ports available (need {needed}, range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
+    // Allocate 1 port for the VS Code server. Terminals and dynamic port
+    // forwards each allocate their own single port on demand from the same range.
+    let ports = allocate_editor_ports(1).await.ok_or_else(|| {
+        format!("No free editor ports available (range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
     })?;
 
     let vscode_port = ports[0];
     let port_mappings: Vec<(u16, u16)> = Vec::new();
-    let spare_ports: Vec<u16> = ports[1..].to_vec();
+    let spare_ports: Vec<u16> = Vec::new();
     let connection_token = generate_connection_token();
     let path_token = generate_session_path_token();
-    info!(ticket = %name, vscode_port, spare_ports = ?spare_ports, "Allocated editor ports");
+    info!(ticket = %name, vscode_port, "Allocated editor port");
 
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -1780,7 +1780,7 @@ pub async fn start_run_command(
     image: &str,
     command: &str,
     cmd_index: usize,
-    dynamic_ports: usize,
+    _dynamic_ports: usize,
     isolate_workspace: bool,
 ) -> std::result::Result<Vec<u16>, String> {
     let name = run_command_container_name(ticket_key, cmd_index);
@@ -1796,11 +1796,10 @@ pub async fn start_run_command(
         .output()
         .await;
 
-    // Allocate spare ports for dynamic forwarding.
-    let spare_count = dynamic_ports.max(3); // at least 3 ports for typical dev servers
-    let spare_ports = allocate_editor_ports(spare_count).await.ok_or_else(|| {
+    // Allocate 1 port for the run command container.
+    let spare_ports = allocate_editor_ports(1).await.ok_or_else(|| {
         format!(
-            "No free ports available for run command (need {spare_count}, range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})"
+            "No free ports available for run command (range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})"
         )
     })?;
 
@@ -1808,7 +1807,7 @@ pub async fn start_run_command(
         ticket = %ticket_key,
         cmd_index,
         container = %name,
-        spare_ports = ?spare_ports,
+        port = spare_ports[0],
         "Starting run command container"
     );
 
