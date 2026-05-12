@@ -9,10 +9,11 @@ import type { User } from "../api/types";
 interface Props {
   onLogout: () => void;
   authEnabled: boolean;
+  isAdmin?: boolean;
 }
 
-const TABS = ["Users"] as const;
-type Tab = (typeof TABS)[number];
+const ALL_TABS = ["Users"] as const;
+type Tab = (typeof ALL_TABS)[number];
 
 // ---------------------------------------------------------------------------
 // Users tab
@@ -271,8 +272,9 @@ function UsersTab() {
 // Config page
 // ---------------------------------------------------------------------------
 
-export function Config({ onLogout, authEnabled }: Props) {
-  const [tab, setTab] = useState<Tab>("Users");
+export function Config({ onLogout, authEnabled, isAdmin }: Props) {
+  const tabs = ALL_TABS.filter((t) => t !== "Users" || isAdmin);
+  const [tab, setTab] = useState<Tab>(tabs[0] ?? "Users");
 
   return (
     <div className="min-h-screen">
@@ -301,7 +303,7 @@ export function Config({ onLogout, authEnabled }: Props) {
       {/* Tab bar */}
       <div className="border-b border-gray-800">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-6">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
