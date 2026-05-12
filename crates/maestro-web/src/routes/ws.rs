@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use tracing::{info, warn};
 
-use crate::auth::session_authorized;
+use crate::auth::{session_authorized, session_cookie_from_headers, validate_db_session};
 use crate::state::AppState;
 
 pub async fn ws_handler(
@@ -15,6 +15,32 @@ pub async fn ws_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    // DB session auth takes priority when the database is available.
+    if let Some(ref db) = state.db {
+        if let Some(raw_cookie) = session_cookie_from_headers(&headers)
+            && raw_cookie.starts_with("db-")
+        {
+            let db = db.clone();
+            let cookie = raw_cookie.to_string();
+            let valid = tokio::task::spawn_blocking(move || {
+                let conn = db.conn().blocking_lock();
+                validate_db_session(&conn, &cookie).is_some()
+            })
+            .await
+            .unwrap_or(false);
+
+            if !valid {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            info!("WebSocket upgrade requested");
+            return ws.on_upgrade(move |socket| handle_socket(socket, state));
+        }
+
+        // DB exists but no valid DB session — reject (same logic as the HTTP middleware).
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    // Legacy config-based auth fallback (no database).
     let web = {
         let cfg = state.config.read().await;
         cfg.web.clone()
