@@ -81,6 +81,20 @@ pub fn verify_user_password(
     Ok(false)
 }
 
+/// Replace a user's password. Deletes all existing password credentials and stores the new one.
+pub fn change_password(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    new_password: &str,
+) -> Result<()> {
+    conn.execute(
+        "DELETE FROM credentials WHERE user_id = ?1 AND kind = 'password'",
+        params![user_id],
+    )?;
+    store_password(conn, user_id, new_password)?;
+    Ok(())
+}
+
 /// Generate a set of recovery codes and store their hashes. Returns the plaintext codes
 /// (to be displayed to the user once).
 pub fn generate_recovery_codes(

@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import { apiJson, api } from "../api/client";
 import type { User } from "../api/types";
 import { UsersTab } from "../components/UsersTab";
+import { SecurityTab } from "../components/SecurityTab";
 
 interface Props {
   onLogout: () => void;
@@ -13,7 +14,7 @@ interface Props {
   isAdmin?: boolean;
 }
 
-const ALL_TABS = ["Users"] as const;
+const ALL_TABS = ["Security", "Users"] as const;
 type Tab = (typeof ALL_TABS)[number];
 
 // ---------------------------------------------------------------------------
@@ -92,12 +93,37 @@ function UsersTabConnected() {
 }
 
 // ---------------------------------------------------------------------------
+// Security data wrapper
+// ---------------------------------------------------------------------------
+
+function SecurityTabConnected() {
+  const handleChangePassword = async (currentPassword: string, newPassword: string) => {
+    try {
+      const res = await api("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        return { error: body?.error ?? `Failed (${res.status})` };
+      }
+      return {};
+    } catch {
+      return { error: "Could not reach the server." };
+    }
+  };
+
+  return <SecurityTab onChangePassword={handleChangePassword} />;
+}
+
+// ---------------------------------------------------------------------------
 // Config page
 // ---------------------------------------------------------------------------
 
 export function Config({ onLogout, authEnabled, isAdmin }: Props) {
   const tabs = ALL_TABS.filter((t) => t !== "Users" || isAdmin);
-  const [tab, setTab] = useState<Tab>(tabs[0] ?? "Users");
+  const [tab, setTab] = useState<Tab>(tabs[0]);
 
   return (
     <div className="min-h-screen">
@@ -143,6 +169,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
       </div>
 
       <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {tab === "Security" && <SecurityTabConnected />}
         {tab === "Users" && <UsersTabConnected />}
       </main>
     </div>

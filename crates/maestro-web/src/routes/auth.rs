@@ -215,6 +215,121 @@ pub async fn me(
 }
 
 // ---------------------------------------------------------------------------
+// Password change
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangePasswordBody {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// Change the current user's password. Requires valid session and correct current password.
+/// Invalidates all other sessions after the change.
+pub async fn change_password(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    jar: CookieJar,
+    Json(body): Json<ChangePasswordBody>,
+) -> impl IntoResponse {
+    use crate::auth::{session_cookie_from_headers, validate_db_session};
+
+    let Some(ref db) = state.db else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
+    // Resolve the current user from the session cookie.
+    let cookie = session_cookie_from_headers(&headers)
+        .unwrap_or_default()
+        .to_string();
+    let db_clone = db.clone();
+    let user_id = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        validate_db_session(&conn, &cookie)
+    })
+    .await
+    .ok()
+    .flatten();
+
+    let Some(user_id) = user_id else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    if body.new_password.len() < 12 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "New password must be at least 12 characters"})),
+        )
+            .into_response();
+    }
+
+    let db_clone = db.clone();
+    let current_pw = body.current_password;
+    let new_pw = body.new_password;
+    let uid = user_id.clone();
+    let current_cookie = jar
+        .get(SESSION_COOKIE_NAME)
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+
+        // Verify current password.
+        if !maestro_core::db::credentials::verify_user_password(&conn, &uid, &current_pw)? {
+            return Err(maestro_core::error::MaestroError::Auth(
+                "Current password is incorrect".into(),
+            ));
+        }
+
+        // Change password.
+        maestro_core::db::credentials::change_password(&conn, &uid, &new_pw)?;
+
+        // Invalidate all sessions, then re-create the current one so the user stays logged in.
+        maestro_core::db::credentials::delete_user_sessions(&conn, &uid)?;
+        let new_token = create_db_session(&conn, &uid)?;
+
+        // We need to return both the old cookie (to know what to replace) and the new token.
+        Ok((new_token, current_cookie))
+    })
+    .await;
+
+    match result {
+        Ok(Ok((new_token, _))) => {
+            let cookie = Cookie::build((SESSION_COOKIE_NAME, new_token))
+                .path("/")
+                .http_only(true)
+                .same_site(SameSite::Lax)
+                .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
+                .build();
+            (jar.add(cookie), StatusCode::NO_CONTENT).into_response()
+        }
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            if msg.contains("incorrect") {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({"error": msg})),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": msg})),
+                )
+                    .into_response()
+            }
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Internal server error"})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // First-user registration
 // ---------------------------------------------------------------------------
 

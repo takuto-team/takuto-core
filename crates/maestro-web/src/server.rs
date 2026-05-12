@@ -29,6 +29,10 @@ pub fn build_router(state: AppState) -> Router {
 
     let api_protected = Router::new()
         .route("/auth/me", get(routes::auth::me))
+        .route(
+            "/auth/change-password",
+            post(routes::auth::change_password),
+        )
         // User management routes (admin only).
         .route("/users/export", get(routes::admin::export_users))
         .route("/users/import", post(routes::admin::import_users))
