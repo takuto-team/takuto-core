@@ -194,8 +194,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI (npm global)
-RUN npm install -g @anthropic-ai/claude-code@2.1.110
+# Install Claude Code CLI (latest version, globally accessible to all users)
+RUN npm install -g @anthropic-ai/claude-code@latest
 
 # Cursor Agent CLI (for [agent] provider = "cursor"). The launcher resolves paths with realpath("$0");
 # copying only the script to /usr/local/bin breaks it (looks for index.js next to the copy). Install the

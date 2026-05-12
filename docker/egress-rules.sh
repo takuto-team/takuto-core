@@ -33,7 +33,7 @@ if [ -n "${DOCKER_HOST:-}" ]; then
     dind_port=$(echo "$DOCKER_HOST" | sed -n 's|^tcp://\([^:]*\):\([0-9]*\)$|\2|p')
     if [ -n "$dind_host" ] && [ -n "$dind_port" ]; then
         echo "Allowing DinD sidecar: $dind_host:$dind_port"
-        for ip in $(getent ahosts "$dind_host" 2>/dev/null | awk '{ print $1 }' | sort -u); do
+        for ip in $(getent ahostsv4 "$dind_host" 2>/dev/null | awk '{ print $1 }' | sort -u); do
             [ -n "$ip" ] && iptables -A OUTPUT -d "$ip" -p tcp --dport "$dind_port" -j ACCEPT
         done
     fi
@@ -43,7 +43,8 @@ fi
 # Uses getent (always available in glibc) instead of dig/host.
 allow_host() {
     local host="$1"
-    for ip in $(getent ahosts "$host" 2>/dev/null | awk '{ print $1 }' | sort -u); do
+    # Use ahostsv4 — iptables is IPv4 only; IPv6 addresses cause a fatal error.
+    for ip in $(getent ahostsv4 "$host" 2>/dev/null | awk '{ print $1 }' | sort -u); do
         [ -n "$ip" ] && iptables -A OUTPUT -d "$ip" -j ACCEPT
     done
 }
