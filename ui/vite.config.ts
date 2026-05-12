@@ -13,7 +13,15 @@ const dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(file
 
 // More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
 const version = readFileSync(resolve(__dirname, "../VERSION"), "utf-8").trim();
+
+// When running inside a Maestro container (run command), MAESTRO_PROXY_BASE is
+// set to the proxy path (e.g. /s/{token}/).  Use it as Vite's `base` so all
+// generated asset URLs go through the reverse proxy, and disable the dev proxy
+// rules (they target the host's dashboard, not the container's).
+const proxyBase = process.env.MAESTRO_PROXY_BASE;
+
 export default defineConfig({
+  base: proxyBase || "/",
   define: {
     __APP_VERSION__: JSON.stringify(version)
   },
@@ -36,7 +44,10 @@ export default defineConfig({
     }
   })],
   server: {
-    proxy: {
+    // Dev proxy rules forward API/WS/session requests to the Maestro backend
+    // when running locally.  Inside a container (MAESTRO_PROXY_BASE is set),
+    // these are not needed — the reverse proxy handles routing.
+    proxy: proxyBase ? undefined : {
       "/api": "http://localhost:8080",
       "/ws": {
         target: "ws://localhost:8080",

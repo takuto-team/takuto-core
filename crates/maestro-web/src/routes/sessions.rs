@@ -346,62 +346,17 @@ fn rewrite_redirect_location(resp: &mut Response<Body>, token: &str) {
     }
 }
 
-/// Rewrite root-relative URLs in text responses from dynamic port backends.
-///
-/// For HTML: rewrites `src="/`, `href="/`, and `from "/` patterns.
-/// For JS/TS: rewrites `from "/`, `import "/`, and `import("/` patterns.
-///
-/// This ensures assets loaded by the initial HTML AND by Vite's runtime
-/// modules (like `@vite/client` importing `/node_modules/...`) go through
-/// the `/s/{token}/…` proxy path instead of hitting the dashboard origin.
-async fn rewrite_dynamic_port_urls(response: Response<Body>, token: &str) -> Response<Body> {
-    let ct = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let is_html = ct.starts_with("text/html");
-    let is_js = ct.starts_with("text/javascript")
-        || ct.starts_with("application/javascript")
-        || ct.starts_with("application/x-javascript");
-    if !is_html && !is_js {
-        return response;
-    }
-    let (mut parts, body) = response.into_parts();
-    let bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(_) => return Response::from_parts(parts, Body::empty()),
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    let prefix = format!("/s/{token}");
-    let mut rewritten = text
-        .replace(r#"from "/"#, &format!(r#"from "{prefix}/"#))
-        .replace(r#"from '/"#, &format!(r#"from '{prefix}/"#))
-        .replace(r#"import "/"#, &format!(r#"import "{prefix}/"#))
-        .replace(r#"import '/"#, &format!(r#"import '{prefix}/"#))
-        .replace(r#"import("/"#, &format!(r#"import("{prefix}/"#))
-        .replace(r#"import('/"#, &format!(r#"import('{prefix}/"#));
-    if is_html {
-        rewritten = rewritten
-            .replace(r#"src="/"#, &format!(r#"src="{prefix}/"#))
-            .replace(r#"href="/"#, &format!(r#"href="{prefix}/"#))
-            .replace(r#"src='/"#, &format!(r#"src='{prefix}/"#))
-            .replace(r#"href='/"#, &format!(r#"href='{prefix}/"#));
-    }
-    let body = Body::from(rewritten);
-    parts.headers.remove(header::CONTENT_LENGTH);
-    Response::from_parts(parts, body)
-}
-
 /// Compute the upstream path based on session kind.
 ///
 /// Editor sessions use `--server-base-path /s/{token}` so the full prefix
 /// must be preserved. Terminal sessions strip the proxy prefix.
 fn upstream_path_for_kind(kind: SessionRouteKind, token: &str, rest: &str) -> String {
     match kind {
-        SessionRouteKind::Editor => format!("/s/{token}{rest}"),
-        SessionRouteKind::Terminal | SessionRouteKind::DynamicPort => rest.to_string(),
+        // Editor: openvscode-server uses --server-base-path /s/{token}
+        // DynamicPort: dev servers use MAESTRO_PROXY_BASE=/s/{token}/ as their
+        //   base path, so they expect the full prefix in the request path.
+        SessionRouteKind::Editor | SessionRouteKind::DynamicPort => format!("/s/{token}{rest}"),
+        SessionRouteKind::Terminal => rest.to_string(),
     }
 }
 
@@ -442,13 +397,12 @@ async fn forward_http(
             let mut response = Response::from_parts(parts, body);
             // Editor sessions with --server-base-path already emit correct
             // `/s/{token}/…` redirects — only terminal sessions need rewriting.
-            if matches!(route.kind, SessionRouteKind::Terminal | SessionRouteKind::DynamicPort) {
+            // Terminal sessions: rewrite root-relative redirects to stay
+            // within the proxy namespace. Editor and DynamicPort apps know
+            // their base path (--server-base-path / MAESTRO_PROXY_BASE) and
+            // emit correct URLs natively.
+            if route.kind == SessionRouteKind::Terminal {
                 rewrite_redirect_location(&mut response, token);
-            }
-            // Dynamic port responses: rewrite root-relative URLs in HTML
-            // and JS so the browser loads assets through the proxy.
-            if route.kind == SessionRouteKind::DynamicPort {
-                response = rewrite_dynamic_port_urls(response, token).await;
             }
             response
         }
