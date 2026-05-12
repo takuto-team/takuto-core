@@ -241,15 +241,26 @@ pub async fn authenticate_db_user(
     .flatten()
 }
 
+/// Authenticated user identity inserted into request extensions by the auth middleware.
+/// Handlers extract this via `request.extensions().get::<AuthenticatedUser>()`.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedUser {
+    pub user_id: String,
+    pub role: maestro_core::db::models::UserRole,
+}
+
 /// Updated auth middleware that supports both legacy config-based auth and
 /// the new database-backed multi-user auth.
 ///
+/// On successful authentication the middleware inserts an [`AuthenticatedUser`]
+/// into the request extensions so downstream handlers can identify the caller.
+///
 /// Priority:
-/// 1. If `AppState.db` is `Some`, try DB session validation first (look for `db-` prefix).
-/// 2. Fall back to legacy HMAC session validation.
+/// 1. If `AppState.db` is `Some`, validate the DB session and look up the user.
+/// 2. Fall back to legacy HMAC session validation (synthetic admin identity).
 pub async fn dashboard_auth_middleware(
     State(state): State<AppState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
     // When the database is available, it is the sole authentication source.
@@ -260,21 +271,27 @@ pub async fn dashboard_auth_middleware(
         {
             let db = db.clone();
             let cookie = raw_cookie.to_string();
-            let valid = tokio::task::spawn_blocking(move || {
+            let auth_user = tokio::task::spawn_blocking(move || {
                 let conn = db.conn().blocking_lock();
-                validate_db_session(&conn, &cookie).is_some()
+                let user_id = validate_db_session(&conn, &cookie)?;
+                let user =
+                    maestro_core::db::users::get_user_by_id(&conn, &user_id).ok()??;
+                Some(AuthenticatedUser {
+                    user_id: user.id,
+                    role: user.role,
+                })
             })
             .await
-            .unwrap_or(false);
+            .ok()
+            .flatten();
 
-            if valid {
+            if let Some(auth) = auth_user {
+                request.extensions_mut().insert(auth);
                 return next.run(request).await;
             }
         }
 
-        // DB exists but no valid session — reject. When DB has zero users the
-        // frontend shows the setup page which uses the public /api/auth/register
-        // endpoint (not gated by this middleware).
+        // DB exists but no valid session — reject.
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -284,11 +301,21 @@ pub async fn dashboard_auth_middleware(
         cfg.web.clone()
     };
     if !web.dashboard_auth_enabled() {
+        // No auth at all — synthetic admin so handlers can assume an identity.
+        request.extensions_mut().insert(AuthenticatedUser {
+            user_id: "__legacy__".to_string(),
+            role: maestro_core::db::models::UserRole::Admin,
+        });
         return next.run(request).await;
     }
     if !session_authorized(request.headers(), &web) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    // Legacy auth — synthetic admin identity.
+    request.extensions_mut().insert(AuthenticatedUser {
+        user_id: "__legacy__".to_string(),
+        role: maestro_core::db::models::UserRole::Admin,
+    });
     next.run(request).await
 }
 

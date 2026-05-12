@@ -78,6 +78,10 @@ pub struct PersistedWorkflowRecord {
     /// Old snapshots without this field get an empty string (assigned during restore).
     #[serde(default)]
     pub workspace_name: String,
+    /// ID of the user who created this workflow. Old snapshots without this field
+    /// get `None` (unowned — visible to admins only during migration).
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 fn default_jira_available() -> bool {
@@ -484,11 +488,13 @@ mod tests {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name: "my-repo".into(),
+            user_id: Some("user-1".into()),
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: PersistedWorkflowRecord = serde_json::from_str(&json).unwrap();
         assert!(!back.driver_started);
         assert_eq!(back.workspace_name, "my-repo");
+        assert_eq!(back.user_id, Some("user-1".into()));
     }
 
     #[test]

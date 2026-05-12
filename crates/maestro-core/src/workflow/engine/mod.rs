@@ -209,6 +209,7 @@ impl WorkflowEngine {
         started_manually: bool,
         ticket_description: Option<String>,
         ticket_url: Option<String>,
+        user_id: Option<String>,
     ) -> Result<String> {
         self.lifecycle
             .add_to_dashboard(
@@ -217,6 +218,7 @@ impl WorkflowEngine {
                 started_manually,
                 ticket_description,
                 ticket_url,
+                user_id,
             )
             .await
     }
@@ -394,6 +396,7 @@ mod tests {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name: "test-workspace".into(),
+            user_id: None,
         }
     }
 
@@ -764,6 +767,7 @@ mod tests {
             },
             worktree_bootstrapped: true,
             workspace_name: "test-workspace".into(),
+            user_id: None,
         }
     }
 
@@ -891,6 +895,7 @@ mod tests {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name: String::new(),
+            user_id: None,
         };
         let w = Workflow::from_persisted_record(rec);
         assert_eq!(
@@ -954,6 +959,7 @@ mod tests {
             workflow_def_runs: def_runs,
             worktree_bootstrapped: true,
             workspace_name: "test-workspace".into(),
+            user_id: Some("user-abc".into()),
         };
 
         let json = serde_json::to_string_pretty(&rec).expect("serialize PersistedWorkflowRecord");
