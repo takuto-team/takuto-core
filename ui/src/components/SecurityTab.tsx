@@ -3,6 +3,7 @@
 
 import { useState, type FormEvent } from "react";
 import { ConfirmModal } from "./modals/ConfirmModal";
+import { copyToClipboard } from "../utils/clipboard";
 
 interface Props {
   onChangePassword: (
@@ -81,6 +82,7 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [regenLoading, setRegenLoading] = useState(false);
   const [regenError, setRegenError] = useState("");
+  const [codesCopied, setCodesCopied] = useState(false);
 
   const passwordsMatch = newPassword === confirmPassword;
   const passwordLongEnough = newPassword.length >= MIN_PASSWORD_LENGTH;
@@ -208,17 +210,18 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  navigator.clipboard.writeText(recoveryCodes.join("\n")).catch(() => {});
+                onClick={async () => {
+                  const ok = await copyToClipboard(recoveryCodes.join("\n"));
+                  if (ok) setCodesCopied(true);
                 }}
                 className="w-full py-1.5 rounded-lg bg-gray-800 text-gray-300 text-xs font-medium hover:bg-gray-700 cursor-pointer"
               >
-                Copy all codes
+                {codesCopied ? "Copied!" : "Copy all codes"}
               </button>
             </div>
             <button
               type="button"
-              onClick={() => setRecoveryCodes(null)}
+              onClick={() => { setRecoveryCodes(null); setCodesCopied(false); }}
               className="text-sm text-gray-500 hover:text-gray-300 cursor-pointer"
             >
               Done

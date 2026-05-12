@@ -4,6 +4,7 @@
 import { useState } from "react";
 import type { User } from "../api/types";
 import { ConfirmModal } from "./modals/ConfirmModal";
+import { copyToClipboard } from "../utils/clipboard";
 
 interface NewUserRow {
   username: string;
@@ -26,6 +27,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
   const [createdUsername, setCreatedUsername] = useState("");
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<User | null>(null);
+  const [codesCopied, setCodesCopied] = useState(false);
 
   const handleCreate = async () => {
     if (!newRow || !newRow.username.trim() || !newRow.password) return;
@@ -63,12 +65,13 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
           </div>
           <button
             type="button"
-            onClick={() => {
-              navigator.clipboard.writeText(recoveryCodes.join("\n")).catch(() => {});
+            onClick={async () => {
+              const ok = await copyToClipboard(recoveryCodes.join("\n"));
+              if (ok) setCodesCopied(true);
             }}
             className="w-full py-1.5 rounded-lg bg-gray-800 text-gray-300 text-xs font-medium hover:bg-gray-700 cursor-pointer"
           >
-            Copy all codes
+            {codesCopied ? "Copied!" : "Copy all codes"}
           </button>
         </div>
         <button
@@ -76,6 +79,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
           onClick={() => {
             setRecoveryCodes(null);
             setCreatedUsername("");
+            setCodesCopied(false);
           }}
           className="text-sm text-blue-400 hover:text-blue-300 cursor-pointer"
         >

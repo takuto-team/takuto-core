@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, type FormEvent } from "react";
+import { copyToClipboard } from "../utils/clipboard";
 
 interface RegisterResponse {
   user_id: string;
@@ -93,22 +94,8 @@ export function Setup({ onSetupComplete, onLogin }: Props) {
 
   const handleCopyCodes = async () => {
     if (!recoveryCodes) return;
-    const text = recoveryCodes.join("\n");
-    try {
-      await navigator.clipboard.writeText(text);
-      setCodesCopied(true);
-    } catch {
-      // Fallback for non-HTTPS contexts
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-      setCodesCopied(true);
-    }
+    const ok = await copyToClipboard(recoveryCodes.join("\n"));
+    if (ok) setCodesCopied(true);
   };
 
   const handleContinue = async () => {
