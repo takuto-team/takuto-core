@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::{
     SESSION_COOKIE_NAME, SESSION_TTL_SECS, authenticate_db_user, create_db_session,
-    credentials_match, delete_db_session, sign_session,
+    delete_db_session,
 };
 use crate::state::AppState;
 
@@ -31,10 +31,8 @@ pub struct AuthStatus {
     pub setup_required: bool,
 }
 
-/// Public probe: whether the server requires dashboard login (reads live config).
+/// Public probe: whether the server requires dashboard login.
 pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
-    // When the database is available it is the sole auth source — legacy
-    // config-based auth is only used when no DB is initialized.
     if let Some(ref db) = state.db {
         let db = db.clone();
         let count = tokio::task::spawn_blocking(move || {
@@ -50,89 +48,59 @@ pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
         });
     }
 
-    // Fallback: no database — use legacy config-based auth.
-    let enabled = state.config.read().await.web.dashboard_auth_enabled();
+    // No database — auth is required but setup cannot proceed.
+    // The UI will show setup_required and the user must fix the data directory.
     Json(AuthStatus {
-        dashboard_auth_enabled: enabled,
+        dashboard_auth_enabled: true,
         multi_user: false,
-        setup_required: false,
+        setup_required: true,
     })
 }
 
 /// Set HttpOnly session cookie (same-origin fetch and WebSocket send it automatically).
 ///
-/// Supports two modes:
-/// 1. **DB auth** -- when the database has users, authenticate against SQLite and issue a `db-` session.
-/// 2. **Legacy auth** -- fall back to config-based HMAC session.
+/// Authenticate against the SQLite database and issue a `db-` session cookie.
 pub async fn login(
     State(state): State<AppState>,
     jar: CookieJar,
     Json(body): Json<LoginBody>,
 ) -> impl IntoResponse {
-    // When the database is available it is the sole auth source.
-    if let Some(ref db) = state.db {
-        let db_clone = db.clone();
-        let has_users = tokio::task::spawn_blocking(move || {
-            let conn = db_clone.conn().blocking_lock();
-            maestro_core::db::users::count_users(&conn).unwrap_or(0) > 0
-        })
-        .await
-        .unwrap_or(false);
+    let Some(ref db) = state.db else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Database not available").into_response();
+    };
 
-        if !has_users {
-            return (
-                StatusCode::CONFLICT,
-                "No users exist yet. Complete first-user setup via /api/auth/register.",
-            )
-                .into_response();
-        }
+    let db_clone = db.clone();
+    let has_users = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        maestro_core::db::users::count_users(&conn).unwrap_or(0) > 0
+    })
+    .await
+    .unwrap_or(false);
 
-        let user = authenticate_db_user(db, &body.username, &body.password).await;
-        let Some(user) = user else {
-            return StatusCode::UNAUTHORIZED.into_response();
-        };
-
-        let db_clone = db.clone();
-        let user_id = user.id.clone();
-        let token = tokio::task::spawn_blocking(move || {
-            let conn = db_clone.conn().blocking_lock();
-            create_db_session(&conn, &user_id)
-        })
-        .await;
-
-        let token = match token {
-            Ok(Ok(t)) => t,
-            _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        };
-
-        let cookie = Cookie::build((SESSION_COOKIE_NAME, token))
-            .path("/")
-            .http_only(true)
-            .same_site(SameSite::Lax)
-            .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
-            .build();
-
-        return (jar.add(cookie), StatusCode::NO_CONTENT).into_response();
-    }
-
-    // Legacy config-based auth fallback (no database available).
-    let cfg = state.config.read().await;
-    if !cfg.web.dashboard_auth_enabled() {
+    if !has_users {
         return (
-            StatusCode::BAD_REQUEST,
-            "dashboard auth not configured (set [web] dashboard_username and dashboard_password)",
+            StatusCode::CONFLICT,
+            "No users exist yet. Complete first-user setup via /api/auth/register.",
         )
             .into_response();
     }
-    if !credentials_match(&cfg.web, &body.username, &body.password) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let canonical_user = cfg.web.dashboard_username.trim().to_string();
-    let password = cfg.web.dashboard_password.clone();
-    drop(cfg);
 
-    let Some(token) = sign_session(&canonical_user, &password) else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let user = authenticate_db_user(db, &body.username, &body.password).await;
+    let Some(user) = user else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    let db_clone = db.clone();
+    let user_id = user.id.clone();
+    let token = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        create_db_session(&conn, &user_id)
+    })
+    .await;
+
+    let token = match token {
+        Ok(Ok(t)) => t,
+        _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
     let cookie = Cookie::build((SESSION_COOKIE_NAME, token))
@@ -579,113 +547,18 @@ pub async fn register(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
-    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use maestro_core::actions::dry_run::DryRunActions;
-    use maestro_core::config::{Config, TicketingSystem};
-    use maestro_core::workflow::engine::WorkflowEngine;
-
     use crate::server::build_router;
-    use crate::state::AppState;
-
-    fn test_state_no_auth() -> AppState {
-        let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
-        );
-        let jira_available = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(WorkflowEngine::new(
-            config.clone(),
-            actions,
-            1,
-            jira_available.clone(),
-            TicketingSystem::None,
-            std::env::temp_dir(),
-        ));
-        AppState {
-            engine,
-            config,
-            db: None,
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        }
-    }
-
-    fn test_state_with_auth() -> AppState {
-        let mut cfg = Config::default();
-        cfg.web.dashboard_username = "admin".to_string();
-        cfg.web.dashboard_password = "secret123".to_string();
-        let config = Arc::new(RwLock::new(cfg));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
-        );
-        let jira_available = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(WorkflowEngine::new(
-            config.clone(),
-            actions,
-            1,
-            jira_available.clone(),
-            TicketingSystem::None,
-            std::env::temp_dir(),
-        ));
-        AppState {
-            engine,
-            config,
-            db: None,
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        }
-    }
+    use crate::test_helpers::{register_and_login, test_state_with_db};
 
     #[tokio::test]
-    async fn auth_status_disabled_when_no_credentials() {
-        let state = test_state_no_auth();
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::get("/api/auth/status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["dashboard_auth_enabled"], false);
-    }
-
-    #[tokio::test]
-    async fn auth_status_enabled_when_credentials_set() {
-        let state = test_state_with_auth();
+    async fn auth_status_setup_required_when_no_users() {
+        // A fresh DB with no registered users: auth is enabled, setup is required.
+        let state = test_state_with_db();
         let app = build_router(state);
         let resp = app
             .oneshot(
@@ -699,17 +572,44 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["dashboard_auth_enabled"], true);
+        assert_eq!(json["setup_required"], true);
+    }
+
+    #[tokio::test]
+    async fn auth_status_enabled_when_user_registered() {
+        let state = test_state_with_db();
+        let _cookie = register_and_login(&state).await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/api/auth/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["dashboard_auth_enabled"], true);
+        assert_eq!(json["multi_user"], true);
+        assert_eq!(json["setup_required"], false);
     }
 
     #[tokio::test]
     async fn login_with_correct_credentials_returns_204_with_cookie() {
-        let state = test_state_with_auth();
+        let state = test_state_with_db();
+        let _cookie = register_and_login(&state).await;
+
+        // Login again to verify the flow independently.
         let app = build_router(state);
         let resp = app
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(r#"{"username":"admin","password":"secret123"}"#))
+                    .body(Body::from(
+                        r#"{"username":"admin","password":"testpassword1234"}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -729,7 +629,9 @@ mod tests {
 
     #[tokio::test]
     async fn login_with_wrong_credentials_returns_401() {
-        let state = test_state_with_auth();
+        let state = test_state_with_db();
+        let _cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         let resp = app
             .oneshot(
@@ -745,7 +647,7 @@ mod tests {
 
     #[tokio::test]
     async fn logout_returns_204() {
-        let state = test_state_no_auth();
+        let state = test_state_with_db();
         let app = build_router(state);
         let resp = app
             .oneshot(
@@ -760,7 +662,9 @@ mod tests {
 
     #[tokio::test]
     async fn protected_route_returns_401_without_cookie_when_auth_enabled() {
-        let state = test_state_with_auth();
+        let state = test_state_with_db();
+        let _cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         let resp = app
             .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
@@ -771,36 +675,14 @@ mod tests {
 
     #[tokio::test]
     async fn protected_route_accessible_with_valid_session() {
-        let state = test_state_with_auth();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
 
-        // First, login to get a session cookie.
-        let app = build_router(state.clone());
-        let login_resp = app
-            .oneshot(
-                Request::post("/api/auth/login")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(r#"{"username":"admin","password":"secret123"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(login_resp.status(), StatusCode::NO_CONTENT);
-        let set_cookie = login_resp
-            .headers()
-            .get("set-cookie")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-        // Extract just the cookie name=value pair (before the first `;`).
-        let cookie_val = set_cookie.split(';').next().unwrap().trim();
-
-        // Now use that cookie to access a protected route.
         let app = build_router(state);
         let resp = app
             .oneshot(
                 Request::get("/api/config")
-                    .header("Cookie", cookie_val)
+                    .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
             )

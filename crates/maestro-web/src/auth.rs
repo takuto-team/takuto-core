@@ -1,11 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Dashboard session cookie auth (username + password via `POST /api/auth/login`).
+//! Dashboard session cookie auth (SQLite-backed multi-user).
 //!
-//! Supports two session formats:
-//! - **Legacy HMAC**: `base64.hexsig` (config-based single-user auth)
-//! - **DB session**: `db-<session-uuid>` (SQLite-backed multi-user auth)
+//! Session format: `db-<session-uuid>` — validated against the `sessions` table.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -249,74 +247,48 @@ pub struct AuthenticatedUser {
     pub role: maestro_core::db::models::UserRole,
 }
 
-/// Updated auth middleware that supports both legacy config-based auth and
-/// the new database-backed multi-user auth.
+/// Database-backed multi-user auth middleware.
 ///
 /// On successful authentication the middleware inserts an [`AuthenticatedUser`]
 /// into the request extensions so downstream handlers can identify the caller.
-///
-/// Priority:
-/// 1. If `AppState.db` is `Some`, validate the DB session and look up the user.
-/// 2. Fall back to legacy HMAC session validation (synthetic admin identity).
+/// If no database is available or no valid session exists, all protected
+/// requests are rejected with 401.
 pub async fn dashboard_auth_middleware(
     State(state): State<AppState>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    // When the database is available, it is the sole authentication source.
-    // Legacy config-based auth is only used when no DB is initialized.
-    if let Some(ref db) = state.db {
-        if let Some(raw_cookie) = session_cookie_from_headers(request.headers())
-            && raw_cookie.starts_with(DB_SESSION_PREFIX)
-        {
-            let db = db.clone();
-            let cookie = raw_cookie.to_string();
-            let auth_user = tokio::task::spawn_blocking(move || {
-                let conn = db.conn().blocking_lock();
-                let user_id = validate_db_session(&conn, &cookie)?;
-                let user =
-                    maestro_core::db::users::get_user_by_id(&conn, &user_id).ok()??;
-                Some(AuthenticatedUser {
-                    user_id: user.id,
-                    role: user.role,
-                })
-            })
-            .await
-            .ok()
-            .flatten();
-
-            if let Some(auth) = auth_user {
-                request.extensions_mut().insert(auth);
-                return next.run(request).await;
-            }
-        }
-
-        // DB exists but no valid session — reject.
+    let Some(ref db) = state.db else {
+        // No database — reject all protected requests.
         return StatusCode::UNAUTHORIZED.into_response();
-    }
-
-    // Legacy config-based auth fallback (no database available).
-    let web = {
-        let cfg = state.config.read().await;
-        cfg.web.clone()
     };
-    if !web.dashboard_auth_enabled() {
-        // No auth at all — synthetic admin so handlers can assume an identity.
-        request.extensions_mut().insert(AuthenticatedUser {
-            user_id: "__legacy__".to_string(),
-            role: maestro_core::db::models::UserRole::Admin,
-        });
-        return next.run(request).await;
+
+    if let Some(raw_cookie) = session_cookie_from_headers(request.headers())
+        && raw_cookie.starts_with(DB_SESSION_PREFIX)
+    {
+        let db = db.clone();
+        let cookie = raw_cookie.to_string();
+        let auth_user = tokio::task::spawn_blocking(move || {
+            let conn = db.conn().blocking_lock();
+            let user_id = validate_db_session(&conn, &cookie)?;
+            let user =
+                maestro_core::db::users::get_user_by_id(&conn, &user_id).ok()??;
+            Some(AuthenticatedUser {
+                user_id: user.id,
+                role: user.role,
+            })
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(auth) = auth_user {
+            request.extensions_mut().insert(auth);
+            return next.run(request).await;
+        }
     }
-    if !session_authorized(request.headers(), &web) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    // Legacy auth — synthetic admin identity.
-    request.extensions_mut().insert(AuthenticatedUser {
-        user_id: "__legacy__".to_string(),
-        role: maestro_core::db::models::UserRole::Admin,
-    });
-    next.run(request).await
+
+    StatusCode::UNAUTHORIZED.into_response()
 }
 
 #[cfg(test)]

@@ -6,3 +6,6 @@ pub mod routes;
 pub mod server;
 pub mod session_registry;
 pub mod state;
+
+#[cfg(test)]
+pub mod test_helpers;

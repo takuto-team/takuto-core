@@ -170,98 +170,27 @@ pub async fn reload_config(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
-    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use maestro_core::actions::dry_run::DryRunActions;
-    use maestro_core::config::{Config, TicketingSystem};
-    use maestro_core::workflow::engine::WorkflowEngine;
-
     use crate::server::build_router;
-    use crate::state::AppState;
-
-    fn test_state() -> AppState {
-        let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
-        );
-        let jira_available = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(WorkflowEngine::new(
-            config.clone(),
-            actions,
-            1,
-            jira_available.clone(),
-            TicketingSystem::None,
-            std::env::temp_dir(),
-        ));
-        AppState {
-            engine,
-            config,
-            db: None,
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        }
-    }
-
-    fn test_state_with_password() -> AppState {
-        let mut cfg = Config::default();
-        cfg.web.dashboard_username = "admin".to_string();
-        cfg.web.dashboard_password = "supersecret".to_string();
-        let config = Arc::new(RwLock::new(cfg));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
-        );
-        let jira_available = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(WorkflowEngine::new(
-            config.clone(),
-            actions,
-            1,
-            jira_available.clone(),
-            TicketingSystem::None,
-            std::env::temp_dir(),
-        ));
-        AppState {
-            engine,
-            config,
-            db: None,
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        }
-    }
+    use crate::test_helpers::{register_and_login, test_state_with_db};
 
     #[tokio::test]
     async fn get_config_returns_expected_fields() {
-        let state = test_state();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         let resp = app
-            .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/api/config")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -281,31 +210,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_config_does_not_return_dashboard_password() {
-        let state = test_state_with_password();
-        // Auth is enabled, so we need a valid session cookie.
-        let app = build_router(state.clone());
-        let login_resp = app
-            .oneshot(
-                Request::post("/api/auth/login")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"admin","password":"supersecret"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let cookie = login_resp
-            .headers()
-            .get("set-cookie")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .split(';')
-            .next()
-            .unwrap()
-            .trim()
-            .to_string();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
 
         let app = build_router(state);
         let resp = app
@@ -332,12 +238,15 @@ mod tests {
 
     #[tokio::test]
     async fn put_config_valid_patch_updates_value() {
-        let state = test_state();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
         let app = build_router(state.clone());
         let resp = app
             .oneshot(
                 Request::put("/api/config")
                     .header("Content-Type", "application/json")
+                    .header("Cookie", &cookie)
                     .body(Body::from(r#"{"general":{"max_concurrent_workflows":5}}"#))
                     .unwrap(),
             )
@@ -355,12 +264,15 @@ mod tests {
 
     #[tokio::test]
     async fn put_config_unknown_field_returns_400() {
-        let state = test_state();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         let resp = app
             .oneshot(
                 Request::put("/api/config")
                     .header("Content-Type", "application/json")
+                    .header("Cookie", &cookie)
                     .body(Body::from(r#"{"jira":{"site":"x"}}"#))
                     .unwrap(),
             )
@@ -372,31 +284,15 @@ mod tests {
 
     #[tokio::test]
     async fn put_config_empty_password_preserves_existing() {
-        let state = test_state_with_password();
-        // Login first to get a session cookie.
-        let app = build_router(state.clone());
-        let login_resp = app
-            .oneshot(
-                Request::post("/api/auth/login")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"admin","password":"supersecret"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let cookie = login_resp
-            .headers()
-            .get("set-cookie")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .split(';')
-            .next()
-            .unwrap()
-            .trim()
-            .to_string();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        // Set a legacy dashboard password in the in-memory config so the test
+        // can verify it is preserved when an empty string is sent.
+        {
+            let mut cfg = state.config.write().await;
+            cfg.web.dashboard_password = "supersecret".to_string();
+        }
 
         // Send a PUT that updates the username but sends empty password.
         let app = build_router(state.clone());
@@ -421,12 +317,15 @@ mod tests {
 
     #[tokio::test]
     async fn post_config_reload_without_config_file_returns_400() {
-        let state = test_state();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         // config_path points to a non-existent temp file, so reload should fail.
         let resp = app
             .oneshot(
                 Request::post("/api/config/reload")
+                    .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
             )
