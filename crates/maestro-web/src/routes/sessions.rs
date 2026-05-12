@@ -347,6 +347,40 @@ fn rewrite_redirect_location(resp: &mut Response<Body>, token: &str) {
 }
 
 
+/// Rewrite root-relative `src` / `href` / `from` URLs in **HTML-only**
+/// responses so the browser's initial asset loads go through the proxy.
+///
+/// Only buffers `text/html` responses (typically small index pages). JS, CSS,
+/// and other content types are passed through unchanged to avoid stalling on
+/// large or chunked streams.
+async fn rewrite_html_root_urls(response: Response<Body>, token: &str) -> Response<Body> {
+    let is_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/html"));
+    if !is_html {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(_) => return Response::from_parts(parts, Body::empty()),
+    };
+    let html = String::from_utf8_lossy(&bytes);
+    let prefix = format!("/s/{token}");
+    let rewritten = html
+        .replace(r#"src="/"#, &format!(r#"src="{prefix}/"#))
+        .replace(r#"href="/"#, &format!(r#"href="{prefix}/"#))
+        .replace(r#"src='/"#, &format!(r#"src='{prefix}/"#))
+        .replace(r#"href='/"#, &format!(r#"href='{prefix}/"#))
+        .replace(r#"from "/"#, &format!(r#"from "{prefix}/"#))
+        .replace(r#"from '/"#, &format!(r#"from '{prefix}/"#));
+    let body = Body::from(rewritten);
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, body)
+}
+
 /// Compute the upstream path based on session kind.
 ///
 /// Editor sessions use `--server-base-path /s/{token}` so the full prefix
@@ -402,8 +436,13 @@ async fn forward_http(
             if matches!(route.kind, SessionRouteKind::Terminal | SessionRouteKind::DynamicPort) {
                 rewrite_redirect_location(&mut response, token);
             }
-            // URL rewriting disabled — apps should work at root with prefix
-            // stripping. MAESTRO_PROXY_BASE is available for apps that need it.
+            // Dynamic port HTML: rewrite root-relative src/href so the
+            // browser loads initial assets through the proxy (e.g. Vite's
+            // /@vite/client, /src/main.tsx). Only HTML — JS/CSS responses
+            // are passed through unchanged to avoid buffering large streams.
+            if route.kind == SessionRouteKind::DynamicPort {
+                response = rewrite_html_root_urls(response, token).await;
+            }
             response
         }
         Err(err) => {
