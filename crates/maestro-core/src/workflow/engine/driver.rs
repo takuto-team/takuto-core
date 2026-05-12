@@ -128,7 +128,6 @@ pub(super) async fn drive_workflow_def(
             &tt,
             &config,
             &workflows,
-            &actions,
             &event_tx,
             &cancel_token,
             &log_writer,
@@ -646,14 +645,9 @@ pub(super) async fn bootstrap_new_workflow(
             image = %image,
             "Container isolation enabled for workflow"
         );
-        let gh_token = actions.get_gh_installation_token(&worktree_path).await;
         let runner =
             ContainerRunner::new(ticket_key, &worktree_path, &image).with_isolate_workspace();
-        Some(if let Some(token) = gh_token {
-            runner.with_gh_token(token)
-        } else {
-            runner
-        })
+        Some(runner)
     } else {
         return Err(MaestroError::Config(
             "Docker daemon is not available. DinD is required for workflow isolation. \
@@ -1022,7 +1016,6 @@ pub(super) async fn run_workflow_def_steps(
     ticket_type: &str,
     config: &Arc<RwLock<Config>>,
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
-    actions: &Arc<dyn ExternalActions>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
@@ -1076,14 +1069,9 @@ pub(super) async fn run_workflow_def_steps(
             drop(cfg);
             img
         };
-        let gh_token = actions.get_gh_installation_token(worktree_path).await;
         let runner =
             ContainerRunner::new(ticket_key, worktree_path, &image).with_isolate_workspace();
-        Some(if let Some(token) = gh_token {
-            runner.with_gh_token(token)
-        } else {
-            runner
-        })
+        Some(runner)
     } else {
         return Err(MaestroError::Config(
             "Docker daemon is not available. DinD is required for workflow isolation. \

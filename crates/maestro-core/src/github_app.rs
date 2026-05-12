@@ -14,7 +14,7 @@
 //! 3. Configure `gh` and git in the worktree to use the installation token.
 //! 4. Tokens are cached and refreshed 5 minutes before expiry.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
@@ -22,11 +22,23 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::config::GitHubAppConfig;
 use crate::error::{MaestroError, Result};
 use crate::process;
+
+/// Well-known path where the background task writes the current installation token.
+/// Worker containers read this file on every `gh` / `git` invocation so they always
+/// use a valid, non-expired token — even for steps that run longer than 1 hour.
+///
+/// Lives inside the `gh-auth` Docker volume, which is mounted at the same path in
+/// both the main Maestro container and worker containers.
+pub const TOKEN_FILE_PATH: &str = "/home/maestro/.config/gh/gh-app-token";
+
+/// How often the background task checks the token expiry (seconds).
+const TOKEN_REFRESH_POLL_SECS: u64 = 300; // 5 minutes
+
 
 // ---------------------------------------------------------------------------
 // JWT claims
@@ -338,17 +350,16 @@ impl GitHubAppTokenManager {
         cwd: &Path,
         cancel: CancellationToken,
     ) -> Result<()> {
-        // Install a git credential helper that reads GH_TOKEN from the subprocess environment.
+        // Install a git credential helper that reads the token from the shared file
+        // written by the background token service. Falls back to $GH_TOKEN env var
+        // for local development without the token file.
         // We do NOT use `gh auth setup-git` because it requires an active `gh` session
         // (gh auth login), which is intentionally skipped when a GitHub App is configured.
-        //
-        // The helper is a shell function:
-        //   !f() { echo protocol=https; echo host=github.com;
-        //          echo username=x-access-token; echo "password=$GH_TOKEN"; }; f
-        //
-        // Git passes this to `sh -c` when credentials are needed. GH_TOKEN is inherited
-        // from the git subprocess environment (injected by gh_token_env() in RealActions).
-        let helper = "!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f";
+        let helper = format!(
+            "!f() {{ echo protocol=https; echo host=github.com; echo username=x-access-token; \
+             echo \"password=$(cat {TOKEN_FILE_PATH} 2>/dev/null || echo $GH_TOKEN)\"; }}; f"
+        );
+        let helper = helper.as_str();
         let cred_out = crate::process::run_command(
             "git",
             &[
@@ -418,6 +429,81 @@ impl GitHubAppTokenManager {
     pub async fn get_token_for_injection(&self, cwd: &Path) -> Result<String> {
         self.get_installation_token(cwd).await
     }
+
+    /// Spawn a background task that proactively refreshes the GitHub App installation
+    /// token and writes it atomically to [`TOKEN_FILE_PATH`].
+    ///
+    /// Worker containers read this file via a `gh` wrapper and git credential helper
+    /// instead of relying on a frozen `GH_TOKEN` env var set at `docker run` time.
+    /// This ensures tokens stay fresh even for workflows that run longer than the
+    /// 1-hour GitHub App token lifetime.
+    ///
+    /// The task runs until `cancel` is triggered (i.e. Maestro shutdown).
+    pub fn start_token_file_writer(
+        self: &Arc<Self>,
+        cwd: PathBuf,
+        cancel: CancellationToken,
+    ) {
+        let mgr = Arc::clone(self);
+        let token_path = PathBuf::from(TOKEN_FILE_PATH);
+        tokio::spawn(async move {
+            info!(
+                path = %token_path.display(),
+                poll_secs = TOKEN_REFRESH_POLL_SECS,
+                "GitHub App token file writer started"
+            );
+
+            // Initial write — fetch immediately so workers have a token from the start.
+            if let Err(e) = refresh_and_write(&mgr, &cwd, &token_path).await {
+                warn!(error = %e, "Initial GitHub App token write failed; will retry");
+            }
+
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        info!("GitHub App token file writer shutting down");
+                        break;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(TOKEN_REFRESH_POLL_SECS)) => {
+                        if let Err(e) = refresh_and_write(&mgr, &cwd, &token_path).await {
+                            error!(error = %e, "GitHub App token refresh failed; workers may use a stale token");
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// Fetch a (possibly cached) token and write it atomically to `path`.
+async fn refresh_and_write(
+    mgr: &GitHubAppTokenManager,
+    cwd: &Path,
+    path: &Path,
+) -> Result<()> {
+    let token = mgr.get_installation_token(cwd).await?;
+    write_token_file(path, &token)?;
+    Ok(())
+}
+
+/// Atomic write: write to a temp sibling, then rename.
+pub fn write_token_file(path: &Path, token: &str) -> Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, token).map_err(|e| {
+        MaestroError::GitHubApp(format!(
+            "Failed to write token file '{}': {e}",
+            tmp.display()
+        ))
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        MaestroError::GitHubApp(format!(
+            "Failed to rename token file '{}' → '{}': {e}",
+            tmp.display(),
+            path.display()
+        ))
+    })?;
+    info!(path = %path.display(), "GitHub App token file updated");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -564,6 +650,29 @@ mod tests {
         };
         let msg = mgr.format_api_error(&err);
         assert!(msg.contains("Something unexpected"));
+    }
+
+    // -- write_token_file --
+
+    #[test]
+    fn write_token_file_creates_and_is_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh-app-token");
+        super::write_token_file(&path, "ghs_test_token_abc").unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "ghs_test_token_abc");
+    }
+
+    #[test]
+    fn write_token_file_overwrites_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh-app-token");
+        super::write_token_file(&path, "first").unwrap();
+        super::write_token_file(&path, "second").unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "second");
+        // Temp file must not linger
+        assert!(!dir.path().join("gh-app-token.tmp").exists());
     }
 }
 
