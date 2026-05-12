@@ -26,19 +26,6 @@ for dns_ip in $(awk '/^nameserver/ { print $2 }' /etc/resolv.conf); do
     iptables -A OUTPUT -d "$dns_ip" -p tcp --dport 53 -j ACCEPT
 done
 
-# Allow Docker-in-Docker sidecar when DOCKER_HOST is set (e.g. tcp://dind:2375).
-# Extract host and port from DOCKER_HOST and resolve to IP.
-if [ -n "${DOCKER_HOST:-}" ]; then
-    dind_host=$(echo "$DOCKER_HOST" | sed -n 's|^tcp://\([^:]*\):\([0-9]*\)$|\1|p')
-    dind_port=$(echo "$DOCKER_HOST" | sed -n 's|^tcp://\([^:]*\):\([0-9]*\)$|\2|p')
-    if [ -n "$dind_host" ] && [ -n "$dind_port" ]; then
-        echo "Allowing DinD sidecar: $dind_host:$dind_port"
-        for ip in $(getent ahostsv4 "$dind_host" 2>/dev/null | awk '{ print $1 }' | sort -u); do
-            [ -n "$ip" ] && iptables -A OUTPUT -d "$ip" -p tcp --dport "$dind_port" -j ACCEPT
-        done
-    fi
-fi
-
 # Helper: resolve a domain and allow all its IPs.
 # Uses getent (always available in glibc) instead of dig/host.
 allow_host() {

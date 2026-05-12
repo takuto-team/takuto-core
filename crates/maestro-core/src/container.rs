@@ -93,7 +93,6 @@ const WORKER_ENV: &[(&str, &str)] = &[
         "PATH",
         "/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ),
-    ("DOCKER_HOST", "tcp://dind:2375"),
     ("MAESTRO_CONFIG", "/etc/maestro/config.toml"),
     // Persist user-level .npmrc across worker containers (aws codeartifact login writes here)
     ("NPM_CONFIG_USERCONFIG", "/workspace/.maestro/.npmrc"),
@@ -2201,7 +2200,7 @@ mod tests {
 
         // Key env vars
         assert!(has_env(&args, "HOME", "/home/maestro"));
-        assert!(has_env(&args, "DOCKER_HOST", "tcp://dind:2375"));
+        assert!(!has_env(&args, "DOCKER_HOST", "tcp://dind:2375"));
         assert!(has_env(&args, "MISE_TRUST_ALL_CONFIGS", "1"));
 
         // Volume mounts
