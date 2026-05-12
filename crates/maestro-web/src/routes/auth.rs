@@ -330,6 +330,101 @@ pub async fn change_password(
 }
 
 // ---------------------------------------------------------------------------
+// Account recovery via recovery code
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoverBody {
+    pub username: String,
+    pub recovery_code: String,
+    pub new_password: String,
+}
+
+/// Reset a user's password using a single-use recovery code.
+///
+/// This is a **public** endpoint (no session required — the user is locked out).
+/// On success, the recovery code is consumed, the password is changed, and all
+/// existing sessions are invalidated.
+pub async fn recover(
+    State(state): State<AppState>,
+    Json(body): Json<RecoverBody>,
+) -> impl IntoResponse {
+    let Some(ref db) = state.db else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Database not available"})),
+        )
+            .into_response();
+    };
+
+    if body.new_password.len() < 12 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "New password must be at least 12 characters"})),
+        )
+            .into_response();
+    }
+
+    let db = db.clone();
+    let username = body.username;
+    let code = body.recovery_code;
+    let new_password = body.new_password;
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = db.conn().blocking_lock();
+
+        // Look up user by username.
+        let user = maestro_core::db::users::get_user_by_username(&conn, &username)?;
+        let Some(user) = user else {
+            // Return a generic error to avoid username enumeration.
+            return Err(maestro_core::error::MaestroError::Auth(
+                "Invalid recovery code".into(),
+            ));
+        };
+
+        if user.suspended {
+            return Err(maestro_core::error::MaestroError::Auth(
+                "Account is suspended".into(),
+            ));
+        }
+
+        // Verify and consume the recovery code.
+        let valid =
+            maestro_core::db::credentials::verify_and_consume_recovery_code(&conn, &user.id, &code)?;
+        if !valid {
+            return Err(maestro_core::error::MaestroError::Auth(
+                "Invalid recovery code".into(),
+            ));
+        }
+
+        // Change password and invalidate sessions.
+        maestro_core::db::credentials::change_password(&conn, &user.id, &new_password)?;
+        maestro_core::db::credentials::delete_user_sessions(&conn, &user.id)?;
+
+        Ok(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": msg})),
+            )
+                .into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Internal server error"})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // First-user registration
 // ---------------------------------------------------------------------------
 

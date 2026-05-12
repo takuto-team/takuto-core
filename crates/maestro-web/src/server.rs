@@ -25,7 +25,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/status", get(routes::auth::auth_status))
         .route("/auth/login", post(routes::auth::login))
         .route("/auth/logout", post(routes::auth::logout))
-        .route("/auth/register", post(routes::auth::register));
+        .route("/auth/register", post(routes::auth::register))
+        .route("/auth/recover", post(routes::auth::recover));
 
     let api_protected = Router::new()
         .route("/auth/me", get(routes::auth::me))
