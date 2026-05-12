@@ -232,13 +232,13 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 
 1. **JWT generation** — `GitHubAppTokenManager::generate_jwt()` creates an RS256 JWT signed with the App's private key (`iss` = App ID, 10-minute expiry, 60 s backdate).
 2. **Installation token** — `get_installation_token()` exchanges the JWT for a 1-hour installation access token via `curl -s -X POST https://api.github.com/app/installations/{id}/access_tokens`. Tokens are cached in a `tokio::sync::RwLock` and refreshed 5 minutes before expiry.
-3. **`gh` + git setup** — `configure_git_and_gh_auth()` pipes the token into `gh auth login --with-token`, runs `gh auth setup-git` (credential helper), and sets `git config user.name` / `user.email` to the bot identity.
+3. **`gh` + git setup** — `configure_git_and_gh_auth()` installs a git credential helper that reads the token from the shared token file (`~/.config/gh/gh-app-token`), falling back to the `$GH_TOKEN` env var. It also sets `git config user.name` / `user.email` to the bot identity. It does **not** call `gh auth login` or `gh auth setup-git`.
 
 **Bot identity:** commits are authored as `maestro-bot[bot] <{app_id}+maestro-bot[bot]@users.noreply.github.com>`. PRs created by the agent are attributed to the App's bot user in the GitHub UI.
 
 **Startup behavior:** `try_create_token_manager()` attempts to parse the PEM key at process start. If it fails (malformed key, missing file), a warning is logged and Maestro falls back to personal `gh` auth — **non-fatal**. Runtime errors (invalid installation ID, insufficient permissions) surface as actionable messages at operation time.
 
-**Container passthrough:** `gh` auth configured by `gh auth login --with-token` propagates to DinD worker containers via the shared `/shared-auth/gh` volume. `GH_TOKEN` is also in `PASSTHROUGH_ENV` (`container.rs`) as a fallback for environments that set it externally.
+**Centralized token service:** At startup, `main.rs` calls `start_token_file_writer()` which spawns a background `tokio::task` that proactively refreshes the installation token every 5 minutes and writes it atomically (write-then-rename) to **`~/.config/gh/gh-app-token`** on the shared `gh-auth` Docker volume. Worker containers read this file dynamically on every `gh` or `git` invocation instead of relying on a frozen `GH_TOKEN` env var baked into `docker run`. This ensures tokens stay valid even for workflows that run longer than the 1-hour GitHub App token lifetime. The `ContainerRunner` no longer captures or injects a static `GH_TOKEN`; the `wrap_command` shell preamble and `worker-entrypoint.sh` both source the token file. `GH_TOKEN` remains in `PASSTHROUGH_ENV` as a fallback for local development without a GitHub App.
 
 **Required GitHub App permissions:** `contents` (write), `pull_requests` (write), `issues` (read), `metadata` (read).
 

@@ -69,7 +69,7 @@ async fn run_description_session(
     system_prompt: Option<&str>,
 ) -> Result<String, (StatusCode, String)> {
     // Snapshot the config fields we need before any await point.
-    let (provider, model, cursor_cli, cursor_model, improve_timeout, worker_image, repo_path) = {
+    let (provider, model, cursor_cli, cursor_model, improve_timeout, worker_image) = {
         let cfg = state.config.read().await;
         (
             cfg.agent.provider,
@@ -82,7 +82,6 @@ async fn run_description_session(
             cfg.agent.cursor_model.clone(),
             cfg.agent.improve_timeout_secs,
             cfg.general.worker_image.clone(),
-            std::path::PathBuf::from(&cfg.git.repo_path),
         )
     };
 
@@ -107,22 +106,14 @@ async fn run_description_session(
         } else {
             worker_image
         };
-        let gh_token = state
-            .engine
-            .actions
-            .get_gh_installation_token(&repo_path)
-            .await;
         // Note: no .with_isolate_workspace() here — the improve session uses a
         // temp directory, not a real worktree under /workspace/worktrees/, so the
         // per-issue isolation logic (which derives the repo root from the grandparent)
         // does not apply.  The session is already sandboxed in its own ephemeral
         // container; it does not need worktree-level isolation.
+        // GH_TOKEN is sourced from the shared token file by the container preamble.
         let runner = ContainerRunner::new(&format!("improve-{ticket_key}"), &worktree, &image);
-        Some(if let Some(token) = gh_token {
-            runner.with_gh_token(token)
-        } else {
-            runner
-        })
+        Some(runner)
     } else {
         tracing::warn!(
             ticket = %ticket_key,

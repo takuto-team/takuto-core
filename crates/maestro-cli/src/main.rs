@@ -117,6 +117,46 @@ fn run_preflight(config_path: &std::path::Path) -> ExitCode {
             ExitCode::FAILURE
         }
         Ok(result) => {
+            // Seed the token file so it is available before the main server starts.
+            // The server's background task handles subsequent refreshes.
+            if let Some(mgr) = maestro_core::github_app::try_create_token_manager(&config.github)
+            {
+                let cwd = config_path
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .filter(|p| p.exists())
+                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    match rt.block_on(mgr.get_installation_token(&cwd)) {
+                        Ok(token) => {
+                            let token_path =
+                                std::path::Path::new(maestro_core::github_app::TOKEN_FILE_PATH);
+                            match maestro_core::github_app::write_token_file(token_path, &token) {
+                                Ok(()) => {
+                                    eprintln!(
+                                        "[maestro preflight] GitHub App token written to {}",
+                                        token_path.display()
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[maestro preflight] WARNING: failed to write token file: {e}"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[maestro preflight] WARNING: failed to fetch GitHub App token: {e}"
+                            );
+                        }
+                    }
+                }
+            }
+
             match ticketing {
                 TicketingSystem::Jira => {
                     if !result.acli_ok {
@@ -281,6 +321,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         )
     };
 
+    // Keep a reference to the token manager so we can start the background writer.
+    let github_app_for_token_writer = github_app_mgr.clone();
+
     let actions: Arc<dyn ExternalActions> = if dry_mode {
         info!("Running in DRY MODE — no external writes");
         Arc::new(DryRunActions::new(repo_path, git_remote, github_app_mgr))
@@ -340,6 +383,14 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let cancel_token = CancellationToken::new();
+
+    // Start the centralized GitHub App token file writer so worker containers
+    // always read a fresh token from the shared volume instead of relying on a
+    // frozen GH_TOKEN env var injected at `docker run` time.
+    if let Some(ref mgr) = github_app_for_token_writer {
+        let cwd = config.read().await.git.repo_path.clone();
+        mgr.start_token_file_writer(PathBuf::from(&cwd), cancel_token.clone());
+    }
 
     // Start the background workflow definitions directory watcher.
     engine.start_definitions_watcher(cancel_token.clone());

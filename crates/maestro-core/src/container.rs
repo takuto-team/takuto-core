@@ -68,10 +68,6 @@ pub struct ContainerRunner {
     image: String,
     worktree_path: PathBuf,
     step_counter: std::sync::atomic::AtomicU32,
-    /// GitHub App installation token injected as `GH_TOKEN` into every worker container.
-    /// Overrides the personal `gh` user for bot-attributed commits and PRs without
-    /// touching the shared `~/.config/gh/hosts.yml` volume.
-    gh_token: Option<String>,
     /// When `true`, replace the broad `/workspace:/workspace` mount with targeted
     /// bind mounts for just the worktree path, `.git`, and `.maestro`. This prevents
     /// a container from accessing any other issue's worktree.
@@ -120,9 +116,8 @@ const PASSTHROUGH_ENV: &[&str] = &[
     // or write a thin shell alias in maestro.env.
     "LOKALISE_API_TOKEN",
     "CURSOR_API_KEY",
-    // When set in the environment, overrides personal `gh` auth in worker containers.
-    // (GitHubAppTokenManager uses `gh auth login --with-token` + the shared auth volume
-    // instead; this passthrough covers cases where GH_TOKEN is set externally.)
+    // Ambient GH_TOKEN fallback for local development (no GitHub App / no token file).
+    // When the centralized token file exists, workers read from that instead.
     "GH_TOKEN",
     // Optional: force a fixed browser bundle (must match the project's @playwright/test version).
     "PLAYWRIGHT_BROWSERS_PATH",
@@ -203,16 +198,8 @@ impl ContainerRunner {
             image: image.to_string(),
             worktree_path: worktree_path.to_path_buf(),
             step_counter: std::sync::atomic::AtomicU32::new(0),
-            gh_token: None,
             isolate_workspace: false,
         }
-    }
-
-    /// Set a GitHub App installation token to inject as `GH_TOKEN` into every
-    /// worker container spawned by this runner.
-    pub fn with_gh_token(mut self, token: String) -> Self {
-        self.gh_token = Some(token);
-        self
     }
 
     /// Enable per-issue workspace isolation. Instead of mounting the full
@@ -273,30 +260,12 @@ impl ContainerRunner {
         }
 
         for key in PASSTHROUGH_ENV {
-            // GH_TOKEN is handled separately below — skip it here so the installation
-            // token (if set) takes precedence over any ambient host env var.
-            if *key == "GH_TOKEN" {
-                continue;
-            }
             if let Ok(val) = std::env::var(key)
                 && !val.is_empty()
             {
                 args.push("-e".into());
                 args.push(format!("{key}={val}"));
             }
-        }
-
-        // Inject the GitHub App installation token when available so the agent process
-        // uses bot identity for gh CLI calls without touching the shared hosts.yml volume.
-        if let Some(ref token) = self.gh_token {
-            args.push("-e".into());
-            args.push(format!("GH_TOKEN={token}"));
-        } else if let Ok(val) = std::env::var("GH_TOKEN")
-            && !val.is_empty()
-        {
-            // Fall back to ambient GH_TOKEN from the host environment.
-            args.push("-e".into());
-            args.push(format!("GH_TOKEN={val}"));
         }
 
         for mount in build_volume_args(&self.worktree_path, self.isolate_workspace) {
@@ -337,7 +306,13 @@ impl ContainerRunner {
         // Ensure npm/mise dirs are owned by maestro (shared volumes start root-owned).
         // Uses passwordless sudo bash (granted in /etc/sudoers.d/maestro-hook-bash).
         let fix_perms = r#"sudo -n bash -c 'for d in "$HOME/.npm" "$HOME/.npm-global" "$HOME/.cache/mise" "$HOME/.local/share/mise"; do [ -d "$d" ] && chown -R "$(id -u):$(id -g)" "$d"; done' 2>/dev/null || true"#;
-        let cmd = format!("{restore}; {fix_perms}; exec {}", shell_parts.join(" "));
+        // Source the centralized GitHub App token so `gh` and git operations use a
+        // fresh token. The token file is refreshed by Maestro's background service.
+        let gh_token = r#"[ -f "$HOME/.config/gh/gh-app-token" ] && export GH_TOKEN="$(cat "$HOME/.config/gh/gh-app-token")";"#;
+        let cmd = format!(
+            "{restore}; {fix_perms}; {gh_token} exec {}",
+            shell_parts.join(" ")
+        );
         docker_args.push("sh".into());
         docker_args.push("-c".into());
         docker_args.push(cmd);
@@ -1177,6 +1152,14 @@ pub async fn start_terminal(
     // and ANTHROPIC_BASE_URL are set. We inject that field on startup so Claude
     // uses the env-var auth (same as the headless --print mode used by workflows).
     let shell_cmd = r#"[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a
+# Source the centralized GitHub App token so gh CLI and git operations authenticate.
+if [ -f "$HOME/.config/gh/gh-app-token" ]; then
+  export GH_TOKEN="$(cat "$HOME/.config/gh/gh-app-token")"
+  # Configure git credential helper to use the token file (editor containers
+  # don't inherit the main container's ~/.gitconfig).
+  git config --global credential.https://github.com.helper \
+    '!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo "password=$(cat $HOME/.config/gh/gh-app-token 2>/dev/null || echo $GH_TOKEN)"; }; f' 2>/dev/null
+fi
 # Make ~/.claude.json persistent by symlinking into the shared volume.
 if [ ! -L "$HOME/.claude.json" ]; then
   if [ -f "$HOME/.claude.json" ] && [ ! -f "$HOME/.claude/.claude.json" ]; then
@@ -2817,31 +2800,36 @@ mod tests {
     }
 
     #[test]
-    fn gh_token_and_isolate_workspace_composable() {
+    fn isolate_workspace_active() {
         let r = ContainerRunner::new(
             "TEST-1",
             &PathBuf::from("/workspace/worktrees/test-1"),
             "maestro:latest",
         )
-        .with_gh_token("ghp_token123".to_string())
         .with_isolate_workspace();
         let (_, args) = r.wrap_command("true", &[]);
-        // GH_TOKEN must be present
-        assert!(
-            has_env(&args, "GH_TOKEN", "ghp_token123"),
-            "GH_TOKEN must be set when both builders are used"
-        );
         // Isolation must be active
         assert!(
             !has_volume(&args, "/workspace:/workspace"),
-            "Isolation must be active when both builders are used"
+            "Isolation must be active"
         );
         assert!(
             has_volume(
                 &args,
                 "/workspace/worktrees/test-1:/workspace/worktrees/test-1"
             ),
-            "Worktree mount must be present when both builders are used"
+            "Worktree mount must be present"
+        );
+    }
+
+    #[test]
+    fn wrap_command_sources_gh_token_file() {
+        let r = runner();
+        let (_, args) = r.wrap_command("claude", &["--print"]);
+        let sh_body = args.last().expect("last arg is the sh -c body");
+        assert!(
+            sh_body.contains("gh-app-token"),
+            "wrap_command preamble must source the GitHub App token file; got: {sh_body}"
         );
     }
 
