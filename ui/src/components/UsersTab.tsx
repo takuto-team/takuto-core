@@ -67,7 +67,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
             type="button"
             onClick={async () => {
               const ok = await copyToClipboard(recoveryCodes.join("\n"));
-              if (ok) setCodesCopied(true);
+              if (ok) { setCodesCopied(true); setTimeout(() => setCodesCopied(false), 2000); }
             }}
             className="w-full py-1.5 rounded-lg bg-gray-800 text-gray-300 text-xs font-medium hover:bg-gray-700 cursor-pointer"
           >

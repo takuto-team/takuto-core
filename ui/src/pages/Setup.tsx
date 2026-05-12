@@ -95,7 +95,7 @@ export function Setup({ onSetupComplete, onLogin }: Props) {
   const handleCopyCodes = async () => {
     if (!recoveryCodes) return;
     const ok = await copyToClipboard(recoveryCodes.join("\n"));
-    if (ok) setCodesCopied(true);
+    if (ok) { setCodesCopied(true); setTimeout(() => setCodesCopied(false), 2000); }
   };
 
   const handleContinue = async () => {
