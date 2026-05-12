@@ -93,7 +93,6 @@ const WORKER_ENV: &[(&str, &str)] = &[
         "PATH",
         "/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ),
-    ("DOCKER_HOST", "tcp://dind:2375"),
     ("MAESTRO_CONFIG", "/etc/maestro/config.toml"),
     // Persist user-level .npmrc across worker containers (aws codeartifact login writes here)
     ("NPM_CONFIG_USERCONFIG", "/workspace/.maestro/.npmrc"),
@@ -447,7 +446,7 @@ fn toml_value_to_json(val: &toml::Value) -> serde_json::Value {
 
 /// Port range reserved for editor instances (VS Code + app ports) on the DinD host.
 const EDITOR_PORT_MIN: u16 = 9100;
-const EDITOR_PORT_MAX: u16 = 9200;
+const EDITOR_PORT_MAX: u16 = 19100;
 
 /// Information about a running editor container.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -488,42 +487,68 @@ fn editor_container_name(ticket_key: &str) -> String {
 async fn used_editor_ports() -> Vec<u16> {
     let mut ports = Vec::new();
     // Check both editor and run-command containers that share the port range.
+    // In --network=host mode (DinD), Docker's {{.Ports}} field is empty, so we
+    // also read the maestro.vscode_port and maestro.spare_ports labels which are
+    // always set on editor/run-command containers.
     for filter in ["name=maestro-editor-", "name=maestro-run-"] {
+        // Method 1: Docker port mappings (works in local-Docker mode).
         let output = tokio::process::Command::new("docker")
             .args(["ps", "--filter", filter, "--format", "{{.Ports}}"])
             .output()
             .await;
 
-        let Ok(out) = output else { continue };
-        if !out.status.success() {
-            continue;
+        if let Ok(out) = &output
+            && out.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for segment in stdout.split([',', '\n']) {
+                let segment = segment.trim();
+                if let Some(arrow) = segment.find("->")
+                    && let Some(colon) = segment[..arrow].rfind(':')
+                {
+                    let host_part = &segment[colon + 1..arrow];
+                    if let Some((lo, hi)) = host_part.split_once('-') {
+                        if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
+                            for p in lo..=hi {
+                                ports.push(p);
+                            }
+                        }
+                    } else if let Ok(p) = host_part.parse::<u16>() {
+                        ports.push(p);
+                    }
+                }
+            }
         }
 
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        // Docker may emit individual mappings or compressed ranges when many consecutive
-        // symmetric ports are bound:
-        //   individual: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->9101/tcp"
-        //   range:      "0.0.0.0:9100-9110->9100-9110/tcp"
-        for segment in stdout.split([',', '\n']) {
-            let segment = segment.trim();
-            if let Some(arrow) = segment.find("->")
-                && let Some(colon) = segment[..arrow].rfind(':')
-            {
-                let host_part = &segment[colon + 1..arrow];
-                if let Some((lo, hi)) = host_part.split_once('-') {
-                    // Range format: "9100-9110"
-                    if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
-                        for p in lo..=hi {
+        // Method 2: Docker labels (works in --network=host / DinD mode).
+        let label_output = tokio::process::Command::new("docker")
+            .args([
+                "ps",
+                "--filter",
+                filter,
+                "--format",
+                "{{.Label \"maestro.vscode_port\"}} {{.Label \"maestro.spare_ports\"}}",
+            ])
+            .output()
+            .await;
+
+        if let Ok(out) = &label_output
+            && out.status.success()
+        {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                for part in line.split_whitespace() {
+                    // vscode_port is a single number, spare_ports is "9101,9102,..."
+                    for token in part.split(',') {
+                        if let Ok(p) = token.trim().parse::<u16>() {
                             ports.push(p);
                         }
                     }
-                } else if let Ok(p) = host_part.parse::<u16>() {
-                    // Single port: "9100"
-                    ports.push(p);
                 }
             }
         }
     }
+    ports.sort();
+    ports.dedup();
     ports
 }
 
@@ -557,6 +582,12 @@ async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
         }
     }
     None // not enough free ports after retries
+}
+
+/// Allocate a single free port from the editor/terminal port range.
+/// Public so the web layer can allocate terminal ports independently.
+pub async fn allocate_single_port() -> Option<u16> {
+    allocate_editor_ports(1).await.map(|v| v[0])
 }
 
 /// Generate a cryptographically random connection token for editor sessions.
@@ -705,8 +736,8 @@ pub async fn start_editor(
     ticket_key: &str,
     worktree_path: &Path,
     image: &str,
-    app_ports: &[u16],
-    dynamic_ports: usize,
+    _app_ports: &[u16],
+    _dynamic_ports: usize,
     theme: &str,
     extensions: &[String],
     settings: &std::collections::HashMap<String, toml::Value>,
@@ -729,24 +760,18 @@ pub async fn start_editor(
         .output()
         .await;
 
-    // Allocate ports: 1 for VS Code + N spare ports for all forwarding (via socat).
-    // NOTE: `app_ports` config is no longer used for Docker port mappings. Instead, the
-    // port scanner detects listening ports inside the container and forwards them via
-    // socat on spare ports. This works regardless of whether the app binds to 0.0.0.0
-    // or 127.0.0.1 (unlike Docker's port forwarding which only reaches 0.0.0.0). To keep
-    // enough headroom, we allocate `app_ports.len() + dynamic_ports` spare ports.
-    let spare_count = app_ports.len() + dynamic_ports;
-    let needed = 1 + spare_count;
-    let ports = allocate_editor_ports(needed).await.ok_or_else(|| {
-        format!("No free editor ports available (need {needed}, range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
+    // Allocate 1 port for the VS Code server. Terminals and dynamic port
+    // forwards each allocate their own single port on demand from the same range.
+    let ports = allocate_editor_ports(1).await.ok_or_else(|| {
+        format!("No free editor ports available (range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
     })?;
 
     let vscode_port = ports[0];
     let port_mappings: Vec<(u16, u16)> = Vec::new();
-    let spare_ports: Vec<u16> = ports[1..].to_vec();
+    let spare_ports: Vec<u16> = Vec::new();
     let connection_token = generate_connection_token();
     let path_token = generate_session_path_token();
-    info!(ticket = %name, vscode_port, spare_ports = ?spare_ports, "Allocated editor ports");
+    info!(ticket = %name, vscode_port, "Allocated editor port");
 
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -1755,7 +1780,7 @@ pub async fn start_run_command(
     image: &str,
     command: &str,
     cmd_index: usize,
-    dynamic_ports: usize,
+    _dynamic_ports: usize,
     isolate_workspace: bool,
 ) -> std::result::Result<Vec<u16>, String> {
     let name = run_command_container_name(ticket_key, cmd_index);
@@ -1771,11 +1796,10 @@ pub async fn start_run_command(
         .output()
         .await;
 
-    // Allocate spare ports for dynamic forwarding.
-    let spare_count = dynamic_ports.max(3); // at least 3 ports for typical dev servers
-    let spare_ports = allocate_editor_ports(spare_count).await.ok_or_else(|| {
+    // Allocate 1 port for the run command container.
+    let spare_ports = allocate_editor_ports(1).await.ok_or_else(|| {
         format!(
-            "No free ports available for run command (need {spare_count}, range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})"
+            "No free ports available for run command (range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})"
         )
     })?;
 
@@ -1783,7 +1807,7 @@ pub async fn start_run_command(
         ticket = %ticket_key,
         cmd_index,
         container = %name,
-        spare_ports = ?spare_ports,
+        port = spare_ports[0],
         "Starting run command container"
     );
 
@@ -2201,7 +2225,7 @@ mod tests {
 
         // Key env vars
         assert!(has_env(&args, "HOME", "/home/maestro"));
-        assert!(has_env(&args, "DOCKER_HOST", "tcp://dind:2375"));
+        assert!(!has_env(&args, "DOCKER_HOST", "tcp://dind:2375"));
         assert!(has_env(&args, "MISE_TRUST_ALL_CONFIGS", "1"));
 
         // Volume mounts

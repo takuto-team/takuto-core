@@ -12,6 +12,10 @@
 //!    or `127.0.0.1` with local Docker).
 //!
 //! Behaviour required by the GH-45 acceptance criteria:
+//!  * When a user database is configured, every request must carry a valid
+//!    `maestro_session` cookie (database-backed session). Unauthenticated
+//!    requests receive `401 Unauthorized` before the path token is even
+//!    checked, so a leaked URL alone is not sufficient to access a session.
 //!  * Unknown tokens → `404 Not Found`, empty body, no `kind` echoed back
 //!    (anti-info-leak per AC #6).
 //!  * `/s/{token}` with no trailing slash → `308 Permanent Redirect` to
@@ -36,6 +40,7 @@ use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use hyper_util::rt::TokioExecutor;
 use sha2::{Digest, Sha256};
 
+use crate::auth::{session_cookie_from_headers, validate_db_session};
 use crate::session_registry::{SessionRoute, SessionRouteKind};
 use crate::state::AppState;
 
@@ -231,7 +236,35 @@ fn sanitise_request_headers(req: &mut Request<Body>, host_port: u16, is_upgrade:
 }
 
 /// Top-level handler registered at `/s/{*rest}`.
+///
+/// When a user database is configured (`state.db` is `Some`), the handler
+/// requires a valid `maestro_session` cookie before proceeding. This prevents
+/// access if the URL leaks — the unguessable path token remains a defence in
+/// depth, but is no longer the sole gatekeeper.
 pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) -> Response<Body> {
+    // --- cookie auth gate (mirrors the /ws inline pattern) ---
+    if let Some(ref db) = state.db {
+        let authed = match session_cookie_from_headers(req.headers()) {
+            Some(raw) if raw.starts_with("db-") => {
+                let db = db.clone();
+                let cookie = raw.to_string();
+                tokio::task::spawn_blocking(move || {
+                    let conn = db.conn().blocking_lock();
+                    validate_db_session(&conn, &cookie).is_some()
+                })
+                .await
+                .unwrap_or(false)
+            }
+            _ => false,
+        };
+        if !authed {
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body(Body::empty())
+                .expect("401 builder is infallible");
+        }
+    }
+
     let path = req.uri().path().to_string();
     let query = req.uri().query().map(|s| s.to_string());
     let (token, rest) = match parse_session_path(&path) {
@@ -240,11 +273,11 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
     };
 
     let rest = match rest {
-        None => return redirect_to_trailing_slash(&token, query.as_deref()),
+        None => return redirect_to_trailing_slash(token, query.as_deref()),
         Some(r) => r,
     };
 
-    let route = match state.path_token_registry.lookup(&token).await {
+    let route = match state.path_token_registry.lookup(token).await {
         Some(r) => r,
         None => {
             // Per the GH-45 description's defense-in-depth recommendations,
@@ -252,7 +285,7 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
             // log levels (anomaly / brute-force-enumeration detection).
             // Logged with the SHA-256 prefix only — never the raw token.
             tracing::warn!(
-                token_hash = %token_hash_prefix(&token),
+                token_hash = %token_hash_prefix(token),
                 "session path token not found"
             );
             return not_found();
@@ -260,9 +293,9 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
     };
 
     if is_websocket_upgrade(&req) {
-        forward_websocket(req, route, &rest, &token).await
+        forward_websocket(req, route, rest, token).await
     } else {
-        forward_http(req, route, &rest, &token).await
+        forward_http(req, route, rest, token).await
     }
 }
 
@@ -489,6 +522,7 @@ mod tests {
             AppState {
                 engine,
                 config,
+                db: None,
                 polling_paused: Arc::new(AtomicBool::new(false)),
                 jira_available,
                 ticketing_system: TicketingSystem::None,
@@ -596,6 +630,107 @@ mod tests {
                 .to_str()
                 .unwrap();
             assert_eq!(loc, format!("/s/{token_str}/"));
+        }
+
+        // -----------------------------------------------------------------
+        // Cookie auth gate (db-backed sessions)
+        // -----------------------------------------------------------------
+
+        /// When a database is present, requests without a session cookie must
+        /// be rejected with 401 — even if the path token is valid.
+        #[tokio::test]
+        async fn proxy_returns_401_when_db_present_but_no_cookie() {
+            let state = crate::test_helpers::test_state_with_db();
+            state
+                .path_token_registry
+                .register_with_token(
+                    "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
+                    SessionRoute {
+                        kind: SessionRouteKind::Editor,
+                        host_port: 19999,
+                        ticket_key: "TEST-1".to_string(),
+                    },
+                )
+                .await;
+
+            let app = build_router(state);
+            let resp = app
+                .oneshot(
+                    Request::get("/s/aaaa1111bbbb2222cccc3333dddd4444/")
+                        .header("Host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        /// An invalid session cookie must also be rejected with 401.
+        #[tokio::test]
+        async fn proxy_returns_401_when_db_present_with_invalid_cookie() {
+            let state = crate::test_helpers::test_state_with_db();
+            state
+                .path_token_registry
+                .register_with_token(
+                    "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
+                    SessionRoute {
+                        kind: SessionRouteKind::Editor,
+                        host_port: 19999,
+                        ticket_key: "TEST-1".to_string(),
+                    },
+                )
+                .await;
+
+            let app = build_router(state);
+            let resp = app
+                .oneshot(
+                    Request::get("/s/aaaa1111bbbb2222cccc3333dddd4444/")
+                        .header("Host", "localhost")
+                        .header("Cookie", "maestro_session=db-nonexistent-session-id")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        /// A valid session cookie must pass through to the proxy logic.
+        /// Since there's no upstream listener, we expect 502 (Bad Gateway) —
+        /// proving we got past the auth gate.
+        #[tokio::test]
+        async fn proxy_allows_with_valid_cookie() {
+            let state = crate::test_helpers::test_state_with_db();
+            let cookie = crate::test_helpers::register_and_login(&state).await;
+            state
+                .path_token_registry
+                .register_with_token(
+                    "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
+                    SessionRoute {
+                        kind: SessionRouteKind::Editor,
+                        host_port: 19999,
+                        ticket_key: "TEST-1".to_string(),
+                    },
+                )
+                .await;
+
+            let app = build_router(state);
+            let resp = app
+                .oneshot(
+                    Request::get("/s/aaaa1111bbbb2222cccc3333dddd4444/")
+                        .header("Host", "localhost")
+                        .header("Cookie", &cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            // 502 = upstream unreachable, which means auth passed.
+            assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
         }
     }
 

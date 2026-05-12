@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use tracing::{info, warn};
 
-use crate::auth::session_authorized;
+use crate::auth::{session_cookie_from_headers, validate_db_session};
 use crate::state::AppState;
 
 pub async fn ws_handler(
@@ -15,66 +15,40 @@ pub async fn ws_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let web = {
-        let cfg = state.config.read().await;
-        cfg.web.clone()
-    };
-    if web.dashboard_auth_enabled() && !session_authorized(&headers, &web) {
+    let Some(ref db) = state.db else {
         return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    if let Some(raw_cookie) = session_cookie_from_headers(&headers)
+        && raw_cookie.starts_with("db-")
+    {
+        let db = db.clone();
+        let cookie = raw_cookie.to_string();
+        let valid = tokio::task::spawn_blocking(move || {
+            let conn = db.conn().blocking_lock();
+            validate_db_session(&conn, &cookie).is_some()
+        })
+        .await
+        .unwrap_or(false);
+
+        if !valid {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        info!("WebSocket upgrade requested");
+        return ws.on_upgrade(move |socket| handle_socket(socket, state));
     }
-    info!("WebSocket upgrade requested");
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+
+    StatusCode::UNAUTHORIZED.into_response()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use maestro_core::actions::dry_run::DryRunActions;
-    use maestro_core::config::{Config, TicketingSystem};
-    use maestro_core::workflow::engine::WorkflowEngine;
-
     use crate::server::build_router;
-    use crate::state::AppState;
-
-    fn test_state() -> AppState {
-        let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
-        );
-        let jira_available = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(WorkflowEngine::new(
-            config.clone(),
-            actions,
-            1,
-            jira_available.clone(),
-            TicketingSystem::None,
-            std::env::temp_dir(),
-        ));
-        AppState {
-            engine,
-            config,
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        }
-    }
+    use crate::test_helpers::{register_and_login, test_state_with_db};
 
     /// WebSocket upgrade requires a real TCP connection. With tower's `oneshot()`,
     /// the handler is reached but returns 426 (Upgrade Required) because the upgrade
@@ -82,7 +56,9 @@ mod tests {
     /// activates (not 404, not 401).
     #[tokio::test]
     async fn ws_route_is_reachable() {
-        let state = test_state();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         let resp = app
             .oneshot(
@@ -92,6 +68,7 @@ mod tests {
                     .header("Upgrade", "websocket")
                     .header("Sec-WebSocket-Version", "13")
                     .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
             )

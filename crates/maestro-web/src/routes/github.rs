@@ -75,69 +75,32 @@ pub async fn list_github_issues(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
-    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use maestro_core::actions::dry_run::DryRunActions;
-    use maestro_core::config::{Config, TicketingSystem};
-    use maestro_core::workflow::engine::WorkflowEngine;
-
     use crate::server::build_router;
-    use crate::state::AppState;
-
-    fn test_state_no_repo() -> AppState {
-        // Use a config with repo_path pointing to a temp dir that is NOT a git repo.
-        let mut cfg = Config::default();
-        cfg.git.repo_path = std::env::temp_dir()
-            .join("maestro-test-no-repo")
-            .to_string_lossy()
-            .to_string();
-        let config = Arc::new(RwLock::new(cfg));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
-        );
-        let jira_available = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(WorkflowEngine::new(
-            config.clone(),
-            actions,
-            1,
-            jira_available.clone(),
-            TicketingSystem::None,
-            std::env::temp_dir(),
-        ));
-        AppState {
-            engine,
-            config,
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        }
-    }
+    use crate::test_helpers::{register_and_login, test_state_with_db};
 
     #[tokio::test]
     async fn list_github_issues_returns_error_when_no_git_repo() {
-        // Config has repo_path pointing to a non-git directory, so resolve_remote_url fails → 400.
-        let state = test_state_no_repo();
+        // Config has repo_path pointing to a non-git directory, so resolve_remote_url fails -> 400.
+        let state = test_state_with_db();
+        {
+            let mut cfg = state.config.write().await;
+            cfg.git.repo_path = std::env::temp_dir()
+                .join("maestro-test-no-repo")
+                .to_string_lossy()
+                .to_string();
+        }
+        let cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         let resp = app
             .oneshot(
                 Request::get("/api/github/issues")
+                    .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
             )

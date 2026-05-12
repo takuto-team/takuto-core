@@ -31,7 +31,11 @@ pub async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<Workspac
                     let name = e.file_name().to_string_lossy().into_owned();
                     let html_url = read_git_remote_url(&path);
                     let active = path.to_string_lossy() == active_path.as_str();
-                    WorkspaceEntry { name, html_url, active }
+                    WorkspaceEntry {
+                        name,
+                        html_url,
+                        active,
+                    }
                 })
                 .collect();
             list.sort_by(|a, b| a.name.cmp(&b.name));
@@ -58,7 +62,10 @@ pub async fn switch_workspace(
         || body.name.contains("..")
         || body.name.starts_with('.')
     {
-        return Err((StatusCode::BAD_REQUEST, "Invalid workspace name".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid workspace name".to_string(),
+        ));
     }
 
     let workspace_path = std::path::Path::new(WORKSPACES_DIR).join(&body.name);
@@ -127,9 +134,7 @@ fn sanitize_clone_error(msg: &str) -> String {
     msg.lines()
         .filter(|line| {
             let lower = line.to_lowercase();
-            !lower.contains("password")
-                && !lower.contains("token")
-                && !lower.contains("credential")
+            !lower.contains("password") && !lower.contains("token") && !lower.contains("credential")
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -157,7 +162,6 @@ pub struct RepoListQuery {
     #[serde(default)]
     pub q: String,
 }
-
 
 /// `GET /api/github/repos` — list GitHub repos accessible by the authenticated user.
 pub async fn list_github_repos(
@@ -511,8 +515,7 @@ async fn do_clone(
             ),
         )
         .await
-        .map_err(|_| "git clone timed out after 10 minutes")?
-        ?;
+        .map_err(|_| "git clone timed out after 10 minutes")??;
         if !output.success() {
             return Err(format!("git clone failed: {}", output.stderr.trim()).into());
         }
@@ -528,8 +531,7 @@ async fn do_clone(
             ),
         )
         .await
-        .map_err(|_| "gh repo clone timed out after 10 minutes")?
-        ?;
+        .map_err(|_| "gh repo clone timed out after 10 minutes")??;
         if !output.success() {
             return Err(format!("gh repo clone failed: {}", output.stderr.trim()).into());
         }
@@ -579,6 +581,7 @@ mod tests {
         AppState {
             engine,
             config,
+            db: None,
             polling_paused: Arc::new(AtomicBool::new(false)),
             jira_available,
             ticketing_system: TicketingSystem::None,

@@ -121,6 +121,7 @@ impl WorkflowLifecycle {
         started_manually: bool,
         ticket_description: Option<String>,
         ticket_url: Option<String>,
+        user_id: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
         let ws_name = {
@@ -136,6 +137,7 @@ impl WorkflowLifecycle {
             ticket_url,
             ws_name,
         );
+        workflow.user_id = user_id;
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
         }

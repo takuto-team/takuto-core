@@ -422,9 +422,33 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());
     let config_writer = Arc::new(ConfigWriter::new(config_path.clone()));
 
+    // Initialize the SQLite database for multi-user auth (GH-75).
+    let db = {
+        use maestro_core::workflow::snapshot::resolve_data_dir;
+        match resolve_data_dir() {
+            Some(data_dir) => match maestro_core::db::Database::open(&data_dir) {
+                Ok(db) => {
+                    info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized");
+                    Some(db)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to open multi-user database (multi-user auth unavailable; legacy auth still works)");
+                    None
+                }
+            },
+            None => {
+                tracing::warn!(
+                    "No data directory resolved — multi-user database unavailable (set MAESTRO_DATA_DIR, MAESTRO_HOME, or HOME)"
+                );
+                None
+            }
+        }
+    };
+
     let app_state = AppState {
         engine: engine.clone(),
         config: config.clone(),
+        db,
         polling_paused,
         jira_available: jira_available.clone(),
         ticketing_system,

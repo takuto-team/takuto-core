@@ -113,6 +113,9 @@ pub struct Workflow {
     /// Name of the workspace (repo directory name under `/workspaces/`) this workflow belongs to.
     /// Used for per-workspace snapshot isolation and dashboard filtering.
     pub workspace_name: String,
+    /// ID of the user who created this workflow. `None` for poller-created workflows
+    /// (pre-multi-user) or workflows restored from older snapshots.
+    pub user_id: Option<String>,
 }
 
 impl Workflow {
@@ -155,6 +158,7 @@ impl Workflow {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name,
+            user_id: None,
         }
     }
 
@@ -231,6 +235,7 @@ impl Workflow {
             workflow_def_runs: rec.workflow_def_runs,
             worktree_bootstrapped: rec.worktree_bootstrapped,
             workspace_name: rec.workspace_name,
+            user_id: rec.user_id,
         }
     }
 }
@@ -269,5 +274,6 @@ pub(super) fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRec
         workflow_def_runs: w.workflow_def_runs.clone(),
         worktree_bootstrapped: w.worktree_bootstrapped,
         workspace_name: w.workspace_name.clone(),
+        user_id: w.user_id.clone(),
     }
 }

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1
 # Stage 1a: Build React dashboard
 FROM node:23-bookworm-slim AS ui-builder
 

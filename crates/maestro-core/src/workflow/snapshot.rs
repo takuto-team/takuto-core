@@ -78,6 +78,10 @@ pub struct PersistedWorkflowRecord {
     /// Old snapshots without this field get an empty string (assigned during restore).
     #[serde(default)]
     pub workspace_name: String,
+    /// ID of the user who created this workflow. Old snapshots without this field
+    /// get `None` (unowned — visible to admins only during migration).
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 fn default_jira_available() -> bool {
@@ -126,20 +130,20 @@ pub const WORKSPACES_DIR: &str = "/workspaces";
 /// Resolve the data directory without needing a repo_path (uses env vars only,
 /// falls back to `$HOME/.maestro`). Returns `None` only when no env var is set.
 pub fn resolve_data_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("MAESTRO_DATA_DIR") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir));
-        }
+    if let Ok(dir) = std::env::var("MAESTRO_DATA_DIR")
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir));
     }
-    if let Ok(home) = std::env::var("MAESTRO_HOME") {
-        if !home.is_empty() {
-            return Some(PathBuf::from(home).join(".maestro"));
-        }
+    if let Ok(home) = std::env::var("MAESTRO_HOME")
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home).join(".maestro"));
     }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return Some(PathBuf::from(home).join(".maestro"));
-        }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home).join(".maestro"));
     }
     None
 }
@@ -156,8 +160,9 @@ pub fn read_active_workspace() -> Option<String> {
 
 /// Write the active workspace name to `{data_dir}/active_workspace`.
 pub fn write_active_workspace(name: &str) -> std::io::Result<()> {
-    let data_dir = resolve_data_dir()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no data directory available"))?;
+    let data_dir = resolve_data_dir().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no data directory available")
+    })?;
     std::fs::create_dir_all(&data_dir)?;
     std::fs::write(data_dir.join(ACTIVE_WORKSPACE_FILE), name.trim())?;
     Ok(())
@@ -345,10 +350,7 @@ pub fn read_all_workspace_snapshots(
                 tracing::warn!(path = %snap.display(), version = file.version, "Skipping snapshot with unsupported version");
                 continue;
             }
-            let ws_name = entry
-                .file_name()
-                .to_string_lossy()
-                .into_owned();
+            let ws_name = entry.file_name().to_string_lossy().into_owned();
             let mut records = file.workflows;
             // Backfill workspace_name for any records missing it.
             for rec in &mut records {
@@ -486,11 +488,13 @@ mod tests {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name: "my-repo".into(),
+            user_id: Some("user-1".into()),
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: PersistedWorkflowRecord = serde_json::from_str(&json).unwrap();
         assert!(!back.driver_started);
         assert_eq!(back.workspace_name, "my-repo");
+        assert_eq!(back.user_id, Some("user-1".into()));
     }
 
     #[test]
@@ -526,14 +530,20 @@ mod tests {
 
     #[test]
     fn workspace_name_from_normal_path() {
-        assert_eq!(workspace_name_from_repo_path(Path::new("/workspaces/my-repo")), "my-repo");
+        assert_eq!(
+            workspace_name_from_repo_path(Path::new("/workspaces/my-repo")),
+            "my-repo"
+        );
     }
 
     #[test]
     fn workspace_name_from_trailing_slash() {
         // Path::file_name returns None for paths ending in /
         // but PathBuf normalizes trailing slashes
-        assert_eq!(workspace_name_from_repo_path(Path::new("/workspaces/my-repo/")), "my-repo");
+        assert_eq!(
+            workspace_name_from_repo_path(Path::new("/workspaces/my-repo/")),
+            "my-repo"
+        );
     }
 
     #[test]
@@ -543,6 +553,9 @@ mod tests {
 
     #[test]
     fn workspace_name_from_single_component() {
-        assert_eq!(workspace_name_from_repo_path(Path::new("workspace")), "workspace");
+        assert_eq!(
+            workspace_name_from_repo_path(Path::new("workspace")),
+            "workspace"
+        );
     }
 }

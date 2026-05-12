@@ -45,6 +45,9 @@ pub type RunCommandsMap = Arc<RwLock<HashMap<String, Vec<RunCommandState>>>>;
 pub struct AppState {
     pub engine: Arc<WorkflowEngine>,
     pub config: Arc<RwLock<Config>>,
+    /// SQLite database for multi-user authentication and access control.
+    /// `None` when the database has not been initialized (e.g., during tests that don't need it).
+    pub db: Option<maestro_core::db::Database>,
     /// Shared with `JiraPoller`: when `true`, poller skips `poll_once` (dashboard pause/resume or
     /// `[general] auto_polling = false` in `config.toml` at startup).
     pub polling_paused: Arc<AtomicBool>,

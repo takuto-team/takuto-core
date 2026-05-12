@@ -12,6 +12,7 @@ pub mod config_watcher;
 pub mod config_writer;
 pub mod container;
 pub mod cursor;
+pub mod db;
 pub mod docker_hooks;
 pub mod error;
 pub mod git;

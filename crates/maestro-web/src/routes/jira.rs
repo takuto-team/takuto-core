@@ -88,96 +88,24 @@ pub async fn get_ticket_preview(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
-    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use maestro_core::actions::dry_run::DryRunActions;
-    use maestro_core::config::{Config, TicketingSystem};
-    use maestro_core::workflow::engine::WorkflowEngine;
-
     use crate::server::build_router;
-    use crate::state::AppState;
-
-    fn test_state_no_project_keys() -> AppState {
-        let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
-        );
-        let jira_available = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(WorkflowEngine::new(
-            config.clone(),
-            actions,
-            1,
-            jira_available.clone(),
-            TicketingSystem::None,
-            std::env::temp_dir(),
-        ));
-        AppState {
-            engine,
-            config,
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        }
-    }
-
-    fn test_state_with_project_keys(keys: Vec<String>) -> AppState {
-        let mut cfg = Config::default();
-        cfg.jira.project_keys = keys;
-        let config = Arc::new(RwLock::new(cfg));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
-        );
-        let jira_available = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(WorkflowEngine::new(
-            config.clone(),
-            actions,
-            1,
-            jira_available.clone(),
-            TicketingSystem::None,
-            std::env::temp_dir(),
-        ));
-        AppState {
-            engine,
-            config,
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        }
-    }
+    use crate::test_helpers::{register_and_login, test_state_with_db};
 
     #[tokio::test]
     async fn list_todo_tickets_returns_400_when_no_project_keys() {
-        let state = test_state_no_project_keys();
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         let resp = app
             .oneshot(
                 Request::get("/api/jira/todo-tickets-manual")
+                    .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -195,11 +123,18 @@ mod tests {
     #[tokio::test]
     async fn get_ticket_preview_returns_403_when_project_not_in_keys() {
         // Configure project keys as ["PROJ"] but request a ticket from "OTHER" project.
-        let state = test_state_with_project_keys(vec!["PROJ".to_string()]);
+        let state = test_state_with_db();
+        {
+            let mut cfg = state.config.write().await;
+            cfg.jira.project_keys = vec!["PROJ".to_string()];
+        }
+        let cookie = register_and_login(&state).await;
+
         let app = build_router(state);
         let resp = app
             .oneshot(
                 Request::get("/api/jira/tickets/OTHER-123/preview")
+                    .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
             )

@@ -38,7 +38,6 @@ if [ -n "${DOCKER_HOST:-}" ]; then
         done
     fi
 fi
-
 # Helper: resolve a domain and allow all its IPs.
 # Uses getent (always available in glibc) instead of dig/host.
 allow_host() {

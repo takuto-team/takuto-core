@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::Extension;
 use serde::{Deserialize, Serialize};
+
+use crate::auth::AuthenticatedUser;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -144,6 +147,26 @@ pub struct WorkflowSummary {
     /// `None` while the worktree is still being pre-created in the background.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    /// ID of the user who created this workflow. `None` for legacy/poller workflows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+}
+
+/// Check whether the authenticated user may act on the workflow with the given ticket key.
+/// Users can only act on workflows they created.
+async fn require_workflow_access(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    ticket_key: &str,
+) -> Result<(), StatusCode> {
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
+    let w = workflows.get(ticket_key).ok_or(StatusCode::NOT_FOUND)?;
+    if w.user_id.as_deref() == Some(&auth.user_id) {
+        Ok(())
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
 }
 
 fn workflow_action_flags(w: &Workflow) -> (bool, bool, bool) {
@@ -250,7 +273,10 @@ fn build_run_commands_status(
         .collect()
 }
 
-pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowSummary>> {
+pub async fn list_workflows(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> Json<Vec<WorkflowSummary>> {
     let cfg = state.config.read().await;
     let current_ws = maestro_core::workflow::snapshot::workspace_name_from_repo_path(
         std::path::Path::new(&cfg.git.repo_path),
@@ -290,6 +316,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
         .filter(|w| w.workspace_name == current_ws)
+        .filter(|w| w.user_id.as_deref() == Some(&auth.user_id))
         .map(|w| {
             let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
             let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
@@ -340,6 +367,7 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowS
                     .as_ref()
                     .filter(|p| p.exists())
                     .and_then(|p| p.to_str().map(str::to_string)),
+                user_id: w.user_id.clone(),
             }
         })
         .collect();
@@ -357,8 +385,11 @@ pub struct WorkflowCountsResponse {
     pub paused: u32,
 }
 
-/// Cross-workspace workflow counts for the dashboard summary bar.
-pub async fn workflow_counts(State(state): State<AppState>) -> Json<WorkflowCountsResponse> {
+/// Per-user workflow counts for the dashboard summary bar.
+pub async fn workflow_counts(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> Json<WorkflowCountsResponse> {
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let mut running = 0u32;
@@ -366,6 +397,9 @@ pub async fn workflow_counts(State(state): State<AppState>) -> Json<WorkflowCoun
     let mut errors = 0u32;
     let mut paused = 0u32;
     for w in workflows.values() {
+        if w.user_id.as_deref() != Some(&auth.user_id) {
+            continue;
+        }
         match &w.state {
             WorkflowState::Done => completed += 1,
             WorkflowState::Error { .. } | WorkflowState::Stopped => errors += 1,
@@ -380,6 +414,7 @@ pub async fn workflow_counts(State(state): State<AppState>) -> Json<WorkflowCoun
 pub async fn get_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<WorkflowSummary>, StatusCode> {
     let cfg = state.config.read().await;
     let current_ws = maestro_core::workflow::snapshot::workspace_name_from_repo_path(
@@ -389,6 +424,10 @@ pub async fn get_workflow(
     let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     if w.workspace_name != current_ws {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    // Users can only access their own workflows.
+    if w.user_id.as_deref() != Some(&auth.user_id) {
         return Err(StatusCode::NOT_FOUND);
     }
     let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
@@ -468,6 +507,7 @@ pub async fn get_workflow(
             .as_ref()
             .filter(|p| p.exists())
             .and_then(|p| p.to_str().map(str::to_string)),
+        user_id: w.user_id.clone(),
     }))
 }
 
@@ -476,7 +516,11 @@ pub async fn get_workflow(
 pub async fn pause_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     state
         .engine
         .pause_workflow(&id)
@@ -491,7 +535,11 @@ pub async fn pause_workflow(
 pub async fn resume_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     state
         .engine
         .resume_workflow(&id)
@@ -505,8 +553,11 @@ pub async fn resume_workflow(
 pub async fn resume_from_error(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // Stop any running run commands — the workflow is transitioning back to active
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     cleanup_run_commands(&state, &id).await;
 
     state
@@ -521,8 +572,11 @@ pub async fn resume_from_error(
 pub async fn retry_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // Stop any running run commands — the old workflow is being removed
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     cleanup_run_commands(&state, &id).await;
 
     state
@@ -542,7 +596,11 @@ pub async fn retry_workflow(
 pub async fn stop_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     state
         .engine
         .stop_workflow(&id)
@@ -555,8 +613,11 @@ pub async fn stop_workflow(
 pub async fn mark_work_done(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<MarkDoneOutcome>, (StatusCode, String)> {
-    // Stop any running run commands for this workflow
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     cleanup_run_commands(&state, &id).await;
 
     state
@@ -571,8 +632,11 @@ pub async fn mark_work_done(
 pub async fn delete_workflow(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // Stop any running run commands for this workflow
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     cleanup_run_commands(&state, &id).await;
 
     state
@@ -599,7 +663,9 @@ async fn cleanup_run_commands(state: &AppState, ticket_key: &str) {
 pub async fn get_workflow_report(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<WorkflowReportResponse>, StatusCode> {
+    require_workflow_access(&state, &auth, &id).await?;
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
@@ -652,6 +718,7 @@ pub struct StartManualWorkflowResponse {
 /// so the agent prompt can use it.
 pub async fn start_manual_workflow(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<StartManualWorkflowBody>,
 ) -> Result<Json<StartManualWorkflowResponse>, (StatusCode, String)> {
     let jira_on = state
@@ -706,7 +773,14 @@ pub async fn start_manual_workflow(
     }
 
     if max_manual > 0 {
-        let n = state.engine.manual_workflows_toward_cap_count().await;
+        // Count per-user, not global.
+        let wf_arc = state.engine.workflows_arc();
+        let map = wf_arc.read().await;
+        let n = map
+            .values()
+            .filter(|w| w.user_id.as_deref() == Some(&auth.user_id))
+            .filter(|w| w.started_manually && w.state.occupies_concurrency_slot())
+            .count();
         if n >= max_manual as usize {
             return Err((
                 StatusCode::CONFLICT,
@@ -739,6 +813,7 @@ pub async fn start_manual_workflow(
             true,
             description,
             issue_url,
+            Some(auth.user_id),
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -772,7 +847,11 @@ pub struct OpenEditorResponse {
 pub async fn open_editor(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<OpenEditorResponse>, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     let cfg = state.config.read().await;
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
@@ -923,7 +1002,14 @@ pub async fn open_editor(
 }
 
 /// Stop and remove the editor container for a workflow.
-pub async fn close_editor(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
+pub async fn close_editor(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> StatusCode {
+    if require_workflow_access(&state, &auth, &id).await.is_err() {
+        return StatusCode::NOT_FOUND;
+    }
     // GH-45 AC #9: drop the path-token mapping BEFORE the port is torn down
     // so any in-flight `/s/<token>/...` request gets a clean 404 instead of
     // a hung connection or — worse — a successful upgrade right as the
@@ -960,7 +1046,11 @@ pub struct OpenTerminalResponse {
 pub async fn open_terminal(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<OpenTerminalResponse>, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     // Reuse existing terminal if already recorded in the in-memory map.
     if let Some((port, token)) = state.terminal_ports.read().await.get(&id).cloned() {
         // GH-45: re-use the existing path token if one is already registered
@@ -992,7 +1082,7 @@ pub async fn open_terminal(
     }
 
     // Editor container must be running.
-    let info = container::get_editor_info(&id).await.ok_or((
+    let _info = container::get_editor_info(&id).await.ok_or((
         StatusCode::CONFLICT,
         "Editor container is not running — open the editor first.".into(),
     ))?;
@@ -1021,27 +1111,12 @@ pub async fn open_terminal(
         }));
     }
 
-    // Pick a spare port that is:
-    //  1. Not already allocated to another workflow's terminal.
-    //  2. Not currently listening inside this container (socat dynamic forwards also bind
-    //     spare ports, so ttyd would fail to bind if we picked one socat already holds).
-    let used_by_terminals: Vec<u16> = state
-        .terminal_ports
-        .read()
-        .await
-        .values()
-        .map(|(port, _)| *port)
-        .collect();
-    let in_use = container::listening_ports_in_editor(&id).await;
-    let port = info
-        .spare_ports
-        .iter()
-        .copied()
-        .find(|p| !used_by_terminals.contains(p) && !in_use.contains(p))
-        .ok_or((
-            StatusCode::CONFLICT,
-            "No spare ports available for terminal.".into(),
-        ))?;
+    // Allocate a single port for ttyd from the shared editor port range.
+    let ports = container::allocate_single_port().await.ok_or((
+        StatusCode::CONFLICT,
+        "No free ports available for terminal.".into(),
+    ))?;
+    let port = ports;
 
     let (_legacy_url, token) = container::start_terminal(&id, port)
         .await
@@ -1075,7 +1150,14 @@ pub async fn open_terminal(
 }
 
 /// Stop the web terminal for a workflow's editor container.
-pub async fn close_terminal(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
+pub async fn close_terminal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> StatusCode {
+    if require_workflow_access(&state, &auth, &id).await.is_err() {
+        return StatusCode::NOT_FOUND;
+    }
     // GH-45 AC #9: drop the terminal's path-token mapping BEFORE we tear
     // down the listener, so any `/s/<token>/...` request mid-flight gets a
     // clean 404 instead of a hung connection. Editor entries for the same
@@ -1169,7 +1251,11 @@ pub async fn list_run_commands(
 pub async fn start_run_command(
     State(state): State<AppState>,
     Path((id, index)): Path<(String, usize)>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<StartRunCommandResponse>, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     let cfg = state.config.read().await;
     let rc = cfg.run_commands.get(index).ok_or((
         StatusCode::BAD_REQUEST,
@@ -1356,7 +1442,11 @@ pub async fn start_run_command(
 pub async fn stop_run_command(
     State(state): State<AppState>,
     Path((id, index)): Path<(String, usize)>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
@@ -1398,7 +1488,11 @@ pub async fn list_workflow_definitions(
 pub async fn run_workflow_def(
     State(state): State<AppState>,
     Path((id, def_name)): Path<(String, String)>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     state
         .engine
         .start_workflow_def(&id, &def_name)
@@ -1411,7 +1505,11 @@ pub async fn run_workflow_def(
 pub async fn retry_workflow_def(
     State(state): State<AppState>,
     Path((id, def_name)): Path<(String, String)>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    require_workflow_access(&state, &auth, &id)
+        .await
+        .map_err(|s| (s, "Workflow not found".into()))?;
     state
         .engine
         .retry_workflow_def(&id, &def_name)

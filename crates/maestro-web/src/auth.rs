@@ -1,7 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Dashboard session cookie auth (username + password via `POST /api/auth/login`).
+//! Dashboard session cookie auth (SQLite-backed multi-user).
+//!
+//! Session format: `db-<session-uuid>` — validated against the `sessions` table.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,6 +16,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
 use maestro_core::config::WebConfig;
+use maestro_core::db::Database;
+use maestro_core::error::MaestroError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -135,22 +139,156 @@ pub fn session_authorized(headers: &HeaderMap, web: &WebConfig) -> bool {
     session_cookie_from_headers(headers).is_some_and(|raw| verify_session_cookie(raw, web))
 }
 
+// ---------------------------------------------------------------------------
+// Database-backed session management
+// ---------------------------------------------------------------------------
+
+/// Cookie value prefix for database-backed sessions.
+///
+/// Uses `db-` (not `db:`) because the `cookie` crate percent-encodes `:` as `%3A`
+/// in `Set-Cookie` headers, which breaks prefix matching when the browser sends the
+/// cookie back.
+const DB_SESSION_PREFIX: &str = "db-";
+
+/// Create a database-backed session for a user. Returns the session cookie value
+/// (prefixed with `db-` so the middleware can distinguish it from legacy HMAC tokens).
+pub fn create_db_session(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+) -> std::result::Result<String, MaestroError> {
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let expires_at = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::seconds(SESSION_TTL_SECS as i64))
+        .unwrap_or_else(chrono::Utc::now)
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let data = serde_json::to_vec(&serde_json::json!({
+        "user_id": user_id,
+    }))
+    .map_err(|e| MaestroError::Auth(format!("Failed to serialize session: {e}")))?;
+
+    conn.execute(
+        "INSERT INTO sessions (id, user_id, data, expires_at) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![session_id, user_id, data, expires_at],
+    )?;
+
+    Ok(format!("{DB_SESSION_PREFIX}{session_id}"))
+}
+
+/// Validate a database session cookie. Returns the `user_id` if valid and not expired.
+pub fn validate_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> Option<String> {
+    let session_id = cookie_value.strip_prefix(DB_SESSION_PREFIX)?;
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    conn.query_row(
+        "SELECT user_id FROM sessions WHERE id = ?1 AND expires_at > ?2",
+        rusqlite::params![session_id, now],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Delete a specific database session. Returns `true` if a session was deleted.
+pub fn delete_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> bool {
+    let Some(session_id) = cookie_value.strip_prefix(DB_SESSION_PREFIX) else {
+        return false;
+    };
+    conn.execute(
+        "DELETE FROM sessions WHERE id = ?1",
+        rusqlite::params![session_id],
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
+/// Authenticate a user against the SQLite database.
+///
+/// Returns the authenticated [`User`](maestro_core::db::models::User) on success,
+/// or `None` if credentials are invalid or the user is suspended.
+pub async fn authenticate_db_user(
+    db: &Database,
+    username: &str,
+    password: &str,
+) -> Option<maestro_core::db::models::User> {
+    let db = db.clone();
+    let username = username.to_string();
+    let password = password.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn().blocking_lock();
+
+        // Look up user by username.
+        let user = match maestro_core::db::users::get_user_by_username(&conn, &username) {
+            Ok(Some(u)) => u,
+            _ => return None,
+        };
+
+        // Reject suspended users.
+        if user.suspended {
+            return None;
+        }
+
+        // Verify password.
+        match maestro_core::db::credentials::verify_user_password(&conn, &user.id, &password) {
+            Ok(true) => Some(user),
+            _ => None,
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Authenticated user identity inserted into request extensions by the auth middleware.
+/// Handlers extract this via `request.extensions().get::<AuthenticatedUser>()`.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedUser {
+    pub user_id: String,
+    pub role: maestro_core::db::models::UserRole,
+}
+
+/// Database-backed multi-user auth middleware.
+///
+/// On successful authentication the middleware inserts an [`AuthenticatedUser`]
+/// into the request extensions so downstream handlers can identify the caller.
+/// If no database is available or no valid session exists, all protected
+/// requests are rejected with 401.
 pub async fn dashboard_auth_middleware(
     State(state): State<AppState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
-    let web = {
-        let cfg = state.config.read().await;
-        cfg.web.clone()
-    };
-    if !web.dashboard_auth_enabled() {
-        return next.run(request).await;
-    }
-    if !session_authorized(request.headers(), &web) {
+    let Some(ref db) = state.db else {
+        // No database — reject all protected requests.
         return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    if let Some(raw_cookie) = session_cookie_from_headers(request.headers())
+        && raw_cookie.starts_with(DB_SESSION_PREFIX)
+    {
+        let db = db.clone();
+        let cookie = raw_cookie.to_string();
+        let auth_user = tokio::task::spawn_blocking(move || {
+            let conn = db.conn().blocking_lock();
+            let user_id = validate_db_session(&conn, &cookie)?;
+            let user =
+                maestro_core::db::users::get_user_by_id(&conn, &user_id).ok()??;
+            Some(AuthenticatedUser {
+                user_id: user.id,
+                role: user.role,
+            })
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(auth) = auth_user {
+            request.extensions_mut().insert(auth);
+            return next.run(request).await;
+        }
     }
-    next.run(request).await
+
+    StatusCode::UNAUTHORIZED.into_response()
 }
 
 #[cfg(test)]
