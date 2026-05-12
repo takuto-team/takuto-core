@@ -213,10 +213,12 @@ export function useWorkflows() {
           if (typeof evt.pr_merged === "boolean") updated.pr_merged = evt.pr_merged;
           if (evt.error) updated.error = evt.error;
 
-          // Terminal states: schedule re-fetch for action flags / pr_url
+          // Terminal states or newly-active workflows: re-fetch for action flags
+          // (can_open_editor, pr_url, etc.) that can only be computed server-side.
           const lower = updated.state.toLowerCase();
           const isTerminal = lower === "done" || lower.startsWith("error") || lower === "stopped";
-          if (isTerminal) {
+          const becameActive = !wf.can_open_editor && evt.state && evt.state !== wf.state;
+          if (isTerminal || becameActive) {
             needsRefetch = true;
             return prev;
           }
