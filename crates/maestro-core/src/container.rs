@@ -487,42 +487,68 @@ fn editor_container_name(ticket_key: &str) -> String {
 async fn used_editor_ports() -> Vec<u16> {
     let mut ports = Vec::new();
     // Check both editor and run-command containers that share the port range.
+    // In --network=host mode (DinD), Docker's {{.Ports}} field is empty, so we
+    // also read the maestro.vscode_port and maestro.spare_ports labels which are
+    // always set on editor/run-command containers.
     for filter in ["name=maestro-editor-", "name=maestro-run-"] {
+        // Method 1: Docker port mappings (works in local-Docker mode).
         let output = tokio::process::Command::new("docker")
             .args(["ps", "--filter", filter, "--format", "{{.Ports}}"])
             .output()
             .await;
 
-        let Ok(out) = output else { continue };
-        if !out.status.success() {
-            continue;
+        if let Ok(out) = &output
+            && out.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for segment in stdout.split([',', '\n']) {
+                let segment = segment.trim();
+                if let Some(arrow) = segment.find("->")
+                    && let Some(colon) = segment[..arrow].rfind(':')
+                {
+                    let host_part = &segment[colon + 1..arrow];
+                    if let Some((lo, hi)) = host_part.split_once('-') {
+                        if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
+                            for p in lo..=hi {
+                                ports.push(p);
+                            }
+                        }
+                    } else if let Ok(p) = host_part.parse::<u16>() {
+                        ports.push(p);
+                    }
+                }
+            }
         }
 
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        // Docker may emit individual mappings or compressed ranges when many consecutive
-        // symmetric ports are bound:
-        //   individual: "0.0.0.0:9100->9100/tcp, 0.0.0.0:9101->9101/tcp"
-        //   range:      "0.0.0.0:9100-9110->9100-9110/tcp"
-        for segment in stdout.split([',', '\n']) {
-            let segment = segment.trim();
-            if let Some(arrow) = segment.find("->")
-                && let Some(colon) = segment[..arrow].rfind(':')
-            {
-                let host_part = &segment[colon + 1..arrow];
-                if let Some((lo, hi)) = host_part.split_once('-') {
-                    // Range format: "9100-9110"
-                    if let (Ok(lo), Ok(hi)) = (lo.parse::<u16>(), hi.parse::<u16>()) {
-                        for p in lo..=hi {
+        // Method 2: Docker labels (works in --network=host / DinD mode).
+        let label_output = tokio::process::Command::new("docker")
+            .args([
+                "ps",
+                "--filter",
+                filter,
+                "--format",
+                "{{.Label \"maestro.vscode_port\"}} {{.Label \"maestro.spare_ports\"}}",
+            ])
+            .output()
+            .await;
+
+        if let Ok(out) = &label_output
+            && out.status.success()
+        {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                for part in line.split_whitespace() {
+                    // vscode_port is a single number, spare_ports is "9101,9102,..."
+                    for token in part.split(',') {
+                        if let Ok(p) = token.trim().parse::<u16>() {
                             ports.push(p);
                         }
                     }
-                } else if let Ok(p) = host_part.parse::<u16>() {
-                    // Single port: "9100"
-                    ports.push(p);
                 }
             }
         }
     }
+    ports.sort();
+    ports.dedup();
     ports
 }
 
