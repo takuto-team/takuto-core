@@ -2149,6 +2149,13 @@ pub async fn run_run_command_port_scanner(
             listening.iter().map(|(p, _)| *p).collect();
 
         // Detect new listening ports → start socat forwarding.
+        // Run commands forward at most ONE port — each command runs a single
+        // server. Without this limit, in DinD --network=host mode, one command's
+        // scanner would pick up ports from other commands (they share the same
+        // network namespace) and both would end up pointing to the same server.
+        if !active_forwards.is_empty() {
+            continue;
+        }
         for &(port, family) in &listening {
             if always_ignore.contains(&port)
                 || baseline.contains(&port)
