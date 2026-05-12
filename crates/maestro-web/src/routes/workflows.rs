@@ -385,8 +385,11 @@ pub struct WorkflowCountsResponse {
     pub paused: u32,
 }
 
-/// Cross-workspace workflow counts for the dashboard summary bar.
-pub async fn workflow_counts(State(state): State<AppState>) -> Json<WorkflowCountsResponse> {
+/// Per-user workflow counts for the dashboard summary bar.
+pub async fn workflow_counts(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> Json<WorkflowCountsResponse> {
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let mut running = 0u32;
@@ -394,6 +397,9 @@ pub async fn workflow_counts(State(state): State<AppState>) -> Json<WorkflowCoun
     let mut errors = 0u32;
     let mut paused = 0u32;
     for w in workflows.values() {
+        if w.user_id.as_deref() != Some(&auth.user_id) {
+            continue;
+        }
         match &w.state {
             WorkflowState::Done => completed += 1,
             WorkflowState::Error { .. } | WorkflowState::Stopped => errors += 1,
@@ -767,7 +773,14 @@ pub async fn start_manual_workflow(
     }
 
     if max_manual > 0 {
-        let n = state.engine.manual_workflows_toward_cap_count().await;
+        // Count per-user, not global.
+        let wf_arc = state.engine.workflows_arc();
+        let map = wf_arc.read().await;
+        let n = map
+            .values()
+            .filter(|w| w.user_id.as_deref() == Some(&auth.user_id))
+            .filter(|w| w.started_manually && w.state.occupies_concurrency_slot())
+            .count();
         if n >= max_manual as usize {
             return Err((
                 StatusCode::CONFLICT,
