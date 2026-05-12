@@ -114,7 +114,26 @@ function SecurityTabConnected() {
     }
   };
 
-  return <SecurityTab onChangePassword={handleChangePassword} />;
+  const handleRegenerateRecoveryCodes = async () => {
+    try {
+      const res = await api("/api/auth/recovery-codes", { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        return { error: body?.error ?? `Failed (${res.status})` };
+      }
+      const data = await res.json();
+      return { recovery_codes: data.recovery_codes };
+    } catch {
+      return { error: "Could not reach the server." };
+    }
+  };
+
+  return (
+    <SecurityTab
+      onChangePassword={handleChangePassword}
+      onRegenerateRecoveryCodes={handleRegenerateRecoveryCodes}
+    />
+  );
 }
 
 // ---------------------------------------------------------------------------

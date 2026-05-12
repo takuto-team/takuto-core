@@ -2,12 +2,14 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, type FormEvent } from "react";
+import { ConfirmModal } from "./modals/ConfirmModal";
 
 interface Props {
   onChangePassword: (
     currentPassword: string,
     newPassword: string,
   ) => Promise<{ error?: string }>;
+  onRegenerateRecoveryCodes: () => Promise<{ recovery_codes?: string[]; error?: string }>;
 }
 
 const MIN_PASSWORD_LENGTH = 12;
@@ -66,7 +68,7 @@ function PasswordInput({
   );
 }
 
-export function SecurityTab({ onChangePassword }: Props) {
+export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Props) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -75,6 +77,10 @@ export function SecurityTab({ onChangePassword }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  const [regenLoading, setRegenLoading] = useState(false);
+  const [regenError, setRegenError] = useState("");
 
   const passwordsMatch = newPassword === confirmPassword;
   const passwordLongEnough = newPassword.length >= MIN_PASSWORD_LENGTH;
@@ -173,6 +179,87 @@ export function SecurityTab({ onChangePassword }: Props) {
             {loading ? "Saving..." : "Update password"}
           </button>
         </form>
+      </section>
+
+      <hr className="border-gray-800" />
+
+      {/* Recovery codes section */}
+      <section>
+        <h2 className="text-base font-semibold text-gray-300 mb-1">Recovery codes</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Single-use codes to regain access if you lose your password. Regenerating replaces all existing codes.
+        </p>
+
+        {recoveryCodes ? (
+          <div className="space-y-3 max-w-md">
+            <div className="bg-amber-950 border border-amber-700 rounded-lg p-4">
+              <p className="text-xs text-amber-200/80 mb-3">
+                Save these codes now. They will not be shown again.
+              </p>
+              <div className="grid grid-cols-2 gap-2 mb-3 font-mono text-sm">
+                {recoveryCodes.map((code) => (
+                  <div
+                    key={code}
+                    className="bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-gray-200 text-center"
+                  >
+                    {code}
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(recoveryCodes.join("\n")).catch(() => {});
+                }}
+                className="w-full py-1.5 rounded-lg bg-gray-800 text-gray-300 text-xs font-medium hover:bg-gray-700 cursor-pointer"
+              >
+                Copy all codes
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRecoveryCodes(null)}
+              className="text-sm text-gray-500 hover:text-gray-300 cursor-pointer"
+            >
+              Done
+            </button>
+          </div>
+        ) : (
+          <div>
+            {regenError && <p className="text-sm text-red-400 mb-2">{regenError}</p>}
+            <button
+              type="button"
+              disabled={regenLoading}
+              onClick={() => setConfirmRegenerate(true)}
+              className="px-5 py-2 rounded-lg bg-gray-800 text-gray-300 text-sm font-medium border border-gray-700 hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+            >
+              {regenLoading ? "Generating..." : "Regenerate recovery codes"}
+            </button>
+          </div>
+        )}
+
+        {confirmRegenerate && (
+          <ConfirmModal
+            title="Regenerate recovery codes"
+            message="This will invalidate all your existing recovery codes. Make sure you save the new ones."
+            onConfirm={async () => {
+              setConfirmRegenerate(false);
+              setRegenError("");
+              setRegenLoading(true);
+              try {
+                const result = await onRegenerateRecoveryCodes();
+                if (result.error) {
+                  setRegenError(result.error);
+                } else {
+                  setRecoveryCodes(result.recovery_codes ?? null);
+                }
+              } finally {
+                setRegenLoading(false);
+              }
+            }}
+            onCancel={() => setConfirmRegenerate(false)}
+          />
+        )}
       </section>
 
       <hr className="border-gray-800" />

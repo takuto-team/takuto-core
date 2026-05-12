@@ -34,6 +34,10 @@ pub fn build_router(state: AppState) -> Router {
             "/auth/change-password",
             post(routes::auth::change_password),
         )
+        .route(
+            "/auth/recovery-codes",
+            post(routes::auth::regenerate_recovery_codes),
+        )
         // User management routes (admin only).
         .route("/users/export", get(routes::admin::export_users))
         .route("/users/import", post(routes::admin::import_users))

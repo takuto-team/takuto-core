@@ -330,6 +330,47 @@ pub async fn change_password(
 }
 
 // ---------------------------------------------------------------------------
+// Regenerate recovery codes
+// ---------------------------------------------------------------------------
+
+/// Regenerate recovery codes for the current user. Replaces all existing codes.
+/// Returns the new plaintext codes (shown once).
+pub async fn regenerate_recovery_codes(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    use crate::auth::{session_cookie_from_headers, validate_db_session};
+
+    let Some(ref db) = state.db else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
+    let cookie = session_cookie_from_headers(&headers)
+        .unwrap_or_default()
+        .to_string();
+    let db = db.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = db.conn().blocking_lock();
+        let user_id = validate_db_session(&conn, &cookie)
+            .ok_or_else(|| maestro_core::error::MaestroError::Auth("Invalid session".into()))?;
+        let codes =
+            maestro_core::db::credentials::generate_recovery_codes(&conn, &user_id, 8)?;
+        Ok::<_, maestro_core::error::MaestroError>(codes)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(codes)) => Json(serde_json::json!({ "recovery_codes": codes })).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Account recovery via recovery code
 // ---------------------------------------------------------------------------
 
