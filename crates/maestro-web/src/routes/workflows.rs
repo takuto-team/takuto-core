@@ -153,15 +153,12 @@ pub struct WorkflowSummary {
 }
 
 /// Check whether the authenticated user may act on the workflow with the given ticket key.
-/// Admins can act on any workflow. Non-admin users can only act on their own.
+/// Users can only act on workflows they created.
 async fn require_workflow_access(
     state: &AppState,
     auth: &AuthenticatedUser,
     ticket_key: &str,
 ) -> Result<(), StatusCode> {
-    if auth.role == maestro_core::db::models::UserRole::Admin {
-        return Ok(());
-    }
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(ticket_key).ok_or(StatusCode::NOT_FOUND)?;
@@ -316,11 +313,10 @@ pub async fn list_workflows(
             })
             .collect()
     };
-    let is_admin = auth.role == maestro_core::db::models::UserRole::Admin;
     let mut summaries: Vec<WorkflowSummary> = workflows
         .values()
         .filter(|w| w.workspace_name == current_ws)
-        .filter(|w| is_admin || w.user_id.as_deref() == Some(&auth.user_id))
+        .filter(|w| w.user_id.as_deref() == Some(&auth.user_id))
         .map(|w| {
             let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
             let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
@@ -424,10 +420,8 @@ pub async fn get_workflow(
     if w.workspace_name != current_ws {
         return Err(StatusCode::NOT_FOUND);
     }
-    // Non-admin users can only access their own workflows.
-    if auth.role != maestro_core::db::models::UserRole::Admin
-        && w.user_id.as_deref() != Some(&auth.user_id)
-    {
+    // Users can only access their own workflows.
+    if w.user_id.as_deref() != Some(&auth.user_id) {
         return Err(StatusCode::NOT_FOUND);
     }
     let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
