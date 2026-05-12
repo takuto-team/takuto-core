@@ -346,17 +346,19 @@ fn rewrite_redirect_location(resp: &mut Response<Body>, token: &str) {
     }
 }
 
+
 /// Compute the upstream path based on session kind.
 ///
 /// Editor sessions use `--server-base-path /s/{token}` so the full prefix
 /// must be preserved. Terminal sessions strip the proxy prefix.
 fn upstream_path_for_kind(kind: SessionRouteKind, token: &str, rest: &str) -> String {
     match kind {
-        // Editor: openvscode-server uses --server-base-path /s/{token}
-        // DynamicPort: dev servers use MAESTRO_PROXY_BASE=/s/{token}/ as their
-        //   base path, so they expect the full prefix in the request path.
-        SessionRouteKind::Editor | SessionRouteKind::DynamicPort => format!("/s/{token}{rest}"),
-        SessionRouteKind::Terminal => rest.to_string(),
+        SessionRouteKind::Editor => format!("/s/{token}{rest}"),
+        // Terminal & DynamicPort: strip the proxy prefix so the upstream
+        // receives requests at root. Apps that need base-path awareness
+        // (e.g. Vite) can use MAESTRO_PROXY_BASE; apps that don't (e.g.
+        // Storybook, static servers) work transparently.
+        SessionRouteKind::Terminal | SessionRouteKind::DynamicPort => rest.to_string(),
     }
 }
 
@@ -397,13 +399,11 @@ async fn forward_http(
             let mut response = Response::from_parts(parts, body);
             // Editor sessions with --server-base-path already emit correct
             // `/s/{token}/…` redirects — only terminal sessions need rewriting.
-            // Terminal sessions: rewrite root-relative redirects to stay
-            // within the proxy namespace. Editor and DynamicPort apps know
-            // their base path (--server-base-path / MAESTRO_PROXY_BASE) and
-            // emit correct URLs natively.
-            if route.kind == SessionRouteKind::Terminal {
+            if matches!(route.kind, SessionRouteKind::Terminal | SessionRouteKind::DynamicPort) {
                 rewrite_redirect_location(&mut response, token);
             }
+            // URL rewriting disabled — apps should work at root with prefix
+            // stripping. MAESTRO_PROXY_BASE is available for apps that need it.
             response
         }
         Err(err) => {

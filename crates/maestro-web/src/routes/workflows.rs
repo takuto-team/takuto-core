@@ -1393,17 +1393,6 @@ pub async fn start_run_command(
         .await
         .unwrap_or_else(|| "maestro:latest".to_string());
 
-    // Pre-register a proxy token so we can pass the base path to the container
-    // as an environment variable. Dev servers (Vite, Next.js, etc.) can use
-    // $MAESTRO_PROXY_BASE to configure their asset base path.
-    let pre_token = state.path_token_registry.register(SessionRoute {
-        kind: SessionRouteKind::DynamicPort,
-        host_port: 0, // placeholder — updated when the port is detected
-        ticket_key: ticket_key.clone(),
-        user_id: auth.user_id.clone(),
-    }).await;
-    let proxy_base = container::build_session_dynamic_port_url(&pre_token);
-
     let spare_ports = container::start_run_command(
         &ticket_key,
         &worktree,
@@ -1412,16 +1401,10 @@ pub async fn start_run_command(
         index,
         dynamic_ports,
         true, // isolate_workspace: restrict container to this issue's worktree
-        &[("MAESTRO_PROXY_BASE", &proxy_base)],
+        &[],
     )
     .await
-    .map_err(|e| {
-        // Clean up the pre-registered token on failure.
-        let registry = state.path_token_registry.clone();
-        let token = pre_token.clone();
-        tokio::spawn(async move { registry.remove(&token).await; });
-        (StatusCode::INTERNAL_SERVER_ERROR, e)
-    })?;
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     // Register in state BEFORE spawning background tasks so that events
     // emitted by the scanner/tracker always find an existing map entry
@@ -1463,13 +1446,9 @@ pub async fn start_run_command(
     });
 
     // Spawn tracker that updates run_commands state on port events.
-    // The pre-registered proxy token (with host_port=0 placeholder) is
-    // updated when the actual port is detected.
     let mut rx = state.engine.subscribe();
     let registry = state.path_token_registry.clone();
     let tracker_user_id = auth.user_id.clone();
-    let tracker_pre_token = pre_token.clone();
-    let tracker_proxy_base = proxy_base.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -1491,25 +1470,20 @@ pub async fn start_run_command(
                             match event.event_type.as_str() {
                                 "run_command_port_forwarded" => {
                                     if let Some((cp, hp)) = event.forwarded_port {
-                                        // Update the pre-registered token with the actual port:
-                                        // remove the placeholder, re-register with correct host_port.
-                                        registry.remove(&tracker_pre_token).await;
-                                        registry.register_with_token(
-                                            tracker_pre_token.clone(),
-                                            SessionRoute {
-                                                kind: SessionRouteKind::DynamicPort,
-                                                host_port: hp,
-                                                ticket_key: ticket_for_tracker.clone(),
-                                                user_id: tracker_user_id.clone(),
-                                            },
-                                        ).await;
+                                        let path_token = registry.register(SessionRoute {
+                                            kind: SessionRouteKind::DynamicPort,
+                                            host_port: hp,
+                                            ticket_key: ticket_for_tracker.clone(),
+                                            user_id: tracker_user_id.clone(),
+                                        }).await;
+                                        let proxy_url = container::build_session_dynamic_port_url(&path_token);
                                         let mut map = run_cmds_map.write().await;
                                         if let Some(cmd) = map.get_mut(&ticket_for_tracker).and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == index)) {
                                             cmd.forwarded_port = Some(DynamicPortForward {
                                                 container_port: cp,
                                                 host_port: hp,
-                                                proxy_url: tracker_proxy_base.clone(),
-                                                path_token: tracker_pre_token.clone(),
+                                                proxy_url,
+                                                path_token,
                                             });
                                         }
                                     }
