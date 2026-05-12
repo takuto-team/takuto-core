@@ -42,7 +42,7 @@ export default defineConfig({
         target: "ws://localhost:8080",
         ws: true
       },
-      "/s": "http://localhost:8080"
+      "/s/": "http://localhost:8080"
     }
   },
   test: {
