@@ -301,11 +301,11 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
         </button>
 
         {/* Bottom-right icons: editor, terminal, port mappings */}
-        {(mergedPorts.length > 0 || (isTerminal && w.can_open_editor)) && (
+        {(mergedPorts.length > 0 || w.can_open_editor) && (
           <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2">
 
             {/* Editor icon */}
-            {isTerminal && w.can_open_editor && (
+            {w.can_open_editor && (
               <div className="relative">
                 {openMenu === "editor" && w.editor_url && (
                   <>
@@ -349,7 +349,7 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
             )}
 
             {/* Terminal icon */}
-            {isTerminal && w.can_open_editor && (
+            {w.can_open_editor && (
               <div className="relative">
                 {openMenu === "terminal" && w.terminal_url && (
                   <>

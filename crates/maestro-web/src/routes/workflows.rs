@@ -166,9 +166,7 @@ fn manual_cap_fields(w: &Workflow) -> (bool, bool) {
 }
 
 fn can_open_editor(w: &Workflow) -> bool {
-    !w.state.is_active()
-        && w.worktree_path.as_ref().is_some_and(|p| p.exists())
-        && ContainerRunner::is_available()
+    w.worktree_path.as_ref().is_some_and(|p| p.exists()) && ContainerRunner::is_available()
 }
 
 fn has_report_file(w: &Workflow) -> bool {
