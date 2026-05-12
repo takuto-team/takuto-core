@@ -33,9 +33,9 @@ pub struct AuthStatus {
 
 /// Public probe: whether the server requires dashboard login (reads live config).
 pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
-    let enabled = state.config.read().await.web.dashboard_auth_enabled();
-
-    let (multi_user, setup_required) = if let Some(ref db) = state.db {
+    // When the database is available it is the sole auth source — legacy
+    // config-based auth is only used when no DB is initialized.
+    if let Some(ref db) = state.db {
         let db = db.clone();
         let count = tokio::task::spawn_blocking(move || {
             let conn = db.conn().blocking_lock();
@@ -43,15 +43,19 @@ pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
         })
         .await
         .unwrap_or(0);
-        (count > 0, count == 0)
-    } else {
-        (false, false)
-    };
+        return Json(AuthStatus {
+            dashboard_auth_enabled: true,
+            multi_user: count > 0,
+            setup_required: count == 0,
+        });
+    }
 
+    // Fallback: no database — use legacy config-based auth.
+    let enabled = state.config.read().await.web.dashboard_auth_enabled();
     Json(AuthStatus {
-        dashboard_auth_enabled: enabled || multi_user,
-        multi_user,
-        setup_required,
+        dashboard_auth_enabled: enabled,
+        multi_user: false,
+        setup_required: false,
     })
 }
 
@@ -65,7 +69,7 @@ pub async fn login(
     jar: CookieJar,
     Json(body): Json<LoginBody>,
 ) -> impl IntoResponse {
-    // Try database-backed auth first.
+    // When the database is available it is the sole auth source.
     if let Some(ref db) = state.db {
         let db_clone = db.clone();
         let has_users = tokio::task::spawn_blocking(move || {
@@ -75,38 +79,43 @@ pub async fn login(
         .await
         .unwrap_or(false);
 
-        if has_users {
-            let user = authenticate_db_user(db, &body.username, &body.password).await;
-            let Some(user) = user else {
-                return StatusCode::UNAUTHORIZED.into_response();
-            };
-
-            // Create a DB session.
-            let db_clone = db.clone();
-            let user_id = user.id.clone();
-            let token = tokio::task::spawn_blocking(move || {
-                let conn = db_clone.conn().blocking_lock();
-                create_db_session(&conn, &user_id)
-            })
-            .await;
-
-            let token = match token {
-                Ok(Ok(t)) => t,
-                _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            };
-
-            let cookie = Cookie::build((SESSION_COOKIE_NAME, token))
-                .path("/")
-                .http_only(true)
-                .same_site(SameSite::Lax)
-                .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
-                .build();
-
-            return (jar.add(cookie), StatusCode::NO_CONTENT).into_response();
+        if !has_users {
+            return (
+                StatusCode::CONFLICT,
+                "No users exist yet. Complete first-user setup via /api/auth/register.",
+            )
+                .into_response();
         }
+
+        let user = authenticate_db_user(db, &body.username, &body.password).await;
+        let Some(user) = user else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+
+        let db_clone = db.clone();
+        let user_id = user.id.clone();
+        let token = tokio::task::spawn_blocking(move || {
+            let conn = db_clone.conn().blocking_lock();
+            create_db_session(&conn, &user_id)
+        })
+        .await;
+
+        let token = match token {
+            Ok(Ok(t)) => t,
+            _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+
+        let cookie = Cookie::build((SESSION_COOKIE_NAME, token))
+            .path("/")
+            .http_only(true)
+            .same_site(SameSite::Lax)
+            .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
+            .build();
+
+        return (jar.add(cookie), StatusCode::NO_CONTENT).into_response();
     }
 
-    // Legacy config-based auth fallback.
+    // Legacy config-based auth fallback (no database available).
     let cfg = state.config.read().await;
     if !cfg.web.dashboard_auth_enabled() {
         return (
@@ -217,9 +226,9 @@ pub async fn register(
                 "Username cannot be empty".into(),
             ));
         }
-        if password.is_empty() {
+        if password.len() < 12 {
             return Err(maestro_core::error::MaestroError::Auth(
-                "Password cannot be empty".into(),
+                "Password must be at least 12 characters".into(),
             ));
         }
 

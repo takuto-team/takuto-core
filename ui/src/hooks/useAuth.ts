@@ -7,15 +7,19 @@ import type { AuthStatus } from "../api/types";
 export function useAuth() {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [setupRequired, setSetupRequired] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const checkAuth = useCallback(() => {
     fetch("/api/auth/status", { credentials: "same-origin" })
       .then((r) => r.json() as Promise<AuthStatus>)
       .then((data) => {
         setAuthEnabled(data.dashboard_auth_enabled);
-        if (!data.dashboard_auth_enabled) {
+        setSetupRequired(data.setup_required);
+        if (!data.dashboard_auth_enabled && !data.setup_required) {
           setLoggedIn(true);
+        } else if (data.setup_required) {
+          setLoggedIn(false);
         } else {
           // Try a protected endpoint to see if session cookie is valid
           return fetch("/api/config", { credentials: "same-origin" }).then((r) => {
@@ -29,6 +33,10 @@ export function useAuth() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await fetch("/api/auth/login", {
@@ -49,5 +57,10 @@ export function useAuth() {
     setLoggedIn(false);
   }, []);
 
-  return { authEnabled, loggedIn, loading, login, logout };
+  const completeSetup = useCallback(() => {
+    setSetupRequired(false);
+    setAuthEnabled(true);
+  }, []);
+
+  return { authEnabled, loggedIn, setupRequired, loading, login, logout, completeSetup };
 }

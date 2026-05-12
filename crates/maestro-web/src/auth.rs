@@ -252,7 +252,8 @@ pub async fn dashboard_auth_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    // Try database-backed session validation first.
+    // When the database is available, it is the sole authentication source.
+    // Legacy config-based auth is only used when no DB is initialized.
     if let Some(ref db) = state.db {
         if let Some(raw_cookie) = session_cookie_from_headers(request.headers())
             && raw_cookie.starts_with(DB_SESSION_PREFIX)
@@ -269,25 +270,15 @@ pub async fn dashboard_auth_middleware(
             if valid {
                 return next.run(request).await;
             }
-            return StatusCode::UNAUTHORIZED.into_response();
         }
 
-        // Check if DB has users -- if so, require DB auth (no legacy fallback).
-        let db_clone = db.clone();
-        let has_users = tokio::task::spawn_blocking(move || {
-            let conn = db_clone.conn().blocking_lock();
-            maestro_core::db::users::count_users(&conn).unwrap_or(0) > 0
-        })
-        .await
-        .unwrap_or(false);
-
-        if has_users {
-            // DB has users but no valid DB session cookie -- reject.
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
+        // DB exists but no valid session — reject. When DB has zero users the
+        // frontend shows the setup page which uses the public /api/auth/register
+        // endpoint (not gated by this middleware).
+        return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    // Legacy config-based auth fallback.
+    // Legacy config-based auth fallback (no database available).
     let web = {
         let cfg = state.config.read().await;
         cfg.web.clone()

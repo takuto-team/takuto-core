@@ -141,6 +141,8 @@ export interface PollingStatus {
 
 export interface AuthStatus {
   dashboard_auth_enabled: boolean;
+  multi_user: boolean;
+  setup_required: boolean;
 }
 
 export interface TodoTicket {

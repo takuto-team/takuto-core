@@ -4,12 +4,13 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
+import { Setup } from "./pages/Setup";
 import { Config } from "./pages/Config";
 import { useAuth } from "./hooks/useAuth";
 import { ToastProvider, ToastContainer } from "./hooks/useToast";
 
 export function App() {
-  const { authEnabled, loggedIn, loading, login, logout } = useAuth();
+  const { authEnabled, loggedIn, setupRequired, loading, login, logout, completeSetup } = useAuth();
 
   if (loading) {
     return (
@@ -17,6 +18,10 @@ export function App() {
         <span className="text-gray-500 text-sm">Loading...</span>
       </div>
     );
+  }
+
+  if (setupRequired) {
+    return <Setup onSetupComplete={completeSetup} onLogin={login} />;
   }
 
   if (authEnabled && !loggedIn) {

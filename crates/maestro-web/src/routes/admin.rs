@@ -119,6 +119,11 @@ pub async fn create_user(
         if let Some(ref password) = body.password
             && !password.is_empty()
         {
+            if password.len() < 12 {
+                return Err(maestro_core::error::MaestroError::Auth(
+                    "Password must be at least 12 characters".into(),
+                ));
+            }
             maestro_core::db::credentials::store_password(&conn, &user.id, password)?;
             let recovery =
                 maestro_core::db::credentials::generate_recovery_codes(&conn, &user.id, 8)?;
@@ -561,7 +566,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/register")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(r#"{"username":"admin","password":"secret123"}"#))
+                    .body(Body::from(r#"{"username":"admin","password":"secret123!@#A"}"#))
                     .unwrap(),
             )
             .await
@@ -578,7 +583,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(r#"{"username":"admin","password":"secret123"}"#))
+                    .body(Body::from(r#"{"username":"admin","password":"secret123!@#A"}"#))
                     .unwrap(),
             )
             .await
@@ -750,7 +755,7 @@ mod tests {
                 Request::post("/api/users")
                     .header("Cookie", &cookie)
                     .header("Content-Type", "application/json")
-                    .body(Body::from(r#"{"username":"bob","password":"pass123"}"#))
+                    .body(Body::from(r#"{"username":"bob","password":"pass123!@#ABCD"}"#))
                     .unwrap(),
             )
             .await

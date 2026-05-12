@@ -429,26 +429,6 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             Some(data_dir) => match maestro_core::db::Database::open(&data_dir) {
                 Ok(db) => {
                     info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized");
-                    // Migrate legacy config.toml credentials if the DB is empty.
-                    let web_config = config.read().await.web.clone();
-                    let db_clone = db.clone();
-                    let migration_result = tokio::task::spawn_blocking(move || {
-                        let conn = db_clone.conn().blocking_lock();
-                        maestro_core::db::migration::migrate_legacy_credentials(&conn, &web_config)
-                    })
-                    .await;
-                    match migration_result {
-                        Ok(Ok(true)) => {
-                            info!("Legacy config.toml credentials migrated to SQLite database");
-                        }
-                        Ok(Ok(false)) => {} // No migration needed
-                        Ok(Err(e)) => {
-                            tracing::warn!(error = %e, "Failed to migrate legacy credentials (continuing without migration)");
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Legacy credential migration task panicked (continuing without migration)");
-                        }
-                    }
                     Some(db)
                 }
                 Err(e) => {
