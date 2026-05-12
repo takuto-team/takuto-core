@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import type { User } from "../api/types";
+import { ConfirmModal } from "./modals/ConfirmModal";
 
 interface NewUserRow {
   username: string;
@@ -24,6 +25,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [createdUsername, setCreatedUsername] = useState("");
   const [error, setError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<User | null>(null);
 
   const handleCreate = async () => {
     if (!newRow || !newRow.username.trim() || !newRow.password) return;
@@ -36,12 +38,6 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
     setCreatedUsername(newRow.username.trim());
     setRecoveryCodes(result.recovery_codes ?? null);
     setNewRow(null);
-  };
-
-  const handleDelete = async (user: User) => {
-    const ok = window.confirm(`Delete user "${user.username}"? This cannot be undone.`);
-    if (!ok) return;
-    await onDeleteUser(user);
   };
 
   // Recovery codes modal after user creation
@@ -132,7 +128,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
                   {u.suspended ? "Unsuspend" : "Suspend"}
                 </button>
                 <button
-                  onClick={() => handleDelete(u)}
+                  onClick={() => setConfirmDelete(u)}
                   className="text-sm text-red-500/70 hover:text-red-400 cursor-pointer"
                 >
                   Delete
@@ -228,6 +224,18 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
         >
           + Add user
         </button>
+      )}
+
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete user"
+          message={`Delete user "${confirmDelete.username}"? This cannot be undone.`}
+          onConfirm={async () => {
+            await onDeleteUser(confirmDelete);
+            setConfirmDelete(null);
+          }}
+          onCancel={() => setConfirmDelete(null)}
+        />
       )}
     </div>
   );
