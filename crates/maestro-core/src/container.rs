@@ -446,7 +446,7 @@ fn toml_value_to_json(val: &toml::Value) -> serde_json::Value {
 
 /// Port range reserved for editor instances (VS Code + app ports) on the DinD host.
 const EDITOR_PORT_MIN: u16 = 9100;
-const EDITOR_PORT_MAX: u16 = 10100;
+const EDITOR_PORT_MAX: u16 = 19100;
 
 /// Information about a running editor container.
 #[derive(Debug, Clone, serde::Serialize)]
