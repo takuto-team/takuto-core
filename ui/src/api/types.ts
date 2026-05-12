@@ -145,6 +145,15 @@ export interface AuthStatus {
   setup_required: boolean;
 }
 
+export interface User {
+  id: string;
+  username: string;
+  role: "admin" | "user";
+  suspended: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TodoTicket {
   key: string;
   summary: string;
