@@ -261,9 +261,6 @@ pub async fn proxy_or_static_fallback(
         && route.kind == SessionRouteKind::DynamicPort
     {
         Some((token, route))
-    } else if is_likely_dev_asset(req.uri().path()) {
-        // Find any DynamicPort session for this user.
-        find_dynamic_port_for_user(&state, req.headers()).await
     } else {
         None
     };
@@ -295,46 +292,6 @@ pub async fn proxy_or_static_fallback(
     }
     // Fall through to the static file handler.
     crate::server::serve_static(req.uri().clone()).await
-}
-
-/// Returns `true` for URL paths that are clearly dev server assets and
-/// should never be handled by the dashboard's SPA fallback.
-fn is_likely_dev_asset(path: &str) -> bool {
-    path.starts_with("/node_modules/")
-        || path.starts_with("/@vite/")
-        || path.starts_with("/@react-refresh")
-        || path.starts_with("/@fs/")
-        || path.starts_with("/@id/")
-        || path.starts_with("/src/")
-}
-
-/// Find any active `DynamicPort` session owned by the authenticated user.
-/// Used as a fallback when a dev server asset request doesn't carry a
-/// referer with `/s/{token}/`.
-async fn find_dynamic_port_for_user(
-    state: &AppState,
-    headers: &axum::http::HeaderMap,
-) -> Option<(String, SessionRoute)> {
-    let db = state.db.as_ref()?;
-    let raw = session_cookie_from_headers(headers)?;
-    if !raw.starts_with("db-") {
-        return None;
-    }
-    let db = db.clone();
-    let cookie = raw.to_string();
-    let uid = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        validate_db_session(&conn, &cookie)
-    })
-    .await
-    .ok()
-    .flatten()?;
-
-    let guard = state.path_token_registry.inner_read().await;
-    guard
-        .iter()
-        .find(|(_, r)| r.kind == SessionRouteKind::DynamicPort && r.user_id == uid)
-        .map(|(token, route)| (token.clone(), route.clone()))
 }
 
 /// Extract a session token from a Referer URL like
