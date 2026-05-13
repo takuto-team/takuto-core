@@ -235,6 +235,120 @@ fn sanitise_request_headers(req: &mut Request<Body>, host_port: u16, is_upgrade:
     req.headers_mut().insert(HOST, host);
 }
 
+/// Fallback handler for root-relative asset requests from proxied apps.
+///
+/// Dev servers (Vite, Storybook, etc.) generate JS `import` statements with
+/// root-relative paths (e.g. `import "/node_modules/.vite/deps/react.js"`).
+/// The browser resolves these against the page origin, bypassing the
+/// `/s/{token}/` proxy path. This handler catches those requests by checking
+/// the `Referer` header: if it contains `/s/{token}/`, the request is proxied
+/// to the same upstream.
+///
+/// Registered as the `fallback` handler, replacing the static file handler
+/// for requests that match a known proxy session via referer.
+pub async fn proxy_or_static_fallback(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> Response<Body> {
+    // Check Referer for a /s/{token}/ pattern.
+    // Strategy 1: Referer contains /s/{token}/ — direct proxy via known token.
+    // Strategy 2: No matching referer, but the path looks like a dev server
+    //   asset (/node_modules/, /@vite/, /src/, /@react-refresh, etc.) — find
+    //   any active DynamicPort session for the authenticated user.
+    let proxy_route = if let Some(referer) = req.headers().get(header::REFERER).and_then(|v| v.to_str().ok())
+        && let Some(token) = extract_token_from_referer(referer)
+        && let Some(route) = state.path_token_registry.lookup(&token).await
+        && route.kind == SessionRouteKind::DynamicPort
+    {
+        Some((token, route))
+    } else if is_likely_dev_asset(req.uri().path()) {
+        // Find any DynamicPort session for this user.
+        find_dynamic_port_for_user(&state, req.headers()).await
+    } else {
+        None
+    };
+
+    if let Some((token, route)) = proxy_route {
+        // Auth check: validate cookie and ownership.
+        let auth_ok = if let Some(ref db) = state.db {
+            let uid = match session_cookie_from_headers(req.headers()) {
+                Some(raw) if raw.starts_with("db-") => {
+                    let db = db.clone();
+                    let cookie = raw.to_string();
+                    tokio::task::spawn_blocking(move || {
+                        let conn = db.conn().blocking_lock();
+                        validate_db_session(&conn, &cookie)
+                    })
+                    .await
+                    .unwrap_or(None)
+                }
+                _ => None,
+            };
+            uid.as_deref() == Some(&route.user_id)
+        } else {
+            true
+        };
+        if auth_ok {
+            let path = req.uri().path().to_string();
+            return forward_http(req, route, &path, &token).await;
+        }
+    }
+    // Fall through to the static file handler.
+    crate::server::serve_static(req.uri().clone()).await
+}
+
+/// Returns `true` for URL paths that are clearly dev server assets and
+/// should never be handled by the dashboard's SPA fallback.
+fn is_likely_dev_asset(path: &str) -> bool {
+    path.starts_with("/node_modules/")
+        || path.starts_with("/@vite/")
+        || path.starts_with("/@react-refresh")
+        || path.starts_with("/@fs/")
+        || path.starts_with("/@id/")
+        || path.starts_with("/src/")
+}
+
+/// Find any active `DynamicPort` session owned by the authenticated user.
+/// Used as a fallback when a dev server asset request doesn't carry a
+/// referer with `/s/{token}/`.
+async fn find_dynamic_port_for_user(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Option<(String, SessionRoute)> {
+    let db = state.db.as_ref()?;
+    let raw = session_cookie_from_headers(headers)?;
+    if !raw.starts_with("db-") {
+        return None;
+    }
+    let db = db.clone();
+    let cookie = raw.to_string();
+    let uid = tokio::task::spawn_blocking(move || {
+        let conn = db.conn().blocking_lock();
+        validate_db_session(&conn, &cookie)
+    })
+    .await
+    .ok()
+    .flatten()?;
+
+    let guard = state.path_token_registry.inner_read().await;
+    guard
+        .iter()
+        .find(|(_, r)| r.kind == SessionRouteKind::DynamicPort && r.user_id == uid)
+        .map(|(token, route)| (token.clone(), route.clone()))
+}
+
+/// Extract a session token from a Referer URL like
+/// `http://host:port/s/{token}/…`.
+fn extract_token_from_referer(referer: &str) -> Option<String> {
+    // Find "/s/" in the referer URL and extract the token segment.
+    let after_s = referer.find("/s/").map(|i| &referer[i + 3..])?;
+    let token = after_s.split('/').next()?;
+    if token.is_empty() {
+        return None;
+    }
+    Some(token.to_string())
+}
+
 /// Top-level handler registered at `/s/{*rest}`.
 ///
 /// When a user database is configured (`state.db` is `Some`), the handler
@@ -338,7 +452,11 @@ fn rewrite_redirect_location(resp: &mut Response<Body>, token: &str) {
     };
     // Only rewrite root-relative paths (starting with `/`).
     // Absolute URLs and relative paths are left untouched.
+    // Skip if the location already contains /s/{token} (app knows its base).
     if let Some(path) = location_str.strip_prefix('/') {
+        if path.starts_with(&format!("s/{token}")) {
+            return;
+        }
         let rewritten = format!("/s/{token}/{path}");
         if let Ok(val) = HeaderValue::from_str(&rewritten) {
             resp.headers_mut().insert(header::LOCATION, val);
@@ -346,40 +464,6 @@ fn rewrite_redirect_location(resp: &mut Response<Body>, token: &str) {
     }
 }
 
-
-/// Rewrite root-relative `src` / `href` / `from` URLs in **HTML-only**
-/// responses so the browser's initial asset loads go through the proxy.
-///
-/// Only buffers `text/html` responses (typically small index pages). JS, CSS,
-/// and other content types are passed through unchanged to avoid stalling on
-/// large or chunked streams.
-async fn rewrite_html_root_urls(response: Response<Body>, token: &str) -> Response<Body> {
-    let is_html = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.starts_with("text/html"));
-    if !is_html {
-        return response;
-    }
-    let (mut parts, body) = response.into_parts();
-    let bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(_) => return Response::from_parts(parts, Body::empty()),
-    };
-    let html = String::from_utf8_lossy(&bytes);
-    let prefix = format!("/s/{token}");
-    let rewritten = html
-        .replace(r#"src="/"#, &format!(r#"src="{prefix}/"#))
-        .replace(r#"href="/"#, &format!(r#"href="{prefix}/"#))
-        .replace(r#"src='/"#, &format!(r#"src='{prefix}/"#))
-        .replace(r#"href='/"#, &format!(r#"href='{prefix}/"#))
-        .replace(r#"from "/"#, &format!(r#"from "{prefix}/"#))
-        .replace(r#"from '/"#, &format!(r#"from '{prefix}/"#));
-    let body = Body::from(rewritten);
-    parts.headers.remove(header::CONTENT_LENGTH);
-    Response::from_parts(parts, body)
-}
 
 /// Compute the upstream path based on session kind.
 ///
@@ -433,16 +517,13 @@ async fn forward_http(
             let mut response = Response::from_parts(parts, body);
             // Editor sessions with --server-base-path already emit correct
             // `/s/{token}/…` redirects — only terminal sessions need rewriting.
-            if matches!(route.kind, SessionRouteKind::Terminal | SessionRouteKind::DynamicPort) {
+            if route.kind == SessionRouteKind::Terminal {
                 rewrite_redirect_location(&mut response, token);
             }
-            // Dynamic port HTML: rewrite root-relative src/href so the
-            // browser loads initial assets through the proxy (e.g. Vite's
-            // /@vite/client, /src/main.tsx). Only HTML — JS/CSS responses
-            // are passed through unchanged to avoid buffering large streams.
-            if route.kind == SessionRouteKind::DynamicPort {
-                response = rewrite_html_root_urls(response, token).await;
-            }
+            // Note: HTML URL rewriting is NOT applied here. Apps that use
+            // MAESTRO_PROXY_BASE already emit correct URLs. Apps that don't
+            // are handled by the referer-based fallback in
+            // proxy_or_static_fallback.
             response
         }
         Err(err) => {

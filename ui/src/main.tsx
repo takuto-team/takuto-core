@@ -9,7 +9,7 @@ import "./styles/index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={window.location.pathname.match(/^\/s\/[a-f0-9]+\//)?.[0] || "/"}>
       <App />
     </BrowserRouter>
   </StrictMode>

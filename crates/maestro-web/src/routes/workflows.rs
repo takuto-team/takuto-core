@@ -1393,6 +1393,12 @@ pub async fn start_run_command(
         .await
         .unwrap_or_else(|| "maestro:latest".to_string());
 
+    // Generate the proxy token upfront so MAESTRO_PROXY_BASE can be passed
+    // to the container. The token is NOT registered yet (host_port unknown) —
+    // `register_with_token` is called by the tracker when the port is detected.
+    let reserved_token = maestro_core::container::generate_session_path_token();
+    let proxy_base = maestro_core::container::build_session_dynamic_port_url(&reserved_token);
+
     let spare_ports = container::start_run_command(
         &ticket_key,
         &worktree,
@@ -1401,7 +1407,7 @@ pub async fn start_run_command(
         index,
         dynamic_ports,
         true, // isolate_workspace: restrict container to this issue's worktree
-        &[],
+        &[("MAESTRO_PROXY_BASE", &proxy_base)],
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -1449,6 +1455,8 @@ pub async fn start_run_command(
     let mut rx = state.engine.subscribe();
     let registry = state.path_token_registry.clone();
     let tracker_user_id = auth.user_id.clone();
+    let tracker_reserved_token = reserved_token.clone();
+    let tracker_proxy_base = proxy_base.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -1470,20 +1478,23 @@ pub async fn start_run_command(
                             match event.event_type.as_str() {
                                 "run_command_port_forwarded" => {
                                     if let Some((cp, hp)) = event.forwarded_port {
-                                        let path_token = registry.register(SessionRoute {
-                                            kind: SessionRouteKind::DynamicPort,
-                                            host_port: hp,
-                                            ticket_key: ticket_for_tracker.clone(),
-                                            user_id: tracker_user_id.clone(),
-                                        }).await;
-                                        let proxy_url = container::build_session_dynamic_port_url(&path_token);
+                                        // Register the reserved token with the now-known host_port.
+                                        registry.register_with_token(
+                                            tracker_reserved_token.clone(),
+                                            SessionRoute {
+                                                kind: SessionRouteKind::DynamicPort,
+                                                host_port: hp,
+                                                ticket_key: ticket_for_tracker.clone(),
+                                                user_id: tracker_user_id.clone(),
+                                            },
+                                        ).await;
                                         let mut map = run_cmds_map.write().await;
                                         if let Some(cmd) = map.get_mut(&ticket_for_tracker).and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == index)) {
                                             cmd.forwarded_port = Some(DynamicPortForward {
                                                 container_port: cp,
                                                 host_port: hp,
-                                                proxy_url,
-                                                path_token,
+                                                proxy_url: tracker_proxy_base.clone(),
+                                                path_token: tracker_reserved_token.clone(),
                                             });
                                         }
                                     }

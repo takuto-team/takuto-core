@@ -5,7 +5,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::{any, get, post, put};
 use rust_embed::Embed;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -195,7 +195,7 @@ pub fn build_router(state: AppState) -> Router {
         // trailing-slash-missing form so relative asset URLs from the backend
         // resolve correctly.
         .route("/s/{*rest}", any(routes::sessions::proxy_session))
-        .fallback(static_handler)
+        .fallback(routes::sessions::proxy_or_static_fallback)
         .layer(cors_layer)
         .with_state(state)
 }
@@ -244,7 +244,9 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn static_handler(uri: Uri) -> impl IntoResponse {
+/// Serve embedded static files (dashboard UI assets). Public so the
+/// session proxy referer-fallback handler can delegate to it.
+pub async fn serve_static(uri: Uri) -> Response<Body> {
     let path = uri.path().trim_start_matches('/');
 
     // Map root to index.html
