@@ -180,7 +180,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       try {
         const res = await apiPost("/api/workflows/start-manual", {
           ticket_key: name,
-          ticket_summary: name || "Manual workflow",
+          ticket_summary: name || "Manual item",
           ticket_description: description,
         });
         if (!res.ok) {

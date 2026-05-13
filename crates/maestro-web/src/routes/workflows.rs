@@ -887,7 +887,7 @@ pub async fn start_manual_workflow(
             if jira_on {
                 ticket_key.clone()
             } else {
-                "Manual workflow".to_string()
+                "Manual item".to_string()
             }
         } else {
             s.to_string()
@@ -908,11 +908,29 @@ pub async fn start_manual_workflow(
     {
         let wf_arc = state.engine.workflows_arc();
         let map = wf_arc.read().await;
-        if map.contains_key(&ticket_key) {
-            return Err((
-                StatusCode::CONFLICT,
-                format!("A workflow already exists for {ticket_key}"),
-            ));
+        if let Some(existing) = map.get(&ticket_key) {
+            // Terminal-state entries (Done / Stopped / Error) are safe to replace —
+            // the user is starting fresh on the same ticket. Replacement also recovers
+            // from "orphan" rows (user_id = None) carried over from pre-plan-01 snapshots:
+            // those rows are invisible to the caller (per-user isolation), so without
+            // this branch they would be undeletable zombies blocking the re-add.
+            let terminal = matches!(
+                existing.state,
+                WorkflowState::Done | WorkflowState::Stopped | WorkflowState::Error { .. }
+            );
+            if !terminal {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!("An item already exists for {ticket_key}"),
+                ));
+            }
+            tracing::info!(
+                ticket = %ticket_key,
+                prev_state = %existing.state,
+                prev_owner = ?existing.user_id,
+                new_owner = %auth.user_id,
+                "Replacing terminal-state workflow with a fresh add"
+            );
         }
     }
 
@@ -929,7 +947,7 @@ pub async fn start_manual_workflow(
             return Err((
                 StatusCode::CONFLICT,
                 format!(
-                    "Maximum concurrent manual workflows ({max_manual}) reached; complete, stop, or delete a manual workflow first"
+                    "Maximum concurrent manual items ({max_manual}) reached; complete, stop, or delete a manual item first"
                 ),
             ));
         }

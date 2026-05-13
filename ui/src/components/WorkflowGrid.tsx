@@ -58,14 +58,14 @@ export function WorkflowGrid({
     return (
       <div className="text-center py-16">
         <p className="text-gray-500 text-sm mb-4">
-          No workflows yet. Click the button below to add a workflow.
+          No items yet. Click the button below to add an item.
         </p>
         {canAddWorkflow && (
           <button
             onClick={onAddWorkflow}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
           >
-            + New Workflow
+            + New Item
           </button>
         )}
       </div>
