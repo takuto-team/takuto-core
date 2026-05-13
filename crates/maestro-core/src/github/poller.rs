@@ -17,6 +17,10 @@ pub struct GitHubPoller {
     pub engine: Arc<WorkflowEngine>,
     pub cancel_token: CancellationToken,
     pub polling_paused: Arc<AtomicBool>,
+    /// User ID of the resolved poller owner (see `crates/maestro-cli/src/main.rs::resolve_poller_owner`).
+    /// When `None`, the poller logs a warning and skips `start_workflow` calls so no orphan
+    /// workflows are created.
+    pub resolved_owner_id: Option<String>,
 }
 
 impl GitHubPoller {
@@ -25,12 +29,14 @@ impl GitHubPoller {
         engine: Arc<WorkflowEngine>,
         cancel_token: CancellationToken,
         polling_paused: Arc<AtomicBool>,
+        resolved_owner_id: Option<String>,
     ) -> Self {
         Self {
             config,
             engine,
             cancel_token,
             polling_paused,
+            resolved_owner_id,
         }
     }
 
@@ -154,6 +160,20 @@ impl GitHubPoller {
             } else {
                 Some(issue.html_url.clone())
             };
+
+            // Skip when no owner could be resolved at startup — creating an orphan
+            // workflow would hide it from every user's dashboard (per AC-4).
+            let owner_id = match &self.resolved_owner_id {
+                Some(id) => id.clone(),
+                None => {
+                    warn!(
+                        key = %issue.key,
+                        "No resolved poller owner; skipping start_workflow to avoid orphan creation"
+                    );
+                    continue;
+                }
+            };
+
             match self
                 .engine
                 .start_workflow(
@@ -162,6 +182,7 @@ impl GitHubPoller {
                     false,
                     Some(issue.body),
                     html_url,
+                    Some(owner_id),
                 )
                 .await
             {

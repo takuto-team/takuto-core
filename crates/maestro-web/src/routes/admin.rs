@@ -16,18 +16,45 @@ use maestro_core::db::models::{
     CreateUserRequest, ImportSummary, SkippedUser, UpdateUserRequest, User, UserExport, UserRole,
 };
 
-use crate::auth::{session_cookie_from_headers, validate_db_session};
+use crate::auth::{AuthenticatedUser, session_cookie_from_headers, validate_db_session};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
-// Admin authorisation helper
+// Admin authorisation helpers
 // ---------------------------------------------------------------------------
 
-/// Extract and validate the session cookie, then verify the user has the admin role.
+/// Preferred admin check for handlers downstream of the auth middleware.
+///
+/// The auth middleware has already validated the session cookie and inserted
+/// an [`AuthenticatedUser`] into the request extensions — this helper simply
+/// asserts that the role is `admin`. Returns `Ok(())` for admins and
+/// `Err(StatusCode::FORBIDDEN)` otherwise.
+///
+/// Use [`Extension(auth): Extension<AuthenticatedUser>`] in the handler
+/// signature and call this as the first line of the handler body.
+pub(crate) async fn require_admin_for(
+    _state: &AppState,
+    auth: &AuthenticatedUser,
+) -> Result<(), StatusCode> {
+    if auth.role == UserRole::Admin {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+/// Legacy admin check that re-reads the session cookie from headers and
+/// re-fetches the user record. Kept for back-compat with the existing
+/// `routes/admin.rs` user-management handlers, which depend on the returned
+/// [`User`] (e.g. for the "admin cannot demote/suspend/delete themselves"
+/// guard rails). New code should prefer [`require_admin_for`].
 ///
 /// Returns the authenticated admin [`User`] on success, or the appropriate HTTP
 /// status code on failure.
-async fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<User, StatusCode> {
+pub(crate) async fn require_admin(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<User, StatusCode> {
     let db = state.db.as_ref().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let raw_cookie = session_cookie_from_headers(headers).ok_or(StatusCode::UNAUTHORIZED)?;

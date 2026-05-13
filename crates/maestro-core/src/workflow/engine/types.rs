@@ -60,6 +60,12 @@ pub struct WorkflowEvent {
     pub forwarded_port: Option<(u16, u16)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_merged: Option<bool>,
+    /// Owning user_id of the workflow that produced this event. `None` for
+    /// broadcast/un-scoped events that should reach every authenticated
+    /// subscriber. The web layer filters per-socket so users only see events
+    /// for workflows they own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 #[derive(Clone)]

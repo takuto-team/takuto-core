@@ -256,11 +256,61 @@ pub struct Config {
     pub editor: EditorConfig,
     #[serde(default)]
     pub terminal: TerminalConfig,
+    /// Dev-only knobs. Off by default in production. Never read inside any code path
+    /// that runs against real users without an explicit `[dev]` opt-in.
+    #[serde(default)]
+    pub dev: DevConfig,
     /// User-defined run commands available from the dashboard after a workflow completes.
     /// Each entry defines a named shell command (e.g. dev server, Storybook) that can be
     /// started/stopped from the workflow card.
     #[serde(default)]
     pub run_commands: Vec<RunCommandConfig>,
+}
+
+/// Dev-only knobs. Off by default in production. Never read inside any code path
+/// that runs against real users without an explicit `[dev]` opt-in.
+///
+/// See `crates/maestro-core/src/dev_mock.rs` for the mock-agent behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DevConfig {
+    /// When `true`, `ClaudeSession::run_prompt` and `CursorSession::run_prompt`
+    /// short-circuit to a scripted mock session. **No Claude/Cursor process is spawned.**
+    /// Honors the env override `MAESTRO_DEV_MOCK_AGENT=1`.
+    #[serde(default)]
+    pub mock_agent: bool,
+
+    /// Optional path to a text file used as the mock's line script (one emit per line).
+    /// Relative paths resolve against the config file directory.
+    /// When `None` (default), the built-in `DEFAULT_MOCK_SCRIPT` is used.
+    #[serde(default)]
+    pub mock_agent_script_path: Option<String>,
+
+    /// Delay between emitted lines in ms. Default 75.
+    #[serde(default = "default_mock_line_delay_ms")]
+    pub mock_agent_line_delay_ms: u64,
+
+    /// Total mock session duration cap in ms. The mock will stop emitting after this
+    /// even if the script has more lines. Default 5000.
+    #[serde(default = "default_mock_total_ms")]
+    pub mock_agent_total_ms: u64,
+}
+
+impl Default for DevConfig {
+    fn default() -> Self {
+        Self {
+            mock_agent: false,
+            mock_agent_script_path: None,
+            mock_agent_line_delay_ms: default_mock_line_delay_ms(),
+            mock_agent_total_ms: default_mock_total_ms(),
+        }
+    }
+}
+
+fn default_mock_line_delay_ms() -> u64 {
+    75
+}
+fn default_mock_total_ms() -> u64 {
+    5000
 }
 
 /// A user-defined run command that can be launched from the dashboard after a workflow completes.
@@ -392,6 +442,18 @@ pub struct GeneralConfig {
     /// directory, or absolute. Default `"workflows"`.
     #[serde(default = "default_workflow_definitions_dir")]
     pub workflow_definitions_dir: String,
+    /// Username of the user who owns workflows created automatically by the Jira/GitHub poller.
+    /// When `None` (default), the poller falls back to the lexicographically-first non-suspended
+    /// admin. When set but the named user is missing or suspended, a warning is logged and the
+    /// fallback is used. When neither resolves, polling-created workflows are skipped entirely.
+    #[serde(default)]
+    pub poller_owner_username: Option<String>,
+    /// When `true`, workflows restored from snapshot with `user_id == None` (e.g. pre-multi-user
+    /// orphans) are reassigned to the resolved poller owner at startup so they appear on that
+    /// user's dashboard. Default `false` — orphan workflows remain invisible until an explicit
+    /// migration is requested.
+    #[serde(default)]
+    pub migrate_orphan_workflows: bool,
 }
 
 fn default_workflow_definitions_dir() -> String {
@@ -735,6 +797,8 @@ impl Default for GeneralConfig {
             pr_merge_poll_interval_secs: default_pr_merge_poll_interval(),
             generate_report: false,
             workflow_definitions_dir: default_workflow_definitions_dir(),
+            poller_owner_username: None,
+            migrate_orphan_workflows: false,
         }
     }
 }

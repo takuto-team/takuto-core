@@ -177,9 +177,7 @@ impl ExternalActions for RealActions {
 
     async fn create_worktree(&self, branch: &str, base: &str) -> Result<PathBuf> {
         let repo_path = self.repo_path().await;
-        let worktree_path = repo_path
-            .join("worktrees")
-            .join(branch.replace('/', "-"));
+        let worktree_path = repo_path.join("worktrees").join(branch.replace('/', "-"));
         info!(branch = branch, base = base, path = %worktree_path.display(), "Creating git worktree");
 
         // Create worktrees directory if it doesn't exist

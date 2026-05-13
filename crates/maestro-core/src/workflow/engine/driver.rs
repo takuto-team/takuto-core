@@ -140,10 +140,10 @@ pub(super) async fn drive_workflow_def(
     // Always clean up worker containers regardless of success/failure
     ContainerRunner::cleanup_for_ticket(&ticket_key).await;
 
-    let workflow_id = {
+    let (workflow_id, workflow_user_id) = {
         let wf = workflows.read().await;
         wf.get(&ticket_key)
-            .map(|w| w.id.clone())
+            .map(|w| (w.id.clone(), w.user_id.clone()))
             .unwrap_or_default()
     };
 
@@ -180,6 +180,7 @@ pub(super) async fn drive_workflow_def(
                 progress_steps_total: None,
                 forwarded_port: None,
                 pr_merged: None,
+                user_id: workflow_user_id.clone(),
             });
         }
         Err(e) => {
@@ -269,6 +270,7 @@ pub(super) async fn drive_workflow_def(
                 progress_steps_total: None,
                 forwarded_port: None,
                 pr_merged: None,
+                user_id: workflow_user_id.clone(),
             });
         }
     }
@@ -336,12 +338,12 @@ pub(super) async fn prepare_worktree_for_ticket(
                 "Worktree pre-created at ticket-add time"
             );
 
-            let workflow_id = {
+            let (workflow_id, owner_user_id) = {
                 let mut wf = workflows.write().await;
                 if let Some(w) = wf.get_mut(ticket_key) {
                     w.worktree_path = Some(worktree_path.clone());
                     w.branch_name = branch_name.clone();
-                    w.id.clone()
+                    (w.id.clone(), w.user_id.clone())
                 } else {
                     return; // Workflow was removed before task finished.
                 }
@@ -361,6 +363,7 @@ pub(super) async fn prepare_worktree_for_ticket(
                 progress_steps_total: None,
                 forwarded_port: None,
                 pr_merged: None,
+                user_id: owner_user_id,
             });
         }
         Err(e) => {
@@ -672,7 +675,7 @@ pub(super) async fn bootstrap_new_workflow(
             .write_step("Mise install", "Running: mise install")
             .await;
 
-        broadcast_step_started(event_tx, ticket_key, "Mise install");
+        broadcast_step_started(event_tx, ticket_key, "Mise install", workflows).await;
         let line_tx = spawn_output_relay(
             event_tx,
             ticket_key,
@@ -755,7 +758,7 @@ pub(super) async fn bootstrap_new_workflow(
                 .write_step(&step_name, &format!("Running: {pre_install_cmd}"))
                 .await;
 
-            broadcast_step_started(event_tx, ticket_key, &step_name);
+            broadcast_step_started(event_tx, ticket_key, &step_name, workflows).await;
             let line_tx = spawn_output_relay(
                 event_tx,
                 ticket_key,
@@ -830,7 +833,7 @@ pub(super) async fn bootstrap_new_workflow(
             .write_step("Install Dependencies", &format!("Running: {install_cmd}"))
             .await;
 
-        broadcast_step_started(event_tx, ticket_key, "Install Dependencies");
+        broadcast_step_started(event_tx, ticket_key, "Install Dependencies", workflows).await;
         let line_tx = spawn_output_relay(
             event_tx,
             ticket_key,
@@ -928,7 +931,7 @@ pub(super) async fn bootstrap_new_workflow(
                 .write_step(&step_name, &format!("Running: {pre_workflow_cmd}"))
                 .await;
 
-            broadcast_step_started(event_tx, ticket_key, &step_name);
+            broadcast_step_started(event_tx, ticket_key, &step_name, workflows).await;
             let line_tx = spawn_output_relay(
                 event_tx,
                 ticket_key,
@@ -1250,7 +1253,7 @@ pub(super) async fn run_agent_step_sequence(
                     snapshot_resume_pending = false;
 
                     let mut step_log = StepLog::new(step_label.clone());
-                    broadcast_step_started(event_tx, ticket_key, &step_label);
+                    broadcast_step_started(event_tx, ticket_key, &step_label, workflows).await;
                     log_writer
                         .write_step(&step_label, "Starting command step")
                         .await;
@@ -1402,7 +1405,7 @@ pub(super) async fn run_agent_step_sequence(
 
                 // ── Agent step execution ────────────────────────────────────
                 let mut step_log = StepLog::new(step_label.clone());
-                broadcast_step_started(event_tx, ticket_key, &step_label);
+                broadcast_step_started(event_tx, ticket_key, &step_label, workflows).await;
                 log_writer.write_step(&step_label, "Starting").await;
 
                 // Build system prompt from step skills (Claude --bare only).
@@ -1579,10 +1582,11 @@ pub(super) async fn acquire_agent_slot(
     }
 }
 
-pub(super) fn broadcast_step_started(
+pub(super) async fn broadcast_step_started(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     ticket_key: &str,
     step_name: &str,
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
 ) {
     let receiver_count = event_tx.receiver_count();
     info!(
@@ -1591,6 +1595,7 @@ pub(super) fn broadcast_step_started(
         receivers = receiver_count,
         "Broadcasting step_started"
     );
+    let owner_user_id = user_id_for_ticket(workflows, ticket_key).await;
     let _ = event_tx.send(WorkflowEvent {
         event_type: "step_started".to_string(),
         workflow_id: String::new(),
@@ -1605,6 +1610,7 @@ pub(super) fn broadcast_step_started(
         progress_steps_total: None,
         forwarded_port: None,
         pr_merged: None,
+        user_id: owner_user_id,
     });
 }
 
@@ -1616,6 +1622,7 @@ pub(super) async fn broadcast_step_completed(
     config: &Arc<RwLock<Config>>,
 ) {
     let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
+    let owner_user_id = user_id_for_ticket(workflows, ticket_key).await;
     let _ = event_tx.send(WorkflowEvent {
         event_type: "step_completed".to_string(),
         workflow_id: String::new(),
@@ -1630,6 +1637,7 @@ pub(super) async fn broadcast_step_completed(
         progress_steps_total: dash.map(|(_, t)| t),
         forwarded_port: None,
         pr_merged: None,
+        user_id: owner_user_id,
     });
 }
 
@@ -1649,6 +1657,10 @@ pub(super) fn spawn_output_relay(
     let workflows = workflows.clone();
 
     tokio::spawn(async move {
+        // Resolve the owning user_id once at the start of the relay. The mapping
+        // ticket → user is stable for the workflow's lifetime, so caching avoids
+        // a read lock per output line.
+        let owner_user_id = user_id_for_ticket(&workflows, &ticket_key).await;
         while let Some(line) = line_rx.recv().await {
             // Always write raw output to log file
             log_writer
@@ -1689,6 +1701,7 @@ pub(super) fn spawn_output_relay(
                     progress_steps_total: None,
                     forwarded_port: None,
                     pr_merged: None,
+                    user_id: owner_user_id.clone(),
                 });
                 match result {
                     Ok(count) => {
@@ -1703,6 +1716,19 @@ pub(super) fn spawn_output_relay(
     });
 
     line_tx
+}
+
+/// Read the owning `user_id` from the workflow map for the given ticket key.
+///
+/// Returns `None` if the workflow has been removed or has no associated user
+/// (legacy snapshots / poller workflows pre-migration). The WS filter delivers
+/// `None` events to every authenticated subscriber, matching broadcast semantics.
+pub(super) async fn user_id_for_ticket(
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    ticket_key: &str,
+) -> Option<String> {
+    let wf = workflows.read().await;
+    wf.get(ticket_key).and_then(|w| w.user_id.clone())
 }
 
 pub(super) async fn progress_dashboard_fields_for_ticket(
@@ -1741,12 +1767,16 @@ pub(super) async fn transition_to_agent_step(
             workflow.state = WorkflowState::AddressingTicket { pass };
             workflow.current_step_label = Some(step_label.to_string());
             workflow.updated_at = Utc::now();
-            Some((workflow.id.clone(), workflow.status_display()))
+            Some((
+                workflow.id.clone(),
+                workflow.status_display(),
+                workflow.user_id.clone(),
+            ))
         } else {
             None
         }
     };
-    if let Some((id, display)) = updated {
+    if let Some((id, display, owner_user_id)) = updated {
         let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
@@ -1762,6 +1792,7 @@ pub(super) async fn transition_to_agent_step(
             progress_steps_total: dash.map(|(_, t)| t),
             forwarded_port: None,
             pr_merged: None,
+            user_id: owner_user_id,
         });
     }
 }
@@ -1782,12 +1813,16 @@ pub(super) async fn transition(
             workflow.current_step_label = None;
             workflow.state = new_state;
             workflow.updated_at = Utc::now();
-            Some((workflow.id.clone(), workflow.status_display()))
+            Some((
+                workflow.id.clone(),
+                workflow.status_display(),
+                workflow.user_id.clone(),
+            ))
         } else {
             None
         }
     };
-    if let Some((id, display)) = updated {
+    if let Some((id, display, owner_user_id)) = updated {
         let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "workflow_updated".to_string(),
@@ -1803,6 +1838,7 @@ pub(super) async fn transition(
             progress_steps_total: dash.map(|(_, t)| t),
             forwarded_port: None,
             pr_merged: None,
+            user_id: owner_user_id,
         });
     }
 }

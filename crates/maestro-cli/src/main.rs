@@ -18,6 +18,7 @@ use maestro_core::actions::traits::ExternalActions;
 use maestro_core::config::{Config, TicketingSystem};
 use maestro_core::config_watcher::ConfigWatcher;
 use maestro_core::config_writer::ConfigWriter;
+use maestro_core::db::Database;
 use maestro_core::docker_hooks;
 use maestro_core::github::poller::GitHubPoller;
 use maestro_core::github::pr_merge_poller::PrMergePoller;
@@ -25,6 +26,66 @@ use maestro_core::jira::poller::JiraPoller;
 use maestro_core::workflow::engine::WorkflowEngine;
 use maestro_web::server::build_router;
 use maestro_web::state::AppState;
+
+/// Resolve the owner of poller-created workflows at startup.
+///
+/// Resolution order:
+///   1. If `cfg_username` is provided AND the user exists AND is not suspended, return their id.
+///   2. Otherwise, return the id of the lexicographically-first non-suspended admin.
+///   3. Otherwise, return `None` (poller will skip `start_workflow` and log).
+///
+/// Warnings are logged when (1) is provided but the user is missing or suspended,
+/// and when neither path resolves (the caller may log an additional summary).
+async fn resolve_poller_owner(db: &Database, cfg_username: Option<&str>) -> Option<String> {
+    let conn = db.conn().lock().await;
+    if let Some(username) = cfg_username {
+        match maestro_core::db::users::get_user_by_username(&conn, username) {
+            Ok(Some(user)) if !user.suspended => {
+                info!(
+                    username = %user.username,
+                    user_id = %user.id,
+                    "Poller owner resolved from [general] poller_owner_username"
+                );
+                return Some(user.id);
+            }
+            Ok(Some(user)) => {
+                tracing::warn!(
+                    username = %username,
+                    user_id = %user.id,
+                    "Configured poller_owner_username is suspended; falling back to admin"
+                );
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    username = %username,
+                    "Configured poller_owner_username not found; falling back to admin"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    username = %username,
+                    "Lookup for poller_owner_username failed; falling back to admin"
+                );
+            }
+        }
+    }
+
+    match maestro_core::db::users::list_admins(&conn) {
+        Ok(admins) => admins.into_iter().next().map(|u| {
+            info!(
+                username = %u.username,
+                user_id = %u.id,
+                "Poller owner resolved to first non-suspended admin"
+            );
+            u.id
+        }),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to list admins for poller-owner resolution");
+            None
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum DockerHookPhase {
@@ -294,6 +355,13 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     info!(dry_mode = config.general.dry_mode, "Maestro starting");
 
+    // Install dev-mode flags so dev_mock::is_enabled_from_runtime() works before
+    // any agent call. Off by default in production.
+    maestro_core::dev_mock::install_dev_config(&config.dev);
+    if maestro_core::dev_mock::is_enabled_from_runtime() {
+        tracing::info!("[mock-agent] enabled");
+    }
+
     let config = Arc::new(RwLock::new(config));
 
     {
@@ -382,6 +450,69 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Initialize the SQLite database for multi-user auth. This must happen
+    // BEFORE poller construction so we can resolve the poller-owner user_id
+    // and pass it into both pollers.
+    let db = {
+        use maestro_core::workflow::snapshot::resolve_data_dir;
+        match resolve_data_dir() {
+            Some(data_dir) => match maestro_core::db::Database::open(&data_dir) {
+                Ok(db) => {
+                    info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized");
+                    Some(db)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to open multi-user database (multi-user auth unavailable; legacy auth still works)");
+                    None
+                }
+            },
+            None => {
+                tracing::warn!(
+                    "No data directory resolved — multi-user database unavailable (set MAESTRO_DATA_DIR, MAESTRO_HOME, or HOME)"
+                );
+                None
+            }
+        }
+    };
+
+    // Resolve the poller owner now that the DB is open. When `None`, the pollers
+    // will log a warning and skip `start_workflow` calls so no orphan workflows
+    // are created — the web server still serves login/setup so an admin can be
+    // created to enable polling later.
+    let (resolved_poller_owner, migrate_orphans) = {
+        let cfg = config.read().await;
+        let username = cfg.general.poller_owner_username.clone();
+        let migrate = cfg.general.migrate_orphan_workflows;
+        let owner = match &db {
+            Some(db) => resolve_poller_owner(db, username.as_deref()).await,
+            None => None,
+        };
+        if owner.is_none() {
+            tracing::warn!(
+                "No poller owner could be resolved (no admin exists and no override set); \
+                 poller will run but skip workflow creation until an admin is registered"
+            );
+        }
+        (owner, migrate)
+    };
+
+    // One-shot orphan migration (gated by `[general] migrate_orphan_workflows`).
+    // Reassigns any restored workflow with `user_id == None` to the resolved
+    // poller owner so it becomes visible on that user's dashboard.
+    if migrate_orphans
+        && let Some(ref owner_id) = resolved_poller_owner
+    {
+        let migrated = engine.migrate_orphan_workflows_to_owner(owner_id).await;
+        if migrated > 0 {
+            // Persist immediately so the migration survives a crash.
+            if let Err(e) = engine.sync_workflow_snapshot().await {
+                tracing::warn!(error = %e, "Failed to persist workflow snapshot after orphan migration");
+            } else {
+                info!(count = migrated, "Orphan workflow migration complete and persisted");
+            }
+        }
+    }
+
     let cancel_token = CancellationToken::new();
 
     // Start the centralized GitHub App token file writer so worker containers
@@ -407,6 +538,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         engine.clone(),
         cancel_token.clone(),
         polling_paused.clone(),
+        resolved_poller_owner.clone(),
     );
 
     let polling_paused_for_gh = polling_paused.clone();
@@ -422,28 +554,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());
     let config_writer = Arc::new(ConfigWriter::new(config_path.clone()));
 
-    // Initialize the SQLite database for multi-user auth (GH-75).
-    let db = {
-        use maestro_core::workflow::snapshot::resolve_data_dir;
-        match resolve_data_dir() {
-            Some(data_dir) => match maestro_core::db::Database::open(&data_dir) {
-                Ok(db) => {
-                    info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized");
-                    Some(db)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to open multi-user database (multi-user auth unavailable; legacy auth still works)");
-                    None
-                }
-            },
-            None => {
-                tracing::warn!(
-                    "No data directory resolved — multi-user database unavailable (set MAESTRO_DATA_DIR, MAESTRO_HOME, or HOME)"
-                );
-                None
-            }
-        }
-    };
+    // `db` was initialised above (before poller construction) so we could resolve
+    // the poller owner. Move it into the AppState here.
 
     let app_state = AppState {
         engine: engine.clone(),
@@ -512,6 +624,29 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     );
     let config_watcher_task = tokio::spawn(async move { config_watcher.run().await });
 
+    // Re-install the [dev] block into the dev_mock module after every config reload.
+    // The ConfigWatcher swaps the in-memory `Config` through the shared `Arc<RwLock>`;
+    // we poll it at the same cadence and re-snapshot the dev knobs so flipping
+    // `[dev] mock_agent` in `config.toml` (or via `POST /api/config/reload`) takes
+    // effect without a restart.
+    let dev_mock_config = config.clone();
+    let dev_mock_cancel = cancel_token.clone();
+    let _dev_mock_reload_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+            maestro_core::config_watcher::DEFAULT_POLL_INTERVAL_SECS,
+        ));
+        // Skip the immediate first tick — initial install already happened in main().
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = dev_mock_cancel.cancelled() => break,
+            }
+            let dev = { dev_mock_config.read().await.dev.clone() };
+            maestro_core::dev_mock::install_dev_config(&dev);
+        }
+    });
+
     tokio::select! {
         _ = async {
             match ticketing_system {
@@ -524,6 +659,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                         engine.clone(),
                         cancel_token_for_gh,
                         polling_paused_for_gh,
+                        resolved_poller_owner.clone(),
                     );
                     gh_poller.run().await;
                 }

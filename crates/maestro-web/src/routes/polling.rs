@@ -3,9 +3,12 @@
 
 use std::sync::atomic::Ordering;
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
+use axum::http::StatusCode;
 use serde::Serialize;
 
+use crate::auth::AuthenticatedUser;
+use crate::routes::admin::require_admin_for;
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -19,14 +22,22 @@ pub async fn get_polling_status(State(state): State<AppState>) -> axum::Json<Pol
     })
 }
 
-pub async fn pause_polling(State(state): State<AppState>) -> axum::Json<PollingStatus> {
+pub async fn pause_polling(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> Result<axum::Json<PollingStatus>, StatusCode> {
+    require_admin_for(&state, &auth).await?;
     state.polling_paused.store(true, Ordering::Relaxed);
-    axum::Json(PollingStatus { paused: true })
+    Ok(axum::Json(PollingStatus { paused: true }))
 }
 
-pub async fn resume_polling(State(state): State<AppState>) -> axum::Json<PollingStatus> {
+pub async fn resume_polling(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> Result<axum::Json<PollingStatus>, StatusCode> {
+    require_admin_for(&state, &auth).await?;
     state.polling_paused.store(false, Ordering::Relaxed);
-    axum::Json(PollingStatus { paused: false })
+    Ok(axum::Json(PollingStatus { paused: false }))
 }
 
 #[cfg(test)]

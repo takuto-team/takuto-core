@@ -39,7 +39,6 @@ pub const TOKEN_FILE_PATH: &str = "/home/maestro/.config/gh/gh-app-token";
 /// How often the background task checks the token expiry (seconds).
 const TOKEN_REFRESH_POLL_SECS: u64 = 300; // 5 minutes
 
-
 // ---------------------------------------------------------------------------
 // JWT claims
 // ---------------------------------------------------------------------------
@@ -439,11 +438,7 @@ impl GitHubAppTokenManager {
     /// 1-hour GitHub App token lifetime.
     ///
     /// The task runs until `cancel` is triggered (i.e. Maestro shutdown).
-    pub fn start_token_file_writer(
-        self: &Arc<Self>,
-        cwd: PathBuf,
-        cancel: CancellationToken,
-    ) {
+    pub fn start_token_file_writer(self: &Arc<Self>, cwd: PathBuf, cancel: CancellationToken) {
         let mgr = Arc::clone(self);
         let token_path = PathBuf::from(TOKEN_FILE_PATH);
         tokio::spawn(async move {
@@ -476,11 +471,7 @@ impl GitHubAppTokenManager {
 }
 
 /// Fetch a (possibly cached) token and write it atomically to `path`.
-async fn refresh_and_write(
-    mgr: &GitHubAppTokenManager,
-    cwd: &Path,
-    path: &Path,
-) -> Result<()> {
+async fn refresh_and_write(mgr: &GitHubAppTokenManager, cwd: &Path, path: &Path) -> Result<()> {
     let token = mgr.get_installation_token(cwd).await?;
     write_token_file(path, &token)?;
     Ok(())

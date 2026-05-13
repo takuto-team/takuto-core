@@ -160,6 +160,31 @@ impl WorkflowEngine {
         self.persistence.sync().await
     }
 
+    /// Reassign every workflow currently in the repository whose `user_id` is
+    /// `None` to `owner_id`. Returns the number of workflows that were touched.
+    ///
+    /// This is the in-memory half of AC-4's one-shot orphan migration. The
+    /// caller is responsible for persisting via [`sync_workflow_snapshot`]
+    /// once the migration is complete so it survives a crash. The helper is
+    /// idempotent: re-running it on a clean repository is a no-op.
+    pub async fn migrate_orphan_workflows_to_owner(&self, owner_id: &str) -> usize {
+        let wf_arc = self.repository.inner_arc();
+        let mut workflows = wf_arc.write().await;
+        let mut migrated = 0usize;
+        for w in workflows.values_mut() {
+            if w.user_id.is_none() {
+                tracing::warn!(
+                    ticket = %w.ticket_key,
+                    new_owner = %owner_id,
+                    "Migrating orphan workflow to resolved poller owner"
+                );
+                w.user_id = Some(owner_id.to_string());
+                migrated += 1;
+            }
+        }
+        migrated
+    }
+
     /// Write `workflow_snapshot.json` and cancel drivers so processes stop, without Jira unassign / **Stopped** (for container restart).
     pub async fn persist_interrupt_for_restart(&self) -> Result<()> {
         self.persistence.persist_interrupt().await
@@ -187,6 +212,7 @@ impl WorkflowEngine {
         started_manually: bool,
         ticket_description: Option<String>,
         ticket_url: Option<String>,
+        user_id: Option<String>,
     ) -> Result<String> {
         self.lifecycle
             .start_workflow(
@@ -196,6 +222,7 @@ impl WorkflowEngine {
                 ticket_description,
                 ticket_url,
                 &self.definitions,
+                user_id,
             )
             .await
     }
@@ -1093,5 +1120,106 @@ mod tests {
         );
         assert_eq!(engine.ticketing_system, TicketingSystem::Jira);
         assert!(engine.jira_available.load(Ordering::SeqCst));
+    }
+
+    // -----------------------------------------------------------------------
+    // 9. start_workflow propagates user_id (AC-4 wiring)
+    // -----------------------------------------------------------------------
+
+    /// Verifies that `WorkflowEngine::start_workflow` stores the caller-supplied
+    /// `user_id` on the created `Workflow`. This is the inner half of AC-4:
+    /// pollers pass `Some(resolved_owner_id)`, web `start-manual` passes
+    /// `Some(auth.user_id)`, and the workflow should carry that owner forward
+    /// so the per-user filter (AC-1) and dashboard list endpoint match the
+    /// right user.
+    #[tokio::test]
+    async fn start_workflow_propagates_user_id() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn ExternalActions> =
+            Arc::new(crate::actions::dry_run::DryRunActions::new(
+                std::env::temp_dir(),
+                "origin".into(),
+                None,
+            ));
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let workflows_dir = std::env::temp_dir().join(format!(
+            "maestro-engine-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+        let engine = WorkflowEngine::new(
+            config,
+            actions,
+            1,
+            jira_available,
+            TicketingSystem::None,
+            workflows_dir,
+        );
+
+        let id = engine
+            .start_workflow(
+                "POLLED-1".into(),
+                "Some summary".into(),
+                false,
+                None,
+                None,
+                Some("user-abc".to_string()),
+            )
+            .await
+            .expect("start_workflow should succeed in dry mode");
+        assert!(!id.is_empty());
+
+        let wf_arc = engine.workflows_arc();
+        let map = wf_arc.read().await;
+        let wf = map
+            .get("POLLED-1")
+            .expect("workflow should be present in the repository");
+        assert_eq!(
+            wf.user_id.as_deref(),
+            Some("user-abc"),
+            "user_id passed into start_workflow must be stored on the Workflow"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_workflow_with_none_user_id_creates_orphan() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn ExternalActions> =
+            Arc::new(crate::actions::dry_run::DryRunActions::new(
+                std::env::temp_dir(),
+                "origin".into(),
+                None,
+            ));
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let workflows_dir = std::env::temp_dir().join(format!(
+            "maestro-engine-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+        let engine = WorkflowEngine::new(
+            config,
+            actions,
+            1,
+            jira_available,
+            TicketingSystem::None,
+            workflows_dir,
+        );
+
+        engine
+            .start_workflow(
+                "POLLED-2".into(),
+                "Other summary".into(),
+                false,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("start_workflow should accept None user_id");
+
+        let wf_arc = engine.workflows_arc();
+        let map = wf_arc.read().await;
+        let wf = map.get("POLLED-2").expect("workflow should exist");
+        assert!(wf.user_id.is_none(), "None should leave the workflow unowned");
     }
 }

@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -15,7 +15,9 @@ use maestro_core::container::ContainerRunner;
 use maestro_core::cursor::session::CursorSession;
 use maestro_core::jira::client::JiraClient;
 
+use crate::auth::AuthenticatedUser;
 use crate::routes::github::parse_github_repo;
+use crate::routes::workflows::require_workflow_access;
 use crate::state::AppState;
 
 const IMPROVE_SYSTEM_PROMPT: &str = "\
@@ -187,8 +189,15 @@ async fn run_description_session(
 pub async fn improve_ticket(
     State(state): State<AppState>,
     Path(key): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<ImproveTicketBody>,
 ) -> Result<Json<ImproveTicketResponse>, (StatusCode, String)> {
+    // AC-2: only the workflow owner may invoke this. The helper returns
+    // `NOT_FOUND` for both "missing" and "wrong owner" so existence is not
+    // leaked across users.
+    require_workflow_access(&state, &auth, &key)
+        .await
+        .map_err(|s| (s, String::new()))?;
     if body.description.len() > MAX_IMPROVE_DESCRIPTION_LEN {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -264,8 +273,13 @@ pub struct PromptTicketResponse {
 pub async fn prompt_ticket(
     State(state): State<AppState>,
     Path(key): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<PromptTicketBody>,
 ) -> Result<Json<PromptTicketResponse>, (StatusCode, String)> {
+    // AC-2: only the workflow owner may invoke this.
+    require_workflow_access(&state, &auth, &key)
+        .await
+        .map_err(|s| (s, String::new()))?;
     // Validate prompt is not empty
     if body.prompt.trim().is_empty() {
         return Err((
@@ -317,8 +331,13 @@ pub async fn prompt_ticket(
 pub async fn update_ticket_description(
     State(state): State<AppState>,
     Path(key): Path<String>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<UpdateDescriptionBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // AC-2: only the workflow owner may invoke this.
+    require_workflow_access(&state, &auth, &key)
+        .await
+        .map_err(|s| (s, String::new()))?;
     match state.ticketing_system {
         TicketingSystem::None => {
             // No external ticketing system — persist to the in-memory workflow.
@@ -514,7 +533,7 @@ mod tests {
         }
     }
 
-    /// Inserts a workflow with the given key, summary, and description into the engine.
+    /// Inserts a workflow owned by the given user id into the engine.
     async fn insert_workflow(engine: &WorkflowEngine, key: &str, summary: &str, description: &str) {
         let mut wf = Workflow::new(
             key.to_string(),
@@ -526,11 +545,24 @@ mod tests {
             "test-workspace".into(),
         );
         wf.ticket_description = description.to_string();
+        // Tests below pass a matching AuthenticatedUser; tag the workflow with
+        // the same id so `require_workflow_access` passes (AC-2).
+        wf.user_id = Some("test-user".to_string());
         engine
             .workflows_arc()
             .write()
             .await
             .insert(key.to_string(), wf);
+    }
+
+    /// Build an `AuthenticatedUser` matching the workflow owner used by
+    /// `insert_workflow`. Tests need this because handlers now require the
+    /// `Extension<AuthenticatedUser>` extractor (AC-2 IDOR fix).
+    fn test_auth() -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: "test-user".to_string(),
+            role: maestro_core::db::models::UserRole::User,
+        }
     }
 
     /// Saving a description (without summary) updates `ticket_description` in memory.
@@ -542,6 +574,7 @@ mod tests {
         let result = update_ticket_description(
             State(state.clone()),
             Path("T-1".to_string()),
+            Extension(test_auth()),
             Json(UpdateDescriptionBody {
                 description: "New description".to_string(),
                 summary: None,
@@ -568,6 +601,7 @@ mod tests {
         let result = update_ticket_description(
             State(state.clone()),
             Path("T-2".to_string()),
+            Extension(test_auth()),
             Json(UpdateDescriptionBody {
                 description: "New description".to_string(),
                 summary: Some("New Summary".to_string()),
@@ -584,7 +618,10 @@ mod tests {
         assert_eq!(wf.ticket_summary, "New Summary");
     }
 
-    /// Saving a description for a non-existent workflow succeeds without error.
+    /// Saving a description for a non-existent workflow returns 404 (AC-2 G/W/T 2.5).
+    /// The previous behaviour was a silent no-op success; after the IDOR fix the
+    /// access guard rejects unknown keys identically to "wrong owner" so existence
+    /// is not leaked across users.
     #[tokio::test]
     async fn update_description_none_mode_missing_workflow() {
         let state = test_app_state_none();
@@ -593,6 +630,7 @@ mod tests {
         let result = update_ticket_description(
             State(state.clone()),
             Path("T-3".to_string()),
+            Extension(test_auth()),
             Json(UpdateDescriptionBody {
                 description: "Some description".to_string(),
                 summary: None,
@@ -600,7 +638,7 @@ mod tests {
         )
         .await;
 
-        // Should succeed (no-op for the in-memory update).
-        assert!(result.is_ok());
+        let err = result.expect_err("missing workflow must be 404");
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
     }
 }

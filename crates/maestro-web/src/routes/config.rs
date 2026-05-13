@@ -4,13 +4,15 @@
 use std::sync::atomic::Ordering;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use serde::Serialize;
 
 use maestro_core::config::{Config, RuntimeDashboardConfigPatch};
 use maestro_core::config_watcher::reload_config_from_disk;
 
+use crate::auth::AuthenticatedUser;
+use crate::routes::admin::require_admin_for;
 use crate::state::AppState;
 
 /// Wraps the redacted config with extra runtime flags that are not in `config.toml`.
@@ -113,8 +115,12 @@ pub struct UpdateConfigResponse {
 
 pub async fn update_config(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Json(patch): Json<RuntimeDashboardConfigPatch>,
 ) -> Result<Json<UpdateConfigResponse>, (StatusCode, String)> {
+    require_admin_for(&state, &auth)
+        .await
+        .map_err(|s| (s, String::new()))?;
     // Apply patch under write lock, then clone and release.
     let config_snapshot = {
         let mut config = state.config.write().await;
@@ -154,7 +160,11 @@ pub async fn update_config(
 /// config. Returns the new config on success or a `400` with the error.
 pub async fn reload_config(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Config>, (StatusCode, String)> {
+    require_admin_for(&state, &auth)
+        .await
+        .map_err(|s| (s, String::new()))?;
     reload_config_from_disk(&state.config_path, &state.config)
         .await
         .map_err(|e| {

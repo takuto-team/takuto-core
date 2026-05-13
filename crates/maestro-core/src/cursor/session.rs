@@ -31,6 +31,24 @@ impl CursorSession {
         resume_session_id: Option<&str>,
         container_runner: Option<&ContainerRunner>,
     ) -> Result<Self> {
+        // === DEV-MODE MOCK ===
+        // Off by default. Enabled by [dev] mock_agent = true OR MAESTRO_DEV_MOCK_AGENT=1
+        // OR dev_mock::set_test_override(Some(true)).
+        if crate::dev_mock::is_enabled_from_runtime() {
+            return crate::dev_mock::run_cursor_mock(
+                worktree,
+                prompt,
+                cancel_token,
+                line_tx,
+                resume_session_id,
+                None, // Cursor's run_prompt has no system_prompt param; the improve path
+                      // doesn't hit Cursor today, but mock is consistent either way.
+            )
+            .await
+            .map(|(session_id, output)| Self { session_id, output });
+        }
+        // === /DEV-MODE MOCK ===
+
         info!(
             worktree = %worktree.display(),
             resume = ?resume_session_id,

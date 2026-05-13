@@ -13,6 +13,7 @@ pub mod config_writer;
 pub mod container;
 pub mod cursor;
 pub mod db;
+pub mod dev_mock;
 pub mod docker_hooks;
 pub mod error;
 pub mod git;

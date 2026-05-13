@@ -448,7 +448,6 @@ fn toml_value_to_json(val: &toml::Value) -> serde_json::Value {
 const EDITOR_PORT_MIN: u16 = 9100;
 const EDITOR_PORT_MAX: u16 = 19100;
 
-
 /// Information about a running editor container.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EditorInfo {
@@ -861,7 +860,11 @@ pub async fn start_editor(
     args.push(format!("maestro.vscode_port={vscode_port}"));
     if !spare_ports.is_empty() {
         args.push("--label".into());
-        let sp_csv: String = spare_ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
+        let sp_csv: String = spare_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         args.push(format!("maestro.spare_ports={sp_csv}"));
     }
 
@@ -1400,55 +1403,68 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
 
     // GH-45: path token is required for the shared-port proxy. Containers
     // without it must be closed and reopened to get a proxied session.
-    let path_token = parse_label_value(labels_json, "maestro.path_token")
-        .unwrap_or_default();
+    let path_token = parse_label_value(labels_json, "maestro.path_token").unwrap_or_default();
 
     // Port discovery: prefer labels (works for both `--network=host` and
     // `-p` containers) with `docker port` as fallback for pre-label containers.
-    let (vscode_port, spare_ports, port_mappings) =
-        if let Some(vp_str) = parse_label_value(labels_json, "maestro.vscode_port") {
-            let vp: u16 = vp_str.parse().ok()?;
-            let sp: Vec<u16> = parse_label_value(labels_json, "maestro.spare_ports")
-                .unwrap_or_default()
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .filter_map(|s| s.parse().ok())
-                .collect();
-            (vp, sp, Vec::new())
-        } else {
-            // Fallback: parse `docker port` output (pre-label containers).
-            let port_output = tokio::process::Command::new("docker")
-                .args(["port", &name])
-                .output()
-                .await
-                .ok()?;
-            if !port_output.status.success() {
-                return None;
+    let (vscode_port, spare_ports, port_mappings) = if let Some(vp_str) =
+        parse_label_value(labels_json, "maestro.vscode_port")
+    {
+        let vp: u16 = vp_str.parse().ok()?;
+        let sp: Vec<u16> = parse_label_value(labels_json, "maestro.spare_ports")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        (vp, sp, Vec::new())
+    } else {
+        // Fallback: parse `docker port` output (pre-label containers).
+        let port_output = tokio::process::Command::new("docker")
+            .args(["port", &name])
+            .output()
+            .await
+            .ok()?;
+        if !port_output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&port_output.stdout);
+        let mut pm = Vec::new();
+        let mut erp: Vec<u16> = Vec::new();
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split("->").collect();
+            if parts.len() != 2 {
+                continue;
             }
-            let stdout = String::from_utf8_lossy(&port_output.stdout);
-            let mut pm = Vec::new();
-            let mut erp: Vec<u16> = Vec::new();
-            for line in stdout.lines() {
-                let parts: Vec<&str> = line.split("->").collect();
-                if parts.len() != 2 { continue; }
-                let cp: u16 = parts[0].trim().split('/').next()
-                    .and_then(|s| s.parse().ok()).unwrap_or(0);
-                let hp: u16 = parts[1].trim().rsplit(':').next()
-                    .and_then(|s| s.parse().ok()).unwrap_or(0);
-                if cp == 0 || hp == 0 { continue; }
-                if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&cp) && cp == hp {
-                    if !erp.contains(&hp) { erp.push(hp); }
-                } else if !(EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&cp)
-                    && !pm.contains(&(cp, hp))
-                {
-                    pm.push((cp, hp));
+            let cp: u16 = parts[0]
+                .trim()
+                .split('/')
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let hp: u16 = parts[1]
+                .trim()
+                .rsplit(':')
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            if cp == 0 || hp == 0 {
+                continue;
+            }
+            if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&cp) && cp == hp {
+                if !erp.contains(&hp) {
+                    erp.push(hp);
                 }
+            } else if !(EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&cp) && !pm.contains(&(cp, hp))
+            {
+                pm.push((cp, hp));
             }
-            erp.sort();
-            let vp = *erp.first()?;
-            let sp: Vec<u16> = erp.into_iter().skip(1).collect();
-            (vp, sp, pm)
-        };
+        }
+        erp.sort();
+        let vp = *erp.first()?;
+        let sp: Vec<u16> = erp.into_iter().skip(1).collect();
+        (vp, sp, pm)
+    };
 
     // Get the working directory to reconstruct the folder URL
     let wd_output = tokio::process::Command::new("docker")
@@ -1559,12 +1575,15 @@ async fn prune_dangling_images() {
 /// container, because socat runs inside the container and connects via `localhost`.
 ///
 /// `spare_ports` is the pool of symmetric-mapped host ports available for forwarding.
+/// `owner_user_id` is the workflow owner's user_id; the WS layer uses it to
+/// filter scanner events per-user.
 pub async fn run_port_scanner(
     ticket_key: &str,
     vscode_port: u16,
     spare_ports: Vec<u16>,
     event_tx: broadcast::Sender<WorkflowEvent>,
     cancel: CancellationToken,
+    owner_user_id: Option<String>,
 ) {
     let container = editor_container_name(ticket_key);
     let ticket = ticket_key.to_string();
@@ -1583,7 +1602,10 @@ pub async fn run_port_scanner(
     // Only ports that appear AFTER this snapshot are treated as user applications.
     // This avoids hardcoding a blocklist — users are free to use any port.
     let baseline = match scan_listening_ports(&container, false).await {
-        Some(ports) => ports.into_iter().map(|(p, _)| p).collect::<std::collections::HashSet<u16>>(),
+        Some(ports) => ports
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect::<std::collections::HashSet<u16>>(),
         None => std::collections::HashSet::new(),
     };
     if !baseline.is_empty() {
@@ -1655,6 +1677,7 @@ pub async fn run_port_scanner(
                         progress_steps_total: None,
                         forwarded_port: Some((port, host_spare)),
                         pr_merged: None,
+                        user_id: owner_user_id.clone(),
                     });
                 } else {
                     available_spares.push(spare);
@@ -1700,6 +1723,7 @@ pub async fn run_port_scanner(
                     progress_steps_total: None,
                     forwarded_port: Some((port, host_spare)),
                     pr_merged: None,
+                    user_id: owner_user_id.clone(),
                 });
             }
         }
@@ -1724,8 +1748,15 @@ enum ListenFamily {
 /// show no PID — this lets each scanner see only its own app's ports,
 /// preventing cross-contamination when multiple run commands share the
 /// same network namespace.
-async fn scan_listening_ports(container: &str, owned_only: bool) -> Option<Vec<(u16, ListenFamily)>> {
-    let ss_args = if owned_only { vec!["ss", "-tlnpH"] } else { vec!["ss", "-tlnH"] };
+async fn scan_listening_ports(
+    container: &str,
+    owned_only: bool,
+) -> Option<Vec<(u16, ListenFamily)>> {
+    let ss_args = if owned_only {
+        vec!["ss", "-tlnpH"]
+    } else {
+        vec!["ss", "-tlnH"]
+    };
     let output = tokio::process::Command::new("docker")
         .arg("exec")
         .arg(container)
@@ -1968,7 +1999,11 @@ pub async fn start_run_command(
     args.push(format!("maestro.ticket_key={ticket_key}"));
     if !spare_ports.is_empty() {
         args.push("--label".into());
-        let sp_csv: String = spare_ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
+        let sp_csv: String = spare_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         args.push(format!("maestro.spare_ports={sp_csv}"));
     }
 
@@ -2121,12 +2156,15 @@ pub async fn stop_all_run_commands(ticket_key: &str) {
 
 /// Run a port scanner for a run-command container. Similar to `run_port_scanner` for
 /// editor containers, but tracks only a single container and uses its own spare ports.
+/// `owner_user_id` is the workflow owner's user_id; the WS layer uses it to
+/// filter scanner events per-user.
 pub async fn run_run_command_port_scanner(
     ticket_key: &str,
     cmd_index: usize,
     spare_ports: Vec<u16>,
     event_tx: broadcast::Sender<WorkflowEvent>,
     cancel: CancellationToken,
+    owner_user_id: Option<String>,
 ) {
     let container = run_command_container_name(ticket_key, cmd_index);
     let ticket = ticket_key.to_string();
@@ -2142,7 +2180,10 @@ pub async fn run_run_command_port_scanner(
     // Maestro dashboard, etc.) and must not be forwarded. Only ports that
     // appear AFTER this snapshot are treated as user applications.
     let baseline = match scan_listening_ports(&container, false).await {
-        Some(ports) => ports.into_iter().map(|(p, _)| p).collect::<std::collections::HashSet<u16>>(),
+        Some(ports) => ports
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect::<std::collections::HashSet<u16>>(),
         None => std::collections::HashSet::new(),
     };
     if !baseline.is_empty() {
@@ -2193,6 +2234,7 @@ pub async fn run_run_command_port_scanner(
                 progress_steps_total: None,
                 forwarded_port: None,
                 pr_merged: None,
+                user_id: owner_user_id.clone(),
             });
             // Clean up the stopped container (we removed --rm to capture exit info).
             let _ = tokio::process::Command::new("docker")
@@ -2246,6 +2288,7 @@ pub async fn run_run_command_port_scanner(
                         progress_steps_total: None,
                         forwarded_port: Some((port, host_spare)),
                         pr_merged: None,
+                        user_id: owner_user_id.clone(),
                     });
                 } else {
                     available_spares.push(spare);
@@ -2279,6 +2322,7 @@ pub async fn run_run_command_port_scanner(
                     progress_steps_total: None,
                     forwarded_port: Some((port, host_spare)),
                     pr_merged: None,
+                    user_id: owner_user_id.clone(),
                 });
             }
         }
@@ -2547,17 +2591,26 @@ mod tests {
     #[test]
     fn build_session_editor_url_encodes_special_chars_in_folder() {
         let url = build_session_editor_url("tok", "conn", "/workspace/my project&foo#bar");
-        assert_eq!(url, "/s/tok/?tkn=conn&folder=/workspace/my%20project%26foo%23bar");
+        assert_eq!(
+            url,
+            "/s/tok/?tkn=conn&folder=/workspace/my%20project%26foo%23bar"
+        );
     }
 
     #[test]
     fn encode_query_value_preserves_slashes_and_alphanumerics() {
-        assert_eq!(encode_query_value("/workspace/proj-name"), "/workspace/proj-name");
+        assert_eq!(
+            encode_query_value("/workspace/proj-name"),
+            "/workspace/proj-name"
+        );
     }
 
     #[test]
     fn encode_query_value_encodes_query_unsafe_chars() {
-        assert_eq!(encode_query_value("a&b=c#d+e f%g"), "a%26b%3dc%23d%2be%20f%25g");
+        assert_eq!(
+            encode_query_value("a&b=c#d+e f%g"),
+            "a%26b%3dc%23d%2be%20f%25g"
+        );
     }
 
     #[test]

@@ -128,7 +128,7 @@ impl WorkflowDefinitionManager {
         // CancellationToken never un-cancels, so a prior stop/interrupt/shutdown would make
         // the definition driver exit instantly at `check_cancelled` even though the parent
         // workflow may now allow this action.
-        let (display, cancel_token) = {
+        let (display, cancel_token, owner_user_id) = {
             let wf_arc = self.repository.inner_arc();
             let mut wf_map = wf_arc.write().await;
             let w = wf_map
@@ -139,7 +139,11 @@ impl WorkflowDefinitionManager {
             w.workflow_def_runs
                 .insert(def_name.to_string(), WorkflowDefRunState::Running);
             w.updated_at = Utc::now();
-            (w.status_display(), w.cancel_token.clone())
+            (
+                w.status_display(),
+                w.cancel_token.clone(),
+                w.user_id.clone(),
+            )
         };
 
         // Broadcast update event
@@ -157,6 +161,7 @@ impl WorkflowDefinitionManager {
             progress_steps_total: None,
             forwarded_port: None,
             pr_merged: None,
+            user_id: owner_user_id,
         });
 
         // Clone values for the spawned task
@@ -265,6 +270,8 @@ impl WorkflowDefinitionManager {
                                     progress_steps_total: None,
                                     forwarded_port: None,
                                     pr_merged: None,
+                                    // Broadcast: no specific user — visible to all subscribers.
+                                    user_id: None,
                                 });
                                 info!("Workflow definitions directory changed, notified clients");
                             }

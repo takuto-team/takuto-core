@@ -27,6 +27,10 @@ pub struct JiraPoller {
     pub cancel_token: CancellationToken,
     /// When `true`, the poller sleeps on schedule but does not call Jira or start workflows.
     pub polling_paused: Arc<AtomicBool>,
+    /// User ID of the resolved poller owner (see `crates/maestro-cli/src/main.rs::resolve_poller_owner`).
+    /// When `None`, the poller logs a warning and skips `start_workflow` calls so no orphan
+    /// workflows are created.
+    pub resolved_owner_id: Option<String>,
 }
 
 impl JiraPoller {
@@ -35,12 +39,14 @@ impl JiraPoller {
         engine: Arc<WorkflowEngine>,
         cancel_token: CancellationToken,
         polling_paused: Arc<AtomicBool>,
+        resolved_owner_id: Option<String>,
     ) -> Self {
         Self {
             config,
             engine,
             cancel_token,
             polling_paused,
+            resolved_owner_id,
         }
     }
 
@@ -154,6 +160,19 @@ impl JiraPoller {
                 "Starting workflow for ticket"
             );
 
+            // Skip when no owner could be resolved at startup — creating an orphan
+            // workflow would hide it from every user's dashboard (per AC-4).
+            let owner_id = match &self.resolved_owner_id {
+                Some(id) => id.clone(),
+                None => {
+                    warn!(
+                        ticket = %ticket.key,
+                        "No resolved poller owner; skipping start_workflow to avoid orphan creation"
+                    );
+                    continue;
+                }
+            };
+
             match self
                 .engine
                 .start_workflow(
@@ -162,6 +181,7 @@ impl JiraPoller {
                     false,
                     None,
                     None,
+                    Some(owner_id),
                 )
                 .await
             {

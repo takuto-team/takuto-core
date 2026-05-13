@@ -40,6 +40,15 @@ max_active_workflows = 0
 # and a final consolidation step produces a polished summary. The Report button
 # on the dashboard shows the result. Default: false (no report overhead).
 # generate_report = false
+# Username of the user who owns workflows created automatically by the Jira/GitHub poller.
+# When unset, the lexicographically-first non-suspended admin is used. When set but the
+# named user is missing or suspended, a warning is logged and the admin fallback applies.
+# When neither resolves, polling-created workflows are skipped entirely.
+# poller_owner_username = "alice"
+# When true, workflows restored from snapshot with no owner (e.g. pre-multi-user orphans)
+# are reassigned to the resolved poller owner at startup so they appear on that user's
+# dashboard. Default false — orphans remain invisible until an explicit migration.
+# migrate_orphan_workflows = false
 log_level = "info"
 # Docker image for isolated workflow containers. Default: auto-detected from this Maestro instance.
 # worker_image = "maestro:latest"
@@ -215,3 +224,14 @@ extra_egress_hosts = []
 # When true, skip the egress allowlist and permit all outbound HTTPS (ports 443/8443).
 # Use only in trusted environments; `extra_egress_hosts` is ignored when this is enabled.
 # allow_all_https = false
+
+# --- Dev-only knobs (leave commented in production) ---
+# When `mock_agent = true`, ClaudeSession::run_prompt and CursorSession::run_prompt
+# short-circuit into a scripted mock session — no real `claude` or `agent` process
+# is spawned, no API tokens are consumed. Designed for E2E tests and dashboard demos.
+# Honors the env var override `MAESTRO_DEV_MOCK_AGENT=1` (env wins over config).
+# [dev]
+# mock_agent = false
+# mock_agent_script_path = "tmp/mock_script.txt"
+# mock_agent_line_delay_ms = 75
+# mock_agent_total_ms = 5000

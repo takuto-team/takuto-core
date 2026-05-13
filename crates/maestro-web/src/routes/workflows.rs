@@ -265,7 +265,10 @@ pub struct WorkflowSummary {
 
 /// Check whether the authenticated user may act on the workflow with the given ticket key.
 /// Users can only act on workflows they created.
-async fn require_workflow_access(
+///
+/// Exposed `pub(crate)` so the ticket-action endpoints (`routes/tickets.rs`)
+/// can reuse the same NOT_FOUND-on-mismatch convention (AC-2).
+pub(crate) async fn require_workflow_access(
     state: &AppState,
     auth: &AuthenticatedUser,
     ticket_key: &str,
@@ -1089,6 +1092,7 @@ pub async fn open_editor(
             }
         }
 
+        let scanner_owner = Some(auth.user_id.clone());
         tokio::spawn(async move {
             container::run_port_scanner(
                 &scanner_ticket,
@@ -1096,6 +1100,7 @@ pub async fn open_editor(
                 scanner_spare,
                 scanner_event_tx,
                 scanner_cancel_clone,
+                scanner_owner,
             )
             .await;
         });
@@ -1533,6 +1538,7 @@ pub async fn start_run_command(
     // Spawn port scanner
     tokio::spawn({
         let spare = spare_ports.clone();
+        let scanner_owner = Some(auth.user_id.clone());
         async move {
             container::run_run_command_port_scanner(
                 &ticket_for_scanner,
@@ -1540,6 +1546,7 @@ pub async fn start_run_command(
                 spare,
                 event_tx,
                 scanner_cancel,
+                scanner_owner,
             )
             .await;
         }
@@ -1676,6 +1683,7 @@ mod tests {
             progress_steps_total: None,
             forwarded_port: Some((container_port, host_port)),
             pr_merged: None,
+            user_id: None,
         }
     }
 

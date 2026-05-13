@@ -54,6 +54,7 @@ impl WorkflowLifecycle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_workflow(
         &self,
         ticket_key: String,
@@ -62,6 +63,7 @@ impl WorkflowLifecycle {
         ticket_description: Option<String>,
         ticket_url: Option<String>,
         definitions: &WorkflowDefinitionManager,
+        user_id: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
         let ws_name = {
@@ -77,6 +79,7 @@ impl WorkflowLifecycle {
             ticket_url,
             ws_name,
         );
+        workflow.user_id = user_id;
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
         }
@@ -143,6 +146,7 @@ impl WorkflowLifecycle {
         }
         // driver_started stays false (set by Workflow::new)
         let id = workflow.id.clone();
+        let user_id_for_emit = workflow.user_id.clone();
 
         self.repository
             .inner_arc()
@@ -180,6 +184,7 @@ impl WorkflowLifecycle {
             progress_steps_total: None,
             forwarded_port: None,
             pr_merged: None,
+            user_id: user_id_for_emit.clone(),
         });
 
         // Pre-create the git worktree in the background so it is ready before the user
@@ -208,7 +213,14 @@ impl WorkflowLifecycle {
         ticket_key: &str,
         persistence: &WorkflowPersistence,
     ) -> Result<()> {
-        let (worktree_path, cancel_token, branch_name, jira_available, driver_started) = {
+        let (
+            worktree_path,
+            cancel_token,
+            branch_name,
+            jira_available,
+            driver_started,
+            owner_user_id,
+        ) = {
             let wf_arc = self.repository.inner_arc();
             let map = wf_arc.read().await;
             let w = map
@@ -226,6 +238,7 @@ impl WorkflowLifecycle {
                 w.branch_name.clone(),
                 w.jira_available,
                 w.driver_started,
+                w.user_id.clone(),
             )
         };
 
@@ -290,6 +303,7 @@ impl WorkflowLifecycle {
             progress_steps_total: None,
             forwarded_port: None,
             pr_merged: None,
+            user_id: owner_user_id,
         });
 
         Ok(())
@@ -312,7 +326,7 @@ impl WorkflowLifecycle {
             )
         };
 
-        let (worktree_path, branch_name) = {
+        let (worktree_path, branch_name, owner_user_id) = {
             let wf_arc = self.repository.inner_arc();
             let wf = wf_arc.read().await;
             let w = wf
@@ -324,7 +338,11 @@ impl WorkflowLifecycle {
                     w.state
                 )));
             }
-            (w.worktree_path.clone(), w.branch_name.clone())
+            (
+                w.worktree_path.clone(),
+                w.branch_name.clone(),
+                w.user_id.clone(),
+            )
         };
 
         let mut jira_ok = true;
@@ -418,6 +436,7 @@ impl WorkflowLifecycle {
                 progress_steps_total: None,
                 forwarded_port: None,
                 pr_merged: None,
+                user_id: owner_user_id.clone(),
             });
         }
 

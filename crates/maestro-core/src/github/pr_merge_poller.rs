@@ -128,18 +128,19 @@ impl PrMergePoller {
                         }
                     }
                     // Broadcast the state change so the dashboard picks it up.
+                    let (state_line, owner_user_id) = {
+                        let wf_arc = self.engine.workflows_arc();
+                        let workflows = wf_arc.read().await;
+                        workflows
+                            .get(&ticket_key)
+                            .map(|w| (w.status_display(), w.user_id.clone()))
+                            .unwrap_or_default()
+                    };
                     self.engine.broadcast_event(WorkflowEvent {
                         event_type: "workflow_updated".to_string(),
                         workflow_id: String::new(),
                         ticket_key: ticket_key.clone(),
-                        state: {
-                            let wf_arc = self.engine.workflows_arc();
-                            let workflows = wf_arc.read().await;
-                            workflows
-                                .get(&ticket_key)
-                                .map(|w| w.status_display())
-                                .unwrap_or_default()
-                        },
+                        state: state_line,
                         timestamp: chrono::Utc::now(),
                         error: None,
                         step_name: None,
@@ -149,6 +150,7 @@ impl PrMergePoller {
                         progress_steps_total: None,
                         forwarded_port: None,
                         pr_merged: Some(true),
+                        user_id: owner_user_id,
                     });
                 }
                 Ok(false) => {

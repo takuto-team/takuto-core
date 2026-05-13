@@ -5,6 +5,7 @@ use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use maestro_core::workflow::engine::WorkflowEvent;
 use tracing::{info, warn};
 
 use crate::auth::{session_cookie_from_headers, validate_db_session};
@@ -24,21 +25,38 @@ pub async fn ws_handler(
     {
         let db = db.clone();
         let cookie = raw_cookie.to_string();
-        let valid = tokio::task::spawn_blocking(move || {
+        // Validate the session AND capture the owning user_id so the WS event
+        // loop can filter per-user (AC-1: cross-user event isolation).
+        let viewer_user_id = tokio::task::spawn_blocking(move || {
             let conn = db.conn().blocking_lock();
-            validate_db_session(&conn, &cookie).is_some()
+            validate_db_session(&conn, &cookie)
         })
         .await
-        .unwrap_or(false);
+        .ok()
+        .flatten();
 
-        if !valid {
+        let Some(viewer_user_id) = viewer_user_id else {
             return StatusCode::UNAUTHORIZED.into_response();
-        }
-        info!("WebSocket upgrade requested");
-        return ws.on_upgrade(move |socket| handle_socket(socket, state));
+        };
+        info!(user = %viewer_user_id, "WebSocket upgrade requested");
+        return ws.on_upgrade(move |socket| handle_socket(socket, state, viewer_user_id));
     }
 
     StatusCode::UNAUTHORIZED.into_response()
+}
+
+/// Per-socket filter: pass through broadcast events (`user_id == None`); drop
+/// events scoped to a different user.
+///
+/// Exposed for the integration test in `tests/ws_isolation.rs` so the filter
+/// can be exercised against the live engine event bus without standing up a
+/// real WebSocket upgrade. See `tmp/plan-01-acceptance.md` AC-1 for the
+/// behavioural contract.
+pub fn should_deliver_event(evt: &WorkflowEvent, viewer_user_id: &str) -> bool {
+    match evt.user_id.as_deref() {
+        None => true,
+        Some(owner) => owner == viewer_user_id,
+    }
 }
 
 #[cfg(test)]
@@ -85,11 +103,12 @@ mod tests {
     }
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
+async fn handle_socket(mut socket: WebSocket, state: AppState, viewer_user_id: String) {
     let mut rx = state.engine.subscribe();
     let receiver_count = state.engine.event_subscriber_count();
     info!(
         receivers = receiver_count,
+        user = %viewer_user_id,
         "WebSocket client connected, subscribed to events"
     );
 
@@ -98,6 +117,12 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             event = rx.recv() => {
                 match event {
                     Ok(evt) => {
+                        // AC-1: per-user isolation — drop events that target a
+                        // different user. `user_id == None` is a broadcast and
+                        // is delivered to every subscriber.
+                        if !should_deliver_event(&evt, &viewer_user_id) {
+                            continue;
+                        }
                         let event_type = evt.event_type.clone();
                         let ticket = evt.ticket_key.clone();
                         match serde_json::to_string(&evt) {
@@ -127,7 +152,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 match msg {
                     Some(Ok(_)) => {} // ignore client messages
                     _ => {
-                        info!("WebSocket client disconnected");
+                        info!(user = %viewer_user_id, "WebSocket client disconnected");
                         break;
                     }
                 }

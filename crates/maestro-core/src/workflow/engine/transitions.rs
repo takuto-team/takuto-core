@@ -59,7 +59,7 @@ impl WorkflowTransitions {
     }
 
     pub async fn pause_workflow(&self, ticket_key: &str) -> Result<()> {
-        let (ticket_key_owned, workflow_id) = {
+        let (ticket_key_owned, workflow_id, owner_user_id) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
@@ -85,7 +85,11 @@ impl WorkflowTransitions {
             // Replace the cancel token with a fresh one for the resumed driver.
             workflow.cancel_token = CancellationToken::new();
 
-            (ticket_key.to_string(), workflow.id.clone())
+            (
+                ticket_key.to_string(),
+                workflow.id.clone(),
+                workflow.user_id.clone(),
+            )
         };
 
         // Force-remove any worker containers for this ticket.
@@ -105,6 +109,7 @@ impl WorkflowTransitions {
             progress_steps_total: None,
             forwarded_port: None,
             pr_merged: None,
+            user_id: owner_user_id,
         });
 
         Ok(())
@@ -144,6 +149,7 @@ impl WorkflowTransitions {
                     progress_steps_total: None,
                     forwarded_port: None,
                     pr_merged: None,
+                    user_id: workflow.user_id.clone(),
                 });
 
                 let running: Vec<String> = workflow
@@ -219,7 +225,7 @@ impl WorkflowTransitions {
     }
 
     pub async fn stop_workflow(&self, ticket_key: &str) -> Result<()> {
-        let (ticket_key_owned, workflow_id) = {
+        let (ticket_key_owned, workflow_id, owner_user_id) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
@@ -231,7 +237,11 @@ impl WorkflowTransitions {
             workflow.state = WorkflowState::Stopped;
             workflow.updated_at = Utc::now();
 
-            (ticket_key.to_string(), workflow.id.clone())
+            (
+                ticket_key.to_string(),
+                workflow.id.clone(),
+                workflow.user_id.clone(),
+            )
         };
 
         ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
@@ -264,6 +274,7 @@ impl WorkflowTransitions {
             progress_steps_total: None,
             forwarded_port: None,
             pr_merged: None,
+            user_id: owner_user_id,
         });
 
         Ok(())
@@ -275,7 +286,7 @@ impl WorkflowTransitions {
         lifecycle: &super::lifecycle::WorkflowLifecycle,
         definitions: &WorkflowDefinitionManager,
     ) -> Result<String> {
-        let (ticket_summary, ticket_description, ticket_url) = {
+        let (ticket_summary, ticket_description, ticket_url, user_id) = {
             let wf_arc = self.repository.inner_arc();
             let workflows = wf_arc.read().await;
             let workflow = workflows
@@ -297,13 +308,14 @@ impl WorkflowTransitions {
                     Some(workflow.ticket_description.clone())
                 },
                 workflow.ticket_url.clone(),
+                workflow.user_id.clone(),
             )
         };
 
         // Remove the old workflow
         self.repository.inner_arc().write().await.remove(ticket_key);
 
-        // Start a fresh one (preserves description and ticket URL for manual/no-Jira workflows)
+        // Start a fresh one (preserves description, ticket URL, and owner for the retry)
         lifecycle
             .start_workflow(
                 ticket_key.to_string(),
@@ -312,6 +324,7 @@ impl WorkflowTransitions {
                 ticket_description,
                 ticket_url,
                 definitions,
+                user_id,
             )
             .await
     }

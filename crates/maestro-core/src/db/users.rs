@@ -94,6 +94,25 @@ pub fn list_users(conn: &rusqlite::Connection) -> Result<Vec<User>> {
     Ok(users)
 }
 
+/// List all non-suspended admins, ordered by username (ascending). Used at startup
+/// by `crates/maestro-cli/src/main.rs::resolve_poller_owner` to pick a deterministic
+/// fallback owner for poller-created workflows.
+pub fn list_admins(conn: &rusqlite::Connection) -> Result<Vec<User>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, username, role, suspended, created_at, updated_at \
+         FROM users \
+         WHERE role = 'admin' AND suspended = 0 \
+         ORDER BY username ASC",
+    )?;
+
+    let admins = stmt
+        .query_map([], row_to_user)?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(admins)
+}
+
 /// Update a user's username and/or role. Returns the updated user.
 pub fn update_user(
     conn: &rusqlite::Connection,

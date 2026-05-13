@@ -2,11 +2,14 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use tracing::{error, info};
+
+use crate::auth::AuthenticatedUser;
+use crate::routes::admin::require_admin_for;
 
 // ── Workspace listing & switching ────────────────────────────────────────────
 
@@ -54,8 +57,12 @@ pub struct SwitchWorkspaceBody {
 /// `POST /api/workspaces/switch` — make a local workspace the active repo.
 pub async fn switch_workspace(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<SwitchWorkspaceBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin_for(&state, &auth)
+        .await
+        .map_err(|s| (s, String::new()))?;
     // Reject any path-traversal attempt.
     if body.name.is_empty()
         || body.name.contains('/')
@@ -307,8 +314,12 @@ pub struct CloneRepoResponse {
 /// `POST /api/repos/clone` — Clone a GitHub repo into `/workspaces/<repo-name>/`.
 pub async fn clone_repo(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<CloneRepoBody>,
 ) -> Result<(StatusCode, Json<CloneRepoResponse>), (StatusCode, String)> {
+    require_admin_for(&state, &auth)
+        .await
+        .map_err(|s| (s, String::new()))?;
     // Validate full_name format: must be "owner/repo" with only safe characters.
     let parts: Vec<&str> = body.full_name.split('/').collect();
     let valid = parts.len() == 2
@@ -407,6 +418,7 @@ pub async fn clone_repo(
                     progress_steps_total: None,
                     forwarded_port: None,
                     pr_merged: None,
+                    user_id: None,
                 }
             }
             Err(e) => {
@@ -425,6 +437,7 @@ pub async fn clone_repo(
                     progress_steps_total: None,
                     forwarded_port: None,
                     pr_merged: None,
+                    user_id: None,
                 }
             }
         };
@@ -552,7 +565,7 @@ async fn do_clone(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::extract::State;
+    use axum::extract::{Extension, State};
 
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -562,7 +575,17 @@ mod tests {
 
     use maestro_core::actions::dry_run::DryRunActions;
     use maestro_core::config::{Config, TicketingSystem};
+    use maestro_core::db::models::UserRole;
     use maestro_core::workflow::engine::WorkflowEngine;
+
+    use crate::auth::AuthenticatedUser;
+
+    fn admin_auth() -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: "test-admin-id".to_string(),
+            role: UserRole::Admin,
+        }
+    }
 
     fn test_state() -> AppState {
         let config = Arc::new(RwLock::new(Config::default()));
@@ -602,6 +625,7 @@ mod tests {
         let state = test_state();
         let result = clone_repo(
             State(state),
+            Extension(admin_auth()),
             Json(CloneRepoBody {
                 full_name: "".to_string(),
                 force: false,
@@ -619,6 +643,7 @@ mod tests {
         let state = test_state();
         let result = clone_repo(
             State(state),
+            Extension(admin_auth()),
             Json(CloneRepoBody {
                 full_name: "noslash".to_string(),
                 force: false,
@@ -636,6 +661,7 @@ mod tests {
         state.clone_in_progress.store(true, Ordering::Relaxed);
         let result = clone_repo(
             State(state),
+            Extension(admin_auth()),
             Json(CloneRepoBody {
                 full_name: "owner/repo".to_string(),
                 force: false,
