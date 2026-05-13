@@ -553,36 +553,43 @@ async fn used_editor_ports() -> Vec<u16> {
     ports
 }
 
+/// In-memory set of allocated ports. Eliminates the race condition where
+/// two concurrent `allocate_editor_ports` calls both query Docker labels
+/// before either's container has started, causing both to get the same ports.
+static ALLOCATED_PORTS: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashSet<u16>>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
 /// Allocate `count` free host ports from the editor range.
-/// Retries with exponential backoff if not enough ports are available,
-/// since Docker port bindings may not be immediately visible.
+///
+/// Uses an in-memory set (no Docker label race) plus a Docker query as a
+/// secondary check for ports allocated by a previous Maestro process.
 async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
-    for attempt in 0..5 {
-        let used = used_editor_ports().await;
-        let mut free = Vec::new();
-        for p in EDITOR_PORT_MIN..=EDITOR_PORT_MAX {
-            if !used.contains(&p) {
-                free.push(p);
-                if free.len() == count {
-                    return Some(free);
+    let mut allocated = ALLOCATED_PORTS.lock().await;
+    // Also check Docker for ports from a previous process (restart recovery).
+    let docker_used = used_editor_ports().await;
+    let mut free = Vec::new();
+    for p in EDITOR_PORT_MIN..=EDITOR_PORT_MAX {
+        if !allocated.contains(&p) && !docker_used.contains(&p) {
+            free.push(p);
+            if free.len() == count {
+                // Mark as allocated before returning — no race possible
+                // since we hold the lock.
+                for &port in &free {
+                    allocated.insert(port);
                 }
+                return Some(free);
             }
         }
-
-        // Not enough free ports on this attempt. If this is not the last attempt,
-        // wait a bit for Docker to register port bindings and retry.
-        if attempt < 4 {
-            let delay_ms = 100 * (attempt + 1) as u64; // 100ms, 200ms, 300ms, 400ms
-            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-            debug!(
-                attempt,
-                needed = count,
-                available = free.len(),
-                "Retrying port allocation after delay"
-            );
-        }
     }
-    None // not enough free ports after retries
+    None // not enough free ports
+}
+
+/// Release ports back to the pool when a container is stopped.
+pub async fn release_editor_ports(ports: &[u16]) {
+    let mut allocated = ALLOCATED_PORTS.lock().await;
+    for &p in ports {
+        allocated.remove(&p);
+    }
 }
 
 /// Allocate a single free port from the editor/terminal port range.
@@ -1148,11 +1155,42 @@ async fn run_editor_startup_commands(container: &str, cmds: &[String]) {
 /// Stop and remove an editor container for a workflow.
 pub async fn stop_editor(ticket_key: &str) {
     let name = editor_container_name(ticket_key);
+    // Release allocated ports before removing the container.
+    release_container_ports(&name).await;
     let _ = tokio::process::Command::new("docker")
         .args(["rm", "-f", &name])
         .output()
         .await;
     info!(name = %name, "Editor container stopped");
+}
+
+/// Query a container's `maestro.vscode_port` and `maestro.spare_ports`
+/// labels and release them from the in-memory allocation set.
+async fn release_container_ports(container_name: &str) {
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"maestro.vscode_port\"}} {{index .Config.Labels \"maestro.spare_ports\"}}",
+            container_name,
+        ])
+        .output()
+        .await;
+    if let Ok(out) = output
+        && out.status.success()
+    {
+        let mut ports = Vec::new();
+        for part in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+            for token in part.split(',') {
+                if let Ok(p) = token.trim().parse::<u16>() {
+                    ports.push(p);
+                }
+            }
+        }
+        if !ports.is_empty() {
+            release_editor_ports(&ports).await;
+        }
+    }
 }
 
 /// Start a web-based terminal (ttyd) inside the running editor container on `port`.
@@ -2023,6 +2061,7 @@ async fn get_run_command_exit_error(container_name: &str) -> Option<String> {
 /// Stop and remove a run-command container.
 pub async fn stop_run_command(ticket_key: &str, cmd_index: usize) {
     let name = run_command_container_name(ticket_key, cmd_index);
+    release_container_ports(&name).await;
     let _ = tokio::process::Command::new("docker")
         .args(["rm", "-f", &name])
         .output()
