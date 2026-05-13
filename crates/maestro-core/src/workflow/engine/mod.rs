@@ -28,8 +28,10 @@ use transitions::WorkflowTransitions;
 
 use crate::actions::traits::ExternalActions;
 use crate::config::{Config, TicketingSystem};
+use crate::db::Database;
 use crate::error::Result;
 
+pub use driver::resolve_worktree_init_commands;
 pub use types::{MarkDoneOutcome, TerminalLine, Workflow, WorkflowEvent};
 
 pub struct WorkflowEngine {
@@ -48,6 +50,10 @@ pub struct WorkflowEngine {
     pub ticketing_system: TicketingSystem,
     /// Directory containing dynamic workflow definition YAML files, resolved at construction time.
     pub workflows_dir: PathBuf,
+    /// Optional SQLite handle used by the bootstrap driver to look up per-workspace
+    /// `worktree_init_commands` overrides. `None` when running without a DB (e.g.
+    /// some test paths) — the driver then falls back to the global config.
+    pub db: Option<Database>,
     // Service structs
     persistence: WorkflowPersistence,
     lifecycle: WorkflowLifecycle,
@@ -63,6 +69,30 @@ impl WorkflowEngine {
         jira_available: Arc<AtomicBool>,
         ticketing_system: TicketingSystem,
         workflows_dir: PathBuf,
+    ) -> Self {
+        Self::new_with_db(
+            config,
+            actions,
+            max_concurrent_workflows,
+            jira_available,
+            ticketing_system,
+            workflows_dir,
+            None,
+        )
+    }
+
+    /// Like [`Self::new`] but optionally threads a `Database` handle through to
+    /// the bootstrap driver so it can resolve per-workspace
+    /// `worktree_init_commands` overrides from the `workspace_commands` table.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_db(
+        config: Arc<RwLock<Config>>,
+        actions: Arc<dyn ExternalActions>,
+        max_concurrent_workflows: usize,
+        jira_available: Arc<AtomicBool>,
+        ticketing_system: TicketingSystem,
+        workflows_dir: PathBuf,
+        db: Option<Database>,
     ) -> Self {
         let repository = Arc::new(WorkflowRepository::new());
         let event_bus = Arc::new(WorkflowEventBus::new());
@@ -86,6 +116,7 @@ impl WorkflowEngine {
             agent_run_semaphore.clone(),
             suppress_cancelled_as_error.clone(),
             workflows_dir.clone(),
+            db.clone(),
         );
 
         let lifecycle = WorkflowLifecycle::new(
@@ -107,6 +138,7 @@ impl WorkflowEngine {
             suppress_cancelled_as_error.clone(),
             jira_available.clone(),
             workflows_dir.clone(),
+            db.clone(),
         );
 
         Self {
@@ -119,6 +151,7 @@ impl WorkflowEngine {
             jira_available,
             ticketing_system,
             workflows_dir,
+            db,
             persistence,
             lifecycle,
             transitions,
@@ -197,6 +230,7 @@ impl WorkflowEngine {
                 &self.workflows_dir,
                 self.agent_run_semaphore.clone(),
                 self.suppress_cancelled_as_error.clone(),
+                self.db.clone(),
             )
             .await
     }

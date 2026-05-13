@@ -13,6 +13,7 @@ use tracing::{info, warn};
 use crate::actions::traits::ExternalActions;
 use crate::config::Config;
 use crate::container::ContainerRunner;
+use crate::db::Database;
 use crate::error::{MaestroError, Result};
 
 use crate::workflow::state::WorkflowState;
@@ -32,6 +33,7 @@ pub(crate) struct WorkflowTransitions {
     pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
     pub(crate) jira_available: Arc<AtomicBool>,
     pub(crate) workflows_dir: PathBuf,
+    pub(crate) db: Option<Database>,
 }
 
 impl WorkflowTransitions {
@@ -45,6 +47,7 @@ impl WorkflowTransitions {
         suppress_cancelled_as_error: Arc<AtomicBool>,
         jira_available: Arc<AtomicBool>,
         workflows_dir: PathBuf,
+        db: Option<Database>,
     ) -> Self {
         Self {
             repository,
@@ -55,6 +58,7 @@ impl WorkflowTransitions {
             suppress_cancelled_as_error,
             jira_available,
             workflows_dir,
+            db,
         }
     }
 
@@ -209,10 +213,11 @@ impl WorkflowTransitions {
                 let as_ = agent_sem.clone();
                 let su = suppress.clone();
                 let ct = cancel_token.clone();
+                let db = self.db.clone();
 
                 tokio::spawn(async move {
                     super::driver::drive_workflow_def(
-                        ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su,
+                        ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su, db,
                     )
                     .await;
                 });

@@ -428,31 +428,11 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             &c.general.workflow_definitions_dir,
         )
     };
-    let engine = Arc::new(WorkflowEngine::new(
-        config.clone(),
-        actions.clone(),
-        max_concurrent,
-        jira_available.clone(),
-        ticketing_system,
-        workflows_dir,
-    ));
-
-    match engine.restore_persisted_workflows().await {
-        Ok(n) if n > 0 => {
-            info!(
-                count = n,
-                "Restored workflow snapshot from previous run (includes Done rows left idle for dashboard actions)"
-            );
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to restore workflow snapshot (continuing without restore)");
-        }
-    }
-
-    // Initialize the SQLite database for multi-user auth. This must happen
-    // BEFORE poller construction so we can resolve the poller-owner user_id
-    // and pass it into both pollers.
+    // Initialize the SQLite database for multi-user auth. This happens BEFORE
+    // engine construction so the engine can thread the DB handle into the
+    // bootstrap driver for per-workspace `worktree_init_commands` overrides
+    // (plan-08), and BEFORE poller construction so we can resolve the
+    // poller-owner user_id and pass it into both pollers.
     let db = {
         use maestro_core::workflow::snapshot::resolve_data_dir;
         match resolve_data_dir() {
@@ -474,6 +454,29 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
+
+    let engine = Arc::new(WorkflowEngine::new_with_db(
+        config.clone(),
+        actions.clone(),
+        max_concurrent,
+        jira_available.clone(),
+        ticketing_system,
+        workflows_dir,
+        db.clone(),
+    ));
+
+    match engine.restore_persisted_workflows().await {
+        Ok(n) if n > 0 => {
+            info!(
+                count = n,
+                "Restored workflow snapshot from previous run (includes Done rows left idle for dashboard actions)"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to restore workflow snapshot (continuing without restore)");
+        }
+    }
 
     // Resolve the poller owner now that the DB is open. When `None`, the pollers
     // will log a warning and skip `start_workflow` calls so no orphan workflows

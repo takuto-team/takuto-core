@@ -11,4 +11,5 @@ pub mod repos;
 pub mod sessions;
 pub mod tickets;
 pub mod workflows;
+pub mod worktree_commands;
 pub mod ws;

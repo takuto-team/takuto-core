@@ -600,12 +600,24 @@ where
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommandsConfig {
+    /// Shell commands run sequentially in the worktree directory immediately
+    /// after the worktree is created (before the first workflow definition
+    /// starts). Use for dependency installation, codegen, registry login —
+    /// anything that must happen once per worktree.
     #[serde(default, deserialize_with = "deserialize_pre_install_vec")]
+    pub worktree_init_commands: Vec<String>,
+
+    // === Deprecated, read-only for backward compat. Migrated into
+    //     worktree_init_commands at load time; NOT emitted on serialize.
+    //     Visible through v0.7; removed in v0.8 (aligns with plan-07 sunset). ===
+    /// Deprecated (v0.8 sunset): migrated into `worktree_init_commands` on load.
+    #[serde(default, skip_serializing, deserialize_with = "deserialize_pre_install_vec")]
     pub pre_install: Vec<String>,
-    #[serde(default)]
+    /// Deprecated (v0.8 sunset): migrated into `worktree_init_commands` on load.
+    #[serde(default, skip_serializing)]
     pub install: String,
-    /// Shell commands executed before each workflow starts (after worktree creation, before agent steps).
-    #[serde(default, deserialize_with = "deserialize_pre_install_vec")]
+    /// Deprecated (v0.8 sunset): migrated into `worktree_init_commands` on load.
+    #[serde(default, skip_serializing, deserialize_with = "deserialize_pre_install_vec")]
     pub pre_workflow: Vec<String>,
 }
 
@@ -885,6 +897,12 @@ impl Config {
     pub fn load_from_str(toml_content: &str) -> Result<Self> {
         let mut config: Config = toml::from_str(toml_content)?;
         config.web.normalize_cors_origins();
+        if config.migrate_legacy_commands() {
+            tracing::info!(
+                worktree_init_commands = ?config.commands.worktree_init_commands,
+                "Migrated legacy [commands] (pre_install/install/pre_workflow) into worktree_init_commands"
+            );
+        }
         config.validate()?;
         Ok(config)
     }
@@ -897,8 +915,46 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let mut config: Config = toml::from_str(&content)?;
         config.web.normalize_cors_origins();
+        if config.migrate_legacy_commands() {
+            tracing::info!(
+                worktree_init_commands = ?config.commands.worktree_init_commands,
+                "Migrated legacy [commands] (pre_install/install/pre_workflow) into worktree_init_commands"
+            );
+        }
         config.validate()?;
         Ok(config)
+    }
+
+    /// One-shot migration: if `worktree_init_commands` is empty and any of the
+    /// deprecated fields (`pre_install`, `install`, `pre_workflow`) have values,
+    /// concatenate them in lifecycle order (pre_install → install → pre_workflow)
+    /// into `worktree_init_commands` and clear the deprecated fields.
+    ///
+    /// Idempotent — running twice on a migrated config is a no-op. Returns
+    /// `true` when a migration actually happened.
+    pub fn migrate_legacy_commands(&mut self) -> bool {
+        let needs_migration = self.commands.worktree_init_commands.is_empty()
+            && (!self.commands.pre_install.is_empty()
+                || !self.commands.install.is_empty()
+                || !self.commands.pre_workflow.is_empty());
+        if !needs_migration {
+            // Even when not merging, drop deprecated values so a later write
+            // never re-emits them (skip_serializing already does, but clear
+            // for consistency when the new field already populated).
+            self.commands.pre_install.clear();
+            self.commands.install.clear();
+            self.commands.pre_workflow.clear();
+            return false;
+        }
+        let mut merged = Vec::new();
+        merged.extend(self.commands.pre_install.drain(..));
+        let install = std::mem::take(&mut self.commands.install);
+        if !install.is_empty() {
+            merged.push(install);
+        }
+        merged.extend(self.commands.pre_workflow.drain(..));
+        self.commands.worktree_init_commands = merged;
+        true
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -1306,6 +1362,8 @@ step_timeout_secs = 600
 
     #[test]
     fn test_pre_install_string_compat() {
+        // Legacy `pre_install` as a single string is migrated transparently
+        // into `worktree_init_commands`.
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(
             br#"
@@ -1331,11 +1389,17 @@ step_timeout_secs = 600
         )
         .unwrap();
         let config = Config::load(f.path()).unwrap();
-        assert_eq!(config.commands.pre_install, vec!["echo one".to_string()]);
+        assert_eq!(
+            config.commands.worktree_init_commands,
+            vec!["echo one".to_string()]
+        );
+        // Deprecated field is cleared after migration.
+        assert!(config.commands.pre_install.is_empty());
     }
 
     #[test]
     fn test_pre_install_array() {
+        // Legacy `pre_install` as an array is migrated transparently.
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(
             br#"
@@ -1362,8 +1426,137 @@ step_timeout_secs = 600
         .unwrap();
         let config = Config::load(f.path()).unwrap();
         assert_eq!(
-            config.commands.pre_install,
+            config.commands.worktree_init_commands,
             vec!["echo a".to_string(), "echo b".to_string()]
+        );
+        assert!(config.commands.pre_install.is_empty());
+    }
+
+    // -- Plan-08: worktree_init_commands migration tests --
+
+    fn make_commands_config(
+        pre_install: Vec<String>,
+        install: String,
+        pre_workflow: Vec<String>,
+        worktree_init_commands: Vec<String>,
+    ) -> Config {
+        let mut c = Config::default();
+        c.commands.pre_install = pre_install;
+        c.commands.install = install;
+        c.commands.pre_workflow = pre_workflow;
+        c.commands.worktree_init_commands = worktree_init_commands;
+        c
+    }
+
+    #[test]
+    fn migrate_legacy_commands_merges_in_lifecycle_order() {
+        // pre_install → install → pre_workflow
+        let mut c = make_commands_config(
+            vec!["echo pre1".into(), "echo pre2".into()],
+            "echo install".into(),
+            vec!["echo post1".into()],
+            Vec::new(),
+        );
+        let migrated = c.migrate_legacy_commands();
+        assert!(migrated, "migration should have happened");
+        assert_eq!(
+            c.commands.worktree_init_commands,
+            vec![
+                "echo pre1".to_string(),
+                "echo pre2".into(),
+                "echo install".into(),
+                "echo post1".into(),
+            ]
+        );
+        // Deprecated fields are drained.
+        assert!(c.commands.pre_install.is_empty());
+        assert!(c.commands.install.is_empty());
+        assert!(c.commands.pre_workflow.is_empty());
+    }
+
+    #[test]
+    fn migrate_legacy_commands_new_only_is_untouched() {
+        let mut c = make_commands_config(
+            Vec::new(),
+            String::new(),
+            Vec::new(),
+            vec!["echo new".into()],
+        );
+        let migrated = c.migrate_legacy_commands();
+        assert!(!migrated, "no migration when only the new field is set");
+        assert_eq!(
+            c.commands.worktree_init_commands,
+            vec!["echo new".to_string()]
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_commands_mixed_new_wins_no_merge() {
+        // When the new field is already populated, deprecated fields are
+        // dropped without being merged on top of the new field.
+        let mut c = make_commands_config(
+            vec!["echo legacy".into()],
+            String::new(),
+            Vec::new(),
+            vec!["echo new1".into(), "echo new2".into()],
+        );
+        let migrated = c.migrate_legacy_commands();
+        assert!(!migrated, "new field present → no merge");
+        assert_eq!(
+            c.commands.worktree_init_commands,
+            vec!["echo new1".to_string(), "echo new2".into()]
+        );
+        // Deprecated values are dropped even when not merged, so a later
+        // write never re-emits them.
+        assert!(c.commands.pre_install.is_empty());
+        assert!(c.commands.install.is_empty());
+        assert!(c.commands.pre_workflow.is_empty());
+    }
+
+    #[test]
+    fn migrate_legacy_commands_is_idempotent() {
+        let mut c = make_commands_config(
+            vec!["a".into()],
+            "b".into(),
+            vec!["c".into()],
+            Vec::new(),
+        );
+        let first = c.migrate_legacy_commands();
+        let snapshot = c.commands.worktree_init_commands.clone();
+        let second = c.migrate_legacy_commands();
+        assert!(first);
+        assert!(!second, "second run must be a no-op");
+        assert_eq!(c.commands.worktree_init_commands, snapshot);
+    }
+
+    #[test]
+    fn migrate_legacy_commands_drops_deprecated_on_serialize() {
+        // After migration, serializing to TOML must not emit deprecated fields.
+        let mut c = make_commands_config(
+            vec!["echo a".into()],
+            "echo b".into(),
+            Vec::new(),
+            Vec::new(),
+        );
+        c.migrate_legacy_commands();
+        let toml = c.to_toml_string().expect("serialize");
+        assert!(
+            !toml.contains("pre_install"),
+            "serialized TOML must not contain pre_install: {toml}"
+        );
+        assert!(
+            !toml.contains("pre_workflow"),
+            "serialized TOML must not contain pre_workflow: {toml}"
+        );
+        // `install` is a substring of "worktree_init_commands"; check for
+        // the standalone `install = ` form instead.
+        assert!(
+            !toml.contains("\ninstall ="),
+            "serialized TOML must not contain a deprecated `install =` line: {toml}"
+        );
+        assert!(
+            toml.contains("worktree_init_commands"),
+            "serialized TOML must contain worktree_init_commands: {toml}"
         );
     }
 

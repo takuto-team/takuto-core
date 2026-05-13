@@ -7,6 +7,7 @@ import { apiJson, api } from "../api/client";
 import type { User } from "../api/types";
 import { UsersTab } from "../components/UsersTab";
 import { SecurityTab } from "../components/SecurityTab";
+import { WorktreeSettingsTab } from "../components/WorktreeSettingsTab";
 
 interface Props {
   onLogout: () => void;
@@ -14,7 +15,7 @@ interface Props {
   isAdmin?: boolean;
 }
 
-const ALL_TABS = ["Security", "Users"] as const;
+const ALL_TABS = ["Security", "Users", "Worktree Settings"] as const;
 type Tab = (typeof ALL_TABS)[number];
 
 // ---------------------------------------------------------------------------
@@ -141,7 +142,10 @@ function SecurityTabConnected() {
 // ---------------------------------------------------------------------------
 
 export function Config({ onLogout, authEnabled, isAdmin }: Props) {
-  const tabs = ALL_TABS.filter((t) => t !== "Users" || isAdmin);
+  // Admin-only tabs: "Users" and "Worktree Settings".
+  const tabs = ALL_TABS.filter((t) =>
+    t === "Users" || t === "Worktree Settings" ? isAdmin : true,
+  );
   const [tab, setTab] = useState<Tab>(tabs[0]);
 
   return (
@@ -187,9 +191,10 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
         </div>
       </div>
 
-      <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {tab === "Security" && <SecurityTabConnected />}
         {tab === "Users" && <UsersTabConnected />}
+        {tab === "Worktree Settings" && <WorktreeSettingsTab />}
       </main>
     </div>
   );

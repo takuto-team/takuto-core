@@ -20,10 +20,12 @@ use crate::config::{
 };
 use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
+use crate::db::Database;
 use crate::error::{MaestroError, Result};
 use crate::git;
 use crate::jira::client::JiraClient;
 use crate::process::OutputLine;
+use crate::workflow::snapshot::workspace_name_from_repo_path;
 
 use crate::workflow::helpers::{
     build_skill_search_paths, build_ticket_context, check_cancelled, extract_acceptance_criteria,
@@ -67,6 +69,54 @@ pub(super) fn scan_definitions_dir(dir: &Path) -> Vec<(String, std::time::System
     entries
 }
 
+/// Resolve the list of `worktree_init_commands` for the current workspace
+/// (plan-08 Step 4).
+///
+/// Resolution rules:
+/// * If a [`crate::db::workspace_commands`] row exists for the workspace
+///   derived from `cfg.git.repo_path`, use **its** `commands` verbatim. An
+///   explicit `[]` means "present and empty" — return an empty vec, do NOT
+///   fall back to the global default (plan-08 AC-9).
+/// * Otherwise, fall back to `cfg.commands.worktree_init_commands` (the
+///   global default — plan-08 AC-6, AC-8).
+/// * If no `db` is provided (e.g. some test paths), behave as if no override
+///   exists and fall back to the global default.
+///
+/// `ticket_key` is used only for diagnostic logging.
+///
+/// Exposed at crate level (not pub(super)) so integration tests can call it
+/// directly without needing to spin up a real Docker driver.
+pub async fn resolve_worktree_init_commands(
+    config: &Arc<RwLock<Config>>,
+    db: Option<&Database>,
+    ticket_key: &str,
+) -> Vec<String> {
+    let (workspace, global_default) = {
+        let cfg = config.read().await;
+        (
+            workspace_name_from_repo_path(Path::new(&cfg.git.repo_path)),
+            cfg.commands.worktree_init_commands.clone(),
+        )
+    };
+
+    if let Some(database) = db {
+        let conn = database.conn().lock().await;
+        match crate::db::workspace_commands::get(&conn, &workspace) {
+            Ok(Some(row)) => return row.commands,
+            Ok(None) => {}
+            Err(e) => {
+                warn!(
+                    ticket = %ticket_key,
+                    workspace = %workspace,
+                    error = %e,
+                    "Failed to read worktree_commands override; falling back to global default"
+                );
+            }
+        }
+    }
+    global_default
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn drive_workflow_def(
     ticket_key: String,
@@ -83,6 +133,7 @@ pub(super) async fn drive_workflow_def(
     cancel_token: CancellationToken,
     agent_run_semaphore: Arc<Semaphore>,
     suppress_cancelled_as_error: Arc<AtomicBool>,
+    db: Option<Database>,
 ) {
     use crate::workflow::definitions::WorkflowDefRunState;
 
@@ -108,6 +159,7 @@ pub(super) async fn drive_workflow_def(
                     &cancel_token,
                     &log_writer,
                     &agent_run_semaphore,
+                    db.as_ref(),
                 )
                 .await?;
                 (
@@ -387,6 +439,7 @@ pub(super) async fn bootstrap_new_workflow(
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
     agent_run_semaphore: &Arc<Semaphore>,
+    db: Option<&Database>,
 ) -> Result<(PathBuf, crate::jira::client::JiraTicket)> {
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
     check_cancelled(cancel_token)?;
@@ -626,7 +679,7 @@ pub(super) async fn bootstrap_new_workflow(
     }
     let _ = branch_name; // used in step_log, suppress unused warning
 
-    // Build container runner for setup commands (mise, pre-install, install, pre-workflow).
+    // Build container runner for setup commands (mise + worktree init).
     let container_runner = if ContainerRunner::is_available() {
         let cfg = config.read().await;
         let image = if cfg.general.worker_image.is_empty() {
@@ -659,12 +712,15 @@ pub(super) async fn bootstrap_new_workflow(
         ));
     };
 
-    let cfg = config.read().await;
-    let pre_install_cmds = cfg.commands.pre_install.clone();
-    let install_cmd = cfg.commands.install.clone();
-    let pre_workflow_cmds = cfg.commands.pre_workflow.clone();
-    let shell_stream_provider = cfg.agent.provider;
-    drop(cfg);
+    let shell_stream_provider = {
+        let cfg = config.read().await;
+        cfg.agent.provider
+    };
+    // Resolve worktree init commands: prefer per-workspace DB override (set via
+    // the admin UI / REST), fall back to the global `commands.worktree_init_commands`.
+    // An explicit `[]` override means "present and empty" — bootstrap runs zero
+    // commands and does NOT fall back to the global default (plan-08 AC-9).
+    let init_commands = resolve_worktree_init_commands(config, db, ticket_key).await;
 
     // Mise install (if project declares mise tools).
     if crate::process::worktree_has_mise_config(&worktree_path) {
@@ -741,21 +797,34 @@ pub(super) async fn bootstrap_new_workflow(
         }
     }
 
-    // Pre-install commands.
-    if !pre_install_cmds.is_empty() {
-        let total = pre_install_cmds.len();
-        for (i, pre_install_cmd) in pre_install_cmds.iter().enumerate() {
-            let step_name = format!("Pre-install ({}/{})", i + 1, total);
+    // Worktree init commands (plan-08): replaces the legacy pre_install / install /
+    // pre_workflow loops. AC-8/AC-9: an empty list (no override + empty default,
+    // or an explicit `[]` override) skips this entire section and proceeds
+    // straight to the agent steps.
+    if !init_commands.is_empty() {
+        let total = init_commands.len();
+        for (i, cmd) in init_commands.iter().enumerate() {
+            // Build a friendly step label: first 40 chars of the command, with
+            // an ellipsis when truncated. Keeps the dashboard's per-step signal
+            // ("which command is slow") that the old labels used to provide.
+            let snippet: String = cmd.chars().take(40).collect();
+            let snippet_display = if cmd.chars().count() > 40 {
+                format!("{snippet}…")
+            } else {
+                snippet
+            };
+            let step_name = format!("Worktree init ({}/{}): {}", i + 1, total, snippet_display);
+
             let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
             let mut step_log = StepLog::new(step_name.clone());
             info!(
-                command = %pre_install_cmd,
+                command = %cmd,
                 step = i + 1,
                 total,
-                "Running pre-install command"
+                "Running worktree init command"
             );
             log_writer
-                .write_step(&step_name, &format!("Running: {pre_install_cmd}"))
+                .write_step(&step_name, &format!("Running: {cmd}"))
                 .await;
 
             broadcast_step_started(event_tx, ticket_key, &step_name, workflows).await;
@@ -767,8 +836,8 @@ pub(super) async fn bootstrap_new_workflow(
                 workflows,
                 shell_stream_provider,
             );
-            let pre_result = if let Some(ref runner) = container_runner {
-                let (prog, docker_args) = runner.wrap_shell_command(pre_install_cmd);
+            let run_result = if let Some(ref runner) = container_runner {
+                let (prog, docker_args) = runner.wrap_shell_command(cmd);
                 let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
                 crate::process::run_command_streaming(
                     &prog,
@@ -780,14 +849,14 @@ pub(super) async fn bootstrap_new_workflow(
                 .await
             } else {
                 crate::process::run_shell_command_streaming(
-                    pre_install_cmd,
+                    cmd,
                     &worktree_path,
                     cancel_token.child_token(),
                     line_tx,
                 )
                 .await
             };
-            match pre_result {
+            match run_result {
                 Ok(output) if output.success() => {
                     step_log.output.push(format!("{step_name} completed"));
                     step_log.complete(StepStatus::Success);
@@ -806,182 +875,19 @@ pub(super) async fn bootstrap_new_workflow(
                         .rev()
                         .collect::<Vec<_>>()
                         .join("\n");
-                    let msg = format!(
-                        "{step_name} failed (exit code {}):\n{}",
-                        output.exit_code, stderr_tail
-                    );
-                    step_log.fail(msg.clone());
-                    add_step_log(workflows, ticket_key, step_log).await;
-                    return Err(MaestroError::Git(msg));
-                }
-                Err(e) => {
-                    let msg = format!("{step_name} error: {e}");
-                    step_log.fail(msg.clone());
-                    add_step_log(workflows, ticket_key, step_log).await;
-                    return Err(MaestroError::Git(msg));
-                }
-            }
-        }
-    }
-
-    // Install dependencies.
-    if !install_cmd.is_empty() {
-        let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
-        let mut step_log = StepLog::new("Install Dependencies".to_string());
-        info!(command = %install_cmd, "Installing dependencies in worktree");
-        log_writer
-            .write_step("Install Dependencies", &format!("Running: {install_cmd}"))
-            .await;
-
-        broadcast_step_started(event_tx, ticket_key, "Install Dependencies", workflows).await;
-        let line_tx = spawn_output_relay(
-            event_tx,
-            ticket_key,
-            "Install Dependencies",
-            log_writer,
-            workflows,
-            shell_stream_provider,
-        );
-        let install_result = if let Some(ref runner) = container_runner {
-            let (prog, docker_args) = runner.wrap_shell_command(&install_cmd);
-            let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
-            crate::process::run_command_streaming(
-                &prog,
-                &refs,
-                &worktree_path,
-                cancel_token.child_token(),
-                line_tx,
-            )
-            .await
-        } else {
-            crate::process::run_shell_command_streaming(
-                &install_cmd,
-                &worktree_path,
-                cancel_token.child_token(),
-                line_tx,
-            )
-            .await
-        };
-        match install_result {
-            Ok(output) if output.success() => {
-                step_log.output.push("Dependencies installed".to_string());
-                step_log.complete(StepStatus::Success);
-                add_step_log(workflows, ticket_key, step_log).await;
-                broadcast_step_completed(
-                    event_tx,
-                    ticket_key,
-                    "Install Dependencies",
-                    workflows,
-                    config,
-                )
-                .await;
-            }
-            Ok(output) => {
-                let stderr_tail = output
-                    .stderr
-                    .lines()
-                    .rev()
-                    .take(20)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let stdout_tail = output
-                    .stdout
-                    .lines()
-                    .rev()
-                    .take(10)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let msg = format!(
-                    "Install failed (exit code {}):\nSTDERR:\n{}\nSTDOUT:\n{}",
-                    output.exit_code, stderr_tail, stdout_tail
-                );
-                step_log.fail(msg.clone());
-                add_step_log(workflows, ticket_key, step_log).await;
-                return Err(MaestroError::Git(msg));
-            }
-            Err(e) => {
-                let msg = format!("Install command error: {e}");
-                step_log.fail(msg.clone());
-                add_step_log(workflows, ticket_key, step_log).await;
-                return Err(MaestroError::Git(msg));
-            }
-        }
-    }
-
-    // Pre-workflow commands.
-    if !pre_workflow_cmds.is_empty() {
-        let total = pre_workflow_cmds.len();
-        for (i, pre_workflow_cmd) in pre_workflow_cmds.iter().enumerate() {
-            let step_name = format!("Pre-workflow ({}/{})", i + 1, total);
-            let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
-            let mut step_log = StepLog::new(step_name.clone());
-            info!(
-                command = %pre_workflow_cmd,
-                step = i + 1,
-                total,
-                "Running pre-workflow command"
-            );
-            log_writer
-                .write_step(&step_name, &format!("Running: {pre_workflow_cmd}"))
-                .await;
-
-            broadcast_step_started(event_tx, ticket_key, &step_name, workflows).await;
-            let line_tx = spawn_output_relay(
-                event_tx,
-                ticket_key,
-                &step_name,
-                log_writer,
-                workflows,
-                shell_stream_provider,
-            );
-            let pre_result = if let Some(ref runner) = container_runner {
-                let (prog, docker_args) = runner.wrap_shell_command(pre_workflow_cmd);
-                let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
-                crate::process::run_command_streaming(
-                    &prog,
-                    &refs,
-                    &worktree_path,
-                    cancel_token.child_token(),
-                    line_tx,
-                )
-                .await
-            } else {
-                crate::process::run_shell_command_streaming(
-                    pre_workflow_cmd,
-                    &worktree_path,
-                    cancel_token.child_token(),
-                    line_tx,
-                )
-                .await
-            };
-            match pre_result {
-                Ok(output) if output.success() => {
-                    step_log.output.push(format!("{step_name} completed"));
-                    step_log.complete(StepStatus::Success);
-                    add_step_log(workflows, ticket_key, step_log).await;
-                    broadcast_step_completed(event_tx, ticket_key, &step_name, workflows, config)
-                        .await;
-                }
-                Ok(output) => {
-                    let stderr_tail = output
-                        .stderr
+                    let stdout_tail = output
+                        .stdout
                         .lines()
                         .rev()
-                        .take(20)
+                        .take(10)
                         .collect::<Vec<_>>()
                         .into_iter()
                         .rev()
                         .collect::<Vec<_>>()
                         .join("\n");
                     let msg = format!(
-                        "{step_name} failed (exit code {}):\n{}",
-                        output.exit_code, stderr_tail
+                        "{step_name} failed (exit code {}):\nSTDERR:\n{}\nSTDOUT:\n{}",
+                        output.exit_code, stderr_tail, stdout_tail
                     );
                     step_log.fail(msg.clone());
                     add_step_log(workflows, ticket_key, step_log).await;

@@ -10,6 +10,7 @@ use tracing::{info, warn};
 
 use crate::actions::traits::ExternalActions;
 use crate::config::Config;
+use crate::db::Database;
 use crate::error::Result;
 
 use crate::workflow::snapshot::{
@@ -48,6 +49,7 @@ impl WorkflowPersistence {
         }
     }
 
+
     /// Periodic snapshot sync during normal operation (called by background task).
     pub async fn sync(&self) -> Result<()> {
         self.sync_from_map().await
@@ -59,6 +61,7 @@ impl WorkflowPersistence {
         workflows_dir: &std::path::Path,
         agent_run_semaphore: Arc<tokio::sync::Semaphore>,
         suppress_cancelled_as_error: Arc<AtomicBool>,
+        db: Option<Database>,
     ) -> Result<usize> {
         let repo_path = {
             let c = self.config.read().await;
@@ -211,6 +214,7 @@ impl WorkflowPersistence {
                         let as_ = agent_sem.clone();
                         let su = suppress.clone();
                         let ct = cancel_token.clone();
+                        let db_clone = db.clone();
 
                         tokio::spawn(async move {
                             drive_workflow_def(
@@ -228,6 +232,7 @@ impl WorkflowPersistence {
                                 ct,
                                 as_,
                                 su,
+                                db_clone,
                             )
                             .await;
                         });

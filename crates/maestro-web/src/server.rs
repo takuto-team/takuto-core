@@ -249,6 +249,24 @@ pub fn build_router(state: AppState) -> Router {
         .route("/polling", get(routes::polling::get_polling_status))
         .route("/polling/pause", post(routes::polling::pause_polling))
         .route("/polling/resume", post(routes::polling::resume_polling))
+        // Plan-08 Step 5: admin-only per-workspace `worktree_init_commands`
+        // overrides. The `_workspaces` route must be registered BEFORE the
+        // `{workspace}` parameter route so it doesn't get captured as a
+        // workspace name.
+        .route(
+            "/admin/worktree-commands/_workspaces",
+            get(routes::worktree_commands::list_workspaces_with_override_flag),
+        )
+        .route(
+            "/admin/worktree-commands",
+            get(routes::worktree_commands::list_top_level),
+        )
+        .route(
+            "/admin/worktree-commands/{workspace}",
+            get(routes::worktree_commands::get_one)
+                .put(routes::worktree_commands::put_override)
+                .delete(routes::worktree_commands::delete_override),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             dashboard_auth_middleware,

@@ -12,6 +12,7 @@ use tracing::info;
 
 use crate::actions::traits::ExternalActions;
 use crate::config::Config;
+use crate::db::Database;
 use crate::error::{MaestroError, Result};
 
 use super::event_bus::WorkflowEventBus;
@@ -26,6 +27,8 @@ pub(crate) struct WorkflowDefinitionManager {
     pub(crate) agent_run_semaphore: Arc<Semaphore>,
     pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
     pub(crate) workflows_dir: PathBuf,
+    /// Optional DB handle used by the bootstrap driver for per-workspace overrides.
+    pub(crate) db: Option<Database>,
 }
 
 impl WorkflowDefinitionManager {
@@ -38,6 +41,7 @@ impl WorkflowDefinitionManager {
         agent_run_semaphore: Arc<Semaphore>,
         suppress_cancelled_as_error: Arc<AtomicBool>,
         workflows_dir: PathBuf,
+        db: Option<Database>,
     ) -> Self {
         Self {
             repository,
@@ -47,6 +51,7 @@ impl WorkflowDefinitionManager {
             agent_run_semaphore,
             suppress_cancelled_as_error,
             workflows_dir,
+            db,
         }
     }
 
@@ -174,6 +179,7 @@ impl WorkflowDefinitionManager {
         let ticket = ticket_key.to_string();
         let def_name_owned = def_name.to_string();
         let steps = def.steps.clone();
+        let db = self.db.clone();
 
         tokio::spawn(async move {
             super::driver::drive_workflow_def(
@@ -191,6 +197,7 @@ impl WorkflowDefinitionManager {
                 cancel_token,
                 agent_sem,
                 suppress,
+                db,
             )
             .await;
         });

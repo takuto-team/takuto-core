@@ -106,11 +106,20 @@ repo_path = "/workspace"
 # gh_allowed_extra_prefixes = []
 
 [commands]
-# Command to run before install (e.g., registry auth: "aws codeartifact login ...")
-# Shell commands run in order before install (e.g. registry auth). Use a TOML array; a single string is still accepted.
-pre_install = []
-install = "npm install"
-# Commands to run before each workflow starts (after worktree creation, before agent steps).
+# Shell commands run sequentially in the worktree directory immediately after
+# the worktree is created. Use for dependency installs, codegen, registry
+# login — anything that must happen once per worktree before workflow steps
+# start. Each command runs via `bash -lc`. Failure of any command aborts the
+# workflow.
+worktree_init_commands = [
+    "npm install",
+]
+
+# Deprecated fields kept for one release for backward compatibility.
+# They are read on first load, merged into worktree_init_commands, and
+# dropped on the next config write. Remove after upgrade.
+# pre_install = []
+# install = ""
 # pre_workflow = []
 
 [web]
