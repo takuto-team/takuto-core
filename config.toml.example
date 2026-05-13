@@ -128,6 +128,21 @@ dashboard_password = ""
 #   cors_origins = ["http://localhost:8080", "https://maestro.example.com"]
 # Startup-only — not changeable via PUT /api/config. Requires restart.
 cors_origins = []
+# Controls the `Secure` flag on the session cookie. When unset (default),
+# Maestro auto-detects: the flag is set when any `cors_origins` entry is
+# `https://…` OR when the inbound request carries `X-Forwarded-Proto: https`
+# (so a TLS-terminating reverse proxy is enough). Set explicitly to `true`
+# to force the flag on (e.g. when terminating TLS in front of Maestro without
+# advertising `X-Forwarded-Proto`), or to `false` for local plain-HTTP testing.
+# cookie_secure = true
+# Whether a successful login deletes all prior sessions for the same user.
+# Default `true` — security-first single-session enforcement. Set to `false`
+# if you want long-lived multi-client sessions (e.g. desktop + mobile).
+# Note: idle session TTL is 24 h, absolute TTL is 30 days regardless of this
+# setting. After 5 failed login or recovery attempts in 10 min the account
+# is temporarily locked (admin can clear via POST /api/users/{id}/unlock).
+# Per-IP rate limit on /api/auth/login and /api/auth/recover is 10 / min.
+# kick_other_sessions_on_login = true
 
 [agent]
 # AI tool for implement / review / fix steps: "claude" (Claude Code CLI) or "cursor" (Cursor Agent CLI).

@@ -27,7 +27,7 @@ use tower::ServiceExt;
 
 use maestro_web::server::build_router;
 use maestro_web::state::AppState;
-use maestro_web::test_helpers::{register_and_login, test_state_with_db};
+use maestro_web::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
 
 /// Create a second user (`role = user`) via the admin API and log them in.
 ///
@@ -50,6 +50,7 @@ async fn create_and_login_regular_user(
         .oneshot(
             Request::post("/api/users")
                 .header("Content-Type", "application/json")
+                .header("Origin", TEST_ORIGIN)
                 .header("Cookie", admin_cookie)
                 .body(Body::from(body))
                 .unwrap(),
@@ -69,6 +70,7 @@ async fn create_and_login_regular_user(
         .oneshot(
             Request::post("/api/auth/login")
                 .header("Content-Type", "application/json")
+                .header("Origin", TEST_ORIGIN)
                 .body(Body::from(body))
                 .unwrap(),
         )
@@ -140,6 +142,8 @@ const ADMIN_GATED_ROUTES: &[Route] = &[
 fn build_request(route: &Route, cookie: &str) -> Request<Body> {
     let mut req = Request::builder().method(route.method).uri(route.path);
     req = req.header("Cookie", cookie);
+    // CSRF middleware requires `Origin` on every mutating method.
+    req = req.header("Origin", TEST_ORIGIN);
     let body = if let Some(b) = route.body {
         req = req.header("Content-Type", "application/json");
         Body::from(b)

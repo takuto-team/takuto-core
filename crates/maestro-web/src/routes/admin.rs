@@ -241,9 +241,35 @@ pub async fn update_user(
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
+    let target_id = id.clone();
+    let new_role = body.role;
+    let new_username = body.username.clone();
     let result = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        maestro_core::db::users::update_user(&conn, &id, body.username.as_deref(), body.role)
+        // Capture the previous role inside the same lock so the "role changed?"
+        // decision sees a consistent snapshot.
+        let previous_role = maestro_core::db::users::get_user_by_id(&conn, &target_id)
+            .ok()
+            .flatten()
+            .map(|u| u.role);
+        let updated = maestro_core::db::users::update_user(
+            &conn,
+            &target_id,
+            new_username.as_deref(),
+            new_role,
+        )?;
+        // Plan-02 AC-5 G/W/T 5.3: if role changed, delete all sessions so the
+        // target user must re-authenticate with the new role.
+        let role_changed = matches!((previous_role, new_role), (Some(prev), Some(new)) if prev != new);
+        if role_changed {
+            let _ = maestro_core::db::credentials::delete_user_sessions(&conn, &target_id);
+            tracing::info!(
+                event = "role_change_session_invalidate",
+                user_id = %target_id,
+                "deleted all sessions after role change"
+            );
+        }
+        Ok::<_, maestro_core::error::MaestroError>(updated)
     })
     .await;
 
@@ -334,6 +360,65 @@ pub async fn unsuspend_user(
 
     match result {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            let status = if msg.contains("not found") || msg.contains("Not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (status, Json(serde_json::json!({"error": msg}))).into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// `POST /api/users/{id}/unlock` — clear all login-attempt rows for a user
+/// (admin only; plan-02 AC-3 G/W/T 3.8).
+///
+/// Deletes both `kind = 'password'` and `kind = 'recovery'` rows so the user's
+/// next login starts from a clean slate. Returns **204 No Content**.
+pub async fn unlock_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(status) = require_admin(&state, &headers).await {
+        return status.into_response();
+    }
+
+    let db = match state.db.as_ref() {
+        Some(db) => db.clone(),
+        None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    let target_id = id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = db.conn().blocking_lock();
+        // Verify the user exists first so we can distinguish 404 from 204.
+        let exists = maestro_core::db::users::get_user_by_id(&conn, &target_id)
+            .ok()
+            .flatten()
+            .is_some();
+        if !exists {
+            return Err(maestro_core::error::MaestroError::Auth(format!(
+                "User not found: {target_id}"
+            )));
+        }
+        maestro_core::db::login_attempts::clear_attempts(&conn, &target_id)?;
+        Ok::<_, maestro_core::error::MaestroError>(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => {
+            tracing::info!(
+                event = "admin_unlock_user",
+                user_id = %id,
+                "cleared lockout counters for user"
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(Err(e)) => {
             let msg = e.to_string();
             let status = if msg.contains("not found") || msg.contains("Not found") {
@@ -593,6 +678,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/register")
                     .header("Content-Type", "application/json")
+                    .header("Origin", "http://localhost:8080")
                     .body(Body::from(r#"{"username":"admin","password":"secret123!@#A"}"#))
                     .unwrap(),
             )
@@ -610,6 +696,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
+                    .header("Origin", "http://localhost:8080")
                     .body(Body::from(r#"{"username":"admin","password":"secret123!@#A"}"#))
                     .unwrap(),
             )
@@ -689,6 +776,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post(&format!("/api/users/{admin_id}/suspend"))
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
@@ -720,6 +808,7 @@ mod tests {
                 Request::builder()
                     .method(Method::DELETE)
                     .uri(&format!("/api/users/{admin_id}"))
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
@@ -751,6 +840,7 @@ mod tests {
                 Request::builder()
                     .method(Method::PATCH)
                     .uri(&format!("/api/users/{admin_id}"))
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .header("Content-Type", "application/json")
                     .body(Body::from(r#"{"role":"user"}"#))
@@ -780,6 +870,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/api/users")
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .header("Content-Type", "application/json")
                     .body(Body::from(r#"{"username":"bob","password":"pass123!@#ABCD"}"#))
@@ -828,6 +919,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/api/users/import")
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .header("Content-Type", "application/json")
                     .body(Body::from(

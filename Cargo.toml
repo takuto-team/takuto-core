@@ -38,6 +38,9 @@ axum-extra = "0.10"
 time = "=0.3.45"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
+# Per-IP rate limiting (plan-02 AC-3). Pinned to a release tested with
+# axum 0.8 + tower-http 0.6.
+tower_governor = "0.8"
 rust-embed = "8"
 mime_guess = "2"
 

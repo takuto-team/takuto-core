@@ -3,7 +3,7 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum_extra::extract::cookie::{CookieJar, SameSite};
 use cookie::Cookie;
@@ -11,10 +11,22 @@ use cookie::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{
-    SESSION_COOKIE_NAME, SESSION_TTL_SECS, authenticate_db_user, create_db_session,
-    delete_db_session,
+    SESSION_COOKIE_NAME, SESSION_IDLE_TTL_SECS, authenticate_db_user, create_db_session,
+    delete_db_session, now_unix, resolve_cookie_secure,
 };
 use crate::state::AppState;
+use maestro_core::db::login_attempts::{
+    AttemptKind, clear_failed_attempts, failed_count_in_window, oldest_failure_ts_in_window,
+    record_attempt,
+};
+
+/// Plan-02 AC-3: per-user lockout threshold and window.
+///
+/// 5 failed attempts within a 10-minute window locks the account until the
+/// **oldest** failure ages out (sliding window — admins can short-circuit via
+/// `POST /api/admin/users/{id}/unlock`).
+const LOCKOUT_THRESHOLD: i64 = 5;
+const LOCKOUT_WINDOW_SECS: i64 = 600;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginBody {
@@ -60,8 +72,23 @@ pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
 /// Set HttpOnly session cookie (same-origin fetch and WebSocket send it automatically).
 ///
 /// Authenticate against the SQLite database and issue a `db-` session cookie.
+///
+/// Plan-02 AC-3 flow (after the per-IP `tower_governor` layer has cleared the
+/// request):
+/// 1. Resolve the username to a `user_id`. Unknown username → generic **401**
+///    without recording any attempt (G/W/T 3.9 — locking a non-existent user
+///    would leak account existence via the 429 boundary).
+/// 2. Check `failed_count_in_window(user_id, password, 600) >= 5` → **429**
+///    with `Retry-After` and a JSON body containing the remaining window
+///    minutes (G/W/T 3.5).
+/// 3. Verify the password. Failure → record an attempt with `success=0` and
+///    return **401**.
+/// 4. On success → record `success=1`, **clear failed counters** so the next
+///    failed attempt restarts from 1 (G/W/T 3.6), apply session rotation
+///    (G/W/T 5.1), then issue the session cookie.
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     jar: CookieJar,
     Json(body): Json<LoginBody>,
 ) -> impl IntoResponse {
@@ -85,15 +112,101 @@ pub async fn login(
             .into_response();
     }
 
-    let user = authenticate_db_user(db, &body.username, &body.password).await;
-    let Some(user) = user else {
+    // Step 1: look up the user. Unknown username → 401 with NO attempt row.
+    let db_clone = db.clone();
+    let username = body.username.clone();
+    let user_lookup = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        maestro_core::db::users::get_user_by_username(&conn, &username).ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some(user) = user_lookup else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
+    if user.suspended {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
 
+    // Step 2: lockout check.
+    let db_clone = db.clone();
+    let uid = user.id.clone();
+    let lockout = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        let count = failed_count_in_window(&conn, &uid, AttemptKind::Password, LOCKOUT_WINDOW_SECS)
+            .unwrap_or(0);
+        if count >= LOCKOUT_THRESHOLD {
+            let oldest = oldest_failure_ts_in_window(
+                &conn,
+                &uid,
+                AttemptKind::Password,
+                LOCKOUT_WINDOW_SECS,
+            )
+            .unwrap_or(None);
+            Some((count, oldest))
+        } else {
+            None
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some((count, oldest)) = lockout {
+        let now = now_unix();
+        let retry_secs = oldest
+            .map(|t| (t + LOCKOUT_WINDOW_SECS - now).max(60))
+            .unwrap_or(60);
+        let minutes = (retry_secs + 59) / 60;
+        tracing::warn!(
+            event = "login_lockout",
+            user_id = %user.id,
+            failed_count = count,
+            "account temporarily locked"
+        );
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [("Retry-After", retry_secs.to_string())],
+            Json(serde_json::json!({
+                "error": format!("account temporarily locked, try again in {minutes} minutes")
+            })),
+        )
+            .into_response();
+    }
+
+    // Step 3: verify password (which also bumps `last_used_at` and rehashes
+    // weak Argon2 hashes via Dev C's path).
+    let verified = authenticate_db_user(db, &body.username, &body.password).await;
+
+    // Step 4: record the outcome.
+    let db_clone = db.clone();
+    let uid = user.id.clone();
+    let success = verified.is_some();
+    let _ = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        let _ = record_attempt(&conn, &uid, AttemptKind::Password, success);
+        if success {
+            // Clear the failed counter so the next miss restarts at 1.
+            let _ = clear_failed_attempts(&conn, &uid, AttemptKind::Password);
+        }
+    })
+    .await;
+
+    if !success {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    // Step 5: session rotation + create session.
+    let kick = state.config.read().await.web.kick_other_sessions_on_login;
     let db_clone = db.clone();
     let user_id = user.id.clone();
     let token = tokio::task::spawn_blocking(move || {
         let conn = db_clone.conn().blocking_lock();
+        if kick {
+            // Plan-02 AC-5 G/W/T 5.1: delete prior sessions so the new login
+            // is the only authenticated client for this user.
+            let _ = maestro_core::db::credentials::delete_user_sessions(&conn, &user_id);
+        }
         create_db_session(&conn, &user_id)
     })
     .await;
@@ -103,17 +216,27 @@ pub async fn login(
         _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
+    let secure = {
+        let cfg = state.config.read().await;
+        resolve_cookie_secure(&cfg.web, &headers)
+    };
+
     let cookie = Cookie::build((SESSION_COOKIE_NAME, token))
         .path("/")
         .http_only(true)
+        .secure(secure)
         .same_site(SameSite::Lax)
-        .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
+        .max_age(Duration::seconds(SESSION_IDLE_TTL_SECS as i64))
         .build();
 
     (jar.add(cookie), StatusCode::NO_CONTENT).into_response()
 }
 
-pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
+pub async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> impl IntoResponse {
     // If this is a DB session, delete the server-side session record.
     if let Some(ref db) = state.db {
         // Extract the cookie value from the jar.
@@ -128,8 +251,17 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> impl IntoR
         }
     }
 
+    // The removal cookie must carry the same `Secure` resolution as the
+    // session cookie it replaces — some browsers refuse to overwrite a
+    // `Secure` cookie with a non-`Secure` one.
+    let secure = {
+        let cfg = state.config.read().await;
+        resolve_cookie_secure(&cfg.web, &headers)
+    };
+
     let mut c = Cookie::build((SESSION_COOKIE_NAME, ""))
         .path("/")
+        .secure(secure)
         .max_age(Duration::seconds(0))
         .build();
     c.make_removal();
@@ -265,11 +397,16 @@ pub async fn change_password(
 
     match result {
         Ok(Ok((new_token, _))) => {
+            let secure = {
+                let cfg = state.config.read().await;
+                resolve_cookie_secure(&cfg.web, &headers)
+            };
             let cookie = Cookie::build((SESSION_COOKIE_NAME, new_token))
                 .path("/")
                 .http_only(true)
+                .secure(secure)
                 .same_site(SameSite::Lax)
-                .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
+                .max_age(Duration::seconds(SESSION_IDLE_TTL_SECS as i64))
                 .build();
             (jar.add(cookie), StatusCode::NO_CONTENT).into_response()
         }
@@ -375,41 +512,112 @@ pub async fn recover(
             .into_response();
     }
 
-    let db = db.clone();
-    let username = body.username;
+    // Plan-02 AC-3 G/W/T 3.7: separate per-user counter for recovery attempts.
+    // The lockout threshold and window match the password path, but the counter
+    // is keyed by `AttemptKind::Recovery` so a brute-force on recovery codes
+    // doesn't slip past the password counter and vice versa.
+    let db_clone = db.clone();
+    let username = body.username.clone();
+    let user_lookup = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        maestro_core::db::users::get_user_by_username(&conn, &username).ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten();
+    // G/W/T 3.9 equivalent for recovery: unknown user → generic 401 without
+    // recording an attempt (lockout DoS would otherwise be free for any attacker
+    // who can guess a username pattern).
+    let Some(user) = user_lookup else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Invalid recovery code"})),
+        )
+            .into_response();
+    };
+    if user.suspended {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Account is suspended"})),
+        )
+            .into_response();
+    }
+
+    // Lockout check for the recovery counter.
+    let db_clone = db.clone();
+    let uid = user.id.clone();
+    let lockout = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        let count = failed_count_in_window(&conn, &uid, AttemptKind::Recovery, LOCKOUT_WINDOW_SECS)
+            .unwrap_or(0);
+        if count >= LOCKOUT_THRESHOLD {
+            let oldest = oldest_failure_ts_in_window(
+                &conn,
+                &uid,
+                AttemptKind::Recovery,
+                LOCKOUT_WINDOW_SECS,
+            )
+            .unwrap_or(None);
+            Some((count, oldest))
+        } else {
+            None
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some((count, oldest)) = lockout {
+        let now = now_unix();
+        let retry_secs = oldest
+            .map(|t| (t + LOCKOUT_WINDOW_SECS - now).max(60))
+            .unwrap_or(60);
+        let minutes = (retry_secs + 59) / 60;
+        tracing::warn!(
+            event = "login_lockout",
+            kind = "recovery",
+            user_id = %user.id,
+            failed_count = count,
+            "account temporarily locked"
+        );
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [("Retry-After", retry_secs.to_string())],
+            Json(serde_json::json!({
+                "error": format!("account temporarily locked, try again in {minutes} minutes")
+            })),
+        )
+            .into_response();
+    }
+
+    let db_clone = db.clone();
+    let uid = user.id.clone();
     let code = body.recovery_code;
     let new_password = body.new_password;
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-
-        // Look up user by username.
-        let user = maestro_core::db::users::get_user_by_username(&conn, &username)?;
-        let Some(user) = user else {
-            // Return a generic error to avoid username enumeration.
-            return Err(maestro_core::error::MaestroError::Auth(
-                "Invalid recovery code".into(),
-            ));
-        };
-
-        if user.suspended {
-            return Err(maestro_core::error::MaestroError::Auth(
-                "Account is suspended".into(),
-            ));
-        }
+        let conn = db_clone.conn().blocking_lock();
 
         // Verify and consume the recovery code.
-        let valid =
-            maestro_core::db::credentials::verify_and_consume_recovery_code(&conn, &user.id, &code)?;
+        let valid = maestro_core::db::credentials::verify_and_consume_recovery_code(
+            &conn, &uid, &code,
+        )?;
         if !valid {
+            // Audit the failure before bubbling the error up so the lockout
+            // counter sees it on the next attempt.
+            let _ = record_attempt(&conn, &uid, AttemptKind::Recovery, false);
             return Err(maestro_core::error::MaestroError::Auth(
                 "Invalid recovery code".into(),
             ));
         }
 
+        // Record success and clear the failed counter so a future locked-out
+        // user comes back to a fresh slate after a successful recovery.
+        let _ = record_attempt(&conn, &uid, AttemptKind::Recovery, true);
+        let _ = clear_failed_attempts(&conn, &uid, AttemptKind::Recovery);
+
         // Change password and invalidate sessions.
-        maestro_core::db::credentials::change_password(&conn, &user.id, &new_password)?;
-        maestro_core::db::credentials::delete_user_sessions(&conn, &user.id)?;
+        maestro_core::db::credentials::change_password(&conn, &uid, &new_password)?;
+        maestro_core::db::credentials::delete_user_sessions(&conn, &uid)?;
 
         Ok(())
     })
@@ -607,6 +815,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
+                    .header("Origin", "http://localhost:8080")
                     .body(Body::from(
                         r#"{"username":"admin","password":"testpassword1234"}"#,
                     ))
@@ -637,6 +846,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
+                    .header("Origin", "http://localhost:8080")
                     .body(Body::from(r#"{"username":"admin","password":"wrong"}"#))
                     .unwrap(),
             )
@@ -652,6 +862,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/api/auth/logout")
+                    .header("Origin", "http://localhost:8080")
                     .body(Body::empty())
                     .unwrap(),
             )

@@ -26,8 +26,68 @@ use crate::state::AppState;
 
 type HmacSha256 = Hmac<Sha256>;
 
+mod test_clock {
+    //! Test-only clock override (always compiled so integration tests in
+    //! sibling crates can use it). Production code calls [`super::now_unix`]
+    //! which checks this override first, so integration tests can drive the
+    //! sliding-extend / absolute-TTL logic deterministically (G/W/T 5.4 / 5.5 /
+    //! 5.7) without `tokio::time::pause`.
+    //!
+    //! The override is a single global `AtomicI64`; tests must run
+    //! sequentially (the `cargo test` defaults) or use `serial_test` if
+    //! parallelised. The override is never read in release builds where
+    //! tests are not configured.
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    /// `i64::MIN` is the "unset" sentinel because `0` is a legitimate
+    /// timestamp (the Unix epoch).
+    static OVERRIDE: AtomicI64 = AtomicI64::new(i64::MIN);
+
+    pub(super) fn current() -> Option<i64> {
+        let v = OVERRIDE.load(Ordering::Relaxed);
+        if v == i64::MIN { None } else { Some(v) }
+    }
+
+    pub fn set(t: i64) {
+        OVERRIDE.store(t, Ordering::Relaxed);
+    }
+
+    pub fn clear() {
+        OVERRIDE.store(i64::MIN, Ordering::Relaxed);
+    }
+}
+
+/// Set the clock used by [`now_unix`] to a specific Unix-seconds value.
+///
+/// Test seam — production code should never call this. Integration tests use
+/// it to drive the sliding-extend / absolute-TTL gates without sleeping.
+pub fn set_test_now_unix(t: i64) {
+    test_clock::set(t);
+}
+
+/// Clear the test-clock override; subsequent [`now_unix`] calls go back to wall-clock.
+pub fn clear_test_now_unix() {
+    test_clock::clear();
+}
+
 pub const SESSION_COOKIE_NAME: &str = "maestro_session";
-/// Session lifetime for signed cookie.
+/// Plan-02 AC-5: idle TTL — a session is rejected once it has been inactive
+/// for this long. Sliding-extended by the auth middleware on each authenticated
+/// request (gated by [`SESSION_EXTEND_THRESHOLD_SECS`] so the write rate stays
+/// bounded). Equivalent to ~24 hours.
+pub const SESSION_IDLE_TTL_SECS: u64 = 60 * 60 * 24;
+/// Plan-02 AC-5: absolute TTL — sessions older than this are rejected even
+/// when actively used, forcing periodic re-authentication. ~30 days.
+pub const SESSION_ABSOLUTE_TTL_SECS: u64 = 60 * 60 * 24 * 30;
+/// Plan-02 AC-5: minimum interval between `last_seen_at` writes from the
+/// auth middleware. Prevents every authenticated request from issuing an
+/// `UPDATE` against the sessions row.
+pub const SESSION_EXTEND_THRESHOLD_SECS: u64 = 5 * 60;
+
+/// Legacy HMAC-signed session cookie TTL (the non-DB-backed code path). Kept
+/// for the legacy `[web] dashboard_username` + `dashboard_password` mode that
+/// pre-dates the multi-user database. New code uses the DB-backed session
+/// flow with the constants above.
 pub const SESSION_TTL_SECS: u64 = 60 * 60 * 24 * 7;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -139,6 +199,38 @@ pub fn session_authorized(headers: &HeaderMap, web: &WebConfig) -> bool {
     session_cookie_from_headers(headers).is_some_and(|raw| verify_session_cookie(raw, web))
 }
 
+/// Resolve whether session cookies should carry the `Secure` attribute.
+///
+/// Resolution order:
+/// 1. If `web.cookie_secure` is `Some(v)` → `v` (explicit override always wins).
+/// 2. Else if any `web.cors_origins` entry starts with `"https://"` → `true`.
+/// 3. Else if the request has `X-Forwarded-Proto: https` (case-insensitive) → `true`.
+/// 4. Otherwise → `false`.
+///
+/// This is used by every `Cookie::build(...)` site (login, logout, change_password)
+/// and by the HSTS header in the security-headers middleware so they stay aligned.
+pub fn resolve_cookie_secure(web: &WebConfig, headers: &HeaderMap) -> bool {
+    if let Some(v) = web.cookie_secure {
+        return v;
+    }
+    if web
+        .cors_origins
+        .iter()
+        .any(|o| o.starts_with("https://"))
+    {
+        return true;
+    }
+    if let Some(proto) = headers
+        .get("X-Forwarded-Proto")
+        .and_then(|v| v.to_str().ok())
+    {
+        if proto.eq_ignore_ascii_case("https") {
+            return true;
+        }
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Database-backed session management
 // ---------------------------------------------------------------------------
@@ -150,42 +242,168 @@ pub fn session_authorized(headers: &HeaderMap, web: &WebConfig) -> bool {
 /// cookie back.
 const DB_SESSION_PREFIX: &str = "db-";
 
+/// Return the current Unix timestamp in seconds. Centralised so tests that
+/// need to drive time forward have a single seam (see [`set_now_unix_override`]).
+pub fn now_unix() -> i64 {
+    if let Some(t) = test_clock::current() {
+        return t;
+    }
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Create a database-backed session for a user. Returns the session cookie value
 /// (prefixed with `db-` so the middleware can distinguish it from legacy HMAC tokens).
+///
+/// The new row carries:
+/// - `expires_at` — RFC3339 string, `now + SESSION_IDLE_TTL_SECS` (sliding TTL).
+/// - `last_seen_at` — Unix seconds at creation (the middleware bumps this on use).
+/// - `created_at_unix` — Unix seconds at creation; the absolute-TTL check
+///   compares against this, so it must not be mutated for the lifetime of the
+///   session. Sessions older than [`SESSION_ABSOLUTE_TTL_SECS`] are rejected
+///   and lazily deleted even when actively used (plan-02 AC-5 / G/W/T 5.7).
 pub fn create_db_session(
     conn: &rusqlite::Connection,
     user_id: &str,
 ) -> std::result::Result<String, MaestroError> {
     let session_id = uuid::Uuid::new_v4().to_string();
-    let expires_at = chrono::Utc::now()
-        .checked_add_signed(chrono::Duration::seconds(SESSION_TTL_SECS as i64))
-        .unwrap_or_else(chrono::Utc::now)
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    let now_secs = now_unix();
+    let expires_at_str = chrono::DateTime::<chrono::Utc>::from_timestamp(
+        now_secs.saturating_add(SESSION_IDLE_TTL_SECS as i64),
+        0,
+    )
+    .unwrap_or_else(chrono::Utc::now)
+    .format("%Y-%m-%dT%H:%M:%SZ")
+    .to_string();
     let data = serde_json::to_vec(&serde_json::json!({
         "user_id": user_id,
     }))
     .map_err(|e| MaestroError::Auth(format!("Failed to serialize session: {e}")))?;
 
     conn.execute(
-        "INSERT INTO sessions (id, user_id, data, expires_at) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![session_id, user_id, data, expires_at],
+        "INSERT INTO sessions (id, user_id, data, expires_at, last_seen_at, created_at_unix) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![session_id, user_id, data, expires_at_str, now_secs, now_secs],
     )?;
 
     Ok(format!("{DB_SESSION_PREFIX}{session_id}"))
 }
 
-/// Validate a database session cookie. Returns the `user_id` if valid and not expired.
+/// Validate a database session cookie and (when appropriate) slide its TTL forward.
+///
+/// Plan-02 AC-5 semantics:
+/// 1. If `now - created_at_unix > SESSION_ABSOLUTE_TTL_SECS` → **delete** the row
+///    and return `None`. The session is past its absolute 30-day cap.
+/// 2. Else if the stored `expires_at` is in the past → return `None`. The
+///    session has aged out idly; the row is left in place so a future
+///    cleanup pass can reclaim it (no urgency — `validate` will not return
+///    it again).
+/// 3. Else, if `now - last_seen_at > SESSION_EXTEND_THRESHOLD_SECS`, update
+///    `last_seen_at = now` and `expires_at = now + SESSION_IDLE_TTL_SECS`.
+///    Returns the resolved `user_id`.
 pub fn validate_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> Option<String> {
     let session_id = cookie_value.strip_prefix(DB_SESSION_PREFIX)?;
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let now_secs = now_unix();
+    let now_rfc3339 = chrono::DateTime::<chrono::Utc>::from_timestamp(now_secs, 0)
+        .unwrap_or_else(chrono::Utc::now)
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
 
-    conn.query_row(
-        "SELECT user_id FROM sessions WHERE id = ?1 AND expires_at > ?2",
-        rusqlite::params![session_id, now],
-        |row| row.get::<_, String>(0),
-    )
-    .ok()
+    // Fetch the user_id along with the lifecycle columns so all the gates
+    // run against a single, consistent snapshot.
+    let row: Option<(String, i64, i64, String)> = conn
+        .query_row(
+            "SELECT user_id, created_at_unix, last_seen_at, expires_at \
+             FROM sessions WHERE id = ?1",
+            rusqlite::params![session_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .ok();
+    let (user_id, created_at_unix, last_seen_at, expires_at) = row?;
+
+    // Absolute TTL — reject and lazily delete sessions older than 30 days,
+    // even if they were recently used (G/W/T 5.7).
+    if created_at_unix > 0
+        && now_secs.saturating_sub(created_at_unix) > SESSION_ABSOLUTE_TTL_SECS as i64
+    {
+        let _ = conn.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            rusqlite::params![session_id],
+        );
+        return None;
+    }
+
+    // Idle TTL — the existing `expires_at` check rejects long-idle sessions.
+    if expires_at <= now_rfc3339 {
+        return None;
+    }
+
+    // Sliding extend (G/W/T 5.4 / 5.5) — only write when we've crossed the
+    // threshold, so light-load polling doesn't hammer the `sessions` table.
+    if now_secs.saturating_sub(last_seen_at) > SESSION_EXTEND_THRESHOLD_SECS as i64 {
+        let new_expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(
+            now_secs.saturating_add(SESSION_IDLE_TTL_SECS as i64),
+            0,
+        )
+        .unwrap_or_else(chrono::Utc::now)
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+        let _ = conn.execute(
+            "UPDATE sessions SET last_seen_at = ?1, expires_at = ?2 WHERE id = ?3",
+            rusqlite::params![now_secs, new_expires_at, session_id],
+        );
+    }
+
+    Some(user_id)
+}
+
+/// Read-only variant of [`validate_db_session`] — used by handlers that need
+/// to check session validity but must not perform the sliding-extend `UPDATE`
+/// (e.g. when the session is being deleted as part of the request anyway).
+pub fn validate_db_session_no_extend(
+    conn: &rusqlite::Connection,
+    cookie_value: &str,
+) -> Option<String> {
+    let session_id = cookie_value.strip_prefix(DB_SESSION_PREFIX)?;
+    let now_secs = now_unix();
+    let now_rfc3339 = chrono::DateTime::<chrono::Utc>::from_timestamp(now_secs, 0)
+        .unwrap_or_else(chrono::Utc::now)
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+
+    let row: Option<(String, i64, String)> = conn
+        .query_row(
+            "SELECT user_id, created_at_unix, expires_at FROM sessions WHERE id = ?1",
+            rusqlite::params![session_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .ok();
+    let (user_id, created_at_unix, expires_at) = row?;
+
+    if created_at_unix > 0
+        && now_secs.saturating_sub(created_at_unix) > SESSION_ABSOLUTE_TTL_SECS as i64
+    {
+        return None;
+    }
+    if expires_at <= now_rfc3339 {
+        return None;
+    }
+    Some(user_id)
 }
 
 /// Delete a specific database session. Returns `true` if a session was deleted.
@@ -418,5 +636,80 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(COOKIE, format!("maestro_session={token}").parse().unwrap());
         assert!(session_authorized(&headers, &web));
+    }
+
+    // -- resolve_cookie_secure --
+
+    #[test]
+    fn resolve_cookie_secure_default_plain_http_is_false() {
+        let web = WebConfig::default();
+        let headers = HeaderMap::new();
+        assert!(!resolve_cookie_secure(&web, &headers));
+    }
+
+    #[test]
+    fn resolve_cookie_secure_explicit_true_wins() {
+        let web = WebConfig {
+            cookie_secure: Some(true),
+            ..Default::default()
+        };
+        let headers = HeaderMap::new();
+        assert!(resolve_cookie_secure(&web, &headers));
+    }
+
+    #[test]
+    fn resolve_cookie_secure_explicit_false_overrides_https_origin_and_header() {
+        let web = WebConfig {
+            cookie_secure: Some(false),
+            cors_origins: vec!["https://x.example.com".into()],
+            ..Default::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-Proto", "https".parse().unwrap());
+        assert!(!resolve_cookie_secure(&web, &headers));
+    }
+
+    #[test]
+    fn resolve_cookie_secure_https_cors_origin_triggers_true() {
+        let web = WebConfig {
+            cors_origins: vec!["https://maestro.example.com".into()],
+            ..Default::default()
+        };
+        let headers = HeaderMap::new();
+        assert!(resolve_cookie_secure(&web, &headers));
+    }
+
+    #[test]
+    fn resolve_cookie_secure_forwarded_proto_https_triggers_true() {
+        let web = WebConfig::default();
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-Proto", "https".parse().unwrap());
+        assert!(resolve_cookie_secure(&web, &headers));
+    }
+
+    #[test]
+    fn resolve_cookie_secure_forwarded_proto_case_insensitive() {
+        let web = WebConfig::default();
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-Proto", "HTTPS".parse().unwrap());
+        assert!(resolve_cookie_secure(&web, &headers));
+    }
+
+    #[test]
+    fn resolve_cookie_secure_forwarded_proto_http_stays_false() {
+        let web = WebConfig::default();
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Forwarded-Proto", "http".parse().unwrap());
+        assert!(!resolve_cookie_secure(&web, &headers));
+    }
+
+    #[test]
+    fn resolve_cookie_secure_only_http_cors_origin_stays_false() {
+        let web = WebConfig {
+            cors_origins: vec!["http://localhost:3000".into()],
+            ..Default::default()
+        };
+        let headers = HeaderMap::new();
+        assert!(!resolve_cookie_secure(&web, &headers));
     }
 }

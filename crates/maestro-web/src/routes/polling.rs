@@ -81,6 +81,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/api/polling/pause")
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
@@ -117,6 +118,7 @@ mod tests {
         let app = build_router(state.clone());
         app.oneshot(
             Request::post("/api/polling/pause")
+                .header("Origin", "http://localhost:8080")
                 .header("Cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -129,6 +131,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/api/polling/resume")
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),

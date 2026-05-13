@@ -7,6 +7,7 @@
 //! automatically on first open via [`Database::open`].
 
 pub mod credentials;
+pub mod login_attempts;
 pub mod migration;
 pub mod models;
 pub mod schema;

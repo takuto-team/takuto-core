@@ -11,22 +11,107 @@ use rust_embed::Embed;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::auth::dashboard_auth_middleware;
+use crate::middleware::csrf::csrf_middleware;
+use crate::middleware::security_headers::security_headers_middleware;
 use crate::routes;
 use crate::state::AppState;
+
+use tower_governor::GovernorLayer;
+use tower_governor::governor::GovernorConfigBuilder;
+use tower_governor::key_extractor::KeyExtractor;
+
+/// Key extractor used by the per-IP login/recover rate limiter.
+///
+/// Prefers `X-Forwarded-For` / `X-Real-IP` (Maestro normally runs behind a
+/// reverse proxy or terminator), falls back to the connection peer address
+/// when present, and finally to a static sentinel string when neither is
+/// available (e.g. during in-process integration tests where `oneshot` does
+/// not populate `ConnectInfo`). Production deployments always have one of
+/// the first two; the sentinel only fires in test mode.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LoginKeyExtractor;
+
+impl KeyExtractor for LoginKeyExtractor {
+    type Key = String;
+
+    fn extract<T>(&self, req: &axum::http::Request<T>) -> Result<Self::Key, tower_governor::GovernorError> {
+        // 1. X-Forwarded-For: first comma-separated entry.
+        if let Some(v) = req.headers().get("x-forwarded-for")
+            && let Ok(s) = v.to_str()
+            && let Some(first) = s.split(',').next()
+        {
+            let ip = first.trim();
+            if !ip.is_empty() {
+                return Ok(ip.to_string());
+            }
+        }
+        // 2. X-Real-IP.
+        if let Some(v) = req.headers().get("x-real-ip")
+            && let Ok(s) = v.to_str()
+            && !s.trim().is_empty()
+        {
+            return Ok(s.trim().to_string());
+        }
+        // 3. Peer addr via Axum's ConnectInfo, if it was wired in.
+        if let Some(ci) =
+            req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        {
+            return Ok(ci.0.ip().to_string());
+        }
+        // 4. Static sentinel — keeps in-process tests deterministic. Production
+        //    always reaches one of the prior cases because the listener
+        //    captures the peer address.
+        Ok("anon".to_string())
+    }
+}
 
 #[derive(Embed)]
 #[folder = "../../ui/dist/"]
 struct Assets;
 
 pub fn build_router(state: AppState) -> Router {
+    // Plan-02 AC-3 Layer A: per-IP rate limit on /auth/login + /auth/recover.
+    //
+    // 10 requests per minute per source IP, burst 10. Returns 429 + a
+    // `Retry-After` header on overflow. We deliberately scope this to the two
+    // brute-force-prone endpoints — `auth/status`, `auth/logout`, and the
+    // protected API stay unthrottled to keep idle dashboard polling and
+    // long-running editor sessions out of the bucket.
+    //
+    // `SmartIpKeyExtractor` consults `Forwarded`, `X-Forwarded-For`, and falls
+    // back to the connection peer address, so reverse-proxy deployments don't
+    // funnel every request into one bucket.
+    let login_governor_conf = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            // 1 permit every 6 seconds → 10 / minute steady state.
+            .period(std::time::Duration::from_secs(6))
+            // Allow short bursts up to 10 — matches the per-minute steady rate
+            // so a fresh attacker burns through 10 attempts before the throttle
+            // engages, and the 11th lands as 429 (G/W/T 3.1).
+            .burst_size(10)
+            .key_extractor(LoginKeyExtractor)
+            .finish()
+            .expect("static governor config"),
+    );
+    let login_rate_limited = Router::new()
+        .route("/auth/login", post(routes::auth::login))
+        .route("/auth/recover", post(routes::auth::recover))
+        .layer(GovernorLayer::new(login_governor_conf));
+
     let api_public = Router::new()
         .route("/health", get(health))
         .route("/version", get(routes::config::get_version))
         .route("/auth/status", get(routes::auth::auth_status))
-        .route("/auth/login", post(routes::auth::login))
         .route("/auth/logout", post(routes::auth::logout))
         .route("/auth/register", post(routes::auth::register))
-        .route("/auth/recover", post(routes::auth::recover));
+        .merge(login_rate_limited)
+        // CSRF: reject cross-origin mutating requests before they hit the
+        // login/register/recover handlers. Safe methods short-circuit inside
+        // the middleware, so `/health`, `/version`, `/auth/status` stay open.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            csrf_middleware,
+        ));
 
     let api_protected = Router::new()
         .route("/auth/me", get(routes::auth::me))
@@ -53,6 +138,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/users/{id}/suspend", post(routes::admin::suspend_user))
         .route("/users/{id}/unsuspend", post(routes::admin::unsuspend_user))
+        .route("/users/{id}/unlock", post(routes::admin::unlock_user))
         .route("/workflows", get(routes::workflows::list_workflows))
         .route("/workflows/counts", get(routes::workflows::workflow_counts))
         .route("/workflows/{id}", get(routes::workflows::get_workflow))
@@ -166,6 +252,14 @@ pub fn build_router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             dashboard_auth_middleware,
+        ))
+        // CSRF runs OUTSIDE the auth middleware so a planted cross-origin POST
+        // is rejected before any DB lookup. Tower layers wrap inside-out, so
+        // the LAST `.layer()` call here is the outermost — runs first on
+        // requests, last on responses.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            csrf_middleware,
         ));
 
     let api = Router::new().merge(api_public).merge(api_protected);
@@ -197,6 +291,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/s/{*rest}", any(routes::sessions::proxy_session))
         .fallback(routes::sessions::proxy_or_static_fallback)
         .layer(cors_layer)
+        // Security headers run as the OUTERMOST layer so every response —
+        // including 401 from auth, 403 from CSRF, 404 from the static
+        // fallback, and `/s/*` proxy responses — carries the defence-in-depth
+        // headers. The middleware branches on `request.uri().path()` to apply
+        // a looser policy to `/s/*` proxy responses.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            security_headers_middleware,
+        ))
         .with_state(state)
 }
 

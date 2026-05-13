@@ -79,6 +79,15 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
     }
 }
 
+/// Origin header to attach to mutating requests in tests. Matches the
+/// auto-computed `cors_origins` allowlist of `WebConfig::default()`
+/// (host=`0.0.0.0`, port=8080 → `http://localhost:8080` is allowed). The CSRF
+/// middleware (plan-02 AC-1) rejects mutating requests whose `Origin` is not
+/// on the allowlist, so every test that POSTs/PUTs/DELETEs/PATCHes must
+/// either send this header (when authenticated) or omit it (to assert that
+/// CSRF rejects the request).
+pub const TEST_ORIGIN: &str = "http://localhost:8080";
+
 /// Register the first admin user and log in, returning the session cookie string.
 ///
 /// The cookie is in `name=value` form (e.g. `maestro_session=db-<uuid>`) ready
@@ -91,6 +100,7 @@ pub async fn register_and_login(state: &AppState) -> String {
         .oneshot(
             Request::post("/api/auth/register")
                 .header("Content-Type", "application/json")
+                .header("Origin", TEST_ORIGIN)
                 .body(Body::from(
                     r#"{"username":"admin","password":"testpassword1234"}"#,
                 ))
@@ -109,6 +119,7 @@ pub async fn register_and_login(state: &AppState) -> String {
         .oneshot(
             Request::post("/api/auth/login")
                 .header("Content-Type", "application/json")
+                .header("Origin", TEST_ORIGIN)
                 .body(Body::from(
                     r#"{"username":"admin","password":"testpassword1234"}"#,
                 ))

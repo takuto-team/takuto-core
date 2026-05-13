@@ -270,14 +270,48 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | `users` | User accounts: `id` (UUID), `username` (unique), `role` (admin/user), `suspended`, `created_at` |
 | `credentials` | Hashed passwords/passkeys per user: `id`, `user_id` (FK), `kind` (password/passkey), `data` (argon2 hash) |
 | `recovery_codes` | Single-use recovery codes: `id`, `user_id` (FK), `code_hash` (argon2), `used` flag |
-| `sessions` | Database-backed sessions: `id` (UUID), `user_id` (FK), `data` (JSON), `expires_at` |
+| `sessions` | Database-backed sessions: `id` (UUID), `user_id` (FK), `data` (JSON), `expires_at`, **`last_seen_at`** (Unix seconds; bumped by the auth middleware on the sliding-extend path), **`created_at_unix`** (Unix seconds at session creation; enforced by the absolute 30-day TTL gate) |
+| `login_attempts` | **Persistent per-user authentication audit** (plan-02 AC-3). Columns: `id`, `user_id` (FK, cascade), `kind` (`'password'` \| `'recovery'` CHECK), `attempted_at` (Unix seconds), `success` (0/1). Used to enforce per-user lockout (5 failures in 10 min → 429 on the 6th attempt). |
 | `user_repositories` | Per-user repository access control (schema only — enforcement in future PR) |
 | `container_users` | Container isolation tracking (schema only — enforcement in future PR) |
 | `schema_migrations` | Migration version tracking |
 
-Schema migrations run automatically on `Database::open()` via a versioned migration runner.
+Schema migrations run automatically on `Database::open()` via a versioned migration runner. **Current `SCHEMA_VERSION = 2`.** `MIGRATION_V2` (plan-02 auth hardening, applied to `current_version < 2`): creates the `login_attempts` table + index, and adds `sessions.last_seen_at` / `sessions.created_at_unix` columns (both `NOT NULL DEFAULT 0`). Sessions inserted under v1 have `created_at_unix = 0`, which trips the absolute-TTL check on next use and forces re-login after the v2 rollout.
 
 **CORS:** The Axum router applies an **explicit origin allowlist** (not `CorsLayer::permissive()`). Allowed origins come from **`[web] cors_origins`**; when that list is empty (default), the origin is auto-computed from `host`/`port` (e.g. `http://localhost:8080`). Methods are restricted to **GET, POST, PUT, DELETE, PATCH**; allowed headers to **Content-Type**; **`Access-Control-Allow-Credentials: true`** is set so session cookies work cross-origin. Requests from unlisted origins receive no `Access-Control-Allow-Origin` header. For deployments behind a reverse proxy or TLS terminator, set `cors_origins` to the external-facing origin (e.g. `["https://maestro.example.com"]`). This setting is **startup-only** — not patchable via `PUT /api/config`.
+
+**CSRF (Origin/Referer allowlist):** Every `POST/PUT/DELETE/PATCH` against `/api/*` (both `api_public` and `api_protected`) is gated by the **`csrf_middleware`** in `crates/maestro-web/src/middleware/csrf.rs`. It reads the `Origin` header (preferred) or falls back to the `Referer` (extracting `scheme://authority`), and rejects with **`403 Forbidden`** (body `{"error":"missing or invalid Origin/Referer"}`) if the value is missing or not in `[web] cors_origins` (or the auto-computed default). Safe methods (`GET/HEAD/OPTIONS`) short-circuit before the check. On `api_protected` the CSRF layer wraps the auth layer so a planted cross-origin POST is rejected **before** any DB session lookup — including against `/api/auth/login`, which means a bad-origin login attempt returns 403, not 401. The shared-port `/s/*` proxy is **exempt** (it authenticates via the opaque path token in the URL; the dashboard cookie is not the gate there).
+
+**Security response headers:** The **`security_headers_middleware`** (in `crates/maestro-web/src/middleware/security_headers.rs`) is the **outermost** layer on the top-level router, so it injects defence-in-depth headers on every response — including 401 from the auth middleware, 403 from CSRF, 404 from the static fallback, and OPTIONS preflights. The dashboard policy:
+
+| Header | Value |
+|---|---|
+| `Content-Security-Policy` | `default-src 'self'; img-src 'self' data: blob:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'` |
+| `X-Frame-Options` | `SAMEORIGIN` |
+| `Referrer-Policy` | `strict-origin` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` (only when HTTPS context — `X-Forwarded-Proto: https` or any `https://` cors origin) |
+
+For `/s/*` proxy responses the policy is **loosened**: no `Content-Security-Policy` (the embedded editor uses inline scripts), no `X-Frame-Options`, and `Referrer-Policy` is **overridden to `no-referrer`** (the session path token is sensitive and must not leak via `Referer` to outbound links). `X-Content-Type-Options: nosniff` is still set.
+
+**Login rate-limit + account lockout (plan-02 AC-3):** Authentication endpoints are gated by two complementary layers.
+
+- **Per-IP rate limit (`tower_governor`):** wired only on `POST /api/auth/login` and `POST /api/auth/recover` (the brute-force-prone routes). Quota: **1 permit / 6 seconds with a burst of 10** — i.e. 10 requests/min/IP steady-state, with a 10-request burst before the throttle engages. Returns **`429 Too Many Requests`** with a `Retry-After` header. The custom **`LoginKeyExtractor`** (in `crates/maestro-web/src/server.rs`) prefers `X-Forwarded-For` then `X-Real-IP` then the connection peer address (so reverse-proxy deployments work out of the box), and falls back to a sentinel string only in tests where no peer addr is available.
+- **Per-user persistent lockout:** every login or recovery attempt against a **known** `user_id` is recorded in `login_attempts` (kind = `'password'` or `'recovery'`). When `failed_count_in_window(user_id, kind, 600s) >= 5`, the handler returns **`429`** with body `{"error":"account temporarily locked, try again in N minutes"}` and a `Retry-After` header pointing at `oldest_failure_ts + 10min - now`. On successful login the failed counter for that `(user_id, kind)` is cleared. **Unknown usernames are never recorded** — otherwise the 429 boundary would leak account existence (G/W/T 3.9). The password and recovery counters are independent (filtered by `kind`). A `tracing::warn!` line with `event="login_lockout"` accompanies every block. Admins clear the counters via **`POST /api/users/{id}/unlock`** (clears both kinds → 204). The unlock endpoint is admin-gated.
+
+**Session lifecycle (plan-02 AC-5):** Sessions live in the `sessions` table and use a sliding-extend model with an absolute cap.
+
+| Constant (`crates/maestro-web/src/auth.rs`) | Value | Meaning |
+|---|---|---|
+| `SESSION_IDLE_TTL_SECS` | 24 h | A session is rejected once it has been idle this long (`expires_at` check). |
+| `SESSION_ABSOLUTE_TTL_SECS` | 30 days | A session is rejected even when active once `now - created_at_unix` exceeds this. The row is lazily deleted on the rejection path. |
+| `SESSION_EXTEND_THRESHOLD_SECS` | 5 min | The auth middleware UPDATEs `last_seen_at` + slides `expires_at` only when `now - last_seen_at` exceeds this — caps the write rate to one UPDATE per session per 5 min of activity. |
+
+`create_db_session` writes `last_seen_at = created_at_unix = now`. `validate_db_session` runs the absolute-TTL gate first (delete + None), then the `expires_at` gate (None), then the sliding-extend UPDATE if the threshold is crossed. There is a `validate_db_session_no_extend` variant for code paths that need a check without the write (rare).
+
+**Session rotation:** `POST /api/auth/login` consults `[web] kick_other_sessions_on_login` (default **`true`**). When true, prior sessions for the same user are deleted before the new session is created — single-session enforcement. Set to `false` for multi-client concurrent sessions. **Role changes invalidate all sessions:** `PATCH /api/users/{id}` calls `delete_user_sessions(target_user_id)` whenever the role actually changes, so the target user must re-authenticate with the new role.
+
+**Test clock seam:** `crates/maestro-web/src/auth.rs` exposes `now_unix()`, `set_test_now_unix(t)`, and `clear_test_now_unix()`. Integration tests use these to drive the sliding-extend and absolute-TTL gates without `tokio::time::pause`. Production code paths read `now_unix()` everywhere a Unix timestamp is needed.
 
 `crates/maestro-web/src/server.rs` mounts:
 
@@ -329,6 +363,7 @@ Schema migrations run automatically on `Database::open()` via a versioned migrat
 | DELETE | `/api/users/{id}` | Admin-only: delete a user and all associated data |
 | POST | `/api/users/{id}/suspend` | Admin-only: suspend a user (also deletes all sessions) |
 | POST | `/api/users/{id}/unsuspend` | Admin-only: unsuspend a user |
+| POST | `/api/users/{id}/unlock` | Admin-only: clear lockout counters (`login_attempts` rows) for the user; **204** on success, **404** if user not found |
 | GET | `/api/users/export` | Admin-only: export all users as JSON |
 | POST | `/api/users/import` | Admin-only: import users; skips existing usernames; returns **`ImportSummary`** |
 | GET | `/api/workspaces` | JSON array of `{ "name", "html_url?", "active" }` — lists all git repos found under `/workspaces/`. Each entry includes whether it is the currently active workspace. |
@@ -350,7 +385,7 @@ Loaded in `crates/maestro-core/src/config.rs` — sections:
 - **`git`**: `base_branch`, `remote` (fetch / worktree / push; default `origin`), `repo_path`
 - **`github`**: optional GitHub App credentials for bot-attributed commits/PRs. `app_id` (u64), `app_installation_id` (u64), `app_private_key` (inline PEM) or `app_private_key_path` (path to PEM file), `app_name` (string, optional — display name of the connected GitHub App, exposed as `github_app_name` in `GET /api/config` response). All three required fields must be set to enable; errors are non-fatal at startup (see **GitHub App authentication** above). `GET /api/config` redacts both private key fields.
 - **`commands`**: `pre_install` (`Vec<String>`, deserializes from a single string too), `install`, `pre_workflow` (`Vec<String>` executed before each agent workflow starts)
-- **`web`**: `host`, `port`, **`dashboard_username`** / **`dashboard_password`** (optional pair — username + password for dashboard login; both empty = no auth), **`cors_origins`** (`Vec<String>`, default empty — allowed CORS origins; when empty, auto-computed from host/port e.g. `http://localhost:8080`; set explicitly for reverse proxy / TLS setups; startup-only, not patchable via `PUT /api/config`)
+- **`web`**: `host`, `port`, **`dashboard_username`** / **`dashboard_password`** (optional pair — username + password for dashboard login; both empty = no auth), **`cors_origins`** (`Vec<String>`, default empty — allowed CORS origins; when empty, auto-computed from host/port e.g. `http://localhost:8080`; set explicitly for reverse proxy / TLS setups; startup-only, not patchable via `PUT /api/config`), **`cookie_secure`** (`Option<bool>`, default `None` — controls the `Secure` attribute on the session cookie; when `None`, auto-detects via `resolve_cookie_secure` in `crates/maestro-web/src/auth.rs`: `true` if any `cors_origins` entry is `https://…` OR the inbound request carries `X-Forwarded-Proto: https`; an explicit `true`/`false` always wins over auto-detect), **`kick_other_sessions_on_login`** (`bool`, default `true` — when a user logs in successfully, prior sessions for that user are deleted; set to `false` to allow multi-client concurrent sessions for the same user)
 - **`agent`**: `provider` (`claude` \| `cursor`), `cursor_cli`, `cursor_model` (default `Auto`; Cursor CLI gets `--model Auto` unless a concrete id is set), `step_timeout_secs` (timeout per agent session, all providers), `improve_timeout_secs` (timeout for **Improve with AI** / **Prompt ticket** sessions; default 300 s; configurable via `config.toml`), `model` (override, e.g. `"claude-opus-4-6"`; empty = provider default)
 - **`docker`**: `build_commands` (image build), `compose_up_commands` (each `docker compose up`)
 - **`network`**: `extra_egress_hosts`, **`allow_all_https`**

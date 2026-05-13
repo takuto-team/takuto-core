@@ -256,6 +256,7 @@ mod tests {
             .oneshot(
                 Request::put("/api/config")
                     .header("Content-Type", "application/json")
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::from(r#"{"general":{"max_concurrent_workflows":5}}"#))
                     .unwrap(),
@@ -282,6 +283,7 @@ mod tests {
             .oneshot(
                 Request::put("/api/config")
                     .header("Content-Type", "application/json")
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::from(r#"{"jira":{"site":"x"}}"#))
                     .unwrap(),
@@ -310,6 +312,7 @@ mod tests {
             .oneshot(
                 Request::put("/api/config")
                     .header("Content-Type", "application/json")
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::from(
                         r#"{"web":{"dashboard_username":"admin","dashboard_password":""}}"#,
@@ -335,6 +338,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/api/config/reload")
+                    .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::empty())
                     .unwrap(),
