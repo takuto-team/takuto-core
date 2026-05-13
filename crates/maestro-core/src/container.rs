@@ -1582,7 +1582,7 @@ pub async fn run_port_scanner(
     // services like the Docker daemon in DinD mode, the Maestro dashboard, etc.).
     // Only ports that appear AFTER this snapshot are treated as user applications.
     // This avoids hardcoding a blocklist — users are free to use any port.
-    let baseline = match scan_listening_ports(&container).await {
+    let baseline = match scan_listening_ports(&container, false).await {
         Some(ports) => ports.into_iter().map(|(p, _)| p).collect::<std::collections::HashSet<u16>>(),
         None => std::collections::HashSet::new(),
     };
@@ -1611,7 +1611,7 @@ pub async fn run_port_scanner(
             _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {}
         }
 
-        let listening = match scan_listening_ports(&container).await {
+        let listening = match scan_listening_ports(&container, false).await {
             Some(ports) => ports,
             None => continue,
         };
@@ -1716,9 +1716,20 @@ enum ListenFamily {
 
 /// Run `ss -tlnH` inside the container and return listening `(port, family)` entries.
 /// If the same port is listening on both families, prefer IPv4 (better Docker reachability).
-async fn scan_listening_ports(container: &str) -> Option<Vec<(u16, ListenFamily)>> {
+/// Scan listening ports inside a container.
+///
+/// When `owned_only` is true, uses `ss -tlnpH` (with process info) and
+/// only returns ports that have a visible PID in this container's PID
+/// namespace. In `--network=host` mode, ports from OTHER containers
+/// show no PID — this lets each scanner see only its own app's ports,
+/// preventing cross-contamination when multiple run commands share the
+/// same network namespace.
+async fn scan_listening_ports(container: &str, owned_only: bool) -> Option<Vec<(u16, ListenFamily)>> {
+    let ss_args = if owned_only { vec!["ss", "-tlnpH"] } else { vec!["ss", "-tlnH"] };
     let output = tokio::process::Command::new("docker")
-        .args(["exec", container, "ss", "-tlnH"])
+        .arg("exec")
+        .arg(container)
+        .args(&ss_args)
         .output()
         .await
         .ok()?;
@@ -1729,27 +1740,33 @@ async fn scan_listening_ports(container: &str) -> Option<Vec<(u16, ListenFamily)
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut by_port: HashMap<u16, ListenFamily> = HashMap::new();
-    // Format: "LISTEN 0 128 0.0.0.0:6006  0.0.0.0:*"
-    //    or:  "LISTEN 0 128 [::]:6006     [::]:*"
-    //    or:  "LISTEN 0 128 127.0.0.1:5173  0.0.0.0:*"
-    //    or:  "LISTEN 0 128 [::1]:5173     [::]:*"
+    // Without -p: "LISTEN 0 128 0.0.0.0:6006  0.0.0.0:*"
+    // With -p:    "LISTEN 0 128 0.0.0.0:6006  0.0.0.0:*  users:(("node",pid=42,fd=19))"
+    //   or no PID for other containers' ports:
+    //             "LISTEN 0 128 0.0.0.0:5173  0.0.0.0:*"
     for line in stdout.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() >= 4 {
-            let local = fields[3];
-            let family = if local.starts_with('[') {
-                ListenFamily::Ipv6
-            } else {
-                ListenFamily::Ipv4
-            };
-            if let Some(port_str) = local.rsplit(':').next()
-                && let Ok(port) = port_str.parse::<u16>()
-                && port > 0
-            {
-                let entry = by_port.entry(port).or_insert(family);
-                if family == ListenFamily::Ipv4 {
-                    *entry = ListenFamily::Ipv4;
-                }
+        if fields.len() < 4 {
+            continue;
+        }
+        // When owned_only, skip lines without "users:(" — those are ports
+        // from other containers (no PID visible in this PID namespace).
+        if owned_only && !line.contains("users:(") {
+            continue;
+        }
+        let local = fields[3];
+        let family = if local.starts_with('[') {
+            ListenFamily::Ipv6
+        } else {
+            ListenFamily::Ipv4
+        };
+        if let Some(port_str) = local.rsplit(':').next()
+            && let Ok(port) = port_str.parse::<u16>()
+            && port > 0
+        {
+            let entry = by_port.entry(port).or_insert(family);
+            if family == ListenFamily::Ipv4 {
+                *entry = ListenFamily::Ipv4;
             }
         }
     }
@@ -1761,7 +1778,7 @@ async fn scan_listening_ports(container: &str) -> Option<Vec<(u16, ListenFamily)
 /// Returns an empty set if the container is unreachable or `ss` fails.
 pub async fn listening_ports_in_editor(ticket_key: &str) -> std::collections::HashSet<u16> {
     let name = editor_container_name(ticket_key);
-    scan_listening_ports(&name)
+    scan_listening_ports(&name, false)
         .await
         .map(|v| v.into_iter().map(|(p, _)| p).collect())
         .unwrap_or_default()
@@ -2124,7 +2141,7 @@ pub async fn run_run_command_port_scanner(
     // present before the user's command runs is infrastructure (Docker daemon,
     // Maestro dashboard, etc.) and must not be forwarded. Only ports that
     // appear AFTER this snapshot are treated as user applications.
-    let baseline = match scan_listening_ports(&container).await {
+    let baseline = match scan_listening_ports(&container, false).await {
         Some(ports) => ports.into_iter().map(|(p, _)| p).collect::<std::collections::HashSet<u16>>(),
         None => std::collections::HashSet::new(),
     };
@@ -2185,7 +2202,10 @@ pub async fn run_run_command_port_scanner(
             return;
         }
 
-        let listening = match scan_listening_ports(&container).await {
+        // owned_only=true: only detect ports with a PID visible in this
+        // container's PID namespace. Prevents picking up ports from other
+        // run command containers that share --network=host.
+        let listening = match scan_listening_ports(&container, true).await {
             Some(ports) => ports,
             None => continue,
         };
@@ -2193,13 +2213,6 @@ pub async fn run_run_command_port_scanner(
             listening.iter().map(|(p, _)| *p).collect();
 
         // Detect new listening ports → start socat forwarding.
-        // Run commands forward at most ONE port — each command runs a single
-        // server. Without this limit, in DinD --network=host mode, one command's
-        // scanner would pick up ports from other commands (they share the same
-        // network namespace) and both would end up pointing to the same server.
-        if !active_forwards.is_empty() {
-            continue;
-        }
         for &(port, family) in &listening {
             if always_ignore.contains(&port)
                 || baseline.contains(&port)
