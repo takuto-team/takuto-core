@@ -82,6 +82,100 @@ pub async fn track_port_forwards(
     }
 }
 
+/// Track port events for a single run command. Registers the reserved proxy
+/// token when a port is detected and cleans up on stop/unforward events.
+#[allow(clippy::too_many_arguments)]
+async fn run_command_port_tracker(
+    ticket_key: String,
+    cmd_index: usize,
+    user_id: String,
+    reserved_token: String,
+    proxy_base: String,
+    run_cmds_map: crate::state::RunCommandsMap,
+    registry: PathTokenRegistry,
+    mut rx: broadcast::Receiver<WorkflowEvent>,
+    cancel: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            result = rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        if event.ticket_key != ticket_key {
+                            continue;
+                        }
+                        let evt_cmd_index: usize = match event.step_name.as_deref().unwrap_or("").parse() {
+                            Ok(i) => i,
+                            Err(_) => continue,
+                        };
+                        if evt_cmd_index != cmd_index {
+                            continue;
+                        }
+                        match event.event_type.as_str() {
+                            "run_command_port_forwarded" => {
+                                if let Some((cp, hp)) = event.forwarded_port {
+                                    registry.register_with_token(
+                                        reserved_token.clone(),
+                                        SessionRoute {
+                                            kind: SessionRouteKind::DynamicPort,
+                                            host_port: hp,
+                                            ticket_key: ticket_key.clone(),
+                                            user_id: user_id.clone(),
+                                        },
+                                    ).await;
+                                    let mut map = run_cmds_map.write().await;
+                                    if let Some(cmd) = map.get_mut(&ticket_key)
+                                        .and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == cmd_index))
+                                    {
+                                        cmd.forwarded_port = Some(DynamicPortForward {
+                                            container_port: cp,
+                                            host_port: hp,
+                                            proxy_url: proxy_base.clone(),
+                                            path_token: reserved_token.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                            "run_command_port_unforwarded" => {
+                                let mut map = run_cmds_map.write().await;
+                                if let Some(cmd) = map.get_mut(&ticket_key)
+                                    .and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == cmd_index))
+                                    && let Some((gone_cp, _)) = event.forwarded_port
+                                    && cmd.forwarded_port.as_ref().map(|f| f.container_port) == Some(gone_cp)
+                                {
+                                    if let Some(ref fwd) = cmd.forwarded_port {
+                                        registry.remove(&fwd.path_token).await;
+                                    }
+                                    cmd.forwarded_port = None;
+                                }
+                            }
+                            "run_command_stopped" => {
+                                let mut map = run_cmds_map.write().await;
+                                if let Some(cmds) = map.get_mut(&ticket_key) {
+                                    if let Some(cmd) = cmds.iter().find(|c| c.cmd_index == cmd_index)
+                                        && let Some(ref fwd) = cmd.forwarded_port
+                                    {
+                                        registry.remove(&fwd.path_token).await;
+                                    }
+                                    cmds.retain(|c| c.cmd_index != cmd_index);
+                                    if cmds.is_empty() {
+                                        map.remove(&ticket_key);
+                                    }
+                                }
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct TerminalLineDto {
     pub text: String,
@@ -1451,93 +1545,17 @@ pub async fn start_run_command(
         }
     });
 
-    // Spawn tracker that updates run_commands state on port events.
-    let mut rx = state.engine.subscribe();
-    let registry = state.path_token_registry.clone();
-    let tracker_user_id = auth.user_id.clone();
-    let tracker_reserved_token = reserved_token.clone();
-    let tracker_proxy_base = proxy_base.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = tracker_cancel.cancelled() => break,
-                result = rx.recv() => {
-                    match result {
-                        Ok(event) => {
-                            if event.ticket_key != ticket_for_tracker {
-                                continue;
-                            }
-                            let cmd_idx_str = event.step_name.as_deref().unwrap_or("");
-                            let evt_cmd_index: usize = match cmd_idx_str.parse() {
-                                Ok(i) => i,
-                                Err(_) => continue,
-                            };
-                            if evt_cmd_index != index {
-                                continue;
-                            }
-                            match event.event_type.as_str() {
-                                "run_command_port_forwarded" => {
-                                    if let Some((cp, hp)) = event.forwarded_port {
-                                        // Register the reserved token with the now-known host_port.
-                                        registry.register_with_token(
-                                            tracker_reserved_token.clone(),
-                                            SessionRoute {
-                                                kind: SessionRouteKind::DynamicPort,
-                                                host_port: hp,
-                                                ticket_key: ticket_for_tracker.clone(),
-                                                user_id: tracker_user_id.clone(),
-                                            },
-                                        ).await;
-                                        let mut map = run_cmds_map.write().await;
-                                        if let Some(cmd) = map.get_mut(&ticket_for_tracker).and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == index)) {
-                                            cmd.forwarded_port = Some(DynamicPortForward {
-                                                container_port: cp,
-                                                host_port: hp,
-                                                proxy_url: tracker_proxy_base.clone(),
-                                                path_token: tracker_reserved_token.clone(),
-                                            });
-                                        }
-                                    }
-                                }
-                                "run_command_port_unforwarded" => {
-                                    let mut map = run_cmds_map.write().await;
-                                    if let Some(cmd) = map.get_mut(&ticket_for_tracker).and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == index))
-                                        && let Some((gone_cp, _)) = event.forwarded_port
-                                        && cmd.forwarded_port.as_ref().map(|f| f.container_port) == Some(gone_cp)
-                                    {
-                                        if let Some(ref fwd) = cmd.forwarded_port {
-                                            registry.remove(&fwd.path_token).await;
-                                        }
-                                        cmd.forwarded_port = None;
-                                    }
-                                }
-                                "run_command_stopped" => {
-                                    // Container exited on its own — clean up state
-                                    let mut map = run_cmds_map.write().await;
-                                    if let Some(cmds) = map.get_mut(&ticket_for_tracker) {
-                                        // Deregister proxy token before removing state.
-                                        if let Some(cmd) = cmds.iter().find(|c| c.cmd_index == index)
-                                            && let Some(ref fwd) = cmd.forwarded_port
-                                        {
-                                            registry.remove(&fwd.path_token).await;
-                                        }
-                                        cmds.retain(|c| c.cmd_index != index);
-                                        if cmds.is_empty() {
-                                            map.remove(&ticket_for_tracker);
-                                        }
-                                    }
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-    });
+    tokio::spawn(run_command_port_tracker(
+        ticket_for_tracker,
+        index,
+        auth.user_id.clone(),
+        reserved_token,
+        proxy_base,
+        run_cmds_map,
+        state.path_token_registry.clone(),
+        state.engine.subscribe(),
+        tracker_cancel,
+    ));
 
     Ok(Json(StartRunCommandResponse {
         index,

@@ -250,62 +250,79 @@ pub async fn proxy_or_static_fallback(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    // Check Referer for a /s/{token}/ pattern.
-    // Strategy 1: Referer contains /s/{token}/ — direct proxy via known token.
-    // Strategy 2: No matching referer, but the path looks like a dev server
-    //   asset (/node_modules/, /@vite/, /src/, /@react-refresh, etc.) — find
-    //   any active DynamicPort session for the authenticated user.
-    let proxy_route = if let Some(referer) = req.headers().get(header::REFERER).and_then(|v| v.to_str().ok())
-        && let Some(token) = extract_token_from_referer(referer)
-        && let Some(route) = state.path_token_registry.lookup(&token).await
-        && route.kind == SessionRouteKind::DynamicPort
-    {
-        Some((token, route))
-    } else if let Some(token) = extract_dynamic_port_cookie(req.headers()) {
-        // Fallback: the maestro_dynamic_port cookie identifies the last
-        // DynamicPort session the user visited. This catches root-relative
-        // JS imports that don't carry the /s/{token}/ referer (deep
-        // dependency chains like /@vite/client → /node_modules/...).
-        if let Some(route) = state.path_token_registry.lookup(&token).await {
-            if route.kind == SessionRouteKind::DynamicPort {
-                Some((token, route))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    // Find a DynamicPort route via referer or cookie.
+    let proxy_route = find_dynamic_port_route(&state, req.headers()).await;
 
     if let Some((token, route)) = proxy_route {
-        // Auth check: validate cookie and ownership.
-        let auth_ok = if let Some(ref db) = state.db {
-            let uid = match session_cookie_from_headers(req.headers()) {
-                Some(raw) if raw.starts_with("db-") => {
-                    let db = db.clone();
-                    let cookie = raw.to_string();
-                    tokio::task::spawn_blocking(move || {
-                        let conn = db.conn().blocking_lock();
-                        validate_db_session(&conn, &cookie)
-                    })
-                    .await
-                    .unwrap_or(None)
-                }
-                _ => None,
-            };
-            uid.as_deref() == Some(&route.user_id)
-        } else {
-            true
-        };
-        if auth_ok {
+        let auth_user_id = authenticate_request(state.db.as_ref(), req.headers())
+            .await
+            .ok()
+            .flatten();
+        if user_owns_route(&auth_user_id, &route) {
             let path = req.uri().path().to_string();
             return forward_http(req, route, &path, &token).await;
         }
     }
-    // Fall through to the static file handler.
     crate::server::serve_static(req.uri().clone()).await
+}
+
+/// Find a DynamicPort route for a root-relative asset request.
+///
+/// Strategy 1: `Referer` header contains `/s/{token}/` → use that token.
+/// Strategy 2: `maestro_dynamic_port` cookie → set when the user last
+///   visited a DynamicPort HTML page, catches deep JS import chains.
+async fn find_dynamic_port_route(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Option<(String, SessionRoute)> {
+    // Try referer first (most reliable — carries the exact token).
+    if let Some(referer) = headers.get(header::REFERER).and_then(|v| v.to_str().ok())
+        && let Some(token) = extract_token_from_referer(referer)
+        && let Some(route) = state.path_token_registry.lookup(&token).await
+        && route.kind == SessionRouteKind::DynamicPort
+    {
+        return Some((token, route));
+    }
+    // Fall back to cookie (covers deep dependency chains without referer).
+    let token = extract_dynamic_port_cookie(headers)?;
+    let route = state.path_token_registry.lookup(&token).await?;
+    (route.kind == SessionRouteKind::DynamicPort).then_some((token, route))
+}
+
+/// Authenticate the request and return the user ID if valid.
+///
+/// Returns `Some(user_id)` when a valid `db-` session cookie is present.
+/// Returns `None` when no database is configured (auth skipped).
+/// Returns `Err(())` when auth is required but the cookie is missing/invalid.
+async fn authenticate_request(
+    db: Option<&maestro_core::db::Database>,
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<String>, ()> {
+    let Some(db) = db else {
+        return Ok(None);
+    };
+    match session_cookie_from_headers(headers) {
+        Some(raw) if raw.starts_with("db-") => {
+            let db = db.clone();
+            let cookie = raw.to_string();
+            let uid = tokio::task::spawn_blocking(move || {
+                let conn = db.conn().blocking_lock();
+                validate_db_session(&conn, &cookie)
+            })
+            .await
+            .unwrap_or(None);
+            uid.map(Some).ok_or(())
+        }
+        _ => Err(()),
+    }
+}
+
+/// Check that the authenticated user owns the given route.
+fn user_owns_route(auth_user_id: &Option<String>, route: &SessionRoute) -> bool {
+    match auth_user_id {
+        Some(uid) => route.user_id == *uid,
+        None => true, // no DB configured, skip ownership check
+    }
 }
 
 /// Extract the `maestro_dynamic_port` cookie value (a proxy token).
@@ -344,32 +361,14 @@ fn extract_token_from_referer(referer: &str) -> Option<String> {
 /// access if the URL leaks — the unguessable path token remains a defence in
 /// depth, but is no longer the sole gatekeeper.
 pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) -> Response<Body> {
-    // --- cookie auth gate (mirrors the /ws inline pattern) ---
-    // When a user database is configured, extract the authenticated user_id
-    // so we can verify ownership after the route lookup.
-    let auth_user_id: Option<String> = if let Some(ref db) = state.db {
-        let uid = match session_cookie_from_headers(req.headers()) {
-            Some(raw) if raw.starts_with("db-") => {
-                let db = db.clone();
-                let cookie = raw.to_string();
-                tokio::task::spawn_blocking(move || {
-                    let conn = db.conn().blocking_lock();
-                    validate_db_session(&conn, &cookie)
-                })
-                .await
-                .unwrap_or(None)
-            }
-            _ => None,
-        };
-        if uid.is_none() {
+    let auth_user_id = match authenticate_request(state.db.as_ref(), req.headers()).await {
+        Ok(uid) => uid,
+        Err(()) => {
             return Response::builder()
                 .status(StatusCode::UNAUTHORIZED)
                 .body(Body::empty())
                 .expect("401 builder is infallible");
         }
-        uid
-    } else {
-        None
     };
 
     let path = req.uri().path().to_string();
@@ -378,19 +377,13 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
         Some(parts) => parts,
         None => return not_found(),
     };
-
     let rest = match rest {
         None => return redirect_to_trailing_slash(token, query.as_deref()),
         Some(r) => r,
     };
-
     let route = match state.path_token_registry.lookup(token).await {
         Some(r) => r,
         None => {
-            // Per the GH-45 description's defense-in-depth recommendations,
-            // failed path-resolution attempts must be visible at production
-            // log levels (anomaly / brute-force-enumeration detection).
-            // Logged with the SHA-256 prefix only — never the raw token.
             tracing::warn!(
                 token_hash = %token_hash_prefix(token),
                 "session path token not found"
@@ -398,13 +391,7 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
             return not_found();
         }
     };
-
-    // Verify the authenticated user owns this session route. A valid
-    // session cookie for user A must not grant access to user B's
-    // editor, terminal, or dynamically forwarded port.
-    if let Some(ref uid) = auth_user_id
-        && route.user_id != *uid
-    {
+    if !user_owns_route(&auth_user_id, &route) {
         tracing::warn!(
             token_hash = %token_hash_prefix(token),
             "session route user_id mismatch"

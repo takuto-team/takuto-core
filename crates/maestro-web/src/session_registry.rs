@@ -38,8 +38,10 @@ pub enum SessionRouteKind {
     Editor,
     Terminal,
     /// A dynamically forwarded application port (e.g. a dev server started by
-    /// the user). Proxied identically to Terminal — prefix stripped, redirects
-    /// rewritten.
+    /// the user). Proxy strips the `/s/{token}` prefix so the upstream app
+    /// receives requests at root `/`. A `maestro_dynamic_port` cookie is set
+    /// on HTML responses so the referer-based fallback can route root-relative
+    /// JS imports to the correct upstream.
     DynamicPort,
 }
 
