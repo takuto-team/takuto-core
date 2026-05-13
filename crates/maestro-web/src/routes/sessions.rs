@@ -261,6 +261,20 @@ pub async fn proxy_or_static_fallback(
         && route.kind == SessionRouteKind::DynamicPort
     {
         Some((token, route))
+    } else if let Some(token) = extract_dynamic_port_cookie(req.headers()) {
+        // Fallback: the maestro_dynamic_port cookie identifies the last
+        // DynamicPort session the user visited. This catches root-relative
+        // JS imports that don't carry the /s/{token}/ referer (deep
+        // dependency chains like /@vite/client → /node_modules/...).
+        if let Some(route) = state.path_token_registry.lookup(&token).await {
+            if route.kind == SessionRouteKind::DynamicPort {
+                Some((token, route))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -292,6 +306,23 @@ pub async fn proxy_or_static_fallback(
     }
     // Fall through to the static file handler.
     crate::server::serve_static(req.uri().clone()).await
+}
+
+/// Extract the `maestro_dynamic_port` cookie value (a proxy token).
+fn extract_dynamic_port_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in raw.split(';') {
+        let part = part.trim();
+        if let Some((name, value)) = part.split_once('=')
+            && name.trim() == "maestro_dynamic_port"
+        {
+            let token = value.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Extract a session token from a Referer URL like
@@ -477,10 +508,21 @@ async fn forward_http(
             if route.kind == SessionRouteKind::Terminal {
                 rewrite_redirect_location(&mut response, token);
             }
-            // Note: HTML URL rewriting is NOT applied here. Apps that use
-            // MAESTRO_PROXY_BASE already emit correct URLs. Apps that don't
-            // are handled by the referer-based fallback in
-            // proxy_or_static_fallback.
+            // For DynamicPort: set a cookie so the referer-based fallback in
+            // proxy_or_static_fallback can identify the correct upstream for
+            // root-relative asset requests (JS imports that bypass /s/{token}/).
+            if route.kind == SessionRouteKind::DynamicPort
+                && response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|ct| ct.starts_with("text/html"))
+                && let Ok(cookie_val) = HeaderValue::from_str(
+                    &format!("maestro_dynamic_port={token}; Path=/; SameSite=Lax")
+                )
+            {
+                response.headers_mut().append(header::SET_COOKIE, cookie_val);
+            }
             response
         }
         Err(err) => {

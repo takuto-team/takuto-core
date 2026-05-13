@@ -1911,6 +1911,11 @@ pub async fn start_run_command(
     args.push(format!("maestro.run_command={cmd_index}"));
     args.push("--label".into());
     args.push(format!("maestro.ticket_key={ticket_key}"));
+    if !spare_ports.is_empty() {
+        args.push("--label".into());
+        let sp_csv: String = spare_ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
+        args.push(format!("maestro.spare_ports={sp_csv}"));
+    }
 
     // Image
     args.push(image.into());
