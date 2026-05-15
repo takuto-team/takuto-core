@@ -66,12 +66,21 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     }
   }, []);
 
-  // When `myRepos` lands, drop the saved active repo if it's no longer in the
-  // user's list (they may have removed it from another tab).
+  // Sync `activeRepoName` with the user's current `myRepos` set:
+  //   - Drop the saved active repo if it's no longer in the user's list (a
+  //     removal in the Config tab — or another browser tab).
+  //   - If exactly ONE repo remains and nothing is selected, auto-select it.
+  //     This is the dashboard's expected behaviour after a removal that leaves
+  //     a single repo — the user shouldn't have to manually pick from the
+  //     header picker to see their items.
   useEffect(() => {
-    if (myRepos === null || activeRepoName === null) return;
-    if (!myRepos.some((r) => r.name === activeRepoName)) {
+    if (myRepos === null) return;
+    if (activeRepoName !== null && !myRepos.some((r) => r.name === activeRepoName)) {
       setActiveRepoName(null);
+      return;
+    }
+    if (myRepos.length === 1 && activeRepoName === null) {
+      setActiveRepoName(myRepos[0].name);
     }
   }, [myRepos, activeRepoName, setActiveRepoName]);
 
@@ -320,6 +329,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       {showPicker && (
         <TicketPickerModal
           ticketingSystem={ticketingSystem}
+          activeRepoName={activeRepoName}
           onSelect={handleTicketSelected}
           onClose={() => setShowPicker(false)}
         />
