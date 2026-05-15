@@ -254,12 +254,22 @@ impl WorkflowTransitions {
         if self.jira_available.load(Ordering::Relaxed) {
             let actions = self.actions.clone();
             let ticket_for_jira = ticket_key_owned.clone();
+            let (repo_path, _base_branch) = super::driver::resolve_repo_for_ticket(
+                &ticket_for_jira,
+                &self.repository.inner_arc(),
+                &self.config,
+                self.db.as_ref(),
+            )
+            .await;
 
             tokio::spawn(async move {
-                if let Err(e) = actions.unassign_ticket(&ticket_for_jira).await {
+                if let Err(e) = actions.unassign_ticket(&repo_path, &ticket_for_jira).await {
                     warn!(error = %e, ticket = %ticket_for_jira, "Failed to unassign ticket on stop");
                 }
-                if let Err(e) = actions.transition_ticket(&ticket_for_jira, "To Do").await {
+                if let Err(e) = actions
+                    .transition_ticket(&repo_path, &ticket_for_jira, "To Do")
+                    .await
+                {
                     warn!(error = %e, ticket = %ticket_for_jira, "Failed to transition ticket back to To Do on stop");
                 }
             });
@@ -291,7 +301,7 @@ impl WorkflowTransitions {
         lifecycle: &super::lifecycle::WorkflowLifecycle,
         definitions: &WorkflowDefinitionManager,
     ) -> Result<String> {
-        let (ticket_summary, ticket_description, ticket_url, user_id) = {
+        let (ticket_summary, ticket_description, ticket_url, user_id, repository_id) = {
             let wf_arc = self.repository.inner_arc();
             let workflows = wf_arc.read().await;
             let workflow = workflows
@@ -314,13 +324,14 @@ impl WorkflowTransitions {
                 },
                 workflow.ticket_url.clone(),
                 workflow.user_id.clone(),
+                workflow.repository_id.clone(),
             )
         };
 
         // Remove the old workflow
         self.repository.inner_arc().write().await.remove(ticket_key);
 
-        // Start a fresh one (preserves description, ticket URL, and owner for the retry)
+        // Start a fresh one (preserves description, ticket URL, owner, and repo for the retry)
         lifecycle
             .start_workflow(
                 ticket_key.to_string(),
@@ -330,6 +341,7 @@ impl WorkflowTransitions {
                 ticket_url,
                 definitions,
                 user_id,
+                repository_id,
             )
             .await
     }

@@ -22,5 +22,6 @@ pub mod github_app;
 pub mod jira;
 pub mod license;
 pub mod process;
+pub mod repo_reconcile;
 pub mod skill_resolve;
 pub mod workflow;

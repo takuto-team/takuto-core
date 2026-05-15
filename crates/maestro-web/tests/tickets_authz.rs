@@ -80,7 +80,13 @@ async fn create_and_login_regular_user(
 }
 
 /// Insert a workflow with the given user_id directly into the engine map.
+///
+/// Plan-10: the workflow's `workspace_name` must match a `repositories` row
+/// that the owning user has added to their `user_repositories`, otherwise
+/// `require_workflow_access` filters it out. Seed both alongside the workflow
+/// so the post-plan-10 visibility gate matches the test's intent.
 async fn seed_workflow(state: &AppState, key: &str, user_id: &str) {
+    let workspace = "test-workspace".to_string();
     let mut wf = Workflow::new(
         key.to_string(),
         format!("Summary for {key}"),
@@ -88,9 +94,36 @@ async fn seed_workflow(state: &AppState, key: &str, user_id: &str) {
         false,
         TicketingSystem::None,
         None,
-        "test-workspace".to_string(),
+        workspace.clone(),
     );
     wf.user_id = Some(user_id.to_string());
+    let repository_id = {
+        let db = state.db.as_ref().expect("test state must have a DB").clone();
+        let user_id_owned = user_id.to_string();
+        let workspace_owned = workspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db.conn().blocking_lock();
+            let id = maestro_core::db::repositories::upsert(
+                &conn,
+                &workspace_owned,
+                None,
+                &format!("/workspaces/{workspace_owned}"),
+                "main",
+                None,
+            )
+            .expect("seed repositories row");
+            // Only attempt the user_repositories association when the user_id
+            // is real (FK to users.id). Tests that pass a synthetic user_id
+            // (e.g. "fake-user-id" for the 401 path) skip the association —
+            // the workflow exists in the engine map but `require_workflow_access`
+            // is never reached because auth rejects the request first.
+            let _ = maestro_core::db::repositories::add_for_user(&conn, &user_id_owned, &id);
+            id
+        })
+        .await
+        .expect("join")
+    };
+    wf.repository_id = Some(repository_id);
     state
         .engine
         .workflows_arc()

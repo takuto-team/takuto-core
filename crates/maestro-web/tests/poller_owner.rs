@@ -45,7 +45,7 @@ fn build_state(data_dir: &std::path::Path) -> AppState {
     cfg.git.repo_path = data_dir.to_string_lossy().into_owned();
     let config = Arc::new(RwLock::new(cfg));
     let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> =
-        Arc::new(DryRunActions::new(data_dir.to_path_buf(), "origin".to_string(), None));
+        Arc::new(DryRunActions::new("origin".to_string(), None));
     let jira_available = Arc::new(AtomicBool::new(false));
     let engine = Arc::new(WorkflowEngine::new(
         config.clone(),
@@ -108,6 +108,7 @@ fn seed_orphan_snapshot(data_dir: &std::path::Path, ws_name: &str, ticket_key: &
         workflow_def_runs: std::collections::HashMap::new(),
         worktree_bootstrapped: false,
         workspace_name: ws_name.to_string(),
+        repository_id: None,
         user_id: None,
     };
 
@@ -184,6 +185,34 @@ async fn orphan_migration_e2e() {
                 w.user_id.is_none(),
                 "pre-migration: orphan workflow should have user_id = None"
             );
+        }
+
+        // Plan-10: the workflow list endpoint additionally gates visibility
+        // on the caller's `user_repositories` set. Seed a `repositories` row
+        // matching the workflow's `workspace_name` and associate it with the
+        // admin so the post-migration assertion still observes the workflow.
+        // (Dev A's startup reconciliation does this for real boots; this test
+        // bypasses startup, so we do it inline.)
+        {
+            let db = state.db.as_ref().unwrap().clone();
+            let admin_id_clone = admin_id.clone();
+            let ws_name_owned = ws_name.to_string();
+            tokio::task::spawn_blocking(move || {
+                let conn = db.conn().blocking_lock();
+                let repo_id = maestro_core::db::repositories::upsert(
+                    &conn,
+                    &ws_name_owned,
+                    None,
+                    &format!("/workspaces/{ws_name_owned}"),
+                    "main",
+                    None,
+                )
+                .expect("upsert repository");
+                maestro_core::db::repositories::add_for_user(&conn, &admin_id_clone, &repo_id)
+                    .expect("add_for_user");
+            })
+            .await
+            .unwrap();
         }
 
         // Run the migration helper using the admin's user_id as owner.

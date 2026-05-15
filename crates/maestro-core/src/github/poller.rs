@@ -183,6 +183,10 @@ impl GitHubPoller {
                     Some(issue.body),
                     html_url,
                     Some(owner_id),
+                    // Plan-10: auto-polling is disabled; this code path is
+                    // unreachable from normal startup. Leave repository_id
+                    // unset — plan-11 will plumb a per-repo association in.
+                    None,
                 )
                 .await
             {

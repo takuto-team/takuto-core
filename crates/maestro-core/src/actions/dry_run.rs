@@ -16,19 +16,13 @@ use crate::github_app::GitHubAppTokenManager;
 use crate::process::{self, CommandOutput};
 
 pub struct DryRunActions {
-    pub repo_path: PathBuf,
     git_remote: String,
     github_app: Option<Arc<GitHubAppTokenManager>>,
 }
 
 impl DryRunActions {
-    pub fn new(
-        repo_path: PathBuf,
-        git_remote: String,
-        github_app: Option<Arc<GitHubAppTokenManager>>,
-    ) -> Self {
+    pub fn new(git_remote: String, github_app: Option<Arc<GitHubAppTokenManager>>) -> Self {
         Self {
-            repo_path,
             git_remote,
             github_app,
         }
@@ -37,7 +31,7 @@ impl DryRunActions {
 
 #[async_trait]
 impl ExternalActions for DryRunActions {
-    async fn assign_ticket(&self, key: &str) -> Result<()> {
+    async fn assign_ticket(&self, _repo_path: &Path, key: &str) -> Result<()> {
         info!(
             ticket = key,
             "[DRY] Would assign ticket to current Jira user (acli @me)"
@@ -45,7 +39,7 @@ impl ExternalActions for DryRunActions {
         Ok(())
     }
 
-    async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
+    async fn transition_ticket(&self, _repo_path: &Path, key: &str, status: &str) -> Result<()> {
         info!(
             ticket = key,
             status = status,
@@ -54,12 +48,12 @@ impl ExternalActions for DryRunActions {
         Ok(())
     }
 
-    async fn unassign_ticket(&self, key: &str) -> Result<()> {
+    async fn unassign_ticket(&self, _repo_path: &Path, key: &str) -> Result<()> {
         info!(ticket = key, "[DRY] Would unassign ticket");
         Ok(())
     }
 
-    async fn get_ticket_details(&self, key: &str) -> Result<String> {
+    async fn get_ticket_details(&self, repo_path: &Path, key: &str) -> Result<String> {
         info!(
             ticket = key,
             "Retrieving ticket details (dry mode — read-only, executes normally)"
@@ -75,7 +69,7 @@ impl ExternalActions for DryRunActions {
                 "--fields",
                 "key,issuetype,summary,status,assignee,description",
             ],
-            &self.repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -88,11 +82,13 @@ impl ExternalActions for DryRunActions {
         Ok(output.stdout)
     }
 
-    async fn create_worktree(&self, branch: &str, base: &str) -> Result<PathBuf> {
-        let worktree_path = self
-            .repo_path
-            .join("worktrees")
-            .join(branch.replace('/', "-"));
+    async fn create_worktree(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base: &str,
+    ) -> Result<PathBuf> {
+        let worktree_path = repo_path.join("worktrees").join(branch.replace('/', "-"));
         info!(
             branch = branch,
             base = base,
@@ -104,13 +100,13 @@ impl ExternalActions for DryRunActions {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        worktree_remove::clear_worktree_path_for_recreate(&self.repo_path, &worktree_path).await?;
+        worktree_remove::clear_worktree_path_for_recreate(repo_path, &worktree_path).await?;
 
         let remote = &self.git_remote;
         info!(base = base, remote = %remote, "Fetching base branch from git remote");
         let fetch_output = process::run_shell_command(
             &format!("git fetch {remote} {base}"),
-            &self.repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -126,7 +122,7 @@ impl ExternalActions for DryRunActions {
                 "git worktree add -b {branch} {} {remote}/{base}",
                 worktree_path.display()
             ),
-            &self.repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -134,7 +130,7 @@ impl ExternalActions for DryRunActions {
         if !output.success() {
             let output2 = process::run_shell_command(
                 &format!("git worktree add {} {branch}", worktree_path.display()),
-                &self.repo_path,
+                repo_path,
                 CancellationToken::new(),
             )
             .await?;
@@ -149,15 +145,15 @@ impl ExternalActions for DryRunActions {
         Ok(worktree_path)
     }
 
-    async fn remove_worktree(&self, path: &Path) -> Result<()> {
+    async fn remove_worktree(&self, repo_path: &Path, worktree_path: &Path) -> Result<()> {
         info!(
-            path = %path.display(),
+            path = %worktree_path.display(),
             "Removing git worktree (dry mode — local operation, executes normally)"
         );
-        worktree_remove::remove_git_worktree(&self.repo_path, path).await
+        worktree_remove::remove_git_worktree(repo_path, worktree_path).await
     }
 
-    async fn delete_local_branch(&self, branch: &str) -> Result<()> {
+    async fn delete_local_branch(&self, repo_path: &Path, branch: &str) -> Result<()> {
         let branch = branch.trim();
         if branch.is_empty() {
             return Ok(());
@@ -169,7 +165,7 @@ impl ExternalActions for DryRunActions {
         let output = process::run_command(
             "git",
             &["branch", "-D", branch],
-            &self.repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;

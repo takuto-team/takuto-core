@@ -117,8 +117,16 @@ pub struct Workflow {
     /// (the worktree was pre-created at ticket-add time but setup has not run yet).
     pub worktree_bootstrapped: bool,
     /// Name of the workspace (repo directory name under `/workspaces/`) this workflow belongs to.
-    /// Used for per-workspace snapshot isolation and dashboard filtering.
+    /// Used for per-workspace snapshot isolation and dashboard filtering. Plan-10 keeps this
+    /// as a denormalised back-compat handle; `repository_id` is the durable identity.
     pub workspace_name: String,
+    /// FK to `repositories.id`. Plan-10: every new workflow is created against a repo the
+    /// caller has added, so this is `Some` for fresh workflows. `None` covers:
+    ///   * Snapshots restored from a pre-plan-10 build (back-fill happens in Dev A's
+    ///     `migrate_orphan_repo_associations` reconciliation step).
+    ///   * Workflows whose `workspace_name` does not match any registered `repositories`
+    ///     row (those stay hidden from the dashboard until an admin re-registers).
+    pub repository_id: Option<String>,
     /// ID of the user who created this workflow. `None` for poller-created workflows
     /// (pre-multi-user) or workflows restored from older snapshots.
     pub user_id: Option<String>,
@@ -164,6 +172,7 @@ impl Workflow {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name,
+            repository_id: None,
             user_id: None,
         }
     }
@@ -241,6 +250,7 @@ impl Workflow {
             workflow_def_runs: rec.workflow_def_runs,
             worktree_bootstrapped: rec.worktree_bootstrapped,
             workspace_name: rec.workspace_name,
+            repository_id: rec.repository_id,
             user_id: rec.user_id,
         }
     }
@@ -280,6 +290,7 @@ pub(super) fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRec
         workflow_def_runs: w.workflow_def_runs.clone(),
         worktree_bootstrapped: w.worktree_bootstrapped,
         workspace_name: w.workspace_name.clone(),
+        repository_id: w.repository_id.clone(),
         user_id: w.user_id.clone(),
     }
 }

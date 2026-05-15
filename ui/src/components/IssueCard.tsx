@@ -192,6 +192,14 @@ export function IssueCard({ workflow: w, terminalState: ts, dynamicForwards, wor
             ) : (
               <span className="font-mono text-base font-medium text-blue-400">{w.ticket_key}</span>
             )}
+            {w.workspace_name && (
+              <span
+                className="text-[11px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700 shrink-0 truncate max-w-32"
+                title={`Repository: ${w.workspace_name}`}
+              >
+                {w.workspace_name}
+              </span>
+            )}
             <StatusBadge status={status} />
           </div>
           {prUrl && (

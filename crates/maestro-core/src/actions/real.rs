@@ -19,8 +19,10 @@ use crate::github_app::GitHubAppTokenManager;
 use crate::process::{self, CommandOutput};
 
 pub struct RealActions {
-    /// Live config reference — `repo_path` is read on each call so that a
-    /// post-clone update to `config.git.repo_path` is picked up without restart.
+    /// Live config reference. Plan-10 dropped the implicit `cfg.git.repo_path`
+    /// reader (`self.repo_path()`); every method now receives the path
+    /// explicitly. The config is still held for future per-repo plumbing
+    /// (e.g. reading `git.remote`).
     config: Arc<RwLock<Config>>,
     git_remote: String,
     github_app: Option<Arc<GitHubAppTokenManager>>,
@@ -39,18 +41,16 @@ impl RealActions {
         }
     }
 
-    async fn repo_path(&self) -> PathBuf {
-        PathBuf::from(&self.config.read().await.git.repo_path)
-    }
-
     /// Return `[("GH_TOKEN", token)]` when a GitHub App is configured, otherwise empty.
     /// Used to inject credentials into git/gh subprocesses spawned in the main process.
-    async fn gh_token_env(&self) -> Vec<(String, String)> {
+    ///
+    /// The repo path is needed so the token manager can pick the correct
+    /// installation for the repository.
+    async fn gh_token_env(&self, repo_path: &Path) -> Vec<(String, String)> {
         let Some(app) = &self.github_app else {
             return vec![];
         };
-        let repo_path = self.repo_path().await;
-        match app.get_installation_token(&repo_path).await {
+        match app.get_installation_token(repo_path).await {
             Ok(token) => vec![("GH_TOKEN".to_string(), token)],
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to get GitHub App token for env injection");
@@ -58,16 +58,22 @@ impl RealActions {
             }
         }
     }
+
+    /// Suppress the unused-field warning while we keep `config` around for
+    /// downstream plumbing (e.g. resolving the active `git.remote`).
+    #[allow(dead_code)]
+    pub(crate) fn config(&self) -> &Arc<RwLock<Config>> {
+        &self.config
+    }
 }
 
 #[async_trait]
 impl ExternalActions for RealActions {
-    async fn assign_ticket(&self, key: &str) -> Result<()> {
+    async fn assign_ticket(&self, repo_path: &Path, key: &str) -> Result<()> {
         info!(
             ticket = key,
             "Assigning ticket to current Jira user (acli @me)"
         );
-        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "acli",
             &[
@@ -80,7 +86,7 @@ impl ExternalActions for RealActions {
                 "@me",
                 "--yes",
             ],
-            &repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -93,9 +99,8 @@ impl ExternalActions for RealActions {
         Ok(())
     }
 
-    async fn transition_ticket(&self, key: &str, status: &str) -> Result<()> {
+    async fn transition_ticket(&self, repo_path: &Path, key: &str, status: &str) -> Result<()> {
         info!(ticket = key, status = status, "Transitioning ticket");
-        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "acli",
             &[
@@ -108,7 +113,7 @@ impl ExternalActions for RealActions {
                 status,
                 "--yes",
             ],
-            &repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -121,9 +126,8 @@ impl ExternalActions for RealActions {
         Ok(())
     }
 
-    async fn unassign_ticket(&self, key: &str) -> Result<()> {
+    async fn unassign_ticket(&self, repo_path: &Path, key: &str) -> Result<()> {
         info!(ticket = key, "Unassigning ticket");
-        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "acli",
             &[
@@ -135,7 +139,7 @@ impl ExternalActions for RealActions {
                 "--remove-assignee",
                 "--yes",
             ],
-            &repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -148,9 +152,8 @@ impl ExternalActions for RealActions {
         Ok(())
     }
 
-    async fn get_ticket_details(&self, key: &str) -> Result<String> {
+    async fn get_ticket_details(&self, repo_path: &Path, key: &str) -> Result<String> {
         info!(ticket = key, "Retrieving ticket details");
-        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "acli",
             &[
@@ -162,7 +165,7 @@ impl ExternalActions for RealActions {
                 "--fields",
                 "key,issuetype,summary,status,assignee,description",
             ],
-            &repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;
@@ -175,8 +178,12 @@ impl ExternalActions for RealActions {
         Ok(output.stdout)
     }
 
-    async fn create_worktree(&self, branch: &str, base: &str) -> Result<PathBuf> {
-        let repo_path = self.repo_path().await;
+    async fn create_worktree(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base: &str,
+    ) -> Result<PathBuf> {
         let worktree_path = repo_path.join("worktrees").join(branch.replace('/', "-"));
         info!(branch = branch, base = base, path = %worktree_path.display(), "Creating git worktree");
 
@@ -185,20 +192,20 @@ impl ExternalActions for RealActions {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        worktree_remove::clear_worktree_path_for_recreate(&repo_path, &worktree_path).await?;
+        worktree_remove::clear_worktree_path_for_recreate(repo_path, &worktree_path).await?;
 
         let remote = &self.git_remote;
         // Fetch the base branch from the configured remote to ensure it's available locally.
         // Inject GH_TOKEN so git's credential helper (gh) can authenticate via the GitHub App.
         info!(base = base, remote = %remote, "Fetching base branch from git remote");
-        let token_env = self.gh_token_env().await;
+        let token_env = self.gh_token_env(repo_path).await;
         let token_env_refs: Vec<(&str, &str)> = token_env
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         let fetch_output = process::run_shell_command_with_env(
             &format!("git fetch {remote} {base}"),
-            &repo_path,
+            repo_path,
             CancellationToken::new(),
             &token_env_refs,
         )
@@ -221,7 +228,7 @@ impl ExternalActions for RealActions {
                 "git -c core.hooksPath=/dev/null worktree add -b {branch} {} {remote}/{base}",
                 worktree_path.display()
             ),
-            &repo_path,
+            repo_path,
             CancellationToken::new(),
             &[],
         )
@@ -234,7 +241,7 @@ impl ExternalActions for RealActions {
                     "git -c core.hooksPath=/dev/null worktree add {} {branch}",
                     worktree_path.display()
                 ),
-                &repo_path,
+                repo_path,
                 CancellationToken::new(),
                 &[],
             )
@@ -250,21 +257,20 @@ impl ExternalActions for RealActions {
         Ok(worktree_path)
     }
 
-    async fn remove_worktree(&self, path: &Path) -> Result<()> {
-        worktree_remove::remove_git_worktree(&self.repo_path().await, path).await
+    async fn remove_worktree(&self, repo_path: &Path, worktree_path: &Path) -> Result<()> {
+        worktree_remove::remove_git_worktree(repo_path, worktree_path).await
     }
 
-    async fn delete_local_branch(&self, branch: &str) -> Result<()> {
+    async fn delete_local_branch(&self, repo_path: &Path, branch: &str) -> Result<()> {
         let branch = branch.trim();
         if branch.is_empty() {
             return Ok(());
         }
         info!(branch = %branch, "Deleting local git branch");
-        let repo_path = self.repo_path().await;
         let output = process::run_command(
             "git",
             &["branch", "-D", branch],
-            &repo_path,
+            repo_path,
             CancellationToken::new(),
         )
         .await?;

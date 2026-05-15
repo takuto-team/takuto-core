@@ -39,6 +39,7 @@ function makeWorkflow(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary
     generate_report: false,
     has_report: false,
     workflow_def_runs: {},
+    workspace_name: "test-repo",
     ...overrides,
   };
 }

@@ -78,6 +78,13 @@ pub struct PersistedWorkflowRecord {
     /// Old snapshots without this field get an empty string (assigned during restore).
     #[serde(default)]
     pub workspace_name: String,
+    /// FK to `repositories.id`. Old snapshots predating plan-10 lack the field and
+    /// deserialize as `None`. The startup reconciliation
+    /// (`migrate_orphan_repo_associations`, Dev A's Step 3.2) back-fills it by joining
+    /// `workspace_name` against `repositories.name`. Workflows that cannot be back-filled
+    /// stay `None` and are hidden from the dashboard.
+    #[serde(default)]
+    pub repository_id: Option<String>,
     /// ID of the user who created this workflow. Old snapshots without this field
     /// get `None` (unowned — visible to admins only during migration).
     #[serde(default)]
@@ -488,6 +495,7 @@ mod tests {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name: "my-repo".into(),
+            repository_id: Some("repo-uuid-1".into()),
             user_id: Some("user-1".into()),
         };
         let json = serde_json::to_string(&rec).unwrap();

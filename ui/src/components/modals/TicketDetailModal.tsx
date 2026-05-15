@@ -2,7 +2,8 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, useEffect, useRef } from "react";
-import { apiJson, apiPost } from "../../api/client";
+import { Link } from "react-router-dom";
+import { apiJson, apiPost, listMyRepositories, type RepositoryRow } from "../../api/client";
 import type { TicketPreview } from "../../api/types";
 import { MarkdownPreview } from "../MarkdownPreview";
 import { AiPromptPanel } from "../AiPromptPanel";
@@ -31,7 +32,8 @@ interface Props {
   showStartButton: boolean;
   /** Timeout in seconds for "Improve with AI" sessions, from server config. */
   improveTimeoutSecs?: number;
-  onStart?: (description: string, summary: string) => void;
+  /** Plan-10: when `showStartButton` is true, the caller receives the chosen repository_id. */
+  onStart?: (description: string, summary: string, repositoryId: string) => void;
   onClose: () => void;
   /** Called after a successful save so the parent can refresh workflow data. */
   onSaved?: () => void;
@@ -67,6 +69,11 @@ export function TicketDetailModal({
   const [pendingImprovement, setPendingImprovement] =
     useState<PendingImprovement | null>(null);
 
+  // Plan-10: repository selector — only shown when starting a workflow.
+  const [repos, setRepos] = useState<RepositoryRow[]>([]);
+  const [repositoryId, setRepositoryId] = useState("");
+  const [loadingRepos, setLoadingRepos] = useState(showStartButton);
+
   useEffect(() => {
     if (initialDescription || ticketingSystem === "none" || ticketingSystem === "github") return;
     apiJson<TicketPreview>(`/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`)
@@ -74,6 +81,18 @@ export function TicketDetailModal({
       .catch(() => setMarkdown("*Failed to load description*"))
       .finally(() => setLoading(false));
   }, [ticketKey, initialDescription, ticketingSystem]);
+
+  useEffect(() => {
+    if (!showStartButton) return;
+    setLoadingRepos(true);
+    listMyRepositories()
+      .then((rs) => {
+        setRepos(rs);
+        if (rs.length > 0) setRepositoryId(rs[0].id);
+      })
+      .catch(() => setRepos([]))
+      .finally(() => setLoadingRepos(false));
+  }, [showStartButton]);
 
   // Debounce editText for the side-by-side preview pane (400 ms)
   useEffect(() => {
@@ -271,6 +290,42 @@ export function TicketDetailModal({
           </button>
         </div>
 
+        {/* Plan-10 repo selector — required when starting a workflow. */}
+        {showStartButton && (
+          <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-3">
+            <label className="text-xs text-gray-400 shrink-0">Repository:</label>
+            {loadingRepos ? (
+              <span className="text-xs text-gray-500">Loading…</span>
+            ) : repos.length === 0 ? (
+              <span className="text-xs text-amber-300">
+                No repositories on your dashboard.{" "}
+                <Link
+                  to="/config.html?tab=repositories"
+                  className="underline hover:text-amber-100"
+                  onClick={onClose}
+                >
+                  Add one
+                </Link>{" "}
+                before starting a workflow.
+              </span>
+            ) : repos.length === 1 ? (
+              <span className="text-xs text-gray-300 font-mono">{repos[0].name}</span>
+            ) : (
+              <select
+                value={repositoryId}
+                onChange={(e) => setRepositoryId(e.target.value)}
+                className="bg-gray-950 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 font-mono"
+              >
+                {repos.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+
         {/* Diff review banner */}
         {pendingImprovement && (
           <div className="border-b px-4 py-2 flex items-center justify-between bg-purple-900/20 border-purple-700/30">
@@ -461,8 +516,9 @@ export function TicketDetailModal({
               </button>
             ) : showStartButton && onStart ? (
               <button
-                onClick={() => onStart(editMode ? editText : markdown, editMode ? editTitle : summary)}
-                className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
+                onClick={() => onStart(editMode ? editText : markdown, editMode ? editTitle : summary, repositoryId)}
+                disabled={!repositoryId || loadingRepos}
+                className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 Add to Dashboard
               </button>

@@ -15,7 +15,8 @@ use crate::error::Result;
 
 use crate::workflow::snapshot::{
     self, PersistedWorkflowRecord, cleanup_legacy_global_snapshot, read_all_workspace_snapshots,
-    read_workflow_snapshot, workspace_name_from_repo_path, write_all_workspace_snapshots,
+    read_workflow_snapshot, resolve_data_dir, workspace_name_from_repo_path,
+    write_all_workspace_snapshots,
 };
 use crate::workflow::state::WorkflowState;
 
@@ -63,12 +64,16 @@ impl WorkflowPersistence {
         suppress_cancelled_as_error: Arc<AtomicBool>,
         db: Option<Database>,
     ) -> Result<usize> {
-        let repo_path = {
+        // Plan-10: snapshots live under `{data_dir}/workspaces/<name>/` and
+        // resolving the data dir no longer needs a repo path. The legacy
+        // `cfg.git.repo_path` fallback survives in `resolve_snapshot_dir` for
+        // the back-compat single-workspace read path below.
+        let legacy_repo_path = {
             let c = self.config.read().await;
             PathBuf::from(&c.git.repo_path)
         };
-        let data_dir = snapshot::resolve_snapshot_dir(&repo_path);
-        let default_ws_name = workspace_name_from_repo_path(&repo_path);
+        let data_dir = resolve_data_dir()
+            .unwrap_or_else(|| snapshot::resolve_snapshot_dir(&legacy_repo_path));
 
         info!(
             data_dir = %data_dir.display(),
@@ -77,19 +82,30 @@ impl WorkflowPersistence {
 
         // Try multi-workspace read first; fall back to single-workspace read for first-time migration.
         let mut records = read_all_workspace_snapshots(&data_dir)?;
-        if records.is_empty() {
-            // Try single-workspace read (handles legacy + global migration).
-            if let Some(file) = read_workflow_snapshot(&repo_path)?
-                && file.version == snapshot::SNAPSHOT_VERSION
-            {
-                records = file.workflows;
-            }
+        if records.is_empty()
+            && let Some(file) = read_workflow_snapshot(&legacy_repo_path)?
+            && file.version == snapshot::SNAPSHOT_VERSION
+        {
+            records = file.workflows;
         }
 
-        // Backfill workspace_name for any legacy records.
+        // Back-fill `workspace_name` from the registered `repositories` row
+        // when the snapshot lacks it. Records without a `repository_id` and
+        // without a `workspace_name` fall back to the (deprecated) global
+        // `cfg.git.repo_path` derivation purely so they retain some identity
+        // for the dashboard filter to skip over.
+        let legacy_default_ws_name = workspace_name_from_repo_path(&legacy_repo_path);
         for rec in &mut records {
             if rec.workspace_name.is_empty() {
-                rec.workspace_name = default_ws_name.clone();
+                if let (Some(repo_id), Some(database)) = (rec.repository_id.as_deref(), db.as_ref())
+                {
+                    let conn = database.conn().lock().await;
+                    if let Ok(Some(row)) = crate::db::repositories::get(&conn, repo_id) {
+                        rec.workspace_name = row.name;
+                        continue;
+                    }
+                }
+                rec.workspace_name = legacy_default_ws_name.clone();
             }
         }
         // Clean up legacy global snapshot after successful migration.
@@ -271,11 +287,13 @@ impl WorkflowPersistence {
         self.suppress_cancelled_as_error
             .store(true, Ordering::SeqCst);
 
-        let repo_path = {
-            let c = self.config.read().await;
-            PathBuf::from(&c.git.repo_path)
+        let data_dir = match resolve_data_dir() {
+            Some(d) => d,
+            None => {
+                let c = self.config.read().await;
+                snapshot::resolve_snapshot_dir(std::path::Path::new(&c.git.repo_path))
+            }
         };
-        let data_dir = snapshot::resolve_snapshot_dir(&repo_path);
 
         let records: Vec<PersistedWorkflowRecord> = {
             let wf_arc = self.repository.inner_arc();
@@ -315,11 +333,13 @@ impl WorkflowPersistence {
 
     /// Rewrite per-workspace snapshots from the current in-memory map (best-effort).
     async fn sync_from_map(&self) -> Result<()> {
-        let repo_path = {
-            let c = self.config.read().await;
-            PathBuf::from(&c.git.repo_path)
+        let data_dir = match resolve_data_dir() {
+            Some(d) => d,
+            None => {
+                let c = self.config.read().await;
+                snapshot::resolve_snapshot_dir(std::path::Path::new(&c.git.repo_path))
+            }
         };
-        let data_dir = snapshot::resolve_snapshot_dir(&repo_path);
 
         let records: Vec<PersistedWorkflowRecord> = {
             let map = self.repository.inner_arc();
@@ -334,6 +354,11 @@ impl WorkflowPersistence {
     }
 
     pub async fn git_worktree_prune(&self) {
+        // Plan-10: in the new model each workflow owns its repository path,
+        // and `mark_work_done`/`delete_workflow` prune via the per-workflow
+        // repo path. This blanket prune (called after the per-action remove)
+        // is informational and uses the deprecated global config path so it
+        // keeps working on legacy single-repo deployments. Best-effort.
         let repo_path = {
             let c = self.config.read().await;
             PathBuf::from(&c.git.repo_path)

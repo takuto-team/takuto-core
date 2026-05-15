@@ -182,6 +182,9 @@ impl JiraPoller {
                     None,
                     None,
                     Some(owner_id),
+                    // Plan-10: auto-polling disabled; left unset until plan-11
+                    // wires per-repo polling.
+                    None,
                 )
                 .await
             {

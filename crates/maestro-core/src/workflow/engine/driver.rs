@@ -40,6 +40,88 @@ use super::types::{TerminalLine, Workflow, WorkflowEvent};
 /// Maximum number of terminal lines stored per workflow for persistence.
 const TERMINAL_LINES_MAX: usize = 100;
 
+/// Resolve a workflow's `workspace_name` (denormalised, used for snapshot
+/// grouping + dashboard back-compat). Mirrors `resolve_repo_for_ticket` but
+/// runs at workflow-creation time when the ticket is not yet in the map.
+///
+/// - `repository_id` set + DB available → look up `repositories.name`.
+/// - Otherwise → fall back to `cfg.git.repo_path`'s last path component
+///   (legacy behaviour, kept so unit tests with no DB still produce a sane
+///   workspace_name).
+pub(crate) async fn resolve_workspace_name(
+    repository_id: Option<&str>,
+    db: Option<&Database>,
+    config: &Arc<RwLock<Config>>,
+) -> String {
+    if let (Some(repo_id), Some(database)) = (repository_id, db) {
+        let conn = database.conn().lock().await;
+        if let Ok(Some(row)) = crate::db::repositories::get(&conn, repo_id) {
+            return row.name;
+        }
+    }
+    let cfg = config.read().await;
+    crate::workflow::snapshot::workspace_name_from_repo_path(std::path::Path::new(
+        &cfg.git.repo_path,
+    ))
+}
+
+/// Resolve `(repo_path, default_branch)` for a workflow.
+///
+/// Plan-10 threading rule: every workflow stores `repository_id` (the durable
+/// FK to the `repositories` row) plus `workspace_name` (denormalised back-compat
+/// handle). This helper looks them up in priority order:
+///   1. `repository_id → db::repositories::get` (canonical).
+///   2. `workspace_name → db::repositories::get_by_name` (defensive — covers
+///      restored snapshots not yet back-filled by `migrate_orphan_repo_associations`).
+///   3. Fallback: `cfg.git.repo_path` + `cfg.git.base_branch` — only useful for
+///      tests/dry-mode paths where no DB is attached. Production callers always
+///      have a DB and a registered repository.
+pub(crate) async fn resolve_repo_for_ticket(
+    ticket_key: &str,
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    config: &Arc<RwLock<Config>>,
+    db: Option<&Database>,
+) -> (PathBuf, String) {
+    let (repository_id, workspace_name) = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| (w.repository_id.clone(), w.workspace_name.clone()))
+            .unwrap_or_default()
+    };
+
+    if let (Some(repo_id), Some(database)) = (repository_id.as_deref(), db) {
+        let conn = database.conn().lock().await;
+        match crate::db::repositories::get(&conn, repo_id) {
+            Ok(Some(row)) => return (PathBuf::from(&row.local_path), row.default_branch),
+            Ok(None) => {
+                warn!(
+                    repository_id = repo_id,
+                    ticket = ticket_key,
+                    "Workflow.repository_id missing from `repositories` table; falling back"
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "DB lookup for Workflow.repository_id failed; falling back");
+            }
+        }
+    }
+
+    if let Some(database) = db
+        && !workspace_name.is_empty()
+    {
+        let conn = database.conn().lock().await;
+        if let Ok(Some(row)) = crate::db::repositories::get_by_name(&conn, &workspace_name) {
+            return (PathBuf::from(&row.local_path), row.default_branch);
+        }
+    }
+
+    let cfg = config.read().await;
+    (
+        PathBuf::from(&cfg.git.repo_path),
+        cfg.git.base_branch.clone(),
+    )
+}
+
 /// Scan the definitions directory and return a sorted list of `(filename, modified_time)` tuples
 /// for change detection.
 pub(super) fn scan_definitions_dir(dir: &Path) -> Vec<(String, std::time::SystemTime)> {
@@ -128,10 +210,13 @@ pub(super) async fn drive_workflow_def(
 
     info!(ticket = %ticket_key, def = %def_name, "Workflow definition driver started");
 
-    let log_dir = {
-        let cfg = config.read().await;
-        PathBuf::from(&cfg.git.repo_path).join("logs")
-    };
+    // Plan-10: workflow logs live under `{data_dir}/logs/<TICKET>.log` so they
+    // are independent of the repository (there is no global active repo any
+    // more). Fall back to a writable temp dir if the data dir cannot be
+    // resolved, mirroring the existing best-effort log writer behaviour.
+    let log_dir = crate::workflow::snapshot::resolve_data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("logs");
     let log_writer = Arc::new(WorkflowLogWriter::new(&log_dir, &ticket_key).await);
 
     let result = async {
@@ -331,14 +416,13 @@ pub(super) async fn prepare_worktree_for_ticket(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     actions: &Arc<dyn ExternalActions>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
+    db: Option<&Database>,
 ) {
-    let (repo_path, base_branch) = {
-        let cfg = config.read().await;
-        (
-            PathBuf::from(&cfg.git.repo_path),
-            cfg.git.base_branch.clone(),
-        )
-    };
+    // Plan-10: the repository path is per-workflow (the registered repo the
+    // caller picked when starting the workflow). Fall back to the global
+    // `cfg.git.repo_path` only when no DB / `repository_id` is available.
+    let (repo_path, base_branch) =
+        resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
 
     // Configure git credentials before fetching.
     if let Err(e) = actions.configure_git_author_from_github(&repo_path).await {
@@ -358,7 +442,10 @@ pub(super) async fn prepare_worktree_for_ticket(
     };
     let branch_name = git::worktree::branch_name_for_ticket(ticket_key, &item_type);
 
-    match actions.create_worktree(&branch_name, &base_branch).await {
+    match actions
+        .create_worktree(&repo_path, &branch_name, &base_branch)
+        .await
+    {
         Ok(worktree_path) => {
             // Configure git identity on the new worktree.
             if let Err(e) = actions
@@ -438,10 +525,15 @@ pub(super) async fn bootstrap_new_workflow(
         wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
     };
 
-    let cfg = config.read().await;
-    let repo_path = PathBuf::from(&cfg.git.repo_path);
-    let project_keys = cfg.jira.project_keys.clone();
-    drop(cfg);
+    // Plan-10: repo path comes from the workflow's `repository_id` lookup, not
+    // from a global `cfg.git.repo_path`. `project_keys` stays in config — it
+    // is workflow-independent.
+    let (repo_path, base_branch) =
+        resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
+    let project_keys = {
+        let cfg = config.read().await;
+        cfg.jira.project_keys.clone()
+    };
 
     // Step 1: Assign + Retrieve ticket (or use in-memory data when Jira is unavailable).
     let ticket_detail = if jira_available {
@@ -456,7 +548,7 @@ pub(super) async fn bootstrap_new_workflow(
         let mut step_log = StepLog::new("Assign Ticket".to_string());
         check_cancelled(cancel_token)?;
 
-        match actions.assign_ticket(ticket_key).await {
+        match actions.assign_ticket(&repo_path, ticket_key).await {
             Ok(()) => {
                 step_log
                     .output
@@ -467,7 +559,10 @@ pub(super) async fn bootstrap_new_workflow(
                 warn!(ticket = ticket_key, error = %e, "Failed to assign ticket, continuing");
             }
         }
-        match actions.transition_ticket(ticket_key, "In Progress").await {
+        match actions
+            .transition_ticket(&repo_path, ticket_key, "In Progress")
+            .await
+        {
             Ok(()) => {
                 step_log
                     .output
@@ -622,11 +717,10 @@ pub(super) async fn bootstrap_new_workflow(
 
         let branch_name =
             git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type);
-        let cfg = config.read().await;
-        let base_branch = cfg.git.base_branch.clone();
-        drop(cfg);
 
-        let worktree_path = actions.create_worktree(&branch_name, &base_branch).await?;
+        let worktree_path = actions
+            .create_worktree(&repo_path, &branch_name, &base_branch)
+            .await?;
 
         {
             let mut wf = workflows.write().await;

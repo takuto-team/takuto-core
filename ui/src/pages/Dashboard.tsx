@@ -2,7 +2,8 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { apiJson, apiPost } from "../api/client";
+import { Link } from "react-router-dom";
+import { apiJson, apiPost, listMyRepositories } from "../api/client";
 import type { ConfigResponse, WorkflowDefinition, WorkflowEvent } from "../api/types";
 import { useToast } from "../hooks/useToast";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -16,10 +17,6 @@ import { TicketPickerModal } from "../components/modals/TicketPickerModal";
 import { TicketDetailModal } from "../components/modals/TicketDetailModal";
 import { PasteDescriptionModal } from "../components/modals/PasteDescriptionModal";
 import { ReportModal } from "../components/modals/ReportModal";
-import { RepoPickerModal } from "../components/modals/RepoPickerModal";
-import { CloneProgressModal } from "../components/modals/CloneProgressModal";
-import { WorkspaceSwitcherModal } from "../components/modals/WorkspaceSwitcherModal";
-import { ConfirmModal } from "../components/modals/ConfirmModal";
 import { NoJiraAlertModal } from "../components/modals/NoJiraAlertModal";
 import { SystemErrorAlert } from "../components/SystemErrorAlert";
 
@@ -31,9 +28,19 @@ interface Props {
 export function Dashboard({ onLogout, authEnabled }: Props) {
   const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts, dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState } = useWorkflows();
+  const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts, dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState: _resetState } = useWorkflows();
   const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
   const defsFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Plan-10: track whether the caller has at least one repo on their dashboard.
+  // Drives the empty-state CTA and gates the "+" picker.
+  const [hasAnyRepo, setHasAnyRepo] = useState<boolean | null>(null);
+
+  const refreshHasAnyRepo = useCallback(() => {
+    listMyRepositories()
+      .then((rs) => setHasAnyRepo(rs.length > 0))
+      .catch(() => setHasAnyRepo(false));
+  }, []);
 
   const fetchWorkflowDefs = useCallback(() => {
     apiJson<WorkflowDefinition[]>("/api/workflow-definitions")
@@ -44,27 +51,13 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   // Fetch definitions on mount
   useEffect(() => {
     fetchWorkflowDefs();
-  }, [fetchWorkflowDefs]);
+    refreshHasAnyRepo();
+  }, [fetchWorkflowDefs, refreshHasAnyRepo]);
 
   // Wrap handleEvent to also re-fetch definitions on relevant events
   const handleEventWithDefs = useCallback(
     (evt: WorkflowEvent) => {
       handleEvent(evt);
-
-      // Handle repo clone progress events
-      if (evt.event_type === "repo_clone_progress") {
-        if (evt.state === "success") {
-          setCloneState((prev) =>
-            prev ? { ...prev, status: "success" } : null
-          );
-        } else if (evt.state === "error") {
-          setCloneState((prev) =>
-            prev
-              ? { ...prev, status: "error", error: evt.error || "Clone failed" }
-              : null
-          );
-        }
-      }
 
       // Re-fetch definitions when definitions change or workflows update (debounced)
       if (
@@ -110,14 +103,6 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     showStart: boolean;
   } | null>(null);
   const [reportKey, setReportKey] = useState<string | null>(null);
-  const [showRepoPicker, setShowRepoPicker] = useState(false);
-  const [showWorkspaceSwitcher, setShowWorkspaceSwitcher] = useState(false);
-  const [cloneState, setCloneState] = useState<{
-    repoName: string;
-    status: "cloning" | "success" | "error";
-    error?: string;
-  } | null>(null);
-  const [overwriteConfirm, setOverwriteConfirm] = useState<string | null>(null);
 
   // Load config
   useEffect(() => {
@@ -155,13 +140,18 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     []
   );
 
-  const handleAddToDashboard = useCallback(async (description: string, summary: string) => {
+  const handleAddToDashboard = useCallback(async (description: string, summary: string, repositoryId: string) => {
     if (!detailModal) return;
+    if (!repositoryId) {
+      showToast("Pick a repository before adding a workflow.");
+      return;
+    }
     try {
       const res = await apiPost("/api/workflows/start-manual", {
         ticket_key: detailModal.key,
         ticket_summary: summary,
         ticket_description: description,
+        repository_id: repositoryId,
         ...(detailModal.url ? { issue_url: detailModal.url } : {}),
       });
       if (!res.ok) {
@@ -173,15 +163,20 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Failed to add workflow");
     }
-  }, [detailModal, fetchWorkflows]);
+  }, [detailModal, fetchWorkflows, showToast]);
 
   const handlePasteSubmit = useCallback(
-    async (name: string, description: string) => {
+    async (name: string, description: string, repositoryId: string) => {
+      if (!repositoryId) {
+        showToast("Pick a repository before adding a workflow.");
+        return;
+      }
       try {
         const res = await apiPost("/api/workflows/start-manual", {
           ticket_key: name,
           ticket_summary: name || "Manual item",
           ticket_description: description,
+          repository_id: repositoryId,
         });
         if (!res.ok) {
           const text = await res.text();
@@ -193,7 +188,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         showToast(e instanceof Error ? e.message : "Failed to add workflow");
       }
     },
-    [fetchWorkflows]
+    [fetchWorkflows, showToast]
   );
 
   const handleShowDescription = useCallback((key: string, summary: string, description?: string) => {
@@ -203,87 +198,10 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     setDetailModal({ key, summary, description: desc, showStart: false });
   }, [ticketingSystem]);
 
-  const handleSetupProject = useCallback(() => {
-    setShowWorkspaceSwitcher(true);
-  }, []);
-
-  const handleRepoSelected = useCallback(async (fullName: string) => {
-    setShowRepoPicker(false);
-    setCloneState({ repoName: fullName, status: "cloning" });
-
-    try {
-      const res = await apiPost("/api/repos/clone", { full_name: fullName, force: false });
-      if (res.status === 409) {
-        const text = await res.text();
-        if (text.includes("repository_exists")) {
-          setCloneState(null);
-          setOverwriteConfirm(fullName);
-        } else {
-          setCloneState({ repoName: fullName, status: "error", error: text });
-        }
-      } else if (!res.ok) {
-        const text = await res.text();
-        setCloneState({ repoName: fullName, status: "error", error: text || `HTTP ${res.status}` });
-      }
-      // If 202, wait for WebSocket events to update clone status
-    } catch (e) {
-      setCloneState({
-        repoName: fullName,
-        status: "error",
-        error: e instanceof Error ? e.message : "Failed to start clone",
-      });
-    }
-  }, []);
-
-  const handleWorkspaceSwitched = useCallback(() => {
-    setShowWorkspaceSwitcher(false);
-    resetState();
-    apiJson<ConfigResponse>("/api/config")
-      .then(setConfig)
-      .catch(() => {});
-    fetchWorkflows();
-    fetchCounts();
-  }, [fetchWorkflows, fetchCounts, resetState]);
-
-  const handleCloneDone = useCallback(() => {
-    setCloneState(null);
-    // Re-fetch config to update repo_exists
-    apiJson<ConfigResponse>("/api/config")
-      .then(setConfig)
-      .catch(() => {});
-    fetchWorkflows();
-  }, [fetchWorkflows]);
-
-  const handleCloneRetry = useCallback(() => {
-    if (cloneState) {
-      handleRepoSelected(cloneState.repoName);
-    }
-  }, [cloneState, handleRepoSelected]);
-
-  const handleOverwriteConfirm = useCallback(async () => {
-    const fullName = overwriteConfirm;
-    if (!fullName) return;
-    setOverwriteConfirm(null);
-    setCloneState({ repoName: fullName, status: "cloning" });
-    try {
-      const res = await apiPost("/api/repos/clone", { full_name: fullName, force: true });
-      if (!res.ok && res.status !== 202) {
-        const errText = await res.text();
-        setCloneState({ repoName: fullName, status: "error", error: errText });
-      }
-    } catch (e) {
-      setCloneState({
-        repoName: fullName,
-        status: "error",
-        error: e instanceof Error ? e.message : "Failed to start clone",
-      });
-    }
-  }, [overwriteConfirm]);
-
-  const handleOverwriteCancel = useCallback(() => {
-    setOverwriteConfirm(null);
-    setShowRepoPicker(true);
-  }, []);
+  // Plan-10: there is no "active repo" any more. The empty-state CTA links to
+  // the My Repositories tab; the per-card badge tells the user which repo
+  // each workflow belongs to.
+  const repoExists = (hasAnyRepo ?? true);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -301,9 +219,6 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         githubAppConfigured={githubAppConfigured}
         githubAppInstallationId={githubAppInstallationId}
         githubAppName={config?.github_app_name}
-        repoName={config?.repo_name}
-        repoHtmlUrl={config?.repo_html_url}
-        onChangeRepo={() => setShowWorkspaceSwitcher(true)}
         onLogout={onLogout}
       />
 
@@ -334,20 +249,34 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
         <SummaryStats counts={counts} />
-        <WorkflowGrid
-          workflows={workflows}
-          orderKeys={orderKeys}
-          terminalStates={terminalStates}
-          dynamicForwards={dynamicForwards}
-          workflowDefs={workflowDefs}
-          onRefresh={fetchWorkflows}
-          onShowDescription={handleShowDescription}
-          onReport={setReportKey}
-          onAddWorkflow={handleAddWorkflow}
-          canAddWorkflow={true}
-          repoExists={config?.repo_exists ?? true}
-          onSetupProject={handleSetupProject}
-        />
+        {hasAnyRepo === false ? (
+          <div className="text-center py-16">
+            <p className="text-gray-500 text-sm mb-4">
+              You haven't added any repositories yet. Add a repository to get started.
+            </p>
+            <Link
+              to="/config.html?tab=repositories"
+              className="inline-block text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
+            >
+              Go to My Repositories
+            </Link>
+          </div>
+        ) : (
+          <WorkflowGrid
+            workflows={workflows}
+            orderKeys={orderKeys}
+            terminalStates={terminalStates}
+            dynamicForwards={dynamicForwards}
+            workflowDefs={workflowDefs}
+            onRefresh={fetchWorkflows}
+            onShowDescription={handleShowDescription}
+            onReport={setReportKey}
+            onAddWorkflow={handleAddWorkflow}
+            canAddWorkflow={hasAnyRepo === true}
+            repoExists={repoExists}
+            onSetupProject={undefined}
+          />
+        )}
       </main>
 
       {/* Modals */}
@@ -379,40 +308,6 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       )}
       {reportKey && workflows[reportKey] && workflows[reportKey].generate_report && workflows[reportKey].has_report && (
         <ReportModal workflow={workflows[reportKey]} onClose={() => setReportKey(null)} />
-      )}
-      {showRepoPicker && (
-        <RepoPickerModal
-          onSelect={handleRepoSelected}
-          onClose={() => setShowRepoPicker(false)}
-        />
-      )}
-      {cloneState && (
-        <CloneProgressModal
-          repoName={cloneState.repoName}
-          status={cloneState.status}
-          error={cloneState.error}
-          onDone={handleCloneDone}
-          onRetry={handleCloneRetry}
-          onCancel={undefined}
-        />
-      )}
-      {overwriteConfirm && (
-        <ConfirmModal
-          title="Overwrite Repository?"
-          message="A repository already exists. Overwriting will delete the current repository and clone the selected one in its place."
-          onConfirm={handleOverwriteConfirm}
-          onCancel={handleOverwriteCancel}
-        />
-      )}
-      {showWorkspaceSwitcher && (
-        <WorkspaceSwitcherModal
-          onClose={() => setShowWorkspaceSwitcher(false)}
-          onSwitched={handleWorkspaceSwitched}
-          onAddRepo={() => {
-            setShowWorkspaceSwitcher(false);
-            setShowRepoPicker(true);
-          }}
-        />
       )}
       {showNoJira && (
         <NoJiraAlertModal

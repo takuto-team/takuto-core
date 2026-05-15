@@ -43,6 +43,7 @@ const baseWorkflow: WorkflowSummary = {
   has_report: false,
   workflow_def_runs: {},
   worktree_path: undefined,
+  workspace_name: "maestro-core",
 };
 
 const defaultWorkflowDefs = [

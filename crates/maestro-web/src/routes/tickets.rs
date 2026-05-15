@@ -59,6 +59,35 @@ pub struct UpdateDescriptionBody {
 /// Maximum allowed length for the ticket description in an improve request (100 KB).
 const MAX_IMPROVE_DESCRIPTION_LEN: usize = 100 * 1024;
 
+/// Plan-10: resolve the on-disk `local_path` of the repository associated with
+/// the workflow keyed by `ticket_key`. Falls back to `cfg.git.repo_path` when
+/// the workflow has no `repository_id` (legacy snapshots) or when no DB is
+/// attached (test paths).
+async fn resolve_workflow_repo_path(state: &AppState, ticket_key: &str) -> PathBuf {
+    let (repo_id, ws_name) = {
+        let wf_arc = state.engine.workflows_arc();
+        let wf = wf_arc.read().await;
+        wf.get(ticket_key)
+            .map(|w| (w.repository_id.clone(), w.workspace_name.clone()))
+            .unwrap_or_default()
+    };
+    if let Some(database) = state.db.as_ref() {
+        let conn = database.conn().lock().await;
+        if let Some(id) = repo_id.as_deref()
+            && let Ok(Some(row)) = maestro_core::db::repositories::get(&conn, id)
+        {
+            return PathBuf::from(&row.local_path);
+        }
+        if !ws_name.is_empty()
+            && let Ok(Some(row)) = maestro_core::db::repositories::get_by_name(&conn, &ws_name)
+        {
+            return PathBuf::from(&row.local_path);
+        }
+    }
+    let cfg = state.config.read().await;
+    PathBuf::from(&cfg.git.repo_path)
+}
+
 /// Run a description-editing AI session (improve / prompt) using the configured provider.
 ///
 /// Reads the workflow's `description_session_id` to resume the shared conversation, then
@@ -338,6 +367,9 @@ pub async fn update_ticket_description(
     require_workflow_access(&state, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
+    // Plan-10: resolve the cwd for `gh` / `acli` from the workflow's
+    // repository_id rather than the global cfg.git.repo_path.
+    let workflow_repo_path = resolve_workflow_repo_path(&state, &key).await;
     match state.ticketing_system {
         TicketingSystem::None => {
             // No external ticketing system — persist to the in-memory workflow.
@@ -355,13 +387,11 @@ pub async fn update_ticket_description(
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::GitHub => {
-            let (repo_path, remote) = {
+            let remote = {
                 let config = state.config.read().await;
-                (
-                    std::path::PathBuf::from(&config.git.repo_path),
-                    config.git.remote.clone(),
-                )
+                config.git.remote.clone()
             };
+            let repo_path = workflow_repo_path.clone();
             let remote_url = maestro_core::git::remote::resolve_remote_url(&repo_path, &remote)
                 .await
                 .map_err(|e| {
@@ -455,11 +485,7 @@ pub async fn update_ticket_description(
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::Jira => {
-            let repo_path = {
-                let config = state.config.read().await;
-                PathBuf::from(&config.git.repo_path)
-            };
-            let client = JiraClient::new(repo_path);
+            let client = JiraClient::new(workflow_repo_path.clone());
             client
                 .update_description(&key, &body.description)
                 .await
@@ -503,7 +529,7 @@ mod tests {
     fn test_app_state_none() -> AppState {
         let config = Arc::new(RwLock::new(Config::default()));
         let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
+            DryRunActions::new("origin".to_string(), None),
         );
         let jira_available = Arc::new(AtomicBool::new(false));
         let engine = Arc::new(WorkflowEngine::new(

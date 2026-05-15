@@ -127,6 +127,7 @@ impl WorkflowEngine {
             jira_available.clone(),
             ticketing_system,
             workflows_dir.clone(),
+            db.clone(),
         );
 
         let transitions = WorkflowTransitions::new(
@@ -239,6 +240,7 @@ impl WorkflowEngine {
         self.event_bus.subscribe()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_workflow(
         &self,
         ticket_key: String,
@@ -247,6 +249,7 @@ impl WorkflowEngine {
         ticket_description: Option<String>,
         ticket_url: Option<String>,
         user_id: Option<String>,
+        repository_id: Option<String>,
     ) -> Result<String> {
         self.lifecycle
             .start_workflow(
@@ -257,12 +260,14 @@ impl WorkflowEngine {
                 ticket_url,
                 &self.definitions,
                 user_id,
+                repository_id,
             )
             .await
     }
 
     /// Add a workflow to the dashboard without spawning the driver.
     /// For Jira tickets, assigns the ticket and transitions to In Progress (best-effort).
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_to_dashboard(
         &self,
         ticket_key: String,
@@ -271,6 +276,7 @@ impl WorkflowEngine {
         ticket_description: Option<String>,
         ticket_url: Option<String>,
         user_id: Option<String>,
+        repository_id: Option<String>,
     ) -> Result<String> {
         self.lifecycle
             .add_to_dashboard(
@@ -280,6 +286,7 @@ impl WorkflowEngine {
                 ticket_description,
                 ticket_url,
                 user_id,
+                repository_id,
             )
             .await
     }
@@ -457,6 +464,7 @@ mod tests {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name: "test-workspace".into(),
+            repository_id: None,
             user_id: None,
         }
     }
@@ -828,6 +836,7 @@ mod tests {
             },
             worktree_bootstrapped: true,
             workspace_name: "test-workspace".into(),
+            repository_id: None,
             user_id: None,
         }
     }
@@ -956,6 +965,7 @@ mod tests {
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
             workspace_name: String::new(),
+            repository_id: None,
             user_id: None,
         };
         let w = Workflow::from_persisted_record(rec);
@@ -1020,6 +1030,7 @@ mod tests {
             workflow_def_runs: def_runs,
             worktree_bootstrapped: true,
             workspace_name: "test-workspace".into(),
+            repository_id: Some("repo-uuid-99".into()),
             user_id: Some("user-abc".into()),
         };
 
@@ -1115,7 +1126,6 @@ mod tests {
         let config = Arc::new(RwLock::new(Config::default()));
         let actions: Arc<dyn ExternalActions> =
             Arc::new(crate::actions::dry_run::DryRunActions::new(
-                PathBuf::from("/workspace"),
                 "origin".into(),
                 None,
             ));
@@ -1139,7 +1149,6 @@ mod tests {
         let config = Arc::new(RwLock::new(Config::default()));
         let actions: Arc<dyn ExternalActions> =
             Arc::new(crate::actions::dry_run::DryRunActions::new(
-                PathBuf::from("/workspace"),
                 "origin".into(),
                 None,
             ));
@@ -1171,7 +1180,6 @@ mod tests {
         let config = Arc::new(RwLock::new(Config::default()));
         let actions: Arc<dyn ExternalActions> =
             Arc::new(crate::actions::dry_run::DryRunActions::new(
-                std::env::temp_dir(),
                 "origin".into(),
                 None,
             ));
@@ -1198,6 +1206,7 @@ mod tests {
                 None,
                 None,
                 Some("user-abc".to_string()),
+                None,
             )
             .await
             .expect("start_workflow should succeed in dry mode");
@@ -1220,7 +1229,6 @@ mod tests {
         let config = Arc::new(RwLock::new(Config::default()));
         let actions: Arc<dyn ExternalActions> =
             Arc::new(crate::actions::dry_run::DryRunActions::new(
-                std::env::temp_dir(),
                 "origin".into(),
                 None,
             ));
@@ -1244,6 +1252,7 @@ mod tests {
                 "POLLED-2".into(),
                 "Other summary".into(),
                 false,
+                None,
                 None,
                 None,
                 None,

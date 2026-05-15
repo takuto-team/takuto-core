@@ -8,6 +8,7 @@ pub mod github;
 pub mod jira;
 pub mod polling;
 pub mod repos;
+pub mod repositories;
 pub mod sessions;
 pub mod tickets;
 pub mod workflows;

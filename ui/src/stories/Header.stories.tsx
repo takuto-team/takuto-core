@@ -27,7 +27,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Minimal: Story = {
-  name: "Minimal (no bot, no repo, no auth)",
+  name: "Minimal (no bot, no auth)",
 };
 
 export const WithNamedApp: Story = {
@@ -47,49 +47,12 @@ export const WithAppNoName: Story = {
   },
 };
 
-export const WithRepo: Story = {
-  name: "With app + repository",
-  args: {
-    githubAppConfigured: true,
-    githubAppInstallationId: 12345,
-    githubAppName: "sous-coder",
-    repoName: "maestro-core",
-    repoHtmlUrl: "https://github.com/morphet81/maestro-core",
-    onChangeRepo: fn(),
-  },
-};
-
-export const WithRepoNoUrl: Story = {
-  name: "With repository (no remote URL)",
-  args: {
-    githubAppConfigured: true,
-    githubAppName: "sous-coder",
-    repoName: "my-private-repo",
-    repoHtmlUrl: null,
-    onChangeRepo: fn(),
-  },
-};
-
-export const LongRepoName: Story = {
-  name: "Long repository name (truncated)",
-  args: {
-    githubAppConfigured: true,
-    githubAppName: "sous-coder",
-    repoName: "my-very-long-repository-name-that-should-truncate",
-    repoHtmlUrl: "https://github.com/some-org/my-very-long-repository-name-that-should-truncate",
-    onChangeRepo: fn(),
-  },
-};
-
 export const Disconnected: Story = {
   name: "WebSocket disconnected",
   args: {
     connected: false,
     githubAppConfigured: true,
     githubAppName: "sous-coder",
-    repoName: "maestro-core",
-    repoHtmlUrl: "https://github.com/morphet81/maestro-core",
-    onChangeRepo: fn(),
   },
 };
 
@@ -101,8 +64,5 @@ export const FullFeatured: Story = {
     githubAppConfigured: true,
     githubAppInstallationId: 12345,
     githubAppName: "sous-coder",
-    repoName: "maestro-core",
-    repoHtmlUrl: "https://github.com/morphet81/maestro-core",
-    onChangeRepo: fn(),
   },
 };

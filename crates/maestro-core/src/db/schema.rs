@@ -6,8 +6,8 @@
 use crate::error::Result;
 
 /// Current schema version. Increment when adding new migrations.
-// v5 reserved for plan-03 audit log
-const SCHEMA_VERSION: i32 = 4;
+// v6 reserved for plan-03 audit log
+const SCHEMA_VERSION: i32 = 5;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS users (
@@ -156,6 +156,53 @@ CREATE TABLE user_worktree_commands (
 CREATE INDEX idx_user_worktree_commands_user ON user_worktree_commands(user_id, updated_at DESC);
 "#;
 
+/// Plan-10 "per-user repositories" migration.
+///
+/// Adds the `repositories` registry — one row per on-disk clone under
+/// `WORKSPACES_DIR` — and reshapes the (previously unused) `user_repositories`
+/// table to FK to it.
+///
+/// Key shape decisions (from plan-10 review):
+/// - `repositories.name` is **NOT UNIQUE**. Two forks (e.g. `owner-a/foo` and
+///   `owner-b/foo`) collide on `name=foo` but must coexist; the clone-time
+///   path collision resolver suffixes `-2`, `-3`, … on `local_path`. UUID `id`
+///   is the durable identity; `local_path` is the on-disk uniqueness key.
+/// - `repo_url` is NOT UNIQUE — re-registering the same URL at a different
+///   path is valid; uniqueness lives on `local_path`.
+/// - `created_by` → `users(id) ON DELETE SET NULL` so deleting the user who
+///   originally cloned a repo keeps the registration intact (it's a shared
+///   on-disk artefact).
+/// - `user_repositories` is dropped and recreated with composite PK
+///   `(user_id, repository_id)`, both FKs cascading. There's no migration of
+///   the old shape's data because plan-01 reserved it but no code ever wrote
+///   to it (every row in the wild is necessarily empty).
+const MIGRATION_V5: &str = r#"
+CREATE TABLE repositories (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    repo_url TEXT,
+    local_path TEXT NOT NULL UNIQUE,
+    default_branch TEXT NOT NULL DEFAULT 'main',
+    created_at INTEGER NOT NULL,
+    created_by TEXT,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX idx_repositories_name ON repositories(name);
+CREATE INDEX idx_repositories_repo_url ON repositories(repo_url);
+
+DROP TABLE IF EXISTS user_repositories;
+
+CREATE TABLE user_repositories (
+    user_id TEXT NOT NULL,
+    repository_id TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, repository_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_user_repositories_repo ON user_repositories(repository_id);
+"#;
+
 /// Run all pending migrations. Idempotent — safe to call on every startup.
 pub fn run_migrations(conn: &rusqlite::Connection) -> Result<()> {
     // Create the migration tracking table if it doesn't exist.
@@ -201,6 +248,14 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> Result<()> {
         conn.execute(
             "INSERT INTO schema_migrations (version) VALUES (?1)",
             rusqlite::params![4],
+        )?;
+    }
+
+    if current_version < 5 {
+        conn.execute_batch(MIGRATION_V5)?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version) VALUES (?1)",
+            rusqlite::params![5],
         )?;
     }
 
@@ -362,12 +417,17 @@ mod tests {
         assert_eq!(count, 0, "FK cascade should drop login_attempts rows");
     }
 
-    /// Plan-09 AC: a fresh database applies migrations through v4 and the
-    /// new `user_worktree_commands` table exists with the expected columns.
-    /// The plan-08 `workspace_commands` table must NOT exist (it's dropped
-    /// by v4 even on a fresh install — the DROP TABLE IF EXISTS is a no-op
-    /// since v3's CREATE never ran in isolation, but the assertion guards
-    /// against accidental reintroduction).
+    /// Plan-09 AC: a fresh database applies migrations through v4's table
+    /// changes — the new `user_worktree_commands` table exists with the
+    /// expected columns; plan-08's `workspace_commands` must NOT exist (it's
+    /// dropped by v4 even on a fresh install — the `DROP TABLE IF EXISTS` is
+    /// a no-op since v3's `CREATE` never ran in isolation, but the assertion
+    /// guards against accidental reintroduction).
+    ///
+    /// Plan-10 note: `SCHEMA_VERSION` is now 5, so we no longer assert the
+    /// version is exactly 4 — we assert it's **at least** 4 and that all v4
+    /// table-shape invariants still hold. `fresh_db_applies_v5` covers the
+    /// post-v5 invariants.
     #[test]
     fn fresh_db_applies_v4() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -379,7 +439,10 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 4);
+        assert!(
+            version >= 4,
+            "v4 must be applied on a fresh DB; got version {version}"
+        );
 
         let tables: Vec<String> = {
             let mut stmt = conn
@@ -495,7 +558,8 @@ mod tests {
         )
         .unwrap();
 
-        // Run the migration runner: it should apply only v4.
+        // Run the migration runner: it should apply v4 (and any later
+        // migrations that have since landed — plan-10 added v5).
         run_migrations(&conn).unwrap();
 
         // Pre-existing rows in unrelated tables still present.
@@ -535,13 +599,18 @@ mod tests {
             .unwrap();
         assert_eq!(new_count, 0);
 
-        // Version bumped to 4.
+        // Version is at least 4 (will be SCHEMA_VERSION after any later
+        // migrations chain on top — we only assert the v3→v4 invariants here).
         let version: i32 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 4);
+        assert!(
+            version >= 4,
+            "expected migration runner to reach at least v4; got {version}"
+        );
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     /// Plan-09: running `run_migrations` twice against a v4 DB is a no-op
@@ -558,8 +627,8 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            rows, 4,
-            "expected exactly 4 migration rows (v1, v2, v3, v4); got {rows}"
+            rows as i32, SCHEMA_VERSION,
+            "expected exactly SCHEMA_VERSION ({SCHEMA_VERSION}) migration rows; got {rows}"
         );
 
         // The new table still exists after a second migrate.
@@ -571,6 +640,221 @@ mod tests {
             )
             .unwrap();
         assert_eq!(new_table_exists, 1);
+    }
+
+    /// Plan-10 AC: a fresh database applies migrations through v5 and the
+    /// new `repositories` table exists with the expected schema. The
+    /// `user_repositories` table is reshaped (composite PK
+    /// `(user_id, repository_id)`; the legacy v1 columns `repo_url` /
+    /// `local_path` / `id` are gone).
+    #[test]
+    fn fresh_db_applies_v5() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_migrations(&conn).unwrap();
+
+        let version: i32 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 5);
+
+        let tables: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(
+            tables.contains(&"repositories".to_string()),
+            "repositories table missing; got: {tables:?}"
+        );
+        assert!(
+            tables.contains(&"user_repositories".to_string()),
+            "user_repositories table missing; got: {tables:?}"
+        );
+
+        // repositories columns.
+        let repo_cols: Vec<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(repositories)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        for expected in [
+            "id",
+            "name",
+            "repo_url",
+            "local_path",
+            "default_branch",
+            "created_at",
+            "created_by",
+        ] {
+            assert!(
+                repo_cols.iter().any(|c| c == expected),
+                "missing repositories column {expected}; got: {repo_cols:?}"
+            );
+        }
+
+        // user_repositories columns are the reshaped composite PK.
+        let ur_cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(user_repositories)")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        for expected in ["user_id", "repository_id", "added_at"] {
+            assert!(
+                ur_cols.iter().any(|c| c == expected),
+                "missing user_repositories column {expected}; got: {ur_cols:?}"
+            );
+        }
+        // Legacy v1 columns are gone.
+        for legacy in ["repo_url", "local_path"] {
+            assert!(
+                !ur_cols.iter().any(|c| c == legacy),
+                "legacy user_repositories column {legacy} should have been dropped; got: {ur_cols:?}"
+            );
+        }
+
+        // Indexes exist.
+        let indexes: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name IN ('repositories', 'user_repositories')")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        for expected in [
+            "idx_repositories_name",
+            "idx_repositories_repo_url",
+            "idx_user_repositories_repo",
+        ] {
+            assert!(
+                indexes.iter().any(|i| i == expected),
+                "missing index {expected}; got: {indexes:?}"
+            );
+        }
+    }
+
+    /// Plan-10: upgrading a v4-only database to v5 drops the old
+    /// `user_repositories` shape (plan-01 reserved but never wrote to it) and
+    /// creates the new `repositories` table + reshaped `user_repositories`.
+    /// Unrelated tables (users, sessions, etc.) are preserved.
+    #[test]
+    fn v4_to_v5_upgrade_creates_repositories_and_reshapes_user_repositories() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+
+        // Apply v1–v4 by hand, then stamp the migration log so the runner
+        // thinks it's resuming from a v4 install.
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            );",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATION_V1).unwrap();
+        conn.execute_batch(MIGRATION_V2).unwrap();
+        conn.execute_batch(MIGRATION_V3).unwrap();
+        conn.execute_batch(MIGRATION_V4).unwrap();
+        for v in 1..=4 {
+            conn.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                rusqlite::params![v],
+            )
+            .unwrap();
+        }
+
+        // Pre-existing row in unrelated table.
+        conn.execute(
+            "INSERT INTO users (id, username, role) VALUES ('u-pre', 'preexisting', 'admin')",
+            [],
+        )
+        .unwrap();
+
+        // Run the migration runner: it should apply only v5.
+        run_migrations(&conn).unwrap();
+
+        // Pre-existing users row still present.
+        let users: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(users, 1);
+
+        // New repositories table is empty and present.
+        let new_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM repositories", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(new_count, 0);
+
+        // Reshaped user_repositories has the new composite PK columns.
+        let ur_cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(user_repositories)")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(ur_cols.iter().any(|c| c == "repository_id"));
+        assert!(!ur_cols.iter().any(|c| c == "repo_url"));
+
+        // Version bumped to 5.
+        let version: i32 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 5);
+    }
+
+    /// Plan-10: running `run_migrations` twice against a v5 DB is a no-op.
+    #[test]
+    fn v5_migrations_are_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+
+        run_migrations(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 5,
+            "expected exactly 5 migration rows (v1..v5); got {rows}"
+        );
+
+        let new_table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='repositories'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(new_table_exists, 1);
+    }
+
+    /// Plan-10 G12: the comment at the top of `schema.rs` reserves the next
+    /// migration slot (v6) for plan-03's audit log. This test guards the
+    /// reservation by verifying that `SCHEMA_VERSION == 5` (so anyone bumping
+    /// to v6 has to also touch the reservation note).
+    #[test]
+    fn v6_is_reserved_for_plan_03_audit_log() {
+        assert_eq!(SCHEMA_VERSION, 5, "if you bump SCHEMA_VERSION, move the 'reserved for plan-03 audit log' comment in schema.rs from v6 to the next slot");
     }
 
     /// Plan-02 carried over: a DB whose schema version is newer than the

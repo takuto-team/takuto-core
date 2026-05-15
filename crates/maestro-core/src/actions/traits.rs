@@ -11,17 +11,31 @@ use crate::process::CommandOutput;
 #[async_trait]
 pub trait ExternalActions: Send + Sync {
     // Jira
-    /// Assign the work item to the **currently authenticated Jira user** (acli `@me`).
-    async fn assign_ticket(&self, key: &str) -> Result<()>;
-    async fn transition_ticket(&self, key: &str, status: &str) -> Result<()>;
-    async fn unassign_ticket(&self, key: &str) -> Result<()>;
-    async fn get_ticket_details(&self, key: &str) -> Result<String>;
+    //
+    // Plan-10: ticket-scoped Jira methods now take `repo_path: &Path` explicitly
+    // so callers thread the workflow's repository row rather than reading a
+    // global `cfg.git.repo_path`. The path is the cwd for the `acli` subprocess
+    // (acli reads the workspace context from the cwd it's spawned in).
+    async fn assign_ticket(&self, repo_path: &Path, key: &str) -> Result<()>;
+    async fn transition_ticket(&self, repo_path: &Path, key: &str, status: &str) -> Result<()>;
+    async fn unassign_ticket(&self, repo_path: &Path, key: &str) -> Result<()>;
+    async fn get_ticket_details(&self, repo_path: &Path, key: &str) -> Result<String>;
 
     // Git/GitHub
-    async fn create_worktree(&self, branch: &str, base: &str) -> Result<PathBuf>;
-    async fn remove_worktree(&self, path: &Path) -> Result<()>;
+    //
+    // Plan-10: worktree-scoped operations now take `repo_path: &Path` explicitly.
+    // The implementor no longer reads `self.repo_path()` (a global config getter
+    // that was dropped); callers resolve the repository's `local_path` from the
+    // workflow's `repository_id` and thread it in.
+    async fn create_worktree(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base: &str,
+    ) -> Result<PathBuf>;
+    async fn remove_worktree(&self, repo_path: &Path, worktree_path: &Path) -> Result<()>;
     /// Best-effort **`git branch -D`** in the main repo after worktree removal (no-op if `branch` is empty or already gone).
-    async fn delete_local_branch(&self, branch: &str) -> Result<()>;
+    async fn delete_local_branch(&self, repo_path: &Path, branch: &str) -> Result<()>;
     /// Set `git config user.name` / `user.email` in `cwd` from `gh api user` (GitHub no-reply email).
     async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()>;
 

@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -12,12 +12,13 @@ use tracing::warn;
 use crate::actions::traits::ExternalActions;
 use crate::config::{Config, TicketingSystem};
 use crate::container::ContainerRunner;
+use crate::db::Database;
 use crate::error::{MaestroError, Result};
 
-use crate::workflow::snapshot::workspace_name_from_repo_path;
 use crate::workflow::state::WorkflowState;
 
 use super::definitions::WorkflowDefinitionManager;
+use super::driver::resolve_workspace_name;
 use super::event_bus::WorkflowEventBus;
 use super::persistence::WorkflowPersistence;
 use super::repository::WorkflowRepository;
@@ -31,9 +32,14 @@ pub(crate) struct WorkflowLifecycle {
     pub(crate) jira_available: Arc<AtomicBool>,
     pub(crate) ticketing_system: TicketingSystem,
     pub(crate) workflows_dir: PathBuf,
+    /// Plan-10: used to look up `repositories.local_path` from a workflow's
+    /// `repository_id`. Optional only because some unit-test paths construct
+    /// the engine without a DB.
+    pub(crate) db: Option<Database>,
 }
 
 impl WorkflowLifecycle {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         repository: Arc<WorkflowRepository>,
         event_bus: Arc<WorkflowEventBus>,
@@ -42,6 +48,7 @@ impl WorkflowLifecycle {
         jira_available: Arc<AtomicBool>,
         ticketing_system: TicketingSystem,
         workflows_dir: PathBuf,
+        db: Option<Database>,
     ) -> Self {
         Self {
             repository,
@@ -51,6 +58,7 @@ impl WorkflowLifecycle {
             jira_available,
             ticketing_system,
             workflows_dir,
+            db,
         }
     }
 
@@ -64,12 +72,19 @@ impl WorkflowLifecycle {
         ticket_url: Option<String>,
         definitions: &WorkflowDefinitionManager,
         user_id: Option<String>,
+        repository_id: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
-        let ws_name = {
-            let c = self.config.read().await;
-            workspace_name_from_repo_path(Path::new(&c.git.repo_path))
-        };
+        // Plan-10: resolve workspace_name from the registered `repositories` row
+        // when `repository_id` is provided (the canonical path). Fall back to
+        // deriving it from `cfg.git.repo_path` for tests/dry-mode paths that
+        // construct workflows without a DB or a repo association.
+        let ws_name = resolve_workspace_name(
+            repository_id.as_deref(),
+            self.db.as_ref(),
+            &self.config,
+        )
+        .await;
         let mut workflow = Workflow::new(
             ticket_key.clone(),
             ticket_summary,
@@ -80,6 +95,7 @@ impl WorkflowLifecycle {
             ws_name,
         );
         workflow.user_id = user_id;
+        workflow.repository_id = repository_id;
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
         }
@@ -117,6 +133,7 @@ impl WorkflowLifecycle {
 
     /// Add a workflow to the dashboard without spawning the driver.
     /// For Jira tickets, assigns the ticket and transitions to In Progress (best-effort).
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_to_dashboard(
         &self,
         ticket_key: String,
@@ -125,12 +142,15 @@ impl WorkflowLifecycle {
         ticket_description: Option<String>,
         ticket_url: Option<String>,
         user_id: Option<String>,
+        repository_id: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
-        let ws_name = {
-            let c = self.config.read().await;
-            workspace_name_from_repo_path(Path::new(&c.git.repo_path))
-        };
+        let ws_name = resolve_workspace_name(
+            repository_id.as_deref(),
+            self.db.as_ref(),
+            &self.config,
+        )
+        .await;
         let mut workflow = Workflow::new(
             ticket_key.clone(),
             ticket_summary,
@@ -141,6 +161,7 @@ impl WorkflowLifecycle {
             ws_name,
         );
         workflow.user_id = user_id;
+        workflow.repository_id = repository_id;
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
         }
@@ -158,12 +179,23 @@ impl WorkflowLifecycle {
         if jira {
             let actions = self.actions.clone();
             let key = ticket_key.clone();
-            // Spawn a task so the HTTP handler doesn't block on slow Jira calls
+            // Resolve the workflow's repo path up-front so the spawned task is
+            // self-contained and doesn't need to re-acquire DB locks.
+            let (repo_path, _base_branch) = super::driver::resolve_repo_for_ticket(
+                &ticket_key,
+                &self.repository.inner_arc(),
+                &self.config,
+                self.db.as_ref(),
+            )
+            .await;
             tokio::spawn(async move {
-                if let Err(e) = actions.assign_ticket(&key).await {
+                if let Err(e) = actions.assign_ticket(&repo_path, &key).await {
                     warn!(ticket = %key, error = %e, "Failed to assign ticket at add-to-dashboard (best-effort)");
                 }
-                if let Err(e) = actions.transition_ticket(&key, "In Progress").await {
+                if let Err(e) = actions
+                    .transition_ticket(&repo_path, &key, "In Progress")
+                    .await
+                {
                     warn!(ticket = %key, error = %e, "Failed to transition ticket at add-to-dashboard (best-effort)");
                 }
             });
@@ -195,9 +227,15 @@ impl WorkflowLifecycle {
             let workflows = self.repository.inner_arc();
             let event_tx = self.event_bus.sender().clone();
             let key = ticket_key.clone();
+            let db = self.db.clone();
             tokio::spawn(async move {
                 super::driver::prepare_worktree_for_ticket(
-                    &key, &config, &workflows, &actions, &event_tx,
+                    &key,
+                    &config,
+                    &workflows,
+                    &actions,
+                    &event_tx,
+                    db.as_ref(),
                 )
                 .await;
             });
@@ -245,9 +283,19 @@ impl WorkflowLifecycle {
         cancel_token.cancel();
         ContainerRunner::cleanup_for_ticket(ticket_key).await;
 
+        // Plan-10: resolve the workflow's repository path so worktree / branch
+        // operations target the right clone.
+        let (repo_path, _base_branch) = super::driver::resolve_repo_for_ticket(
+            ticket_key,
+            &self.repository.inner_arc(),
+            &self.config,
+            self.db.as_ref(),
+        )
+        .await;
+
         if let Some(ref path) = worktree_path
             && path.exists()
-            && let Err(e) = self.actions.remove_worktree(path).await
+            && let Err(e) = self.actions.remove_worktree(&repo_path, path).await
         {
             warn!(
                 ticket = %ticket_key,
@@ -258,7 +306,10 @@ impl WorkflowLifecycle {
         }
 
         if !branch_name.trim().is_empty()
-            && let Err(e) = self.actions.delete_local_branch(&branch_name).await
+            && let Err(e) = self
+                .actions
+                .delete_local_branch(&repo_path, &branch_name)
+                .await
         {
             warn!(
                 ticket = %ticket_key,
@@ -275,10 +326,14 @@ impl WorkflowLifecycle {
         if jira_available && !driver_started {
             let actions = self.actions.clone();
             let key = ticket_key.to_string();
-            if let Err(e) = actions.unassign_ticket(&key).await {
+            let repo_path_clone = repo_path.clone();
+            if let Err(e) = actions.unassign_ticket(&repo_path_clone, &key).await {
                 warn!(ticket = %key, error = %e, "Failed to unassign ticket on delete (best-effort)");
             }
-            if let Err(e) = actions.transition_ticket(&key, "To Do").await {
+            if let Err(e) = actions
+                .transition_ticket(&repo_path_clone, &key, "To Do")
+                .await
+            {
                 warn!(ticket = %key, error = %e, "Failed to transition ticket back to To Do on delete (best-effort)");
             }
         }
@@ -316,11 +371,10 @@ impl WorkflowLifecycle {
         persistence: &WorkflowPersistence,
         broadcast_event: impl Fn(WorkflowEvent),
     ) -> Result<MarkDoneOutcome> {
-        let (done_status, repo_path, remote, ticketing_system) = {
+        let (done_status, remote, ticketing_system) = {
             let c = self.config.read().await;
             (
                 c.jira.done_status.clone(),
-                c.git.repo_path.clone(),
                 c.git.remote.clone(),
                 c.general.ticketing_system,
             )
@@ -345,13 +399,22 @@ impl WorkflowLifecycle {
             )
         };
 
+        // Plan-10: resolve the per-workflow repo path.
+        let (repo_path, _base_branch) = super::driver::resolve_repo_for_ticket(
+            ticket_key,
+            &self.repository.inner_arc(),
+            &self.config,
+            self.db.as_ref(),
+        )
+        .await;
+
         let mut jira_ok = true;
         let mut jira_error = None;
         if self.jira_available.load(Ordering::Relaxed) {
             // Jira mode: transition ticket to the configured done status.
             if let Err(e) = self
                 .actions
-                .transition_ticket(ticket_key, done_status.trim())
+                .transition_ticket(&repo_path, ticket_key, done_status.trim())
                 .await
             {
                 jira_ok = false;
@@ -363,10 +426,8 @@ impl WorkflowLifecycle {
             let cwd = worktree_path
                 .as_deref()
                 .filter(|p| p.exists())
-                .unwrap_or_else(|| Path::new(&repo_path));
-            match crate::git::remote::resolve_remote_url(std::path::Path::new(&repo_path), &remote)
-                .await
-            {
+                .unwrap_or(repo_path.as_path());
+            match crate::git::remote::resolve_remote_url(&repo_path, &remote).await {
                 Ok(remote_url) => {
                     if let Err(e) = super::driver::close_github_issue(
                         ticket_key,
@@ -396,7 +457,7 @@ impl WorkflowLifecycle {
         let mut worktree_error = None;
         if let Some(ref path) = worktree_path
             && path.exists()
-            && let Err(e) = self.actions.remove_worktree(path).await
+            && let Err(e) = self.actions.remove_worktree(&repo_path, path).await
         {
             worktree_ok = false;
             worktree_error = Some(e.to_string());
@@ -405,7 +466,10 @@ impl WorkflowLifecycle {
 
         if worktree_ok
             && !branch_name.trim().is_empty()
-            && let Err(e) = self.actions.delete_local_branch(&branch_name).await
+            && let Err(e) = self
+                .actions
+                .delete_local_branch(&repo_path, &branch_name)
+                .await
         {
             warn!(
                 ticket = %ticket_key,

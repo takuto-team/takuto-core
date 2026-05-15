@@ -123,20 +123,10 @@ const ADMIN_GATED_ROUTES: &[Route] = &[
         path: "/api/polling/resume",
         body: None,
     },
-    // POST /api/workspaces/switch — admin path will 4xx because no
-    // workspace exists in the test state, but that is still non-403.
-    Route {
-        method: "POST",
-        path: "/api/workspaces/switch",
-        body: Some(r#"{"name":"missing"}"#),
-    },
-    // POST /api/repos/clone — admin path will return 202 (clone task is
-    // spawned async); the request reaches the handler past the gate.
-    Route {
-        method: "POST",
-        path: "/api/repos/clone",
-        body: Some(r#"{"full_name":"owner/repo"}"#),
-    },
+    // Plan-10: `/api/workspaces/switch` and `/api/repos/clone` are
+    // hard-deleted (decision #3). The cloning + add-repo flow is now the
+    // open-to-all `POST /api/repositories`; the legacy admin gates here are
+    // no longer applicable.
 ];
 
 fn build_request(route: &Route, cookie: &str) -> Request<Body> {

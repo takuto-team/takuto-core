@@ -436,6 +436,20 @@ pub struct GeneralConfig {
     /// migration is requested.
     #[serde(default)]
     pub migrate_orphan_workflows: bool,
+    /// Plan-10: when `true` (default), startup reconciliation back-fills
+    /// `user_repositories` rows from restored snapshot workflows — every
+    /// workflow whose `user_id` is set and whose `workspace_name` matches a
+    /// registered repository's name gets a `(user_id, repository_id)`
+    /// association created so the dashboard list filter (Step 6) shows the
+    /// workflow to its owner. Set to `false` if the operator wants
+    /// pre-existing workflows to STAY hidden on their owner's dashboard until
+    /// the owner explicitly adds the repository.
+    #[serde(default = "default_migrate_orphan_repo_associations")]
+    pub migrate_orphan_repo_associations: bool,
+}
+
+fn default_migrate_orphan_repo_associations() -> bool {
+    true
 }
 
 fn default_workflow_definitions_dir() -> String {
@@ -731,6 +745,7 @@ impl Default for GeneralConfig {
             workflow_definitions_dir: default_workflow_definitions_dir(),
             poller_owner_username: None,
             migrate_orphan_workflows: false,
+            migrate_orphan_repo_associations: default_migrate_orphan_repo_associations(),
         }
     }
 }

@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware;
 use axum::response::Response;
-use axum::routing::{any, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use rust_embed::Embed;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -228,9 +228,21 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/github/issues", get(routes::github::list_github_issues))
         .route("/github/repos", get(routes::repos::list_github_repos))
-        .route("/repos/clone", post(routes::repos::clone_repo))
-        .route("/workspaces", get(routes::repos::list_workspaces))
-        .route("/workspaces/switch", post(routes::repos::switch_workspace))
+        // Plan-10: per-user repository associations. Any authenticated user
+        // may add (cloning if necessary) or remove repos from their own
+        // dashboard; admin-only `force_purge` flag drops the repo for everyone.
+        .route(
+            "/repositories",
+            get(routes::repositories::list_mine).post(routes::repositories::add),
+        )
+        .route(
+            "/repositories/_available",
+            get(routes::repositories::list_available),
+        )
+        .route(
+            "/repositories/{id}",
+            delete(routes::repositories::delete),
+        )
         .route(
             "/tickets/{key}/improve",
             post(routes::tickets::improve_ticket),

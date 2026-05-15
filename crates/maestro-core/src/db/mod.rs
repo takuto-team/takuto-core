@@ -10,6 +10,7 @@ pub mod credentials;
 pub mod login_attempts;
 pub mod migration;
 pub mod models;
+pub mod repositories;
 pub mod schema;
 pub mod users;
 pub mod user_worktree_commands;

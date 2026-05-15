@@ -49,7 +49,7 @@ pub fn test_state_with_db() -> AppState {
 pub fn test_state_with_db_instance(db: Database) -> AppState {
     let config = Arc::new(RwLock::new(Config::default()));
     let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-        DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
+        DryRunActions::new("origin".to_string(), None),
     );
     let jira_available = Arc::new(AtomicBool::new(false));
     let engine = Arc::new(WorkflowEngine::new(

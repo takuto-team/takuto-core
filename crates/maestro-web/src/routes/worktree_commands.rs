@@ -40,10 +40,10 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use maestro_core::db::repositories;
 use maestro_core::db::user_worktree_commands::{self, RunCommand, UserWorktreeCommandsRow};
 
 use crate::auth::AuthenticatedUser;
-use crate::routes::repos::list_workspaces;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -102,9 +102,10 @@ pub struct PutBody {
 #[derive(Debug, Serialize)]
 pub struct WorkspaceWithHasCommands {
     pub name: String,
+    /// `repo_url` from the `repositories` row when available — the old field
+    /// name `html_url` is kept on the wire so the UI doesn't need to change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub html_url: Option<String>,
-    pub active: bool,
     pub has_my_commands: bool,
 }
 
@@ -538,39 +539,45 @@ pub async fn delete_my_row(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/worktree-commands/_workspaces` — known workspaces from the
-/// filesystem scan augmented with `has_my_commands` for the caller.
+/// `GET /api/worktree-commands/_workspaces` — repositories the caller has
+/// added (plan-10) augmented with `has_my_commands`.
+///
+/// Plan-09 listed every workspace on disk (filesystem scan). Plan-10 deletes
+/// the global workspace list and replaces it with per-user repositories
+/// (`db::repositories::list_for_user`). The wire shape keeps `name`,
+/// `html_url`, and `has_my_commands` so the existing UI keeps working; the
+/// old `active` field is dropped (there is no "active repo" concept after
+/// plan-10).
 pub async fn list_workspaces_with_has_commands(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<WorkspaceWithHasCommands>>, (StatusCode, String)> {
-    // Reuse the existing filesystem scan from routes::repos.
-    let ws = list_workspaces(State(state.clone())).await.0;
-
     let db = state
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
         .clone();
     let user_id = auth.user_id.clone();
-    let rows = tokio::task::spawn_blocking(move || {
+
+    let (repos, command_rows) = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        user_worktree_commands::list_for_user(&conn, &user_id)
+        let repos = repositories::list_for_user(&conn, &user_id)?;
+        let cmds = user_worktree_commands::list_for_user(&conn, &user_id)?;
+        Ok::<_, maestro_core::error::MaestroError>((repos, cmds))
     })
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
     .map_err(db_error)?;
 
     let my_workspaces: BTreeSet<String> =
-        rows.into_iter().map(|r| r.workspace_name).collect();
+        command_rows.into_iter().map(|r| r.workspace_name).collect();
 
-    let merged: Vec<WorkspaceWithHasCommands> = ws
+    let merged: Vec<WorkspaceWithHasCommands> = repos
         .into_iter()
-        .map(|w| WorkspaceWithHasCommands {
-            has_my_commands: my_workspaces.contains(&w.name),
-            name: w.name,
-            html_url: w.html_url,
-            active: w.active,
+        .map(|r| WorkspaceWithHasCommands {
+            has_my_commands: my_workspaces.contains(&r.name),
+            html_url: r.repo_url,
+            name: r.name,
         })
         .collect();
 

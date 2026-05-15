@@ -1,16 +1,39 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { listMyRepositories, type RepositoryRow } from "../../api/client";
 
 interface Props {
-  onSubmit: (name: string, description: string) => void;
+  onSubmit: (name: string, description: string, repositoryId: string) => void;
   onClose: () => void;
 }
 
+/**
+ * Plan-10: a repository dropdown is now required above the description input.
+ * Without a repo association the workflow has no worktree base and the engine
+ * can't bootstrap it.
+ */
 export function PasteDescriptionModal({ onSubmit, onClose }: Props) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [repos, setRepos] = useState<RepositoryRow[]>([]);
+  const [repositoryId, setRepositoryId] = useState("");
+  const [loadingRepos, setLoadingRepos] = useState(true);
+
+  useEffect(() => {
+    listMyRepositories()
+      .then((rs) => {
+        setRepos(rs);
+        if (rs.length > 0) setRepositoryId(rs[0].id);
+      })
+      .catch(() => setRepos([]))
+      .finally(() => setLoadingRepos(false));
+  }, []);
+
+  const noRepos = !loadingRepos && repos.length === 0;
+  const canSubmit = !!description.trim() && !!repositoryId;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -24,6 +47,41 @@ export function PasteDescriptionModal({ onSubmit, onClose }: Props) {
         </div>
 
         <div className="p-6 flex flex-col gap-4 overflow-y-auto flex-1">
+          {/* Repository selector */}
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Repository</label>
+            {loadingRepos ? (
+              <p className="text-sm text-gray-500">Loading repositories…</p>
+            ) : noRepos ? (
+              <div className="border border-amber-800/50 bg-amber-900/20 rounded-lg px-3 py-2 text-sm text-amber-200">
+                You have no repositories added.{" "}
+                <Link
+                  to="/config.html?tab=repositories"
+                  className="text-amber-100 underline hover:text-white"
+                >
+                  Add one from the My Repositories tab
+                </Link>{" "}
+                before creating a workflow.
+              </div>
+            ) : repos.length === 1 ? (
+              <div className="text-sm text-gray-200 bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 font-mono">
+                {repos[0].name}
+              </div>
+            ) : (
+              <select
+                value={repositoryId}
+                onChange={(e) => setRepositoryId(e.target.value)}
+                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
+              >
+                {repos.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
           <div>
             <label className="block text-xs text-gray-400 mb-1">Workflow name (optional)</label>
             <input
@@ -53,8 +111,8 @@ export function PasteDescriptionModal({ onSubmit, onClose }: Props) {
             Cancel
           </button>
           <button
-            onClick={() => onSubmit(name, description)}
-            disabled={!description.trim()}
+            onClick={() => onSubmit(name, description, repositoryId)}
+            disabled={!canSubmit}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
           >
             Add to Dashboard

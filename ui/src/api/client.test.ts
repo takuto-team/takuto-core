@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { api, apiJson, apiPost, apiPostJson } from "./client";
+import {
+  api,
+  apiJson,
+  apiPost,
+  apiPostJson,
+  addRepository,
+  listMyRepositories,
+  listAvailableRepositories,
+  removeRepository,
+} from "./client";
 
 // Stub window.location for the 401 redirect logic
 const originalLocation = window.location;
@@ -18,7 +27,9 @@ afterEach(() => {
 });
 
 function mockFetch(status: number, body?: unknown, ok?: boolean) {
-  const res = new Response(body !== undefined ? JSON.stringify(body) : "", {
+  // 204/205/304 must have a null body per the Fetch spec.
+  const hasBody = body !== undefined && status !== 204 && status !== 205 && status !== 304;
+  const res = new Response(hasBody ? JSON.stringify(body) : null, {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -108,5 +119,84 @@ describe("apiPostJson()", () => {
     Object.defineProperty(res, "ok", { value: false });
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
     await expect(apiPostJson("/api/start", {})).rejects.toThrow("conflict");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan-10 repository wrappers.
+// ---------------------------------------------------------------------------
+
+describe("repository API wrappers", () => {
+  it("listMyRepositories hits GET /api/repositories", async () => {
+    mockFetch(200, [
+      { id: "r1", name: "maestro-core", repo_url: "https://github.com/x/y", local_path: "/workspaces/maestro-core", default_branch: "main", added_at: 1 },
+    ]);
+    const rows = await listMyRepositories();
+    expect(fetch).toHaveBeenCalledWith("/api/repositories", { credentials: "same-origin" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("maestro-core");
+  });
+
+  it("listAvailableRepositories hits GET /api/repositories/_available", async () => {
+    mockFetch(200, []);
+    await listAvailableRepositories();
+    expect(fetch).toHaveBeenCalledWith("/api/repositories/_available", { credentials: "same-origin" });
+  });
+
+  it("addRepository POSTs body and returns row", async () => {
+    mockFetch(200, { id: "r2", name: "foo", repo_url: null, local_path: "/workspaces/foo", default_branch: "main" });
+    const row = await addRepository({ repository_id: "r2" });
+    expect(fetch).toHaveBeenCalledWith("/api/repositories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repository_id: "r2" }),
+      credentials: "same-origin",
+    });
+    expect(row.id).toBe("r2");
+  });
+
+  it("addRepository throws with body text on error", async () => {
+    const res = new Response("clone already in progress", { status: 409 });
+    Object.defineProperty(res, "ok", { value: false });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
+    await expect(addRepository({ repo_url: "https://github.com/x/y" })).rejects.toThrow(
+      "clone already in progress",
+    );
+  });
+
+  it("removeRepository sends DELETE without body by default", async () => {
+    mockFetch(204);
+    await removeRepository("r3");
+    expect(fetch).toHaveBeenCalledWith("/api/repositories/r3", {
+      method: "DELETE",
+      headers: undefined,
+      body: undefined,
+      credentials: "same-origin",
+    });
+  });
+
+  it("removeRepository sends force_purge body when admin asks for it", async () => {
+    mockFetch(204);
+    await removeRepository("r3", { force_purge: true });
+    expect(fetch).toHaveBeenCalledWith("/api/repositories/r3", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_purge: true }),
+      credentials: "same-origin",
+    });
+  });
+
+  it("removeRepository url-encodes the id", async () => {
+    mockFetch(204);
+    await removeRepository("abc/def");
+    const call = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(call).toBe("/api/repositories/abc%2Fdef");
+  });
+
+  it("removeRepository surfaces 409 conflict text", async () => {
+    const res = new Response("active workflow blocks removal", { status: 409 });
+    Object.defineProperty(res, "ok", { value: false });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
+    await expect(removeRepository("r3")).rejects.toThrow("active workflow blocks removal");
   });
 });

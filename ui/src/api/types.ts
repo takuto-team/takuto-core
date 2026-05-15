@@ -51,6 +51,13 @@ export interface WorkflowSummary {
   workflow_def_runs: Record<string, string>;
   /** Absolute path of the git worktree on disk. Absent while being pre-created in the background. */
   worktree_path?: string;
+  /** Name of the repository (workspace) the workflow belongs to. Plan-10.
+   *  Always present on the wire; may be empty string for legacy snapshots
+   *  that pre-date workspace_name being recorded. */
+  workspace_name: string;
+  /** UUID of the repository row the workflow belongs to. Plan-10.
+   *  `None` for legacy snapshots not yet back-filled by reconciliation. */
+  repository_id?: string;
 }
 
 export interface RunCommandStatus {

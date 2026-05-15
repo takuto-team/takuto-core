@@ -24,6 +24,7 @@ use maestro_core::github::poller::GitHubPoller;
 use maestro_core::github::pr_merge_poller::PrMergePoller;
 use maestro_core::jira::poller::JiraPoller;
 use maestro_core::workflow::engine::WorkflowEngine;
+use maestro_core::repo_reconcile;
 use maestro_web::server::build_router;
 use maestro_web::state::AppState;
 
@@ -356,6 +357,22 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("{msg}");
     }
 
+    // Plan-10: auto-polling is disabled in this build. Operators need a visible
+    // signal at startup; if they had `auto_polling = true` configured, the
+    // override is louder still (warn vs info).
+    if config.general.auto_polling {
+        tracing::warn!(
+            "[general] auto_polling = true is ignored: auto-polling is disabled \
+             in this build (plan-11 TODO: per-repo polling). Items must be added \
+             manually via the dashboard."
+        );
+    } else {
+        info!(
+            "Auto-polling is disabled in this build (plan-11 TODO: per-repo \
+             polling). Items must be added manually via the dashboard."
+        );
+    }
+
     if !cli.config.exists() {
         info!(
             path = %cli.config.display(),
@@ -396,15 +413,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let (repo_path, git_remote, dry_mode, github_app_mgr) = {
+    let (git_remote, dry_mode, github_app_mgr) = {
         let c = config.read().await;
         let mgr = maestro_core::github_app::try_create_token_manager(&c.github);
-        (
-            PathBuf::from(&c.git.repo_path),
-            c.git.remote.clone(),
-            c.general.dry_mode,
-            mgr,
-        )
+        (c.git.remote.clone(), c.general.dry_mode, mgr)
     };
 
     // Keep a reference to the token manager so we can start the background writer.
@@ -412,7 +424,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let actions: Arc<dyn ExternalActions> = if dry_mode {
         info!("Running in DRY MODE — no external writes");
-        Arc::new(DryRunActions::new(repo_path, git_remote, github_app_mgr))
+        Arc::new(DryRunActions::new(git_remote, github_app_mgr))
     } else {
         // Pass the live config Arc so RealActions always reads the current
         // repo_path — a post-clone update takes effect without restart.
@@ -451,27 +463,111 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // bootstrap driver for per-workspace `worktree_init_commands` overrides
     // (plan-08), and BEFORE poller construction so we can resolve the
     // poller-owner user_id and pass it into both pollers.
-    let db = {
-        use maestro_core::workflow::snapshot::resolve_data_dir;
-        match resolve_data_dir() {
-            Some(data_dir) => match maestro_core::db::Database::open(&data_dir) {
-                Ok(db) => {
-                    info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized");
-                    Some(db)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to open multi-user database (multi-user auth unavailable; legacy auth still works)");
-                    None
-                }
-            },
-            None => {
-                tracing::warn!(
-                    "No data directory resolved — multi-user database unavailable (set MAESTRO_DATA_DIR, MAESTRO_HOME, or HOME)"
-                );
+    let resolved_data_dir = maestro_core::workflow::snapshot::resolve_data_dir();
+    let db = match resolved_data_dir.as_deref() {
+        Some(data_dir) => match maestro_core::db::Database::open(data_dir) {
+            Ok(db) => {
+                info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized");
+                Some(db)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to open multi-user database (multi-user auth unavailable; legacy auth still works)");
                 None
             }
+        },
+        None => {
+            tracing::warn!(
+                "No data directory resolved — multi-user database unavailable (set MAESTRO_DATA_DIR, MAESTRO_HOME, or HOME)"
+            );
+            None
         }
     };
+
+    // Plan-10: filesystem ↔ DB reconciliation must run AFTER DB open and
+    // BEFORE engine.restore_persisted_workflows(). Reviewer G2: otherwise
+    // restored workflows have no `repositories` row to look up by
+    // workspace_name and the workflow filter (Step 6) hides every legacy
+    // workflow from its owner's dashboard until an admin manually re-adds.
+    if let (Some(ref db), Some(data_dir)) = (db.as_ref(), resolved_data_dir.as_deref()) {
+        let migrate_associations = config
+            .read()
+            .await
+            .general
+            .migrate_orphan_repo_associations;
+
+        let conn_arc = db.conn().clone();
+        let conn_guard = conn_arc.lock().await;
+        let conn = &*conn_guard;
+
+        // 3.1 Filesystem → `repositories` reconciliation.
+        match repo_reconcile::reconcile_repositories(
+            conn,
+            maestro_core::workflow::snapshot::WORKSPACES_DIR,
+        ) {
+            Ok(n) if n > 0 => info!(
+                count = n,
+                workspaces_dir = maestro_core::workflow::snapshot::WORKSPACES_DIR,
+                "Plan-10 reconciliation: registered repositories from on-disk clones"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "Plan-10 reconciliation failed (continuing)"),
+        }
+
+        // 3.2 Backfill `user_repositories` from restored snapshot workflows
+        // (gated; default on).
+        if migrate_associations {
+            match repo_reconcile::backfill_user_repositories_from_snapshots(conn, data_dir) {
+                Ok(n) if n > 0 => info!(
+                    count = n,
+                    "Backfilled user_repositories from restored workflow snapshots (plan-10)"
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "Plan-10 association backfill failed (continuing)")
+                }
+            }
+        } else {
+            info!(
+                "[general] migrate_orphan_repo_associations = false — skipping snapshot-driven \
+                 user_repositories backfill; existing workflows will be invisible until each user \
+                 re-adds the repository from the dashboard"
+            );
+        }
+
+        // 3.3 active_workspace file cleanup. The active-workspace concept is
+        // dead after plan-10; each workflow carries its own repo association.
+        let aw_path = data_dir.join("active_workspace");
+        if aw_path.exists() {
+            if let Ok(value) = std::fs::read_to_string(&aw_path) {
+                tracing::info!(
+                    value = %value.trim(),
+                    "Removing dead `active_workspace` file (plan-10)"
+                );
+            }
+            let _ = std::fs::remove_file(&aw_path);
+        }
+
+        // 3.4 Deprecation warning for `[git] repo_path` when set and not
+        // matching any registered repository.
+        let cfg_repo_path = config.read().await.git.repo_path.clone();
+        if !cfg_repo_path.is_empty() && cfg_repo_path != "/workspace" {
+            let matches_any = maestro_core::db::repositories::get_by_path(conn, &cfg_repo_path)
+                .ok()
+                .flatten()
+                .is_some();
+            if !matches_any {
+                tracing::warn!(
+                    repo_path = %cfg_repo_path,
+                    "[git] repo_path is deprecated and ignored; configure repositories via the dashboard's My Repositories tab."
+                );
+            }
+        }
+    } else {
+        tracing::warn!(
+            "Skipping plan-10 reconciliation: no multi-user database available — \
+             repositories cannot be registered until the data dir is configured"
+        );
+    }
 
     let engine = Arc::new(WorkflowEngine::new_with_db(
         config.clone(),

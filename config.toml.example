@@ -41,6 +41,13 @@ max_active_workflows = 0
 # are reassigned to the resolved poller owner at startup so they appear on that user's
 # dashboard. Default false — orphans remain invisible until an explicit migration.
 # migrate_orphan_workflows = false
+# Plan-10: when true (default), startup reconciliation creates a `user_repositories`
+# association for every restored snapshot workflow that has a `user_id` and whose
+# `workspace_name` matches a registered repository — so workflows that pre-date
+# plan-10's per-user repo model stay visible on their owner's dashboard. Set to
+# false to require each user to explicitly re-add the repository from the
+# dashboard's My Repositories tab before their old workflows reappear.
+# migrate_orphan_repo_associations = true
 log_level = "info"
 # Docker image for isolated workflow containers. Default: auto-detected from this Maestro instance.
 # worker_image = "maestro:latest"

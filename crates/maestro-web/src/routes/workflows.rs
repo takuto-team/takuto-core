@@ -261,6 +261,14 @@ pub struct WorkflowSummary {
     /// ID of the user who created this workflow. `None` for legacy/poller workflows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    /// Plan-10: name of the repository (`repositories.name`) this workflow runs against.
+    /// Powers the per-card repo badge on the dashboard. Always populated — every
+    /// workflow has a `workspace_name` even pre-plan-10.
+    pub workspace_name: String,
+    /// Plan-10: FK to `repositories.id`. `None` for pre-plan-10 snapshots not yet
+    /// back-filled by the startup reconciliation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<String>,
 }
 
 /// Check whether the authenticated user may act on the workflow with the given ticket key.
@@ -276,7 +284,31 @@ pub(crate) async fn require_workflow_access(
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(ticket_key).ok_or(StatusCode::NOT_FOUND)?;
-    if w.user_id.as_deref() == Some(&auth.user_id) {
+    if w.user_id.as_deref() != Some(&auth.user_id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    // Plan-10: workflow's repository must be one the caller has added.
+    // Defensive back-compat: when `repository_id` is `None`, fall back to
+    // matching `workspace_name` against the user's repo names. Without a DB
+    // attached (test paths), skip the gate entirely.
+    let Some(database) = state.db.as_ref() else {
+        return Ok(());
+    };
+    let workflow_repo_id = w.repository_id.clone();
+    let workflow_workspace = w.workspace_name.clone();
+    drop(workflows);
+
+    let conn = database.conn().lock().await;
+    let repos = match maestro_core::db::repositories::list_for_user(&conn, &auth.user_id) {
+        Ok(r) => r,
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    let has_access = if let Some(ref repo_id) = workflow_repo_id {
+        repos.iter().any(|r| &r.id == repo_id)
+    } else {
+        !workflow_workspace.is_empty() && repos.iter().any(|r| r.name == workflow_workspace)
+    };
+    if has_access {
         Ok(())
     } else {
         Err(StatusCode::NOT_FOUND)
@@ -392,9 +424,42 @@ pub async fn list_workflows(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Json<Vec<WorkflowSummary>> {
     let cfg = state.config.read().await;
-    let current_ws = maestro_core::workflow::snapshot::workspace_name_from_repo_path(
-        std::path::Path::new(&cfg.git.repo_path),
-    );
+    // Plan-10: workflow visibility is gated by the caller's `user_repositories`
+    // associations. Build two HashSets in ONE batched query so the in-memory
+    // filter below is O(1) per workflow.
+    let (allowed_repo_ids, allowed_repo_names): (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ) = if let Some(database) = state.db.as_ref() {
+        let conn = database.conn().lock().await;
+        match maestro_core::db::repositories::list_for_user(&conn, &auth.user_id) {
+            Ok(repos) => {
+                let mut ids = std::collections::HashSet::new();
+                let mut names = std::collections::HashSet::new();
+                for r in repos {
+                    ids.insert(r.id);
+                    names.insert(r.name);
+                }
+                (ids, names)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load user repositories for workflow filter; returning empty list");
+                (
+                    std::collections::HashSet::new(),
+                    std::collections::HashSet::new(),
+                )
+            }
+        }
+    } else {
+        // No DB available (test paths). Fall back to legacy "all workflows owned
+        // by the caller" with no repo gate so the existing unit tests keep
+        // working.
+        (
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+        )
+    };
+    let no_db = state.db.is_none();
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let dyn_fwd = state.dynamic_forwards.read().await;
@@ -434,8 +499,24 @@ pub async fn list_workflows(
     // Still go through the batched helper for forward-compat / consistency.)
     let visible_workflows: Vec<&Workflow> = workflows
         .values()
-        .filter(|w| w.workspace_name == current_ws)
         .filter(|w| w.user_id.as_deref() == Some(&auth.user_id))
+        .filter(|w| {
+            if no_db {
+                // No DB → fall through with just the user_id gate (test paths).
+                return true;
+            }
+            // Canonical filter: workflow.repository_id ∈ caller's user_repositories.
+            if let Some(ref repo_id) = w.repository_id
+                && allowed_repo_ids.contains(repo_id)
+            {
+                return true;
+            }
+            // Defensive back-compat: legacy workflows have repository_id=None but
+            // may still carry a workspace_name matching a repo the user has
+            // added (the startup reconciliation back-fills repository_id but
+            // is best-effort).
+            !w.workspace_name.is_empty() && allowed_repo_names.contains(&w.workspace_name)
+        })
         .collect();
     let pairs: Vec<(String, String)> = {
         let mut seen: std::collections::HashSet<(String, String)> =
@@ -531,6 +612,8 @@ pub async fn list_workflows(
                     .filter(|p| p.exists())
                     .and_then(|p| p.to_str().map(str::to_string)),
                 user_id: w.user_id.clone(),
+                workspace_name: w.workspace_name.clone(),
+                repository_id: w.repository_id.clone(),
             }
         })
         .collect();
@@ -580,19 +663,15 @@ pub async fn get_workflow(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<WorkflowSummary>, StatusCode> {
     let cfg = state.config.read().await;
-    let current_ws = maestro_core::workflow::snapshot::workspace_name_from_repo_path(
-        std::path::Path::new(&cfg.git.repo_path),
-    );
+    // Plan-10: visibility is gated by `require_workflow_access`, which checks
+    // both user_id ownership AND repo association. The legacy
+    // workspace_name-equals-current-workspace check is dropped because there
+    // is no longer a single "current workspace" — every workflow knows its
+    // own repo.
+    require_workflow_access(&state, &auth, &id).await?;
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    if w.workspace_name != current_ws {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    // Users can only access their own workflows.
-    if w.user_id.as_deref() != Some(&auth.user_id) {
-        return Err(StatusCode::NOT_FOUND);
-    }
     let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
     let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
     let ticket_key = w.ticket_key.clone();
@@ -717,6 +796,8 @@ pub async fn get_workflow(
             .filter(|p| p.exists())
             .and_then(|p| p.to_str().map(str::to_string)),
         user_id: w.user_id.clone(),
+        workspace_name: w.workspace_name.clone(),
+        repository_id: w.repository_id.clone(),
     }))
 }
 
@@ -912,6 +993,11 @@ pub struct StartManualWorkflowBody {
     /// Used so clicking the issue key on the dashboard opens the correct URL for GitHub workflows.
     #[serde(default)]
     pub issue_url: Option<String>,
+    /// Plan-10: id of a `repositories` row the caller has added. When omitted,
+    /// the server picks the caller's most-recently-added repo (or rejects when
+    /// the caller has none).
+    #[serde(default)]
+    pub repository_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1032,6 +1118,47 @@ pub async fn start_manual_workflow(
         .filter(|s| !s.is_empty())
         .map(String::from);
 
+    // Plan-10: resolve the workflow's repository_id. When the body specifies
+    // one, validate the caller has it associated; otherwise, default to the
+    // most-recently-added repo. Reject when the caller has zero repos.
+    let repository_id = if let Some(database) = state.db.as_ref() {
+        let conn = database.conn().lock().await;
+        let user_repos = maestro_core::db::repositories::list_for_user(&conn, &auth.user_id)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if user_repos.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Add a repository before starting an item.".into(),
+            ));
+        }
+        let chosen_id = match body
+            .repository_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(requested) => {
+                if !user_repos.iter().any(|r| r.id == requested) {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        "You do not have access to that repository".into(),
+                    ));
+                }
+                requested.to_string()
+            }
+            None => user_repos
+                .iter()
+                .max_by_key(|r| r.created_at)
+                .map(|r| r.id.clone())
+                .expect("user_repos non-empty"),
+        };
+        Some(chosen_id)
+    } else {
+        // No DB attached (legacy test paths). Fall through with None — the
+        // engine will derive workspace_name from cfg.git.repo_path.
+        None
+    };
+
     let workflow_id = state
         .engine
         .add_to_dashboard(
@@ -1041,6 +1168,7 @@ pub async fn start_manual_workflow(
             description,
             issue_url,
             Some(auth.user_id),
+            repository_id,
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

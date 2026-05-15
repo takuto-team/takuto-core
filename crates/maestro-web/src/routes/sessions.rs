@@ -250,6 +250,14 @@ pub async fn proxy_or_static_fallback(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
+    // Unknown `/api/*` paths must NOT fall through to the SPA bundle — a route
+    // that has been deleted (e.g. plan-10's removed `/api/workspaces`) should
+    // return 404, not 200 with `index.html`. The SPA is for client-side routes
+    // only; the dashboard's API surface is canonical.
+    if req.uri().path().starts_with("/api/") {
+        return (StatusCode::NOT_FOUND, "").into_response();
+    }
+
     // Find a DynamicPort route via referer or cookie.
     let proxy_route = find_dynamic_port_route(&state, req.headers()).await;
 
@@ -639,7 +647,7 @@ mod tests {
         fn test_state() -> AppState {
             let config = Arc::new(RwLock::new(Config::default()));
             let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-                DryRunActions::new(std::env::temp_dir(), "origin".to_string(), None),
+                DryRunActions::new("origin".to_string(), None),
             );
             let jira_available = Arc::new(AtomicBool::new(false));
             let engine = Arc::new(WorkflowEngine::new(

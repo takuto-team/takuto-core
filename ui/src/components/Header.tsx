@@ -10,13 +10,16 @@ interface Props {
   githubAppConfigured: boolean;
   githubAppInstallationId?: number;
   githubAppName?: string | null;
-  repoName?: string | null;
-  repoHtmlUrl?: string | null;
-  onChangeRepo?: () => void;
   onLogout: () => void;
 }
 
-export function Header({ connected, authEnabled, githubAppConfigured, githubAppInstallationId, githubAppName, repoName, repoHtmlUrl, onChangeRepo, onLogout }: Props) {
+/**
+ * Plan-10: the global active-workspace indicator is gone. Each workflow card
+ * carries its own repo badge instead (via `workspace_name` in
+ * `WorkflowSummary`). The hamburger menu links to the new "My Repositories"
+ * tab where users add or remove repositories.
+ */
+export function Header({ connected, authEnabled, githubAppConfigured, githubAppInstallationId, githubAppName, onLogout }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -37,33 +40,13 @@ export function Header({ connected, authEnabled, githubAppConfigured, githubAppI
         <div className="flex items-center justify-between h-14">
           <div className="flex items-center gap-3">
             <span className="text-lg font-bold tracking-tight text-white">Maestro</span>
-            {repoName && (
-              <>
-                <span className="text-gray-700">|</span>
-                <span className="inline-flex items-baseline gap-2">
-                  {repoHtmlUrl ? (
-                    <a
-                      href={repoHtmlUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm font-semibold text-blue-400 hover:text-blue-300 transition-colors truncate max-w-48"
-                    >
-                      {repoName}
-                    </a>
-                  ) : (
-                    <span className="text-sm font-semibold text-gray-300 truncate max-w-48">{repoName}</span>
-                  )}
-                  {onChangeRepo && (
-                    <button
-                      onClick={onChangeRepo}
-                      className="text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
-                    >
-                      change
-                    </button>
-                  )}
-                </span>
-              </>
-            )}
+            <span className="text-gray-700">|</span>
+            <Link
+              to="/config.html?tab=repositories"
+              className="text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+            >
+              My Repositories
+            </Link>
           </div>
 
           <div className="flex items-center gap-4">
@@ -109,13 +92,20 @@ export function Header({ connected, authEnabled, githubAppConfigured, githubAppI
                 </svg>
               </button>
               {menuOpen && (
-                <div className="absolute right-0 mt-1 w-40 bg-gray-900 border border-gray-700 rounded-lg shadow-lg py-1 z-50">
+                <div className="absolute right-0 mt-1 w-44 bg-gray-900 border border-gray-700 rounded-lg shadow-lg py-1 z-50">
                   <Link
                     to="/config.html"
                     className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
                     onClick={() => setMenuOpen(false)}
                   >
                     Configuration
+                  </Link>
+                  <Link
+                    to="/config.html?tab=repositories"
+                    className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    My Repositories
                   </Link>
                   {authEnabled && (
                     <button
