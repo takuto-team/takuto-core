@@ -3,6 +3,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
+import type { RepositoryRow } from "../api/client";
 
 interface Props {
   connected: boolean;
@@ -11,17 +12,49 @@ interface Props {
   githubAppInstallationId?: number;
   githubAppName?: string | null;
   onLogout: () => void;
+  /**
+   * Plan-10: the user's added repositories. When the list is non-empty the
+   * header shows a small picker (active repo + chevron) instead of the bare
+   * "My Repositories" link.
+   */
+  repos?: RepositoryRow[];
+  /**
+   * Name of the currently-filtered repo (matches `RepositoryRow.name` and
+   * `WorkflowSummary.workspace_name`). `null` = "All repositories".
+   */
+  activeRepoName?: string | null;
+  /** Called when the user picks a different repo from the dropdown. */
+  onSelectRepo?: (name: string | null) => void;
 }
 
 /**
- * Plan-10: the global active-workspace indicator is gone. Each workflow card
- * carries its own repo badge instead (via `workspace_name` in
- * `WorkflowSummary`). The hamburger menu links to the new "My Repositories"
- * tab where users add or remove repositories.
+ * Plan-10: per-user repo picker in the header.
+ *
+ * - When the caller has zero repos added → shows the legacy CTA link to the
+ *   "My Repositories" tab so they can add one.
+ * - When the caller has ≥1 repo added → shows a compact dropdown listing
+ *   those repos with an "All repositories" option and a "Manage…" link
+ *   back to the Config tab.
+ *
+ * The dropdown only filters the dashboard view; it does NOT mutate any
+ * global state. The selection lives in the parent component (Dashboard) and
+ * is persisted to localStorage by the caller.
  */
-export function Header({ connected, authEnabled, githubAppConfigured, githubAppInstallationId, githubAppName, onLogout }: Props) {
+export function Header({
+  connected,
+  authEnabled,
+  githubAppConfigured,
+  githubAppInstallationId,
+  githubAppName,
+  onLogout,
+  repos,
+  activeRepoName,
+  onSelectRepo,
+}: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -34,6 +67,23 @@ export function Header({ connected, authEnabled, githubAppConfigured, githubAppI
     return () => document.removeEventListener("mousedown", handleClick);
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!pickerOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setPickerOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [pickerOpen]);
+
+  const hasRepos = (repos?.length ?? 0) > 0;
+  const activeRepo = activeRepoName
+    ? (repos ?? []).find((r) => r.name === activeRepoName) ?? null
+    : null;
+  const pickerLabel = activeRepo ? activeRepo.name : "All repositories";
+
   return (
     <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -41,12 +91,67 @@ export function Header({ connected, authEnabled, githubAppConfigured, githubAppI
           <div className="flex items-center gap-3">
             <span className="text-lg font-bold tracking-tight text-white">Maestro</span>
             <span className="text-gray-700">|</span>
-            <Link
-              to="/config.html?tab=repositories"
-              className="text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
-            >
-              My Repositories
-            </Link>
+            {hasRepos && onSelectRepo ? (
+              <div className="relative" ref={pickerRef}>
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen((v) => !v)}
+                  className="inline-flex items-center gap-1.5 text-xs text-gray-300 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800 cursor-pointer"
+                  title="Switch active repository (filters the dashboard)"
+                >
+                  <span className="font-medium">{pickerLabel}</span>
+                  <svg className="w-3 h-3 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {pickerOpen && (
+                  <div className="absolute left-0 mt-1 w-60 bg-gray-900 border border-gray-700 rounded-lg shadow-lg py-1 z-50 max-h-80 overflow-y-auto">
+                    <button
+                      type="button"
+                      onClick={() => { setPickerOpen(false); onSelectRepo(null); }}
+                      className={`w-full text-left px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                        activeRepoName === null
+                          ? "bg-blue-950/60 text-blue-300"
+                          : "text-gray-300 hover:bg-gray-800 hover:text-white"
+                      }`}
+                    >
+                      All repositories
+                    </button>
+                    <div className="border-t border-gray-800 my-1" />
+                    {(repos ?? []).map((r) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => { setPickerOpen(false); onSelectRepo(r.name); }}
+                        className={`w-full text-left px-3 py-1.5 text-sm transition-colors cursor-pointer truncate ${
+                          activeRepoName === r.name
+                            ? "bg-blue-950/60 text-blue-300"
+                            : "text-gray-300 hover:bg-gray-800 hover:text-white"
+                        }`}
+                        title={r.local_path}
+                      >
+                        {r.name}
+                      </button>
+                    ))}
+                    <div className="border-t border-gray-800 my-1" />
+                    <Link
+                      to="/config.html?tab=repositories"
+                      onClick={() => setPickerOpen(false)}
+                      className="block px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
+                    >
+                      Manage repositories…
+                    </Link>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Link
+                to="/config.html?tab=repositories"
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+              >
+                My Repositories
+              </Link>
+            )}
           </div>
 
           <div className="flex items-center gap-4">

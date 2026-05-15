@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { apiJson, apiPost, listMyRepositories } from "../api/client";
+import { apiJson, apiPost, listMyRepositories, type RepositoryRow } from "../api/client";
 import type { ConfigResponse, WorkflowDefinition, WorkflowEvent } from "../api/types";
 import { useToast } from "../hooks/useToast";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -32,15 +32,48 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
   const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
   const defsFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Plan-10: track whether the caller has at least one repo on their dashboard.
-  // Drives the empty-state CTA and gates the "+" picker.
-  const [hasAnyRepo, setHasAnyRepo] = useState<boolean | null>(null);
+  // Plan-10: track the caller's added repositories. Drives the empty-state CTA,
+  // gates the "+" picker, and feeds the header repo-switcher dropdown.
+  const [myRepos, setMyRepos] = useState<RepositoryRow[] | null>(null);
+  const hasAnyRepo = myRepos === null ? null : myRepos.length > 0;
 
   const refreshHasAnyRepo = useCallback(() => {
     listMyRepositories()
-      .then((rs) => setHasAnyRepo(rs.length > 0))
-      .catch(() => setHasAnyRepo(false));
+      .then(setMyRepos)
+      .catch(() => setMyRepos([]));
   }, []);
+
+  // Active repo for dashboard filtering. `null` = "All repositories".
+  // Persisted in localStorage so the choice survives page reloads. Scoped to
+  // the caller via the same key for simplicity; if the user changes accounts
+  // on the same browser the stale name is harmless — the picker just shows
+  // "All repositories" because the name won't match any of `myRepos`.
+  const ACTIVE_REPO_KEY = "maestro.activeRepoName";
+  const [activeRepoName, setActiveRepoNameState] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_REPO_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const setActiveRepoName = useCallback((name: string | null) => {
+    setActiveRepoNameState(name);
+    try {
+      if (name === null) localStorage.removeItem(ACTIVE_REPO_KEY);
+      else localStorage.setItem(ACTIVE_REPO_KEY, name);
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, []);
+
+  // When `myRepos` lands, drop the saved active repo if it's no longer in the
+  // user's list (they may have removed it from another tab).
+  useEffect(() => {
+    if (myRepos === null || activeRepoName === null) return;
+    if (!myRepos.some((r) => r.name === activeRepoName)) {
+      setActiveRepoName(null);
+    }
+  }, [myRepos, activeRepoName, setActiveRepoName]);
 
   const fetchWorkflowDefs = useCallback(() => {
     apiJson<WorkflowDefinition[]>("/api/workflow-definitions")
@@ -220,6 +253,9 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         githubAppInstallationId={githubAppInstallationId}
         githubAppName={config?.github_app_name}
         onLogout={onLogout}
+        repos={myRepos ?? []}
+        activeRepoName={activeRepoName}
+        onSelectRepo={setActiveRepoName}
       />
 
       {/* Preflight error banner */}
@@ -275,6 +311,7 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
             canAddWorkflow={hasAnyRepo === true}
             repoExists={repoExists}
             onSetupProject={undefined}
+            activeRepoName={activeRepoName}
           />
         )}
       </main>

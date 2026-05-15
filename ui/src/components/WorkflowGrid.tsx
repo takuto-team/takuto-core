@@ -18,6 +18,11 @@ interface Props {
   canAddWorkflow: boolean;
   repoExists: boolean;
   onSetupProject?: () => void;
+  /**
+   * Plan-10: when set, only workflows whose `workspace_name` matches this
+   * value are shown. `null` (or omitted) shows all of the caller's items.
+   */
+  activeRepoName?: string | null;
 }
 
 export function WorkflowGrid({
@@ -33,8 +38,12 @@ export function WorkflowGrid({
   canAddWorkflow,
   repoExists,
   onSetupProject,
+  activeRepoName,
 }: Props) {
-  const list = orderKeys.map((k) => workflows[k]).filter(Boolean);
+  const fullList = orderKeys.map((k) => workflows[k]).filter(Boolean);
+  const list = activeRepoName
+    ? fullList.filter((w) => w.workspace_name === activeRepoName)
+    : fullList;
 
   if (list.length === 0) {
     // No repo cloned yet — show project setup prompt
@@ -54,7 +63,27 @@ export function WorkflowGrid({
       );
     }
 
-    // Repo exists but no workflows
+    // Active-repo filter is set but matches nothing → distinguish from
+    // "you have no items at all".
+    if (activeRepoName && fullList.length > 0) {
+      return (
+        <div className="text-center py-16">
+          <p className="text-gray-500 text-sm mb-4">
+            No items in <span className="font-mono text-gray-400">{activeRepoName}</span> yet.
+          </p>
+          {canAddWorkflow && (
+            <button
+              onClick={onAddWorkflow}
+              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
+            >
+              + New Item
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    // Repo exists but no workflows at all
     return (
       <div className="text-center py-16">
         <p className="text-gray-500 text-sm mb-4">
