@@ -498,10 +498,17 @@ pub async fn delete(
 
     let db = require_db(&state)?;
 
-    // 1. Check for active workflows on the repo. Refuse 409 if any.
+    // 1. Active-workflow check, scoped correctly:
+    //    - force_purge (admin): refuse if ANY user has an active workflow on
+    //      the repo — admin is destroying it for everyone, so every user's
+    //      worktrees would orphan.
+    //    - non-force-purge: refuse only if the CALLER has an active workflow
+    //      on the repo. Other users' workflows are irrelevant — the caller is
+    //      just dropping their own association. Other users keep theirs and
+    //      their worktrees stay valid.
     let db_cl = db.clone();
     let repo_id = repository_id.clone();
-    let blockers = tokio::task::spawn_blocking(move || {
+    let all_blockers = tokio::task::spawn_blocking(move || {
         let conn = db_cl.conn().blocking_lock();
         maestro_core::db::repositories::repository_has_active_workflow(&conn, &repo_id)
     })
@@ -509,13 +516,27 @@ pub async fn delete(
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
     .map_err(db_error)?;
 
-    if !blockers.is_empty() {
-        let entries: Vec<BlockingWorkflowEntry> = blockers
+    let relevant_blockers: Vec<(String, String)> = if force_purge {
+        all_blockers
+    } else {
+        all_blockers
+            .into_iter()
+            .filter(|(_, uid)| uid == &auth.user_id)
+            .collect()
+    };
+
+    if !relevant_blockers.is_empty() {
+        let entries: Vec<BlockingWorkflowEntry> = relevant_blockers
             .into_iter()
             .map(|(ticket_key, user_id)| BlockingWorkflowEntry { ticket_key, user_id })
             .collect();
+        let error_msg = if force_purge {
+            "active workflows reference this repository — stop or finish them first"
+        } else {
+            "you have active workflows on this repository — stop or finish them before removing it from your dashboard"
+        };
         let body = serde_json::to_string(&DeleteRefusedResponse {
-            error: "active workflows reference this repository — stop or finish them first",
+            error: error_msg,
             blocking_workflows: entries,
         })
         .unwrap_or_default();

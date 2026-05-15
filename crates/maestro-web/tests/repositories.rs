@@ -637,8 +637,28 @@ async fn ac11_user_delete_cascades_to_associations() {
 // AC-16 — active workflow blocks delete.
 // ---------------------------------------------------------------------------
 
+/// Fetch the user_id of an existing username, directly from the DB. Used by
+/// the AC-16 tests to seed workflow snapshots with realistic user_ids.
+async fn user_id_for(state: &AppState, username: &str) -> String {
+    let db = state.db.as_ref().expect("db required").clone();
+    let username = username.to_string();
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn().blocking_lock();
+        conn.query_row(
+            "SELECT id FROM users WHERE username = ?1",
+            rusqlite::params![username],
+            |r| r.get::<_, String>(0),
+        )
+        .expect("user must exist")
+    })
+    .await
+    .expect("join error")
+}
+
+/// AC-16a: the caller's OWN active workflow on a repo blocks the caller's
+/// delete of that repo (the workflow's worktree would orphan).
 #[tokio::test]
-async fn ac16_active_workflow_blocks_delete() {
+async fn ac16_callers_active_workflow_blocks_delete() {
     use chrono::Utc;
     use maestro_core::workflow::snapshot::{
         PersistedWorkflowRecord, SNAPSHOT_FILENAME, SNAPSHOT_VERSION, WorkflowSnapshotFile,
@@ -647,9 +667,8 @@ async fn ac16_active_workflow_blocks_delete() {
 
     let (state, tmp) = test_state_isolated();
     let cookie = register_admin(&state).await;
+    let admin_uid = user_id_for(&state, "admin").await;
 
-    // The reconciliation helper resolves the data_dir via
-    // `MAESTRO_DATA_DIR` env or a default. Set it to our isolated tmp.
     let prev = std::env::var("MAESTRO_DATA_DIR").ok();
     // SAFETY: tests are single-threaded inside this function; we restore the
     // env at the end. The wider process may have other env access, but
@@ -663,7 +682,8 @@ async fn ac16_active_workflow_blocks_delete() {
     let body = format!(r#"{{"repository_id":"{r1}"}}"#);
     post_repositories(&state, &cookie, &body).await;
 
-    // Drop an active workflow snapshot under the workspace's name.
+    // Drop an active workflow snapshot owned by the CALLER. Their own active
+    // workflow must block their own delete (worktree would orphan).
     let snap_dir = tmp.path().join("workspaces").join("active-wf-repo");
     std::fs::create_dir_all(&snap_dir).unwrap();
     let snap_file = snap_dir.join(SNAPSHOT_FILENAME);
@@ -696,7 +716,7 @@ async fn ac16_active_workflow_blocks_delete() {
             worktree_bootstrapped: false,
             workspace_name: "active-wf-repo".to_string(),
             repository_id: Some(r1.clone()),
-            user_id: Some("anyone".to_string()),
+            user_id: Some(admin_uid.clone()),
         }],
     };
     std::fs::write(&snap_file, serde_json::to_string(&snap).unwrap()).unwrap();
@@ -721,6 +741,105 @@ async fn ac16_active_workflow_blocks_delete() {
     let blockers = json["blocking_workflows"].as_array().unwrap();
     assert_eq!(blockers.len(), 1);
     assert_eq!(blockers[0]["ticket_key"], "ACTIVE-1");
+    assert_eq!(blockers[0]["user_id"], admin_uid);
+
+    // Restore env.
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("MAESTRO_DATA_DIR", v),
+            None => std::env::remove_var("MAESTRO_DATA_DIR"),
+        }
+    }
+}
+
+/// AC-16b: ANOTHER user's active workflow on a repo MUST NOT block the
+/// caller's delete. The caller is just dropping their own association; the
+/// other user keeps theirs and their worktree stays valid.
+///
+/// Fix for the bug surfaced in production: user `alex` (non-admin) tried to
+/// remove `maestro-core` and was 409'd because admin had an active workflow
+/// on the repo.
+#[tokio::test]
+async fn ac16_other_users_active_workflow_does_not_block_caller_delete() {
+    use chrono::Utc;
+    use maestro_core::workflow::snapshot::{
+        PersistedWorkflowRecord, SNAPSHOT_FILENAME, SNAPSHOT_VERSION, WorkflowSnapshotFile,
+    };
+    use maestro_core::workflow::state::WorkflowState;
+
+    let (state, tmp) = test_state_isolated();
+    let admin_cookie = register_admin(&state).await;
+    let admin_uid = user_id_for(&state, "admin").await;
+    let alice_cookie = create_user_login(&state, &admin_cookie, "alice", "AlicePass1234").await;
+
+    let prev = std::env::var("MAESTRO_DATA_DIR").ok();
+    unsafe {
+        std::env::set_var("MAESTRO_DATA_DIR", tmp.path());
+    }
+
+    let r1 = seed_repository(&state, "shared-repo", None, "/workspaces/shared-repo").await;
+    // Both users add the repo.
+    let body = format!(r#"{{"repository_id":"{r1}"}}"#);
+    post_repositories(&state, &admin_cookie, &body).await;
+    post_repositories(&state, &alice_cookie, &body).await;
+
+    // Drop an active workflow snapshot OWNED BY ADMIN (not alice).
+    let snap_dir = tmp.path().join("workspaces").join("shared-repo");
+    std::fs::create_dir_all(&snap_dir).unwrap();
+    let snap_file = snap_dir.join(SNAPSHOT_FILENAME);
+    let snap = WorkflowSnapshotFile {
+        version: SNAPSHOT_VERSION,
+        workflows: vec![PersistedWorkflowRecord {
+            id: "wf-1".to_string(),
+            ticket_key: "GH-65".to_string(),
+            ticket_summary: "admin's active workflow".to_string(),
+            ticket_description: String::new(),
+            ticket_type: String::new(),
+            state: WorkflowState::Pending,
+            started_at: Utc::now(),
+            updated_at: Utc::now(),
+            steps_log: Vec::new(),
+            branch_name: String::new(),
+            worktree_path: None,
+            pr_url: None,
+            pr_merged: false,
+            terminal_lines: Vec::new(),
+            current_step_label: None,
+            started_manually: true,
+            jira_available: false,
+            last_session_id: None,
+            description_session_id: None,
+            ticketing_system: maestro_core::config::TicketingSystem::None,
+            ticket_url: None,
+            driver_started: false,
+            workflow_def_runs: std::collections::HashMap::new(),
+            worktree_bootstrapped: false,
+            workspace_name: "shared-repo".to_string(),
+            repository_id: Some(r1.clone()),
+            user_id: Some(admin_uid.clone()),
+        }],
+    };
+    std::fs::write(&snap_file, serde_json::to_string(&snap).unwrap()).unwrap();
+
+    // Alice removes her association — admin's workflow must NOT block her.
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/repositories/{r1}"))
+                .header("Origin", TEST_ORIGIN)
+                .header("Cookie", &alice_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NO_CONTENT,
+        "alice should be allowed to remove her association even though admin has an active workflow on the repo"
+    );
 
     // Restore env.
     unsafe {
