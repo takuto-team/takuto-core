@@ -174,6 +174,19 @@ export async function listAvailableRepositories(): Promise<RepositoryRow[]> {
 }
 
 /**
+ * GET /api/github/repos — list GitHub repositories the deployment's GitHub App
+ * installation (or PAT, fallback) can see. Pass `q` for server-side filtering
+ * (uses GitHub's search API when set; lists installation repositories
+ * otherwise). Returns up to ~50 results per call.
+ */
+export async function listGitHubAccessibleRepos(
+  q?: string,
+): Promise<import("./types").GitHubRepo[]> {
+  const qs = q && q.trim().length > 0 ? `?q=${encodeURIComponent(q.trim())}` : "";
+  return apiJson<import("./types").GitHubRepo[]>(`/api/github/repos${qs}`);
+}
+
+/**
  * POST /api/repositories — clone-if-needed + associate.
  *
  * Body: `{ repository_id }` to add an existing repo to MY dashboard, OR
