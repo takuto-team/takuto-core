@@ -320,6 +320,19 @@ fn main() -> ExitCode {
 }
 
 async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    // Detect stale `[commands]` / `[[run_commands]]` keys BEFORE `tracing_subscriber::init`
+    // so we can replay the warnings via tracing after the subscriber is up. Inline
+    // tracing calls inside Config::load on the first invocation go to the no-op default
+    // subscriber and are silently dropped — this two-step path is the workaround.
+    let legacy_warnings = if cli.config.exists() {
+        match std::fs::read_to_string(&cli.config) {
+            Ok(content) => maestro_core::config::detect_legacy_command_keys(&content),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
     let mut config = if cli.config.exists() {
         Config::load(&cli.config)?
     } else {
@@ -337,6 +350,11 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_target(true)
         .init();
+
+    // Replay legacy-key warnings now that the subscriber is initialised.
+    for msg in &legacy_warnings {
+        tracing::warn!("{msg}");
+    }
 
     if !cli.config.exists() {
         info!(

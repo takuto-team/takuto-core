@@ -41,38 +41,46 @@ export async function apiPostJson<T>(input: string, body?: unknown): Promise<T> 
 }
 
 // ---------------------------------------------------------------------------
-// Worktree commands (per-workspace init command overrides)
+// Worktree commands (per-user-per-workspace init + run commands).
+//
+// Plan-09: drops the admin-only `/api/admin/worktree-commands/*` endpoints in
+// favour of user-scoped `/api/worktree-commands/*` — each authenticated user
+// manages their own data only; admins have no special access. A single row
+// stores BOTH the init commands (Vec<string>) and the run commands
+// (Vec<{ name, command }>), so a single PUT updates both atomically.
 // ---------------------------------------------------------------------------
 
-export interface WorktreeCommandsOverride {
-  workspace_name: string;
-  commands: string[];
-  updated_at: number;
-  updated_by?: string | null;
+export interface RunCommand {
+  name: string;
+  command: string;
 }
 
-export interface WorktreeCommandsListResponse {
-  default: string[];
-  overrides: WorktreeCommandsOverride[];
+/** A single row in `user_worktree_commands` for the caller's user. */
+export interface WorktreeCommandsRow {
+  workspace_name: string;
+  init_commands: string[];
+  run_commands: RunCommand[];
+  updated_at: number;
 }
 
 export interface WorktreeCommandsWorkspaceEntry {
   name: string;
   html_url?: string | null;
   active: boolean;
-  has_override: boolean;
+  /** True if the caller has a `user_worktree_commands` row for this workspace. */
+  has_my_commands: boolean;
 }
 
-/** GET /api/admin/worktree-commands — global default + all per-workspace overrides. */
-export async function getWorktreeCommands(): Promise<WorktreeCommandsListResponse> {
-  return apiJson<WorktreeCommandsListResponse>("/api/admin/worktree-commands");
+/** GET /api/worktree-commands — list every row the caller owns. */
+export async function listMyWorktreeCommands(): Promise<WorktreeCommandsRow[]> {
+  return apiJson<WorktreeCommandsRow[]>("/api/worktree-commands");
 }
 
-/** GET /api/admin/worktree-commands/{workspace} — returns null on 404. */
-export async function getWorktreeCommandsOverride(
+/** GET /api/worktree-commands/{workspace} — returns null on 404. */
+export async function getMyWorktreeCommands(
   workspace: string,
-): Promise<WorktreeCommandsOverride | null> {
-  const res = await api(`/api/admin/worktree-commands/${encodeURIComponent(workspace)}`);
+): Promise<WorktreeCommandsRow | null> {
+  const res = await api(`/api/worktree-commands/${encodeURIComponent(workspace)}`);
   if (res.status === 404) {
     return null;
   }
@@ -83,15 +91,25 @@ export async function getWorktreeCommandsOverride(
   return res.json();
 }
 
-/** PUT /api/admin/worktree-commands/{workspace} — upsert the override. */
-export async function putWorktreeCommandsOverride(
+/**
+ * PUT /api/worktree-commands/{workspace} — upsert both kinds in one round-trip.
+ *
+ * The server validates: ≤50 commands per kind, ≤2000 char per command, ≤100
+ * char per run-command name, non-empty after trim, no NUL bytes, unique
+ * run-command names within the list.
+ */
+export async function putMyWorktreeCommands(
   workspace: string,
-  commands: string[],
-): Promise<WorktreeCommandsOverride> {
-  const res = await api(`/api/admin/worktree-commands/${encodeURIComponent(workspace)}`, {
+  initCommands: string[],
+  runCommands: RunCommand[],
+): Promise<WorktreeCommandsRow> {
+  const res = await api(`/api/worktree-commands/${encodeURIComponent(workspace)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ commands }),
+    body: JSON.stringify({
+      init_commands: initCommands,
+      run_commands: runCommands,
+    }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -100,14 +118,14 @@ export async function putWorktreeCommandsOverride(
   return res.json();
 }
 
-/** DELETE /api/admin/worktree-commands/{workspace} — drops the override. */
-export async function deleteWorktreeCommandsOverride(workspace: string): Promise<void> {
-  const res = await api(`/api/admin/worktree-commands/${encodeURIComponent(workspace)}`, {
+/** DELETE /api/worktree-commands/{workspace} — remove the caller's row (204) or 404. */
+export async function deleteMyWorktreeCommands(workspace: string): Promise<void> {
+  const res = await api(`/api/worktree-commands/${encodeURIComponent(workspace)}`, {
     method: "DELETE",
   });
   if (res.status === 204) return;
   if (res.status === 404) {
-    throw new Error("Override not found");
+    throw new Error("No commands set for this workspace");
   }
   if (!res.ok) {
     const text = await res.text();
@@ -115,7 +133,10 @@ export async function deleteWorktreeCommandsOverride(workspace: string): Promise
   }
 }
 
-/** GET /api/admin/worktree-commands/_workspaces — workspaces with `has_override` flag. */
+/**
+ * GET /api/worktree-commands/_workspaces — workspaces from the filesystem scan
+ * augmented with a `has_my_commands` boolean for the caller's user.
+ */
 export async function listWorktreeCommandsWorkspaces(): Promise<WorktreeCommandsWorkspaceEntry[]> {
-  return apiJson<WorktreeCommandsWorkspaceEntry[]>("/api/admin/worktree-commands/_workspaces");
+  return apiJson<WorktreeCommandsWorkspaceEntry[]>("/api/worktree-commands/_workspaces");
 }

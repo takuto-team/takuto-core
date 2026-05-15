@@ -12,7 +12,7 @@ pub mod migration;
 pub mod models;
 pub mod schema;
 pub mod users;
-pub mod workspace_commands;
+pub mod user_worktree_commands;
 
 use std::path::Path;
 use std::sync::Arc;

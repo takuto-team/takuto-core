@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use serde::de::{self, SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{MaestroError, Result};
 
@@ -243,8 +242,6 @@ pub struct Config {
     #[serde(default)]
     pub github: GitHubAppConfig,
     #[serde(default)]
-    pub commands: CommandsConfig,
-    #[serde(default)]
     pub web: WebConfig,
     #[serde(default)]
     pub agent: AgentConfig,
@@ -260,11 +257,6 @@ pub struct Config {
     /// that runs against real users without an explicit `[dev]` opt-in.
     #[serde(default)]
     pub dev: DevConfig,
-    /// User-defined run commands available from the dashboard after a workflow completes.
-    /// Each entry defines a named shell command (e.g. dev server, Storybook) that can be
-    /// started/stopped from the workflow card.
-    #[serde(default)]
-    pub run_commands: Vec<RunCommandConfig>,
 }
 
 /// Dev-only knobs. Off by default in production. Never read inside any code path
@@ -311,16 +303,6 @@ fn default_mock_line_delay_ms() -> u64 {
 }
 fn default_mock_total_ms() -> u64 {
     5000
-}
-
-/// A user-defined run command that can be launched from the dashboard after a workflow completes.
-/// Each command runs in a dedicated container with port detection and forwarding.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunCommandConfig {
-    /// Display label for the command (e.g. `"Dev Server"`, `"Storybook"`).
-    pub name: String,
-    /// Shell command to execute (e.g. `"npm run dev"`, `"npx storybook dev -p 6006"`).
-    pub command: String,
 }
 
 /// Docker-specific hooks (see README). `build_commands` run at image build time; `compose_up_commands` on each container start.
@@ -545,80 +527,6 @@ impl GitHubAppConfig {
             && (!self.app_private_key.trim().is_empty()
                 || !self.app_private_key_path.trim().is_empty())
     }
-}
-
-fn deserialize_pre_install_vec<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct PreInstallVisitor;
-
-    impl<'de> Visitor<'de> for PreInstallVisitor {
-        type Value = Vec<String>;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a string or array of strings")
-        }
-
-        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
-            let t = v.trim();
-            if t.is_empty() {
-                Ok(Vec::new())
-            } else {
-                Ok(vec![t.to_string()])
-            }
-        }
-
-        fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<Self::Value, E> {
-            let t = v.trim();
-            if t.is_empty() {
-                Ok(Vec::new())
-            } else {
-                Ok(vec![t.to_string()])
-            }
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
-        where
-            A: SeqAccess<'de>,
-        {
-            let mut out = Vec::new();
-            while let Some(s) = seq.next_element::<String>()? {
-                let t = s.trim();
-                if !t.is_empty() {
-                    out.push(t.to_string());
-                }
-            }
-            Ok(out)
-        }
-    }
-
-    deserializer.deserialize_any(PreInstallVisitor)
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CommandsConfig {
-    /// Shell commands run sequentially in the worktree directory immediately
-    /// after the worktree is created (before the first workflow definition
-    /// starts). Use for dependency installation, codegen, registry login —
-    /// anything that must happen once per worktree.
-    #[serde(default, deserialize_with = "deserialize_pre_install_vec")]
-    pub worktree_init_commands: Vec<String>,
-
-    // === Deprecated, read-only for backward compat. Migrated into
-    //     worktree_init_commands at load time; NOT emitted on serialize.
-    //     Visible through v0.7; removed in v0.8 (aligns with plan-07 sunset). ===
-    /// Deprecated (v0.8 sunset): migrated into `worktree_init_commands` on load.
-    #[serde(default, skip_serializing, deserialize_with = "deserialize_pre_install_vec")]
-    pub pre_install: Vec<String>,
-    /// Deprecated (v0.8 sunset): migrated into `worktree_init_commands` on load.
-    #[serde(default, skip_serializing)]
-    pub install: String,
-    /// Deprecated (v0.8 sunset): migrated into `worktree_init_commands` on load.
-    #[serde(default, skip_serializing, deserialize_with = "deserialize_pre_install_vec")]
-    pub pre_workflow: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -888,6 +796,51 @@ pub fn resolve_config_relative_path(config_file_dir: &Path, rel: &str) -> PathBu
     }
 }
 
+/// Emit a startup warning if the loaded TOML still contains the legacy
+/// `[commands]` table or `[[run_commands]]` array.
+///
+/// As of plan-09 these settings live per-user-per-workspace in the database
+/// and are configured from the dashboard's Configuration → Worktree Settings
+/// tab. Stale entries in `config.toml` are silently ignored at parse time;
+/// this warning exists so operators notice the migration.
+/// Detect stale `[commands]` / `[[run_commands]]` top-level keys in a config
+/// file. Returns the warning messages that callers should emit; pure so the
+/// caller can defer emission until after `tracing_subscriber` is initialised
+/// (otherwise the warning is silently dropped because the global subscriber
+/// is a no-op until init runs).
+pub fn detect_legacy_command_keys(toml_content: &str) -> Vec<&'static str> {
+    let mut warnings = Vec::new();
+    let Ok(value) = toml::from_str::<toml::Value>(toml_content) else {
+        return warnings;
+    };
+    let Some(table) = value.as_table() else {
+        return warnings;
+    };
+    if table.contains_key("commands") {
+        warnings.push(
+            "config.toml: `[commands]` table is ignored — worktree init commands are now per-user. \
+             Configure them in the dashboard's Configuration → Worktree Settings tab.",
+        );
+    }
+    if table.contains_key("run_commands") {
+        warnings.push(
+            "config.toml: `[[run_commands]]` entries are ignored — run commands are now per-user. \
+             Configure them in the dashboard's Configuration → Worktree Settings tab.",
+        );
+    }
+    warnings
+}
+
+/// Emit any detected legacy-key warnings via `tracing::warn!`. Safe to call
+/// any time tracing is initialised; on first load the caller in `maestro-cli`
+/// uses [`detect_legacy_command_keys`] directly and replays the warnings
+/// after tracing setup.
+fn warn_legacy_command_keys(toml_content: &str) {
+    for msg in detect_legacy_command_keys(toml_content) {
+        tracing::warn!("{msg}");
+    }
+}
+
 impl Config {
     /// Parse a `Config` from a TOML string without loading from disk.
     ///
@@ -895,14 +848,9 @@ impl Config {
     /// memory. Applies validation but **not** external workflow step files
     /// (those require a filesystem path).
     pub fn load_from_str(toml_content: &str) -> Result<Self> {
+        warn_legacy_command_keys(toml_content);
         let mut config: Config = toml::from_str(toml_content)?;
         config.web.normalize_cors_origins();
-        if config.migrate_legacy_commands() {
-            tracing::info!(
-                worktree_init_commands = ?config.commands.worktree_init_commands,
-                "Migrated legacy [commands] (pre_install/install/pre_workflow) into worktree_init_commands"
-            );
-        }
         config.validate()?;
         Ok(config)
     }
@@ -913,48 +861,11 @@ impl Config {
         }
 
         let content = std::fs::read_to_string(path)?;
+        warn_legacy_command_keys(&content);
         let mut config: Config = toml::from_str(&content)?;
         config.web.normalize_cors_origins();
-        if config.migrate_legacy_commands() {
-            tracing::info!(
-                worktree_init_commands = ?config.commands.worktree_init_commands,
-                "Migrated legacy [commands] (pre_install/install/pre_workflow) into worktree_init_commands"
-            );
-        }
         config.validate()?;
         Ok(config)
-    }
-
-    /// One-shot migration: if `worktree_init_commands` is empty and any of the
-    /// deprecated fields (`pre_install`, `install`, `pre_workflow`) have values,
-    /// concatenate them in lifecycle order (pre_install → install → pre_workflow)
-    /// into `worktree_init_commands` and clear the deprecated fields.
-    ///
-    /// Idempotent — running twice on a migrated config is a no-op. Returns
-    /// `true` when a migration actually happened.
-    pub fn migrate_legacy_commands(&mut self) -> bool {
-        let needs_migration = self.commands.worktree_init_commands.is_empty()
-            && (!self.commands.pre_install.is_empty()
-                || !self.commands.install.is_empty()
-                || !self.commands.pre_workflow.is_empty());
-        if !needs_migration {
-            // Even when not merging, drop deprecated values so a later write
-            // never re-emits them (skip_serializing already does, but clear
-            // for consistency when the new field already populated).
-            self.commands.pre_install.clear();
-            self.commands.install.clear();
-            self.commands.pre_workflow.clear();
-            return false;
-        }
-        let mut merged = Vec::new();
-        merged.extend(self.commands.pre_install.drain(..));
-        let install = std::mem::take(&mut self.commands.install);
-        if !install.is_empty() {
-            merged.push(install);
-        }
-        merged.extend(self.commands.pre_workflow.drain(..));
-        self.commands.worktree_init_commands = merged;
-        true
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -1032,33 +943,6 @@ impl Config {
                 "[jira] done_status must be non-empty (Jira transition target for Mark as Done)"
                     .to_string(),
             ));
-        }
-
-        // Validate run commands: names must be non-empty and unique.
-        for (i, rc) in self.run_commands.iter().enumerate() {
-            if rc.name.trim().is_empty() {
-                return Err(MaestroError::Config(format!(
-                    "[[run_commands]] entry {i} has an empty name"
-                )));
-            }
-            if rc.command.trim().is_empty() {
-                return Err(MaestroError::Config(format!(
-                    "[[run_commands]] entry '{}' has an empty command",
-                    rc.name
-                )));
-            }
-        }
-        {
-            let mut seen_names = std::collections::HashSet::new();
-            for rc in &self.run_commands {
-                let key = rc.name.trim().to_lowercase();
-                if !seen_names.insert(key) {
-                    return Err(MaestroError::Config(format!(
-                        "[[run_commands]] duplicate name: '{}'",
-                        rc.name.trim()
-                    )));
-                }
-            }
         }
 
         if self.agent.step_timeout_secs == 0 {
@@ -1243,9 +1127,6 @@ item_types = ["Task", "Bug"]
 base_branch = "main"
 repo_path = "/workspace"
 
-[commands]
-pre_install = []
-
 [web]
 port = 8080
 
@@ -1361,9 +1242,10 @@ step_timeout_secs = 600
     }
 
     #[test]
-    fn test_pre_install_string_compat() {
-        // Legacy `pre_install` as a single string is migrated transparently
-        // into `worktree_init_commands`.
+    fn legacy_commands_table_is_silently_ignored() {
+        // Plan-09: stale `[commands]` in a user's config.toml is ignored at
+        // load time. The startup warning is logged but the config still
+        // parses cleanly (no panic, no error).
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(
             br#"
@@ -1378,7 +1260,8 @@ item_types = ["Task"]
 base_branch = "main"
 
 [commands]
-pre_install = "echo one"
+worktree_init_commands = ["echo legacy"]
+pre_install = ["should be ignored"]
 
 [web]
 port = 8080
@@ -1388,18 +1271,13 @@ step_timeout_secs = 600
 "#,
         )
         .unwrap();
-        let config = Config::load(f.path()).unwrap();
-        assert_eq!(
-            config.commands.worktree_init_commands,
-            vec!["echo one".to_string()]
-        );
-        // Deprecated field is cleared after migration.
-        assert!(config.commands.pre_install.is_empty());
+        // Must load without error — the legacy [commands] table is dropped.
+        Config::load(f.path()).expect("load must succeed with stale [commands]");
     }
 
     #[test]
-    fn test_pre_install_array() {
-        // Legacy `pre_install` as an array is migrated transparently.
+    fn legacy_run_commands_array_is_silently_ignored() {
+        // Plan-09: stale `[[run_commands]]` entries are ignored at load time.
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(
             br#"
@@ -1413,151 +1291,19 @@ item_types = ["Task"]
 [git]
 base_branch = "main"
 
-[commands]
-pre_install = ["echo a", "echo b"]
-
 [web]
 port = 8080
 
 [agent]
 step_timeout_secs = 600
+
+[[run_commands]]
+name = "Dev Server"
+command = "npm run dev"
 "#,
         )
         .unwrap();
-        let config = Config::load(f.path()).unwrap();
-        assert_eq!(
-            config.commands.worktree_init_commands,
-            vec!["echo a".to_string(), "echo b".to_string()]
-        );
-        assert!(config.commands.pre_install.is_empty());
-    }
-
-    // -- Plan-08: worktree_init_commands migration tests --
-
-    fn make_commands_config(
-        pre_install: Vec<String>,
-        install: String,
-        pre_workflow: Vec<String>,
-        worktree_init_commands: Vec<String>,
-    ) -> Config {
-        let mut c = Config::default();
-        c.commands.pre_install = pre_install;
-        c.commands.install = install;
-        c.commands.pre_workflow = pre_workflow;
-        c.commands.worktree_init_commands = worktree_init_commands;
-        c
-    }
-
-    #[test]
-    fn migrate_legacy_commands_merges_in_lifecycle_order() {
-        // pre_install → install → pre_workflow
-        let mut c = make_commands_config(
-            vec!["echo pre1".into(), "echo pre2".into()],
-            "echo install".into(),
-            vec!["echo post1".into()],
-            Vec::new(),
-        );
-        let migrated = c.migrate_legacy_commands();
-        assert!(migrated, "migration should have happened");
-        assert_eq!(
-            c.commands.worktree_init_commands,
-            vec![
-                "echo pre1".to_string(),
-                "echo pre2".into(),
-                "echo install".into(),
-                "echo post1".into(),
-            ]
-        );
-        // Deprecated fields are drained.
-        assert!(c.commands.pre_install.is_empty());
-        assert!(c.commands.install.is_empty());
-        assert!(c.commands.pre_workflow.is_empty());
-    }
-
-    #[test]
-    fn migrate_legacy_commands_new_only_is_untouched() {
-        let mut c = make_commands_config(
-            Vec::new(),
-            String::new(),
-            Vec::new(),
-            vec!["echo new".into()],
-        );
-        let migrated = c.migrate_legacy_commands();
-        assert!(!migrated, "no migration when only the new field is set");
-        assert_eq!(
-            c.commands.worktree_init_commands,
-            vec!["echo new".to_string()]
-        );
-    }
-
-    #[test]
-    fn migrate_legacy_commands_mixed_new_wins_no_merge() {
-        // When the new field is already populated, deprecated fields are
-        // dropped without being merged on top of the new field.
-        let mut c = make_commands_config(
-            vec!["echo legacy".into()],
-            String::new(),
-            Vec::new(),
-            vec!["echo new1".into(), "echo new2".into()],
-        );
-        let migrated = c.migrate_legacy_commands();
-        assert!(!migrated, "new field present → no merge");
-        assert_eq!(
-            c.commands.worktree_init_commands,
-            vec!["echo new1".to_string(), "echo new2".into()]
-        );
-        // Deprecated values are dropped even when not merged, so a later
-        // write never re-emits them.
-        assert!(c.commands.pre_install.is_empty());
-        assert!(c.commands.install.is_empty());
-        assert!(c.commands.pre_workflow.is_empty());
-    }
-
-    #[test]
-    fn migrate_legacy_commands_is_idempotent() {
-        let mut c = make_commands_config(
-            vec!["a".into()],
-            "b".into(),
-            vec!["c".into()],
-            Vec::new(),
-        );
-        let first = c.migrate_legacy_commands();
-        let snapshot = c.commands.worktree_init_commands.clone();
-        let second = c.migrate_legacy_commands();
-        assert!(first);
-        assert!(!second, "second run must be a no-op");
-        assert_eq!(c.commands.worktree_init_commands, snapshot);
-    }
-
-    #[test]
-    fn migrate_legacy_commands_drops_deprecated_on_serialize() {
-        // After migration, serializing to TOML must not emit deprecated fields.
-        let mut c = make_commands_config(
-            vec!["echo a".into()],
-            "echo b".into(),
-            Vec::new(),
-            Vec::new(),
-        );
-        c.migrate_legacy_commands();
-        let toml = c.to_toml_string().expect("serialize");
-        assert!(
-            !toml.contains("pre_install"),
-            "serialized TOML must not contain pre_install: {toml}"
-        );
-        assert!(
-            !toml.contains("pre_workflow"),
-            "serialized TOML must not contain pre_workflow: {toml}"
-        );
-        // `install` is a substring of "worktree_init_commands"; check for
-        // the standalone `install = ` form instead.
-        assert!(
-            !toml.contains("\ninstall ="),
-            "serialized TOML must not contain a deprecated `install =` line: {toml}"
-        );
-        assert!(
-            toml.contains("worktree_init_commands"),
-            "serialized TOML must contain worktree_init_commands: {toml}"
-        );
+        Config::load(f.path()).expect("load must succeed with stale [[run_commands]]");
     }
 
     #[test]
@@ -1708,8 +1454,6 @@ item_types = ["Task"]
 [git]
 base_branch = "main"
 repo_path = "/workspace"
-[commands]
-pre_install = []
 [web]
 port = 8080
 cors_origins = ["http://example.com:3000"]
@@ -1735,8 +1479,6 @@ item_types = ["Task"]
 [git]
 base_branch = "main"
 repo_path = "/workspace"
-[commands]
-pre_install = []
 [web]
 port = 8080
 cors_origins = ["localhost:3000"]
@@ -2050,9 +1792,6 @@ item_types = ["Task"]
 [git]
 base_branch = "main"
 repo_path = "/workspace"
-
-[commands]
-pre_install = []
 
 [web]
 port = 8080

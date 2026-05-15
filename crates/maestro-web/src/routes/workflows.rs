@@ -361,10 +361,10 @@ fn extract_error(state: &WorkflowState) -> Option<String> {
 
 /// Build the run command status list for a given workflow's ticket key.
 fn build_run_commands_status(
-    cfg_commands: &[maestro_core::config::RunCommandConfig],
+    configured: &[maestro_core::db::user_worktree_commands::RunCommand],
     active_cmds: Option<&Vec<crate::state::RunCommandState>>,
 ) -> Vec<RunCommandStatus> {
-    cfg_commands
+    configured
         .iter()
         .enumerate()
         .map(|(i, rc)| {
@@ -427,10 +427,48 @@ pub async fn list_workflows(
             })
             .collect()
     };
-    let mut summaries: Vec<WorkflowSummary> = workflows
+    // Collect the unique (user_id, workspace_name) pairs for this user's
+    // workflows in the current workspace, then do ONE batched DB read for
+    // the configured run-commands. (At most one pair in practice, since the
+    // list is already filtered to the authenticated user + current workspace.
+    // Still go through the batched helper for forward-compat / consistency.)
+    let visible_workflows: Vec<&Workflow> = workflows
         .values()
         .filter(|w| w.workspace_name == current_ws)
         .filter(|w| w.user_id.as_deref() == Some(&auth.user_id))
+        .collect();
+    let pairs: Vec<(String, String)> = {
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut out: Vec<(String, String)> = Vec::new();
+        for w in &visible_workflows {
+            if let Some(uid) = w.user_id.as_deref() {
+                let key = (uid.to_string(), w.workspace_name.clone());
+                if seen.insert(key.clone()) {
+                    out.push(key);
+                }
+            }
+        }
+        out
+    };
+    let run_commands_by_pair: HashMap<
+        (String, String),
+        Vec<maestro_core::db::user_worktree_commands::RunCommand>,
+    > = match (pairs.is_empty(), state.db.as_ref()) {
+        (false, Some(database)) => {
+            let conn = database.conn().lock().await;
+            let pair_refs: Vec<(&str, &str)> = pairs
+                .iter()
+                .map(|(u, w)| (u.as_str(), w.as_str()))
+                .collect();
+            maestro_core::db::user_worktree_commands::get_run_commands_for_pairs(&conn, &pair_refs)
+                .unwrap_or_default()
+        }
+        _ => HashMap::new(),
+    };
+    let empty_run_cmds: Vec<maestro_core::db::user_worktree_commands::RunCommand> = Vec::new();
+    let mut summaries: Vec<WorkflowSummary> = visible_workflows
+        .into_iter()
         .map(|w| {
             let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
             let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
@@ -440,8 +478,16 @@ pub async fn list_workflows(
                 .get(&w.ticket_key)
                 .map(|forwards| forwards.iter().map(|f| (f.container_port, f.proxy_url.clone())).collect())
                 .unwrap_or_default();
+            let configured_run_cmds: &[maestro_core::db::user_worktree_commands::RunCommand] =
+                match w.user_id.as_deref() {
+                    Some(uid) => run_commands_by_pair
+                        .get(&(uid.to_string(), w.workspace_name.clone()))
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&empty_run_cmds),
+                    None => &empty_run_cmds,
+                };
             let run_commands =
-                build_run_commands_status(&cfg.run_commands, run_cmds_state.get(&w.ticket_key));
+                build_run_commands_status(configured_run_cmds, run_cmds_state.get(&w.ticket_key));
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -640,8 +686,27 @@ pub async fn get_workflow(
             }
         },
         run_commands: {
+            // Per-user-per-workspace lookup of configured run commands (plan-09).
+            // Owner-less workflows, or workflows whose owner has no row, get an
+            // empty list (no buttons rendered on the card).
+            let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
+                match (w.user_id.as_deref(), state.db.as_ref()) {
+                    (Some(uid), Some(database)) => {
+                        let conn = database.conn().lock().await;
+                        maestro_core::db::user_worktree_commands::get(
+                            &conn,
+                            uid,
+                            &w.workspace_name,
+                        )
+                        .ok()
+                        .flatten()
+                        .map(|r| r.run_commands)
+                        .unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                };
             let run_cmds_state = state.run_commands.read().await;
-            build_run_commands_status(&cfg.run_commands, run_cmds_state.get(&ticket_key))
+            build_run_commands_status(&configured, run_cmds_state.get(&ticket_key))
         },
         generate_report: cfg.general.generate_report,
         has_report: has_report_file(w),
@@ -1398,38 +1463,32 @@ pub async fn list_run_commands(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<RunCommandsStatusResponse>, (StatusCode, String)> {
-    let cfg = state.config.read().await;
     let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
-    let _w = workflows
+    let w = workflows
         .get(&id)
         .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
+    let owner_user_id = w.user_id.clone();
+    let workspace_name = w.workspace_name.clone();
+    drop(workflows);
+
+    // Per-user-per-workspace lookup (plan-09). Owner-less workflows return
+    // an empty list.
+    let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
+        match (owner_user_id.as_deref(), state.db.as_ref()) {
+            (Some(uid), Some(database)) => {
+                let conn = database.conn().lock().await;
+                maestro_core::db::user_worktree_commands::get(&conn, uid, &workspace_name)
+                    .ok()
+                    .flatten()
+                    .map(|r| r.run_commands)
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
 
     let run_cmds_state = state.run_commands.read().await;
-    let active_cmds = run_cmds_state.get(&id);
-
-    let commands: Vec<RunCommandStatus> = cfg
-        .run_commands
-        .iter()
-        .enumerate()
-        .map(|(i, rc)| {
-            let (running, forwarded_port) = if let Some(active) = active_cmds {
-                if let Some(cmd_state) = active.iter().find(|c| c.cmd_index == i) {
-                    (true, cmd_state.forwarded_port.as_ref().map(|f| (f.container_port, f.proxy_url.clone())))
-                } else {
-                    (false, None)
-                }
-            } else {
-                (false, None)
-            };
-            RunCommandStatus {
-                index: i,
-                name: rc.name.clone(),
-                running,
-                forwarded_port,
-            }
-        })
-        .collect();
+    let commands = build_run_commands_status(&configured, run_cmds_state.get(&id));
 
     Ok(Json(RunCommandsStatusResponse { commands }))
 }
@@ -1443,20 +1502,45 @@ pub async fn start_run_command(
     require_workflow_access(&state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    let cfg = state.config.read().await;
-    let rc = cfg.run_commands.get(index).ok_or((
+
+    // Resolve owner + workspace before opening the DB to keep the workflow
+    // read-lock short.
+    let wf_arc = state.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
+    let w = workflows
+        .get(&id)
+        .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
+    let owner_user_id = w.user_id.clone();
+    let workspace_name = w.workspace_name.clone();
+    drop(workflows);
+
+    let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
+        match (owner_user_id.as_deref(), state.db.as_ref()) {
+            (Some(uid), Some(database)) => {
+                let conn = database.conn().lock().await;
+                maestro_core::db::user_worktree_commands::get(&conn, uid, &workspace_name)
+                    .ok()
+                    .flatten()
+                    .map(|r| r.run_commands)
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+
+    let rc = configured.get(index).ok_or((
         StatusCode::BAD_REQUEST,
         format!(
             "Run command index {index} out of range (max {})",
-            cfg.run_commands.len()
+            configured.len()
         ),
     ))?;
     let rc_name = rc.name.clone();
     let rc_command = rc.command.clone();
-    let dynamic_ports = cfg.editor.dynamic_ports;
-    drop(cfg);
+    let dynamic_ports = {
+        let cfg = state.config.read().await;
+        cfg.editor.dynamic_ports
+    };
 
-    let wf_arc = state.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)

@@ -25,8 +25,6 @@ use crate::error::{MaestroError, Result};
 use crate::git;
 use crate::jira::client::JiraClient;
 use crate::process::OutputLine;
-use crate::workflow::snapshot::workspace_name_from_repo_path;
-
 use crate::workflow::helpers::{
     build_skill_search_paths, build_ticket_context, check_cancelled, extract_acceptance_criteria,
     format_acceptance_criteria_block, parse_gh_issue_number, step_already_succeeded,
@@ -69,52 +67,43 @@ pub(super) fn scan_definitions_dir(dir: &Path) -> Vec<(String, std::time::System
     entries
 }
 
-/// Resolve the list of `worktree_init_commands` for the current workspace
-/// (plan-08 Step 4).
+/// Resolve the list of `worktree_init_commands` for the workflow owner's
+/// `(user_id, workspace_name)` pair (plan-09 Step 3).
 ///
 /// Resolution rules:
-/// * If a [`crate::db::workspace_commands`] row exists for the workspace
-///   derived from `cfg.git.repo_path`, use **its** `commands` verbatim. An
-///   explicit `[]` means "present and empty" — return an empty vec, do NOT
-///   fall back to the global default (plan-08 AC-9).
-/// * Otherwise, fall back to `cfg.commands.worktree_init_commands` (the
-///   global default — plan-08 AC-6, AC-8).
-/// * If no `db` is provided (e.g. some test paths), behave as if no override
-///   exists and fall back to the global default.
+/// * If `workflow_user_id` is `None` or no `db` is available (e.g. some test
+///   paths), return an empty vec — the bootstrap runs no init commands.
+/// * Otherwise, look up `user_worktree_commands` for the owner; if a row
+///   exists, return its `init_commands`. No row → empty vec.
 ///
-/// `ticket_key` is used only for diagnostic logging.
+/// There is no global-default fallback; init commands are exclusively a
+/// per-user-per-workspace concern (configured from the dashboard's Worktree
+/// Settings tab).
 ///
 /// Exposed at crate level (not pub(super)) so integration tests can call it
 /// directly without needing to spin up a real Docker driver.
 pub async fn resolve_worktree_init_commands(
-    config: &Arc<RwLock<Config>>,
+    workflow_user_id: Option<&str>,
+    workspace_name: &str,
     db: Option<&Database>,
-    ticket_key: &str,
 ) -> Vec<String> {
-    let (workspace, global_default) = {
-        let cfg = config.read().await;
-        (
-            workspace_name_from_repo_path(Path::new(&cfg.git.repo_path)),
-            cfg.commands.worktree_init_commands.clone(),
-        )
+    let (Some(user_id), Some(db)) = (workflow_user_id, db) else {
+        return Vec::new();
     };
-
-    if let Some(database) = db {
-        let conn = database.conn().lock().await;
-        match crate::db::workspace_commands::get(&conn, &workspace) {
-            Ok(Some(row)) => return row.commands,
-            Ok(None) => {}
-            Err(e) => {
-                warn!(
-                    ticket = %ticket_key,
-                    workspace = %workspace,
-                    error = %e,
-                    "Failed to read worktree_commands override; falling back to global default"
-                );
-            }
+    let conn = db.conn().lock().await;
+    match crate::db::user_worktree_commands::get(&conn, user_id, workspace_name) {
+        Ok(Some(row)) => row.init_commands,
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            warn!(
+                user_id = %user_id,
+                workspace = %workspace_name,
+                error = %e,
+                "Failed to read user_worktree_commands; running zero init commands"
+            );
+            Vec::new()
         }
     }
-    global_default
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -716,11 +705,21 @@ pub(super) async fn bootstrap_new_workflow(
         let cfg = config.read().await;
         cfg.agent.provider
     };
-    // Resolve worktree init commands: prefer per-workspace DB override (set via
-    // the admin UI / REST), fall back to the global `commands.worktree_init_commands`.
-    // An explicit `[]` override means "present and empty" — bootstrap runs zero
-    // commands and does NOT fall back to the global default (plan-08 AC-9).
-    let init_commands = resolve_worktree_init_commands(config, db, ticket_key).await;
+    // Resolve worktree init commands from the workflow owner's per-user
+    // per-workspace DB row (plan-09). No row, or no owner, or no db → run
+    // zero init commands. There is no global default.
+    let (workflow_user_id, workspace_name) = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| (w.user_id.clone(), w.workspace_name.clone()))
+            .unwrap_or_default()
+    };
+    let init_commands = resolve_worktree_init_commands(
+        workflow_user_id.as_deref(),
+        &workspace_name,
+        db,
+    )
+    .await;
 
     // Mise install (if project declares mise tools).
     if crate::process::worktree_has_mise_config(&worktree_path) {

@@ -142,10 +142,9 @@ function SecurityTabConnected() {
 // ---------------------------------------------------------------------------
 
 export function Config({ onLogout, authEnabled, isAdmin }: Props) {
-  // Admin-only tabs: "Users" and "Worktree Settings".
-  const tabs = ALL_TABS.filter((t) =>
-    t === "Users" || t === "Worktree Settings" ? isAdmin : true,
-  );
+  // Admin-only tabs: "Users". Plan-09 dropped the admin gate on
+  // "Worktree Settings" — every authenticated user manages their own data.
+  const tabs = ALL_TABS.filter((t) => (t === "Users" ? isAdmin : true));
   const [tab, setTab] = useState<Tab>(tabs[0]);
 
   return (

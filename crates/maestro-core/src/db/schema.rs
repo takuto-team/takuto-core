@@ -6,8 +6,8 @@
 use crate::error::Result;
 
 /// Current schema version. Increment when adding new migrations.
-// v4 reserved for plan-03 audit log
-const SCHEMA_VERSION: i32 = 3;
+// v5 reserved for plan-03 audit log
+const SCHEMA_VERSION: i32 = 4;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS users (
@@ -126,6 +126,36 @@ CREATE TABLE IF NOT EXISTS workspace_commands (
 CREATE INDEX IF NOT EXISTS idx_workspace_commands_updated ON workspace_commands(updated_at DESC);
 "#;
 
+/// Plan-09 "per-user worktree settings" migration.
+///
+/// Drops plan-08's admin-scoped `workspace_commands` table (plan-08 was never
+/// released, so no production data to migrate) and replaces it with
+/// `user_worktree_commands`, keyed by `(user_id, workspace_name)`. Each row
+/// stores BOTH command kinds — `init_commands_json` (a JSON array of strings
+/// run at worktree bootstrap) and `run_commands_json` (a JSON array of
+/// `{name, command}` objects surfaced as buttons on completed workflow cards).
+///
+/// Two JSON columns rather than two tables: a single round-trip per
+/// `(user, workspace)` lookup, atomic updates, and fewer endpoints. The
+/// application layer knows the schema for each column.
+///
+/// `user_id` cascades on user delete — removing a user wipes every row they
+/// configured (AC-7).
+const MIGRATION_V4: &str = r#"
+DROP TABLE IF EXISTS workspace_commands;
+
+CREATE TABLE user_worktree_commands (
+    user_id TEXT NOT NULL,
+    workspace_name TEXT NOT NULL,
+    init_commands_json TEXT NOT NULL DEFAULT '[]',
+    run_commands_json TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, workspace_name),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_user_worktree_commands_user ON user_worktree_commands(user_id, updated_at DESC);
+"#;
+
 /// Run all pending migrations. Idempotent — safe to call on every startup.
 pub fn run_migrations(conn: &rusqlite::Connection) -> Result<()> {
     // Create the migration tracking table if it doesn't exist.
@@ -163,6 +193,14 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> Result<()> {
         conn.execute(
             "INSERT INTO schema_migrations (version) VALUES (?1)",
             rusqlite::params![3],
+        )?;
+    }
+
+    if current_version < 4 {
+        conn.execute_batch(MIGRATION_V4)?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version) VALUES (?1)",
+            rusqlite::params![4],
         )?;
     }
 
@@ -238,7 +276,10 @@ mod tests {
         assert!(tables.contains(&"container_users".to_string()));
         assert!(tables.contains(&"sessions".to_string()));
         assert!(tables.contains(&"schema_migrations".to_string()));
-        assert!(tables.contains(&"workspace_commands".to_string()));
+        // Plan-09: plan-08's `workspace_commands` is replaced by
+        // `user_worktree_commands` in v4. The old name must NOT be present.
+        assert!(!tables.contains(&"workspace_commands".to_string()));
+        assert!(tables.contains(&"user_worktree_commands".to_string()));
     }
 
     /// Plan-02 AC-3 + AC-5: the v2 migration creates `login_attempts` and
@@ -321,10 +362,14 @@ mod tests {
         assert_eq!(count, 0, "FK cascade should drop login_attempts rows");
     }
 
-    /// Plan-08 AC: a fresh database applies migrations through v3 and the
-    /// `workspace_commands` table exists with the expected columns.
+    /// Plan-09 AC: a fresh database applies migrations through v4 and the
+    /// new `user_worktree_commands` table exists with the expected columns.
+    /// The plan-08 `workspace_commands` table must NOT exist (it's dropped
+    /// by v4 even on a fresh install — the DROP TABLE IF EXISTS is a no-op
+    /// since v3's CREATE never ran in isolation, but the assertion guards
+    /// against accidental reintroduction).
     #[test]
-    fn fresh_db_applies_v3() {
+    fn fresh_db_applies_v4() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         run_migrations(&conn).unwrap();
@@ -334,9 +379,8 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
 
-        // workspace_commands table exists.
         let tables: Vec<String> = {
             let mut stmt = conn
                 .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -347,29 +391,41 @@ mod tests {
                 .collect()
         };
         assert!(
-            tables.contains(&"workspace_commands".to_string()),
-            "workspace_commands table should exist after fresh migration; got: {tables:?}"
+            !tables.contains(&"workspace_commands".to_string()),
+            "plan-08's workspace_commands must be dropped by v4; got: {tables:?}"
+        );
+        assert!(
+            tables.contains(&"user_worktree_commands".to_string()),
+            "user_worktree_commands table should exist after v4; got: {tables:?}"
         );
 
         // Expected columns.
         let cols: Vec<String> = {
-            let mut stmt = conn.prepare("PRAGMA table_info(workspace_commands)").unwrap();
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(user_worktree_commands)")
+                .unwrap();
             stmt.query_map([], |row| row.get::<_, String>(1))
                 .unwrap()
                 .filter_map(|r| r.ok())
                 .collect()
         };
-        for expected in ["workspace_name", "commands_json", "updated_at", "updated_by"] {
+        for expected in [
+            "user_id",
+            "workspace_name",
+            "init_commands_json",
+            "run_commands_json",
+            "updated_at",
+        ] {
             assert!(
                 cols.iter().any(|c| c == expected),
                 "missing column {expected}; got: {cols:?}"
             );
         }
 
-        // The updated_at index is present.
+        // The composite (user, updated_at) index is present.
         let indexes: Vec<String> = {
             let mut stmt = conn
-                .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='workspace_commands'")
+                .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='user_worktree_commands'")
                 .unwrap();
             stmt.query_map([], |row| row.get(0))
                 .unwrap()
@@ -377,20 +433,25 @@ mod tests {
                 .collect()
         };
         assert!(
-            indexes.iter().any(|i| i == "idx_workspace_commands_updated"),
-            "missing idx_workspace_commands_updated; got: {indexes:?}"
+            indexes
+                .iter()
+                .any(|i| i == "idx_user_worktree_commands_user"),
+            "missing idx_user_worktree_commands_user; got: {indexes:?}"
         );
     }
 
-    /// Plan-08: upgrading a v2-only database to v3 keeps existing rows
-    /// (users, sessions, login_attempts) and adds `workspace_commands`.
+    /// Plan-09: upgrading a v3-only database to v4 drops the old
+    /// `workspace_commands` table (including any rows in it — plan-08 was
+    /// never released, so dropping data is the intentional behaviour) and
+    /// creates the new `user_worktree_commands` table. Other tables
+    /// (users, sessions, login_attempts) are preserved.
     #[test]
-    fn v2_to_v3_upgrade_preserves_rows() {
+    fn v3_to_v4_upgrade_drops_workspace_commands_and_creates_new_table() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
 
-        // Apply v1 + v2 by hand, then mark as version 2 so the runner thinks
-        // it's resuming from a v2 install.
+        // Apply v1 + v2 + v3 by hand, then mark as version 3 so the runner
+        // thinks it's resuming from a v3 install.
         conn.execute_batch(
             "CREATE TABLE schema_migrations (
                 version INTEGER PRIMARY KEY NOT NULL,
@@ -400,18 +461,16 @@ mod tests {
         .unwrap();
         conn.execute_batch(MIGRATION_V1).unwrap();
         conn.execute_batch(MIGRATION_V2).unwrap();
-        conn.execute(
-            "INSERT INTO schema_migrations (version) VALUES (1)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO schema_migrations (version) VALUES (2)",
-            [],
-        )
-        .unwrap();
+        conn.execute_batch(MIGRATION_V3).unwrap();
+        for v in 1..=3 {
+            conn.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                rusqlite::params![v],
+            )
+            .unwrap();
+        }
 
-        // Pre-existing rows in v2 tables.
+        // Pre-existing rows that must survive.
         conn.execute(
             "INSERT INTO users (id, username, role) VALUES ('u-pre', 'preexisting', 'admin')",
             [],
@@ -428,10 +487,18 @@ mod tests {
         )
         .unwrap();
 
-        // Run the migration runner: it should apply only v3.
+        // Pre-existing row in the soon-to-be-dropped workspace_commands.
+        conn.execute(
+            "INSERT INTO workspace_commands (workspace_name, commands_json, updated_at, updated_by) \
+             VALUES ('frontend', '[\"echo legacy\"]', 100, NULL)",
+            [],
+        )
+        .unwrap();
+
+        // Run the migration runner: it should apply only v4.
         run_migrations(&conn).unwrap();
 
-        // Pre-existing rows still present.
+        // Pre-existing rows in unrelated tables still present.
         let users: i64 = conn
             .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
             .unwrap();
@@ -445,25 +512,42 @@ mod tests {
             .unwrap();
         assert_eq!(attempts, 1);
 
-        // workspace_commands exists and is empty.
-        let wc_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM workspace_commands", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(wc_count, 0);
+        // workspace_commands has been dropped.
+        let tables: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(
+            !tables.contains(&"workspace_commands".to_string()),
+            "workspace_commands must be dropped after v3→v4; got: {tables:?}"
+        );
 
-        // Version bumped to 3.
+        // user_worktree_commands exists and is empty.
+        let new_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM user_worktree_commands", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(new_count, 0);
+
+        // Version bumped to 4.
         let version: i32 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
-    /// Plan-08: running `run_migrations` twice against a v3 DB is a no-op
+    /// Plan-09: running `run_migrations` twice against a v4 DB is a no-op
     /// (no duplicate schema_migrations rows, no table conflicts).
     #[test]
-    fn v3_migrations_are_idempotent() {
+    fn v4_migrations_are_idempotent() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
 
@@ -474,9 +558,19 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            rows, 3,
-            "expected exactly 3 migration rows (v1, v2, v3); got {rows}"
+            rows, 4,
+            "expected exactly 4 migration rows (v1, v2, v3, v4); got {rows}"
         );
+
+        // The new table still exists after a second migrate.
+        let new_table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='user_worktree_commands'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(new_table_exists, 1);
     }
 
     /// Plan-02 carried over: a DB whose schema version is newer than the
@@ -488,7 +582,7 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         run_migrations(&conn).unwrap();
 
-        // Simulate a future migration (v4) already applied by a newer binary.
+        // Simulate a future migration already applied by a newer binary.
         conn.execute(
             "INSERT INTO schema_migrations (version) VALUES (?1)",
             rusqlite::params![SCHEMA_VERSION + 1],

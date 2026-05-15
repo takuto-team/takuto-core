@@ -1,22 +1,15 @@
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-08 Step 5: admin-gated per-workspace
-// `worktree_init_commands` override endpoints.
+// Integration tests for plan-09 Step 5: per-user-per-workspace worktree
+// init + run command endpoints.
 //
-//   GET    /api/admin/worktree-commands
-//   GET    /api/admin/worktree-commands/_workspaces
-//   GET    /api/admin/worktree-commands/{workspace}
-//   PUT    /api/admin/worktree-commands/{workspace}
-//   DELETE /api/admin/worktree-commands/{workspace}
+//   GET    /api/worktree-commands
+//   GET    /api/worktree-commands/_workspaces
+//   GET    /api/worktree-commands/{workspace}
+//   PUT    /api/worktree-commands/{workspace}
+//   DELETE /api/worktree-commands/{workspace}
 //
-// We assert:
-//   * AC-4: non-admins are rejected with 403 on PUT/DELETE.
-//   * AC-3: admin can PUT and read back unchanged.
-//   * DELETE returns 204 the first time, 404 the second.
-//   * `_workspaces` augments `list_workspaces` with `has_override`.
-//   * PUT validates list size (50), per-command length (2000), empty cmds,
-//     and NUL bytes.
-//   * Top-level GET returns the global default + every override.
+// AC-3 / AC-5 / AC-6 / AC-9 — covered below.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -27,6 +20,10 @@ use tower::ServiceExt;
 use maestro_web::server::build_router;
 use maestro_web::state::AppState;
 use maestro_web::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+// ---------------------------------------------------------------------------
+// Test plumbing.
+// ---------------------------------------------------------------------------
 
 async fn create_and_login_regular_user(
     state: &AppState,
@@ -82,7 +79,7 @@ async fn put_commands(
 ) -> axum::response::Response {
     let app = build_router(state.clone());
     app.oneshot(
-        Request::put(format!("/api/admin/worktree-commands/{workspace}"))
+        Request::put(format!("/api/worktree-commands/{workspace}"))
             .header("Content-Type", "application/json")
             .header("Origin", TEST_ORIGIN)
             .header("Cookie", cookie)
@@ -93,95 +90,158 @@ async fn put_commands(
     .unwrap()
 }
 
-#[tokio::test]
-async fn non_admin_gets_403_on_put() {
-    let state = test_state_with_db();
-    let admin_cookie = register_and_login(&state).await;
-    let user_cookie =
-        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#").await;
-
-    let resp = put_commands(&state, &user_cookie, "frontend", r#"{"commands":["echo hi"]}"#).await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn non_admin_gets_403_on_delete() {
-    let state = test_state_with_db();
-    let admin_cookie = register_and_login(&state).await;
-    let user_cookie =
-        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#").await;
-
+async fn get_one(
+    state: &AppState,
+    cookie: &str,
+    workspace: &str,
+) -> axum::response::Response {
     let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::DELETE)
-                .uri("/api/admin/worktree-commands/frontend")
-                .header("Origin", TEST_ORIGIN)
-                .header("Cookie", &user_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    app.oneshot(
+        Request::get(format!("/api/worktree-commands/{workspace}"))
+            .header("Cookie", cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
 }
 
+async fn list_mine(state: &AppState, cookie: &str) -> axum::response::Response {
+    let app = build_router(state.clone());
+    app.oneshot(
+        Request::get("/api/worktree-commands")
+            .header("Cookie", cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+async fn delete_one(
+    state: &AppState,
+    cookie: &str,
+    workspace: &str,
+) -> axum::response::Response {
+    let app = build_router(state.clone());
+    app.oneshot(
+        Request::builder()
+            .method(axum::http::Method::DELETE)
+            .uri(format!("/api/worktree-commands/{workspace}"))
+            .header("Origin", TEST_ORIGIN)
+            .header("Cookie", cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// Tests.
+// ---------------------------------------------------------------------------
+
+/// AC-6: non-admin users can PUT and GET their own data — the endpoint is
+/// not admin-gated.
 #[tokio::test]
-async fn non_admin_gets_403_on_get() {
-    // Per task brief: all endpoints admin-gated.
+async fn non_admin_can_put_and_get_their_own() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
     let user_cookie =
-        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#").await;
+        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#")
+            .await;
 
-    let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::get("/api/admin/worktree-commands")
-                .header("Cookie", &user_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body = r#"{"init_commands":["echo init"],"run_commands":[{"name":"UI","command":"npm run dev"}]}"#;
+    let resp = put_commands(&state, &user_cookie, "frontend", body).await;
+    assert_eq!(resp.status(), StatusCode::OK, "PUT should succeed for non-admin");
+
+    let resp = get_one(&state, &user_cookie, "frontend").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["workspace_name"], "frontend");
+    assert_eq!(body["init_commands"], serde_json::json!(["echo init"]));
+    assert_eq!(
+        body["run_commands"],
+        serde_json::json!([{"name":"UI","command":"npm run dev"}])
+    );
+}
+
+/// AC-5: User A cannot see, edit, or delete User B's commands.
+///   - Top-level GET returns only the caller's own rows.
+///   - GET /{workspace} returns 404 against another user's workspace.
+#[tokio::test]
+async fn user_a_cannot_see_user_b_data() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+    let alice =
+        create_and_login_regular_user(&state, &admin_cookie, "alice", "secretpassword123!@#")
+            .await;
+    let bob = create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#")
+        .await;
+
+    // Alice saves a row for `frontend`.
+    let alice_body =
+        r#"{"init_commands":["echo alice-init"],"run_commands":[{"name":"Alice","command":"true"}]}"#;
+    assert_eq!(
+        put_commands(&state, &alice, "frontend", alice_body)
+            .await
+            .status(),
+        StatusCode::OK,
+    );
+
+    // Bob's top-level GET sees no rows.
+    let resp = list_mine(&state, &bob).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let arr = body.as_array().expect("expected array");
+    assert!(arr.is_empty(), "bob should see no rows, got: {body}");
+
+    // Bob's GET on `frontend` (Alice's workspace) 404s — there's no path to
+    // reach Alice's row even by guessing the workspace name.
+    let resp = get_one(&state, &bob, "frontend").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // Bob's DELETE on `frontend` 404s — Alice's row is unaffected.
+    let resp = delete_one(&state, &bob, "frontend").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // Sanity: Alice's row is still intact.
+    let resp = get_one(&state, &alice, "frontend").await;
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
-async fn admin_can_put_and_get_back_unchanged() {
+async fn put_then_get_roundtrips_both_kinds() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
-    let body = r#"{"commands":["set -e\necho boot","npm ci","cargo build"]}"#;
+    let body = r#"{"init_commands":["set -e\necho boot","npm ci","cargo build"],"run_commands":[{"name":"Dashboard UI","command":"cd ui && npm run dev"},{"name":"Storybook","command":"cd ui && npm run storybook"}]}"#;
     let resp = put_commands(&state, &admin_cookie, "frontend", body).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let put_body: Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(put_body["workspace_name"], "frontend");
     assert_eq!(
-        put_body["commands"],
+        put_body["init_commands"],
         serde_json::json!(["set -e\necho boot", "npm ci", "cargo build"])
     );
+    assert_eq!(
+        put_body["run_commands"],
+        serde_json::json!([
+            { "name": "Dashboard UI", "command": "cd ui && npm run dev" },
+            { "name": "Storybook", "command": "cd ui && npm run storybook" }
+        ])
+    );
 
-    // GET reads back identically.
-    let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::get("/api/admin/worktree-commands/frontend")
-                .header("Cookie", &admin_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = get_one(&state, &admin_cookie, "frontend").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let get_body: Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(get_body["commands"], put_body["commands"]);
-    assert_eq!(get_body["workspace_name"], "frontend");
-    // updated_by is the admin's user id (non-empty).
-    assert!(get_body["updated_by"].is_string());
+    assert_eq!(get_body["init_commands"], put_body["init_commands"]);
+    assert_eq!(get_body["run_commands"], put_body["run_commands"]);
+    assert!(get_body["updated_at"].is_i64());
 }
 
 #[tokio::test]
@@ -189,133 +249,241 @@ async fn delete_returns_204_then_404() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
-    let resp = put_commands(
-        &state,
-        &admin_cookie,
-        "frontend",
-        r#"{"commands":["echo hi"]}"#,
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let body = r#"{"init_commands":["echo hi"],"run_commands":[]}"#;
+    assert_eq!(
+        put_commands(&state, &admin_cookie, "frontend", body)
+            .await
+            .status(),
+        StatusCode::OK,
+    );
 
-    // First DELETE → 204.
-    let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::DELETE)
-                .uri("/api/admin/worktree-commands/frontend")
-                .header("Origin", TEST_ORIGIN)
-                .header("Cookie", &admin_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = delete_one(&state, &admin_cookie, "frontend").await;
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    // Second DELETE → 404 (no row to remove).
-    let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::DELETE)
-                .uri("/api/admin/worktree-commands/frontend")
-                .header("Origin", TEST_ORIGIN)
-                .header("Cookie", &admin_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = delete_one(&state, &admin_cookie, "frontend").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn get_one_returns_404_when_no_override() {
+async fn get_one_returns_404_when_no_row() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
-    let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::get("/api/admin/worktree-commands/missing")
-                .header("Cookie", &admin_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = get_one(&state, &admin_cookie, "missing").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+/// `_workspaces` augments the filesystem scan with `has_my_commands`.
+///
+/// The filesystem scan inspects `/workspaces/*` which is empty in the test
+/// environment, so we cannot assert the merged shape carries our newly-saved
+/// workspace. We CAN assert (a) the endpoint is reachable for a non-admin and
+/// (b) the response is an array whose entries — if any — carry the merged
+/// `has_my_commands` key with the correct shape. The DB-merge logic is
+/// already covered by the per-user isolation test above.
 #[tokio::test]
-async fn workspaces_includes_has_override_flag() {
+async fn _workspaces_includes_has_my_commands() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
+    let user_cookie =
+        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#")
+            .await;
 
-    // PUT an override for some workspace name. The `_workspaces` endpoint
-    // returns directory entries from /workspaces/* — those won't include this
-    // synthetic name in the test environment, but the override row itself is
-    // visible to the DB. We assert the response is a JSON array and that the
-    // request succeeded (admin-gate test). To assert the flag merges in we
-    // would need a workspace on disk; that is environment-dependent and
-    // covered by the manual / E2E pass.
-    let resp = put_commands(
-        &state,
-        &admin_cookie,
-        "frontend",
-        r#"{"commands":["echo hi"]}"#,
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    // Save a row for `frontend` so the DB read has something to match against.
+    assert_eq!(
+        put_commands(
+            &state,
+            &user_cookie,
+            "frontend",
+            r#"{"init_commands":["echo hi"],"run_commands":[]}"#,
+        )
+        .await
+        .status(),
+        StatusCode::OK,
+    );
 
     let app = build_router(state.clone());
     let resp = app
         .oneshot(
-            Request::get("/api/admin/worktree-commands/_workspaces")
-                .header("Cookie", &admin_cookie)
+            Request::get("/api/worktree-commands/_workspaces")
+                .header("Cookie", &user_cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "non-admin user should be able to list workspaces"
+    );
     let body: Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert!(body.is_array(), "expected JSON array, got {body}");
-    // Every entry — if any — has the merged `has_override: bool` key.
     for entry in body.as_array().unwrap() {
-        assert!(entry["has_override"].is_boolean(), "entry: {entry}");
+        assert!(entry["has_my_commands"].is_boolean(), "entry: {entry}");
         assert!(entry["name"].is_string(), "entry: {entry}");
         assert!(entry["active"].is_boolean(), "entry: {entry}");
     }
 }
 
+// ---------------------------------------------------------------------------
+// Validation matrix (AC-9).
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
-async fn put_validates_list_size_50() {
+async fn put_rejects_oversize_init_list() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
     let cmds: Vec<String> = (0..51).map(|i| format!("echo {i}")).collect();
-    let body = serde_json::json!({ "commands": cmds }).to_string();
+    let body =
+        serde_json::json!({ "init_commands": cmds, "run_commands": [] }).to_string();
     let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
-async fn put_validates_per_command_2000_chars() {
+async fn put_rejects_oversize_run_list() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let rcs: Vec<_> = (0..51)
+        .map(|i| serde_json::json!({ "name": format!("n{i}"), "command": "echo" }))
+        .collect();
+    let body =
+        serde_json::json!({ "init_commands": [], "run_commands": rcs }).to_string();
+    let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_oversize_init_command() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
     let big = "x".repeat(2001);
-    let body = serde_json::json!({ "commands": [big] }).to_string();
+    let body = serde_json::json!({
+        "init_commands": [big],
+        "run_commands": [],
+    })
+    .to_string();
     let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
-async fn put_rejects_empty_commands() {
+async fn put_rejects_oversize_run_command() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let big = "x".repeat(2001);
+    let body = serde_json::json!({
+        "init_commands": [],
+        "run_commands": [{ "name": "ok", "command": big }],
+    })
+    .to_string();
+    let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_oversize_run_name() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let big_name = "n".repeat(101);
+    let body = serde_json::json!({
+        "init_commands": [],
+        "run_commands": [{ "name": big_name, "command": "echo" }],
+    })
+    .to_string();
+    let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_empty_init_command() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let body = r#"{"init_commands":["   "],"run_commands":[]}"#;
+    let resp = put_commands(&state, &admin_cookie, "frontend", body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_empty_run_name() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let body =
+        r#"{"init_commands":[],"run_commands":[{"name":"  ","command":"echo"}]}"#;
+    let resp = put_commands(&state, &admin_cookie, "frontend", body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_empty_run_command() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let body =
+        r#"{"init_commands":[],"run_commands":[{"name":"ok","command":""}]}"#;
+    let resp = put_commands(&state, &admin_cookie, "frontend", body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_nul_byte_in_init() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let body = serde_json::json!({
+        "init_commands": ["a\u{0000}b"],
+        "run_commands": [],
+    })
+    .to_string();
+    let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_nul_byte_in_run() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let body = serde_json::json!({
+        "init_commands": [],
+        "run_commands": [{ "name": "ok", "command": "echo a\u{0000}b" }],
+    })
+    .to_string();
+    let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_duplicate_run_names() {
+    let state = test_state_with_db();
+    let admin_cookie = register_and_login(&state).await;
+
+    let body = r#"{"init_commands":[],"run_commands":[{"name":"X","command":"a"},{"name":"X","command":"b"}]}"#;
+    let resp = put_commands(&state, &admin_cookie, "frontend", body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let txt = std::str::from_utf8(&bytes).unwrap_or("");
+    assert!(
+        txt.contains("duplicate"),
+        "expected duplicate-name message, got: {txt}"
+    );
+}
+
+#[tokio::test]
+async fn put_accepts_empty_lists() {
+    // Plan-09: a row with both lists empty is a valid "I exist but have
+    // configured nothing yet" state. It's the same observable behaviour as
+    // having no row, but the row's presence is what `has_my_commands`
+    // reports back through `_workspaces`.
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
@@ -323,46 +491,17 @@ async fn put_rejects_empty_commands() {
         &state,
         &admin_cookie,
         "frontend",
-        r#"{"commands":["   "]}"#,
+        r#"{"init_commands":[],"run_commands":[]}"#,
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn put_rejects_nul_bytes() {
-    let state = test_state_with_db();
-    let admin_cookie = register_and_login(&state).await;
-
-    // Use serde_json to inject a NUL byte without breaking the JSON syntax.
-    let body = serde_json::json!({ "commands": ["a\u{0000}b"] }).to_string();
-    let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn put_accepts_empty_list_as_override() {
-    // Plan AC-9: explicit [] override = present and empty, NOT fallback.
-    let state = test_state_with_db();
-    let admin_cookie = register_and_login(&state).await;
-
-    let resp = put_commands(&state, &admin_cookie, "frontend", r#"{"commands":[]}"#).await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::get("/api/admin/worktree-commands/frontend")
-                .header("Cookie", &admin_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = get_one(&state, &admin_cookie, "frontend").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(body["commands"], serde_json::json!([]));
+    assert_eq!(body["init_commands"], serde_json::json!([]));
+    assert_eq!(body["run_commands"], serde_json::json!([]));
 }
 
 #[tokio::test]
@@ -370,71 +509,79 @@ async fn put_rejects_path_traversal_workspace_name() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
-    // axum routing won't match `..` in the path segment cleanly — use a name
-    // with a hidden-file prefix, which our validation rejects.
     let resp = put_commands(
         &state,
         &admin_cookie,
         ".hidden",
-        r#"{"commands":["echo"]}"#,
+        r#"{"init_commands":["echo"],"run_commands":[]}"#,
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
-async fn get_top_level_returns_default_plus_overrides() {
+async fn list_top_level_returns_only_callers_rows_sorted() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
+    let alice = create_and_login_regular_user(
+        &state,
+        &admin_cookie,
+        "alice",
+        "secretpassword123!@#",
+    )
+    .await;
 
-    // Two overrides.
+    // Alice writes two rows.
     assert_eq!(
         put_commands(
             &state,
-            &admin_cookie,
+            &alice,
             "frontend",
-            r#"{"commands":["echo one"]}"#,
+            r#"{"init_commands":["echo one"],"run_commands":[]}"#,
         )
         .await
         .status(),
-        StatusCode::OK
+        StatusCode::OK,
     );
     assert_eq!(
         put_commands(
             &state,
-            &admin_cookie,
+            &alice,
             "backend",
-            r#"{"commands":["echo two","echo three"]}"#,
+            r#"{"init_commands":["echo two","echo three"],"run_commands":[]}"#,
         )
         .await
         .status(),
-        StatusCode::OK
+        StatusCode::OK,
     );
 
-    let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::get("/api/admin/worktree-commands")
-                .header("Cookie", &admin_cookie)
-                .body(Body::empty())
-                .unwrap(),
+    // Admin writes one row to confirm Alice's listing doesn't leak it.
+    assert_eq!(
+        put_commands(
+            &state,
+            &admin_cookie,
+            "infra",
+            r#"{"init_commands":["echo admin"],"run_commands":[]}"#,
         )
         .await
-        .unwrap();
+        .status(),
+        StatusCode::OK,
+    );
+
+    let resp = list_mine(&state, &alice).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert!(body["default"].is_array(), "missing `default`: {body}");
-    let overrides = body["overrides"].as_array().expect("missing overrides");
-    assert_eq!(overrides.len(), 2);
+    let arr = body.as_array().expect("expected JSON array");
+    assert_eq!(arr.len(), 2);
     // Sorted by workspace_name.
-    assert_eq!(overrides[0]["workspace_name"], "backend");
+    assert_eq!(arr[0]["workspace_name"], "backend");
     assert_eq!(
-        overrides[0]["commands"],
+        arr[0]["init_commands"],
         serde_json::json!(["echo two", "echo three"])
     );
-    assert_eq!(overrides[1]["workspace_name"], "frontend");
-    assert_eq!(overrides[1]["commands"], serde_json::json!(["echo one"]));
+    assert_eq!(arr[1]["workspace_name"], "frontend");
+    assert_eq!(arr[1]["init_commands"], serde_json::json!(["echo one"]));
 }
 
 #[tokio::test]
@@ -444,7 +591,7 @@ async fn unauthenticated_request_is_401() {
     let app = build_router(state.clone());
     let resp = app
         .oneshot(
-            Request::get("/api/admin/worktree-commands")
+            Request::get("/api/worktree-commands")
                 .body(Body::empty())
                 .unwrap(),
         )

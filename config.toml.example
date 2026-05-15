@@ -4,18 +4,10 @@
 # Each definition file has top-level `name`, optional `depends_on`, and [[steps]] entries.
 # See workflows/implement_ticket.example.toml for the full format.
 
-# --- Custom run commands (optional `[[run_commands]]` at TOML root) ---
-# Define named shell commands that appear as actionable buttons on the workflow card
-# after a workflow completes. Each command runs in a dedicated container with automatic
-# port detection and forwarding.
-#
-# [[run_commands]]
-# name = "Dev Server"
-# command = "npm run dev"
-#
-# [[run_commands]]
-# name = "Storybook"
-# command = "npx storybook dev -p 6006"
+# Worktree init commands and run commands are now per-user, configured
+# via the dashboard's Configuration → Worktree Settings tab. Any stale
+# `[commands]` or `[[run_commands]]` entries in this file are ignored at
+# load time (a startup warning is logged so you notice).
 
 [general]
 dry_mode = false
@@ -104,23 +96,6 @@ repo_path = "/workspace"
 # Each entry is a whitespace-separated token line (e.g. "pr list").
 # Set to ["*"] to allow ALL gh subcommands (disables the gh allowlist entirely).
 # gh_allowed_extra_prefixes = []
-
-[commands]
-# Shell commands run sequentially in the worktree directory immediately after
-# the worktree is created. Use for dependency installs, codegen, registry
-# login — anything that must happen once per worktree before workflow steps
-# start. Each command runs via `bash -lc`. Failure of any command aborts the
-# workflow.
-worktree_init_commands = [
-    "npm install",
-]
-
-# Deprecated fields kept for one release for backward compatibility.
-# They are read on first load, merged into worktree_init_commands, and
-# dropped on the next config write. Remove after upgrade.
-# pre_install = []
-# install = ""
-# pre_workflow = []
 
 [web]
 host = "0.0.0.0"

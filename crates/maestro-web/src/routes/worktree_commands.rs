@@ -1,20 +1,38 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Admin REST endpoints for per-workspace `worktree_init_commands` overrides
-//! (plan-08 Step 5).
+//! Per-user REST endpoints for worktree init + run commands (plan-09 Step 5).
 //!
-//! All endpoints are admin-gated via [`require_admin_for`]. CSRF and session
-//! authentication are enforced by the outer middleware stack mounted in
-//! `server.rs` — no need to re-check them here.
+//! Mounted under `/api/worktree-commands/*` (no admin prefix). Every handler
+//! reads `Extension<AuthenticatedUser>` and operates on `auth.user_id` ONLY —
+//! the URL never carries a `user_id` and admins have no special path to
+//! another user's data. The CSRF + session middleware mounted in `server.rs`
+//! cover the rest; these handlers don't re-implement auth.
 //!
-//! Trust boundary: only admins can write. Command strings may contain `sudo`,
-//! shell-meta, and secrets (registry tokens, CI keys); the threat model is
-//! "rogue admin", which is out of scope. The audit log line below scrubs
-//! `*_TOKEN=…` style secrets from the message, but the DB stores the command
-//! verbatim — operators legitimately need to read it back.
+//! Endpoints:
+//!
+//! | Method | Path                                       |
+//! |--------|--------------------------------------------|
+//! | GET    | `/api/worktree-commands`                   |
+//! | GET    | `/api/worktree-commands/{workspace}`       |
+//! | PUT    | `/api/worktree-commands/{workspace}`       |
+//! | DELETE | `/api/worktree-commands/{workspace}`       |
+//! | GET    | `/api/worktree-commands/_workspaces`       |
+//!
+//! Validation (PUT body):
+//! - `init_commands`: ≤50 items, each ≤2000 chars after trim, non-empty,
+//!   no NUL bytes.
+//! - `run_commands`: ≤50 items, each `name` ≤100 chars after trim non-empty,
+//!   each `command` ≤2000 chars after trim non-empty, no NUL bytes,
+//!   duplicate `name`s within the list are rejected.
+//! - Whole body capped at 1 MiB defense-in-depth.
+//!
+//! Audit log: PUT and DELETE emit a `tracing::info!` line with the user_id,
+//! workspace_name, action, command counts, and SHA-256 hashes of each JSON.
+//! The optional snippet is scrubbed of `*_TOKEN=…` style assignments; the DB
+//! stores commands verbatim.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -22,10 +40,9 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use maestro_core::db::workspace_commands::{self, WorkspaceCommandsRow};
+use maestro_core::db::user_worktree_commands::{self, RunCommand, UserWorktreeCommandsRow};
 
 use crate::auth::AuthenticatedUser;
-use crate::routes::admin::require_admin_for;
 use crate::routes::repos::list_workspaces;
 use crate::state::AppState;
 
@@ -33,17 +50,21 @@ use crate::state::AppState;
 // Constants — validation limits.
 // ---------------------------------------------------------------------------
 
-/// Hard ceiling on the number of commands per override.
+/// Hard ceiling on the number of commands per kind (init or run).
 const MAX_COMMANDS: usize = 50;
 
-/// Hard ceiling on a single command's length (after `trim`). Multi-line shell
-/// scripts inside a single command are allowed; newlines do NOT count as
-/// command separators.
+/// Hard ceiling on a single command string's length (after `trim`). Multi-line
+/// shell scripts inside a single command are allowed — newlines do NOT count
+/// as command separators.
 const MAX_COMMAND_LEN: usize = 2000;
+
+/// Hard ceiling on a run-command `name`. Short labels: "Dashboard UI",
+/// "Storybook" — 100 is more than enough.
+const MAX_NAME_LEN: usize = 100;
 
 /// Defense-in-depth ceiling on the serialized JSON body size. axum's default
 /// JSON limit (currently 2 MiB) covers this for normal requests, but we
-/// enforce it ourselves so the policy stays in this file.
+/// enforce it ourselves so the policy stays local.
 const MAX_BODY_BYTES: usize = 1_024 * 1_024; // 1 MiB
 
 // ---------------------------------------------------------------------------
@@ -51,54 +72,47 @@ const MAX_BODY_BYTES: usize = 1_024 * 1_024; // 1 MiB
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
-pub struct OverrideEntry {
+pub struct UserCommandsEntry {
     pub workspace_name: String,
-    pub commands: Vec<String>,
+    pub init_commands: Vec<String>,
+    pub run_commands: Vec<RunCommand>,
     pub updated_at: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_by: Option<String>,
 }
 
-impl From<WorkspaceCommandsRow> for OverrideEntry {
-    fn from(row: WorkspaceCommandsRow) -> Self {
-        OverrideEntry {
+impl From<UserWorktreeCommandsRow> for UserCommandsEntry {
+    fn from(row: UserWorktreeCommandsRow) -> Self {
+        UserCommandsEntry {
             workspace_name: row.workspace_name,
-            commands: row.commands,
+            init_commands: row.init_commands,
+            run_commands: row.run_commands,
             updated_at: row.updated_at,
-            updated_by: row.updated_by,
         }
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct TopLevelResponse {
-    /// The global `Config.commands.worktree_init_commands` value.
-    pub default: Vec<String>,
-    /// All per-workspace overrides, sorted by `workspace_name`.
-    pub overrides: Vec<OverrideEntry>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PutOverrideBody {
-    pub commands: Vec<String>,
+pub struct PutBody {
+    #[serde(default)]
+    pub init_commands: Vec<String>,
+    #[serde(default)]
+    pub run_commands: Vec<RunCommand>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct WorkspaceWithOverride {
+pub struct WorkspaceWithHasCommands {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub html_url: Option<String>,
     pub active: bool,
-    pub has_override: bool,
+    pub has_my_commands: bool,
 }
 
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
 
-/// SHA-256 hex digest. Empty input → empty string (used as the `prev_hash`
-/// when no override existed before, and as the `new_hash` after a DELETE).
+/// SHA-256 hex digest. Empty input → empty string.
 fn sha256_hex(input: &[u8]) -> String {
     if input.is_empty() {
         return String::new();
@@ -108,28 +122,25 @@ fn sha256_hex(input: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Serialize a command list to JSON for hashing. Stable for a given Vec since
-/// `serde_json::to_vec` produces deterministic output for `Vec<String>`.
-fn commands_json_bytes(commands: &[String]) -> Vec<u8> {
+fn init_json_bytes(commands: &[String]) -> Vec<u8> {
+    serde_json::to_vec(commands).unwrap_or_default()
+}
+
+fn run_json_bytes(commands: &[RunCommand]) -> Vec<u8> {
     serde_json::to_vec(commands).unwrap_or_default()
 }
 
 /// Scrub `*_TOKEN=…` style assignments from a command snippet so they don't
-/// leak into the audit log. The DB-stored copy is untouched.
-fn scrub_secrets_for_log(commands: &[String]) -> Vec<String> {
-    // We do this inline with a small state machine rather than pulling in
-    // `regex` (already a transitive dep, but the inline scan avoids the
-    // import cost in this hot path). Match the regex:
-    //   `\b[A-Z_]*TOKEN\b\s*=\s*\S+`  →  `<NAME>=***`
-    commands
+/// leak into the audit log. The DB-stored copy is untouched. Matches the
+/// regex `\b[A-Z_]*TOKEN\b\s*=\s*\S+` → `<NAME>=***`.
+fn scrub_secrets_for_log(snippets: &[String]) -> Vec<String> {
+    snippets
         .iter()
         .map(|cmd| {
             let mut out = String::with_capacity(cmd.len());
             let bytes = cmd.as_bytes();
             let mut i = 0;
             while i < bytes.len() {
-                // Find the start of a potential TOKEN identifier: a run of
-                // [A-Z_] characters at a word boundary that ends in TOKEN.
                 let id_start = i;
                 let mut j = i;
                 while j < bytes.len() && (bytes[j].is_ascii_uppercase() || bytes[j] == b'_') {
@@ -140,7 +151,6 @@ fn scrub_secrets_for_log(commands: &[String]) -> Vec<String> {
                 let ident = &bytes[id_start..j];
                 let ends_with_token = ident.ends_with(b"TOKEN");
                 if j > id_start && is_word_boundary && ends_with_token {
-                    // Optional whitespace then '='.
                     let mut k = j;
                     while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
                         k += 1;
@@ -150,7 +160,6 @@ fn scrub_secrets_for_log(commands: &[String]) -> Vec<String> {
                         while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
                             k += 1;
                         }
-                        // Consume non-whitespace value (\S+).
                         let val_start = k;
                         while k < bytes.len() && !bytes[k].is_ascii_whitespace() {
                             k += 1;
@@ -163,9 +172,6 @@ fn scrub_secrets_for_log(commands: &[String]) -> Vec<String> {
                         }
                     }
                 }
-                // No match: copy this byte and advance one.
-                // (Using char boundaries via `str` slicing instead of bytes
-                // to avoid splitting a multi-byte char.)
                 let ch_end = next_char_boundary(cmd, i);
                 out.push_str(&cmd[i..ch_end]);
                 i = ch_end;
@@ -188,7 +194,7 @@ fn next_char_boundary(s: &str, i: usize) -> usize {
 }
 
 /// Validate the workspace name segment from the URL. Rejects path traversal
-/// and empty names; mirrors the policy in `routes/repos.rs::switch_workspace`.
+/// and empty names; mirrors `routes/repos.rs::switch_workspace`.
 fn validate_workspace_name(name: &str) -> Result<(), (StatusCode, String)> {
     if name.is_empty()
         || name.contains('/')
@@ -204,50 +210,130 @@ fn validate_workspace_name(name: &str) -> Result<(), (StatusCode, String)> {
     Ok(())
 }
 
-/// Validate a command list per the spec:
-/// - `commands.len() <= MAX_COMMANDS`
-/// - each `cmd.trim()` non-empty
-/// - each command ≤ `MAX_COMMAND_LEN` chars after trim
-/// - reject `\0` bytes anywhere
-/// - the entire commands-as-JSON must fit in `MAX_BODY_BYTES`
-fn validate_commands(commands: &[String]) -> Result<(), (StatusCode, String)> {
+/// Validate the init-commands list.
+fn validate_init_commands(commands: &[String]) -> Result<(), (StatusCode, String)> {
     if commands.len() > MAX_COMMANDS {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!("Too many commands: {} > {MAX_COMMANDS}", commands.len()),
+            format!(
+                "Too many init commands: {} > {MAX_COMMANDS}",
+                commands.len()
+            ),
         ));
     }
     for (i, cmd) in commands.iter().enumerate() {
         if cmd.contains('\0') {
             return Err((
                 StatusCode::BAD_REQUEST,
-                format!("Command #{}: contains NUL byte", i + 1),
+                format!("Init command #{}: contains NUL byte", i + 1),
             ));
         }
         let trimmed = cmd.trim();
         if trimmed.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
-                format!("Command #{}: empty after trim", i + 1),
+                format!("Init command #{}: empty after trim", i + 1),
             ));
         }
         if trimmed.chars().count() > MAX_COMMAND_LEN {
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!(
-                    "Command #{}: {} chars exceeds {MAX_COMMAND_LEN}",
+                    "Init command #{}: {} chars exceeds {MAX_COMMAND_LEN}",
                     i + 1,
                     trimmed.chars().count()
                 ),
             ));
         }
     }
-    // Defense-in-depth: even with each field within bounds, fail if the
-    // serialized JSON exceeds the body ceiling.
-    if commands_json_bytes(commands).len() > MAX_BODY_BYTES {
+    Ok(())
+}
+
+/// Validate the run-commands list.
+fn validate_run_commands(commands: &[RunCommand]) -> Result<(), (StatusCode, String)> {
+    if commands.len() > MAX_COMMANDS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Too many run commands: {} > {MAX_COMMANDS}",
+                commands.len()
+            ),
+        ));
+    }
+    let mut seen_names: HashSet<&str> = HashSet::with_capacity(commands.len());
+    for (i, rc) in commands.iter().enumerate() {
+        if rc.name.contains('\0') {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Run command #{}: name contains NUL byte", i + 1),
+            ));
+        }
+        if rc.command.contains('\0') {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Run command #{}: command contains NUL byte", i + 1),
+            ));
+        }
+        let trimmed_name = rc.name.trim();
+        if trimmed_name.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Run command #{}: name empty after trim", i + 1),
+            ));
+        }
+        if trimmed_name.chars().count() > MAX_NAME_LEN {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Run command #{}: name {} chars exceeds {MAX_NAME_LEN}",
+                    i + 1,
+                    trimmed_name.chars().count()
+                ),
+            ));
+        }
+        let trimmed_cmd = rc.command.trim();
+        if trimmed_cmd.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Run command #{}: command empty after trim", i + 1),
+            ));
+        }
+        if trimmed_cmd.chars().count() > MAX_COMMAND_LEN {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Run command #{}: command {} chars exceeds {MAX_COMMAND_LEN}",
+                    i + 1,
+                    trimmed_cmd.chars().count()
+                ),
+            ));
+        }
+        if !seen_names.insert(trimmed_name) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Run command #{}: duplicate name \"{}\"",
+                    i + 1,
+                    trimmed_name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Defense-in-depth body-size check on the combined JSON shape. Both lists
+/// are independently capped above; this guards against pathological JSON
+/// (e.g. 50 × 2000-char commands × 2 kinds = ~200 KiB — still well below
+/// 1 MiB, but operators may save smaller-than-cap lists in odd shapes).
+fn validate_combined_size(
+    init_bytes: &[u8],
+    run_bytes: &[u8],
+) -> Result<(), (StatusCode, String)> {
+    if init_bytes.len().saturating_add(run_bytes.len()) > MAX_BODY_BYTES {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            format!("Commands JSON exceeds {MAX_BODY_BYTES} bytes"),
+            format!("Body exceeds {MAX_BODY_BYTES} bytes"),
         ));
     }
     Ok(())
@@ -262,51 +348,39 @@ fn db_error(e: maestro_core::error::MaestroError) -> (StatusCode, String) {
 // Handlers.
 // ---------------------------------------------------------------------------
 
-/// `GET /api/admin/worktree-commands` — global default + all overrides.
-pub async fn list_top_level(
+/// `GET /api/worktree-commands` — the caller's rows.
+pub async fn list_my_rows(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
-) -> Result<Json<TopLevelResponse>, (StatusCode, String)> {
-    require_admin_for(&state, &auth)
-        .await
-        .map_err(|s| (s, String::new()))?;
-
-    let default = state
-        .config
-        .read()
-        .await
-        .commands
-        .worktree_init_commands
-        .clone();
-
+) -> Result<Json<Vec<UserCommandsEntry>>, (StatusCode, String)> {
     let db = state
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
         .clone();
+    let user_id = auth.user_id.clone();
+
     let rows = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        workspace_commands::list(&conn)
+        user_worktree_commands::list_for_user(&conn, &user_id)
     })
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
     .map_err(db_error)?;
 
-    let mut overrides: Vec<OverrideEntry> = rows.into_iter().map(OverrideEntry::from).collect();
-    overrides.sort_by(|a, b| a.workspace_name.cmp(&b.workspace_name));
-
-    Ok(Json(TopLevelResponse { default, overrides }))
+    let mut entries: Vec<UserCommandsEntry> =
+        rows.into_iter().map(UserCommandsEntry::from).collect();
+    entries.sort_by(|a, b| a.workspace_name.cmp(&b.workspace_name));
+    Ok(Json(entries))
 }
 
-/// `GET /api/admin/worktree-commands/{workspace}` — one override row.
-pub async fn get_one(
+/// `GET /api/worktree-commands/{workspace}` — the caller's row for that
+/// workspace, or 404 if absent.
+pub async fn get_my_row(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(workspace): Path<String>,
-) -> Result<Json<OverrideEntry>, (StatusCode, String)> {
-    require_admin_for(&state, &auth)
-        .await
-        .map_err(|s| (s, String::new()))?;
+) -> Result<Json<UserCommandsEntry>, (StatusCode, String)> {
     validate_workspace_name(&workspace)?;
 
     let db = state
@@ -314,10 +388,12 @@ pub async fn get_one(
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
         .clone();
+    let user_id = auth.user_id.clone();
     let lookup_name = workspace.clone();
+
     let row = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        workspace_commands::get(&conn, &lookup_name)
+        user_worktree_commands::get(&conn, &user_id, &lookup_name)
     })
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
@@ -325,22 +401,23 @@ pub async fn get_one(
 
     match row {
         Some(r) => Ok(Json(r.into())),
-        None => Err((StatusCode::NOT_FOUND, "No override".to_string())),
+        None => Err((StatusCode::NOT_FOUND, "No commands set".to_string())),
     }
 }
 
-/// `PUT /api/admin/worktree-commands/{workspace}` — upsert an override.
-pub async fn put_override(
+/// `PUT /api/worktree-commands/{workspace}` — upsert both kinds atomically.
+pub async fn put_my_row(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(workspace): Path<String>,
-    Json(body): Json<PutOverrideBody>,
-) -> Result<Json<OverrideEntry>, (StatusCode, String)> {
-    require_admin_for(&state, &auth)
-        .await
-        .map_err(|s| (s, String::new()))?;
+    Json(body): Json<PutBody>,
+) -> Result<Json<UserCommandsEntry>, (StatusCode, String)> {
     validate_workspace_name(&workspace)?;
-    validate_commands(&body.commands)?;
+    validate_init_commands(&body.init_commands)?;
+    validate_run_commands(&body.run_commands)?;
+    let init_bytes = init_json_bytes(&body.init_commands);
+    let run_bytes = run_json_bytes(&body.run_commands);
+    validate_combined_size(&init_bytes, &run_bytes)?;
 
     let db = state
         .db
@@ -348,62 +425,70 @@ pub async fn put_override(
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
         .clone();
 
-    let writer_id = auth.user_id.clone();
-    let commands = body.commands.clone();
+    let user_id = auth.user_id.clone();
     let lookup_name = workspace.clone();
+    let init_commands = body.init_commands.clone();
+    let run_commands = body.run_commands.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let row = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        let prev = workspace_commands::get(&conn, &lookup_name)?;
-        workspace_commands::upsert(&conn, &lookup_name, &commands, Some(&writer_id))?;
-        let row = workspace_commands::get(&conn, &lookup_name)?
-            .expect("row was just upserted");
-        Ok::<_, maestro_core::error::MaestroError>((prev, row))
+        user_worktree_commands::upsert(
+            &conn,
+            &user_id,
+            &lookup_name,
+            &init_commands,
+            &run_commands,
+        )?;
+        user_worktree_commands::get(&conn, &user_id, &lookup_name)?.ok_or_else(|| {
+            maestro_core::error::MaestroError::Database(
+                "row was just upserted but vanished".into(),
+            )
+        })
     })
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
     .map_err(db_error)?;
 
-    let (prev, row) = result;
-    let prev_bytes = prev
-        .as_ref()
-        .map(|r| commands_json_bytes(&r.commands))
-        .unwrap_or_default();
-    let new_bytes = commands_json_bytes(&row.commands);
+    // Audit log — scrubbed init snippets + hashes of both kinds.
+    let scrubbed_init = scrub_secrets_for_log(&row.init_commands);
+    let scrubbed_run: Vec<String> = row
+        .run_commands
+        .iter()
+        .map(|rc| format!("{}={}", rc.name, rc.command))
+        .collect();
+    let scrubbed_run = scrub_secrets_for_log(&scrubbed_run);
 
-    // Audit log — scrubbed snippet (first 3 entries, each truncated) plus
-    // hashes for plan-03 backfill.
-    let scrubbed = scrub_secrets_for_log(&row.commands);
     tracing::info!(
-        actor_user_id = %auth.user_id,
+        user_id = %auth.user_id,
         workspace_name = %workspace,
         action = "set",
-        prev_hash = %sha256_hex(&prev_bytes),
-        new_hash = %sha256_hex(&new_bytes),
-        command_count = row.commands.len(),
-        snippet = ?scrubbed.iter().take(3).map(|s| {
-            let mut t = s.clone();
-            if t.len() > 80 {
-                t.truncate(80);
-                t.push('…');
-            }
-            t
-        }).collect::<Vec<_>>(),
-        "worktree_commands override changed"
+        init_count = row.init_commands.len(),
+        run_count = row.run_commands.len(),
+        init_hash = %sha256_hex(&init_bytes),
+        run_hash = %sha256_hex(&run_bytes),
+        init_snippet = ?scrubbed_init.iter().take(3).map(|s| truncate_80(s)).collect::<Vec<_>>(),
+        run_snippet = ?scrubbed_run.iter().take(3).map(|s| truncate_80(s)).collect::<Vec<_>>(),
+        "user_worktree_commands changed"
     );
 
     Ok(Json(row.into()))
 }
 
-/// `DELETE /api/admin/worktree-commands/{workspace}` — drop the override.
-pub async fn delete_override(
+fn truncate_80(s: &str) -> String {
+    if s.chars().count() <= 80 {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(80).collect();
+    out.push('…');
+    out
+}
+
+/// `DELETE /api/worktree-commands/{workspace}` — remove the caller's row.
+pub async fn delete_my_row(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(workspace): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_admin_for(&state, &auth)
-        .await
-        .map_err(|s| (s, String::new()))?;
     validate_workspace_name(&workspace)?;
 
     let db = state
@@ -412,11 +497,13 @@ pub async fn delete_override(
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
         .clone();
 
+    let user_id = auth.user_id.clone();
     let lookup_name = workspace.clone();
+
     let (prev, deleted) = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        let prev = workspace_commands::get(&conn, &lookup_name)?;
-        let removed = workspace_commands::delete(&conn, &lookup_name)?;
+        let prev = user_worktree_commands::get(&conn, &user_id, &lookup_name)?;
+        let removed = user_worktree_commands::delete(&conn, &user_id, &lookup_name)?;
         Ok::<_, maestro_core::error::MaestroError>((prev, removed))
     })
     .await
@@ -424,37 +511,40 @@ pub async fn delete_override(
     .map_err(db_error)?;
 
     if !deleted {
-        return Err((StatusCode::NOT_FOUND, "No override to delete".to_string()));
+        return Err((StatusCode::NOT_FOUND, "No commands to delete".to_string()));
     }
 
-    let prev_bytes = prev
-        .as_ref()
-        .map(|r| commands_json_bytes(&r.commands))
-        .unwrap_or_default();
+    let (prev_init_hash, prev_run_hash, init_count, run_count) = match prev {
+        Some(r) => (
+            sha256_hex(&init_json_bytes(&r.init_commands)),
+            sha256_hex(&run_json_bytes(&r.run_commands)),
+            r.init_commands.len(),
+            r.run_commands.len(),
+        ),
+        None => (String::new(), String::new(), 0, 0),
+    };
 
     tracing::info!(
-        actor_user_id = %auth.user_id,
+        user_id = %auth.user_id,
         workspace_name = %workspace,
         action = "delete",
-        prev_hash = %sha256_hex(&prev_bytes),
-        new_hash = "",
-        "worktree_commands override changed"
+        init_count = init_count,
+        run_count = run_count,
+        init_hash = %prev_init_hash,
+        run_hash = %prev_run_hash,
+        "user_worktree_commands changed"
     );
 
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/admin/worktree-commands/_workspaces` — workspaces with the
-/// `has_override` flag merged in. Delegates the filesystem scan to
-/// `routes/repos.rs::list_workspaces` so we don't duplicate the scan logic.
-pub async fn list_workspaces_with_override_flag(
+/// `GET /api/worktree-commands/_workspaces` — known workspaces from the
+/// filesystem scan augmented with `has_my_commands` for the caller.
+pub async fn list_workspaces_with_has_commands(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<WorkspaceWithOverride>>, (StatusCode, String)> {
-    require_admin_for(&state, &auth)
-        .await
-        .map_err(|s| (s, String::new()))?;
-
+) -> Result<Json<Vec<WorkspaceWithHasCommands>>, (StatusCode, String)> {
+    // Reuse the existing filesystem scan from routes::repos.
     let ws = list_workspaces(State(state.clone())).await.0;
 
     let db = state
@@ -462,20 +552,22 @@ pub async fn list_workspaces_with_override_flag(
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
         .clone();
-    let names: BTreeSet<String> = tokio::task::spawn_blocking(move || {
+    let user_id = auth.user_id.clone();
+    let rows = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        workspace_commands::list_workspaces_with_overrides(&conn)
+        user_worktree_commands::list_for_user(&conn, &user_id)
     })
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?
-    .into_iter()
-    .collect();
+    .map_err(db_error)?;
 
-    let merged: Vec<WorkspaceWithOverride> = ws
+    let my_workspaces: BTreeSet<String> =
+        rows.into_iter().map(|r| r.workspace_name).collect();
+
+    let merged: Vec<WorkspaceWithHasCommands> = ws
         .into_iter()
-        .map(|w| WorkspaceWithOverride {
-            has_override: names.contains(&w.name),
+        .map(|w| WorkspaceWithHasCommands {
+            has_my_commands: my_workspaces.contains(&w.name),
             name: w.name,
             html_url: w.html_url,
             active: w.active,
@@ -495,7 +587,6 @@ mod tests {
 
     #[test]
     fn sha256_hex_known_vector() {
-        // SHA-256("abc") = ba7816bf...
         assert_eq!(
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
@@ -513,8 +604,6 @@ mod tests {
         let out = scrub_secrets_for_log(&cmds);
         assert!(out[0].contains("GITHUB_TOKEN=***"), "got: {}", out[0]);
         assert!(!out[0].contains("ghp_secretvalue"));
-        // "NOT_A_TOKEN_VALUE" is one ident token, doesn't end in TOKEN (it ends
-        // in VALUE), so it should NOT be scrubbed.
         assert_eq!(out[1], "echo NOT_A_TOKEN_VALUE");
         assert!(out[2].contains("MY_TOKEN=***"), "got: {}", out[2]);
         assert!(!out[2].contains("xyz123"));
@@ -529,33 +618,111 @@ mod tests {
     }
 
     #[test]
-    fn validate_commands_rejects_too_many() {
+    fn validate_init_rejects_too_many() {
         let cmds: Vec<String> = (0..51).map(|i| format!("echo {i}")).collect();
-        assert!(validate_commands(&cmds).is_err());
+        assert!(validate_init_commands(&cmds).is_err());
     }
 
     #[test]
-    fn validate_commands_rejects_empty_after_trim() {
+    fn validate_init_rejects_empty_after_trim() {
         let cmds = vec!["   ".to_string()];
-        assert!(validate_commands(&cmds).is_err());
+        assert!(validate_init_commands(&cmds).is_err());
     }
 
     #[test]
-    fn validate_commands_rejects_nul_byte() {
+    fn validate_init_rejects_nul_byte() {
         let cmds = vec!["echo a\0b".to_string()];
-        assert!(validate_commands(&cmds).is_err());
+        assert!(validate_init_commands(&cmds).is_err());
     }
 
     #[test]
-    fn validate_commands_rejects_oversize_cmd() {
+    fn validate_init_rejects_oversize_cmd() {
         let cmds = vec!["x".repeat(MAX_COMMAND_LEN + 1)];
-        assert!(validate_commands(&cmds).is_err());
+        assert!(validate_init_commands(&cmds).is_err());
     }
 
     #[test]
-    fn validate_commands_accepts_multi_line() {
+    fn validate_init_accepts_multi_line() {
         let cmds = vec!["set -e\necho one\necho two".to_string()];
-        assert!(validate_commands(&cmds).is_ok());
+        assert!(validate_init_commands(&cmds).is_ok());
+    }
+
+    #[test]
+    fn validate_run_rejects_too_many() {
+        let rcs: Vec<RunCommand> = (0..51)
+            .map(|i| RunCommand {
+                name: format!("n{i}"),
+                command: "echo".to_string(),
+            })
+            .collect();
+        assert!(validate_run_commands(&rcs).is_err());
+    }
+
+    #[test]
+    fn validate_run_rejects_duplicate_names() {
+        let rcs = vec![
+            RunCommand {
+                name: "Storybook".to_string(),
+                command: "echo a".to_string(),
+            },
+            RunCommand {
+                name: "Storybook".to_string(),
+                command: "echo b".to_string(),
+            },
+        ];
+        let err = validate_run_commands(&rcs).expect_err("dup names should error");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1.contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_run_rejects_empty_name() {
+        let rcs = vec![RunCommand {
+            name: "   ".to_string(),
+            command: "echo".to_string(),
+        }];
+        assert!(validate_run_commands(&rcs).is_err());
+    }
+
+    #[test]
+    fn validate_run_rejects_empty_command() {
+        let rcs = vec![RunCommand {
+            name: "ok".to_string(),
+            command: "  ".to_string(),
+        }];
+        assert!(validate_run_commands(&rcs).is_err());
+    }
+
+    #[test]
+    fn validate_run_rejects_long_name() {
+        let rcs = vec![RunCommand {
+            name: "x".repeat(MAX_NAME_LEN + 1),
+            command: "echo".to_string(),
+        }];
+        assert!(validate_run_commands(&rcs).is_err());
+    }
+
+    #[test]
+    fn validate_run_rejects_long_command() {
+        let rcs = vec![RunCommand {
+            name: "ok".to_string(),
+            command: "x".repeat(MAX_COMMAND_LEN + 1),
+        }];
+        assert!(validate_run_commands(&rcs).is_err());
+    }
+
+    #[test]
+    fn validate_run_rejects_nul_byte() {
+        let rcs = vec![RunCommand {
+            name: "ok".to_string(),
+            command: "echo a\0b".to_string(),
+        }];
+        assert!(validate_run_commands(&rcs).is_err());
+        let rcs = vec![RunCommand {
+            name: "a\0b".to_string(),
+            command: "echo".to_string(),
+        }];
+        assert!(validate_run_commands(&rcs).is_err());
     }
 
     #[test]
