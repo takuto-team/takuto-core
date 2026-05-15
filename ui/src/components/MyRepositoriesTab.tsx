@@ -169,8 +169,6 @@ export function MyRepositoriesTab({ isAdmin }: Props) {
         ) : (
           <ul className="divide-y divide-gray-800">
             {mine.map((repo) => {
-              const co = repo.co_users_count ?? 0;
-              const isLast = co === 0;
               return (
                 <li key={repo.id} className="px-4 py-3 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
@@ -186,14 +184,6 @@ export function MyRepositoriesTab({ isAdmin }: Props) {
                         </a>
                       ) : (
                         <span className="text-sm font-medium text-gray-200 truncate">{repo.name}</span>
-                      )}
-                      {isLast && (
-                        <span
-                          className="text-[11px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 border border-amber-800/50 shrink-0"
-                          title="You are the last user associated with this repository; removing it will purge the on-disk clone."
-                        >
-                          last user
-                        </span>
                       )}
                     </div>
                     <div className="text-xs text-gray-500 truncate font-mono">{repo.local_path}</div>
