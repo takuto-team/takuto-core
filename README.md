@@ -2,6 +2,33 @@
 
 **Maestro is an AI coding pipeline that works at your pace.** Let it run autonomously overnight — polling Jira or GitHub Issues, writing code, running tests, opening PRs — or stay in the driver's seat: pick items manually, refine descriptions with AI assistance, and trigger each phase yourself from the dashboard.
 
+**License:** FSL for self-hosted use, commercial license available — see [License](#license).
+
+---
+
+## Table of contents
+
+- [What you can achieve](#what-you-can-achieve)
+- [Why Maestro?](#why-maestro)
+- [You will need](#you-will-need)
+- [Cost expectations](#cost-expectations)
+- [Quick start — Individual developer (local)](#quick-start--individual-developer-local)
+- [Quick start — Teams (server deployment)](#quick-start--teams-server-deployment)
+- [How a workflow runs](#how-a-workflow-runs)
+- [Multi-user model](#multi-user-model)
+- [Privacy & telemetry](#privacy--telemetry)
+- [Configuration reference](#configuration-reference)
+- [Browser-based editor and web terminal](#browser-based-editor-and-web-terminal)
+- [Docker-in-Docker sidecar (optional)](#docker-in-docker-sidecar-optional)
+- [Dry mode](#dry-mode)
+- [Security and operations](#security-and-operations)
+- [Environment variables](#environment-variables)
+- [Container details](#container-details)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [Going deeper](#going-deeper)
+- [License](#license)
+
 ---
 
 ## What you can achieve
@@ -29,6 +56,47 @@
 | **Security boundary** | Full internet access from agent | Egress firewall — only approved hosts reachable |
 | **Team deployment** | Per-developer only | Self-host on a server; shared dashboard |
 | **Persistence** | Session ends when you close your editor | Survives container restarts; paused workflows resume |
+
+---
+
+## You will need
+
+Before you start, gather these:
+
+- **Docker** (or Podman) with `docker compose` — Docker 24+ / Podman 4+ recommended.
+- **RAM:** ≥ 8 GiB for a single workflow; ≥ 12 GiB on macOS with Podman because the Podman VM needs its own share. Tune `[general] max_concurrent_workflows` to your machine.
+- **Disk:** ≥ 30 GiB free. Worktrees, npm/cargo caches, mise toolchains, and (if enabled) the DinD storage layer all live in Docker volumes.
+- **GitHub access:** either a fine-grained personal access token (PAT) or a configured GitHub App. See [Scoped GitHub token](#scoped-github-token-recommended).
+- **Atlassian CLI (optional):** required only when `[general] ticketing_system = "jira"`. Installed automatically inside the container; you authenticate via `make setup`.
+- **Claude or Cursor account:**
+  - Claude Code via Anthropic API key, Pro/Max OAuth, or a corporate proxy (`ANTHROPIC_BASE_URL`).
+  - Cursor Agent via `CURSOR_API_KEY` or interactive `agent login`.
+
+A Linux host is recommended for server deployments; macOS works for local use but Podman's VM eats memory you'd rather give to the agent.
+
+---
+
+## Cost expectations
+
+Maestro doesn't bill you — your AI provider does. The agent runs Claude Code or Cursor Agent against your account, and each ticket consumes tokens proportional to the size of the codebase, the prompt context, and the number of steps in your workflow definition.
+
+Rough budgeting (Sonnet 4-tier models, your mileage will vary):
+
+- **$0.50 – $2 per ticket** for a typical implement-then-review pipeline on a medium codebase.
+- Larger codebases, longer prompts, or pipelines with extra `repeat`-passes can push a single ticket past $5.
+- Cursor Agent's "Auto" model selection generally lands in a similar range but bills per the Cursor plan you have.
+
+Reference pricing pages:
+
+- [Anthropic API pricing](https://www.anthropic.com/pricing#anthropic-api)
+- [Cursor pricing](https://cursor.com/pricing)
+
+Cost-saving levers:
+
+- Use **command steps** (`commands = ["..."]`) instead of agent prompts for deterministic work like linting and testing — they don't consume AI tokens.
+- Cap context with `[jira] ticket_context_max_description_bytes` and `linked_issue_description_max_bytes`.
+- Run a **dry mode** rehearsal of your workflow definition (`[general] dry_mode = true`) before pointing it at a real backlog.
+- Claude Code Pro/Max OAuth (via `claude login`) uses your subscription rather than per-token API billing.
 
 ---
 
@@ -102,11 +170,13 @@ max_concurrent_workflows = 3       # tune to your server's CPU/RAM
 [web]
 host = "0.0.0.0"
 port = 8080
-
-[web.login]
-username = "admin"
-password = "choose-a-strong-password"
 ```
+
+> Maestro uses a multi-user database for authentication — on first boot the
+> dashboard prompts you to create the initial admin account. The legacy
+> single-user keys `[web] dashboard_username` / `dashboard_password` still
+> exist but are deprecated; leave them empty in new deployments. See
+> [Multi-user model](#multi-user-model).
 
 Put secrets in `maestro.env` (never in `config.toml`):
 ```bash
@@ -168,97 +238,67 @@ Each definition has `[[steps]]` with a `prompt` (ticket context auto-injected) o
 
 ---
 
+## Multi-user model
+
+Maestro is multi-user, single-tenant. Every user has their own dashboard view; all users on one instance share the same Jira, GitHub, and AI credentials.
+
+**On first boot,** when the database has zero users, the dashboard shows a **first-user setup** page. The account you create there becomes the initial **admin**.
+
+**Roles:**
+
+- **admin** — can create, edit, suspend, and delete users; can mutate shared state (`PUT /api/config`, polling pause/resume, workspace switch, repo clone).
+- **user** — sees and acts only on workflows they created. No cross-user visibility, even for admins.
+
+**Sign-in flow:**
+
+- Username + password, argon2-hashed in `maestro.db`.
+- Idle session TTL: 24 hours. Absolute TTL: 30 days.
+- After 5 failed login or recovery attempts in 10 minutes the account is temporarily locked; an admin clears it via `POST /api/users/{id}/unlock`.
+- Per-IP rate limit on `/api/auth/login` and `/api/auth/recover`: 10 / minute.
+- One-time **recovery codes** are issued at account creation and can reset a forgotten password without admin intervention.
+- By default a new login kicks other sessions for the same user (`[web] kick_other_sessions_on_login = true`). Flip to `false` if you want concurrent desktop + mobile sessions.
+
+**Workflow isolation:** each `Workflow` carries a `user_id`. Users see only their own workflows on the dashboard and via `GET /api/workflows`. Workflows created automatically by the poller are owned by the user resolved via `[general] poller_owner_username` (defaults to the lexicographically-first admin).
+
+**Workspace switching is global.** When an admin switches workspaces (`POST /api/workspaces/switch`), running workflows from the previous workspace keep executing — but the dashboard scopes its grid to the newly-active workspace. Cross-workspace impact is documented in [AGENTS.md](AGENTS.md) under "Workflow model".
+
+User management UI lives at **Configuration → Users** (admin-only). For the full data model and migration path from single-user deployments, see the **Multi-user database** section in [AGENTS.md](AGENTS.md).
+
+---
+
+## Privacy & telemetry
+
+**Maestro does not collect or transmit any telemetry.** There is no usage analytics, no crash reporter, no phone-home — verify with `git grep telemetry` if you want to.
+
+All outbound traffic is to services *you* configure:
+
+- Your Jira/Atlassian site (when `ticketing_system = "jira"`).
+- GitHub (`github.com`, `api.github.com`, `raw.githubusercontent.com`).
+- Your AI provider — Anthropic (`api.anthropic.com`, `api.claude.ai`, `claude.ai`, `console.anthropic.com`) and/or Cursor.
+- npm registry (`registry.npmjs.org`) and any private registries detected in `.npmrc`.
+- Any host you add to `[network] extra_egress_hosts`.
+
+The egress firewall (iptables, set up at container start) blocks everything else by default. Ticket content, source code, and agent prompts are sent only to the AI provider you configured — Maestro itself never sees them.
+
+---
+
 ## Configuration reference
 
-Full configuration in `config.toml`. See `config.toml.example` for annotated defaults.
+The canonical, per-key reference for `config.toml` lives in **[docs/configuration.md](docs/configuration.md)** — every key, default, type, and description, with 🔒 callouts on security-sensitive options. Start there. The annotated `config.toml.example` at the repo root is the source of truth: if it diverges from the doc, the example wins.
 
-### Root-level `[[agent_steps]]` *(deprecated — use workflow definitions instead)*
+A few keys you'll touch first:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `[[agent_steps]]` | *(built-in)* | Legacy inline steps. Each entry: `name`, `prompt` (placeholders: `ticket_key`, `ticket_summary`, `ticket_description`, `ticket_type`, `acceptance_criteria`, `ticket_context`), `repeat`, `when` (`always`/`ticketing`/`no_ticketing`), optional `skills`, optional `resume_previous` |
+| Key | Default | What it does |
+|---|---|---|
+| `[general] ticketing_system` | `"none"` | `"jira"`, `"github"`, or `"none"` — drives the poller and the **+** picker. |
+| `[general] max_concurrent_workflows` | `1` | Parallel install/agent sessions. Tune to your host. |
+| `[git] base_branch` | `"main"` | Branch worktrees are created from. |
+| `[agent] provider` | `"claude"` | `"claude"` or `"cursor"`. |
+| `[agent] model` | `""` | Model override (empty = provider default). |
+| `[web] host` / `port` | `"0.0.0.0"` / `8080` | Dashboard bind address. |
+| `[network] extra_egress_hosts` 🔒 | `[]` | Extra domains permitted through the egress firewall. |
 
-### `[general]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `ticketing_system` | `"none"` | `"jira"`, `"github"`, or `"none"` |
-| `dry_mode` | `false` | Run without Jira/GitHub writes |
-| `poll_interval_secs` | `60` | Seconds between Jira/GitHub polls |
-| `max_concurrent_workflows` | `1` | Max parallel workflows |
-| `log_level` | `"info"` | `trace`, `debug`, `info`, `warn`, `error` |
-| `worker_image` | `""` | Docker image for isolated workflow containers; empty = auto-detect |
-
-### `[jira]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `project_keys` | `[]` | Jira project keys to poll (e.g. `["PROJ"]`) |
-| `item_types` | `["Task", "Bug"]` | Ticket types to handle |
-| `jql_filter` | `""` | Extra JQL AND-merged into the dashboard ticket search |
-| `site` | `""` | Jira site host (e.g. `"company.atlassian.net"`) |
-| `email` | `""` | Jira user email for token auth |
-
-### `[git]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `base_branch` | `"main"` | Branch to create worktrees from |
-| `remote` | `"origin"` | Git remote name |
-| `repo_path` | `"/workspace"` | Path inside container |
-
-### `[commands]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `pre_install` | `[]` | Shell commands before install (e.g. registry auth) |
-| `install` | `""` | Dependency install command (e.g. `"npm ci"`) |
-
-### `[agent]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `provider` | `"claude"` | `"claude"` (Claude Code CLI) or `"cursor"` (Cursor Agent CLI) |
-| `cursor_cli` | `"agent"` | Cursor Agent executable name or path |
-| `cursor_model` | `"Auto"` | Cursor Agent `--model` |
-| `step_timeout_secs` | `1800` | Timeout per agent session (30 min) |
-| `model` | `""` | Model override (e.g. `"claude-opus-4-6"`). Empty = provider default |
-
-### `[editor]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `ports` | `[]` | App ports to expose in the VS Code editor container |
-| `dynamic_ports` | `10` | Spare ports for automatic dev-server forwarding |
-| `theme` | `"vs-dark"` | VS Code theme: `"vs-dark"`, `"vs-light"`, `"hc-black"` |
-| `extensions` | `[]` | VS Code extensions to install |
-| `settings` | `{}` | VS Code settings as a TOML table |
-
-### `[terminal]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `setup_commands` | `[]` | Shell commands run once at editor container creation |
-
-### `[web]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `host` | `"0.0.0.0"` | Web server bind address |
-| `port` | `8080` | Web server port |
-
-### `[docker]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `build_commands` | `[]` | Commands run during `docker compose build` |
-| `compose_up_commands` | `[]` | Commands run on every `docker compose up` after auth preflight |
-
-### `[network]`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `extra_egress_hosts` | `[]` | Additional domains allowed through the egress firewall |
+**Heads up:** `[commands]` and `[[run_commands]]` in `config.toml` are **ignored at load** (a startup warning is logged). Worktree init commands and dashboard run/stop buttons are per-user and live in the database — edit them via **Configuration → Worktree Settings** in the dashboard. See [docs/configuration.md § Ignored sections](docs/configuration.md#ignored-sections).
 
 ---
 
@@ -520,6 +560,18 @@ docker/
   egress-rules.sh    # iptables egress allowlist
 workflows/           # TOML workflow definitions (*.example.toml → copy and edit)
 ```
+
+---
+
+## Going deeper
+
+- [AGENTS.md](AGENTS.md) — canonical map of architecture, runtime paths, REST/WebSocket contracts. Read this first if you're contributing or hacking on Maestro.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — crate-by-crate breakdown and diagrams.
+- [CODING_STANDARDS.md](CODING_STANDARDS.md) — SOLID, Rust, React/TypeScript, and security rules every contributor follows.
+- [docs/workflow.md](docs/workflow.md) — Mermaid diagrams for the ticket lifecycle.
+- [docs/configuration.md](docs/configuration.md) — full configuration reference.
+- [SECURITY.md](SECURITY.md) — supported versions, reporting a vulnerability, trust model.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup, DCO sign-off, license-header rules.
 
 ---
 

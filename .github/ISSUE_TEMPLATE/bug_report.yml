@@ -1,0 +1,105 @@
+name: Bug report
+description: Report a defect or unexpected behaviour in Maestro.
+title: "[bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill in as
+        much detail as you can — vague reports are hard to act on.
+
+        **Do not** report security vulnerabilities here — use the channels
+        in [SECURITY.md](https://github.com/morphet81/maestro-core/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Maestro version
+      description: Output of `cat VERSION` or the container image tag you are running.
+      placeholder: "e.g. 0.7.2 or ghcr.io/morphet81/maestro-core:v0.7.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      description: How are you running Maestro?
+      options:
+        - Docker Compose (recommended)
+        - Standalone container
+        - Built from source via cargo
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Host OS / architecture
+      description: e.g. "macOS 14.4 arm64", "Ubuntu 22.04 amd64".
+    validations:
+      required: true
+  - type: dropdown
+    id: ticketing_mode
+    attributes:
+      label: Ticketing mode
+      description: Value of `[general] ticketing_system` in `config.toml`.
+      options:
+        - jira
+        - github
+        - none
+    validations:
+      required: true
+  - type: dropdown
+    id: agent_provider
+    attributes:
+      label: Agent provider
+      description: Which agent runtime is configured for the failing workflow step?
+      options:
+        - Claude Code
+        - Cursor Agent
+        - Other / custom
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimum sequence of actions to reproduce the bug.
+      placeholder: |
+        1. Start Maestro with config X
+        2. Trigger workflow Y
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened? Include error messages verbatim.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Relevant log lines from `maestro` (JSON), the dashboard, or the
+        agent session. Redact secrets and tokens before pasting.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, suspicions, links to related issues, etc.
+    validations:
+      required: false

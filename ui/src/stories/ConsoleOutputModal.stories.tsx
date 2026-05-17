@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { fn } from "storybook/test";
 import { ConsoleOutputModal } from "../components/modals/ConsoleOutputModal";

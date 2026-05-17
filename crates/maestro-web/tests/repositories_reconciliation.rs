@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 // Copyright (C) 2026 Alexandre Obellianne
 //
 // Plan-10 integration test for the startup reconciliation pass.

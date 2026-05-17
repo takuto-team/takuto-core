@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a new feature or enhancement.
+title: "[feat]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature. Larger or contentious proposals are
+        better discussed first in
+        [Discussions](https://github.com/morphet81/maestro-core/discussions).
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: A clear, concise description of the feature.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: |
+        What problem does it solve? Who benefits? What is the concrete use
+        case that motivates this change?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        What workarounds exist today? What other designs did you consider
+        and why are they worse?
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Sketches, links to prior art, related issues, etc.
+    validations:
+      required: false

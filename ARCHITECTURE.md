@@ -2,7 +2,7 @@
 
 ## Overview
 
-Maestro is a Rust application that automates Jira ticket handling using **Claude Code** or **Cursor Agent** in headless mode. It polls Jira for tickets, orchestrates a workflow per ticket (branching, install hooks, configurable **`[[agent_steps]]`** sessions, PR creation), and serves a web dashboard for real-time monitoring and control. Lint and test gates are expressed as **agent prompts**, not separate `[commands]` fields.
+Maestro is a Rust application that drives ticket-shaped work through **Claude Code** or **Cursor Agent** in headless mode. It polls **Jira** or **GitHub Issues** (or runs ticket-free from manual paste-description starts), and for each item orchestrates a workflow: branch + git worktree, optional per-workspace **worktree init commands** (edited from the dashboard, not `config.toml`), then a sequence of **agent steps** and **command steps** defined by TOML files in `workflows/`. The engine **finalizes to `Done` after the last step succeeds** — there is no separate built-in PR step; a PR URL surfaces on the dashboard via `.maestro/outcome.toml` or a `MAESTRO_PR_URL: …` line in agent output. Lint, tests, and other deterministic gates are expressed either as agent prompts or as command steps. A small web dashboard lists workflows, streams output over WebSocket, and exposes REST endpoints for control, config, and user management.
 
 ---
 

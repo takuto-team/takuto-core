@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/morphet81/maestro-core/discussions
+    about: Use Discussions for questions, design feedback, or help.
+  - name: Security vulnerability
+    url: https://github.com/morphet81/maestro-core/security/advisories/new
+    about: Report security issues privately via GitHub Security Advisories.

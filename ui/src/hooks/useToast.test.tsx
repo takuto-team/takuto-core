@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { ToastProvider, useToast } from "./useToast";

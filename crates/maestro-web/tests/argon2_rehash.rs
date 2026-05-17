@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 // Copyright (C) 2026 Alexandre Obellianne
 //
 // Integration test for plan-02 AC-4 — Argon2id parameters + rehash-on-login.

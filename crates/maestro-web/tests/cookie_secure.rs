@@ -1,3 +1,6 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
 // Copyright (C) 2026 Alexandre Obellianne
 //
 // Integration tests for plan-02 AC-2 — `Secure` cookie flag with auto-detect.
