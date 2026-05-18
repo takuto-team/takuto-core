@@ -97,6 +97,15 @@ pub struct AppState {
     /// validation. Production uses [`maestro_core::auth::RealGhClient`];
     /// tests inject a `MockGhClient` so the suite never touches github.com.
     pub gh_client: maestro_core::auth::SharedGhClient,
+    /// Phase 2b.2: picks App vs user-PAT per [`GitAction`] per
+    /// 04_architecture.md §4.2. Holds the DB (for user PAT rows) and the
+    /// optional `GitHubAppTokenManager` (for App installation tokens). Phase
+    /// 2b.3 will thread it into the worker container spawn path.
+    ///
+    /// `None` only when `db: None` — every production AppState carries
+    /// `Some(resolver)`. Test fixtures with no DB use `None` and the
+    /// per-route helpers fall back to the legacy App-only token path.
+    pub git_auth_resolver: Option<Arc<maestro_core::github::auth_resolver::GitAuthResolver>>,
     /// Registry of unguessable session path tokens (GH-45 shared-port proxy).
     /// Maps `{path-token} → SessionRoute` so `/s/{token}/...` requests can be
     /// dispatched to the right loopback backend (editor or terminal). The

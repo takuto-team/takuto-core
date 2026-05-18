@@ -929,6 +929,17 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // `db` was initialised above (before poller construction) so we could resolve
     // the poller owner. Move it into the AppState here.
 
+    // Phase 2b.2: construct the GitAuthResolver. `db.clone()` is cheap
+    // (internal Arc<Mutex>); the optional `Arc<GitHubAppTokenManager>` is
+    // also Clone. When `db: None` (no data dir / DB open failed), the
+    // resolver is omitted and the legacy App-only paths remain.
+    let git_auth_resolver = db.as_ref().map(|d| {
+        std::sync::Arc::new(maestro_core::github::auth_resolver::GitAuthResolver::new(
+            d.clone(),
+            github_app_for_token_writer.clone(),
+        ))
+    });
+
     let app_state = AppState {
         engine: engine.clone(),
         config: config.clone(),
@@ -954,7 +965,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         config_writer: Some(config_writer.clone()),
         clone_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        git_auth_resolver,
+        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
     };
     let app = build_router(app_state);
 

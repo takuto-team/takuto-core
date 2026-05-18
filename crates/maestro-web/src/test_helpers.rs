@@ -60,6 +60,12 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
         TicketingSystem::None,
         std::env::temp_dir(),
     ));
+    // Phase 2b.2: build the resolver from the test DB. No App configured
+    // here — tests that need a Mode A / B fixture seed PAT rows directly
+    // and the resolver picks them up via the DB.
+    let git_auth_resolver = Some(Arc::new(
+        maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
+    ));
     AppState {
         engine,
         config,
@@ -77,7 +83,8 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
+        git_auth_resolver,
+        path_token_registry: crate::session_registry::PathTokenRegistry::new(),
     }
 }
 

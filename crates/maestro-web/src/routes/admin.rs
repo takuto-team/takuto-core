@@ -652,6 +652,9 @@ mod tests {
             TicketingSystem::None,
             std::env::temp_dir(),
         ));
+        let git_auth_resolver = Some(Arc::new(
+            maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
+        ));
         AppState {
             engine,
             config,
@@ -669,6 +672,7 @@ mod tests {
             config_writer: None,
             clone_in_progress: Arc::new(AtomicBool::new(false)),
             gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
+            git_auth_resolver,
             path_token_registry: crate::session_registry::PathTokenRegistry::new(),
         }
     }

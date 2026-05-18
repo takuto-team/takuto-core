@@ -675,6 +675,7 @@ mod tests {
                 config_writer: None,
                 clone_in_progress: Arc::new(AtomicBool::new(false)),
                 gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
+            git_auth_resolver: None,
             path_token_registry: PathTokenRegistry::new(),
             }
         }

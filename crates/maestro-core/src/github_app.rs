@@ -127,6 +127,26 @@ impl GitHubAppTokenManager {
         })
     }
 
+    /// **Test-only** constructor used by sibling crates in the workspace
+    /// that need a `GitHubAppTokenManager` instance for mode-checks (where
+    /// `.is_some()` is the only thing that matters and
+    /// `get_installation_token` is never expected to succeed). The encoding
+    /// key is a meaningless secret — any call to `fetch_installation_token`
+    /// will fail at the JWT signing step. Production callers must use
+    /// [`Self::new`].
+    ///
+    /// Marked `#[doc(hidden)]` to keep it out of the rendered docs and
+    /// signal at the API surface that it's not for production use.
+    #[doc(hidden)]
+    pub fn for_tests(app_id: u64, installation_id: u64) -> Self {
+        Self {
+            app_id,
+            installation_id,
+            encoding_key: EncodingKey::from_secret(b"test-only-not-a-real-key"),
+            cached: RwLock::new(None),
+        }
+    }
+
     fn resolve_private_key(config: &GitHubAppConfig) -> Result<String> {
         let has_inline = !config.app_private_key.trim().is_empty();
         let has_path = !config.app_private_key_path.trim().is_empty();

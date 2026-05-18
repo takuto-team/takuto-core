@@ -410,7 +410,16 @@ async fn add_via_clone(
     let clone_target = pick_clone_target(&repo_name);
     let token_cwd = std::path::Path::new(WORKSPACES_DIR);
 
-    let clone_result = do_clone(state, &full_name, token_cwd, &clone_target).await;
+    // Phase 2b.2: pass the authenticated caller so do_clone can ask the
+    // GitAuthResolver to pick App vs user PAT per the §4.2 matrix.
+    let clone_result = do_clone(
+        state,
+        &full_name,
+        token_cwd,
+        &clone_target,
+        Some(&auth.user_id),
+    )
+    .await;
     if let Err(err) = clone_result {
         let stderr = err.to_string();
         warn!(

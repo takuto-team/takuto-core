@@ -59,6 +59,9 @@ fn build_state(data_dir: &std::path::Path) -> AppState {
         data_dir.join("workflows"),
     ));
     std::fs::create_dir_all(data_dir.join("workflows")).ok();
+    let git_auth_resolver = Some(Arc::new(
+        maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
+    ));
     AppState {
         engine,
         config,
@@ -76,7 +79,8 @@ fn build_state(data_dir: &std::path::Path) -> AppState {
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        git_auth_resolver,
+        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
     }
 }
 

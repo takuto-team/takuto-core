@@ -58,7 +58,8 @@ fn test_state_no_db() -> AppState {
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        git_auth_resolver: None,
+        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
     }
 }
 

@@ -217,7 +217,15 @@ impl Drop for CloneGuard {
 /// Perform a git clone of `full_name` (`owner/repo`) into `clone_target`.
 ///
 /// `token_cwd` is an existing directory used as the working directory when
-/// fetching the GitHub App installation token (pre-clone).
+/// fetching the GitHub App installation token (pre-clone). `user_id` is the
+/// authenticated caller (`Some` for user-driven clones via
+/// `POST /api/repositories`; `None` for poller / legacy paths).
+///
+/// Phase 2b.2: when `user_id.is_some()` AND the `GitAuthResolver` is wired,
+/// we ask the resolver for a `GitAction::Clone` token (which picks App in
+/// Mode A/B and UserPat in Mode C per arch §4.2). Otherwise we fall back
+/// to the legacy `actions.get_gh_installation_token` + `gh repo clone`
+/// chain that pre-existed Phase 2b.2.
 ///
 /// This is the helper used by `routes/repositories.rs::POST /api/repositories`
 /// to perform the actual filesystem clone after the per-process lock has been
@@ -227,12 +235,31 @@ pub(crate) async fn do_clone(
     full_name: &str,
     token_cwd: &std::path::Path,
     clone_target: &std::path::Path,
+    user_id: Option<&str>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let gh_token = state
-        .engine
-        .actions
-        .get_gh_installation_token(token_cwd)
-        .await;
+    use maestro_core::github::auth_resolver::GitAction;
+
+    // 1. Prefer the resolver path when both a user_id and a resolver exist.
+    let gh_token = match (user_id, state.git_auth_resolver.as_ref()) {
+        (Some(uid), Some(resolver)) => match resolver.token_for(GitAction::Clone, uid).await {
+            Ok(tok) => Some(tok.bearer.expose().to_string()),
+            // Resolver returned UnauthenticatedGit (Mode Missing) — surface
+            // as a clean clone failure rather than crashing.
+            Err(maestro_core::github::auth_resolver::GitAuthError::UnauthenticatedGit { .. }) => {
+                return Err(
+                    "GitHub authentication unavailable for this user — paste a PAT in My Credentials or configure a GitHub App.".into(),
+                );
+            }
+            Err(e) => return Err(format!("token resolution failed: {e}").into()),
+        },
+        // 2. Legacy path: ask the App directly via the existing actions trait.
+        //    Mode `db: None` tests and pre-Phase-2b.2 poller calls go through here.
+        _ => state
+            .engine
+            .actions
+            .get_gh_installation_token(token_cwd)
+            .await,
+    };
 
     let clone_url = format!("https://github.com/{full_name}.git");
     let target = clone_target.to_str().unwrap_or(".");

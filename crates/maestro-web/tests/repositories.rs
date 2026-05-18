@@ -83,6 +83,9 @@ fn test_state_isolated() -> (AppState, TempDir) {
         TicketingSystem::None,
         dir.path().to_path_buf(),
     ));
+    let git_auth_resolver = Some(Arc::new(
+        maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
+    ));
     let state = AppState {
         engine,
         config,
@@ -100,7 +103,8 @@ fn test_state_isolated() -> (AppState, TempDir) {
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        git_auth_resolver,
+        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
     };
     (state, dir)
 }
