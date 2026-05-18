@@ -8,6 +8,7 @@ import { Login } from "./pages/Login";
 import { Onboarding } from "./pages/Onboarding";
 import { Setup } from "./pages/Setup";
 import { Config } from "./pages/Config";
+import { UserCredentials } from "./pages/UserCredentials";
 import { useAuth } from "./hooks/useAuth";
 import { ToastProvider, ToastContainer } from "./hooks/useToast";
 
@@ -56,6 +57,15 @@ export function App() {
         <Route
           path="/onboarding"
           element={<Onboarding onLogout={logout} authEnabled={authEnabled} />}
+        />
+        {/* Phase 2 (auth-overhaul) — per-user credential surface. Any logged-in
+            user can manage their own credentials; the App.tsx login gate
+            above already guarantees we only land here authenticated. */}
+        <Route
+          path="/me/credentials"
+          element={
+            <UserCredentials onLogout={logout} authEnabled={authEnabled} />
+          }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

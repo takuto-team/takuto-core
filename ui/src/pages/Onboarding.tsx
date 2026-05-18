@@ -452,12 +452,18 @@ function CredentialsStep() {
         <strong>Your credentials</strong>
       </p>
       <p className="text-xs text-gray-500 mt-2">
-        Per-user provider keys and GitHub tokens land in Phase 2 alongside the
-        per-user credential store. For now, click <em>Finish setup</em> to
-        complete the wizard — workflows will use the deployment-default
-        credentials from <code className="text-gray-400">maestro.env</code> if
-        any.
+        Paste your AI provider key and (optionally) a GitHub personal access
+        token from the per-user credential page. Skipping is fine — the
+        deployment-default credentials in{" "}
+        <code className="text-gray-400">maestro.env</code> stay in effect
+        until you connect your own.
       </p>
+      <Link
+        to="/me/credentials"
+        className="inline-block mt-3 text-sm text-blue-400 hover:text-blue-300"
+      >
+        Open My credentials →
+      </Link>
     </div>
   );
 }

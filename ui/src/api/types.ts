@@ -321,6 +321,70 @@ export interface User {
   updated_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Per-user credentials (Phase 2 — auth-overhaul).
+//
+// Source of truth: tmp/multi-agents/04_architecture.md §3 (per-user provider
+// store) + §4 (GitHub auth resolver) + 05_ux_design.md §2.2 / §2.3.
+//
+// **A3 rename:** the architecture renamed `sign_commits` to
+// `attribute_commits` BEFORE any rows existed (no DB migration needed). The
+// task description text still mentioned `sign_commits` but the team-lead's
+// dispatch and the architecture doc are explicit: the field is
+// `attribute_commits` and v1 does NOT do GPG/SSH signing. Honour the rename.
+// ---------------------------------------------------------------------------
+
+export type ProviderCredentialKind = "api_key" | "cli_state" | "oauth_token";
+
+/** What `kind` of credential the user has stored, plus its last-seen state. */
+export interface UserProviderCredentialStatus {
+  kind: ProviderCredentialKind | null;
+  valid: boolean;
+  last_validated_at: string | null;
+  /** "claude" | "cursor" | "codex" | "opencode" — currently active provider. */
+  provider_name: string;
+}
+
+export type GithubAuthMode =
+  | "app"
+  | "app_plus_pat"
+  | "pat_only"
+  | "pat_required"
+  | "missing";
+
+export interface UserGithubCredentialStatus {
+  has_pat: boolean;
+  login: string | null;
+  scopes: string[];
+  /** A3: per-user toggle that sets `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env vars
+   *  on the worker. NOT GPG/SSH signing. */
+  attribute_commits: boolean;
+  mode: GithubAuthMode;
+}
+
+export interface UserCredentialsStatus {
+  /** `null` when the user has not yet captured a provider credential. */
+  provider: UserProviderCredentialStatus | null;
+  github: UserGithubCredentialStatus;
+}
+
+/** Body for `POST /api/users/me/credentials/{provider}`. Cursor is A1 — the
+ *  CLI-state path is dropped, every provider takes a raw API key here. */
+export interface SetProviderCredentialRequest {
+  api_key: string;
+}
+
+/** Body for `POST /api/users/me/github-pat`. A3 rename applied. */
+export interface SetGithubPatRequest {
+  pat: string;
+  attribute_commits?: boolean;
+}
+
+/** Body for `PATCH /api/users/me/github` (A3 rename). */
+export interface PatchGithubSettingsRequest {
+  attribute_commits: boolean;
+}
+
 export interface TodoTicket {
   key: string;
   summary: string;

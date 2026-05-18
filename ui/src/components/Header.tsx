@@ -212,6 +212,15 @@ export function Header({
                   >
                     My Repositories
                   </Link>
+                  {/* Phase 2 — per-user credential surface (every signed-in
+                      user can manage their own keys). */}
+                  <Link
+                    to="/me/credentials"
+                    className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    My credentials
+                  </Link>
                   {authEnabled && (
                     <button
                       onClick={() => { setMenuOpen(false); onLogout(); }}

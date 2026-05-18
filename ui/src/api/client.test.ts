@@ -9,12 +9,20 @@ import {
   apiPostJson,
   addRepository,
   AgentConfigError,
+  deleteGithubPat,
+  deleteProviderCredential,
   fetchOnboardingStatus,
+  fetchUserCredentials,
   listMyRepositories,
   listAvailableRepositories,
+  patchGithubSettings,
   putAgentConfig,
   removeRepository,
+  setGithubPat,
+  setProviderCredential,
+  UserCredentialsError,
 } from "./client";
+import { clearMocksOverride, setMocksEnabled } from "./mocks";
 
 // Stub window.location for the 401 redirect logic
 const originalLocation = window.location;
@@ -125,6 +133,196 @@ describe("apiPostJson()", () => {
     Object.defineProperty(res, "ok", { value: false });
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
     await expect(apiPostJson("/api/start", {})).rejects.toThrow("conflict");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-user credentials (Phase 2 — auth-overhaul).
+// All tests below force `clearMocksOverride()` first so a previous test that
+// flipped the runtime override doesn't bleed into the next.
+// ---------------------------------------------------------------------------
+
+describe("per-user credentials client", () => {
+  beforeEach(() => {
+    clearMocksOverride();
+  });
+
+  it("fetchUserCredentials parses a 200 body", async () => {
+    const status = {
+      provider: {
+        kind: "api_key",
+        valid: true,
+        last_validated_at: "2026-01-01T00:00:00Z",
+        provider_name: "claude",
+      },
+      github: {
+        has_pat: false,
+        login: null,
+        scopes: [],
+        attribute_commits: true,
+        mode: "app",
+      },
+    };
+    mockFetch(200, status);
+    const got = await fetchUserCredentials();
+    expect(fetch).toHaveBeenCalledWith("/api/users/me/credentials", {
+      credentials: "same-origin",
+    });
+    expect(got).toEqual(status);
+  });
+
+  it("fetchUserCredentials throws UserCredentialsError on 401", async () => {
+    const res = new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+    Object.defineProperty(res, "ok", { value: false });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
+    let caught: unknown;
+    try {
+      await fetchUserCredentials();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(UserCredentialsError);
+    expect((caught as UserCredentialsError).code).toBe("unauthorized");
+    expect((caught as UserCredentialsError).status).toBe(401);
+  });
+
+  it("setProviderCredential POSTs the api_key body to the encoded provider URL", async () => {
+    mockFetch(204);
+    await setProviderCredential("cursor", { api_key: "key_xyz" });
+    expect(fetch).toHaveBeenCalledWith("/api/users/me/credentials/cursor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: "key_xyz" }),
+      credentials: "same-origin",
+    });
+  });
+
+  it("setProviderCredential surfaces the structured `invalid_token` error on 400", async () => {
+    const res = new Response(
+      JSON.stringify({ error: "invalid_token", message: "rejected by Claude" }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+    Object.defineProperty(res, "ok", { value: false });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
+    let caught: unknown;
+    try {
+      await setProviderCredential("claude", { api_key: "bad" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(UserCredentialsError);
+    const err = caught as UserCredentialsError;
+    expect(err.code).toBe("invalid_token");
+    expect(err.message).toBe("rejected by Claude");
+  });
+
+  it("deleteProviderCredential DELETEs the encoded provider URL", async () => {
+    mockFetch(204);
+    await deleteProviderCredential("claude");
+    expect(fetch).toHaveBeenCalledWith("/api/users/me/credentials/claude", {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+  });
+
+  it("setGithubPat threads attribute_commits through the body", async () => {
+    const status = {
+      provider: null,
+      github: {
+        has_pat: true,
+        login: "alice",
+        scopes: ["repo"],
+        attribute_commits: false,
+        mode: "app_plus_pat",
+      },
+    };
+    mockFetch(200, status);
+    const got = await setGithubPat({ pat: "ghp_xyz", attribute_commits: false });
+    expect(fetch).toHaveBeenCalledWith("/api/users/me/github-pat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pat: "ghp_xyz", attribute_commits: false }),
+      credentials: "same-origin",
+    });
+    expect(got).toEqual(status);
+  });
+
+  it("setGithubPat surfaces sso_authorization_required with orgSsoUrl", async () => {
+    const body = {
+      error: "sso_authorization_required",
+      message: "Authorize SSO",
+      org_sso_url: "https://github.com/orgs/acme/sso",
+    };
+    const res = new Response(JSON.stringify(body), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+    Object.defineProperty(res, "ok", { value: false });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
+    let caught: unknown;
+    try {
+      await setGithubPat({ pat: "ghp_xyz" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(UserCredentialsError);
+    const err = caught as UserCredentialsError;
+    expect(err.code).toBe("sso_authorization_required");
+    expect(err.status).toBe(403);
+    expect(err.orgSsoUrl).toBe("https://github.com/orgs/acme/sso");
+  });
+
+  it("deleteGithubPat DELETEs /api/users/me/github-pat and returns the fresh status", async () => {
+    const status = {
+      provider: null,
+      github: {
+        has_pat: false,
+        login: null,
+        scopes: [],
+        attribute_commits: true,
+        mode: "missing",
+      },
+    };
+    mockFetch(200, status);
+    const got = await deleteGithubPat();
+    expect(fetch).toHaveBeenCalledWith("/api/users/me/github-pat", {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+    expect(got).toEqual(status);
+  });
+
+  it("patchGithubSettings PATCHes with attribute_commits (A3 rename guard)", async () => {
+    const status = {
+      provider: null,
+      github: {
+        has_pat: true,
+        login: "alice",
+        scopes: ["repo"],
+        attribute_commits: false,
+        mode: "app_plus_pat",
+      },
+    };
+    mockFetch(200, status);
+    await patchGithubSettings({ attribute_commits: false });
+    expect(fetch).toHaveBeenCalledWith("/api/users/me/github", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attribute_commits: false }),
+      credentials: "same-origin",
+    });
+  });
+
+  it("routes through the mock layer when isMocksEnabled() returns true", async () => {
+    setMocksEnabled(true);
+    const got = await fetchUserCredentials();
+    // Real fetch must NOT have been called — mock layer answered.
+    expect(fetch).not.toHaveBeenCalled();
+    expect(got.github.mode).toBe("missing");
+    clearMocksOverride();
   });
 });
 
