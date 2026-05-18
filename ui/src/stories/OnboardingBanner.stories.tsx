@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { MemoryRouter } from "react-router-dom";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import type { SystemStatus } from "../api/types";
 
@@ -15,6 +16,13 @@ const meta = {
       values: [{ name: "dark", value: "#030712" }],
     },
   },
+  decorators: [
+    (Story) => (
+      <MemoryRouter>
+        <Story />
+      </MemoryRouter>
+    ),
+  ],
   tags: ["autodocs"],
 } satisfies Meta<typeof OnboardingBanner>;
 
@@ -50,115 +58,190 @@ export const Healthy: Story = {
   },
 };
 
-export const MissingGitHub: Story = {
-  name: "Missing GitHub credential",
+/* ── User-facing deep-links (every authenticated user sees them) ── */
+
+export const ClaudeNotAuthenticated: Story = {
+  name: "Critical · claude_not_authenticated → /me/credentials",
   args: {
     status: {
       ...healthy(),
-      github: { mode: "missing", app_configured: false, app_id: null, app_name: null },
       warnings: [
         {
-          code: "github_missing",
+          code: "claude_not_authenticated",
           severity: "critical",
           message:
-            "GitHub authentication is not configured. Maestro can't read repos, push commits, or open PRs.",
+            "Claude Code is not authenticated and no CLAUDE_CODE_OAUTH_TOKEN env var is set.",
         },
       ],
     },
   },
 };
 
-export const MissingProvider: Story = {
-  name: "Missing AI provider credential",
+export const CursorNotAuthenticated: Story = {
+  name: "Critical · cursor_not_authenticated → /me/credentials",
   args: {
     status: {
       ...healthy(),
-      provider: {
-        selected: "none",
-        deployment_default_credential_present: false,
-        headless_capable: false,
-        custom_base_url: null,
-      },
       warnings: [
         {
-          code: "provider_missing",
+          code: "cursor_not_authenticated",
           severity: "critical",
           message:
-            "No AI provider is selected. Pick one in AI Settings before your team can run workflows.",
+            "Cursor is not authenticated. Paste a CURSOR_API_KEY from cursor.com/dashboard.",
         },
       ],
     },
   },
 };
 
-export const MissingAcliInfo: Story = {
-  name: "Missing acli (info — no banner rendered)",
+export const GhAuthMissing: Story = {
+  name: "Critical · gh_auth_missing → /me/credentials",
   args: {
     status: {
       ...healthy(),
-      ticketing: { system: "jira", acli_ok: false },
       warnings: [
         {
-          code: "acli_missing",
-          severity: "info",
+          code: "gh_auth_missing",
+          severity: "critical",
           message:
-            "`acli` isn't authenticated. Jira polling is paused until you run `acli auth`.",
+            "GitHub authentication is missing. Maestro can't read repos, push commits, or open PRs.",
         },
       ],
     },
   },
 };
 
-export const MultipleCritical: Story = {
-  name: "Multiple critical warnings",
+/* ── Admin-only deep-link (provider_not_implemented) ── */
+
+export const ProviderNotImplementedAdmin: Story = {
+  name: "Critical · provider_not_implemented (admin view: 'Change provider')",
   args: {
+    isAdmin: true,
     status: {
       ...healthy(),
-      github: { mode: "missing", app_configured: false, app_id: null, app_name: null },
-      provider: {
-        selected: "none",
-        deployment_default_credential_present: false,
-        headless_capable: false,
-        custom_base_url: null,
-      },
       warnings: [
         {
-          code: "github_missing",
+          code: "provider_not_implemented",
           severity: "critical",
           message:
-            "GitHub authentication is not configured. Maestro can't read repos, push commits, or open PRs.",
-        },
-        {
-          code: "provider_missing",
-          severity: "critical",
-          message:
-            "No AI provider is selected. Pick one in AI Settings before your team can run workflows.",
-        },
-        {
-          code: "acli_missing",
-          severity: "info",
-          message:
-            "`acli` isn't authenticated. Jira polling is paused until you run `acli auth`.",
+            "Provider 'codex' adapter ships in Phase 4 — workflows can't start until then.",
         },
       ],
     },
   },
 };
+
+export const ProviderNotImplementedNonAdmin: Story = {
+  name: "Critical · provider_not_implemented (non-admin view: hint, no link)",
+  args: {
+    isAdmin: false,
+    status: {
+      ...healthy(),
+      warnings: [
+        {
+          code: "provider_not_implemented",
+          severity: "critical",
+          message:
+            "Provider 'codex' adapter ships in Phase 4 — workflows can't start until then.",
+        },
+      ],
+    },
+  },
+};
+
+/* ── Admin-only docs links ── */
+
+export const MasterKeyUnavailableAdmin: Story = {
+  name: "Critical · master_key_unavailable (admin view: 'Read docs')",
+  args: {
+    isAdmin: true,
+    status: {
+      ...healthy(),
+      warnings: [
+        {
+          code: "master_key_unavailable",
+          severity: "critical",
+          message:
+            "Master encryption key not available — credentials cannot be sealed.",
+        },
+      ],
+    },
+  },
+};
+
+export const SecretKeyWorldReadableNonAdmin: Story = {
+  name: "Critical · secret_key_world_readable (non-admin: hint, no link)",
+  args: {
+    isAdmin: false,
+    status: {
+      ...healthy(),
+      warnings: [
+        {
+          code: "secret_key_world_readable",
+          severity: "critical",
+          message:
+            "${data_dir}/secret.key has insecure permissions — restrict to mode 0600.",
+        },
+      ],
+    },
+  },
+};
+
+/* ── Multiple criticals, mixed audiences ── */
+
+export const MultipleCriticalMixed: Story = {
+  name: "Multiple critical warnings (mixed user + admin CTAs)",
+  args: {
+    isAdmin: true,
+    status: {
+      ...healthy(),
+      warnings: [
+        {
+          code: "claude_not_authenticated",
+          severity: "critical",
+          message: "Claude credential missing for current user.",
+        },
+        {
+          code: "gh_auth_missing",
+          severity: "critical",
+          message: "GitHub PAT missing.",
+        },
+        {
+          code: "provider_not_implemented",
+          severity: "critical",
+          message: "Provider 'codex' adapter ships in Phase 4.",
+        },
+      ],
+    },
+  },
+};
+
+/* ── Unknown code ── */
+
+export const UnknownCodeNoCta: Story = {
+  name: "Critical with unknown code (no CTA rendered)",
+  args: {
+    status: {
+      ...healthy(),
+      warnings: [
+        {
+          code: "some_future_code_we_dont_know_about",
+          severity: "critical",
+          message: "Mystery warning that the UI doesn't recognise.",
+        },
+      ],
+    },
+  },
+};
+
+/* ── Legacy fallback (no codes, no CTAs) ── */
 
 export const LegacyFallback: Story = {
-  name: "Legacy fallback (endpoint 404)",
+  name: "Legacy fallback (endpoint 404 — no deep-links)",
   args: {
     status: null,
     legacyPreflightError:
       "GITHUB_APP_PRIVATE_KEY is not set\nCLAUDE_CODE_OAUTH_TOKEN is not set",
-  },
-};
-
-export const LegacyFallbackEmpty: Story = {
-  name: "Legacy fallback with no error (no banner rendered)",
-  args: {
-    status: null,
-    legacyPreflightError: null,
   },
 };
 

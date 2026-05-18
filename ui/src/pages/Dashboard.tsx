@@ -36,9 +36,15 @@ import { handleProviderChangedEvent } from "../utils/providerChanged";
 interface Props {
   onLogout: () => void;
   authEnabled: boolean;
+  /**
+   * Whether the current user has the `admin` role. Drives the OnboardingBanner
+   * deep-links (admin-only CTAs collapse to greyed-out hints for non-admins).
+   * Optional + defaults to false so existing call sites don't break.
+   */
+  isAdmin?: boolean;
 }
 
-export function Dashboard({ onLogout, authEnabled }: Props) {
+export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   // Phase 0 banner: `undefined` = fetch in flight, `null` = endpoint 404'd
@@ -325,10 +331,13 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       />
 
       {/* Onboarding / preflight banner — driven by /api/onboarding/status with
-          a fallback to ConfigResponse.preflight_error for older servers. */}
+          a fallback to ConfigResponse.preflight_error for older servers.
+          `isAdmin` drives the per-warning deep-link visibility (admin-only
+          CTAs collapse to greyed text for regular users). */}
       <OnboardingBanner
         status={systemStatus}
         legacyPreflightError={config?.preflight_error ?? null}
+        isAdmin={isAdmin}
       />
 
       {/* Dry mode banner */}

@@ -34,7 +34,16 @@ export function App() {
   return (
     <ToastProvider>
       <Routes>
-        <Route path="/" element={<Dashboard onLogout={logout} authEnabled={authEnabled} />} />
+        <Route
+          path="/"
+          element={
+            <Dashboard
+              onLogout={logout}
+              authEnabled={authEnabled}
+              isAdmin={currentUser?.role === "admin"}
+            />
+          }
+        />
         <Route path="/login.html" element={<Login onLogin={login} />} />
         <Route path="/config.html" element={<Config onLogout={logout} authEnabled={authEnabled} isAdmin={currentUser?.role === "admin"} />} />
         {/* Phase 1 (auth-overhaul) — admin AI Settings + onboarding wizard.
