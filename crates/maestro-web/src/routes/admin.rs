@@ -634,7 +634,7 @@ mod tests {
     /// in `maestro-core` and unavailable from downstream crate tests).
     fn temp_db() -> Database {
         let dir = std::env::temp_dir().join(format!("maestro-test-{}", uuid::Uuid::new_v4()));
-        Database::open(&dir).expect("failed to create temp test database")
+        Database::open(&dir, true).expect("failed to create temp test database")
     }
 
     /// Create a test `AppState` with an in-memory SQLite database.

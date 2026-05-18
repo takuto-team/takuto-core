@@ -69,7 +69,7 @@ impl Drop for TempDir {
 /// floor (empty by default — no workflows on disk).
 fn test_state_isolated() -> (AppState, TempDir) {
     let dir = TempDir::new();
-    let db = Database::open(dir.path()).expect("open db");
+    let db = Database::open(dir.path(), true).expect("open db");
     let config = Arc::new(RwLock::new(Config::default()));
     let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
         DryRunActions::new("origin".to_string(), None),

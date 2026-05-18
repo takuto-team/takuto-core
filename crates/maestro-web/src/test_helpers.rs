@@ -29,7 +29,7 @@ use crate::state::AppState;
 /// other. Migrations are applied automatically by `Database::open`.
 pub fn temp_db() -> Database {
     let dir = std::env::temp_dir().join(format!("maestro-test-{}", uuid::Uuid::new_v4()));
-    Database::open(&dir).expect("failed to create temp test database")
+    Database::open(&dir, true).expect("failed to create temp test database")
 }
 
 /// Create a test [`AppState`] with a temp SQLite database (no users registered yet).

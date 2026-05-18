@@ -431,8 +431,45 @@ impl Default for SystemStatus {
 /// every former hard error becomes a `severity = "critical"` warning. This is
 /// the Phase 0 replacement for `preflight()` and is what the dashboard reads
 /// via `GET /api/onboarding/status`.
+///
+/// Phase 2a (04_architecture.md §3.2): when a `Database` handle is provided,
+/// the helper also surfaces master-key warnings (`master_key_unavailable` and
+/// `secret_key_world_readable`) so the dashboard can render the degraded-mode
+/// banner before any credential CRUD endpoint is hit. Callers that don't have
+/// a DB in scope (e.g. the standalone `maestro preflight` CLI subcommand)
+/// pass `None` and get config-only warnings.
 pub fn collect_system_status(config: &Config) -> SystemStatus {
+    collect_system_status_with_db(config, None)
+}
+
+/// Like [`collect_system_status`] but additionally emits Phase 2a master-key
+/// warnings derived from the database's master-key state.
+pub fn collect_system_status_with_db(
+    config: &Config,
+    db: Option<&crate::db::Database>,
+) -> SystemStatus {
     let mut warnings: Vec<StructuredWarning> = Vec::new();
+
+    // Phase 2a: when a DB handle is provided, emit master-key warnings.
+    // These come first so the dashboard can render them at the top of the
+    // banner — they block per-user credential CRUD entirely.
+    if let Some(db) = db {
+        match db.master_key() {
+            None => {
+                warnings.push(StructuredWarning::critical(
+                    "master_key_unavailable",
+                    "Master key unavailable: set MAESTRO_SECRET_KEY or enable [general] allow_auto_generate_secret_key. Per-user credential storage is disabled until this is resolved.",
+                ));
+            }
+            Some(state) if state.keyfile_world_readable => {
+                warnings.push(StructuredWarning::critical(
+                    "secret_key_world_readable",
+                    "Master keyfile permissions are not 0600. Re-secure with `chmod 600 ${data_dir}/secret.key` (cold-disk leak risk).",
+                ));
+            }
+            Some(_) => {}
+        }
+    }
 
     // ── GitHub ────────────────────────────────────────────────────────────
     let github = if config.github.is_configured() {

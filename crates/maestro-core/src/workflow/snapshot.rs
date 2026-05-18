@@ -220,6 +220,56 @@ pub fn snapshot_path(repo_path: &Path) -> PathBuf {
     resolve_workspace_snapshot_dir(repo_path).join(SNAPSHOT_FILENAME)
 }
 
+/// Phase 2a (04_architecture.md §3.2, A5): scan every per-workspace snapshot
+/// under `{data_dir}/workspaces/*/workflow_snapshot.json` and return the
+/// `ticket_key` of each workflow that is currently in flight. "In flight"
+/// means **not** in a terminal state (`Done` / `Stopped` / `Error`) and
+/// **not** `Paused` — i.e. the workflow has a live driver task that would
+/// lose its sealed credentials mid-step if the master key were reset.
+///
+/// Used by `maestro keys reset` as the safety gate; surfaces the active
+/// ticket keys so the operator knows which workflows must finish or be
+/// stopped before retrying.
+///
+/// Returns `Ok(vec![])` when `{data_dir}/workspaces` does not exist (fresh
+/// install). Returns `Err` only on real I/O failure during directory
+/// traversal; malformed individual snapshot files are skipped silently
+/// because we'd rather under-report than block a reset on garbage data.
+pub fn scan_in_flight_workflow_keys(data_dir: &Path) -> std::io::Result<Vec<String>> {
+    use crate::workflow::state::WorkflowState;
+
+    let workspaces_root = data_dir.join("workspaces");
+    if !workspaces_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut keys: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&workspaces_root)?.flatten() {
+        let snap_path = entry.path().join(SNAPSHOT_FILENAME);
+        if !snap_path.is_file() {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&snap_path) else {
+            continue;
+        };
+        let Ok(file) = serde_json::from_slice::<WorkflowSnapshotFile>(&bytes) else {
+            continue;
+        };
+        for rec in file.workflows {
+            let in_flight = !matches!(
+                rec.state,
+                WorkflowState::Done
+                    | WorkflowState::Stopped
+                    | WorkflowState::Error { .. }
+                    | WorkflowState::Paused { .. }
+            );
+            if in_flight {
+                keys.push(rec.ticket_key);
+            }
+        }
+    }
+    Ok(keys)
+}
+
 /// Legacy snapshot path inside `{repo_path}/.maestro/`.
 fn legacy_snapshot_path(repo_path: &Path) -> PathBuf {
     repo_path.join(".maestro").join(SNAPSHOT_FILENAME)
@@ -565,5 +615,133 @@ mod tests {
             workspace_name_from_repo_path(Path::new("workspace")),
             "workspace"
         );
+    }
+
+    // ── Phase 2a: scan_in_flight_workflow_keys ───────────────────────────
+
+    fn rec(ticket: &str, state: WorkflowState) -> PersistedWorkflowRecord {
+        PersistedWorkflowRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            ticket_key: ticket.into(),
+            ticket_summary: String::new(),
+            ticket_description: String::new(),
+            ticket_type: "Task".into(),
+            state,
+            started_at: Utc::now(),
+            updated_at: Utc::now(),
+            steps_log: vec![],
+            branch_name: String::new(),
+            worktree_path: None,
+            pr_url: None,
+            pr_merged: false,
+            terminal_lines: vec![],
+            current_step_label: None,
+            started_manually: false,
+            jira_available: false,
+            last_session_id: None,
+            description_session_id: None,
+            ticketing_system: crate::config::TicketingSystem::None,
+            ticket_url: None,
+            driver_started: false,
+            workflow_def_runs: HashMap::new(),
+            worktree_bootstrapped: false,
+            workspace_name: "ws".into(),
+            repository_id: None,
+            user_id: None,
+        }
+    }
+
+    fn write_snapshot(data_dir: &Path, ws: &str, records: Vec<PersistedWorkflowRecord>) {
+        let dir = data_dir.join("workspaces").join(ws);
+        fs::create_dir_all(&dir).unwrap();
+        let file = WorkflowSnapshotFile {
+            version: SNAPSHOT_VERSION,
+            workflows: records,
+        };
+        fs::write(
+            dir.join(SNAPSHOT_FILENAME),
+            serde_json::to_vec_pretty(&file).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_returns_empty_when_workspaces_dir_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let got = scan_in_flight_workflow_keys(d.path()).unwrap();
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn scan_skips_terminal_and_paused_workflows() {
+        let d = tempfile::tempdir().unwrap();
+        write_snapshot(
+            d.path(),
+            "ws-1",
+            vec![
+                rec("DONE-1", WorkflowState::Done),
+                rec("STOP-1", WorkflowState::Stopped),
+                rec(
+                    "ERR-1",
+                    WorkflowState::Error {
+                        source_state: Box::new(WorkflowState::Pending),
+                        message: "boom".into(),
+                    },
+                ),
+                rec(
+                    "PAUSE-1",
+                    WorkflowState::Paused {
+                        source_state: Box::new(WorkflowState::AddressingTicket { pass: 1 }),
+                    },
+                ),
+            ],
+        );
+
+        let got = scan_in_flight_workflow_keys(d.path()).unwrap();
+        assert!(
+            got.is_empty(),
+            "no in-flight workflows expected; got {got:?}"
+        );
+    }
+
+    #[test]
+    fn scan_returns_in_flight_keys() {
+        let d = tempfile::tempdir().unwrap();
+        write_snapshot(
+            d.path(),
+            "ws-1",
+            vec![
+                rec("RUN-1", WorkflowState::AddressingTicket { pass: 1 }),
+                rec("PENDING-1", WorkflowState::Pending),
+                rec("DONE-1", WorkflowState::Done),
+            ],
+        );
+        write_snapshot(
+            d.path(),
+            "ws-2",
+            vec![rec("REVIEW-1", WorkflowState::Reviewing)],
+        );
+
+        let mut got = scan_in_flight_workflow_keys(d.path()).unwrap();
+        got.sort();
+        assert_eq!(got, vec!["PENDING-1", "REVIEW-1", "RUN-1"]);
+    }
+
+    #[test]
+    fn scan_tolerates_malformed_snapshot_files() {
+        let d = tempfile::tempdir().unwrap();
+        // One good workspace with an in-flight workflow.
+        write_snapshot(
+            d.path(),
+            "ws-good",
+            vec![rec("RUN-1", WorkflowState::AddressingTicket { pass: 1 })],
+        );
+        // One malformed snapshot — we expect the scanner to skip it.
+        let bad_dir = d.path().join("workspaces").join("ws-bad");
+        fs::create_dir_all(&bad_dir).unwrap();
+        fs::write(bad_dir.join(SNAPSHOT_FILENAME), b"not valid json").unwrap();
+
+        let got = scan_in_flight_workflow_keys(d.path()).unwrap();
+        assert_eq!(got, vec!["RUN-1"]);
     }
 }

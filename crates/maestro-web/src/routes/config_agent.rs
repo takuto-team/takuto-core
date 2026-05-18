@@ -21,7 +21,7 @@ use maestro_core::config::{
     AgentProviderConfig, AiAgentProvider, CodexProviderConfig, CursorProviderConfig,
     validate_extra_args,
 };
-use maestro_core::docker_hooks::collect_system_status;
+use maestro_core::docker_hooks::collect_system_status_with_db;
 use maestro_core::workflow::engine::WorkflowEvent;
 
 use crate::auth::AuthenticatedUser;
@@ -295,7 +295,9 @@ pub async fn put_agent_config(
     // succeeded — the in-memory config was applied and validated either way,
     // and the dashboard polls these endpoints on the WS `provider_changed`
     // event we're about to broadcast.
-    let refreshed = collect_system_status(&config_snapshot);
+    // Phase 2a: pass the DB through so master-key warnings (which depend on
+    // boot-time key resolution, not the patched config) are re-attached.
+    let refreshed = collect_system_status_with_db(&config_snapshot, state.db.as_ref());
     {
         let mut s = state.system_status.write().await;
         // Preserve per_user_required from the existing snapshot — it tracks

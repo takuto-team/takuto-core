@@ -124,6 +124,31 @@ enum Commands {
     /// Generate a GitHub App installation token and print it to stdout.
     /// Used by the setup script to clone the repository when no personal gh auth is present.
     GithubAppToken,
+    /// Master-key management. v1 ships reset-only (04_architecture.md §3.2 / A5).
+    Keys {
+        #[command(subcommand)]
+        action: KeysAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum KeysAction {
+    /// Reset the deployment master key and every credential row.
+    ///
+    /// Lossy by design: every user must re-paste their credentials after a
+    /// reset. Use only when the master key has been compromised or the
+    /// keyfile is otherwise unrecoverable.
+    ///
+    /// Refuses to run while any workflow is `Running` per the persisted
+    /// snapshot — graceful-shutdown the server first.
+    ///
+    /// Requires `--yes-i-am-sure` so no shell mishap can wipe production
+    /// credentials.
+    Reset {
+        /// Explicit acknowledgement that every credential row will be deleted.
+        #[arg(long = "yes-i-am-sure")]
+        yes_i_am_sure: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -317,6 +342,138 @@ async fn run_github_app_token(config_path: &std::path::Path) -> ExitCode {
     }
 }
 
+/// `maestro keys reset` — Phase 2a (04_architecture.md §3.2, A5).
+///
+/// Clears every credential / audit / onboarding row and rewrites the master
+/// keyfile under `${data_dir}/secret.key`. Lossy by design: every user must
+/// re-paste their credentials afterwards.
+///
+/// Refusal cases (non-zero exit):
+/// - `--yes-i-am-sure` not passed
+/// - any workflow in a non-terminal, non-paused state per the snapshot file
+///   (graceful-shutdown the server first; see QA T-KEYS-002)
+/// - config load failure
+/// - data_dir cannot be resolved
+fn run_keys_reset(config_path: &std::path::Path, yes_i_am_sure: bool) -> ExitCode {
+    if !yes_i_am_sure {
+        eprintln!(
+            "maestro keys reset: refuses to run without --yes-i-am-sure (this command is destructive)."
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let config = match Config::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config {}: {e}", config_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let Some(data_dir) = maestro_core::workflow::snapshot::resolve_data_dir() else {
+        eprintln!(
+            "maestro keys reset: cannot resolve data directory (set MAESTRO_DATA_DIR, MAESTRO_HOME, or HOME)."
+        );
+        return ExitCode::FAILURE;
+    };
+
+    // Refuse when an in-flight workflow is present in any per-workspace
+    // snapshot. The helper lives in maestro-core::workflow::snapshot so it
+    // can be unit-tested without spawning the CLI.
+    match maestro_core::workflow::snapshot::scan_in_flight_workflow_keys(&data_dir) {
+        Ok(active) if !active.is_empty() => {
+            eprintln!(
+                "maestro keys reset: refuses to run — {} active workflow(s) present in the snapshot: {}.",
+                active.len(),
+                active.join(", ")
+            );
+            eprintln!("Stop or finish them, then retry.");
+            return ExitCode::FAILURE;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("maestro keys reset: failed to read workflow snapshots: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    // Open the DB so we can clear the credential / audit / onboarding tables.
+    // Pass `allow_auto_generate_secret_key = false` here — we're about to
+    // rewrite the keyfile ourselves; we don't want Database::open creating
+    // a new one mid-reset.
+    let db = match maestro_core::db::Database::open(&data_dir, false) {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!(
+                "maestro keys reset: failed to open database at {}: {e}",
+                data_dir.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(e) = clear_credential_tables(&db) {
+        eprintln!("maestro keys reset: failed to clear credential tables: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    // Regenerate (or wipe) the master keyfile.
+    let keyfile = maestro_core::auth::master_key::keyfile_path(&data_dir);
+    let env_set = std::env::var("MAESTRO_SECRET_KEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    if env_set {
+        // Operator manages the master key via env var; we only nuked the rows.
+        // Don't touch the keyfile (if any) — it may not even exist. Warn so
+        // the operator knows to rotate the env var manually.
+        eprintln!(
+            "maestro keys reset: credential rows cleared. MAESTRO_SECRET_KEY is set — rotate it manually before bringing the server back up."
+        );
+    } else {
+        // Best-effort delete + regenerate.
+        let _ = std::fs::remove_file(&keyfile);
+        match maestro_core::auth::master_key::load_or_init_master_key(
+            &data_dir,
+            config.general.allow_auto_generate_secret_key,
+        ) {
+            Ok(_) => {
+                eprintln!(
+                    "maestro keys reset: credential rows cleared and {} regenerated.",
+                    keyfile.display()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "maestro keys reset: credential rows cleared but failed to regenerate {}: {e}",
+                    keyfile.display()
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Wipe every Phase 2a credential / audit / onboarding row. Caller has already
+/// opened the database and verified no workflows are in flight.
+fn clear_credential_tables(db: &maestro_core::db::Database) -> Result<(), Box<dyn std::error::Error>> {
+    // The CLI is sync; use `blocking_lock` on the tokio mutex (not inside an
+    // async runtime — fine per tokio's docs).
+    let conn = db.conn().blocking_lock();
+    let tx = conn.unchecked_transaction()?;
+    for table in [
+        "user_provider_credentials",
+        "user_github_credentials",
+        "credential_audit",
+        "onboarding_state",
+    ] {
+        tx.execute(&format!("DELETE FROM {table}"), [])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -335,6 +492,9 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some(Commands::Keys {
+            action: KeysAction::Reset { yes_i_am_sure },
+        }) => run_keys_reset(&cli.config, *yes_i_am_sure),
         None => match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -520,8 +680,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // (plan-08), and BEFORE poller construction so we can resolve the
     // poller-owner user_id and pass it into both pollers.
     let resolved_data_dir = maestro_core::workflow::snapshot::resolve_data_dir();
+    let allow_auto_generate_secret_key = config.read().await.general.allow_auto_generate_secret_key;
     let db = match resolved_data_dir.as_deref() {
-        Some(data_dir) => match maestro_core::db::Database::open(data_dir) {
+        Some(data_dir) => match maestro_core::db::Database::open(data_dir, allow_auto_generate_secret_key) {
             Ok(db) => {
                 info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized");
                 Some(db)
@@ -734,6 +895,32 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // Now that the DB has been opened (or not), set `per_user_required`. This
     // is the only mutation we make to the system_status after collection.
     system_status.per_user_required = db.is_some();
+
+    // Phase 2a: recompute SystemStatus with the DB in scope so master-key
+    // warnings (master_key_unavailable, secret_key_world_readable) join the
+    // existing config-derived warnings. We do this AFTER the
+    // `per_user_required` patch so the boot snapshot is complete.
+    if let Some(ref db) = db {
+        let refreshed = {
+            let cfg_snapshot = config.read().await;
+            docker_hooks::collect_system_status_with_db(&cfg_snapshot, Some(db))
+        };
+        // Preserve `per_user_required` (already computed) and merge the
+        // refreshed warnings + provider/github/ticketing struct.
+        let prior_per_user_required = system_status.per_user_required;
+        system_status = refreshed;
+        system_status.per_user_required = prior_per_user_required;
+        for w in &system_status.warnings {
+            if w.severity == "critical" {
+                tracing::warn!(
+                    code = %w.code,
+                    severity = %w.severity,
+                    "Phase 2a boot warning: {}",
+                    w.message
+                );
+            }
+        }
+    }
 
     // Config writer — only available when the config file path is known.
     let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());

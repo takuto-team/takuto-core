@@ -6,6 +6,7 @@ pub const VERSION: &str = include_str!("../../../VERSION");
 
 pub mod actions;
 pub mod agent_prompt;
+pub mod auth;
 pub mod claude;
 pub mod config;
 pub mod config_watcher;

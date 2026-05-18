@@ -698,9 +698,22 @@ pub struct GeneralConfig {
     /// the owner explicitly adds the repository.
     #[serde(default = "default_migrate_orphan_repo_associations")]
     pub migrate_orphan_repo_associations: bool,
+    /// Phase 2a (04_architecture.md §3.2): controls whether the server will
+    /// auto-generate `${data_dir}/secret.key` on first boot when neither
+    /// `MAESTRO_SECRET_KEY` nor an existing keyfile is present. Default
+    /// **`true`** so single-tenant + fresh installs Just Work. Set to `false`
+    /// in hardened environments where the operator wants to provision the
+    /// key out of band; the server then boots in degraded mode until the
+    /// keyfile or env var is provided.
+    #[serde(default = "default_allow_auto_generate_secret_key")]
+    pub allow_auto_generate_secret_key: bool,
 }
 
 fn default_migrate_orphan_repo_associations() -> bool {
+    true
+}
+
+fn default_allow_auto_generate_secret_key() -> bool {
     true
 }
 
@@ -998,6 +1011,7 @@ impl Default for GeneralConfig {
             poller_owner_username: None,
             migrate_orphan_workflows: false,
             migrate_orphan_repo_associations: default_migrate_orphan_repo_associations(),
+            allow_auto_generate_secret_key: default_allow_auto_generate_secret_key(),
         }
     }
 }

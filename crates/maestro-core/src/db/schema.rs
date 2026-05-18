@@ -6,8 +6,11 @@
 use crate::error::Result;
 
 /// Current schema version. Increment when adding new migrations.
-// v6 reserved for plan-03 audit log
-const SCHEMA_VERSION: i32 = 5;
+//
+// v6: Phase 2a — per-user provider credentials, GitHub PAT, credential audit,
+//     onboarding state (04_architecture.md §3.1).
+// v7+: next free slot (e.g. plan-03 audit_events when that lands).
+const SCHEMA_VERSION: i32 = 6;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS users (
@@ -203,6 +206,95 @@ CREATE TABLE user_repositories (
 CREATE INDEX idx_user_repositories_repo ON user_repositories(repository_id);
 "#;
 
+/// Phase 2a "per-user credentials foundation" migration.
+///
+/// Source of truth: tmp/multi-agents/04_architecture.md §3.1.
+///
+/// Four new tables:
+///
+/// - `user_provider_credentials` — sealed AI-provider credentials (Claude OAuth
+///   token, Cursor API key, Codex / OpenCode env-var keys). Envelope-encrypted
+///   per row: `ciphertext` is the AEAD-sealed plaintext; `wrapped_dek` is the
+///   per-row DEK sealed with the deployment master key. Both nonces are fresh
+///   24-byte random values. `inactive=1` after a deployment-wide provider
+///   switch (kept for audit + restore).
+///
+/// - `user_github_credentials` — per-user GitHub PAT. Same envelope shape;
+///   one row per user. `sign_commits` is the A3 commit-attribution toggle
+///   (the column name is kept for stability; the UI label is "Attribute
+///   commits to me" — NO GPG/SSH cryptographic signing in v1).
+///
+/// - `credential_audit` — append-only trail. `kind` discriminates between
+///   `ai_provider`, `github_pat`, and `cursor_session`. `actor_user_id` is
+///   nullable because system actions (cascade invalidate on provider switch)
+///   have no human actor.
+///
+/// - `onboarding_state` — admin onboarding wizard step state (FR-2.4).
+///   `completed_at` is set when the wizard is finished; clearing it triggers
+///   a re-entry.
+///
+/// All FKs cascade on `users.id` so deleting a user wipes their credential
+/// rows (Q12). Existing tables are untouched.
+const MIGRATION_V6: &str = r#"
+CREATE TABLE user_provider_credentials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    wrapped_dek BLOB NOT NULL,
+    wnonce BLOB NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    inactive INTEGER NOT NULL DEFAULT 0,
+    last_validated_at TEXT,
+    last_used_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    expires_at TEXT,
+    UNIQUE(user_id, provider, kind)
+);
+CREATE INDEX idx_user_provider_credentials_lookup
+    ON user_provider_credentials(user_id, provider, inactive);
+
+CREATE TABLE user_github_credentials (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    ciphertext BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    wrapped_dek BLOB NOT NULL,
+    wnonce BLOB NOT NULL,
+    github_login TEXT NOT NULL,
+    scopes_json TEXT NOT NULL,
+    sign_commits INTEGER NOT NULL DEFAULT 1,
+    last_validated_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE TABLE credential_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_user_id TEXT REFERENCES users(id),
+    kind TEXT NOT NULL,
+    provider TEXT,
+    event TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    error_code TEXT,
+    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+CREATE INDEX idx_credential_audit_user ON credential_audit(user_id, at);
+
+CREATE TABLE onboarding_state (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    step_1_ticketing TEXT,
+    step_2_provider TEXT,
+    step_3_github TEXT,
+    step_4_credentials TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+"#;
+
 /// Run all pending migrations. Idempotent — safe to call on every startup.
 pub fn run_migrations(conn: &rusqlite::Connection) -> Result<()> {
     // Create the migration tracking table if it doesn't exist.
@@ -256,6 +348,14 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> Result<()> {
         conn.execute(
             "INSERT INTO schema_migrations (version) VALUES (?1)",
             rusqlite::params![5],
+        )?;
+    }
+
+    if current_version < 6 {
+        conn.execute_batch(MIGRATION_V6)?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version) VALUES (?1)",
+            rusqlite::params![6],
         )?;
     }
 
@@ -658,7 +758,13 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 5);
+        // Phase 2a bumped SCHEMA_VERSION to 6; the v5 invariants still hold,
+        // we just chained one more migration on top.
+        assert!(
+            version >= 5,
+            "v5 invariants assume migrations have run at least through v5; got {version}"
+        );
+        assert_eq!(version, SCHEMA_VERSION);
 
         let tables: Vec<String> = {
             let mut stmt = conn
@@ -812,13 +918,15 @@ mod tests {
         assert!(ur_cols.iter().any(|c| c == "repository_id"));
         assert!(!ur_cols.iter().any(|c| c == "repo_url"));
 
-        // Version bumped to 5.
+        // Phase 2a chained v6 on top — just assert we reached the v5 line and
+        // landed on SCHEMA_VERSION.
         let version: i32 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 5);
+        assert!(version >= 5);
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     /// Plan-10: running `run_migrations` twice against a v5 DB is a no-op.
@@ -834,8 +942,8 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            rows, 5,
-            "expected exactly 5 migration rows (v1..v5); got {rows}"
+            rows as i32, SCHEMA_VERSION,
+            "expected exactly SCHEMA_VERSION ({SCHEMA_VERSION}) migration rows; got {rows}"
         );
 
         let new_table_exists: i64 = conn
@@ -848,13 +956,263 @@ mod tests {
         assert_eq!(new_table_exists, 1);
     }
 
-    /// Plan-10 G12: the comment at the top of `schema.rs` reserves the next
-    /// migration slot (v6) for plan-03's audit log. This test guards the
-    /// reservation by verifying that `SCHEMA_VERSION == 5` (so anyone bumping
-    /// to v6 has to also touch the reservation note).
+    /// Phase 2a AC: a fresh DB applies migrations through v6 and the new
+    /// credential / audit / onboarding tables exist with the expected columns.
     #[test]
-    fn v6_is_reserved_for_plan_03_audit_log() {
-        assert_eq!(SCHEMA_VERSION, 5, "if you bump SCHEMA_VERSION, move the 'reserved for plan-03 audit log' comment in schema.rs from v6 to the next slot");
+    fn fresh_db_applies_v6() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_migrations(&conn).unwrap();
+
+        let version: i32 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 6);
+
+        let tables: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        for t in [
+            "user_provider_credentials",
+            "user_github_credentials",
+            "credential_audit",
+            "onboarding_state",
+        ] {
+            assert!(
+                tables.contains(&t.to_string()),
+                "v6 must create table {t}; got: {tables:?}"
+            );
+        }
+
+        // user_provider_credentials columns.
+        let cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(user_provider_credentials)")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        for c in [
+            "id",
+            "user_id",
+            "provider",
+            "kind",
+            "ciphertext",
+            "nonce",
+            "wrapped_dek",
+            "wnonce",
+            "metadata_json",
+            "inactive",
+            "last_validated_at",
+            "last_used_at",
+            "created_at",
+            "updated_at",
+            "expires_at",
+        ] {
+            assert!(
+                cols.iter().any(|x| x == c),
+                "missing user_provider_credentials column {c}; got: {cols:?}"
+            );
+        }
+
+        // The lookup index is present.
+        let indexes: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name IN ('user_provider_credentials','credential_audit')")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(indexes
+            .iter()
+            .any(|i| i == "idx_user_provider_credentials_lookup"));
+        assert!(indexes.iter().any(|i| i == "idx_credential_audit_user"));
+
+        // sign_commits column exists with default 1 (A3 — commit attribution).
+        let gh_cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(user_github_credentials)")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(gh_cols.iter().any(|c| c == "sign_commits"));
+        assert!(gh_cols.iter().any(|c| c == "github_login"));
+        assert!(gh_cols.iter().any(|c| c == "scopes_json"));
+    }
+
+    /// Phase 2a: v5 → v6 upgrade keeps existing rows and adds the four new
+    /// tables. The migration is purely additive.
+    #[test]
+    fn v5_to_v6_upgrade_preserves_existing_rows_and_adds_credential_tables() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+
+        // Apply v1..v5 by hand and stamp the migration log at version 5 so
+        // the runner thinks it's resuming from a v5 install.
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            );",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATION_V1).unwrap();
+        conn.execute_batch(MIGRATION_V2).unwrap();
+        conn.execute_batch(MIGRATION_V3).unwrap();
+        conn.execute_batch(MIGRATION_V4).unwrap();
+        conn.execute_batch(MIGRATION_V5).unwrap();
+        for v in 1..=5 {
+            conn.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                rusqlite::params![v],
+            )
+            .unwrap();
+        }
+
+        // Pre-existing user row that must survive.
+        conn.execute(
+            "INSERT INTO users (id, username, role) VALUES ('u-pre', 'preexisting', 'admin')",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let users: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(users, 1);
+
+        // New tables exist and are empty.
+        for t in [
+            "user_provider_credentials",
+            "user_github_credentials",
+            "credential_audit",
+            "onboarding_state",
+        ] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{t} must exist and be empty");
+        }
+
+        let version: i32 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 6);
+    }
+
+    /// Phase 2a: deleting a user cascades to every credential / audit /
+    /// onboarding row (Q12).
+    #[test]
+    fn user_delete_cascades_to_phase_2a_tables() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_migrations(&conn).unwrap();
+
+        // Seed a user + one row in each new table.
+        conn.execute(
+            "INSERT INTO users (id, username, role) VALUES ('u1', 'alice', 'admin')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO user_provider_credentials \
+             (user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce) \
+             VALUES ('u1', 'claude', 'api_key', X'00', X'00', X'00', X'00')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO user_github_credentials \
+             (user_id, ciphertext, nonce, wrapped_dek, wnonce, github_login, scopes_json) \
+             VALUES ('u1', X'00', X'00', X'00', X'00', 'alice-gh', '[\"repo\"]')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO credential_audit \
+             (user_id, kind, event, outcome) \
+             VALUES ('u1', 'ai_provider', 'created', 'ok')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO onboarding_state (user_id) VALUES ('u1')",
+            [],
+        )
+        .unwrap();
+
+        // Cascade.
+        conn.execute("DELETE FROM users WHERE id='u1'", []).unwrap();
+
+        for t in [
+            "user_provider_credentials",
+            "user_github_credentials",
+            "credential_audit",
+            "onboarding_state",
+        ] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "FK cascade must drop {t} rows on user delete");
+        }
+    }
+
+    /// Phase 2a: `UNIQUE(user_id, provider, kind)` rejects duplicate
+    /// per-user-per-provider credential rows.
+    #[test]
+    fn user_provider_credentials_unique_constraint() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO users (id, username, role) VALUES ('u1', 'alice', 'admin')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO user_provider_credentials \
+             (user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce) \
+             VALUES ('u1', 'claude', 'api_key', X'00', X'00', X'00', X'00')",
+            [],
+        )
+        .unwrap();
+        let dup = conn.execute(
+            "INSERT INTO user_provider_credentials \
+             (user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce) \
+             VALUES ('u1', 'claude', 'api_key', X'01', X'01', X'01', X'01')",
+            [],
+        );
+        assert!(dup.is_err(), "UNIQUE(user_id, provider, kind) must reject");
+    }
+
+    /// Plan-10 G12 (carried forward to Phase 2a): when SCHEMA_VERSION is
+    /// bumped, the reservation comment at the top of `schema.rs` and any
+    /// per-slot integration tests must move forward too. The plan-03
+    /// `audit_events` table now slots into the next free slot (v7+); Phase 2a
+    /// owns v6 (per 04_architecture.md §0 D7).
+    #[test]
+    fn schema_version_matches_phase_assignment() {
+        assert_eq!(SCHEMA_VERSION, 6, "if you bump SCHEMA_VERSION, update the schema.rs header comment to record which feature owns the new slot");
     }
 
     /// Plan-02 carried over: a DB whose schema version is newer than the

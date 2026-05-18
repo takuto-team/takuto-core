@@ -142,7 +142,7 @@ async fn reconcile_then_backfill_e2e() {
     std::fs::create_dir_all(workspaces_dir.join("not-a-repo")).unwrap();
     std::fs::write(workspaces_dir.join("not-a-repo/README.md"), "hi").unwrap();
 
-    let db = Database::open(&data_dir).expect("open DB");
+    let db = Database::open(&data_dir, true).expect("open DB");
 
     let workspaces_dir_str = workspaces_dir.to_str().expect("utf-8");
 
@@ -268,7 +268,7 @@ async fn reconcile_then_backfill_e2e() {
 async fn backfill_skips_unmatched_workspaces() {
     let data_dir = fresh_data_dir("unmatched");
 
-    let db = Database::open(&data_dir).expect("open DB");
+    let db = Database::open(&data_dir, true).expect("open DB");
 
     // Register "alpha" only.
     let alice_id = {
@@ -317,7 +317,7 @@ async fn backfill_skips_unmatched_workspaces() {
 #[tokio::test]
 async fn backfill_skips_orphan_workflows() {
     let data_dir = fresh_data_dir("orphan");
-    let db = Database::open(&data_dir).expect("open DB");
+    let db = Database::open(&data_dir, true).expect("open DB");
 
     {
         let conn_arc = db.conn().clone();

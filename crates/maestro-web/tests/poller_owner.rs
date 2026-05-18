@@ -41,7 +41,7 @@ use maestro_web::test_helpers::register_and_login;
 /// from `{data_dir}/workspaces/*/workflow_snapshot.json` because
 /// `MAESTRO_DATA_DIR` is set to `data_dir` for the duration of the test.
 fn build_state(data_dir: &std::path::Path) -> AppState {
-    let db = Database::open(data_dir).expect("open temp DB");
+    let db = Database::open(data_dir, true).expect("open temp DB");
     let mut cfg = Config::default();
     // Point repo_path at the data dir so resolve_snapshot_dir falls back
     // there if MAESTRO_DATA_DIR somehow gets unset between Test A and Test B.

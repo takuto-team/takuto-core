@@ -23,6 +23,13 @@ getrandom = "0.3"
 rusqlite = { workspace = true }
 argon2 = { workspace = true }
 rand = { workspace = true }
+# Phase 2a: envelope encryption for per-user credentials. XChaCha20-Poly1305
+# wraps a fresh per-row DEK; the DEK is then sealed with the master key.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
+# Zero out DEKs and the master key on Drop.
+zeroize = { version = "1.7", default-features = false, features = ["zeroize_derive"] }
+# Decode the optional 64-char hex MAESTRO_SECRET_KEY env var.
+hex = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
