@@ -56,15 +56,14 @@ export function clearMocksOverride(): void {
  * Starting fixture. Each call to `resetMocks()` deep-clones this so stories
  * can mutate state freely without leaking into the next render.
  */
+/**
+ * Starting fixture. `github: null` mirrors the backend's `Option<>` shape —
+ * a missing PAT is represented as a null sub-object, NOT an object with
+ * `has_pat: false`. See routes/credentials.rs::UserCredentialsStatus.
+ */
 const DEFAULT_STATE: UserCredentialsStatus = {
   provider: null,
-  github: {
-    has_pat: false,
-    login: null,
-    scopes: [],
-    attribute_commits: true,
-    mode: "missing",
-  },
+  github: null,
 };
 
 let state: UserCredentialsStatus = clone(DEFAULT_STATE);
@@ -139,30 +138,35 @@ export function mockSetGithubPat(body: SetGithubPatRequest): Response {
       message: "PAT cannot be empty.",
     });
   }
+  // Wire-format note: mirrors routes/credentials.rs::GithubCredentialStatus.
+  // `mode` is NOT here — it lives on /api/auth/status::github_mode.
   state.github = {
-    has_pat: true,
     login: "mock-user",
     scopes: ["repo", "read:org"],
     attribute_commits: body.attribute_commits ?? true,
-    mode: "app_plus_pat",
+    last_validated_at: new Date().toISOString(),
   };
   return jsonResponse(200, state);
 }
 
 export function mockDeleteGithubPat(): Response {
-  state.github = {
-    has_pat: false,
-    login: null,
-    scopes: [],
-    attribute_commits: true,
-    mode: "missing",
-  };
+  // Deleting a PAT collapses the github sub-object to null (matches the
+  // backend's Option<...> wire shape).
+  state.github = null;
   return jsonResponse(200, state);
 }
 
 export function mockPatchGithubSettings(
   body: PatchGithubSettingsRequest,
 ): Response {
+  if (!state.github) {
+    // PATCHing the toggle without a stored PAT is a 404 in the real
+    // backend (the row doesn't exist yet) — surface that here too.
+    return jsonResponse(404, {
+      error: "not_found",
+      message: "No GitHub PAT to update.",
+    });
+  }
   state.github.attribute_commits = body.attribute_commits;
   return jsonResponse(200, state);
 }

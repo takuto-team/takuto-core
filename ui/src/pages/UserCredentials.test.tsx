@@ -44,8 +44,11 @@ function renderPage() {
  * intercept ONLY that URL and let the mock layer answer the credential
  * endpoints — so the rest of the page renders against the documented
  * contract, not raw fetch mocks.
+ *
+ * `githubMode` parameterises the effective GitHub mode (per #29 it lives on
+ * /api/auth/status, NOT on the per-user credentials response).
  */
-function stubAuthStatus(provider: string) {
+function stubAuthStatus(provider: string, githubMode: string = "app") {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string) => {
@@ -56,7 +59,7 @@ function stubAuthStatus(provider: string) {
             multi_user: true,
             setup_required: false,
             provider_selected: provider,
-            github_mode: "app",
+            github_mode: githubMode,
             degraded: false,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -69,15 +72,14 @@ function stubAuthStatus(provider: string) {
   );
 }
 
+/**
+ * Baseline status: no provider credential, no GitHub PAT. `github: null`
+ * matches the backend's `Option<GithubCredentialStatus>` wire shape (see
+ * routes/credentials.rs::UserCredentialsStatus).
+ */
 const BLANK_STATUS: UserCredentialsStatus = {
   provider: null,
-  github: {
-    has_pat: false,
-    login: null,
-    scopes: [],
-    attribute_commits: true,
-    mode: "app",
-  },
+  github: null,
 };
 
 beforeEach(() => {
@@ -135,13 +137,8 @@ describe("UserCredentials — wire-format regression (#28)", () => {
         last_validated_at: "2026-05-19T08:00:00Z",
         last_used_at: null,
       },
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // GitHub absent — `null` matches the backend's Option<> wire shape.
+      github: null,
     });
     renderPage();
 
@@ -177,13 +174,8 @@ describe("UserCredentials — wire-format regression (#28)", () => {
         last_validated_at: "2026-05-19T08:00:00Z",
         last_used_at: null,
       },
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // GitHub absent — `null` matches the backend's Option<> wire shape.
+      github: null,
     });
     renderPage();
     await waitFor(() => {
@@ -194,17 +186,82 @@ describe("UserCredentials — wire-format regression (#28)", () => {
   });
 });
 
-describe("UserCredentials — A3 regression (Attribute commits, not Sign commits)", () => {
-  it("renders the toggle as 'Attribute commits to me' and never says 'Sign commits'", async () => {
-    stubAuthStatus("claude");
+describe("UserCredentials — wire-format regression #29 (GitHub side)", () => {
+  it("renders 'Connected' on the GitHub card when github = { login, scopes, attribute_commits, last_validated_at } (real wire shape)", async () => {
+    stubAuthStatus("claude", "app_plus_pat");
+    // Hard-coded from `routes/credentials.rs::GithubCredentialStatus` (no
+    // `has_pat`, no `mode`). The presence of the row means hasPat = true;
+    // the effective mode comes from /api/auth/status::github_mode.
     resetMocks({
       provider: null,
       github: {
-        has_pat: true,
+        login: "alice",
+        scopes: ["repo", "read:org"],
+        attribute_commits: true,
+        last_validated_at: "2026-05-19T08:00:00Z",
+      },
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
+    });
+    // Scope to the GitHub section so we don't pick up the AI card's pill.
+    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
+    expect(ghSection).toBeTruthy();
+    expect(within(ghSection!).getByText(/^Connected$/i)).toBeTruthy();
+    expect(within(ghSection!).queryByText(/^Not connected$/i)).toBeNull();
+    // The login should also be surfaced — confirms the panel rendered the
+    // PAT-present branch, not the "no PAT" CTA.
+    expect(within(ghSection!).getByText(/alice/)).toBeTruthy();
+  });
+
+  it("renders 'Not connected' on the GitHub card when github = null in PAT-only mode", async () => {
+    // Mode C: no shared App, no user PAT → must show "Not connected".
+    stubAuthStatus("claude", "pat_only");
+    resetMocks({
+      provider: null,
+      github: null,
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
+    });
+    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
+    expect(within(ghSection!).getByText(/^Not connected$/i)).toBeTruthy();
+  });
+
+  it("renders 'Connected' (App-only path) when github = null but mode is 'app'", async () => {
+    // Mode A: shared App handles everything → the pill should still read
+    // "Connected" because Maestro can talk to GitHub via the App. This
+    // preserves the pre-existing logic in describeMode().
+    stubAuthStatus("claude", "app");
+    resetMocks({
+      provider: null,
+      github: null,
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
+    });
+    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
+    expect(within(ghSection!).getByText(/^Connected$/i)).toBeTruthy();
+  });
+});
+
+describe("UserCredentials — A3 regression (Attribute commits, not Sign commits)", () => {
+  it("renders the toggle as 'Attribute commits to me' and never says 'Sign commits'", async () => {
+    stubAuthStatus("claude", "app_plus_pat");
+    resetMocks({
+      provider: null,
+      // Wire shape: no `has_pat`, no `mode` — see #29.
+      github: {
         login: "alice",
         scopes: ["repo"],
         attribute_commits: true,
-        mode: "app_plus_pat",
+        last_validated_at: "2026-05-19T08:00:00Z",
       },
     });
     renderPage();

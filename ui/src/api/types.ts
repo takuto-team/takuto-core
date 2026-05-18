@@ -356,6 +356,11 @@ export interface UserProviderCredentialStatus {
   last_used_at: string | null;
 }
 
+/**
+ * Possible effective GitHub auth modes for the deployment + user pair. This
+ * value lives on `/api/auth/status::github_mode` — the per-user credential
+ * status returned by `/api/users/me/credentials` does NOT carry it.
+ */
 export type GithubAuthMode =
   | "app"
   | "app_plus_pat"
@@ -363,20 +368,29 @@ export type GithubAuthMode =
   | "pat_required"
   | "missing";
 
+/**
+ * Per-user GitHub credential. Matches the wire shape returned by
+ * `crates/maestro-web/src/routes/credentials.rs::GithubCredentialStatus`
+ * — do NOT add fields without also updating the Rust struct.
+ *
+ * The presence of a PAT is implied by the parent's `github` field being
+ * non-null (the backend wraps this in `Option<...>`). There is no `has_pat`
+ * here, and `mode` lives on `/api/auth/status::github_mode`, not here.
+ */
 export interface UserGithubCredentialStatus {
-  has_pat: boolean;
-  login: string | null;
+  login: string;
   scopes: string[];
   /** A3: per-user toggle that sets `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env vars
    *  on the worker. NOT GPG/SSH signing. */
   attribute_commits: boolean;
-  mode: GithubAuthMode;
+  last_validated_at: string | null;
 }
 
 export interface UserCredentialsStatus {
   /** `null` when the user has not yet captured a provider credential. */
   provider: UserProviderCredentialStatus | null;
-  github: UserGithubCredentialStatus;
+  /** `null` when the user has not captured a PAT (App-only / missing mode). */
+  github: UserGithubCredentialStatus | null;
 }
 
 /** Body for `POST /api/users/me/credentials/{provider}`. Cursor is A1 — the

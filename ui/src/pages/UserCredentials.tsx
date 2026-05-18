@@ -207,17 +207,29 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
               authMode={auth?.github_mode as GithubAuthMode | undefined}
               onSavePat={async (pat, attribute) => {
                 try {
-                  const next = await setGithubPat({ pat, attribute_commits: attribute });
-                  setCreds((prev) => (prev ? { ...prev, github: next.github } : next));
-                  showToast(`GitHub token saved — you're @${next.github.login}.`, "success");
+                  // Capture login from the response *before* re-fetching so
+                  // we can use it in the success toast. The refresh() call
+                  // refreshes both `creds.github` and `auth.github_mode`
+                  // (which flips app → app_plus_pat once the PAT lands).
+                  const next = await setGithubPat({
+                    pat,
+                    attribute_commits: attribute,
+                  });
+                  await refresh();
+                  showToast(
+                    `GitHub token saved — you're @${next.github?.login ?? "?"}.`,
+                    "success",
+                  );
                 } catch (e: unknown) {
                   handleSurfaceError(e, "Could not save your GitHub token.");
                 }
               }}
               onRemovePat={async () => {
                 try {
-                  const next = await deleteGithubPat();
-                  setCreds((prev) => (prev ? { ...prev, github: next.github } : next));
+                  await deleteGithubPat();
+                  // Refresh both creds (github → null) AND auth.github_mode
+                  // (app_plus_pat → app, or pat_only → pat_required, etc.).
+                  await refresh();
                   showToast("GitHub token removed.", "info");
                 } catch (e: unknown) {
                   handleSurfaceError(e, "Could not remove your GitHub token.");
@@ -225,8 +237,8 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
               }}
               onToggleAttributeCommits={async (attribute) => {
                 try {
-                  const next = await patchGithubSettings({ attribute_commits: attribute });
-                  setCreds((prev) => (prev ? { ...prev, github: next.github } : next));
+                  await patchGithubSettings({ attribute_commits: attribute });
+                  await refresh();
                 } catch (e: unknown) {
                   handleSurfaceError(e, "Could not update GitHub settings.");
                 }
@@ -402,8 +414,12 @@ function GitHubCredentialPanel({
     setAttribute(github?.attribute_commits ?? true);
   }, [github?.attribute_commits]);
 
-  const effectiveMode = github?.mode ?? authMode ?? "missing";
-  const hasPat = github?.has_pat ?? false;
+  // Wire-format note: presence of a PAT is derived from the parent's
+  // `github` field being non-null. The backend never returns `has_pat` —
+  // see `routes/credentials.rs::GithubCredentialStatus`. The effective mode
+  // lives on `/api/auth/status::github_mode`.
+  const hasPat = github != null;
+  const effectiveMode = authMode ?? "missing";
 
   const submit = async () => {
     setSaving(true);

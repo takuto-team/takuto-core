@@ -62,13 +62,10 @@ export const ClaudeMissing: Story = {
   decorators: [
     withMocks({
       provider: null,
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // Wire-format note: a missing PAT is `github: null` per
+      // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
+      // page reads the effective mode from /api/auth/status::github_mode.
+      github: null,
     }),
   ],
 };
@@ -84,13 +81,10 @@ export const ClaudeConnected: Story = {
         last_validated_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
         last_used_at: null,
       },
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // Wire-format note: a missing PAT is `github: null` per
+      // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
+      // page reads the effective mode from /api/auth/status::github_mode.
+      github: null,
     }),
   ],
 };
@@ -100,13 +94,10 @@ export const CursorMissingNoTtydCopy: Story = {
   decorators: [
     withMocks({
       provider: null,
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // Wire-format note: a missing PAT is `github: null` per
+      // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
+      // page reads the effective mode from /api/auth/status::github_mode.
+      github: null,
     }),
   ],
   // The mock layer surfaces provider_selected via /api/auth/status which the
@@ -123,13 +114,10 @@ export const CodexPhase4Placeholder: Story = {
   decorators: [
     withMocks({
       provider: null,
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // Wire-format note: a missing PAT is `github: null` per
+      // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
+      // page reads the effective mode from /api/auth/status::github_mode.
+      github: null,
     }),
   ],
 };
@@ -141,13 +129,10 @@ export const GitHubAppOnly: Story = {
   decorators: [
     withMocks({
       provider: null,
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // Wire-format note: a missing PAT is `github: null` per
+      // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
+      // page reads the effective mode from /api/auth/status::github_mode.
+      github: null,
     }),
   ],
 };
@@ -157,12 +142,12 @@ export const GitHubAppPlusPat: Story = {
   decorators: [
     withMocks({
       provider: null,
+      // Wire-format note: `mode` lives on /api/auth/status, not here.
       github: {
-        has_pat: true,
         login: "alice-gh",
         scopes: ["repo", "read:org"],
         attribute_commits: true,
-        mode: "app_plus_pat",
+        last_validated_at: new Date().toISOString(),
       },
     }),
   ],
@@ -174,11 +159,10 @@ export const GitHubPatOnly: Story = {
     withMocks({
       provider: null,
       github: {
-        has_pat: true,
         login: "alice-gh",
         scopes: ["repo"],
         attribute_commits: false,
-        mode: "pat_only",
+        last_validated_at: new Date().toISOString(),
       },
     }),
   ],
@@ -192,13 +176,7 @@ export const SsoRequiredToast: Story = {
     withMocks(
       {
         provider: null,
-        github: {
-          has_pat: false,
-          login: null,
-          scopes: [],
-          attribute_commits: true,
-          mode: "app",
-        },
+        github: null,
       },
       () =>
         setNextFailure({
@@ -220,13 +198,10 @@ export const ProviderMismatch: Story = {
         last_validated_at: new Date().toISOString(),
         last_used_at: null,
       },
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // Wire-format note: a missing PAT is `github: null` per
+      // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
+      // page reads the effective mode from /api/auth/status::github_mode.
+      github: null,
     }),
   ],
 };

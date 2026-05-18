@@ -157,13 +157,9 @@ describe("per-user credentials client", () => {
         last_validated_at: "2026-01-01T00:00:00Z",
         last_used_at: null,
       },
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "app",
-      },
+      // Wire shape: no `has_pat` / `mode` on the per-user response; a
+      // missing PAT is represented as `github: null` (Option<>).
+      github: null,
     };
     mockFetch(200, status);
     const got = await fetchUserCredentials();
@@ -231,14 +227,15 @@ describe("per-user credentials client", () => {
   });
 
   it("setGithubPat threads attribute_commits through the body", async () => {
+    // Wire shape: github sub-object has only { login, scopes,
+    // attribute_commits, last_validated_at } — no `has_pat`, no `mode`.
     const status = {
       provider: null,
       github: {
-        has_pat: true,
         login: "alice",
         scopes: ["repo"],
         attribute_commits: false,
-        mode: "app_plus_pat",
+        last_validated_at: "2026-05-19T08:00:00Z",
       },
     };
     mockFetch(200, status);
@@ -278,15 +275,11 @@ describe("per-user credentials client", () => {
   });
 
   it("deleteGithubPat DELETEs /api/users/me/github-pat and returns the fresh status", async () => {
+    // After delete, the github row is gone — wire shape uses null, not an
+    // object with `has_pat: false` (#29 alignment).
     const status = {
       provider: null,
-      github: {
-        has_pat: false,
-        login: null,
-        scopes: [],
-        attribute_commits: true,
-        mode: "missing",
-      },
+      github: null,
     };
     mockFetch(200, status);
     const got = await deleteGithubPat();
@@ -301,11 +294,10 @@ describe("per-user credentials client", () => {
     const status = {
       provider: null,
       github: {
-        has_pat: true,
         login: "alice",
         scopes: ["repo"],
         attribute_commits: false,
-        mode: "app_plus_pat",
+        last_validated_at: "2026-05-19T08:00:00Z",
       },
     };
     mockFetch(200, status);
@@ -323,7 +315,9 @@ describe("per-user credentials client", () => {
     const got = await fetchUserCredentials();
     // Real fetch must NOT have been called — mock layer answered.
     expect(fetch).not.toHaveBeenCalled();
-    expect(got.github.mode).toBe("missing");
+    // The fresh mock state has no PAT — `github` is null per the new
+    // wire shape (#29).
+    expect(got.github).toBeNull();
     clearMocksOverride();
   });
 });
