@@ -1914,6 +1914,7 @@ mod tests {
             forwarded_port: Some((container_port, host_port)),
             pr_merged: None,
             user_id: None,
+            ..Default::default()
         }
     }
 

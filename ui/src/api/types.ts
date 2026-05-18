@@ -81,6 +81,110 @@ export interface WorkflowEvent {
   forwarded_port?: [number, number];
   pr_merged?: boolean;
   workflow_def_name?: string;
+  /**
+   * Auth-overhaul Phase 1: `provider_changed` events carry from/to instead of
+   * workflow fields (which are sent empty). 04_architecture.md §2.3.
+   */
+  from?: string;
+  to?: string;
+  affected_users?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Agent config (Phase 1 — auth-overhaul).
+//
+// Mirrors the Rust sub-tables in tmp/multi-agents/04_architecture.md §2.2.
+// Each provider table is its own interface so callers can patch a single
+// provider without bloating the parent type. All fields are optional in the
+// patch shapes so a `PUT /api/config/agent` body can carry deltas.
+// ---------------------------------------------------------------------------
+
+/** Identifier of a v1 AI provider, plus the v2 placeholder + "none" disable. */
+export type AgentProviderId =
+  | "claude"
+  | "cursor"
+  | "codex"
+  | "opencode"
+  | "gemini"
+  | "none";
+
+/** Common shape: every provider has `model`, `extra_args`, `allow_shared_default`. */
+interface AgentProviderConfigBase {
+  model: string;
+  extra_args: string[];
+  allow_shared_default: boolean;
+}
+
+export interface AgentClaudeConfig extends AgentProviderConfigBase {
+  base_url: string;
+}
+
+/**
+ * Cursor's CLI does not support custom upstream endpoints (amendment A1 in
+ * 04_architecture.md). The `base_url` field is intentionally absent here so
+ * the dashboard never lets an admin set one.
+ */
+export interface AgentCursorConfig extends AgentProviderConfigBase {
+  cli: string;
+}
+
+export interface AgentCodexConfig extends AgentProviderConfigBase {
+  /** Named entry in `~/.codex/config.toml [model_providers]`. */
+  provider_name: string;
+  base_url: string;
+}
+
+export interface AgentOpenCodeConfig extends AgentProviderConfigBase {
+  base_url: string;
+}
+
+export interface AgentGeminiConfig extends AgentProviderConfigBase {
+  base_url: string;
+}
+
+export interface AgentProvidersConfig {
+  claude?: AgentClaudeConfig;
+  cursor?: AgentCursorConfig;
+  codex?: AgentCodexConfig;
+  opencode?: AgentOpenCodeConfig;
+  gemini?: AgentGeminiConfig;
+}
+
+/** Top-level [agent] table as returned by `GET /api/config`. */
+export interface AgentConfig {
+  provider: AgentProviderId;
+  available_providers: AgentProviderId[];
+  step_timeout_secs?: number;
+  improve_timeout_secs?: number;
+  providers: AgentProvidersConfig;
+  /** Forward-compat for unknown fields surfaced by older / newer servers. */
+  [key: string]: unknown;
+}
+
+// --- Patch shapes -----------------------------------------------------------
+
+/** Partial provider patch: only the keys the admin actually changed. */
+export type AgentClaudeConfigPatch = Partial<AgentClaudeConfig>;
+export type AgentCursorConfigPatch = Partial<AgentCursorConfig>;
+export type AgentCodexConfigPatch = Partial<AgentCodexConfig>;
+export type AgentOpenCodeConfigPatch = Partial<AgentOpenCodeConfig>;
+
+export interface AgentProvidersConfigPatch {
+  claude?: AgentClaudeConfigPatch;
+  cursor?: AgentCursorConfigPatch;
+  codex?: AgentCodexConfigPatch;
+  opencode?: AgentOpenCodeConfigPatch;
+}
+
+/**
+ * Body for `PUT /api/config/agent`. All fields optional — the server treats
+ * absent keys as "leave alone" and rejects unknown keys via
+ * `deny_unknown_fields` (04_architecture.md §2.3).
+ */
+export interface AgentConfigPatch {
+  provider?: AgentProviderId;
+  available_providers?: AgentProviderId[];
+  providers?: AgentProvidersConfigPatch;
 }
 
 export interface ConfigResponse {
@@ -92,7 +196,13 @@ export interface ConfigResponse {
     ticketing_system: string;
     [key: string]: unknown;
   };
-  agent?: {
+  /**
+   * Phase 1 (auth-overhaul) populates this with the full sub-table shape.
+   * Pre-Phase-1 servers send only `improve_timeout_secs` and the agent table
+   * may be absent altogether — hence the optional. Callers that need the
+   * structured shape should also tolerate a partial / undefined value.
+   */
+  agent?: Partial<AgentConfig> & {
     improve_timeout_secs?: number;
     [key: string]: unknown;
   };

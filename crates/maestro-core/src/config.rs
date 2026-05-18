@@ -10,12 +10,50 @@ use serde::{Deserialize, Serialize};
 use crate::error::{MaestroError, Result};
 
 /// Which CLI implements ticket implementation / review / fix steps.
+///
+/// Phase 1 (04_architecture.md §0 D1, A1, A2): four native adapters in v1.
+/// `Claude` and `Cursor` are wired today; `Codex` and `OpenCode` are enum
+/// placeholders only — workflow execution against them fails with a clear
+/// "not yet implemented (Phase 4)" error.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AiAgentProvider {
     #[default]
     Claude,
     Cursor,
+    Codex,
+    OpenCode,
+}
+
+impl AiAgentProvider {
+    /// Stable lowercase identifier matching the TOML serde representation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AiAgentProvider::Claude => "claude",
+            AiAgentProvider::Cursor => "cursor",
+            AiAgentProvider::Codex => "codex",
+            AiAgentProvider::OpenCode => "opencode",
+        }
+    }
+
+    /// Parse from the lowercase TOML / API identifier.
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "claude" => Ok(AiAgentProvider::Claude),
+            "cursor" => Ok(AiAgentProvider::Cursor),
+            "codex" => Ok(AiAgentProvider::Codex),
+            "opencode" => Ok(AiAgentProvider::OpenCode),
+            other => Err(MaestroError::Config(format!(
+                "unknown agent provider \"{other}\" (expected one of: claude, cursor, codex, opencode)"
+            ))),
+        }
+    }
+
+    /// `true` for providers whose runtime adapter is wired in v1. `Codex` and
+    /// `OpenCode` are config-only until Phase 4.
+    pub fn is_runtime_implemented(self) -> bool {
+        matches!(self, AiAgentProvider::Claude | AiAgentProvider::Cursor)
+    }
 }
 
 /// Which ticketing system (if any) drives workflow automation.
@@ -45,10 +83,13 @@ impl fmt::Display for TicketingSystem {
 pub struct AgentConfig {
     #[serde(default)]
     pub provider: AiAgentProvider,
-    /// Cursor Agent CLI executable (install script usually provides `agent` on PATH).
+    /// **Deprecated (Phase 1)**: legacy top-level Cursor CLI binary. Moved to
+    /// `[agent.providers.cursor].cli`. Still parsed for one release; migrated
+    /// at load time and overwritten on next save (see `Config::load`).
     #[serde(default = "default_cursor_cli")]
     pub cursor_cli: String,
-    /// Cursor Agent `--model`. Default `"Auto"` requests Cursor automatic model selection.
+    /// **Deprecated (Phase 1)**: legacy top-level Cursor model. Moved to
+    /// `[agent.providers.cursor].model`. Migrated at load time.
     #[serde(default = "default_cursor_model")]
     pub cursor_model: String,
     /// Timeout per agent session (applies to all providers).
@@ -57,9 +98,132 @@ pub struct AgentConfig {
     /// Timeout in seconds for "Improve with AI" / "Prompt ticket" sessions. Default 300.
     #[serde(default = "default_improve_timeout")]
     pub improve_timeout_secs: u64,
-    /// Model override (e.g. `"claude-opus-4-6"`). Empty = provider default.
+    /// **Deprecated (Phase 1)**: legacy top-level model. Moved to
+    /// `[agent.providers.<active>].model`. Migrated at load time.
     #[serde(default)]
     pub model: String,
+    /// Phase 1: per-provider sub-tables (`[agent.providers.<name>]`). Defaults
+    /// are used when the TOML section is missing.
+    #[serde(default)]
+    pub providers: AgentProvidersConfig,
+    /// Phase 1: admin's whitelist of providers users may authenticate against.
+    /// Empty = only the active provider is offered. Defaults to all v1
+    /// providers (`["claude", "cursor", "codex", "opencode"]`).
+    #[serde(default = "default_available_providers")]
+    pub available_providers: Vec<String>,
+}
+
+fn default_available_providers() -> Vec<String> {
+    vec![
+        "claude".to_string(),
+        "cursor".to_string(),
+        "codex".to_string(),
+        "opencode".to_string(),
+    ]
+}
+
+/// Per-provider config sub-tables. Each provider has its own struct because
+/// the fields diverge (Cursor has `cli`, Codex has `provider_name`, …).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentProvidersConfig {
+    pub claude: AgentProviderConfig,
+    pub cursor: CursorProviderConfig,
+    pub codex: CodexProviderConfig,
+    pub opencode: AgentProviderConfig,
+}
+
+/// Generic provider sub-table (Claude, OpenCode, future Gemini).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentProviderConfig {
+    /// Model override; empty = vendor default.
+    #[serde(default)]
+    pub model: String,
+    /// Custom OpenAI/Anthropic-compatible base URL; empty = vendor default.
+    #[serde(default)]
+    pub base_url: String,
+    /// Extra CLI flags passed to the provider binary. Validated against a
+    /// deny-list of Maestro-owned flags (see [`DENIED_EXTRA_ARG_FLAGS`]).
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    /// `true` lets users without a personal credential fall back to the
+    /// deployment-default env-var token. Default OFF on fresh installs
+    /// (04_architecture.md §0 D6).
+    #[serde(default)]
+    pub allow_shared_default: bool,
+}
+
+/// Cursor provider sub-table — diverges from the generic shape because it
+/// carries a CLI binary name and **no** `base_url` (amendment A1: Cursor's
+/// CLI does not support custom endpoints).
+///
+/// All fields default to **empty / false** (not the runtime defaults like
+/// `"agent"` and `"Auto"`). The "empty" sentinel is meaningful: at load time
+/// `migrate_legacy_flat_fields` only copies the legacy `[agent].cursor_cli`
+/// into the sub-table when this field is empty, and `effective_cursor_cli`
+/// falls back to the legacy field's `default_cursor_cli()` when the
+/// sub-table is empty. This lets us distinguish "operator did not configure
+/// the sub-table at all" from "operator explicitly set `cli = \"\"`" (the
+/// latter is a config error caught by `validate`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CursorProviderConfig {
+    #[serde(default)]
+    pub cli: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub allow_shared_default: bool,
+    /// Phase 1 (06_qa_and_blind_spots.md §A.4 T-CFG-002, amendment A1): Cursor's
+    /// CLI does not support custom endpoints. The field is accepted (so legacy
+    /// configs parse) but `Config::validate()` refuses any non-empty value with
+    /// a stable, user-visible error so the operator removes it.
+    #[serde(default)]
+    pub base_url: String,
+}
+
+/// Codex provider sub-table — adds `provider_name` (the named entry in
+/// `~/.codex/config.toml [model_providers]`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CodexProviderConfig {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub provider_name: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub allow_shared_default: bool,
+}
+
+/// Flags Maestro owns and clients must not override via `extra_args`.
+/// Source: 04_architecture.md §0 D10. Adding to this list is a breaking change
+/// for any operator who set the flag in their config and must be coordinated
+/// with the release notes.
+pub const DENIED_EXTRA_ARG_FLAGS: &[&str] = &[
+    "--dangerously-skip-permissions",
+    "--output-format",
+    "--resume",
+    "--print",
+    "--verbose",
+    "-p",
+];
+
+/// Return `Err` when `args` contains any flag from [`DENIED_EXTRA_ARG_FLAGS`].
+/// Matches whole tokens; `--max-turns` is fine even though `--print` is denied.
+pub fn validate_extra_args(args: &[String]) -> Result<()> {
+    for a in args {
+        let tok = a.trim();
+        if DENIED_EXTRA_ARG_FLAGS.contains(&tok) {
+            return Err(MaestroError::Config(format!(
+                "extra_args_denied: flag \"{tok}\" is reserved by Maestro and cannot be set via [agent.providers.*].extra_args"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn default_improve_timeout() -> u64 {
@@ -96,7 +260,95 @@ impl Default for AgentConfig {
             step_timeout_secs: default_step_timeout(),
             improve_timeout_secs: default_improve_timeout(),
             model: String::new(),
+            providers: AgentProvidersConfig::default(),
+            available_providers: default_available_providers(),
         }
+    }
+}
+
+impl AgentConfig {
+    /// Phase 1 migration (04_architecture.md §8): copy values from the legacy
+    /// flat `[agent].cursor_cli` / `cursor_model` / `model` fields into the
+    /// new `[agent.providers.<name>]` sub-tables when the sub-table key is
+    /// empty. Idempotent — running it twice produces the same result.
+    ///
+    /// Emits a `tracing::warn!` per migrated key. The file is **not** rewritten
+    /// at load time; the next save via `ConfigWriter` writes the new shape.
+    pub fn migrate_legacy_flat_fields(&mut self) {
+        // Cursor: flat cursor_cli → providers.cursor.cli. Migrate when the
+        // sub-table is empty AND the legacy field carries a non-default
+        // value. The legacy default ("agent") is also `effective_cursor_cli`'s
+        // fallback when the sub-table is empty, so skipping migration in
+        // that case keeps the on-disk shape minimal.
+        if self.providers.cursor.cli.trim().is_empty()
+            && !self.cursor_cli.trim().is_empty()
+            && self.cursor_cli != default_cursor_cli()
+        {
+            tracing::warn!(
+                from = "agent.cursor_cli",
+                to = "agent.providers.cursor.cli",
+                "config: legacy field migrated to [agent.providers.cursor]"
+            );
+            self.providers.cursor.cli = self.cursor_cli.clone();
+        }
+        // Cursor: flat cursor_model → providers.cursor.model.
+        if self.providers.cursor.model.trim().is_empty()
+            && !self.cursor_model.trim().is_empty()
+            && self.cursor_model != default_cursor_model()
+        {
+            tracing::warn!(
+                from = "agent.cursor_model",
+                to = "agent.providers.cursor.model",
+                "config: legacy field migrated to [agent.providers.cursor]"
+            );
+            self.providers.cursor.model = self.cursor_model.clone();
+        }
+        // Generic model: flat agent.model → providers.<active>.model.
+        if !self.model.trim().is_empty() {
+            let dest = match self.provider {
+                AiAgentProvider::Claude => &mut self.providers.claude.model,
+                AiAgentProvider::Cursor => &mut self.providers.cursor.model,
+                AiAgentProvider::Codex => &mut self.providers.codex.model,
+                AiAgentProvider::OpenCode => &mut self.providers.opencode.model,
+            };
+            if dest.trim().is_empty() {
+                tracing::warn!(
+                    from = "agent.model",
+                    to = "agent.providers.<active>.model",
+                    provider = %self.provider.as_str(),
+                    "config: legacy field migrated to active provider sub-table"
+                );
+                *dest = self.model.clone();
+            }
+        }
+    }
+
+    /// Return the effective Cursor CLI binary, preferring the sub-table value
+    /// when non-empty, then the legacy flat field, then the hard-coded default.
+    pub fn effective_cursor_cli(&self) -> &str {
+        let sub = self.providers.cursor.cli.trim();
+        if !sub.is_empty() {
+            return &self.providers.cursor.cli;
+        }
+        let legacy = self.cursor_cli.trim();
+        if !legacy.is_empty() {
+            return &self.cursor_cli;
+        }
+        "agent"
+    }
+
+    /// Return the effective Cursor model, preferring the sub-table value
+    /// when non-empty, then the legacy flat field, then the hard-coded default.
+    pub fn effective_cursor_model(&self) -> &str {
+        let sub = self.providers.cursor.model.trim();
+        if !sub.is_empty() {
+            return &self.providers.cursor.model;
+        }
+        let legacy = self.cursor_model.trim();
+        if !legacy.is_empty() {
+            return &self.cursor_model;
+        }
+        "Auto"
     }
 }
 
@@ -866,6 +1118,9 @@ impl Config {
         warn_legacy_command_keys(toml_content);
         let mut config: Config = toml::from_str(toml_content)?;
         config.web.normalize_cors_origins();
+        // Phase 1: migrate legacy flat [agent] keys into the new sub-tables
+        // before validation so validation sees the post-migration shape.
+        config.agent.migrate_legacy_flat_fields();
         config.validate()?;
         Ok(config)
     }
@@ -879,6 +1134,8 @@ impl Config {
         warn_legacy_command_keys(&content);
         let mut config: Config = toml::from_str(&content)?;
         config.web.normalize_cors_origins();
+        // Phase 1: migrate legacy flat [agent] keys into the new sub-tables.
+        config.agent.migrate_legacy_flat_fields();
         config.validate()?;
         Ok(config)
     }
@@ -966,11 +1223,40 @@ impl Config {
             ));
         }
 
-        if self.agent.provider == AiAgentProvider::Cursor && self.agent.cursor_cli.trim().is_empty()
+        if self.agent.provider == AiAgentProvider::Cursor
+            && self.agent.effective_cursor_cli().trim().is_empty()
         {
             return Err(MaestroError::Config(
-                "agent.cursor_cli must be set when agent.provider is \"cursor\"".to_string(),
+                "agent.providers.cursor.cli (or legacy agent.cursor_cli) must be set when agent.provider is \"cursor\""
+                    .to_string(),
             ));
+        }
+
+        // T-CFG-002 (Phase 1, amendment A1): the Cursor CLI does not honour
+        // custom endpoints, so a non-empty `[agent.providers.cursor].base_url`
+        // is silently ignored at runtime and would lull the operator into
+        // thinking proxying works. Reject loudly at validate time.
+        if !self.agent.providers.cursor.base_url.trim().is_empty() {
+            return Err(MaestroError::Config(
+                "[agent.providers.cursor] base_url: Cursor CLI custom endpoints not supported (remove this key)"
+                    .to_string(),
+            ));
+        }
+
+        // Phase 1 (04_architecture.md §0 D10): deny-list every provider's
+        // `extra_args` against Maestro-owned flags, regardless of which
+        // provider is currently active. Operators commonly switch providers
+        // without re-reading the deny-list, so we validate the static config.
+        validate_extra_args(&self.agent.providers.claude.extra_args)?;
+        validate_extra_args(&self.agent.providers.cursor.extra_args)?;
+        validate_extra_args(&self.agent.providers.codex.extra_args)?;
+        validate_extra_args(&self.agent.providers.opencode.extra_args)?;
+
+        // available_providers entries must be parseable provider identifiers.
+        for p in &self.agent.available_providers {
+            AiAgentProvider::parse(p).map_err(|e| {
+                MaestroError::Config(format!("[agent] available_providers: {e}"))
+            })?;
         }
 
         if self.git.remote.trim().is_empty() {
@@ -1848,5 +2134,322 @@ step_timeout_secs = 600
             ..Default::default()
         };
         assert_eq!(general.effective_max_active_workflows(), 4);
+    }
+
+    // ─── Phase 1: provider sub-tables, migration, validation ─────────────
+
+    #[test]
+    fn ai_agent_provider_parse_and_as_str_round_trip() {
+        for name in ["claude", "cursor", "codex", "opencode"] {
+            let p = AiAgentProvider::parse(name).unwrap();
+            assert_eq!(p.as_str(), name);
+        }
+        assert!(AiAgentProvider::parse("gemini").is_err());
+        assert!(AiAgentProvider::parse("").is_err());
+    }
+
+    #[test]
+    fn ai_agent_provider_runtime_implemented_only_for_claude_cursor() {
+        assert!(AiAgentProvider::Claude.is_runtime_implemented());
+        assert!(AiAgentProvider::Cursor.is_runtime_implemented());
+        assert!(!AiAgentProvider::Codex.is_runtime_implemented());
+        assert!(!AiAgentProvider::OpenCode.is_runtime_implemented());
+    }
+
+    #[test]
+    fn validate_extra_args_accepts_user_flags() {
+        validate_extra_args(&["--max-turns".into(), "50".into()]).unwrap();
+        validate_extra_args(&[]).unwrap();
+        validate_extra_args(&["--something-custom".into()]).unwrap();
+    }
+
+    #[test]
+    fn validate_extra_args_rejects_denied_flags() {
+        for denied in [
+            "--dangerously-skip-permissions",
+            "--output-format",
+            "--resume",
+            "--print",
+            "--verbose",
+            "-p",
+        ] {
+            let err = validate_extra_args(&[denied.into()])
+                .expect_err(&format!("flag {denied} must be rejected"));
+            let msg = err.to_string();
+            assert!(
+                msg.contains("extra_args_denied"),
+                "error message should carry the stable code 'extra_args_denied', got: {msg}"
+            );
+            assert!(
+                msg.contains(denied),
+                "error message should name the denied flag, got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_migrates_legacy_cursor_cli_to_subtable() {
+        let toml = r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 2
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+
+[web]
+port = 8080
+
+[agent]
+provider = "cursor"
+cursor_cli = "agent-custom"
+cursor_model = "gpt-4.1"
+model = "claude-3-5"
+"#;
+        let cfg = Config::load_from_str(toml).expect("load");
+        assert_eq!(cfg.agent.providers.cursor.cli, "agent-custom");
+        assert_eq!(cfg.agent.providers.cursor.model, "gpt-4.1");
+        // `agent.model` migrates into the **active** provider's sub-table.
+        assert_eq!(cfg.agent.providers.cursor.model, "gpt-4.1");
+    }
+
+    #[test]
+    fn load_with_subtable_does_not_overwrite_explicit_sub_value() {
+        // When both the legacy field and the sub-table value are set, the
+        // sub-table wins (migration is "fill if empty").
+        let toml = r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 2
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+
+[web]
+port = 8080
+
+[agent]
+provider = "cursor"
+cursor_cli = "legacy-agent"
+
+[agent.providers.cursor]
+cli = "sub-table-agent"
+"#;
+        let cfg = Config::load_from_str(toml).expect("load");
+        assert_eq!(cfg.agent.providers.cursor.cli, "sub-table-agent");
+    }
+
+    /// T-CFG-002 (Phase 1, P1): a non-empty `[agent.providers.cursor].base_url`
+    /// is rejected with a stable, user-visible message — Cursor's CLI does not
+    /// honour custom endpoints (amendment A1).
+    #[test]
+    fn load_rejects_cursor_base_url_with_friendly_message() {
+        let toml = r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 2
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+
+[web]
+port = 8080
+
+[agent]
+provider = "claude"
+
+[agent.providers.cursor]
+base_url = "https://proxy.example.com"
+"#;
+        let err = Config::load_from_str(toml).expect_err("cursor base_url must reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Cursor CLI custom endpoints not supported"),
+            "expected friendly message, got: {msg}"
+        );
+    }
+
+    /// Empty / default `[agent.providers.cursor].base_url` continues to load
+    /// (the validator only fires on non-empty values) — guarantees the new
+    /// check doesn't break clean configs.
+    #[test]
+    fn load_accepts_empty_cursor_base_url() {
+        let toml = r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 2
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+
+[web]
+port = 8080
+
+[agent]
+provider = "claude"
+
+[agent.providers.cursor]
+base_url = ""
+"#;
+        Config::load_from_str(toml).expect("empty cursor.base_url must load");
+    }
+
+    #[test]
+    fn load_rejects_denied_extra_arg_in_subtable() {
+        let toml = r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 2
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+
+[web]
+port = 8080
+
+[agent]
+provider = "claude"
+
+[agent.providers.claude]
+extra_args = ["--dangerously-skip-permissions"]
+"#;
+        let err = Config::load_from_str(toml).expect_err("denied flag must reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("extra_args_denied"),
+            "expected extra_args_denied in error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_rejects_unknown_available_provider() {
+        let toml = r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 2
+
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+
+[git]
+base_branch = "main"
+
+[web]
+port = 8080
+
+[agent]
+provider = "claude"
+available_providers = ["claude", "bogus"]
+"#;
+        let err = Config::load_from_str(toml).expect_err("unknown provider must reject");
+        assert!(err.to_string().contains("bogus"));
+    }
+
+    #[test]
+    fn default_available_providers_lists_all_v1() {
+        let cfg = Config::default();
+        assert_eq!(
+            cfg.agent.available_providers,
+            vec!["claude", "cursor", "codex", "opencode"]
+        );
+    }
+
+    #[test]
+    fn to_toml_round_trip_preserves_provider_sub_tables() {
+        let mut cfg = Config::default();
+        cfg.agent.providers.claude.model = "claude-3-5".into();
+        cfg.agent.providers.claude.base_url = "https://proxy.example.com".into();
+        cfg.agent.providers.cursor.cli = "agent-custom".into();
+        cfg.agent.providers.cursor.model = "gpt-4.1".into();
+        cfg.agent.providers.codex.provider_name = "lmstudio".into();
+        cfg.agent.providers.codex.base_url = "http://lm-studio:1234/v1".into();
+        cfg.agent.providers.opencode.model = "anthropic/claude-3-5-sonnet".into();
+
+        let serialized = cfg.to_toml_string().expect("serialize");
+        let parsed: Config = toml::from_str(&serialized).expect("re-parse");
+
+        assert_eq!(parsed.agent.providers.claude.model, "claude-3-5");
+        assert_eq!(
+            parsed.agent.providers.claude.base_url,
+            "https://proxy.example.com"
+        );
+        assert_eq!(parsed.agent.providers.cursor.cli, "agent-custom");
+        assert_eq!(parsed.agent.providers.cursor.model, "gpt-4.1");
+        assert_eq!(parsed.agent.providers.codex.provider_name, "lmstudio");
+        assert_eq!(
+            parsed.agent.providers.codex.base_url,
+            "http://lm-studio:1234/v1"
+        );
+        assert_eq!(
+            parsed.agent.providers.opencode.model,
+            "anthropic/claude-3-5-sonnet"
+        );
+    }
+
+    #[test]
+    fn codex_provider_serde_round_trips_lowercase() {
+        let cfg: Config = toml::from_str(
+            r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 2
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+[git]
+base_branch = "main"
+[web]
+port = 8080
+[agent]
+provider = "codex"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.agent.provider, AiAgentProvider::Codex);
+        assert_eq!(cfg.agent.provider.as_str(), "codex");
+    }
+
+    #[test]
+    fn opencode_provider_serde_round_trips_lowercase() {
+        let cfg: Config = toml::from_str(
+            r#"
+[general]
+poll_interval_secs = 30
+max_concurrent_workflows = 2
+[jira]
+project_keys = ["X"]
+item_types = ["Task"]
+[git]
+base_branch = "main"
+[web]
+port = 8080
+[agent]
+provider = "opencode"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.agent.provider, AiAgentProvider::OpenCode);
+        assert_eq!(cfg.agent.provider.as_str(), "opencode");
     }
 }

@@ -54,9 +54,16 @@ pub struct AuthStatus {
 
 /// Public probe: whether the server requires dashboard login.
 pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
-    let provider_selected = state.system_status.provider.selected.clone();
-    let github_mode = state.system_status.github.mode.clone();
-    let degraded = state.system_status.has_critical();
+    // Phase 1: system_status is mutable (refreshed after PUT /api/config/agent),
+    // so take a snapshot under the read lock and drop it before any other awaits.
+    let (provider_selected, github_mode, degraded) = {
+        let s = state.system_status.read().await;
+        (
+            s.provider.selected.clone(),
+            s.github.mode.clone(),
+            s.has_critical(),
+        )
+    };
 
     if let Some(ref db) = state.db {
         let db = db.clone();
@@ -673,12 +680,19 @@ pub struct RegisterBody {
 }
 
 /// Registration response containing recovery codes.
+///
+/// Phase 1 (auth-overhaul, 06_qa_and_blind_spots.md §A.3 T-ONB-001): the
+/// just-created admin must land on the 4-step onboarding wizard, not the empty
+/// dashboard. The server advertises that next-hop in `redirect_to` so the UI
+/// (and any non-browser API consumers) don't have to hard-code the path.
 #[derive(Debug, Serialize)]
 struct RegisterResponse {
     user_id: String,
     username: String,
     role: String,
     recovery_codes: Vec<String>,
+    /// Always `"/onboarding"` on first-user setup success.
+    redirect_to: &'static str,
 }
 
 /// Register the first user (admin) when the database exists but has no users.
@@ -742,6 +756,7 @@ pub async fn register(
             username: user.username,
             role: user.role.as_str().to_string(),
             recovery_codes: codes,
+            redirect_to: "/onboarding",
         })
     })
     .await;

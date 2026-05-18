@@ -264,6 +264,14 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
+        // Phase 1 (04_architecture.md §2.3): admin-only patch of the
+        // [agent] section. Behind the same auth+CSRF stack as the existing
+        // PUT /api/config and gated additionally via require_admin_for in
+        // the handler.
+        .route(
+            "/config/agent",
+            put(routes::config_agent::put_agent_config),
+        )
         .route("/config/reload", post(routes::config::reload_config))
         .route("/polling", get(routes::polling::get_polling_status))
         .route("/polling/pause", post(routes::polling::pause_polling))

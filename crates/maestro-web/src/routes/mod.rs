@@ -4,6 +4,7 @@
 pub mod admin;
 pub mod auth;
 pub mod config;
+pub mod config_agent;
 pub mod github;
 pub mod jira;
 pub mod onboarding;

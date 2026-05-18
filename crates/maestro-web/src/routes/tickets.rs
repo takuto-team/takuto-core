@@ -198,6 +198,18 @@ async fn run_description_session(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             (sess.session_id, sess.output)
         }
+        // Phase 1 (04_architecture.md §12 Phase 4): Codex / OpenCode adapters
+        // are config-only placeholders. Improve/Prompt sessions refuse to run
+        // with a clear error so the dashboard shows a recoverable banner.
+        AiAgentProvider::Codex | AiAgentProvider::OpenCode => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!(
+                    "Provider \"{}\" is not yet implemented (Phase 4). Switch to claude or cursor in [agent] provider.",
+                    provider.as_str()
+                ),
+            ));
+        }
     };
 
     // Persist the session ID back to the workflow so the next call resumes it.
@@ -552,7 +564,7 @@ mod tests {
             terminal_ports: Arc::new(RwLock::new(HashMap::new())),
             run_commands: Arc::new(RwLock::new(HashMap::new())),
             preflight_error: None,
-            system_status: maestro_core::docker_hooks::SystemStatus::default(),
+            system_status: std::sync::Arc::new(tokio::sync::RwLock::new(maestro_core::docker_hooks::SystemStatus::default())),
             config_path: std::env::temp_dir().join("config.toml"),
             config_writer: None,
             clone_in_progress: Arc::new(AtomicBool::new(false)),

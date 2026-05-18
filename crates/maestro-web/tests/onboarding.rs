@@ -53,7 +53,7 @@ fn test_state_no_db() -> AppState {
         terminal_ports: Arc::new(RwLock::new(HashMap::new())),
         run_commands: Arc::new(RwLock::new(HashMap::new())),
         preflight_error: None,
-        system_status: SystemStatus::default(),
+        system_status: Arc::new(RwLock::new(SystemStatus::default())),
         config_path: std::env::temp_dir().join("config.toml"),
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),
@@ -121,14 +121,17 @@ async fn onboarding_status_is_public_and_returns_system_status_shape() {
 /// When a critical warning is present, `/api/auth/status` reports `degraded: true`.
 #[tokio::test]
 async fn auth_status_reports_degraded_when_critical_warning_present() {
-    let mut state = test_state_with_db();
-    state.system_status.warnings.push(StructuredWarning {
-        code: "claude_not_authenticated".into(),
-        severity: "critical".into(),
-        message: "test fixture".into(),
-    });
-    state.system_status.provider.selected = "claude".into();
-    state.system_status.github.mode = "missing".into();
+    let state = test_state_with_db();
+    {
+        let mut s = state.system_status.write().await;
+        s.warnings.push(StructuredWarning {
+            code: "claude_not_authenticated".into(),
+            severity: "critical".into(),
+            message: "test fixture".into(),
+        });
+        s.provider.selected = "claude".into();
+        s.github.mode = "missing".into();
+    }
 
     let app = build_router(state);
     let resp = app
@@ -151,28 +154,65 @@ async fn auth_status_reports_degraded_when_critical_warning_present() {
     );
 }
 
+/// T-ONB-001 (Phase 1, P0): on the very first POST /api/auth/register (zero
+/// users in the DB), the 201 response body includes `redirect_to: "/onboarding"`
+/// so non-browser API consumers and the UI can both route the just-created
+/// admin to the 4-step onboarding wizard without hard-coding the path.
+#[tokio::test]
+async fn register_first_admin_response_includes_redirect_to_onboarding() {
+    let state = test_state_with_db(); // DB present, zero users.
+    let app = build_router(state);
+
+    let resp = app
+        .oneshot(
+            Request::post("/api/auth/register")
+                .header("Content-Type", "application/json")
+                .header("Origin", "http://localhost:8080")
+                .body(Body::from(
+                    r#"{"username":"admin","password":"testpassword1234"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["redirect_to"], "/onboarding");
+    // Other fields stay intact — adding the key must not regress Phase 0.
+    assert_eq!(json["username"], "admin");
+    assert_eq!(json["role"], "admin");
+    assert!(json["user_id"].is_string());
+    assert!(json["recovery_codes"].is_array());
+}
+
 /// T-BOOT-001 (P0): when every check has failed and `system_status.warnings`
 /// is populated, `/api/health` still returns 200 (the server stays alive in
 /// degraded mode) and `/api/onboarding/status` returns the populated status
 /// with a non-empty `warnings` array.
 #[tokio::test]
 async fn health_ok_and_onboarding_exposes_warnings_when_everything_broken() {
-    let mut state = test_state_with_db();
-    state.system_status.warnings.push(StructuredWarning {
-        code: "claude_not_authenticated".into(),
-        severity: "critical".into(),
-        message: "claude broken".into(),
-    });
-    state.system_status.warnings.push(StructuredWarning {
-        code: "gh_auth_missing".into(),
-        severity: "critical".into(),
-        message: "gh broken".into(),
-    });
-    state.system_status.warnings.push(StructuredWarning {
-        code: "acli_not_authenticated".into(),
-        severity: "warning".into(),
-        message: "acli broken".into(),
-    });
+    let state = test_state_with_db();
+    {
+        let mut s = state.system_status.write().await;
+        s.warnings.push(StructuredWarning {
+            code: "claude_not_authenticated".into(),
+            severity: "critical".into(),
+            message: "claude broken".into(),
+        });
+        s.warnings.push(StructuredWarning {
+            code: "gh_auth_missing".into(),
+            severity: "critical".into(),
+            message: "gh broken".into(),
+        });
+        s.warnings.push(StructuredWarning {
+            code: "acli_not_authenticated".into(),
+            severity: "warning".into(),
+            message: "acli broken".into(),
+        });
+    }
 
     // /api/health must stay 200 — the server boots into degraded mode rather
     // than crashing or returning 5xx.
@@ -210,14 +250,17 @@ async fn health_ok_and_onboarding_exposes_warnings_when_everything_broken() {
 /// been registered yet.
 #[tokio::test]
 async fn auth_status_setup_required_and_degraded_when_no_users_and_critical() {
-    let mut state = test_state_with_db(); // DB present, zero users registered.
-    state.system_status.warnings.push(StructuredWarning {
-        code: "claude_not_authenticated".into(),
-        severity: "critical".into(),
-        message: "test fixture".into(),
-    });
-    state.system_status.provider.selected = "claude".into();
-    state.system_status.github.mode = "missing".into();
+    let state = test_state_with_db(); // DB present, zero users registered.
+    {
+        let mut s = state.system_status.write().await;
+        s.warnings.push(StructuredWarning {
+            code: "claude_not_authenticated".into(),
+            severity: "critical".into(),
+            message: "test fixture".into(),
+        });
+        s.provider.selected = "claude".into();
+        s.github.mode = "missing".into();
+    }
 
     let app = build_router(state);
     let resp = app
@@ -295,9 +338,12 @@ async fn boots_in_degraded_mode_when_database_is_unavailable() {
 /// values even on a clean boot.
 #[tokio::test]
 async fn auth_status_includes_phase0_mirrored_fields_on_clean_boot() {
-    let mut state = test_state_with_db();
-    state.system_status.provider.selected = "cursor".into();
-    state.system_status.github.mode = "app".into();
+    let state = test_state_with_db();
+    {
+        let mut s = state.system_status.write().await;
+        s.provider.selected = "cursor".into();
+        s.github.mode = "app".into();
+    }
     // No warnings → degraded must be false.
 
     let app = build_router(state);

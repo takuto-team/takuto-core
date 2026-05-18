@@ -114,6 +114,7 @@ impl WorkflowTransitions {
             forwarded_port: None,
             pr_merged: None,
             user_id: owner_user_id,
+            ..Default::default()
         });
 
         Ok(())
@@ -154,6 +155,7 @@ impl WorkflowTransitions {
                     forwarded_port: None,
                     pr_merged: None,
                     user_id: workflow.user_id.clone(),
+                    ..Default::default()
                 });
 
                 let running: Vec<String> = workflow
@@ -290,6 +292,7 @@ impl WorkflowTransitions {
             forwarded_port: None,
             pr_merged: None,
             user_id: owner_user_id,
+            ..Default::default()
         });
 
         Ok(())

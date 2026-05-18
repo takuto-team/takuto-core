@@ -1678,6 +1678,7 @@ pub async fn run_port_scanner(
                         forwarded_port: Some((port, host_spare)),
                         pr_merged: None,
                         user_id: owner_user_id.clone(),
+                        ..Default::default()
                     });
                 } else {
                     available_spares.push(spare);
@@ -1724,6 +1725,7 @@ pub async fn run_port_scanner(
                     forwarded_port: Some((port, host_spare)),
                     pr_merged: None,
                     user_id: owner_user_id.clone(),
+                    ..Default::default()
                 });
             }
         }
@@ -2235,6 +2237,7 @@ pub async fn run_run_command_port_scanner(
                 forwarded_port: None,
                 pr_merged: None,
                 user_id: owner_user_id.clone(),
+                ..Default::default()
             });
             // Clean up the stopped container (we removed --rm to capture exit info).
             let _ = tokio::process::Command::new("docker")
@@ -2289,6 +2292,7 @@ pub async fn run_run_command_port_scanner(
                         forwarded_port: Some((port, host_spare)),
                         pr_merged: None,
                         user_id: owner_user_id.clone(),
+                        ..Default::default()
                     });
                 } else {
                     available_spares.push(spare);
@@ -2323,6 +2327,7 @@ pub async fn run_run_command_port_scanner(
                     forwarded_port: Some((port, host_spare)),
                     pr_merged: None,
                     user_id: owner_user_id.clone(),
+                    ..Default::default()
                 });
             }
         }

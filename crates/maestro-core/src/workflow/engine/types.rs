@@ -35,6 +35,34 @@ pub struct TerminalLine {
     pub stream: String,
 }
 
+impl Default for WorkflowEvent {
+    /// Empty-string discriminator with all-None payload fields. Used together
+    /// with the `..Default::default()` struct-update syntax so callers that
+    /// don't need the Phase 1 `provider_from` / `provider_to` /
+    /// `affected_users` fields don't have to spell them out.
+    fn default() -> Self {
+        Self {
+            event_type: String::new(),
+            workflow_id: String::new(),
+            ticket_key: String::new(),
+            state: String::new(),
+            timestamp: Utc::now(),
+            error: None,
+            step_name: None,
+            output_line: None,
+            stream: None,
+            progress_percent: None,
+            progress_steps_total: None,
+            forwarded_port: None,
+            pr_merged: None,
+            user_id: None,
+            provider_from: None,
+            provider_to: None,
+            affected_users: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WorkflowEvent {
     pub event_type: String,
@@ -66,6 +94,20 @@ pub struct WorkflowEvent {
     /// for workflows they own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    /// Phase 1 (`event_type = "provider_changed"`, 04_architecture.md §2.3):
+    /// previous active provider name (e.g. `"claude"`). Other event types
+    /// omit this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_from: Option<String>,
+    /// Phase 1 (`event_type = "provider_changed"`): new active provider name.
+    /// Other event types omit this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_to: Option<String>,
+    /// Phase 1 (`event_type = "provider_changed"`): user IDs whose stored
+    /// credentials need re-capture after the switch. Empty in Phase 1 (the
+    /// per-user credential layer ships in Phase 2). Other event types omit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affected_users: Option<Vec<String>>,
 }
 
 #[derive(Clone)]

@@ -76,10 +76,16 @@ pub struct AppState {
     /// (e.g. `gh` not authenticated). Kept for one release as a fallback when
     /// the DB is unavailable; the UI should read [`system_status`] instead.
     pub preflight_error: Option<String>,
-    /// Structured boot-time auth + integration snapshot (Phase 0). Served by
+    /// Structured auth + integration snapshot (Phase 0). Served by
     /// `GET /api/onboarding/status` and mirrored as three fields into
     /// `GET /api/auth/status`.
-    pub system_status: maestro_core::docker_hooks::SystemStatus,
+    ///
+    /// Wrapped in `Arc<RwLock<…>>` because Phase 1 mutates it: a successful
+    /// `PUT /api/config/agent` recomputes the snapshot from the patched
+    /// config and replaces the value here, so `auth_status` and
+    /// `onboarding_status` reflect the new provider / degraded state without
+    /// requiring a process restart (Phase 1 AC-4).
+    pub system_status: Arc<RwLock<maestro_core::docker_hooks::SystemStatus>>,
     /// Path to the config file on disk (for reload and persistence operations).
     pub config_path: PathBuf,
     /// Writer for atomic config persistence. `None` when the config file is not

@@ -217,6 +217,7 @@ impl WorkflowLifecycle {
             forwarded_port: None,
             pr_merged: None,
             user_id: user_id_for_emit.clone(),
+            ..Default::default()
         });
 
         // Pre-create the git worktree in the background so it is ready before the user
@@ -359,6 +360,7 @@ impl WorkflowLifecycle {
             forwarded_port: None,
             pr_merged: None,
             user_id: owner_user_id,
+            ..Default::default()
         });
 
         Ok(())
@@ -501,6 +503,7 @@ impl WorkflowLifecycle {
                 forwarded_port: None,
                 pr_merged: None,
                 user_id: owner_user_id.clone(),
+                ..Default::default()
             });
         }
 

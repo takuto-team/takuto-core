@@ -151,6 +151,7 @@ impl PrMergePoller {
                         forwarded_port: None,
                         pr_merged: Some(true),
                         user_id: owner_user_id,
+                        ..Default::default()
                     });
                 }
                 Ok(false) => {

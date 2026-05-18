@@ -66,6 +66,15 @@ pub fn headless_instructions_suffix(provider: AiAgentProvider) -> &'static str {
              `.maestro/outcome.toml` with `pr_url = \"<url>\"`. \
              Maestro aligns git commits with `gh` and requests the same account as PR reviewer when a URL is recorded (may fail if that account opened the PR)."
         }
+        // Phase 1: Codex and OpenCode are config-only placeholders; the
+        // driver refuses to start a workflow against them, so this suffix
+        // is never actually appended. Keep a generic headless guidance
+        // string here so callers that pre-render templates don't panic.
+        AiAgentProvider::Codex | AiAgentProvider::OpenCode => {
+            "IMPORTANT: Fully automated headless run — no human operator. \
+             Do not ask questions or wait for user input. \
+             Implement changes autonomously and exit when complete."
+        }
     }
 }
 

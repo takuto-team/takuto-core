@@ -307,6 +307,7 @@ pub(super) async fn drive_workflow_def(
                 forwarded_port: None,
                 pr_merged: None,
                 user_id: workflow_user_id.clone(),
+                ..Default::default()
             });
         }
         Err(e) => {
@@ -397,6 +398,7 @@ pub(super) async fn drive_workflow_def(
                 forwarded_port: None,
                 pr_merged: None,
                 user_id: workflow_user_id.clone(),
+                ..Default::default()
             });
         }
     }
@@ -492,6 +494,7 @@ pub(super) async fn prepare_worktree_for_ticket(
                 forwarded_port: None,
                 pr_merged: None,
                 user_id: owner_user_id,
+                ..Default::default()
             });
         }
         Err(e) => {
@@ -1513,6 +1516,16 @@ pub(super) async fn run_agent_step_sequence(
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),
+                    // Phase 1: Codex / OpenCode adapters are not yet wired
+                    // (Phase 4). Refuse to spawn a session with a clear,
+                    // typed error so the dashboard surfaces a recoverable
+                    // banner instead of a generic timeout.
+                    AiAgentProvider::Codex | AiAgentProvider::OpenCode => {
+                        Err(MaestroError::AiAgent(format!(
+                            "Provider \"{}\" is configured but not yet implemented (Phase 4). Switch to claude or cursor in [agent] provider.",
+                            ai_stream_provider.as_str()
+                        )))
+                    }
                 };
 
                 match session_result {
@@ -1553,7 +1566,12 @@ pub(super) async fn run_agent_step_sequence(
                             error!(ticket = %ticket_key, "Agent step AI session failed — aborting workflow");
                             let msg = match ai_stream_provider {
                                 AiAgentProvider::Claude => "Agent step failed — check that Claude Code is authenticated in the container".to_string(),
-                                AiAgentProvider::Cursor => "Agent step failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.cursor_cli".to_string(),
+                                AiAgentProvider::Cursor => "Agent step failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli".to_string(),
+                                // Phase 1: Codex / OpenCode adapters land in Phase 4.
+                                AiAgentProvider::Codex | AiAgentProvider::OpenCode => format!(
+                                    "Provider \"{}\" is not yet implemented (Phase 4). Switch to claude or cursor in [agent] provider.",
+                                    ai_stream_provider.as_str()
+                                ),
                             };
                             return Err(MaestroError::AiAgent(msg));
                         }
@@ -1610,6 +1628,7 @@ pub(super) async fn broadcast_step_started(
         forwarded_port: None,
         pr_merged: None,
         user_id: owner_user_id,
+        ..Default::default()
     });
 }
 
@@ -1637,6 +1656,7 @@ pub(super) async fn broadcast_step_completed(
         forwarded_port: None,
         pr_merged: None,
         user_id: owner_user_id,
+        ..Default::default()
     });
 }
 
@@ -1701,6 +1721,7 @@ pub(super) fn spawn_output_relay(
                     forwarded_port: None,
                     pr_merged: None,
                     user_id: owner_user_id.clone(),
+                    ..Default::default()
                 });
                 match result {
                     Ok(count) => {
@@ -1792,6 +1813,7 @@ pub(super) async fn transition_to_agent_step(
             forwarded_port: None,
             pr_merged: None,
             user_id: owner_user_id,
+            ..Default::default()
         });
     }
 }
@@ -1838,6 +1860,7 @@ pub(super) async fn transition(
             forwarded_port: None,
             pr_merged: None,
             user_id: owner_user_id,
+            ..Default::default()
         });
     }
 }

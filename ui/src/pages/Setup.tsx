@@ -102,6 +102,11 @@ export function Setup({ onSetupComplete, onLogin }: Props) {
     // Auto-login with the credentials just created
     await onLogin(username.trim(), password);
     onSetupComplete();
+    // Phase 1 (auth-overhaul): the just-created admin lands in the 4-step
+    // onboarding wizard instead of the empty dashboard. A full navigation
+    // makes the session-cookie-aware re-bootstrap unambiguous; Setup is
+    // rendered outside the Router so we can't useNavigate() here.
+    window.location.replace("/onboarding");
   };
 
   // Recovery codes screen — shown after successful registration

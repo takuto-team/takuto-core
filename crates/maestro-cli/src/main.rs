@@ -762,7 +762,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::collections::HashMap::new(),
         )),
         preflight_error,
-        system_status,
+        system_status: std::sync::Arc::new(tokio::sync::RwLock::new(system_status)),
         config_path: config_path.clone(),
         config_writer: Some(config_writer.clone()),
         clone_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),

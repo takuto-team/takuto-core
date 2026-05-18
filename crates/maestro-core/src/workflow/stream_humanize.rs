@@ -28,6 +28,17 @@ pub fn humanize_agent_stream_line(provider: AiAgentProvider, raw: &str) -> Optio
     match provider {
         AiAgentProvider::Claude => humanize_claude_output(raw),
         AiAgentProvider::Cursor => humanize_cursor_output(raw),
+        // Phase 1: Codex and OpenCode have no adapter wired yet (Phase 4).
+        // The driver refuses to spawn sessions against them, so we never
+        // reach this code path at runtime. Falling back to raw passthrough
+        // keeps the humanizer total in case the stream is fed offline.
+        AiAgentProvider::Codex | AiAgentProvider::OpenCode => {
+            if raw.trim().is_empty() {
+                None
+            } else {
+                Some(raw.to_string())
+            }
+        }
     }
 }
 

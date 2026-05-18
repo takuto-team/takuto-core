@@ -670,7 +670,7 @@ mod tests {
                 terminal_ports: Arc::new(RwLock::new(HashMap::new())),
                 run_commands: Arc::new(RwLock::new(HashMap::new())),
                 preflight_error: None,
-                system_status: maestro_core::docker_hooks::SystemStatus::default(),
+                system_status: std::sync::Arc::new(tokio::sync::RwLock::new(maestro_core::docker_hooks::SystemStatus::default())),
                 config_path: std::env::temp_dir().join("config.toml"),
                 config_writer: None,
                 clone_in_progress: Arc::new(AtomicBool::new(false)),

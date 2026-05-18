@@ -31,6 +31,7 @@ import { ReportModal } from "../components/modals/ReportModal";
 import { NoJiraAlertModal } from "../components/modals/NoJiraAlertModal";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { SystemErrorAlert } from "../components/SystemErrorAlert";
+import { handleProviderChangedEvent } from "../utils/providerChanged";
 
 interface Props {
   onLogout: () => void;
@@ -155,8 +156,19 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
       if (evt.event_type === "onboarding_changed") {
         refreshOnboardingStatus();
       }
+
+      // Phase 1: admin switched the deployment-wide AI provider. Surface a
+      // toast + re-fetch /api/auth/status (degraded / provider_selected may
+      // have flipped) and /api/onboarding/status (banner state). No
+      // credential-storage UI work yet — that ships with Phase 2.
+      if (evt.event_type === "provider_changed") {
+        handleProviderChangedEvent(evt, {
+          showToast,
+          refreshOnboardingStatus,
+        });
+      }
     },
-    [handleEvent, fetchWorkflowDefs, refreshOnboardingStatus]
+    [handleEvent, fetchWorkflowDefs, refreshOnboardingStatus, showToast]
   );
 
   const { connected } = useWebSocket(handleEventWithDefs);

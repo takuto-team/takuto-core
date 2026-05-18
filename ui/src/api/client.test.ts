@@ -8,9 +8,11 @@ import {
   apiPost,
   apiPostJson,
   addRepository,
+  AgentConfigError,
   fetchOnboardingStatus,
   listMyRepositories,
   listAvailableRepositories,
+  putAgentConfig,
   removeRepository,
 } from "./client";
 
@@ -123,6 +125,70 @@ describe("apiPostJson()", () => {
     Object.defineProperty(res, "ok", { value: false });
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
     await expect(apiPostJson("/api/start", {})).rejects.toThrow("conflict");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agent config patch (Phase 1 — auth-overhaul).
+// ---------------------------------------------------------------------------
+
+describe("putAgentConfig()", () => {
+  const patch = {
+    provider: "claude" as const,
+    providers: {
+      claude: { model: "claude-3-5-sonnet-latest", base_url: "", extra_args: [], allow_shared_default: false },
+    },
+  };
+
+  it("PUTs the patch and returns the parsed ConfigResponse on 200", async () => {
+    const updated = {
+      general: { ticketing_system: "none" },
+      agent: { provider: "claude" },
+    };
+    mockFetch(200, updated);
+    const got = await putAgentConfig(patch);
+    expect(fetch).toHaveBeenCalledWith("/api/config/agent", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+      credentials: "same-origin",
+    });
+    expect(got).toEqual(updated);
+  });
+
+  it("throws AgentConfigError with structured code on 400", async () => {
+    const body = { error: "denied_extra_arg", message: "--resume is Maestro-owned" };
+    const res = new Response(JSON.stringify(body), { status: 400 });
+    Object.defineProperty(res, "ok", { value: false });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
+    let caught: unknown;
+    try {
+      await putAgentConfig(patch);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(AgentConfigError);
+    const err = caught as AgentConfigError;
+    expect(err.code).toBe("denied_extra_arg");
+    expect(err.status).toBe(400);
+    expect(err.message).toBe("--resume is Maestro-owned");
+  });
+
+  it("throws AgentConfigError on 403 with no JSON body (falls back to http_403 code)", async () => {
+    const res = new Response("forbidden", { status: 403 });
+    Object.defineProperty(res, "ok", { value: false });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
+    let caught: unknown;
+    try {
+      await putAgentConfig(patch);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(AgentConfigError);
+    const err = caught as AgentConfigError;
+    expect(err.code).toBe("http_403");
+    expect(err.status).toBe(403);
+    expect(err.message).toBe("forbidden");
   });
 });
 

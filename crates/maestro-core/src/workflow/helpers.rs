@@ -179,6 +179,11 @@ pub(crate) fn build_skill_search_paths(
         AiAgentProvider::Cursor => {
             paths.push(PathBuf::from(&home).join(".cursor/skills"));
         }
+        // Phase 1: Codex / OpenCode have no skills directory convention yet;
+        // the runtime refuses to start a session for them. Fall through with
+        // only the worktree path so callers don't crash if the function is
+        // invoked from a code path that does run before the refusal check.
+        AiAgentProvider::Codex | AiAgentProvider::OpenCode => {}
     }
     paths
 }

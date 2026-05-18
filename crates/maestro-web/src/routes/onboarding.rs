@@ -15,12 +15,12 @@ use maestro_core::docker_hooks::SystemStatus;
 
 use crate::state::AppState;
 
-/// `GET /api/onboarding/status` — returns the boot-time `SystemStatus` snapshot.
+/// `GET /api/onboarding/status` — returns the current `SystemStatus` snapshot.
 ///
-/// Public endpoint (no auth required). The snapshot is captured once at
-/// startup and lives in `AppState::system_status`; this handler just clones it
-/// onto the response. A future Phase 0 follow-up may refresh it on demand —
-/// today it is stable for the lifetime of the process.
+/// Public endpoint (no auth required). The snapshot is captured at startup
+/// and refreshed in place by `PUT /api/config/agent` (Phase 1), so callers
+/// always see the latest provider / degraded state without a process restart.
 pub async fn onboarding_status(State(state): State<AppState>) -> Json<SystemStatus> {
-    Json(state.system_status.clone())
+    let snapshot = state.system_status.read().await.clone();
+    Json(snapshot)
 }

@@ -167,6 +167,7 @@ impl WorkflowDefinitionManager {
             forwarded_port: None,
             pr_merged: None,
             user_id: owner_user_id,
+            ..Default::default()
         });
 
         // Clone values for the spawned task
@@ -279,6 +280,7 @@ impl WorkflowDefinitionManager {
                                     pr_merged: None,
                                     // Broadcast: no specific user — visible to all subscribers.
                                     user_id: None,
+                                    ..Default::default()
                                 });
                                 info!("Workflow definitions directory changed, notified clients");
                             }

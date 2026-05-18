@@ -508,10 +508,20 @@ pub fn collect_system_status(config: &Config) -> SystemStatus {
                 .ok()
                 .map(|v| !v.trim().is_empty())
                 .unwrap_or(false);
-            let custom_base_url = std::env::var("ANTHROPIC_BASE_URL")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty());
+            // Phase 1: prefer the [agent.providers.claude].base_url config
+            // value; fall back to the ANTHROPIC_BASE_URL env var the way
+            // setup scripts used to surface it.
+            let custom_base_url = {
+                let cfg_url = config.agent.providers.claude.base_url.trim();
+                if !cfg_url.is_empty() {
+                    Some(cfg_url.to_string())
+                } else {
+                    std::env::var("ANTHROPIC_BASE_URL")
+                        .ok()
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
+                }
+            };
             let cli_ok = env_credential || auth_cmd_ok("claude", &["auth", "status"]);
             if !cli_ok {
                 warnings.push(StructuredWarning::critical(
@@ -531,11 +541,11 @@ pub fn collect_system_status(config: &Config) -> SystemStatus {
                 .ok()
                 .map(|v| !v.trim().is_empty())
                 .unwrap_or(false);
-            let cli = config.agent.cursor_cli.trim();
+            let cli = config.agent.effective_cursor_cli().trim();
             if cli.is_empty() {
                 warnings.push(StructuredWarning::critical(
                     "cursor_cli_missing",
-                    "[agent] cursor_cli must be set when provider is \"cursor\".",
+                    "[agent.providers.cursor].cli must be set when provider is \"cursor\".",
                 ));
                 ProviderStatus {
                     selected: "cursor".to_string(),
@@ -558,6 +568,49 @@ pub fn collect_system_status(config: &Config) -> SystemStatus {
                     headless_capable: headless,
                     custom_base_url: None,
                 }
+            }
+        }
+        // Phase 1 (04_architecture.md §0 D1, §12 Phase 4): Codex and OpenCode
+        // are config-only placeholders in v1. The adapter wiring lands in
+        // Phase 4. Until then, selecting one of these providers surfaces a
+        // critical warning so the dashboard renders "Coming in Phase 4" copy
+        // and the runtime refuses to spawn sessions.
+        AiAgentProvider::Codex => {
+            warnings.push(StructuredWarning::critical(
+                "provider_not_implemented",
+                "Provider \"codex\" is configured but the adapter is not yet wired (Phase 4). Workflows will fail until the adapter ships.",
+            ));
+            ProviderStatus {
+                selected: "codex".to_string(),
+                deployment_default_credential_present: false,
+                headless_capable: false,
+                custom_base_url: {
+                    let url = config.agent.providers.codex.base_url.trim();
+                    if url.is_empty() {
+                        None
+                    } else {
+                        Some(url.to_string())
+                    }
+                },
+            }
+        }
+        AiAgentProvider::OpenCode => {
+            warnings.push(StructuredWarning::critical(
+                "provider_not_implemented",
+                "Provider \"opencode\" is configured but the adapter is not yet wired (Phase 4). Workflows will fail until the adapter ships.",
+            ));
+            ProviderStatus {
+                selected: "opencode".to_string(),
+                deployment_default_credential_present: false,
+                headless_capable: false,
+                custom_base_url: {
+                    let url = config.agent.providers.opencode.base_url.trim();
+                    if url.is_empty() {
+                        None
+                    } else {
+                        Some(url.to_string())
+                    }
+                },
             }
         }
     };

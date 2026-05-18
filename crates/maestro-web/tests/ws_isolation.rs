@@ -45,6 +45,7 @@ fn make_event(ticket: &str, user_id: Option<&str>) -> WorkflowEvent {
         forwarded_port: None,
         pr_merged: None,
         user_id: user_id.map(|s| s.to_string()),
+        ..Default::default()
     }
 }
 
