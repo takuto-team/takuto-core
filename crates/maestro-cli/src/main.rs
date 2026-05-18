@@ -810,6 +810,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref resolver) = git_auth_resolver {
         engine = engine.with_git_auth_resolver(resolver.clone());
     }
+    // Phase 2b.3.x: wire the production GhClient so at-resume PAT
+    // revalidation can run. Tests inject a MockGhClient instead.
+    engine = engine.with_gh_client(Arc::new(maestro_core::auth::RealGhClient::new()));
     let engine = Arc::new(engine);
 
     match engine.restore_persisted_workflows().await {

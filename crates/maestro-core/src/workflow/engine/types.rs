@@ -59,6 +59,8 @@ impl Default for WorkflowEvent {
             provider_from: None,
             provider_to: None,
             affected_users: None,
+            auth_warning_code: None,
+            auth_warning_message: None,
         }
     }
 }
@@ -108,6 +110,15 @@ pub struct WorkflowEvent {
     /// per-user credential layer ships in Phase 2). Other event types omit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affected_users: Option<Vec<String>>,
+    /// Phase 2b.3.x (`event_type = "auth_warning"`): a stable error code
+    /// (`"sso_authorization_required"`, `"invalid_pat"`, …) the dashboard
+    /// `switch()`es on. Other event types omit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_warning_code: Option<String>,
+    /// Phase 2b.3.x (`event_type = "auth_warning"`): human-readable message
+    /// for the dashboard banner. Never contains token bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_warning_message: Option<String>,
 }
 
 #[derive(Clone)]

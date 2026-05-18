@@ -60,6 +60,10 @@ pub struct WorkflowEngine {
     /// (legacy poller / single-tenant) — the worker falls back to the
     /// ambient-env `PASSTHROUGH_ENV` path.
     pub git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    /// Phase 2b.3.x: `GhClient` used by the engine for at-resume PAT
+    /// revalidation. Defaults to a `RealGhClient`. Test fixtures override
+    /// via [`Self::with_gh_client`] to inject a mock.
+    pub gh_client: Arc<dyn crate::auth::GhClient>,
     // Service structs
     persistence: WorkflowPersistence,
     lifecycle: WorkflowLifecycle,
@@ -160,11 +164,21 @@ impl WorkflowEngine {
             workflows_dir,
             db,
             git_auth_resolver: None,
+            gh_client: Arc::new(crate::auth::RealGhClient::new()),
             persistence,
             lifecycle,
             transitions,
             definitions,
         }
+    }
+
+    /// Phase 2b.3.x: override the GhClient (production uses `RealGhClient`;
+    /// tests inject a mock).
+    pub fn with_gh_client(mut self, gh: Arc<dyn crate::auth::GhClient>) -> Self {
+        self.gh_client = gh.clone();
+        self.persistence.set_gh_client(gh.clone());
+        self.transitions.set_gh_client(gh);
+        self
     }
 
     /// Phase 2b.3: attach the `GitAuthResolver` so the driver can pin

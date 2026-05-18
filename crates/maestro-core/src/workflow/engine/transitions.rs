@@ -37,6 +37,8 @@ pub(crate) struct WorkflowTransitions {
     /// Phase 2b.3: resolver for pin + bundle build on resume-after-pause.
     pub(crate) git_auth_resolver:
         Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    /// Phase 2b.3.x: GhClient for at-resume PAT revalidation.
+    pub(crate) gh_client: Option<Arc<dyn crate::auth::GhClient>>,
 }
 
 impl WorkflowTransitions {
@@ -63,6 +65,7 @@ impl WorkflowTransitions {
             workflows_dir,
             db,
             git_auth_resolver: None,
+            gh_client: None,
         }
     }
 
@@ -71,6 +74,10 @@ impl WorkflowTransitions {
         resolver: Arc<crate::github::auth_resolver::GitAuthResolver>,
     ) {
         self.git_auth_resolver = Some(resolver);
+    }
+
+    pub(crate) fn set_gh_client(&mut self, gh: Arc<dyn crate::auth::GhClient>) {
+        self.gh_client = Some(gh);
     }
 
     pub async fn pause_workflow(&self, ticket_key: &str) -> Result<()> {
@@ -227,9 +234,58 @@ impl WorkflowTransitions {
                 let su = suppress.clone();
                 let ct = cancel_token.clone();
                 let db = self.db.clone();
+                // Phase 2b.3.x: revalidate the user's PAT on resume —
+                // their SSO session may have lapsed while paused. Done BEFORE
+                // taking the owned `resolver` clone for `drive_workflow_def` so
+                // we don't move-then-borrow.
+                if let (Some(r), Some(gh)) =
+                    (self.git_auth_resolver.as_ref(), self.gh_client.as_ref())
+                {
+                    let wf_arc = self.repository.inner_arc();
+                    let pin_uid = {
+                        let wf = wf_arc.read().await;
+                        wf.get(ticket_key).and_then(|w| {
+                            w.auth_pin.as_ref().and_then(|p| {
+                                let uid = w.user_id.clone()?;
+                                p.github_credential_row_id.map(|_| uid)
+                            })
+                        })
+                    };
+                    if let Some(uid) = pin_uid {
+                        let r_clone: Arc<crate::github::auth_resolver::GitAuthResolver> =
+                            r.clone();
+                        let gh_clone: Arc<dyn crate::auth::GhClient> = gh.clone();
+                        let event_tx = engine_event_tx.clone();
+                        let ticket_for_event = ticket_key.to_string();
+                        tokio::spawn(async move {
+                            if let Err(e) = r_clone
+                                .revalidate_pat_for_workflow(&uid, gh_clone.as_ref(), &[])
+                                .await
+                            {
+                                let (code, message) =
+                                    crate::github::auth_resolver::auth_warning_payload(&e);
+                                tracing::warn!(
+                                    ticket = %ticket_for_event,
+                                    user_id = %uid,
+                                    code = code,
+                                    "PAT revalidation failed at resume — emitting AuthWarning"
+                                );
+                                let _ = event_tx.send(WorkflowEvent {
+                                    event_type: "auth_warning".to_string(),
+                                    ticket_key: ticket_for_event,
+                                    timestamp: chrono::Utc::now(),
+                                    user_id: Some(uid),
+                                    auth_warning_code: Some(code.to_string()),
+                                    auth_warning_message: Some(message),
+                                    ..Default::default()
+                                });
+                            }
+                        });
+                    }
+                }
+
                 // Phase 2b.3: thread the resolver into the resumed driver task.
                 let resolver = self.git_auth_resolver.clone();
-
                 tokio::spawn(async move {
                     super::driver::drive_workflow_def(
                         ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su, db,

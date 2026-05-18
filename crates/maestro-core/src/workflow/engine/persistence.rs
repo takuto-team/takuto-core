@@ -34,6 +34,10 @@ pub(crate) struct WorkflowPersistence {
     /// Phase 2b.3: resolver for pin + bundle build on snapshot-restore.
     pub(crate) git_auth_resolver:
         Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    /// Phase 2b.3.x: GhClient for at-restore PAT revalidation. Defaults to
+    /// `None`; set by `WorkflowEngine::with_gh_client` (so tests can inject
+    /// a mock without going through the real `gh` binary).
+    pub(crate) gh_client: Option<Arc<dyn crate::auth::GhClient>>,
 }
 
 impl WorkflowPersistence {
@@ -51,6 +55,7 @@ impl WorkflowPersistence {
             suppress_cancelled_as_error,
             actions,
             git_auth_resolver: None,
+            gh_client: None,
         }
     }
 
@@ -59,6 +64,10 @@ impl WorkflowPersistence {
         resolver: Arc<crate::github::auth_resolver::GitAuthResolver>,
     ) {
         self.git_auth_resolver = Some(resolver);
+    }
+
+    pub(crate) fn set_gh_client(&mut self, gh: Arc<dyn crate::auth::GhClient>) {
+        self.gh_client = Some(gh);
     }
 
 
@@ -242,9 +251,69 @@ impl WorkflowPersistence {
                         let su = suppress.clone();
                         let ct = cancel_token.clone();
                         let db_clone = db.clone();
+                        // Phase 2b.3.x: revalidate the user's PAT at restore.
+                        // Best-effort: failure broadcasts an AuthWarning event
+                        // but does NOT block re-spawn (the workflow's next
+                        // git action will still fail loudly).
+                        // Done BEFORE binding the owned `resolver` for the
+                        // driver spawn — otherwise we'd borrow-then-move.
+                        if let (Some(r), Some(gh)) =
+                            (self.git_auth_resolver.as_ref(), self.gh_client.as_ref())
+                        {
+                            let wf_arc = self.repository.inner_arc();
+                            let pin_info = {
+                                let wf = wf_arc.read().await;
+                                wf.get(&ticket_key).and_then(|w| {
+                                    w.auth_pin.as_ref().and_then(|p| {
+                                        let uid = w.user_id.clone()?;
+                                        if p.github_credential_row_id.is_some() {
+                                            Some(uid)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                })
+                            };
+                            if let Some(uid) = pin_info {
+                                let r_clone: Arc<
+                                    crate::github::auth_resolver::GitAuthResolver,
+                                > = r.clone();
+                                let gh_clone: Arc<dyn crate::auth::GhClient> = gh.clone();
+                                let event_tx = engine_event_tx.clone();
+                                let ticket_for_event = ticket_key.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = r_clone
+                                        .revalidate_pat_for_workflow(&uid, gh_clone.as_ref(), &[])
+                                        .await
+                                    {
+                                        let (code, message) =
+                                            crate::github::auth_resolver::auth_warning_payload(
+                                                &e,
+                                            );
+                                        tracing::warn!(
+                                            ticket = %ticket_for_event,
+                                            user_id = %uid,
+                                            code = code,
+                                            "PAT revalidation failed at restore — emitting AuthWarning"
+                                        );
+                                        let _ = event_tx.send(
+                                            crate::workflow::engine::WorkflowEvent {
+                                                event_type: "auth_warning".to_string(),
+                                                ticket_key: ticket_for_event,
+                                                timestamp: chrono::Utc::now(),
+                                                user_id: Some(uid),
+                                                auth_warning_code: Some(code.to_string()),
+                                                auth_warning_message: Some(message),
+                                                ..Default::default()
+                                            },
+                                        );
+                                    }
+                                });
+                            }
+                        }
+
                         // Phase 2b.3: thread the resolver to the spawned driver.
                         let resolver = self.git_auth_resolver.clone();
-
                         tokio::spawn(async move {
                             drive_workflow_def(
                                 ticket,

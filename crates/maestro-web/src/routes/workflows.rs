@@ -1243,6 +1243,15 @@ pub async fn open_editor(
         .await
         .unwrap_or_else(|| "maestro:latest".to_string());
 
+    // Phase 2b.3.x: try to build a per-workflow secrets bundle so the
+    // browser editor's in-terminal `claude`/`cursor`/`gh` invocations see
+    // the same per-user credentials an agent step would. Falls back to the
+    // legacy passthrough silently when the resolver / DB / master key /
+    // credential aren't available — the editor still works, just without
+    // the per-user secret mount.
+    let secrets_bundle: Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> =
+        build_editor_or_run_command_bundle(&state, &id, &auth.user_id).await;
+
     let info = container::start_editor(
         &ticket_key,
         &worktree,
@@ -1256,6 +1265,7 @@ pub async fn open_editor(
         &startup_commands,
         &git_editor,
         true, // isolate_workspace: restrict container to this issue's worktree
+        secrets_bundle.as_deref(),
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -1728,6 +1738,12 @@ pub async fn start_run_command(
     let reserved_token = maestro_core::container::generate_session_path_token();
     let proxy_base = maestro_core::container::build_session_dynamic_port_url(&reserved_token);
 
+    // Phase 2b.3.x: same per-workflow bundle the editor uses — run-commands
+    // often `git push` / `gh` to publish preview deploys, so the GitHub
+    // side of the bundle is the value-add here.
+    let secrets_bundle: Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> =
+        build_editor_or_run_command_bundle(&state, &id, &auth.user_id).await;
+
     let spare_ports = container::start_run_command(
         &ticket_key,
         &worktree,
@@ -1737,6 +1753,7 @@ pub async fn start_run_command(
         dynamic_ports,
         true, // isolate_workspace: restrict container to this issue's worktree
         &[("MAESTRO_PROXY_BASE", &proxy_base)],
+        secrets_bundle.as_deref(),
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -1881,6 +1898,60 @@ pub async fn retry_workflow_def(
         .await
         .map(|()| StatusCode::ACCEPTED)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+}
+
+/// Phase 2b.3.x: try to build a `WorkerSecretsBundle` for a side-channel
+/// container (browser editor, dev-server run command) tied to a workflow.
+/// Returns `None` whenever any precondition for the bundle isn't met (no
+/// resolver / no DB / no master key / no per-user credential and no
+/// shared-default fallback). The caller falls back to the legacy
+/// PASSTHROUGH path on `None` — this is a "best-effort attach" because
+/// these containers are user-interactive, not agent-driven, and partial
+/// credentials should not block the user from opening the editor.
+///
+/// When the workflow already has an `auth_pin` (the agent path has run),
+/// the bundle reuses the pinned credential row by routing through the
+/// same [`auth::bundle::build`] path. Otherwise it falls back to
+/// `build_for_endpoint`, which looks at the user's current credentials.
+async fn build_editor_or_run_command_bundle(
+    state: &AppState,
+    workflow_id_or_ticket_key: &str,
+    user_id: &str,
+) -> Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> {
+    let resolver = state.git_auth_resolver.as_ref()?;
+    let db = state.db.as_ref()?;
+    db.master_key()?;
+    let cfg_snapshot = state.config.read().await.clone();
+
+    // If the workflow already pinned its credentials, prefer that pin so
+    // the editor sees the same row the agent path used.
+    let pin = {
+        let wf_arc = state.engine.workflows_arc();
+        let wf = wf_arc.read().await;
+        wf.get(workflow_id_or_ticket_key)
+            .and_then(|w| w.auth_pin.clone())
+    };
+    let result = match pin {
+        Some(pin) => {
+            maestro_core::auth::bundle::build(&cfg_snapshot, db, resolver, &pin, user_id).await
+        }
+        None => {
+            maestro_core::auth::bundle::build_for_endpoint(&cfg_snapshot, db, resolver, user_id)
+                .await
+        }
+    };
+    match result {
+        Ok(b) => Some(std::sync::Arc::new(b)),
+        Err(e) => {
+            tracing::info!(
+                user_id = %user_id,
+                workflow = %workflow_id_or_ticket_key,
+                error = %e,
+                "Bundle build skipped for editor/run-command — falling back to legacy passthrough"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]

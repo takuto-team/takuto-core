@@ -166,6 +166,38 @@ const WORKER_VOLUMES: &[&str] = &[
     "/etc/maestro:/etc/maestro:ro",
 ];
 
+/// Phase 2b.3.x helper: which `PASSTHROUGH_ENV` names a
+/// [`WorkerSecretsBundle`] takes over. Must match
+/// [`ContainerRunner::base_docker_args`]'s suppression list so callers
+/// outside `ContainerRunner` (e.g. `start_editor`, `start_run_command`,
+/// improve-ticket) keep the same threat model.
+pub(crate) fn passthrough_is_bundled(key: &str) -> bool {
+    matches!(
+        key,
+        "CLAUDE_CODE_OAUTH_TOKEN" | "ANTHROPIC_BASE_URL" | "CURSOR_API_KEY" | "GH_TOKEN"
+    )
+}
+
+/// Phase 2b.3.x helper: append the bundle's mount (`/run/maestro-secrets:ro`)
+/// and non-secret env vars (`MAESTRO_AUTH_BUNDLE`, base URLs,
+/// `GIT_AUTHOR_*`/`GIT_COMMITTER_*`) onto an in-flight `docker run` argv.
+/// Token bytes are NEVER added; they live in the bind-mounted tmpfs files.
+pub(crate) fn apply_secrets_bundle_to_args(
+    args: &mut Vec<String>,
+    bundle: &crate::auth::WorkerSecretsBundle,
+) {
+    args.push("-v".into());
+    args.push(format!(
+        "{}:{}:ro",
+        bundle.host_dir().to_string_lossy(),
+        crate::auth::WORKER_SECRETS_MOUNTPOINT,
+    ));
+    for (k, v) in &bundle.extra_env {
+        args.push("-e".into());
+        args.push(format!("{k}={v}"));
+    }
+}
+
 /// Build the list of volume mount strings for a Docker container.
 ///
 /// When `isolate_workspace` is `true`, the broad `/workspace:/workspace` mount is
@@ -849,6 +881,12 @@ pub async fn start_editor(
     startup_commands: &[String],
     git_editor: &str,
     isolate_workspace: bool,
+    // Phase 2b.3.x: optional per-workflow secrets bundle. When `Some`,
+    // secret PASSTHROUGH names are suppressed and the bundle's tmpfs
+    // directory is bind-mounted at `/run/maestro-secrets:ro`. Token bytes
+    // reach the editor's in-browser terminal via the file path, not
+    // `docker inspect`.
+    secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
 ) -> std::result::Result<EditorInfo, String> {
     let name = editor_container_name(ticket_key);
 
@@ -891,7 +929,13 @@ pub async fn start_editor(
         args.push("-e".into());
         args.push(format!("{k}={v}"));
     }
+    let bundle_attached = secrets_bundle.is_some();
     for key in PASSTHROUGH_ENV {
+        if bundle_attached && passthrough_is_bundled(key) {
+            // Phase 2b.3.x: the bundle owns this secret; suppress the
+            // ambient host value so `docker inspect` cannot leak it.
+            continue;
+        }
         if let Ok(val) = std::env::var(key)
             && !val.is_empty()
         {
@@ -904,6 +948,12 @@ pub async fn start_editor(
     for mount in build_volume_args(worktree_path, isolate_workspace) {
         args.push("-v".into());
         args.push(mount);
+    }
+
+    // Phase 2b.3.x: attach the bundle AFTER the standard volumes so the
+    // bundle's `-v` and `-e` flags are colocated.
+    if let Some(b) = secrets_bundle {
+        apply_secrets_bundle_to_args(&mut args, b);
     }
 
     // In DinD mode, use `--network=host` so the editor process binds
@@ -1995,6 +2045,10 @@ pub async fn start_run_command(
     dynamic_ports: usize,
     isolate_workspace: bool,
     extra_env: &[(&str, &str)],
+    // Phase 2b.3.x: optional per-workflow secrets bundle. Same semantics as
+    // `start_editor`'s `secrets_bundle` — when `Some`, tokens reach the
+    // run-command container via tmpfs file mount, never `docker inspect`.
+    secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
 ) -> std::result::Result<Vec<u16>, String> {
     let name = run_command_container_name(ticket_key, cmd_index);
 
@@ -2039,7 +2093,13 @@ pub async fn start_run_command(
         args.push("-e".into());
         args.push(format!("{k}={v}"));
     }
+    let bundle_attached = secrets_bundle.is_some();
     for key in PASSTHROUGH_ENV {
+        if bundle_attached && passthrough_is_bundled(key) {
+            // Phase 2b.3.x: the bundle owns this secret; suppress the
+            // ambient host value so `docker inspect` cannot leak it.
+            continue;
+        }
         if let Ok(val) = std::env::var(key)
             && !val.is_empty()
         {
@@ -2058,6 +2118,11 @@ pub async fn start_run_command(
     for mount in build_volume_args(worktree_path, isolate_workspace) {
         args.push("-v".into());
         args.push(mount);
+    }
+
+    // Phase 2b.3.x: attach the bundle mount + non-secret env vars.
+    if let Some(b) = secrets_bundle {
+        apply_secrets_bundle_to_args(&mut args, b);
     }
 
     // Port mappings — see start_editor() for the DinD vs local rationale.
@@ -2469,6 +2534,26 @@ mod tests {
     /// Helper: check if a `-v SRC:DST` pair is present.
     fn has_volume(args: &[String], mount: &str) -> bool {
         args.windows(2).any(|w| w[0] == "-v" && w[1] == mount)
+    }
+
+    /// Phase 2b.3.x: `passthrough_is_bundled` must match the exact set of
+    /// env names the worker entrypoint sources from `/run/maestro-secrets`.
+    /// If this list drifts from the entrypoint, tokens leak via `docker
+    /// run -e` AND get sourced from tmpfs — duplicate exposure surface.
+    #[test]
+    fn passthrough_is_bundled_lists_only_known_secret_env_names() {
+        // Must suppress (bundled by tmpfs files):
+        assert!(passthrough_is_bundled("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(passthrough_is_bundled("ANTHROPIC_BASE_URL"));
+        assert!(passthrough_is_bundled("CURSOR_API_KEY"));
+        assert!(passthrough_is_bundled("GH_TOKEN"));
+        // Must NOT suppress (still flow through legacy passthrough):
+        assert!(!passthrough_is_bundled("PATH"));
+        assert!(!passthrough_is_bundled("HOME"));
+        assert!(!passthrough_is_bundled("MAESTRO_AUTH_BUNDLE"));
+        assert!(!passthrough_is_bundled("GIT_AUTHOR_NAME"));
+        assert!(!passthrough_is_bundled("GH_TOKEN_FOO")); // prefix match must NOT match
+        assert!(!passthrough_is_bundled("")); // empty must not match
     }
 
     #[test]

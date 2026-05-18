@@ -96,6 +96,7 @@ async fn resolve_workflow_repo_path(state: &AppState, ticket_key: &str) -> PathB
 async fn run_description_session(
     state: &AppState,
     ticket_key: &str,
+    user_id: &str,
     prompt: &str,
     system_prompt: Option<&str>,
 ) -> Result<String, (StatusCode, String)> {
@@ -142,8 +143,68 @@ async fn run_description_session(
         // per-issue isolation logic (which derives the repo root from the grandparent)
         // does not apply.  The session is already sandboxed in its own ephemeral
         // container; it does not need worktree-level isolation.
-        // GH_TOKEN is sourced from the shared token file by the container preamble.
-        let runner = ContainerRunner::new(&format!("improve-{ticket_key}"), &worktree, &image);
+        let mut runner =
+            ContainerRunner::new(&format!("improve-{ticket_key}"), &worktree, &image);
+
+        // Phase 2b.3.x: attach a per-request `WorkerSecretsBundle` so the
+        // ephemeral worker reads the caller's per-user provider key + GitHub
+        // token from tmpfs files instead of `docker run -e`. Falls back to
+        // the legacy `PASSTHROUGH_ENV` path when:
+        //   - master key unavailable (degraded mode), OR
+        //   - user has no credential AND active provider's
+        //     `allow_shared_default = false`.
+        // The first case surfaces 503; the second surfaces 503 + a
+        // structured `credential_required` error so the dashboard can
+        // prompt the user to paste an API key.
+        if let Some(ref resolver) = state.git_auth_resolver
+            && let Some(db) = state.db.as_ref()
+        {
+            if db.master_key().is_none() {
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "master_key_unavailable".into(),
+                ));
+            }
+            let cfg_snapshot = state.config.read().await.clone();
+            match maestro_core::auth::bundle::build_for_endpoint(
+                &cfg_snapshot,
+                db,
+                resolver,
+                user_id,
+            )
+            .await
+            {
+                Ok(bundle) => {
+                    tracing::info!(
+                        action = "improve_ticket",
+                        user_id = %user_id,
+                        ticket = %ticket_key,
+                        source = "user_credential",
+                        "Attached WorkerSecretsBundle to improve/prompt runner"
+                    );
+                    runner = runner.with_secrets_bundle(std::sync::Arc::new(bundle));
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("provider_credential_missing") {
+                        return Err((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            serde_json::json!({
+                                "error": "credential_required",
+                                "provider": cfg_snapshot.agent.provider.as_str(),
+                            })
+                            .to_string(),
+                        ));
+                    }
+                    tracing::warn!(
+                        ticket = %ticket_key,
+                        error = %e,
+                        "Bundle build failed for improve/prompt — falling back to legacy passthrough"
+                    );
+                }
+            }
+        }
+
         Some(runner)
     } else {
         tracing::warn!(
@@ -266,7 +327,8 @@ technically precise. Add acceptance criteria if none are present. Keep the origi
     }
 
     let output =
-        run_description_session(&state, &key, &prompt, Some(IMPROVE_SYSTEM_PROMPT)).await?;
+        run_description_session(&state, &key, &auth.user_id, &prompt, Some(IMPROVE_SYSTEM_PROMPT))
+            .await?;
 
     // Parse "Title\n---\nDescription" format from AI output.
     let (improved_summary, improved_description) =
@@ -363,7 +425,9 @@ pub async fn prompt_ticket(
         description = body.ticket_description,
     );
 
-    let output = run_description_session(&state, &key, &prompt, Some(PROMPT_SYSTEM_PROMPT)).await?;
+    let output =
+        run_description_session(&state, &key, &auth.user_id, &prompt, Some(PROMPT_SYSTEM_PROMPT))
+            .await?;
 
     Ok(Json(PromptTicketResponse { response: output }))
 }

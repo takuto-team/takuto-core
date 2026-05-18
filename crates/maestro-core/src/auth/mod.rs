@@ -33,6 +33,7 @@ pub use bundle::{
     WorkerSecretsBundle, WORKER_SECRETS_MOUNTPOINT,
     SECRET_FILE_CLAUDE, SECRET_FILE_CODEX, SECRET_FILE_CURSOR, SECRET_FILE_GH,
     SECRET_FILE_OPENCODE,
+    build_for_endpoint as build_bundle_for_endpoint,
 };
 pub use gh_client::{GhClient, GhResponse, RealGhClient, SharedGhClient};
 pub use master_key::{MasterKey, MasterKeySource, load_or_init_master_key};

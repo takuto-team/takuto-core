@@ -296,6 +296,75 @@ impl GitAuthResolver {
         }
     }
 
+    /// Phase 2b.3.x: re-validate a user's PAT against the live `gh` shim at
+    /// workflow restore / resume time. Returns `Ok(())` when:
+    /// - the user has no PAT row (App-only / Missing modes — the App side
+    ///   handles its own token rotation via the background writer), OR
+    /// - the PAT still validates against `gh api user` AND every org in
+    ///   `orgs` accepts it (no `X-GitHub-SSO` block).
+    ///
+    /// On failure, writes a `credential_audit` row with
+    /// `event = "validation_failed", outcome = "error", error_code = <code>`
+    /// before returning the typed error so the workflow driver can surface
+    /// a `WorkflowEvent::AuthWarning`.
+    pub async fn revalidate_pat_for_workflow(
+        &self,
+        user_id: &str,
+        gh: &dyn GhClient,
+        orgs: &[String],
+    ) -> GitAuthResult<()> {
+        // Skip silently for App-only / Missing modes.
+        if !self.user_has_pat(user_id).await? {
+            return Ok(());
+        }
+        let pat = self.unseal_user_pat(user_id).await?;
+        let result = crate::auth::validate_pat(gh, pat.expose(), orgs).await;
+        if let Err(ref e) = result {
+            // Audit the failure.
+            let code = match e {
+                crate::auth::PatValidationError::InvalidPat => "invalid_pat",
+                crate::auth::PatValidationError::InsufficientScopes { .. } => {
+                    "insufficient_scopes"
+                }
+                crate::auth::PatValidationError::SsoAuthorizationRequired { .. } => {
+                    "sso_authorization_required"
+                }
+                crate::auth::PatValidationError::Transport(_) => "gh_transport_error",
+            };
+            let conn = self.db.conn().lock().await;
+            let _ = credential_audit::log(
+                &conn,
+                user_id,
+                None,
+                CredentialAuditKind::GithubPat,
+                None,
+                "validation_failed",
+                "error",
+                Some(code),
+            );
+        }
+        match result {
+            Ok(_) => Ok(()),
+            Err(crate::auth::PatValidationError::SsoAuthorizationRequired { org, sso_url }) => {
+                Err(GitAuthError::SsoAuthorizationRequired { org, sso_url })
+            }
+            Err(crate::auth::PatValidationError::InvalidPat) => Err(GitAuthError::Internal {
+                message: "PAT no longer valid (revoked or expired)".into(),
+            }),
+            Err(crate::auth::PatValidationError::InsufficientScopes { missing }) => {
+                Err(GitAuthError::Internal {
+                    message: format!(
+                        "PAT lost required scopes; missing: {}",
+                        missing.join(", ")
+                    ),
+                })
+            }
+            Err(crate::auth::PatValidationError::Transport(m)) => Err(GitAuthError::Internal {
+                message: format!("PAT revalidation transport error: {m}"),
+            }),
+        }
+    }
+
     /// Phase 2b.3 calls this at workflow start to re-check SSO authorisation
     /// for every org the workflow will touch. Phase 2b.2 only exposes it;
     /// the driver invocation lands later.
@@ -460,6 +529,32 @@ impl GitAuthResolver {
             author_email: Some(author_email),
             credential_row_id: row_id,
         })
+    }
+}
+
+/// Phase 2b.3.x: build a `WorkflowEvent::AuthWarning`-shaped payload from a
+/// [`GitAuthError`] for the dashboard to render. Pure helper so the engine
+/// can call this from both the restore path and the resume path without
+/// duplicating string-building logic.
+pub fn auth_warning_payload(err: &GitAuthError) -> (&'static str, String) {
+    match err {
+        GitAuthError::SsoAuthorizationRequired { org, sso_url } => (
+            "sso_authorization_required",
+            format!("SSO authorization required for org {org}: authorize at {sso_url}"),
+        ),
+        GitAuthError::UnauthenticatedGit { .. } => (
+            "unauthenticated_git",
+            "GitHub authentication missing for this workflow's owner".to_string(),
+        ),
+        GitAuthError::MasterKeyUnavailable { .. } => (
+            "master_key_unavailable",
+            "Master key not loaded; per-user credentials cannot be unsealed".to_string(),
+        ),
+        GitAuthError::GitHubAppTokenFetchFailed { message } => (
+            "github_app_token_fetch_failed",
+            message.clone(),
+        ),
+        GitAuthError::Internal { message } => ("auth_warning", message.clone()),
     }
 }
 
@@ -1108,5 +1203,173 @@ mod tests {
     fn test_resolver_with_app(db: Database) -> GitAuthResolver {
         let mgr = GitHubAppTokenManager::for_tests(1, 1);
         GitAuthResolver::new(db, Some(Arc::new(mgr)))
+    }
+
+    // ─── revalidate_pat_for_workflow (Phase 2b.3.x) ─────────────────────
+    //
+    // We need a `GhClient` mock here that the tests can swap between
+    // happy and SSO-failure responses. The one in `pat_validation::tests`
+    // isn't `pub(crate)`, so define a minimal local one. Hitting real
+    // github.com from tests is forbidden by the OSS-hygiene policy.
+
+    struct RevalMockGh {
+        user: std::sync::Mutex<crate::auth::gh_client::GhResponse>,
+        org: std::sync::Mutex<crate::auth::gh_client::GhResponse>,
+    }
+
+    impl RevalMockGh {
+        fn ok(scopes: &str) -> Self {
+            Self {
+                user: std::sync::Mutex::new(crate::auth::gh_client::GhResponse {
+                    status: 200,
+                    headers: vec![("X-OAuth-Scopes".into(), scopes.into())],
+                    body: "{\"login\":\"alice\"}".into(),
+                }),
+                org: std::sync::Mutex::new(crate::auth::gh_client::GhResponse {
+                    status: 200,
+                    headers: vec![],
+                    body: "{}".into(),
+                }),
+            }
+        }
+        fn sso_blocked() -> Self {
+            Self {
+                user: std::sync::Mutex::new(crate::auth::gh_client::GhResponse {
+                    status: 200,
+                    headers: vec![("X-OAuth-Scopes".into(), "repo, read:org".into())],
+                    body: "{\"login\":\"alice\"}".into(),
+                }),
+                org: std::sync::Mutex::new(crate::auth::gh_client::GhResponse {
+                    status: 403,
+                    headers: vec![(
+                        "X-GitHub-SSO".into(),
+                        "required; url=https://github.com/sso?org_id=42".into(),
+                    )],
+                    body: "{}".into(),
+                }),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::auth::gh_client::GhClient for RevalMockGh {
+        async fn api_user(
+            &self,
+            _pat: &str,
+        ) -> Result<crate::auth::gh_client::GhResponse, String> {
+            Ok(self.user.lock().unwrap().clone())
+        }
+        async fn api_org(
+            &self,
+            _pat: &str,
+            _org: &str,
+        ) -> Result<crate::auth::gh_client::GhResponse, String> {
+            Ok(self.org.lock().unwrap().clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn revalidate_pat_for_workflow_skips_when_user_has_no_pat() {
+        let db = in_mem_db_with_master_key(MasterKey::from_bytes([0x70; 32]));
+        seed_user(&db, "u-noah").await;
+        let resolver = GitAuthResolver::new(db.clone(), None);
+        let gh = RevalMockGh::ok("repo");
+        // No PAT row → must return Ok(()) without touching gh.
+        resolver
+            .revalidate_pat_for_workflow("u-noah", &gh, &[])
+            .await
+            .expect("must skip silently when user has no PAT");
+        // And must NOT write any audit row.
+        let audit_count: i64 = {
+            let conn = db.conn().lock().await;
+            conn.query_row(
+                "SELECT COUNT(*) FROM credential_audit WHERE user_id = 'u-noah'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(audit_count, 0, "no-PAT path must not write audit rows");
+    }
+
+    #[tokio::test]
+    async fn revalidate_pat_for_workflow_happy_path_returns_ok() {
+        let db = in_mem_db_with_master_key(MasterKey::from_bytes([0x71; 32]));
+        seed_user(&db, "u-alice").await;
+        seed_pat(&db, "u-alice", true).await;
+        let resolver = GitAuthResolver::new(db.clone(), None);
+        let gh = RevalMockGh::ok("repo, read:org");
+        resolver
+            .revalidate_pat_for_workflow("u-alice", &gh, &[])
+            .await
+            .expect("PAT with full scopes must pass revalidation");
+        // Success path must NOT log a validation_failed row.
+        let failed_count: i64 = {
+            let conn = db.conn().lock().await;
+            conn.query_row(
+                "SELECT COUNT(*) FROM credential_audit \
+                 WHERE user_id = 'u-alice' AND event = 'validation_failed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(failed_count, 0);
+    }
+
+    #[tokio::test]
+    async fn revalidate_pat_for_workflow_sso_failure_writes_audit_and_returns_typed_err() {
+        let db = in_mem_db_with_master_key(MasterKey::from_bytes([0x72; 32]));
+        seed_user(&db, "u-eve").await;
+        seed_pat(&db, "u-eve", true).await;
+        let resolver = GitAuthResolver::new(db.clone(), None);
+        let gh = RevalMockGh::sso_blocked();
+        // Pass the org so the org-check fires.
+        let err = resolver
+            .revalidate_pat_for_workflow("u-eve", &gh, &["acme".to_string()])
+            .await
+            .expect_err("SSO-blocked org must surface as Err");
+        // Must be typed (not Internal).
+        match err {
+            GitAuthError::SsoAuthorizationRequired { ref org, .. } => {
+                assert_eq!(org, "acme");
+            }
+            other => panic!("expected SsoAuthorizationRequired; got {other:?}"),
+        }
+        // And the failure must be recorded in credential_audit with the
+        // mapped error code.
+        let row: (String, Option<String>) = {
+            let conn = db.conn().lock().await;
+            conn.query_row(
+                "SELECT event, error_code FROM credential_audit \
+                 WHERE user_id = 'u-eve' AND event = 'validation_failed' \
+                 ORDER BY at DESC LIMIT 1",
+                [],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .expect("must write a validation_failed audit row")
+        };
+        assert_eq!(row.0, "validation_failed");
+        assert_eq!(row.1.as_deref(), Some("sso_authorization_required"));
+    }
+
+    #[test]
+    fn auth_warning_payload_maps_each_variant_to_stable_code() {
+        let (c, _) = auth_warning_payload(&GitAuthError::SsoAuthorizationRequired {
+            org: "acme".into(),
+            sso_url: "u".into(),
+        });
+        assert_eq!(c, "sso_authorization_required");
+
+        let (c, _) = auth_warning_payload(&GitAuthError::MasterKeyUnavailable {
+            user_id: "u".into(),
+        });
+        assert_eq!(c, "master_key_unavailable");
+
+        let (c, _) = auth_warning_payload(&GitAuthError::Internal {
+            message: "boom".into(),
+        });
+        // Internal must not leak the message into the code field.
+        assert!(!c.contains("boom"));
     }
 }

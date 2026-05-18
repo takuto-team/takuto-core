@@ -346,6 +346,36 @@ fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
 // auth_pin helpers: capture a pin at workflow start
 // ---------------------------------------------------------------------------
 
+/// Phase 2b.3.x — build a [`WorkerSecretsBundle`] from the user's **current**
+/// credentials (no workflow / no pin involved). Used by the ephemeral
+/// runners that aren't part of a workflow auth-pin chain:
+///
+/// - `improve_ticket` / `prompt_ticket` (one-shot Improve / Ask AI sessions)
+/// - `open_editor` (browser VS Code container, when the workflow has no pin)
+/// - `start_run_command` (dev-server / preview containers)
+///
+/// Reads the active provider from `[agent].provider`, looks up the user's
+/// active credential row for that provider, and builds the bundle the same
+/// way [`build`] does — same RAII `TempDir`, same secret-file layout, same
+/// `extra_env` discriminator.
+pub async fn build_for_endpoint(
+    config: &Config,
+    db: &crate::db::Database,
+    resolver: &Arc<GitAuthResolver>,
+    user_id: &str,
+) -> Result<WorkerSecretsBundle> {
+    // Synthesise a pin from the current config + DB. We don't write it
+    // anywhere; it's only used by `build`'s row-lookup logic.
+    let ephemeral_pin = AuthPin {
+        provider: config.agent.provider.as_str().to_string(),
+        provider_credential_row_id: None,
+        github_mode: "unknown".to_string(),
+        github_credential_row_id: None,
+        started_at: chrono::Utc::now().to_rfc3339(),
+    };
+    build(config, db, resolver, &ephemeral_pin, user_id).await
+}
+
 /// Build an [`AuthPin`] from the current state of the DB / config. Called
 /// once at the workflow's first agent step.
 pub async fn pin_for_workflow(
@@ -590,6 +620,123 @@ mod tests {
         let pin = pin_for_workflow(&cfg, &db, "u-alice").await.unwrap();
         assert_eq!(pin.provider, "claude");
         assert!(pin.provider_credential_row_id.is_none());
+    }
+
+    // ─── build_for_endpoint (Phase 2b.3.x) ────────────────────────────────
+    //
+    // The endpoint-side wrapper synthesizes an ephemeral pin internally.
+    // It must behave identically to `build` for credential lookup, but
+    // requires no caller-supplied pin (so improve_ticket / open_editor
+    // / start_run_command can be wired without first computing a pin).
+
+    #[tokio::test]
+    async fn build_for_endpoint_returns_bundle_when_credential_present() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "claude", b"sk-ant-endpoint").await;
+        let resolver = make_resolver(db.clone());
+        let cfg = fixed_config(AiAgentProvider::Claude);
+
+        let bundle = build_for_endpoint(&cfg, &db, &resolver, "u-alice")
+            .await
+            .expect("endpoint bundle build");
+        let secret_path = bundle
+            .provider_secret_file
+            .as_ref()
+            .expect("provider secret file");
+        let bytes = std::fs::read(secret_path).expect("read secret file");
+        assert_eq!(bytes, b"sk-ant-endpoint");
+    }
+
+    #[tokio::test]
+    async fn build_for_endpoint_surfaces_credential_required_for_no_cred_and_no_default() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        let resolver = make_resolver(db.clone());
+        // Default config has `allow_shared_default = false` for every
+        // provider — so a user with no credential MUST surface the
+        // structured `provider_credential_missing` error so the dashboard
+        // can prompt them to paste an API key.
+        let cfg = fixed_config(AiAgentProvider::Claude);
+
+        let err = build_for_endpoint(&cfg, &db, &resolver, "u-alice")
+            .await
+            .expect_err("must error when caller has no credential");
+        assert!(err.to_string().contains("provider_credential_missing"));
+    }
+
+    /// Phase 2b.3.x: `apply_secrets_bundle_to_args` (defined in
+    /// `container.rs`) must:
+    ///   1. Bind-mount the bundle's host_dir RO at /run/maestro-secrets, AND
+    ///   2. Copy every `extra_env` pair as `-e KEY=VALUE`, AND
+    ///   3. NEVER write secret bytes into the argv (those live in tmpfs).
+    ///
+    /// We exercise the helper from bundle.rs because `WorkerSecretsBundle`'s
+    /// `_temp_dir` field is private to this module, so the by-hand
+    /// constructor is only reachable here.
+    #[test]
+    fn apply_secrets_bundle_to_args_mounts_ro_and_copies_extra_env_only() {
+        use std::path::Path;
+        let dir = TempDir::new().unwrap();
+        let host_dir_path = dir.path().to_path_buf();
+        let bundle = WorkerSecretsBundle {
+            provider: AiAgentProvider::Claude,
+            provider_secret_file: Some(host_dir_path.join("claude")),
+            github_token_file: Some(host_dir_path.join("gh")),
+            git_author_name: Some("alice".into()),
+            git_author_email: Some("alice@noreply".into()),
+            base_url: Some("https://proxy.example".into()),
+            extra_args: vec![],
+            extra_env: vec![
+                ("MAESTRO_AUTH_BUNDLE".into(), "1".into()),
+                ("ANTHROPIC_BASE_URL".into(), "https://proxy.example".into()),
+                ("GIT_AUTHOR_NAME".into(), "alice".into()),
+            ],
+            _temp_dir: dir,
+        };
+
+        let mut args: Vec<String> = Vec::new();
+        crate::container::apply_secrets_bundle_to_args(&mut args, &bundle);
+
+        // The mount must be RO and point at the bundle's host_dir.
+        let mount_expected = format!(
+            "{}:/run/maestro-secrets:ro",
+            Path::new(&host_dir_path).to_string_lossy()
+        );
+        let has_volume = args
+            .windows(2)
+            .any(|w| w[0] == "-v" && w[1] == mount_expected);
+        assert!(
+            has_volume,
+            "expected RO mount {mount_expected:?} in args = {args:?}"
+        );
+
+        // All extra_env entries must be present as -e KEY=VALUE.
+        let has_env = |k: &str, v: &str| -> bool {
+            let needle = format!("{k}={v}");
+            args.windows(2).any(|w| w[0] == "-e" && w[1] == needle)
+        };
+        assert!(has_env("MAESTRO_AUTH_BUNDLE", "1"));
+        assert!(has_env("ANTHROPIC_BASE_URL", "https://proxy.example"));
+        assert!(has_env("GIT_AUTHOR_NAME", "alice"));
+
+        // CRITICAL: argv must NOT carry the bundled secret env names —
+        // those flow through tmpfs files only. Token bytes never appear
+        // in argv at all because the bundle exposes only file paths,
+        // not byte slices.
+        let argv_joined = args.join(" ");
+        assert!(
+            !argv_joined.contains("CLAUDE_CODE_OAUTH_TOKEN"),
+            "secret env name must not appear in argv"
+        );
+        assert!(
+            !argv_joined.contains("CURSOR_API_KEY"),
+            "secret env name must not appear in argv"
+        );
+        assert!(
+            !argv_joined.contains("GH_TOKEN="),
+            "secret env name must not appear in argv"
+        );
     }
 
     #[test]
