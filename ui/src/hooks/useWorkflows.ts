@@ -64,12 +64,19 @@ export function useWorkflows() {
         }
         return next;
       });
-      // Initialize dynamic forwards from API response (proxy URLs).
+      // Initialize dynamic forwards from API response (proxy URLs). The
+      // server is the source of truth: if it returns an empty mapping list
+      // for a workflow we already tracked, clear the stale entry — otherwise
+      // a `port_unforwarded` event that triggers a re-fetch would leave the
+      // old proxy URL hanging around.
       setDynamicForwards((prev) => {
         const next = { ...prev };
         for (const w of list) {
-          if (w.editor_port_mappings && w.editor_port_mappings.length > 0) {
-            next[w.ticket_key] = w.editor_port_mappings;
+          const mappings = w.editor_port_mappings ?? [];
+          if (mappings.length > 0) {
+            next[w.ticket_key] = mappings;
+          } else if (next[w.ticket_key]) {
+            delete next[w.ticket_key];
           }
         }
         return next;
