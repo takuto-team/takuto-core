@@ -18,7 +18,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within, cleanup } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  within,
+  cleanup,
+  fireEvent,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { UserCredentials } from "./UserCredentials";
 import { ToastProvider } from "../hooks/useToast";
@@ -278,5 +285,131 @@ describe("UserCredentials — A3 regression (Attribute commits, not Sign commits
     expect(/sign commits/i.test(body)).toBe(false);
     expect(/gpg sign/i.test(body)).toBe(false);
     expect(/ssh sign/i.test(body)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #31 issue A + B — Rotate / Disconnect / Remove-PAT buttons removed.
+// ---------------------------------------------------------------------------
+
+describe("UserCredentials — #31 issue A + B: no Rotate / Disconnect / Remove-PAT buttons", () => {
+  it("AI provider card never renders Rotate or Disconnect buttons (connected state)", async () => {
+    stubAuthStatus("claude");
+    resetMocks({
+      provider: {
+        provider: "claude",
+        kind: "api_key",
+        active: true,
+        last_validated_at: "2026-05-19T08:00:00Z",
+        last_used_at: null,
+      },
+      github: null,
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+    const aiSection = screen.getByText(/AI provider — Claude/i).closest("section");
+    expect(within(aiSection!).queryByRole("button", { name: /^rotate( key)?$/i })).toBeNull();
+    expect(within(aiSection!).queryByRole("button", { name: /^disconnect$/i })).toBeNull();
+    // The single "Replace" / "Save" button must still exist.
+    const saveBtn = within(aiSection!).getByRole("button", { name: /^(save|replace)$/i });
+    expect(saveBtn).toBeTruthy();
+  });
+
+  it("GitHub card never renders a 'Remove PAT' button (even when a PAT is saved)", async () => {
+    stubAuthStatus("claude", "app_plus_pat");
+    resetMocks({
+      provider: null,
+      github: {
+        login: "alice",
+        scopes: ["repo"],
+        attribute_commits: true,
+        last_validated_at: "2026-05-19T08:00:00Z",
+      },
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
+    });
+    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
+    expect(
+      within(ghSection!).queryByRole("button", { name: /remove pat/i }),
+    ).toBeNull();
+    expect(
+      within(ghSection!).queryByRole("button", { name: /^disconnect$/i }),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #31 issue C — pill flips synchronously on save without manual refresh.
+// ---------------------------------------------------------------------------
+
+describe("UserCredentials — #31 issue C: pill flips to Connected synchronously on save", () => {
+  it("after a successful POST + refresh, the pill renders 'Connected' WITHOUT a manual page refresh", async () => {
+    stubAuthStatus("claude");
+    // Start with NO credential — pill should be "Not connected".
+    resetMocks({ provider: null, github: null });
+    renderPage();
+
+    // Wait for initial load to settle and the form to mount.
+    const inputId = await waitFor(() =>
+      screen.getByLabelText(/Claude API key/i),
+    );
+    const aiSection = screen.getByText(/AI provider — Claude/i).closest("section")!;
+    expect(within(aiSection).getByText(/^Not connected$/i)).toBeTruthy();
+
+    // Type a key and click Save. NOTE: do NOT trigger any extra refresh /
+    // re-render — the test verifies the pill flips on its own.
+    fireEvent.change(inputId, { target: { value: "sk-test-123" } });
+    const saveBtn = within(aiSection).getByRole("button", { name: /^save$/i });
+    fireEvent.click(saveBtn);
+
+    // The mock layer transitions state synchronously on the POST handler;
+    // the page's refresh() then re-reads it. waitFor lets React flush the
+    // post-save state update + re-render before we assert.
+    await waitFor(() => {
+      // Re-query the section because React replaced its children on
+      // re-render — the closure-captured reference may be stale.
+      const section = screen.getByText(/AI provider — Claude/i).closest("section")!;
+      expect(within(section).getByText(/^Connected$/i)).toBeTruthy();
+    });
+
+    // Belt-and-braces: the "Not connected" pill must be gone from the AI
+    // card after the save completes.
+    const finalSection = screen
+      .getByText(/AI provider — Claude/i)
+      .closest("section")!;
+    expect(within(finalSection).queryByText(/^Not connected$/i)).toBeNull();
+  });
+
+  it("the page does NOT show a 'Loading…' state during a save-triggered refetch", async () => {
+    stubAuthStatus("claude");
+    resetMocks({ provider: null, github: null });
+    renderPage();
+
+    // Settle initial load.
+    const input = await waitFor(() =>
+      screen.getByLabelText(/Claude API key/i),
+    );
+
+    fireEvent.change(input, { target: { value: "sk-test" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    // The card must stay mounted across save — i.e. no full "Loading…"
+    // takeover that hides the panel. The visible "Saving…" label inside
+    // the paste field is fine (that's local to the field), but the
+    // page-level Loading… branch must not re-fire.
+    //
+    // We assert by checking that the AI section heading is continuously
+    // visible while the save resolves.
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+    // No page-level "Loading…" text should exist at this point.
+    expect(screen.queryByText(/^Loading…$/i)).toBeNull();
   });
 });

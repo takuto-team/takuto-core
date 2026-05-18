@@ -22,8 +22,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   apiJson,
-  deleteGithubPat,
-  deleteProviderCredential,
+  // deleteGithubPat / deleteProviderCredential intentionally NOT imported —
+  // task #31 removed the Disconnect / Remove-PAT buttons because the
+  // single Replace/Save flow covers rotation and revocation happens on
+  // the provider side (anthropic.com / cursor.com / github.com).
   fetchUserCredentials,
   patchGithubSettings,
   setGithubPat,
@@ -59,33 +61,54 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Split state: `initialLoading` gates the first paint only. Subsequent
+  // refetches (triggered by save handlers) do NOT flip it back to true, so
+  // the credential panels stay mounted across save → refresh → toast.
+  //
+  // **Root cause of #31 issue C:** the previous `refresh()` set
+  // `loading=true` for the *post-save* refetch as well, which unmounted the
+  // entire credential panel (it's behind `{!loading && <Panel/>}`). When
+  // the panel remounted with the fresh `credentials` prop, its local
+  // `apiKey`/`saving` state was reset, the toast had ALREADY fired during
+  // the loading window, and React's commit/batch ordering left the user
+  // looking at a freshly-mounted panel whose pill *was* "Connected" but
+  // whose perceived experience was: "I pressed Save, the page blanked, the
+  // pill is back to Not connected (until I refresh)." On slow networks the
+  // unmount window also collapsed back to the empty-state branch before
+  // remounting, which produced exactly the symptom the user reported.
+  //
+  // The fix is structural — don't ever unmount the panel during a save.
+  // The save handler stays linear: POST → await background refetch → toast.
+  const [initialLoading, setInitialLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   /**
-   * Returns the in-flight Promise so callers can `await` it. The save
-   * handlers below rely on this to refetch BEFORE toasting "connected" —
-   * otherwise the pill stays "not connected" until the next render tick
-   * even though the server already accepted the row.
+   * Returns the in-flight Promise so callers can `await` it. Refreshes
+   * both `creds` AND `auth` (provider_selected + github_mode live on
+   * /api/auth/status). Crucially does NOT flip `initialLoading`, so the
+   * panel stays mounted while the refetch is in flight.
    */
   const refresh = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const [c, a] = await Promise.all([
-        fetchUserCredentials().catch(() => null),
-        apiJson<AuthStatus>("/api/auth/status").catch(() => null),
-      ]);
-      setCreds(c);
-      setAuth(a);
-      if (!c) setLoadError("Could not load your credentials.");
-    } finally {
-      setLoading(false);
-    }
+    const [c, a] = await Promise.all([
+      fetchUserCredentials().catch(() => null),
+      apiJson<AuthStatus>("/api/auth/status").catch(() => null),
+    ]);
+    setCreds(c);
+    setAuth(a);
+    setLoadError(c ? null : "Could not load your credentials.");
   }, []);
 
+  // Initial mount: refetch, then flip `initialLoading` once. After this
+  // the panels are mounted for the lifetime of the page; save handlers
+  // call `refresh()` directly without touching `initialLoading`.
   useEffect(() => {
-    refresh();
+    let mounted = true;
+    refresh().finally(() => {
+      if (mounted) setInitialLoading(false);
+    });
+    return () => {
+      mounted = false;
+    };
   }, [refresh]);
 
   /**
@@ -148,12 +171,14 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
-        {loading && <p className="text-sm text-gray-500">Loading…</p>}
-        {!loading && loadError && (
+        {initialLoading && (
+          <p className="text-sm text-gray-500">Loading…</p>
+        )}
+        {!initialLoading && loadError && (
           <p className="text-sm text-red-400">{loadError}</p>
         )}
 
-        {!loading && (
+        {!initialLoading && (
           <>
             {showProviderMismatch && (
               <div
@@ -174,11 +199,12 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
               onSave={async (apiKey) => {
                 try {
                   await setProviderCredential(activeProvider, { api_key: apiKey });
-                  // Re-read the server state BEFORE toasting "connected" so
+                  // Refresh the server state BEFORE toasting "connected" so
                   // the pill flips at the same instant the user sees the
-                  // success message. Fixes the original bug where the row
-                  // was saved but the pill stayed "not connected" until the
-                  // user navigated away and back.
+                  // success message. `refresh()` no longer toggles the
+                  // page-level loading flag, so the panel stays mounted —
+                  // see the comment on `refresh` above for the root-cause
+                  // analysis (#31 issue C).
                   await refresh();
                   showToast(
                     `${PROVIDER_LABEL[activeProvider] ?? activeProvider} connected.`,
@@ -186,18 +212,6 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
                   );
                 } catch (e: unknown) {
                   handleSurfaceError(e, "Could not save your credential.");
-                }
-              }}
-              onDisconnect={async () => {
-                try {
-                  await deleteProviderCredential(activeProvider);
-                  await refresh();
-                  showToast(
-                    `${PROVIDER_LABEL[activeProvider] ?? activeProvider} disconnected.`,
-                    "info",
-                  );
-                } catch (e: unknown) {
-                  handleSurfaceError(e, "Could not disconnect.");
                 }
               }}
             />
@@ -224,17 +238,6 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
                   handleSurfaceError(e, "Could not save your GitHub token.");
                 }
               }}
-              onRemovePat={async () => {
-                try {
-                  await deleteGithubPat();
-                  // Refresh both creds (github → null) AND auth.github_mode
-                  // (app_plus_pat → app, or pat_only → pat_required, etc.).
-                  await refresh();
-                  showToast("GitHub token removed.", "info");
-                } catch (e: unknown) {
-                  handleSurfaceError(e, "Could not remove your GitHub token.");
-                }
-              }}
               onToggleAttributeCommits={async (attribute) => {
                 try {
                   await patchGithubSettings({ attribute_commits: attribute });
@@ -259,14 +262,12 @@ interface AiCredentialPanelProps {
   activeProvider: string;
   credentials: UserCredentialsStatus | null;
   onSave: (apiKey: string) => Promise<void>;
-  onDisconnect: () => Promise<void>;
 }
 
 function AiCredentialPanel({
   activeProvider,
   credentials,
   onSave,
-  onDisconnect,
 }: AiCredentialPanelProps) {
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -290,15 +291,6 @@ function AiCredentialPanel({
     try {
       await onSave(apiKey);
       setApiKey("");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const disconnect = async () => {
-    setSaving(true);
-    try {
-      await onDisconnect();
     } finally {
       setSaving(false);
     }
@@ -331,32 +323,11 @@ function AiCredentialPanel({
             You'll be able to paste a key here once that lands.
           </p>
         </div>
-      ) : hasMatchingCredential ? (
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setApiKey("")}
-            className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-            onClickCapture={(e) => {
-              // Reveal the paste field by clearing local input — the form
-              // below shows whenever the user has nothing typed yet.
-              e.stopPropagation();
-            }}
-          >
-            Rotate key
-          </button>
-          <button
-            type="button"
-            disabled={saving}
-            onClick={disconnect}
-            className="text-sm px-4 py-2 rounded-lg bg-red-900/40 text-red-300 border border-red-700/50 hover:bg-red-900/70 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-          >
-            Disconnect
-          </button>
-        </div>
-      ) : null}
-
-      {!isPhase4 && (
+      ) : (
+        // Issues A + B from #31: no Rotate / Disconnect buttons.
+        // The single Replace/Save button covers rotation; revocation lives
+        // on the provider side (anthropic.com / cursor.com / github.com).
+        // To wipe the local row, the user pastes a different key.
         <CredentialPasteField
           label={`${label} API key`}
           value={apiKey}
@@ -395,7 +366,6 @@ interface GitHubCredentialPanelProps {
   github: UserCredentialsStatus["github"] | null;
   authMode: GithubAuthMode | undefined;
   onSavePat: (pat: string, attributeCommits: boolean) => Promise<void>;
-  onRemovePat: () => Promise<void>;
   onToggleAttributeCommits: (next: boolean) => Promise<void>;
 }
 
@@ -403,7 +373,6 @@ function GitHubCredentialPanel({
   github,
   authMode,
   onSavePat,
-  onRemovePat,
   onToggleAttributeCommits,
 }: GitHubCredentialPanelProps) {
   const [pat, setPat] = useState("");
@@ -431,14 +400,8 @@ function GitHubCredentialPanel({
     }
   };
 
-  const remove = async () => {
-    setSaving(true);
-    try {
-      await onRemovePat();
-    } finally {
-      setSaving(false);
-    }
-  };
+  // Issue B from #31: no "Remove PAT" button. PAT revocation happens on
+  // github.com; to wipe the local row the user saves a different token.
 
   const toggle = async (next: boolean) => {
     setAttribute(next);
@@ -550,18 +513,6 @@ function GitHubCredentialPanel({
         }
       />
 
-      {hasPat && (
-        <div className="flex justify-end">
-          <button
-            type="button"
-            disabled={saving}
-            onClick={remove}
-            className="text-sm px-4 py-2 rounded-lg bg-red-900/40 text-red-300 border border-red-700/50 hover:bg-red-900/70 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-          >
-            Remove PAT
-          </button>
-        </div>
-      )}
     </section>
   );
 }
