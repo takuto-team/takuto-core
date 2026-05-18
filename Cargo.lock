@@ -1082,6 +1082,7 @@ dependencies = [
 name = "maestro-web"
 version = "0.5.15"
 dependencies = [
+ "async-trait",
  "axum",
  "axum-extra",
  "base64",

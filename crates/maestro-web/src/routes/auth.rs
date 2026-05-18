@@ -50,10 +50,19 @@ pub struct AuthStatus {
     /// Phase 0: `true` when any critical warning exists in `system_status`.
     /// The dashboard uses this to render the degraded-mode banner.
     pub degraded: bool,
+    /// Phase 2b.1: `true` when the caller is authenticated AND has an
+    /// active provider credential row for the deployment-wide active
+    /// provider. `false` for unauthenticated callers and for users who
+    /// haven't pasted any credential yet. Drives the per-user "set up your
+    /// provider" banner on the dashboard.
+    pub provider_credential_present: bool,
 }
 
 /// Public probe: whether the server requires dashboard login.
-pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
+pub async fn auth_status(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<AuthStatus> {
     // Phase 1: system_status is mutable (refreshed after PUT /api/config/agent),
     // so take a snapshot under the read lock and drop it before any other awaits.
     let (provider_selected, github_mode, degraded) = {
@@ -63,6 +72,41 @@ pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
             s.github.mode.clone(),
             s.has_critical(),
         )
+    };
+
+    // Phase 2b.1: optionally resolve the caller's identity to surface their
+    // per-user credential state. The endpoint stays public (no auth gate);
+    // an unauthenticated request reports `provider_credential_present:
+    // false` and the rest of the fields exactly as before.
+    let provider_credential_present = if let Some(ref db) = state.db {
+        let active_provider = provider_selected.clone();
+        let cookie = crate::auth::session_cookie_from_headers(&headers)
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        if cookie.is_empty() {
+            false
+        } else {
+            let db_clone = db.clone();
+            tokio::task::spawn_blocking(move || {
+                let conn = db_clone.conn().blocking_lock();
+                let user_id = match crate::auth::validate_db_session(&conn, &cookie) {
+                    Some(uid) => uid,
+                    None => return false,
+                };
+                matches!(
+                    maestro_core::db::provider_credentials::find_active(
+                        &conn,
+                        &user_id,
+                        &active_provider,
+                    ),
+                    Ok(Some(_))
+                )
+            })
+            .await
+            .unwrap_or(false)
+        }
+    } else {
+        false
     };
 
     if let Some(ref db) = state.db {
@@ -80,6 +124,7 @@ pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
             provider_selected,
             github_mode,
             degraded,
+            provider_credential_present,
         });
     }
 
@@ -92,6 +137,7 @@ pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
         provider_selected,
         github_mode,
         degraded,
+        provider_credential_present,
     })
 }
 

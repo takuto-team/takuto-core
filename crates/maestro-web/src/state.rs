@@ -93,6 +93,10 @@ pub struct AppState {
     pub config_writer: Option<Arc<ConfigWriter>>,
     /// `true` while an async `POST /api/repos/clone` operation is in progress.
     pub clone_in_progress: Arc<AtomicBool>,
+    /// Phase 2b.1: injectable shim around the `gh` CLI for per-user PAT
+    /// validation. Production uses [`maestro_core::auth::RealGhClient`];
+    /// tests inject a `MockGhClient` so the suite never touches github.com.
+    pub gh_client: maestro_core::auth::SharedGhClient,
     /// Registry of unguessable session path tokens (GH-45 shared-port proxy).
     /// Maps `{path-token} → SessionRoute` so `/s/{token}/...` requests can be
     /// dispatched to the right loopback backend (editor or terminal). The

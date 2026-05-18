@@ -953,7 +953,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         config_path: config_path.clone(),
         config_writer: Some(config_writer.clone()),
         clone_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
+            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
     };
     let app = build_router(app_state);
 

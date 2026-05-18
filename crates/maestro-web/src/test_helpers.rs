@@ -76,7 +76,8 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
         config_path: std::env::temp_dir().join("config.toml"),
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),
-        path_token_registry: crate::session_registry::PathTokenRegistry::new(),
+        gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
+            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
     }
 }
 

@@ -674,7 +674,8 @@ mod tests {
                 config_path: std::env::temp_dir().join("config.toml"),
                 config_writer: None,
                 clone_in_progress: Arc::new(AtomicBool::new(false)),
-                path_token_registry: PathTokenRegistry::new(),
+                gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
+            path_token_registry: PathTokenRegistry::new(),
             }
         }
 

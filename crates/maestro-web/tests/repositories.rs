@@ -99,7 +99,8 @@ fn test_state_isolated() -> (AppState, TempDir) {
         config_path: dir.path().join("config.toml"),
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),
-        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
+            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
     };
     (state, dir)
 }

@@ -273,6 +273,29 @@ pub fn build_router(state: AppState) -> Router {
             put(routes::config_agent::put_agent_config),
         )
         .route("/config/reload", post(routes::config::reload_config))
+        // Phase 2b.1: per-user credential surface (04_architecture.md §3).
+        .route(
+            "/users/me/credentials",
+            get(routes::credentials::get_my_credentials),
+        )
+        .route(
+            "/users/me/credentials/{provider}",
+            post(routes::credentials::post_provider_credential)
+                .delete(routes::credentials::delete_provider_credential),
+        )
+        .route(
+            "/users/me/github-pat",
+            post(routes::credentials::post_github_pat)
+                .delete(routes::credentials::delete_github_pat),
+        )
+        .route(
+            "/users/me/github",
+            axum::routing::patch(routes::credentials::patch_github_attribution),
+        )
+        .route(
+            "/admin/users/{id}/github-status",
+            get(routes::credentials::get_admin_github_status),
+        )
         .route("/polling", get(routes::polling::get_polling_status))
         .route("/polling/pause", post(routes::polling::pause_polling))
         .route("/polling/resume", post(routes::polling::resume_polling))
