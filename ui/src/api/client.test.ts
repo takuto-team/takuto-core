@@ -8,6 +8,7 @@ import {
   apiPost,
   apiPostJson,
   addRepository,
+  fetchOnboardingStatus,
   listMyRepositories,
   listAvailableRepositories,
   removeRepository,
@@ -122,6 +123,47 @@ describe("apiPostJson()", () => {
     Object.defineProperty(res, "ok", { value: false });
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
     await expect(apiPostJson("/api/start", {})).rejects.toThrow("conflict");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Onboarding status (Phase 0 — auth-overhaul).
+// ---------------------------------------------------------------------------
+
+describe("fetchOnboardingStatus()", () => {
+  it("returns the parsed SystemStatus on 200", async () => {
+    const status = {
+      config_toml_ok: true,
+      github: { mode: "app", app_configured: true, app_id: 1, app_name: "x" },
+      provider: {
+        selected: "claude",
+        deployment_default_credential_present: true,
+        headless_capable: true,
+        custom_base_url: null,
+      },
+      ticketing: { system: "jira", acli_ok: true },
+      per_user_required: true,
+      warnings: [],
+    };
+    mockFetch(200, status);
+    const got = await fetchOnboardingStatus();
+    expect(fetch).toHaveBeenCalledWith("/api/onboarding/status", {
+      credentials: "same-origin",
+    });
+    expect(got).toEqual(status);
+  });
+
+  it("returns null when the server has no such endpoint (404)", async () => {
+    mockFetch(404, "not found");
+    const got = await fetchOnboardingStatus();
+    expect(got).toBeNull();
+  });
+
+  it("throws on other non-2xx responses", async () => {
+    const res = new Response("boom", { status: 500 });
+    Object.defineProperty(res, "ok", { value: false });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
+    await expect(fetchOnboardingStatus()).rejects.toThrow("boom");
   });
 });
 

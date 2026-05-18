@@ -6,6 +6,7 @@ pub mod auth;
 pub mod config;
 pub mod github;
 pub mod jira;
+pub mod onboarding;
 pub mod polling;
 pub mod repos;
 pub mod repositories;

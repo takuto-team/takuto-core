@@ -3,8 +3,19 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { apiJson, apiPost, listMyRepositories, type RepositoryRow } from "../api/client";
-import type { ConfigResponse, WorkflowDefinition, WorkflowEvent } from "../api/types";
+import {
+  apiJson,
+  apiPost,
+  fetchOnboardingStatus,
+  listMyRepositories,
+  type RepositoryRow,
+} from "../api/client";
+import type {
+  ConfigResponse,
+  SystemStatus,
+  WorkflowDefinition,
+  WorkflowEvent,
+} from "../api/types";
 import { useToast } from "../hooks/useToast";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useWorkflows } from "../hooks/useWorkflows";
@@ -18,6 +29,7 @@ import { TicketDetailModal } from "../components/modals/TicketDetailModal";
 import { PasteDescriptionModal } from "../components/modals/PasteDescriptionModal";
 import { ReportModal } from "../components/modals/ReportModal";
 import { NoJiraAlertModal } from "../components/modals/NoJiraAlertModal";
+import { OnboardingBanner } from "../components/OnboardingBanner";
 import { SystemErrorAlert } from "../components/SystemErrorAlert";
 
 interface Props {
@@ -28,6 +40,22 @@ interface Props {
 export function Dashboard({ onLogout, authEnabled }: Props) {
   const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
+  // Phase 0 banner: `undefined` = fetch in flight, `null` = endpoint 404'd
+  // (older server, fall back to ConfigResponse.preflight_error), otherwise
+  // the structured status. See 04_architecture.md §1.
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null | undefined>(
+    undefined,
+  );
+
+  const refreshOnboardingStatus = useCallback(() => {
+    fetchOnboardingStatus()
+      .then(setSystemStatus)
+      .catch(() => {
+        // Network or 5xx — treat as "endpoint not available" so the legacy
+        // preflight_error string is rendered instead of a blank banner.
+        setSystemStatus(null);
+      });
+  }, []);
   const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts, dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState: _resetState } = useWorkflows();
   const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
   const defsFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -96,6 +124,16 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
     refreshHasAnyRepo();
   }, [fetchWorkflowDefs, refreshHasAnyRepo]);
 
+  // Phase 0 onboarding status — fetch on mount and refetch when the window
+  // regains focus. The `onboarding_changed` WS event handler in
+  // handleEventWithDefs covers server-pushed updates once Phase 1 ships it.
+  useEffect(() => {
+    refreshOnboardingStatus();
+    const onFocus = () => refreshOnboardingStatus();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshOnboardingStatus]);
+
   // Wrap handleEvent to also re-fetch definitions on relevant events
   const handleEventWithDefs = useCallback(
     (evt: WorkflowEvent) => {
@@ -110,8 +148,15 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         if (defsFetchTimer.current) clearTimeout(defsFetchTimer.current);
         defsFetchTimer.current = setTimeout(fetchWorkflowDefs, 500);
       }
+
+      // Phase 0: re-fetch onboarding status on the dedicated server-pushed
+      // event. The event itself ships in Phase 1; declaring the handler now
+      // means we'll pick up server-side state changes the moment it does.
+      if (evt.event_type === "onboarding_changed") {
+        refreshOnboardingStatus();
+      }
     },
-    [handleEvent, fetchWorkflowDefs]
+    [handleEvent, fetchWorkflowDefs, refreshOnboardingStatus]
   );
 
   const { connected } = useWebSocket(handleEventWithDefs);
@@ -267,23 +312,12 @@ export function Dashboard({ onLogout, authEnabled }: Props) {
         onSelectRepo={setActiveRepoName}
       />
 
-      {/* Preflight error banner */}
-      {config?.preflight_error && (
-        <div className="bg-red-950/80 border-b border-red-700 px-4 py-3 text-red-200">
-          <div className="max-w-7xl mx-auto flex items-start gap-3">
-            <span className="text-red-400 text-lg leading-none mt-0.5">⚠</span>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-red-300 text-sm">Maestro is not ready — setup required</p>
-              {config.preflight_error.split("\n").map((line, i) => (
-                <p key={i} className="text-xs text-red-300/80 mt-1 font-mono break-all">{line}</p>
-              ))}
-              <p className="text-xs text-red-300/70 mt-1">
-                Run <code className="bg-red-900/50 px-1 rounded">docker compose run --rm -it maestro setup</code> to complete setup, then restart.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Onboarding / preflight banner — driven by /api/onboarding/status with
+          a fallback to ConfigResponse.preflight_error for older servers. */}
+      <OnboardingBanner
+        status={systemStatus}
+        legacyPreflightError={config?.preflight_error ?? null}
+      />
 
       {/* Dry mode banner */}
       {dryMode && (

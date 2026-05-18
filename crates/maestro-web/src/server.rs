@@ -104,6 +104,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/status", get(routes::auth::auth_status))
         .route("/auth/logout", post(routes::auth::logout))
         .route("/auth/register", post(routes::auth::register))
+        // Phase 0 — structured SystemStatus for the degraded-mode dashboard
+        // banner. Public per AGENTS.md / 04_architecture.md §1.3 (no auth, no
+        // CSRF gate beyond the safe-method short-circuit).
+        .route(
+            "/onboarding/status",
+            get(routes::onboarding::onboarding_status),
+        )
         .merge(login_rate_limited)
         // CSRF: reject cross-origin mutating requests before they hit the
         // login/register/recover handlers. Safe methods short-circuit inside

@@ -348,12 +348,20 @@ if [ ! -f /etc/maestro/env ]; then
 fi
 
 echo "[maestro] Running auth preflight..."
+# Phase 0 (04_architecture.md §1, §8): `maestro preflight` now always exits 0
+# under normal mode — every former hard-error becomes a structured warning
+# served from GET /api/onboarding/status. The block below is retained for ONE
+# release as a back-compat fallback: when the SQLite DB is unavailable the UI
+# cannot query the endpoint, so we still surface stderr text via the legacy
+# env var. The CLI's `--strict` flag (not used here) is the CI hard-fail mode.
 PREFLIGHT_ERROR=""
 if ! PREFLIGHT_OUT=$(/usr/local/bin/maestro --config "$CONFIG_FILE" preflight 2>&1); then
     PREFLIGHT_ERROR="$PREFLIGHT_OUT"
-    echo "[maestro] Preflight failed: $PREFLIGHT_ERROR" >&2
-    echo "[maestro] Starting web server in degraded mode — open http://localhost:8080 for details." >&2
+    echo "[maestro] Preflight reported a failure: $PREFLIGHT_ERROR" >&2
+    echo "[maestro] Starting web server in degraded mode — UI reads GET /api/onboarding/status." >&2
 fi
+# Legacy — UI reads from GET /api/onboarding/status going forward; this env var
+# is the fallback when the DB is unavailable.
 export MAESTRO_PREFLIGHT_ERROR="$PREFLIGHT_ERROR"
 
 # When using a DinD sidecar (DOCKER_HOST=tcp://...), wait for the daemon.

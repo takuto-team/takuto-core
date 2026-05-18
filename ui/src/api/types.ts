@@ -150,6 +150,56 @@ export interface AuthStatus {
   dashboard_auth_enabled: boolean;
   multi_user: boolean;
   setup_required: boolean;
+  /** Phase 0 (04_architecture §1.3): present once the extended /api/auth/status
+   *  ships in the auth-overhaul Rust changes. Optional for back-compat. */
+  provider_selected?: string;
+  github_mode?: string;
+  degraded?: boolean;
+}
+
+/**
+ * Severity of a structured onboarding warning. Mirrors the Rust enum in
+ * 04_architecture.md §1.2. `critical` blocks the user from running workflows
+ * and is what the dashboard banner surfaces; `warning` / `info` are reserved
+ * for non-blocking hints (Phase 1+).
+ */
+export type WarningSeverity = "critical" | "warning" | "info";
+
+/** A single entry in `SystemStatus.warnings`. See 04_architecture.md §1.2. */
+export interface StructuredWarning {
+  code: string;
+  severity: WarningSeverity;
+  message: string;
+}
+
+/**
+ * Phase 0 system status returned by `GET /api/onboarding/status`. Mirrors the
+ * Rust struct in 04_architecture.md §1.2. The dashboard banner is derived
+ * from `warnings` (filtered to `severity === "critical"`).
+ *
+ * Back-compat: when the server is older and the endpoint 404s, the dashboard
+ * falls back to the legacy `ConfigResponse.preflight_error` string.
+ */
+export interface SystemStatus {
+  config_toml_ok: boolean;
+  github: {
+    mode: "app" | "pat_required" | "missing";
+    app_configured: boolean;
+    app_id: number | null;
+    app_name: string | null;
+  };
+  provider: {
+    selected: string;
+    deployment_default_credential_present: boolean;
+    headless_capable: boolean;
+    custom_base_url: string | null;
+  };
+  ticketing: {
+    system: "none" | "jira" | "github";
+    acli_ok: boolean;
+  };
+  per_user_required: boolean;
+  warnings: StructuredWarning[];
 }
 
 export interface User {

@@ -290,6 +290,292 @@ pub struct PreflightResult {
     pub acli_ok: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Phase 0 — Structured SystemStatus (boot soft-fail)
+// ---------------------------------------------------------------------------
+
+/// Snapshot of the deployment's boot-time auth + integration state.
+///
+/// Source-of-truth shape: `tmp/multi-agents/04_architecture.md §1.2`.
+///
+/// `collect_system_status` runs every former-hard-error check (gh, provider for
+/// the active provider, acli) and returns a populated value **without ever
+/// returning `Err`**. Every former hard-error becomes a structured warning with
+/// `severity = "critical"` so the dashboard can render a soft-fail banner
+/// instead of the binary refusing to boot.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SystemStatus {
+    /// `true` when the server got far enough to compute this struct.
+    /// (When `config.toml` is missing/unparseable the server does not start at
+    /// all; this field is therefore always `true` in any served response.)
+    pub config_toml_ok: bool,
+    pub github: GitHubStatus,
+    pub provider: ProviderStatus,
+    pub ticketing: TicketingStatus,
+    /// `true` when the SQLite database is initialised — i.e. multi-user auth is
+    /// active and per-user credentials are required (vs. legacy single-tenant).
+    pub per_user_required: bool,
+    pub warnings: Vec<StructuredWarning>,
+}
+
+/// GitHub integration state.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GitHubStatus {
+    /// `"app"` when a GitHub App is configured; `"pat_required"` when the host
+    /// has a personal `gh` auth that workflows can fall back to; `"missing"`
+    /// otherwise. Phase 2 will add the per-user PAT layer (FR-4.2).
+    pub mode: String,
+    pub app_configured: bool,
+    pub app_id: Option<u64>,
+    pub app_name: Option<String>,
+}
+
+/// Provider integration state for the active AI agent (`[agent] provider`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProviderStatus {
+    /// `"claude" | "cursor" | "codex" | "opencode" | "none"`. Only `claude` and
+    /// `cursor` are wired in v0; the other values are reserved for Phase 4.
+    pub selected: String,
+    /// `true` when a deployment-wide env-var credential is present
+    /// (`CLAUDE_CODE_OAUTH_TOKEN` / `CURSOR_API_KEY`).
+    pub deployment_default_credential_present: bool,
+    /// `true` when the provider can run without a TTY using on-disk credentials
+    /// or the deployment-default env var.
+    pub headless_capable: bool,
+    /// Custom base URL when set (e.g. `ANTHROPIC_BASE_URL`). Returned as-is from
+    /// the env var; the value is **never a secret** (URLs only — secrets are
+    /// the bearer token, not the endpoint).
+    pub custom_base_url: Option<String>,
+}
+
+/// Ticketing integration state derived from `[general] ticketing_system`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TicketingStatus {
+    /// `"none" | "jira" | "github"`.
+    pub system: String,
+    /// `true` when `acli jira auth status` succeeded (only meaningful when
+    /// `system == "jira"`; always `false` for the other two).
+    pub acli_ok: bool,
+}
+
+/// A single structured warning. Severity discriminates "must fix before
+/// workflows can run" (`critical`) from "advisory" (`warning` / `info`).
+///
+/// `code` is a short, stable identifier the UI can `switch()` on to render
+/// localised copy / setup links. `message` is a human-readable fallback.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StructuredWarning {
+    /// e.g. `"gh_auth_missing"`, `"claude_not_authenticated"`,
+    /// `"cursor_not_authenticated"`, `"acli_not_authenticated"`.
+    pub code: String,
+    /// `"critical" | "warning" | "info"`.
+    pub severity: String,
+    pub message: String,
+}
+
+impl StructuredWarning {
+    fn critical(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            severity: "critical".to_string(),
+            message: message.into(),
+        }
+    }
+
+    fn warning(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            severity: "warning".to_string(),
+            message: message.into(),
+        }
+    }
+}
+
+impl SystemStatus {
+    /// `true` when any `severity = "critical"` warning is present. The dashboard
+    /// uses this to flip into degraded-mode rendering.
+    pub fn has_critical(&self) -> bool {
+        self.warnings.iter().any(|w| w.severity == "critical")
+    }
+}
+
+/// Default `SystemStatus` used by tests / fixtures that don't go through
+/// `collect_system_status`. All booleans are conservative defaults.
+impl Default for SystemStatus {
+    fn default() -> Self {
+        Self {
+            config_toml_ok: true,
+            github: GitHubStatus {
+                mode: "missing".to_string(),
+                app_configured: false,
+                app_id: None,
+                app_name: None,
+            },
+            provider: ProviderStatus {
+                selected: "claude".to_string(),
+                deployment_default_credential_present: false,
+                headless_capable: false,
+                custom_base_url: None,
+            },
+            ticketing: TicketingStatus {
+                system: "none".to_string(),
+                acli_ok: false,
+            },
+            per_user_required: false,
+            warnings: Vec::new(),
+        }
+    }
+}
+
+/// Collect a structured `SystemStatus` snapshot. **Never returns `Err`** —
+/// every former hard error becomes a `severity = "critical"` warning. This is
+/// the Phase 0 replacement for `preflight()` and is what the dashboard reads
+/// via `GET /api/onboarding/status`.
+pub fn collect_system_status(config: &Config) -> SystemStatus {
+    let mut warnings: Vec<StructuredWarning> = Vec::new();
+
+    // ── GitHub ────────────────────────────────────────────────────────────
+    let github = if config.github.is_configured() {
+        GitHubStatus {
+            mode: "app".to_string(),
+            app_configured: true,
+            app_id: Some(config.github.app_id),
+            app_name: if config.github.app_name.trim().is_empty() {
+                None
+            } else {
+                Some(config.github.app_name.clone())
+            },
+        }
+    } else {
+        // No App configured — fall back to host `gh` auth. The presence/validity
+        // of that auth is informational at this layer (Phase 2 introduces the
+        // per-user PAT). When the active host token is invalid we surface a
+        // critical warning instead of returning Err.
+        let token_exists = auth_cmd_ok("gh", &["auth", "token", "-h", "github.com"]);
+        let mut token_valid = token_exists && auth_cmd_ok("gh", &["api", "user"]);
+        // Recovery: if the active user has an expired token (common with GitHub
+        // App installation tokens that expire hourly), try switching to a user
+        // with a personal token before reporting "missing".
+        if !token_valid && gh_auth_recover_expired_token() {
+            token_valid = true;
+        }
+        if token_valid {
+            GitHubStatus {
+                mode: "pat_required".to_string(),
+                app_configured: false,
+                app_id: None,
+                app_name: None,
+            }
+        } else {
+            warnings.push(StructuredWarning::critical(
+                "gh_auth_missing",
+                "GitHub authentication is not configured. Either provision a GitHub App in [github] or authenticate `gh` on the host.",
+            ));
+            GitHubStatus {
+                mode: "missing".to_string(),
+                app_configured: false,
+                app_id: None,
+                app_name: None,
+            }
+        }
+    };
+
+    // ── Ticketing ─────────────────────────────────────────────────────────
+    let ticketing_system = config.general.ticketing_system;
+    let (ticketing_label, acli_ok) = match ticketing_system {
+        TicketingSystem::None => ("none", false),
+        TicketingSystem::GitHub => ("github", false),
+        TicketingSystem::Jira => {
+            let ok = check_acli_auth();
+            if !ok {
+                warnings.push(StructuredWarning::warning(
+                    "acli_not_authenticated",
+                    "Atlassian CLI (acli) is not authenticated. Jira integration is disabled until acli is logged in.",
+                ));
+            }
+            ("jira", ok)
+        }
+    };
+    let ticketing = TicketingStatus {
+        system: ticketing_label.to_string(),
+        acli_ok,
+    };
+
+    // ── Provider ──────────────────────────────────────────────────────────
+    let provider = match config.agent.provider {
+        AiAgentProvider::Claude => {
+            let env_credential = std::env::var("CLAUDE_CODE_OAUTH_TOKEN")
+                .ok()
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+            let custom_base_url = std::env::var("ANTHROPIC_BASE_URL")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+            let cli_ok = env_credential || auth_cmd_ok("claude", &["auth", "status"]);
+            if !cli_ok {
+                warnings.push(StructuredWarning::critical(
+                    "claude_not_authenticated",
+                    "Claude Code is not authenticated and no CLAUDE_CODE_OAUTH_TOKEN env var is set.",
+                ));
+            }
+            ProviderStatus {
+                selected: "claude".to_string(),
+                deployment_default_credential_present: env_credential,
+                headless_capable: cli_ok,
+                custom_base_url,
+            }
+        }
+        AiAgentProvider::Cursor => {
+            let env_credential = std::env::var("CURSOR_API_KEY")
+                .ok()
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+            let cli = config.agent.cursor_cli.trim();
+            if cli.is_empty() {
+                warnings.push(StructuredWarning::critical(
+                    "cursor_cli_missing",
+                    "[agent] cursor_cli must be set when provider is \"cursor\".",
+                ));
+                ProviderStatus {
+                    selected: "cursor".to_string(),
+                    deployment_default_credential_present: env_credential,
+                    headless_capable: env_credential,
+                    custom_base_url: None,
+                }
+            } else {
+                let on_disk = cursor_agent_auth_likely_on_disk();
+                let headless = env_credential || on_disk;
+                if !headless {
+                    warnings.push(StructuredWarning::critical(
+                        "cursor_not_authenticated",
+                        "Cursor is not authenticated and CURSOR_API_KEY is not set.",
+                    ));
+                }
+                ProviderStatus {
+                    selected: "cursor".to_string(),
+                    deployment_default_credential_present: env_credential,
+                    headless_capable: headless,
+                    custom_base_url: None,
+                }
+            }
+        }
+    };
+
+    SystemStatus {
+        // We got here, so the config is loaded and parseable.
+        config_toml_ok: true,
+        github,
+        provider,
+        ticketing,
+        // Phase 0 ships pre-DB; populated by the caller when the DB is
+        // available (see `maestro-cli` `run_server`). Default `false` so the
+        // CLI's `preflight` subcommand gives a sensible standalone answer.
+        per_user_required: false,
+        warnings,
+    }
+}
+
 /// Check whether acli (Atlassian CLI) is currently authenticated.
 /// This is a standalone helper so callers (e.g. the server startup) can probe acli without
 /// running the full preflight sequence.
@@ -403,97 +689,46 @@ fn gh_auth_recover_expired_token() -> bool {
     false
 }
 
-/// Verify required CLIs for the configured AI provider. Used before `docker compose up`.
+/// Verify required CLIs for the configured AI provider.
 ///
-/// GitHub and AI-provider auth remain hard errors; acli auth is a soft-fail
-/// (the app can run without Jira integration).
+/// **Deprecated** in favour of [`collect_system_status`] (Phase 0 soft-fail
+/// model). Kept for one release for any external caller — internal callers
+/// should switch to `collect_system_status`, treat all results as informational,
+/// and let the dashboard render the degraded-mode banner.
+///
+/// Behaviour: collects the full [`SystemStatus`], then returns `Err` iff a
+/// `severity = "critical"` warning exists. `acli` failures remain soft-fail
+/// (warning, not critical).
+#[deprecated(note = "use collect_system_status")]
 pub fn preflight(config: &Config) -> Result<PreflightResult> {
-    // When a GitHub App is fully configured, runtime tokens are generated automatically
-    // via the App's private key — no interactive gh auth is needed or expected.
-    if config.github.is_configured() {
-        eprintln!(
-            "[maestro preflight] GitHub App configured (app_id = {}); skipping gh auth check.",
-            config.github.app_id
-        );
-    } else {
-        eprintln!("[maestro preflight] Checking GitHub CLI (gh)…");
-        // Two-stage check:
-        // 1. `gh auth token` — does a token exist? (reads from hosts.yml, no network call)
-        // 2. `gh api user` — is it actually valid? (catches expired `ghs_` installation tokens)
-        //
-        // `gh auth token` alone is insufficient: it exits 0 even for expired GitHub App
-        // installation tokens (`ghs_`), which then fail at runtime with HTTP 401.
-        let token_exists = auth_cmd_ok("gh", &["auth", "token", "-h", "github.com"]);
-        let token_valid = token_exists && auth_cmd_ok("gh", &["api", "user"]);
+    let status = collect_system_status(config);
 
-        if !token_valid {
-            // Attempt recovery: if the active gh user has an expired token (common with GitHub App
-            // installation tokens that expire hourly), switch to any user with a personal token.
-            if !gh_auth_recover_expired_token() {
-                return Err(MaestroError::Config(
-                    "GitHub CLI (gh) is not authenticated. Run: docker compose run --rm -it maestro setup"
-                        .to_string(),
-                ));
-            }
-        }
+    // Echo the structured warnings to stderr so existing callers still see the
+    // diagnostic text they used to get from inline `eprintln!`s.
+    for w in &status.warnings {
+        eprintln!(
+            "[maestro preflight] {sev}: {code} — {msg}",
+            sev = w.severity,
+            code = w.code,
+            msg = w.message
+        );
     }
 
-    let acli_ok = if config.general.ticketing_system == TicketingSystem::Jira {
-        eprintln!("[maestro preflight] Checking Atlassian CLI (acli) [ticketing_system = jira]…");
-        let ok = check_acli_auth();
-        if !ok {
-            eprintln!(
-                "[maestro preflight] WARNING: Atlassian CLI (acli) is not authenticated. \
-                 Jira integration will be disabled (no auto-polling, manual description entry only)."
-            );
-        }
-        ok
-    } else {
-        // ticketing_system is "none" or "github" — acli is not required
-        false
-    };
-
-    match config.agent.provider {
-        AiAgentProvider::Claude => {
-            eprintln!("[maestro preflight] Checking Claude Code…");
-            if !auth_cmd_ok("claude", &["auth", "status"]) {
-                return Err(MaestroError::Config(
-                    "Claude Code is not authenticated but [agent] provider is \"claude\". Run: docker compose run --rm -it maestro setup (Claude step) or switch provider."
-                        .to_string(),
-                ));
-            }
-        }
-        AiAgentProvider::Cursor => {
-            let cli = config.agent.cursor_cli.trim();
-            if cli.is_empty() {
-                return Err(MaestroError::Config(
-                    "[agent] cursor_cli must be set when provider is \"cursor\"".to_string(),
-                ));
-            }
-            let has_api_key = std::env::var("CURSOR_API_KEY")
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false);
-            if has_api_key {
-                eprintln!(
-                    "[maestro preflight] Cursor: CURSOR_API_KEY is set; skipping agent status probe."
-                );
-            } else if cursor_agent_auth_likely_on_disk() {
-                eprintln!(
-                    "[maestro preflight] Cursor: found on-disk CLI data (tokens/config tree); skipping agent status (unreliable without a TTY)."
-                );
-            } else {
-                eprintln!("[maestro preflight] Cursor: checking {cli} status (45s timeout)…");
-                if !auth_cmd_ok(cli, &["status"]) {
-                    return Err(MaestroError::Config(format!(
-                        "Cursor Agent ({cli}) is not logged in and CURSOR_API_KEY is not set. Run: docker compose run --rm -it maestro setup (Cursor step) or set CURSOR_API_KEY in maestro.env. If you already logged in, exec into the container and check: ls -la \"$CURSOR_CONFIG_DIR\" and ~/.config/Cursor — the cursor-auth volume must be the same compose project as setup, and CURSOR_CONFIG_DIR should be /home/maestro/.cursor (see docker-compose.yml)."
-                    )));
-                }
-            }
-        }
+    if status.has_critical() {
+        let msg = status
+            .warnings
+            .iter()
+            .filter(|w| w.severity == "critical")
+            .map(|w| format!("{}: {}", w.code, w.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(MaestroError::Config(msg));
     }
 
     eprintln!("[maestro preflight] OK.");
-    Ok(PreflightResult { acli_ok })
+    Ok(PreflightResult {
+        acli_ok: status.ticketing.acli_ok,
+    })
 }
 
 #[cfg(test)]
@@ -521,5 +756,246 @@ mod cursor_preflight_tests {
         std::fs::create_dir_all(d.path().join("User/globalStorage")).unwrap();
         std::fs::write(d.path().join("User/globalStorage/state.vscdb"), [0u8; 64]).unwrap();
         assert!(cursor_data_tree_looks_populated(d.path()));
+    }
+}
+
+#[cfg(test)]
+mod system_status_tests {
+    //! Phase 0 unit tests — verify `collect_system_status` never returns Err
+    //! and emits the right structured warnings for misconfigured providers.
+    //!
+    //! These tests manipulate process-global env vars (`HOME`,
+    //! `CLAUDE_CODE_OAUTH_TOKEN`, `CURSOR_API_KEY`, …). They run in a
+    //! `tokio::sync::Mutex`-style serial-test fixture to avoid stomping on
+    //! each other; we use a plain `Mutex<()>` because `serial_test` is not a
+    //! workspace dep.
+    use super::*;
+    use crate::config::{AgentConfig, AiAgentProvider, Config, TicketingSystem};
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    /// Serialises every test in this module so concurrent runs do not race on
+    /// the process env. `std::sync::Mutex` is fine because the locked region
+    /// is purely synchronous (no `.await`).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Build a Config with the given provider, defaulting every other knob.
+    fn config_with_provider(provider: AiAgentProvider) -> Config {
+        let mut cfg = Config {
+            agent: AgentConfig {
+                provider,
+                ..AgentConfig::default()
+            },
+            ..Config::default()
+        };
+        cfg.general.ticketing_system = TicketingSystem::None;
+        cfg
+    }
+
+    /// Set HOME to an empty temp dir so the cursor on-disk auth probe sees
+    /// no credentials, and clear every provider env var. Returns the temp
+    /// dir handle so the caller keeps it alive for the duration of the test.
+    fn isolate_env() -> tempfile::TempDir {
+        let d = tempdir().unwrap();
+        // SAFETY: tests in this module are serialised via ENV_LOCK.
+        unsafe {
+            std::env::set_var("HOME", d.path());
+            std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+            std::env::remove_var("CURSOR_API_KEY");
+            std::env::remove_var("ANTHROPIC_BASE_URL");
+            std::env::remove_var("CURSOR_CONFIG_DIR");
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        d
+    }
+
+    #[test]
+    fn claude_misconfigured_produces_critical_warning_no_err() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let _home = isolate_env();
+        let cfg = config_with_provider(AiAgentProvider::Claude);
+
+        let status = collect_system_status(&cfg);
+
+        // No Err, structured output.
+        assert!(status.config_toml_ok);
+        assert_eq!(status.provider.selected, "claude");
+        assert!(!status.provider.deployment_default_credential_present);
+        assert!(!status.provider.headless_capable);
+        assert!(
+            status
+                .warnings
+                .iter()
+                .any(|w| w.code == "claude_not_authenticated" && w.severity == "critical"),
+            "expected critical claude_not_authenticated warning; got {:?}",
+            status.warnings
+        );
+        assert!(status.has_critical());
+    }
+
+    #[test]
+    fn cursor_misconfigured_produces_critical_warning_no_err() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let _home = isolate_env();
+        let cfg = config_with_provider(AiAgentProvider::Cursor);
+
+        let status = collect_system_status(&cfg);
+
+        assert!(status.config_toml_ok);
+        assert_eq!(status.provider.selected, "cursor");
+        assert!(!status.provider.deployment_default_credential_present);
+        assert!(!status.provider.headless_capable);
+        assert!(
+            status
+                .warnings
+                .iter()
+                .any(|w| w.code == "cursor_not_authenticated" && w.severity == "critical"),
+            "expected critical cursor_not_authenticated warning; got {:?}",
+            status.warnings
+        );
+        assert!(status.has_critical());
+    }
+
+    #[test]
+    fn claude_with_env_token_is_headless_capable() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let _home = isolate_env();
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-test");
+            std::env::set_var("ANTHROPIC_BASE_URL", "https://proxy.example.com");
+        }
+        let cfg = config_with_provider(AiAgentProvider::Claude);
+
+        let status = collect_system_status(&cfg);
+
+        assert_eq!(status.provider.selected, "claude");
+        assert!(status.provider.deployment_default_credential_present);
+        assert!(status.provider.headless_capable);
+        assert_eq!(
+            status.provider.custom_base_url.as_deref(),
+            Some("https://proxy.example.com")
+        );
+        // No provider-related critical warnings.
+        assert!(
+            !status
+                .warnings
+                .iter()
+                .any(|w| w.code == "claude_not_authenticated"),
+            "claude warning should be absent when token is set; got {:?}",
+            status.warnings
+        );
+
+        // Clean up env so sibling tests are not polluted.
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+            std::env::remove_var("ANTHROPIC_BASE_URL");
+        }
+    }
+
+    #[test]
+    fn cursor_with_env_key_is_headless_capable() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let _home = isolate_env();
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::set_var("CURSOR_API_KEY", "ck_test_token");
+        }
+        let cfg = config_with_provider(AiAgentProvider::Cursor);
+
+        let status = collect_system_status(&cfg);
+
+        assert_eq!(status.provider.selected, "cursor");
+        assert!(status.provider.deployment_default_credential_present);
+        assert!(status.provider.headless_capable);
+        assert!(
+            !status
+                .warnings
+                .iter()
+                .any(|w| w.code == "cursor_not_authenticated"),
+            "cursor warning should be absent when key is set; got {:?}",
+            status.warnings
+        );
+
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::remove_var("CURSOR_API_KEY");
+        }
+    }
+
+    /// T-BOOT-003 (P0): when every check is failing, `collect_system_status`
+    /// must return a `SystemStatus` (never `Err`), and every warning it emits
+    /// must have a non-empty structured `code` — the UI relies on `code` for
+    /// localised copy and setup links, free-form `message` text alone is not
+    /// sufficient.
+    #[test]
+    fn collect_system_status_returns_struct_with_codes_when_everything_broken() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let _home = isolate_env();
+        let mut cfg = config_with_provider(AiAgentProvider::Claude);
+        // Force the ticketing branch to flag too.
+        cfg.general.ticketing_system = TicketingSystem::Jira;
+
+        let status = collect_system_status(&cfg);
+
+        // 1) Never an Err — the function signature already guarantees this,
+        //    but the assertion below documents the contract.
+        assert!(!status.warnings.is_empty(), "expected ≥1 warning");
+        // 2) Every warning is structured: non-empty `code` and a known severity.
+        for w in &status.warnings {
+            assert!(!w.code.is_empty(), "warning {:?} has empty code", w);
+            assert!(
+                matches!(w.severity.as_str(), "critical" | "warning" | "info"),
+                "warning {:?} has unknown severity",
+                w
+            );
+        }
+        // 3) The provider blocker must be enumerated as a critical warning.
+        assert!(
+            status
+                .warnings
+                .iter()
+                .any(|w| w.code == "claude_not_authenticated" && w.severity == "critical"),
+            "expected critical claude_not_authenticated; got {:?}",
+            status.warnings
+        );
+        // 4) `has_critical()` reflects the warning set.
+        assert!(status.has_critical());
+    }
+
+    #[test]
+    fn ticketing_jira_without_acli_emits_warning_not_critical() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let _home = isolate_env();
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            // Make claude headless so the provider check stays clean.
+            std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-test");
+        }
+        let mut cfg = config_with_provider(AiAgentProvider::Claude);
+        cfg.general.ticketing_system = TicketingSystem::Jira;
+
+        let status = collect_system_status(&cfg);
+
+        assert_eq!(status.ticketing.system, "jira");
+        // acli probe is unlikely to succeed in CI — accept either branch, but
+        // when it fails the warning must be `warning` (not critical).
+        if !status.ticketing.acli_ok {
+            let acli_w = status
+                .warnings
+                .iter()
+                .find(|w| w.code == "acli_not_authenticated")
+                .expect("expected acli_not_authenticated warning");
+            assert_eq!(
+                acli_w.severity, "warning",
+                "acli failure must be a soft-fail (warning), not critical"
+            );
+        }
+
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+        }
     }
 }

@@ -664,6 +664,7 @@ mod tests {
             terminal_ports: Arc::new(RwLock::new(HashMap::new())),
             run_commands: Arc::new(RwLock::new(HashMap::new())),
             preflight_error: None,
+            system_status: maestro_core::docker_hooks::SystemStatus::default(),
             config_path: std::env::temp_dir().join("config.toml"),
             config_writer: None,
             clone_in_progress: Arc::new(AtomicBool::new(false)),
@@ -775,7 +776,7 @@ mod tests {
         let app = build_router(state);
         let resp = app
             .oneshot(
-                Request::post(&format!("/api/users/{admin_id}/suspend"))
+                Request::post(format!("/api/users/{admin_id}/suspend"))
                     .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::empty())
@@ -807,7 +808,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::DELETE)
-                    .uri(&format!("/api/users/{admin_id}"))
+                    .uri(format!("/api/users/{admin_id}"))
                     .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .body(Body::empty())
@@ -839,7 +840,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::PATCH)
-                    .uri(&format!("/api/users/{admin_id}"))
+                    .uri(format!("/api/users/{admin_id}"))
                     .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .header("Content-Type", "application/json")

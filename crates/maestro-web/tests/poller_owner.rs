@@ -71,6 +71,7 @@ fn build_state(data_dir: &std::path::Path) -> AppState {
         terminal_ports: Arc::new(RwLock::new(std::collections::HashMap::new())),
         run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
         preflight_error: None,
+        system_status: maestro_core::docker_hooks::SystemStatus::default(),
         config_path: data_dir.join("config.toml"),
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),

@@ -72,9 +72,14 @@ pub struct AppState {
     pub terminal_ports: Arc<RwLock<HashMap<String, (u16, String)>>>,
     /// Active run command processes, keyed by ticket_key.
     pub run_commands: RunCommandsMap,
-    /// Non-empty when preflight failed at startup (e.g. `gh` not authenticated).
-    /// Exposed via `GET /api/config` so the UI can show a blocking error banner.
+    /// **Deprecated (Phase 0).** Non-empty when preflight failed at startup
+    /// (e.g. `gh` not authenticated). Kept for one release as a fallback when
+    /// the DB is unavailable; the UI should read [`system_status`] instead.
     pub preflight_error: Option<String>,
+    /// Structured boot-time auth + integration snapshot (Phase 0). Served by
+    /// `GET /api/onboarding/status` and mirrored as three fields into
+    /// `GET /api/auth/status`.
+    pub system_status: maestro_core::docker_hooks::SystemStatus,
     /// Path to the config file on disk (for reload and persistence operations).
     pub config_path: PathBuf,
     /// Writer for atomic config persistence. `None` when the config file is not

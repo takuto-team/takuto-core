@@ -111,7 +111,16 @@ enum Commands {
         phase: DockerHookPhase,
     },
     /// Verify GitHub, Atlassian, and provider-specific auth before starting the server.
-    Preflight,
+    ///
+    /// Phase 0 (04_architecture.md §1.2, §8): the subcommand normally exits `0`
+    /// even when checks fail — the dashboard renders the degraded-mode banner
+    /// from `GET /api/onboarding/status`. The `--strict` flag flips back to a
+    /// hard-fail exit code for CI pipelines that want to gate on a clean boot.
+    Preflight {
+        /// Exit non-zero when any critical warning is present.
+        #[arg(long)]
+        strict: bool,
+    },
     /// Generate a GitHub App installation token and print it to stdout.
     /// Used by the setup script to clone the repository when no personal gh auth is present.
     GithubAppToken,
@@ -163,7 +172,7 @@ fn run_docker_hooks(config_path: &std::path::Path, phase: DockerHookPhase) -> Ex
     ExitCode::SUCCESS
 }
 
-fn run_preflight(config_path: &std::path::Path) -> ExitCode {
+fn run_preflight(config_path: &std::path::Path, strict: bool) -> ExitCode {
     let config = match Config::load(config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -172,77 +181,102 @@ fn run_preflight(config_path: &std::path::Path) -> ExitCode {
         }
     };
 
-    let ticketing = config.general.ticketing_system;
-    match docker_hooks::preflight(&config) {
-        Err(e) => {
-            eprintln!("Preflight failed: {e}");
-            ExitCode::FAILURE
-        }
-        Ok(result) => {
-            // Seed the token file so it is available before the main server starts.
-            // The server's background task handles subsequent refreshes.
-            if let Some(mgr) = maestro_core::github_app::try_create_token_manager(&config.github)
-            {
-                let cwd = config_path
-                    .parent()
-                    .map(std::path::Path::to_path_buf)
-                    .filter(|p| p.exists())
-                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    match rt.block_on(mgr.get_installation_token(&cwd)) {
-                        Ok(token) => {
-                            let token_path =
-                                std::path::Path::new(maestro_core::github_app::TOKEN_FILE_PATH);
-                            match maestro_core::github_app::write_token_file(token_path, &token) {
-                                Ok(()) => {
-                                    eprintln!(
-                                        "[maestro preflight] GitHub App token written to {}",
-                                        token_path.display()
-                                    );
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "[maestro preflight] WARNING: failed to write token file: {e}"
-                                    );
-                                }
-                            }
+    // Phase 0 (04_architecture.md §1): collect_system_status never returns Err
+    // — every former hard-error becomes a structured warning. The CLI prints
+    // them to stderr (so docker logs surface them) and exits 0 unless the
+    // operator passed --strict.
+    let status = docker_hooks::collect_system_status(&config);
+
+    for w in &status.warnings {
+        eprintln!(
+            "[maestro preflight] {sev}: {code} — {msg}",
+            sev = w.severity,
+            code = w.code,
+            msg = w.message
+        );
+    }
+
+    // Seed the GitHub App token file so it is available before the main server
+    // starts. The server's background task handles subsequent refreshes. This
+    // runs even on degraded boots — it's a no-op when the App is not
+    // configured.
+    if let Some(mgr) = maestro_core::github_app::try_create_token_manager(&config.github) {
+        let cwd = config_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            match rt.block_on(mgr.get_installation_token(&cwd)) {
+                Ok(token) => {
+                    let token_path =
+                        std::path::Path::new(maestro_core::github_app::TOKEN_FILE_PATH);
+                    match maestro_core::github_app::write_token_file(token_path, &token) {
+                        Ok(()) => {
+                            eprintln!(
+                                "[maestro preflight] GitHub App token written to {}",
+                                token_path.display()
+                            );
                         }
                         Err(e) => {
                             eprintln!(
-                                "[maestro preflight] WARNING: failed to fetch GitHub App token: {e}"
+                                "[maestro preflight] WARNING: failed to write token file: {e}"
                             );
                         }
                     }
                 }
-            }
-
-            match ticketing {
-                TicketingSystem::Jira => {
-                    if !result.acli_ok {
-                        eprintln!(
-                            "Preflight OK (warning: acli not authenticated — Jira integration disabled, falling back to manual mode)."
-                        );
-                    } else {
-                        eprintln!("Preflight OK (ticketing_system = jira, acli authenticated).");
-                    }
-                }
-                TicketingSystem::GitHub => {
+                Err(e) => {
                     eprintln!(
-                        "Preflight OK (ticketing_system = github — polling GitHub issues, no Atlassian auth required)."
-                    );
-                }
-                TicketingSystem::None => {
-                    eprintln!(
-                        "Preflight OK (ticketing_system = none — manual description entry only)."
+                        "[maestro preflight] WARNING: failed to fetch GitHub App token: {e}"
                     );
                 }
             }
-            ExitCode::SUCCESS
         }
     }
+
+    match config.general.ticketing_system {
+        TicketingSystem::Jira => {
+            if status.ticketing.acli_ok {
+                eprintln!("[maestro preflight] ticketing_system = jira, acli authenticated.");
+            } else {
+                eprintln!(
+                    "[maestro preflight] ticketing_system = jira but acli is not authenticated — Jira integration disabled, manual entry only."
+                );
+            }
+        }
+        TicketingSystem::GitHub => {
+            eprintln!(
+                "[maestro preflight] ticketing_system = github — polling GitHub issues, no Atlassian auth required."
+            );
+        }
+        TicketingSystem::None => {
+            eprintln!(
+                "[maestro preflight] ticketing_system = none — manual description entry only."
+            );
+        }
+    }
+
+    if status.has_critical() {
+        eprintln!(
+            "[maestro preflight] {n} critical warning(s) present — the dashboard will boot in degraded mode (see GET /api/onboarding/status).",
+            n = status
+                .warnings
+                .iter()
+                .filter(|w| w.severity == "critical")
+                .count()
+        );
+        if strict {
+            eprintln!("[maestro preflight] --strict was passed — exiting FAILURE for CI.");
+            return ExitCode::FAILURE;
+        }
+    } else {
+        eprintln!("[maestro preflight] OK.");
+    }
+
+    ExitCode::SUCCESS
 }
 
 async fn run_github_app_token(config_path: &std::path::Path) -> ExitCode {
@@ -288,7 +322,7 @@ fn main() -> ExitCode {
 
     match &cli.command {
         Some(Commands::DockerHooks { phase }) => run_docker_hooks(&cli.config, *phase),
-        Some(Commands::Preflight) => run_preflight(&cli.config),
+        Some(Commands::Preflight { strict }) => run_preflight(&cli.config, *strict),
         Some(Commands::GithubAppToken) => {
             match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -433,11 +467,33 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let ticketing_system = config.read().await.general.ticketing_system;
 
-    let acli_ok = if ticketing_system == TicketingSystem::Jira {
-        docker_hooks::check_acli_auth()
-    } else {
-        false
+    // Phase 0 (04_architecture.md §1): collect the structured SystemStatus
+    // snapshot once at startup. This is the single source of truth the
+    // dashboard reads from `GET /api/onboarding/status`. The standalone
+    // `acli_ok` probe is replaced by reading `system_status.ticketing.acli_ok`
+    // so we don't shell out twice.
+    let mut system_status = {
+        let cfg_snapshot = config.read().await;
+        docker_hooks::collect_system_status(&cfg_snapshot)
     };
+    for w in &system_status.warnings {
+        match w.severity.as_str() {
+            "critical" => tracing::warn!(
+                code = %w.code,
+                severity = %w.severity,
+                "Boot warning (degraded mode): {}",
+                w.message
+            ),
+            _ => tracing::info!(
+                code = %w.code,
+                severity = %w.severity,
+                "Boot advisory: {}",
+                w.message
+            ),
+        }
+    }
+
+    let acli_ok = system_status.ticketing.acli_ok;
     let jira_available = Arc::new(AtomicBool::new(acli_ok));
     if ticketing_system == TicketingSystem::Jira && !acli_ok {
         info!(
@@ -488,7 +544,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // restored workflows have no `repositories` row to look up by
     // workspace_name and the workflow filter (Step 6) hides every legacy
     // workflow from its owner's dashboard until an admin manually re-adds.
-    if let (Some(ref db), Some(data_dir)) = (db.as_ref(), resolved_data_dir.as_deref()) {
+    if let (Some(db), Some(data_dir)) = (db.as_ref(), resolved_data_dir.as_deref()) {
         let migrate_associations = config
             .read()
             .await
@@ -660,12 +716,24 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let polling_paused_for_gh = polling_paused.clone();
     let cancel_token_for_gh = cancel_token.clone();
+    // Back-compat (one release): legacy `MAESTRO_PREFLIGHT_ERROR` env var set
+    // by `docker/entrypoint.sh`. The UI now reads
+    // `GET /api/onboarding/status`; this fallback is retained so the
+    // dashboard can still render a banner when the DB is unavailable.
     let preflight_error = std::env::var("MAESTRO_PREFLIGHT_ERROR")
         .ok()
         .filter(|s| !s.is_empty());
     if let Some(ref err) = preflight_error {
-        tracing::warn!(error = %err, "Server starting in degraded mode (preflight failed)");
+        tracing::warn!(
+            error = %err,
+            "MAESTRO_PREFLIGHT_ERROR is set (legacy env var, deprecated — \
+             dashboard should read /api/onboarding/status instead)"
+        );
     }
+
+    // Now that the DB has been opened (or not), set `per_user_required`. This
+    // is the only mutation we make to the system_status after collection.
+    system_status.per_user_required = db.is_some();
 
     // Config writer — only available when the config file path is known.
     let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());
@@ -694,6 +762,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::collections::HashMap::new(),
         )),
         preflight_error,
+        system_status,
         config_path: config_path.clone(),
         config_writer: Some(config_writer.clone()),
         clone_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),

@@ -95,6 +95,7 @@ fn test_state_isolated() -> (AppState, TempDir) {
         terminal_ports: Arc::new(RwLock::new(std::collections::HashMap::new())),
         run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
         preflight_error: None,
+        system_status: maestro_core::docker_hooks::SystemStatus::default(),
         config_path: dir.path().join("config.toml"),
         config_writer: None,
         clone_in_progress: Arc::new(AtomicBool::new(false)),
@@ -234,7 +235,7 @@ async fn post_repositories(state: &AppState, cookie: &str, body_json: &str) -> (
     let status = resp.status();
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&body).into_owned();
-    let json: Value = serde_json::from_slice(&body).unwrap_or_else(|_| Value::String(text));
+    let json: Value = serde_json::from_slice(&body).unwrap_or(Value::String(text));
     (status, json)
 }
 

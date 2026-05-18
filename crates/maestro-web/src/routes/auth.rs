@@ -41,10 +41,23 @@ pub struct AuthStatus {
     pub multi_user: bool,
     /// `true` when the database is available but has no users yet (first-user registration required).
     pub setup_required: bool,
+    /// Phase 0 (04_architecture.md §1.3): mirror of
+    /// `system_status.provider.selected` so the login page can render the
+    /// right provider-specific hint without a second round-trip.
+    pub provider_selected: String,
+    /// Phase 0: mirror of `system_status.github.mode`.
+    pub github_mode: String,
+    /// Phase 0: `true` when any critical warning exists in `system_status`.
+    /// The dashboard uses this to render the degraded-mode banner.
+    pub degraded: bool,
 }
 
 /// Public probe: whether the server requires dashboard login.
 pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
+    let provider_selected = state.system_status.provider.selected.clone();
+    let github_mode = state.system_status.github.mode.clone();
+    let degraded = state.system_status.has_critical();
+
     if let Some(ref db) = state.db {
         let db = db.clone();
         let count = tokio::task::spawn_blocking(move || {
@@ -57,6 +70,9 @@ pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
             dashboard_auth_enabled: true,
             multi_user: count > 0,
             setup_required: count == 0,
+            provider_selected,
+            github_mode,
+            degraded,
         });
     }
 
@@ -66,6 +82,9 @@ pub async fn auth_status(State(state): State<AppState>) -> Json<AuthStatus> {
         dashboard_auth_enabled: true,
         multi_user: false,
         setup_required: true,
+        provider_selected,
+        github_mode,
+        degraded,
     })
 }
 
@@ -781,6 +800,12 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["dashboard_auth_enabled"], true);
         assert_eq!(json["setup_required"], true);
+        // Phase 0 mirrored fields (04_architecture.md §1.3) — test_state_with_db
+        // seeds an empty default `SystemStatus`: provider=claude, github=missing,
+        // no warnings → degraded=false.
+        assert_eq!(json["provider_selected"], "claude");
+        assert_eq!(json["github_mode"], "missing");
+        assert_eq!(json["degraded"], false);
     }
 
     #[tokio::test]
@@ -802,6 +827,10 @@ mod tests {
         assert_eq!(json["dashboard_auth_enabled"], true);
         assert_eq!(json["multi_user"], true);
         assert_eq!(json["setup_required"], false);
+        // Phase 0 mirrored fields present even after first-user registration.
+        assert_eq!(json["provider_selected"], "claude");
+        assert_eq!(json["github_mode"], "missing");
+        assert_eq!(json["degraded"], false);
     }
 
     #[tokio::test]
