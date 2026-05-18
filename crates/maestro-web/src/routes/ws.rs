@@ -59,50 +59,6 @@ pub fn should_deliver_event(evt: &WorkflowEvent, viewer_user_id: &str) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use tower::ServiceExt;
-
-    use crate::server::build_router;
-    use crate::test_helpers::{register_and_login, test_state_with_db};
-
-    /// WebSocket upgrade requires a real TCP connection. With tower's `oneshot()`,
-    /// the handler is reached but returns 426 (Upgrade Required) because the upgrade
-    /// cannot complete without a socket. We verify the route exists and the handler
-    /// activates (not 404, not 401).
-    #[tokio::test]
-    async fn ws_route_is_reachable() {
-        let state = test_state_with_db();
-        let cookie = register_and_login(&state).await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::get("/ws")
-                    .header("Host", "localhost")
-                    .header("Connection", "Upgrade")
-                    .header("Upgrade", "websocket")
-                    .header("Sec-WebSocket-Version", "13")
-                    .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-                    .header("Cookie", &cookie)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        // 426 confirms the WebSocket handler was reached; the upgrade can't complete
-        // through oneshot (no real TCP socket). The key thing is it's not 404 or 500.
-        assert!(
-            resp.status() == StatusCode::SWITCHING_PROTOCOLS
-                || resp.status() == StatusCode::from_u16(426).unwrap(),
-            "expected 101 or 426, got: {}",
-            resp.status()
-        );
-    }
-}
-
 async fn handle_socket(mut socket: WebSocket, state: AppState, viewer_user_id: String) {
     let mut rx = state.engine.subscribe();
     let receiver_count = state.engine.event_subscriber_count();
@@ -158,5 +114,49 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, viewer_user_id: S
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use crate::server::build_router;
+    use crate::test_helpers::{register_and_login, test_state_with_db};
+
+    /// WebSocket upgrade requires a real TCP connection. With tower's `oneshot()`,
+    /// the handler is reached but returns 426 (Upgrade Required) because the upgrade
+    /// cannot complete without a socket. We verify the route exists and the handler
+    /// activates (not 404, not 401).
+    #[tokio::test]
+    async fn ws_route_is_reachable() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/ws")
+                    .header("Host", "localhost")
+                    .header("Connection", "Upgrade")
+                    .header("Upgrade", "websocket")
+                    .header("Sec-WebSocket-Version", "13")
+                    .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 426 confirms the WebSocket handler was reached; the upgrade can't complete
+        // through oneshot (no real TCP socket). The key thing is it's not 404 or 500.
+        assert!(
+            resp.status() == StatusCode::SWITCHING_PROTOCOLS
+                || resp.status() == StatusCode::from_u16(426).unwrap(),
+            "expected 101 or 426, got: {}",
+            resp.status()
+        );
     }
 }

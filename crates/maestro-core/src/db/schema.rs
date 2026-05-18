@@ -75,7 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 ///
 /// Adds the persistent per-user `login_attempts` audit table (AC-3 — rate-limit
 /// + lockout) and two new columns on `sessions` (AC-5 — sliding-extend +
-/// absolute-TTL session rotation):
+///   absolute-TTL session rotation):
 ///
 /// - `sessions.last_seen_at INTEGER` — unix seconds; bumped at most every
 ///   `SESSION_EXTEND_THRESHOLD_SECS` from the auth middleware so an active

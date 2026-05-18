@@ -183,7 +183,7 @@ async fn run_commands_surface_from_owner_row() {
             &alice,
             "frontend",
             &["echo init".to_string()],
-            &[rc.clone()],
+            std::slice::from_ref(&rc),
         )
         .expect("upsert with run command");
     }
@@ -232,7 +232,7 @@ async fn run_commands_batched_lookup_returns_per_owner_data() {
             &alice,
             "frontend",
             &[],
-            &[alice_rc.clone()],
+            std::slice::from_ref(&alice_rc),
         )
         .unwrap();
         user_worktree_commands::upsert(
@@ -240,7 +240,7 @@ async fn run_commands_batched_lookup_returns_per_owner_data() {
             &bob,
             "frontend",
             &[],
-            &[bob_rc.clone()],
+            std::slice::from_ref(&bob_rc),
         )
         .unwrap();
         // carol has no row, on purpose.

@@ -461,17 +461,33 @@ fn parse_body_from_prompt(prompt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock as StdOnceLock;
     use std::sync::atomic::Ordering;
-    use std::sync::{Mutex as StdMutex, OnceLock as StdOnceLock};
     use std::time::Instant;
+    use tokio::sync::{Mutex as TokioMutex, MutexGuard as TokioMutexGuard};
 
     /// Tests in this module touch process-global state (env var, atomics, OnceLock).
     /// Serialize them so they don't race each other.
-    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: StdOnceLock<StdMutex<()>> = StdOnceLock::new();
-        LOCK.get_or_init(|| StdMutex::new(()))
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+    ///
+    /// We use `tokio::sync::Mutex` instead of `std::sync::Mutex` so the async
+    /// tests can hold the guard across `.await` without tripping
+    /// `clippy::await_holding_lock` and — more importantly — without risk of
+    /// deadlocking a single-threaded executor. Sync `#[test]` functions are
+    /// not inside a tokio runtime, so they may use `blocking_lock()`; async
+    /// `#[tokio::test]` functions acquire via `.lock().await`.
+    fn lock_singleton() -> &'static TokioMutex<()> {
+        static LOCK: StdOnceLock<TokioMutex<()>> = StdOnceLock::new();
+        LOCK.get_or_init(|| TokioMutex::new(()))
+    }
+
+    /// Sync entry point — call from plain `#[test]` functions.
+    fn test_lock() -> TokioMutexGuard<'static, ()> {
+        lock_singleton().blocking_lock()
+    }
+
+    /// Async entry point — call from `#[tokio::test]` functions.
+    async fn test_lock_async() -> TokioMutexGuard<'static, ()> {
+        lock_singleton().lock().await
     }
 
     /// Ensure the env var is unset across tests that don't explicitly set it.
@@ -590,7 +606,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn claude_mock_emits_lines() {
-        let _g = test_lock();
+        let _g = test_lock_async().await;
         reset_globals();
         // Use fast tickers so the test stays under ~1 s.
         install_dev_config(&DevConfig {
@@ -633,7 +649,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn claude_mock_honors_cancel() {
-        let _g = test_lock();
+        let _g = test_lock_async().await;
         reset_globals();
         install_dev_config(&DevConfig {
             mock_agent: false,
@@ -663,7 +679,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn improve_path_returns_two_pane() {
-        let _g = test_lock();
+        let _g = test_lock_async().await;
         reset_globals();
         let token = CancellationToken::new();
         let worktree = std::path::PathBuf::from("/tmp/mock-improve");
@@ -686,7 +702,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn cursor_mock_works_same_shape() {
-        let _g = test_lock();
+        let _g = test_lock_async().await;
         reset_globals();
         install_dev_config(&DevConfig {
             mock_agent: false,
@@ -714,7 +730,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn resume_mock_session_prepends_line() {
-        let _g = test_lock();
+        let _g = test_lock_async().await;
         reset_globals();
         install_dev_config(&DevConfig {
             mock_agent: false,
@@ -746,7 +762,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn no_line_tx_still_returns_output() {
-        let _g = test_lock();
+        let _g = test_lock_async().await;
         reset_globals();
         install_dev_config(&DevConfig {
             mock_agent: false,

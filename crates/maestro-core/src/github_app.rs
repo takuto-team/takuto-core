@@ -497,6 +497,38 @@ pub fn write_token_file(path: &Path, token: &str) -> Result<()> {
     Ok(())
 }
 
+/// Try to create a [`GitHubAppTokenManager`] from config.
+///
+/// Returns `None` (with a warning log) when:
+/// - The `[github]` section is not configured (silent).
+/// - The configuration is present but invalid (warning logged).
+///
+/// This ensures GitHub App errors are **non-fatal at startup**.
+pub fn try_create_token_manager(config: &GitHubAppConfig) -> Option<Arc<GitHubAppTokenManager>> {
+    if !config.is_configured() {
+        return None;
+    }
+
+    match GitHubAppTokenManager::new(config) {
+        Ok(mgr) => {
+            info!(
+                app_id = config.app_id,
+                installation_id = config.app_installation_id,
+                "GitHub App authentication configured — commits and PRs will use bot identity"
+            );
+            Some(Arc::new(mgr))
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "GitHub App configuration present but invalid — falling back to personal gh auth. \
+                 Fix the [github] section in config.toml to enable bot-attributed commits and PRs."
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,37 +696,5 @@ mod tests {
         assert_eq!(contents, "second");
         // Temp file must not linger
         assert!(!dir.path().join("gh-app-token.tmp").exists());
-    }
-}
-
-/// Try to create a [`GitHubAppTokenManager`] from config.
-///
-/// Returns `None` (with a warning log) when:
-/// - The `[github]` section is not configured (silent).
-/// - The configuration is present but invalid (warning logged).
-///
-/// This ensures GitHub App errors are **non-fatal at startup**.
-pub fn try_create_token_manager(config: &GitHubAppConfig) -> Option<Arc<GitHubAppTokenManager>> {
-    if !config.is_configured() {
-        return None;
-    }
-
-    match GitHubAppTokenManager::new(config) {
-        Ok(mgr) => {
-            info!(
-                app_id = config.app_id,
-                installation_id = config.app_installation_id,
-                "GitHub App authentication configured — commits and PRs will use bot identity"
-            );
-            Some(Arc::new(mgr))
-        }
-        Err(e) => {
-            warn!(
-                error = %e,
-                "GitHub App configuration present but invalid — falling back to personal gh auth. \
-                 Fix the [github] section in config.toml to enable bot-attributed commits and PRs."
-            );
-            None
-        }
     }
 }

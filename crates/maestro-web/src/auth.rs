@@ -223,10 +223,9 @@ pub fn resolve_cookie_secure(web: &WebConfig, headers: &HeaderMap) -> bool {
     if let Some(proto) = headers
         .get("X-Forwarded-Proto")
         .and_then(|v| v.to_str().ok())
+        && proto.eq_ignore_ascii_case("https")
     {
-        if proto.eq_ignore_ascii_case("https") {
-            return true;
-        }
+        return true;
     }
     false
 }

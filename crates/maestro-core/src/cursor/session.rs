@@ -264,11 +264,11 @@ mod tests {
             workspace.to_string(),
         ];
 
-        if let Some(m) = model {
-            if !m.is_empty() {
-                args.push("--model".to_string());
-                args.push(m.to_string());
-            }
+        if let Some(m) = model
+            && !m.is_empty()
+        {
+            args.push("--model".to_string());
+            args.push(m.to_string());
         }
 
         if let Some(sid) = resume_session_id {
