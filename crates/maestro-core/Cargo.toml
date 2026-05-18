@@ -30,9 +30,11 @@ chacha20poly1305 = { version = "0.10", default-features = false, features = ["al
 zeroize = { version = "1.7", default-features = false, features = ["zeroize_derive"] }
 # Decode the optional 64-char hex MAESTRO_SECRET_KEY env var.
 hex = "0.4"
+# Phase 2b.3: tmpfs-style temp directories for worker secret bundles
+# (RAII cleanup via Drop).
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"

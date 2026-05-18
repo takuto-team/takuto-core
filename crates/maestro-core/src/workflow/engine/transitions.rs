@@ -34,6 +34,9 @@ pub(crate) struct WorkflowTransitions {
     pub(crate) jira_available: Arc<AtomicBool>,
     pub(crate) workflows_dir: PathBuf,
     pub(crate) db: Option<Database>,
+    /// Phase 2b.3: resolver for pin + bundle build on resume-after-pause.
+    pub(crate) git_auth_resolver:
+        Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
 }
 
 impl WorkflowTransitions {
@@ -59,7 +62,15 @@ impl WorkflowTransitions {
             jira_available,
             workflows_dir,
             db,
+            git_auth_resolver: None,
         }
+    }
+
+    pub(crate) fn set_git_auth_resolver(
+        &mut self,
+        resolver: Arc<crate::github::auth_resolver::GitAuthResolver>,
+    ) {
+        self.git_auth_resolver = Some(resolver);
     }
 
     pub async fn pause_workflow(&self, ticket_key: &str) -> Result<()> {
@@ -216,10 +227,13 @@ impl WorkflowTransitions {
                 let su = suppress.clone();
                 let ct = cancel_token.clone();
                 let db = self.db.clone();
+                // Phase 2b.3: thread the resolver into the resumed driver task.
+                let resolver = self.git_auth_resolver.clone();
 
                 tokio::spawn(async move {
                     super::driver::drive_workflow_def(
                         ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su, db,
+                        resolver,
                     )
                     .await;
                 });

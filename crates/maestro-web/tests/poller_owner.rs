@@ -119,7 +119,7 @@ fn seed_orphan_snapshot(data_dir: &std::path::Path, ws_name: &str, ticket_key: &
         workspace_name: ws_name.to_string(),
         repository_id: None,
         user_id: None,
-    };
+            auth_pin: None,    };
 
     let file = WorkflowSnapshotFile {
         version: SNAPSHOT_VERSION,

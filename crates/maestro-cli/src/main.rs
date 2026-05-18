@@ -786,7 +786,19 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let engine = Arc::new(WorkflowEngine::new_with_db(
+    // Phase 2b.3: construct the GitAuthResolver here so we can attach it to
+    // the engine via `with_git_auth_resolver` BEFORE wrapping in Arc. The
+    // same resolver is later stored on AppState (line ~960) for the web
+    // layer.
+    let git_auth_resolver: Option<Arc<maestro_core::github::auth_resolver::GitAuthResolver>> =
+        db.as_ref().map(|d| {
+            Arc::new(maestro_core::github::auth_resolver::GitAuthResolver::new(
+                d.clone(),
+                github_app_for_token_writer.clone(),
+            ))
+        });
+
+    let mut engine = WorkflowEngine::new_with_db(
         config.clone(),
         actions.clone(),
         max_concurrent,
@@ -794,7 +806,11 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         ticketing_system,
         workflows_dir,
         db.clone(),
-    ));
+    );
+    if let Some(ref resolver) = git_auth_resolver {
+        engine = engine.with_git_auth_resolver(resolver.clone());
+    }
+    let engine = Arc::new(engine);
 
     match engine.restore_persisted_workflows().await {
         Ok(n) if n > 0 => {
@@ -929,16 +945,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // `db` was initialised above (before poller construction) so we could resolve
     // the poller owner. Move it into the AppState here.
 
-    // Phase 2b.2: construct the GitAuthResolver. `db.clone()` is cheap
-    // (internal Arc<Mutex>); the optional `Arc<GitHubAppTokenManager>` is
-    // also Clone. When `db: None` (no data dir / DB open failed), the
-    // resolver is omitted and the legacy App-only paths remain.
-    let git_auth_resolver = db.as_ref().map(|d| {
-        std::sync::Arc::new(maestro_core::github::auth_resolver::GitAuthResolver::new(
-            d.clone(),
-            github_app_for_token_writer.clone(),
-        ))
-    });
+    // Phase 2b.2 / 2b.3: reuse the resolver we built above for the engine.
+    // The same Arc lives on both AppState (for HTTP-handler use) and the
+    // workflow engine (for driver-task use).
 
     let app_state = AppState {
         engine: engine.clone(),

@@ -31,6 +31,9 @@ pub(crate) struct WorkflowPersistence {
     pub(crate) event_bus: Arc<WorkflowEventBus>,
     pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
     pub(crate) actions: Arc<dyn ExternalActions>,
+    /// Phase 2b.3: resolver for pin + bundle build on snapshot-restore.
+    pub(crate) git_auth_resolver:
+        Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
 }
 
 impl WorkflowPersistence {
@@ -47,7 +50,15 @@ impl WorkflowPersistence {
             event_bus,
             suppress_cancelled_as_error,
             actions,
+            git_auth_resolver: None,
         }
+    }
+
+    pub(crate) fn set_git_auth_resolver(
+        &mut self,
+        resolver: Arc<crate::github::auth_resolver::GitAuthResolver>,
+    ) {
+        self.git_auth_resolver = Some(resolver);
     }
 
 
@@ -231,6 +242,8 @@ impl WorkflowPersistence {
                         let su = suppress.clone();
                         let ct = cancel_token.clone();
                         let db_clone = db.clone();
+                        // Phase 2b.3: thread the resolver to the spawned driver.
+                        let resolver = self.git_auth_resolver.clone();
 
                         tokio::spawn(async move {
                             drive_workflow_def(
@@ -249,6 +262,7 @@ impl WorkflowPersistence {
                                 as_,
                                 su,
                                 db_clone,
+                                resolver,
                             )
                             .await;
                         });

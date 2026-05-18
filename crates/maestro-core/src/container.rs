@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -72,6 +73,20 @@ pub struct ContainerRunner {
     /// bind mounts for just the worktree path, `.git`, and `.maestro`. This prevents
     /// a container from accessing any other issue's worktree.
     isolate_workspace: bool,
+    /// Phase 2b.3 (04_architecture.md §6): optional per-workflow secrets
+    /// bundle. When `Some`, the runner bind-mounts the bundle's tmpfs
+    /// directory at `/run/maestro-secrets:ro`, sets `MAESTRO_AUTH_BUNDLE=1`
+    /// so the worker entrypoint sources the secret files into env vars (then
+    /// `rm`s them inside the container), adds non-secret env vars like
+    /// `ANTHROPIC_BASE_URL` and the `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
+    /// attribution names. Tokens are NEVER passed as `-e KEY=value` to
+    /// `docker run` — the threat is `docker inspect <ctr>` leaking the
+    /// bytes.
+    ///
+    /// When `None`, the runner falls back to the legacy `PASSTHROUGH_ENV`
+    /// path which forwards ambient `CLAUDE_CODE_OAUTH_TOKEN` /
+    /// `CURSOR_API_KEY` from the host (single-tenant / poller workflows).
+    secrets_bundle: Option<Arc<crate::auth::WorkerSecretsBundle>>,
 }
 
 static DOCKER_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -198,6 +213,7 @@ impl ContainerRunner {
             worktree_path: worktree_path.to_path_buf(),
             step_counter: std::sync::atomic::AtomicU32::new(0),
             isolate_workspace: false,
+            secrets_bundle: None,
         }
     }
 
@@ -207,6 +223,27 @@ impl ContainerRunner {
     pub fn with_isolate_workspace(mut self) -> Self {
         self.isolate_workspace = true;
         self
+    }
+
+    /// Phase 2b.3 (04_architecture.md §6): attach a per-workflow secrets
+    /// bundle. The runner will bind-mount the bundle's tmpfs directory
+    /// read-only at `/run/maestro-secrets`, set `MAESTRO_AUTH_BUNDLE=1` so
+    /// the worker entrypoint knows to source the files, and export the
+    /// non-secret env vars (`ANTHROPIC_BASE_URL`, `GIT_AUTHOR_*` /
+    /// `GIT_COMMITTER_*`). Token bytes are NEVER passed via `-e`.
+    pub fn with_secrets_bundle(
+        mut self,
+        bundle: Arc<crate::auth::WorkerSecretsBundle>,
+    ) -> Self {
+        self.secrets_bundle = Some(bundle);
+        self
+    }
+
+    /// `true` when this runner has a Phase 2b.3 secrets bundle attached.
+    /// Callers consult this to log "legacy auth path" vs "bundle path"
+    /// without exposing the bundle itself.
+    pub fn has_secrets_bundle(&self) -> bool {
+        self.secrets_bundle.is_some()
     }
 
     /// Check if Docker is available (`DOCKER_HOST` set and `docker info` succeeds).
@@ -244,6 +281,17 @@ impl ContainerRunner {
 
     /// Build the common `docker run` prefix (flags, env, volumes, workdir, entrypoint)
     /// before the image name and user command.
+    ///
+    /// Phase 2b.3: when a `WorkerSecretsBundle` is attached, the legacy
+    /// `PASSTHROUGH_ENV` token forwarding is suppressed for the AI-provider
+    /// auth env vars (`CLAUDE_CODE_OAUTH_TOKEN`, `CURSOR_API_KEY`, `GH_TOKEN`,
+    /// `ANTHROPIC_BASE_URL`) — the worker entrypoint sources them from the
+    /// tmpfs files at `/run/maestro-secrets/*` instead. Non-secret env vars
+    /// (`CI`, `TZ`, `LANG`, `LC_ALL`, `FIGMA_*`, `LOKALISE_*`,
+    /// `PLAYWRIGHT_BROWSERS_PATH`) keep flowing through `-e` because they
+    /// aren't in the threat model. The bundle's `extra_env` (non-secret
+    /// names like `MAESTRO_AUTH_BUNDLE`, base URLs, `GIT_AUTHOR_*`) is
+    /// appended after the passthrough block.
     fn base_docker_args(&self, container_name: &str, entrypoint: Option<&str>) -> Vec<String> {
         let mut args = vec![
             "run".into(),
@@ -258,7 +306,23 @@ impl ContainerRunner {
             args.push(format!("{k}={v}"));
         }
 
+        // Tokens we hide when a bundle is attached. These names must mirror
+        // the keys the worker entrypoint reads from `/run/maestro-secrets/*`.
+        const SECRET_PASSTHROUGH: &[&str] = &[
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "CURSOR_API_KEY",
+            "GH_TOKEN",
+        ];
+
+        let bundle_attached = self.secrets_bundle.is_some();
         for key in PASSTHROUGH_ENV {
+            if bundle_attached && SECRET_PASSTHROUGH.contains(key) {
+                // Suppress: a bundle is in charge of this secret. Passing
+                // the host's ambient value would defeat the
+                // `docker inspect` mitigation.
+                continue;
+            }
             if let Ok(val) = std::env::var(key)
                 && !val.is_empty()
             {
@@ -272,6 +336,23 @@ impl ContainerRunner {
             args.push(mount);
         }
 
+        // Phase 2b.3: bundle-driven secret mount + non-secret env vars.
+        if let Some(ref bundle) = self.secrets_bundle {
+            // Bind-mount the per-workflow secrets dir read-only into the
+            // worker. Path bytes ARE fine in `docker inspect`; secret bytes
+            // are not.
+            args.push("-v".into());
+            args.push(format!(
+                "{}:{}:ro",
+                bundle.host_dir().to_string_lossy(),
+                crate::auth::WORKER_SECRETS_MOUNTPOINT,
+            ));
+            for (k, v) in &bundle.extra_env {
+                args.push("-e".into());
+                args.push(format!("{k}={v}"));
+            }
+        }
+
         args.push("-w".into());
         args.push(self.worktree_path.to_string_lossy().into_owned());
 
@@ -279,6 +360,13 @@ impl ContainerRunner {
         args.push(entrypoint.unwrap_or("").into());
 
         args
+    }
+
+    /// Phase 2b.3: return the bundle's `extra_args` (provider sub-table
+    /// `extra_args`). Callers append these to the agent argv. `None` when no
+    /// bundle is attached.
+    pub fn provider_extra_args(&self) -> Option<&[String]> {
+        self.secrets_bundle.as_ref().map(|b| b.extra_args.as_slice())
     }
 
     /// Wrap a direct command (`program` + `args`) into a `docker run` invocation.

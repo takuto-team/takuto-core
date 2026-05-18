@@ -29,6 +29,10 @@ pub(crate) struct WorkflowDefinitionManager {
     pub(crate) workflows_dir: PathBuf,
     /// Optional DB handle used by the bootstrap driver for per-workspace overrides.
     pub(crate) db: Option<Database>,
+    /// Phase 2b.3: resolver for pin + bundle build. Set via
+    /// [`WorkflowEngine::with_git_auth_resolver`].
+    pub(crate) git_auth_resolver:
+        Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
 }
 
 impl WorkflowDefinitionManager {
@@ -52,7 +56,15 @@ impl WorkflowDefinitionManager {
             suppress_cancelled_as_error,
             workflows_dir,
             db,
+            git_auth_resolver: None,
         }
+    }
+
+    pub(crate) fn set_git_auth_resolver(
+        &mut self,
+        resolver: Arc<crate::github::auth_resolver::GitAuthResolver>,
+    ) {
+        self.git_auth_resolver = Some(resolver);
     }
 
     /// Start running a specific workflow definition for a ticket.
@@ -181,6 +193,8 @@ impl WorkflowDefinitionManager {
         let def_name_owned = def_name.to_string();
         let steps = def.steps.clone();
         let db = self.db.clone();
+        // Phase 2b.3: thread the resolver into the spawned driver task.
+        let resolver = self.git_auth_resolver.clone();
 
         tokio::spawn(async move {
             super::driver::drive_workflow_def(
@@ -199,6 +213,7 @@ impl WorkflowDefinitionManager {
                 agent_sem,
                 suppress,
                 db,
+                resolver,
             )
             .await;
         });

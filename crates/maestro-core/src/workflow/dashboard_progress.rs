@@ -150,7 +150,7 @@ mod tests {
             workspace_name: "test-workspace".into(),
             repository_id: None,
             user_id: None,
-        }
+            auth_pin: None,        }
     }
 
     #[test]

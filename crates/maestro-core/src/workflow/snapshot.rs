@@ -89,6 +89,37 @@ pub struct PersistedWorkflowRecord {
     /// get `None` (unowned — visible to admins only during migration).
     #[serde(default)]
     pub user_id: Option<String>,
+    /// Phase 2b.3 (04_architecture.md §7.2): credentials pinned at the
+    /// workflow's first agent step. Survives an admin provider switch
+    /// mid-flight — the workflow keeps using the credential row id it was
+    /// pinned to, while the row's `inactive` flag may have flipped to `1`
+    /// for new workflows. `#[serde(default)]` so pre-v6 snapshots (which
+    /// predate Phase 2) deserialize as `None`.
+    #[serde(default)]
+    pub auth_pin: Option<AuthPin>,
+}
+
+/// Credentials pinned at workflow start. Survives an admin provider switch
+/// mid-flight per 04_architecture.md §7.2.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthPin {
+    /// Active AI provider when the workflow started (`"claude" | "cursor" |
+    /// "codex" | "opencode"`).
+    pub provider: String,
+    /// `user_provider_credentials.id` for the pinned row. `None` when the
+    /// workflow ran against a deployment-default credential (env var
+    /// fallback; only valid when the provider's `allow_shared_default = true`).
+    #[serde(default)]
+    pub provider_credential_row_id: Option<i64>,
+    /// `"app" | "user_pat"` — which side of the §4.2 mode matrix the
+    /// resolver was in when the pin landed.
+    pub github_mode: String,
+    /// Stable identifier of the GitHub credential row (when PAT-mode).
+    /// `None` for App-mode pins.
+    #[serde(default)]
+    pub github_credential_row_id: Option<i64>,
+    /// RFC-3339 timestamp.
+    pub started_at: String,
 }
 
 fn default_jira_available() -> bool {
@@ -547,7 +578,7 @@ mod tests {
             workspace_name: "my-repo".into(),
             repository_id: Some("repo-uuid-1".into()),
             user_id: Some("user-1".into()),
-        };
+            auth_pin: None,        };
         let json = serde_json::to_string(&rec).unwrap();
         let back: PersistedWorkflowRecord = serde_json::from_str(&json).unwrap();
         assert!(!back.driver_started);
@@ -648,7 +679,7 @@ mod tests {
             workspace_name: "ws".into(),
             repository_id: None,
             user_id: None,
-        }
+            auth_pin: None,        }
     }
 
     fn write_snapshot(data_dir: &Path, ws: &str, records: Vec<PersistedWorkflowRecord>) {

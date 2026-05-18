@@ -23,11 +23,17 @@
 //! Phase 2a ships seal/open and the key bootstrap. Phase 2b adds the per-user
 //! credential CRUD that consumes these primitives.
 
+pub mod bundle;
 pub mod gh_client;
 pub mod master_key;
 pub mod pat_validation;
 pub mod seal;
 
+pub use bundle::{
+    WorkerSecretsBundle, WORKER_SECRETS_MOUNTPOINT,
+    SECRET_FILE_CLAUDE, SECRET_FILE_CODEX, SECRET_FILE_CURSOR, SECRET_FILE_GH,
+    SECRET_FILE_OPENCODE,
+};
 pub use gh_client::{GhClient, GhResponse, RealGhClient, SharedGhClient};
 pub use master_key::{MasterKey, MasterKeySource, load_or_init_master_key};
 pub use pat_validation::{PatValidationError, ValidatedPat, validate_pat};

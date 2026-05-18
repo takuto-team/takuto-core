@@ -54,6 +54,12 @@ pub struct WorkflowEngine {
     /// `worktree_init_commands` overrides. `None` when running without a DB (e.g.
     /// some test paths) — the driver then falls back to the global config.
     pub db: Option<Database>,
+    /// Phase 2b.3 (04_architecture.md §6): optional `GitAuthResolver` used to
+    /// pin credentials at workflow start and build per-step
+    /// `WorkerSecretsBundle`s. `None` when running without the resolver
+    /// (legacy poller / single-tenant) — the worker falls back to the
+    /// ambient-env `PASSTHROUGH_ENV` path.
+    pub git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
     // Service structs
     persistence: WorkflowPersistence,
     lifecycle: WorkflowLifecycle,
@@ -153,11 +159,32 @@ impl WorkflowEngine {
             ticketing_system,
             workflows_dir,
             db,
+            git_auth_resolver: None,
             persistence,
             lifecycle,
             transitions,
             definitions,
         }
+    }
+
+    /// Phase 2b.3: attach the `GitAuthResolver` so the driver can pin
+    /// credentials at workflow start and build per-step worker secrets
+    /// bundles. Builder-style so the existing constructor signature stays
+    /// back-compatible with all test fixtures.
+    ///
+    /// Propagates the same `Arc` to the three service structs that spawn
+    /// driver tasks (definitions / persistence / transitions). The
+    /// lifecycle does not spawn drivers itself, so it doesn't need a
+    /// resolver field.
+    pub fn with_git_auth_resolver(
+        mut self,
+        resolver: Arc<crate::github::auth_resolver::GitAuthResolver>,
+    ) -> Self {
+        self.git_auth_resolver = Some(resolver.clone());
+        self.definitions.set_git_auth_resolver(resolver.clone());
+        self.persistence.set_git_auth_resolver(resolver.clone());
+        self.transitions.set_git_auth_resolver(resolver);
+        self
     }
 
     /// Convenience accessor for the inner `Arc<RwLock<HashMap<String, Workflow>>>`.
@@ -466,7 +493,7 @@ mod tests {
             workspace_name: "test-workspace".into(),
             repository_id: None,
             user_id: None,
-        }
+            auth_pin: None,        }
     }
 
     // -----------------------------------------------------------------------
@@ -838,7 +865,7 @@ mod tests {
             workspace_name: "test-workspace".into(),
             repository_id: None,
             user_id: None,
-        }
+            auth_pin: None,        }
     }
 
     #[test]
@@ -967,7 +994,7 @@ mod tests {
             workspace_name: String::new(),
             repository_id: None,
             user_id: None,
-        };
+            auth_pin: None,        };
         let w = Workflow::from_persisted_record(rec);
         assert_eq!(
             w.ticketing_system,
@@ -1032,7 +1059,7 @@ mod tests {
             workspace_name: "test-workspace".into(),
             repository_id: Some("repo-uuid-99".into()),
             user_id: Some("user-abc".into()),
-        };
+            auth_pin: None,        };
 
         let json = serde_json::to_string_pretty(&rec).expect("serialize PersistedWorkflowRecord");
         let back: PersistedWorkflowRecord =

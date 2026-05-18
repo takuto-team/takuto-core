@@ -172,6 +172,10 @@ pub struct Workflow {
     /// ID of the user who created this workflow. `None` for poller-created workflows
     /// (pre-multi-user) or workflows restored from older snapshots.
     pub user_id: Option<String>,
+    /// Phase 2b.3 (04_architecture.md §7.2): credentials pinned at the
+    /// workflow's first agent step. `None` for legacy (pre-Phase-2) workflows
+    /// and for fresh workflows that haven't reached their first step yet.
+    pub auth_pin: Option<crate::workflow::snapshot::AuthPin>,
 }
 
 impl Workflow {
@@ -216,6 +220,7 @@ impl Workflow {
             workspace_name,
             repository_id: None,
             user_id: None,
+            auth_pin: None,
         }
     }
 
@@ -294,6 +299,7 @@ impl Workflow {
             workspace_name: rec.workspace_name,
             repository_id: rec.repository_id,
             user_id: rec.user_id,
+            auth_pin: rec.auth_pin,
         }
     }
 }
@@ -334,5 +340,6 @@ pub(super) fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRec
         workspace_name: w.workspace_name.clone(),
         repository_id: w.repository_id.clone(),
         user_id: w.user_id.clone(),
+        auth_pin: w.auth_pin.clone(),
     }
 }

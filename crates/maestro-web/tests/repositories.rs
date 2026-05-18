@@ -726,7 +726,7 @@ async fn ac16_callers_active_workflow_blocks_delete() {
             workspace_name: "active-wf-repo".to_string(),
             repository_id: Some(r1.clone()),
             user_id: Some(admin_uid.clone()),
-        }],
+            auth_pin: None,        }],
     };
     std::fs::write(&snap_file, serde_json::to_string(&snap).unwrap()).unwrap();
 
@@ -826,7 +826,7 @@ async fn ac16_other_users_active_workflow_does_not_block_caller_delete() {
             workspace_name: "shared-repo".to_string(),
             repository_id: Some(r1.clone()),
             user_id: Some(admin_uid.clone()),
-        }],
+            auth_pin: None,        }],
     };
     std::fs::write(&snap_file, serde_json::to_string(&snap).unwrap()).unwrap();
 

@@ -106,7 +106,7 @@ fn seed_snapshot_workflow(
         workspace_name: workspace_name.to_string(),
         repository_id: None,
         user_id: Some(user_id.to_string()),
-    };
+            auth_pin: None,    };
 
     let file = WorkflowSnapshotFile {
         version: SNAPSHOT_VERSION,
@@ -358,7 +358,7 @@ async fn backfill_skips_orphan_workflows() {
         workspace_name: "alpha".into(),
         repository_id: None,
         user_id: None,
-    };
+            auth_pin: None,    };
     let file = WorkflowSnapshotFile {
         version: SNAPSHOT_VERSION,
         workflows: vec![rec],
