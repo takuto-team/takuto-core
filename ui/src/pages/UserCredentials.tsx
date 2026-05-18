@@ -62,19 +62,26 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
+  /**
+   * Returns the in-flight Promise so callers can `await` it. The save
+   * handlers below rely on this to refetch BEFORE toasting "connected" —
+   * otherwise the pill stays "not connected" until the next render tick
+   * even though the server already accepted the row.
+   */
+  const refresh = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      fetchUserCredentials().catch(() => null),
-      apiJson<AuthStatus>("/api/auth/status").catch(() => null),
-    ])
-      .then(([c, a]) => {
-        setCreds(c);
-        setAuth(a);
-        if (!c) setLoadError("Could not load your credentials.");
-      })
-      .finally(() => setLoading(false));
+    try {
+      const [c, a] = await Promise.all([
+        fetchUserCredentials().catch(() => null),
+        apiJson<AuthStatus>("/api/auth/status").catch(() => null),
+      ]);
+      setCreds(c);
+      setAuth(a);
+      if (!c) setLoadError("Could not load your credentials.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -87,7 +94,10 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
    * as the absolute default.
    */
   const adminProvider = auth?.provider_selected ?? null;
-  const userProvider = creds?.provider?.provider_name ?? null;
+  // Wire-format note: the backend returns `provider.provider` (matches the
+  // `provider` column in `user_provider_credentials`). See
+  // `crates/maestro-web/src/routes/credentials.rs::ProviderCredentialStatus`.
+  const userProvider = creds?.provider?.provider ?? null;
   const activeProvider = adminProvider ?? userProvider ?? "claude";
 
   // Mismatch banner: admin switched the deployment provider but the user
@@ -164,11 +174,16 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
               onSave={async (apiKey) => {
                 try {
                   await setProviderCredential(activeProvider, { api_key: apiKey });
+                  // Re-read the server state BEFORE toasting "connected" so
+                  // the pill flips at the same instant the user sees the
+                  // success message. Fixes the original bug where the row
+                  // was saved but the pill stayed "not connected" until the
+                  // user navigated away and back.
+                  await refresh();
                   showToast(
                     `${PROVIDER_LABEL[activeProvider] ?? activeProvider} connected.`,
                     "success",
                   );
-                  refresh();
                 } catch (e: unknown) {
                   handleSurfaceError(e, "Could not save your credential.");
                 }
@@ -176,11 +191,11 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
               onDisconnect={async () => {
                 try {
                   await deleteProviderCredential(activeProvider);
+                  await refresh();
                   showToast(
                     `${PROVIDER_LABEL[activeProvider] ?? activeProvider} disconnected.`,
                     "info",
                   );
-                  refresh();
                 } catch (e: unknown) {
                   handleSurfaceError(e, "Could not disconnect.");
                 }
@@ -245,10 +260,14 @@ function AiCredentialPanel({
   const [saving, setSaving] = useState(false);
 
   const isPhase4 = PHASE_4_PROVIDERS.has(activeProvider);
+  // Wire-format note: the backend's row is named `provider.provider` (the
+  // provider this credential was sealed for) and `provider.active` (false
+  // only after a provider switch deactivated it). See
+  // `routes/credentials.rs::ProviderCredentialStatus`.
   const hasMatchingCredential =
     !!credentials?.provider &&
-    credentials.provider.provider_name === activeProvider &&
-    credentials.provider.valid;
+    credentials.provider.provider === activeProvider &&
+    credentials.provider.active;
 
   const label = PROVIDER_LABEL[activeProvider] ?? activeProvider;
   const helper = useMemo(() => providerHelper(activeProvider), [activeProvider]);

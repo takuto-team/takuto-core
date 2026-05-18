@@ -336,13 +336,24 @@ export interface User {
 
 export type ProviderCredentialKind = "api_key" | "cli_state" | "oauth_token";
 
-/** What `kind` of credential the user has stored, plus its last-seen state. */
+/**
+ * What credential the user currently has stored for the deployment-wide
+ * active provider. Matches the wire shape returned by
+ * `crates/maestro-web/src/routes/credentials.rs::ProviderCredentialStatus`
+ * — do NOT rename these fields without also updating the Rust struct.
+ *
+ * - `provider`: "claude" | "cursor" | "codex" | "opencode" — the provider
+ *   the row was sealed for.
+ * - `active`: true when the row is NOT a leftover from a provider switch
+ *   (inactive rows are kept for audit/restore per 04_architecture.md §2.4).
+ * - `last_used_at`: stamped by the engine on every workflow start.
+ */
 export interface UserProviderCredentialStatus {
-  kind: ProviderCredentialKind | null;
-  valid: boolean;
+  provider: string;
+  kind: ProviderCredentialKind;
+  active: boolean;
   last_validated_at: string | null;
-  /** "claude" | "cursor" | "codex" | "opencode" — currently active provider. */
-  provider_name: string;
+  last_used_at: string | null;
 }
 
 export type GithubAuthMode =

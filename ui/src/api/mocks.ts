@@ -115,10 +115,12 @@ export function mockSetProviderCredential(
     });
   }
   state.provider = {
+    // Wire-format note: mirrors routes/credentials.rs::ProviderCredentialStatus.
+    provider,
     kind: "api_key",
-    valid: true,
+    active: true,
     last_validated_at: new Date().toISOString(),
-    provider_name: provider,
+    last_used_at: null,
   };
   return new Response(null, { status: 204 });
 }

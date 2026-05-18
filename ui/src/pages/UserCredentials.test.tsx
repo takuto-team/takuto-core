@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, within, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { UserCredentials } from "./UserCredentials";
 import { ToastProvider } from "../hooks/useToast";
@@ -119,6 +119,78 @@ describe("UserCredentials — A1 regression (Cursor is API-key only)", () => {
     for (const re of banned) {
       expect(re.test(body)).toBe(false);
     }
+  });
+});
+
+describe("UserCredentials — wire-format regression (#28)", () => {
+  it("renders the ✅ Connected pill when the server returns { provider, active } (the real wire shape)", async () => {
+    stubAuthStatus("claude");
+    // Hard-coded from `routes/credentials.rs::ProviderCredentialStatus` so a
+    // future Rust rename trips the typecheck or this test, not the user.
+    resetMocks({
+      provider: {
+        provider: "claude",
+        kind: "api_key",
+        active: true,
+        last_validated_at: "2026-05-19T08:00:00Z",
+        last_used_at: null,
+      },
+      github: {
+        has_pat: false,
+        login: null,
+        scopes: [],
+        attribute_commits: true,
+        mode: "app",
+      },
+    });
+    renderPage();
+
+    // The pill should read "Connected" — NOT "Not connected". This is the
+    // exact regression the user reported: row saved, audit logged, but pill
+    // stuck at "not connected" because the UI read `provider_name`/`valid`.
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+    // Disambiguate from the GitHub card's pill (which is also "Connected"
+    // in some states) by scoping the query to the AI card via the heading.
+    const aiHeading = screen.getByText(/AI provider — Claude/i);
+    const aiSection = aiHeading.closest("section");
+    expect(aiSection).toBeTruthy();
+    expect(
+      within(aiSection!).getByText(/^Connected$/i),
+    ).toBeTruthy();
+    expect(
+      within(aiSection!).queryByText(/^Not connected$/i),
+    ).toBeNull();
+  });
+
+  it("renders the ⚠ Not connected pill when the row is inactive (post-provider-switch)", async () => {
+    stubAuthStatus("claude");
+    // `active: false` → the row was deactivated by a provider switch and
+    // must NOT count as a live credential, even though it's still in the
+    // DB. Per 04_architecture.md §2.4.
+    resetMocks({
+      provider: {
+        provider: "claude",
+        kind: "api_key",
+        active: false,
+        last_validated_at: "2026-05-19T08:00:00Z",
+        last_used_at: null,
+      },
+      github: {
+        has_pat: false,
+        login: null,
+        scopes: [],
+        attribute_commits: true,
+        mode: "app",
+      },
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+    const aiSection = screen.getByText(/AI provider — Claude/i).closest("section");
+    expect(within(aiSection!).getByText(/^Not connected$/i)).toBeTruthy();
   });
 });
 

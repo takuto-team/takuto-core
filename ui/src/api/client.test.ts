@@ -148,12 +148,14 @@ describe("per-user credentials client", () => {
   });
 
   it("fetchUserCredentials parses a 200 body", async () => {
+    // Wire shape mirrors routes/credentials.rs::ProviderCredentialStatus.
     const status = {
       provider: {
+        provider: "claude",
         kind: "api_key",
-        valid: true,
+        active: true,
         last_validated_at: "2026-01-01T00:00:00Z",
-        provider_name: "claude",
+        last_used_at: null,
       },
       github: {
         has_pat: false,

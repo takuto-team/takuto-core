@@ -78,10 +78,11 @@ export const ClaudeConnected: Story = {
   decorators: [
     withMocks({
       provider: {
+        provider: "claude",
         kind: "api_key",
-        valid: true,
+        active: true,
         last_validated_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
-        provider_name: "claude",
+        last_used_at: null,
       },
       github: {
         has_pat: false,
@@ -213,10 +214,11 @@ export const ProviderMismatch: Story = {
   decorators: [
     withMocks({
       provider: {
+        provider: "claude",
         kind: "api_key",
-        valid: true,
+        active: true,
         last_validated_at: new Date().toISOString(),
-        provider_name: "claude",
+        last_used_at: null,
       },
       github: {
         has_pat: false,
