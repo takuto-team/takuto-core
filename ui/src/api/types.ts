@@ -229,6 +229,26 @@ export interface ConfigResponse {
   repo_exists: boolean;
   repo_name?: string | null;
   repo_html_url?: string | null;
+  /**
+   * Present on the response of `PUT /api/config` and `PUT /api/config/agent`.
+   * Anchored to `crates/maestro-web/src/routes/config.rs::UpdateConfigResponse`
+   * (the backend uses `#[serde(flatten)]` on the config, so these fields
+   * appear at the top level alongside `general` / `agent` / etc.).
+   *
+   * - `persisted: true`: in-memory patch AND disk write both succeeded.
+   * - `persisted: false`: patch is live in memory but the on-disk write
+   *   failed (read-only mount, EACCES, etc.) — admin must fix the mount
+   *   or the change is lost at restart.
+   * - `persist_warning`: human-readable error from the write attempt.
+   *   Backend omits the key on success (serde `skip_serializing_if`), so
+   *   it's optional on the wire.
+   *
+   * Both fields are absent on `GET /api/config` — they only appear on PUT
+   * responses. Use `persisted === false` (strict) to detect failure so
+   * legacy servers that don't return the field default to "assume OK".
+   */
+  persisted?: boolean;
+  persist_warning?: string | null;
   [key: string]: unknown;
 }
 

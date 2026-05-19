@@ -217,7 +217,24 @@ export function AdminAiSettings({ onLogout, authEnabled, isAdmin }: Props) {
       try {
         const updated = await putAgentConfig(patch);
         setConfig(updated);
-        showToast("AI provider settings saved.", "success");
+        // Backend returns `persisted: false` + `persist_warning: "<error>"`
+        // when the in-memory patch succeeded but the on-disk write failed
+        // (e.g. read-only mount, EACCES). Previously the UI swallowed both
+        // fields and showed "saved" regardless — admins thought the change
+        // was permanent and were confused when it didn't survive restart.
+        // See `routes/config_agent.rs::PutAgentConfigResponse`.
+        //
+        // Strict `=== false` so a legacy server that doesn't return the
+        // field (undefined) is treated as "assume OK".
+        if (updated.persisted === false) {
+          const reason = updated.persist_warning ?? "unknown error";
+          showToast(
+            `AI provider settings applied in memory but NOT persisted to disk: ${reason}. The change will be lost on next restart — fix the config volume and save again.`,
+            "error",
+          );
+        } else {
+          showToast("AI provider settings saved.", "success");
+        }
       } catch (e: unknown) {
         if (e instanceof AgentConfigError) {
           // Surface the structured code so QA / admins can correlate with the
