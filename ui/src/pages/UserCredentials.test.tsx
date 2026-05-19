@@ -134,15 +134,19 @@ describe("UserCredentials — A1 regression (Cursor is API-key only)", () => {
 describe("UserCredentials — wire-format regression (#28)", () => {
   it("renders the ✅ Connected pill when the server returns { provider, active } (the real wire shape)", async () => {
     stubAuthStatus("claude");
-    // Hard-coded from `routes/credentials.rs::ProviderCredentialStatus` so a
+    // Hard-coded from `routes/credentials.rs::ProviderCredentialBundle` so a
     // future Rust rename trips the typecheck or this test, not the user.
+    // Bundle layout per #39: { provider, api_key?, cli_state? }.
     resetMocks({
       provider: {
         provider: "claude",
-        kind: "api_key",
-        active: true,
-        last_validated_at: "2026-05-19T08:00:00Z",
-        last_used_at: null,
+        api_key: {
+          provider: "claude",
+          kind: "api_key",
+          active: true,
+          last_validated_at: "2026-05-19T08:00:00Z",
+          last_used_at: null,
+        },
       },
       // GitHub absent — `null` matches the backend's Option<> wire shape.
       github: null,
@@ -176,10 +180,13 @@ describe("UserCredentials — wire-format regression (#28)", () => {
     resetMocks({
       provider: {
         provider: "claude",
-        kind: "api_key",
-        active: false,
-        last_validated_at: "2026-05-19T08:00:00Z",
-        last_used_at: null,
+        api_key: {
+          provider: "claude",
+          kind: "api_key",
+          active: false,
+          last_validated_at: "2026-05-19T08:00:00Z",
+          last_used_at: null,
+        },
       },
       // GitHub absent — `null` matches the backend's Option<> wire shape.
       github: null,
@@ -298,10 +305,13 @@ describe("UserCredentials — #31 issue A + B: no Rotate / Disconnect / Remove-P
     resetMocks({
       provider: {
         provider: "claude",
-        kind: "api_key",
-        active: true,
-        last_validated_at: "2026-05-19T08:00:00Z",
-        last_used_at: null,
+        api_key: {
+          provider: "claude",
+          kind: "api_key",
+          active: true,
+          last_validated_at: "2026-05-19T08:00:00Z",
+          last_used_at: null,
+        },
       },
       github: null,
     });
@@ -411,5 +421,213 @@ describe("UserCredentials — #31 issue C: pill flips to Connected synchronously
     });
     // No page-level "Loading…" text should exist at this point.
     expect(screen.queryByText(/^Loading…$/i)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #40 — Claude "Auth method" selector + bundle wire shape.
+// ---------------------------------------------------------------------------
+
+describe("UserCredentials — #40 Claude auth-method selector", () => {
+  it("T-CLAUDE-UI-001 — selector is visible on the Claude card", async () => {
+    stubAuthStatus("claude");
+    resetMocks({ provider: null, github: null });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+
+    // The tablist + two tabs ("API key" and "Claude Code session") must
+    // be in the DOM.
+    expect(
+      screen.getByRole("tablist", { name: /claude auth method/i }),
+    ).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /^api key$/i })).toBeTruthy();
+    expect(
+      screen.getByRole("tab", { name: /claude code session/i }),
+    ).toBeTruthy();
+  });
+
+  it("T-CLAUDE-UI-007 — selector is NOT rendered on Cursor / Codex / OpenCode cards", async () => {
+    for (const provider of ["cursor", "codex", "opencode"] as const) {
+      cleanup();
+      stubAuthStatus(provider);
+      resetMocks({ provider: null, github: null });
+      renderPage();
+      await waitFor(() => {
+        expect(
+          screen.getByText(
+            new RegExp(`AI provider — ${provider}`, "i"),
+          ),
+        ).toBeTruthy();
+      });
+      expect(
+        screen.queryByRole("tablist", { name: /claude auth method/i }),
+      ).toBeNull();
+    }
+  });
+
+  it("T-CLAUDE-UI-002 — API key tab → save → pill flips to Connected (API key) after the round-trip", async () => {
+    stubAuthStatus("claude");
+    resetMocks({ provider: null, github: null });
+    renderPage();
+
+    const input = await waitFor(() =>
+      screen.getByLabelText(/Claude API key/i),
+    );
+    fireEvent.change(input, { target: { value: "sk-ant-test" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    // After save, mock layer transitions to bundle.api_key.active = true.
+    // Scope assertion to the pill via role="status" so the tab label
+    // "Claude Code session" doesn't false-positive the "Session" match.
+    await waitFor(() => {
+      const section = screen
+        .getByText(/AI provider — Claude/i)
+        .closest("section")!;
+      const pill = within(section).getByRole("status");
+      expect(pill.textContent).toMatch(/Connected/);
+      expect(pill.textContent).toMatch(/API key/);
+      expect(pill.textContent).not.toMatch(/Session/);
+    });
+  });
+
+  it("T-CLAUDE-UI-003 — Session tab → paste valid JSON → save → POST body has kind=cli_state + the blob", async () => {
+    stubAuthStatus("claude");
+    resetMocks({ provider: null, github: null });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+
+    // Switch to the Session tab.
+    fireEvent.click(
+      screen.getByRole("tab", { name: /claude code session/i }),
+    );
+
+    const textarea = await waitFor(() =>
+      screen.getByLabelText(/Paste contents of your local/i),
+    );
+
+    const blob = JSON.stringify({
+      oauthAccount: {
+        accountUuid: "11111111-1111-1111-1111-111111111111",
+        emailAddress: "alice@example.com",
+        organizationUuid: "22222222-2222-2222-2222-222222222222",
+      },
+    });
+    fireEvent.change(textarea, { target: { value: blob } });
+    fireEvent.click(screen.getByRole("button", { name: /save session/i }));
+
+    // After save, the mock transitions bundle.cli_state.active = true.
+    // Scope to the status pill so "Claude Code session" (the tab) doesn't
+    // false-positive.
+    await waitFor(() => {
+      const section = screen
+        .getByText(/AI provider — Claude/i)
+        .closest("section")!;
+      const pill = within(section).getByRole("status");
+      expect(pill.textContent).toMatch(/Connected/);
+      expect(pill.textContent).toMatch(/Session/);
+      expect(pill.textContent).not.toMatch(/API key/);
+    });
+  });
+
+  it("T-CLAUDE-UI-004 — pill shows 'API key + Session' when bundle has both kinds active", async () => {
+    stubAuthStatus("claude");
+    resetMocks({
+      provider: {
+        provider: "claude",
+        api_key: {
+          provider: "claude",
+          kind: "api_key",
+          active: true,
+          last_validated_at: "2026-05-19T08:00:00Z",
+          last_used_at: null,
+        },
+        cli_state: {
+          provider: "claude",
+          kind: "cli_state",
+          active: true,
+          last_validated_at: "2026-05-19T08:00:00Z",
+          last_used_at: null,
+        },
+      },
+      github: null,
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+    const section = screen
+      .getByText(/AI provider — Claude/i)
+      .closest("section")!;
+    const pill = within(section).getByRole("status");
+    expect(pill.textContent).toMatch(/Connected/);
+    expect(pill.textContent).toMatch(/API key \+ Session/);
+  });
+
+  it("T-CLAUDE-UI-005 — pill shows 'Connected' even when ONLY cli_state is active (no API key)", async () => {
+    stubAuthStatus("claude");
+    resetMocks({
+      provider: {
+        provider: "claude",
+        cli_state: {
+          provider: "claude",
+          kind: "cli_state",
+          active: true,
+          last_validated_at: "2026-05-19T08:00:00Z",
+          last_used_at: null,
+        },
+      },
+      github: null,
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+    const section = screen
+      .getByText(/AI provider — Claude/i)
+      .closest("section")!;
+    const pill = within(section).getByRole("status");
+    expect(pill.textContent).toMatch(/Connected/);
+    expect(pill.textContent).toMatch(/Session/);
+    // Pill must not contain "API key" or the combined label.
+    expect(pill.textContent).not.toMatch(/API key/);
+  });
+
+  it("T-CLAUDE-UI-006 — invalid JSON in the session tab surfaces a client-side error BEFORE any POST", async () => {
+    stubAuthStatus("claude");
+    resetMocks({ provider: null, github: null });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI provider — Claude/i)).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("tab", { name: /claude code session/i }),
+    );
+    const textarea = await waitFor(() =>
+      screen.getByLabelText(/Paste contents of your local/i),
+    );
+    fireEvent.change(textarea, { target: { value: "not valid json" } });
+    fireEvent.click(screen.getByRole("button", { name: /save session/i }));
+
+    // An inline alert with the validator's message must appear. We assert
+    // role=alert so screen readers pick it up.
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(/doesn't look like valid JSON/i.test(alert.textContent ?? "")).toBe(
+        true,
+      );
+    });
+    // The pill must still be "Not connected" — no save happened.
+    const section = screen
+      .getByText(/AI provider — Claude/i)
+      .closest("section")!;
+    const pill = within(section).getByRole("status");
+    expect(pill.textContent).toMatch(/Not connected/);
   });
 });

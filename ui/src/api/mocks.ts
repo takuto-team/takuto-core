@@ -17,10 +17,13 @@
 
 import type {
   PatchGithubSettingsRequest,
+  ProviderCredentialKind,
   SetGithubPatRequest,
   SetProviderCredentialRequest,
   UserCredentialsStatus,
+  UserProviderCredentialStatus,
 } from "./types";
+import { parseClaudeSessionBlob } from "../utils/claudeSession";
 
 /**
  * Build-time toggle: when `VITE_USE_MOCKS` is `"true"` at `vite build` /
@@ -101,31 +104,104 @@ export function mockGetCredentials(): Response {
   return jsonResponse(200, state);
 }
 
+function makeStatus(
+  provider: string,
+  kind: ProviderCredentialKind,
+): UserProviderCredentialStatus {
+  return {
+    provider,
+    kind,
+    active: true,
+    last_validated_at: new Date().toISOString(),
+    last_used_at: null,
+  };
+}
+
 export function mockSetProviderCredential(
   provider: string,
   body: SetProviderCredentialRequest,
 ): Response {
   const fail = takeFailure();
   if (fail) return failureResponse(fail);
+
+  const kind: ProviderCredentialKind = body.kind ?? "api_key";
+
+  if (kind === "cli_state") {
+    // Task #39: only Claude accepts cli_state.
+    if (provider !== "claude") {
+      return jsonResponse(400, {
+        error: "cli_state_only_supported_for_claude",
+        message: "Only the Claude provider accepts a cli_state credential.",
+      });
+    }
+    if (body.api_key !== undefined) {
+      return jsonResponse(400, {
+        error: "api_key_not_allowed_for_cli_state_kind",
+        message: "Do not pass `api_key` when `kind = cli_state`.",
+      });
+    }
+    const blob = body.claude_session_json ?? "";
+    // Run the same client-side validator that the UI uses pre-flight, so
+    // the mock surfaces the same structured error codes the server would.
+    const parsed = parseClaudeSessionBlob(blob);
+    if (!parsed.ok) {
+      return jsonResponse(400, {
+        error:
+          parsed.code === "invalid_json"
+            ? "claude_session_json_invalid"
+            : parsed.code === "empty"
+              ? "claude_session_json_empty"
+              : "claude_session_invalid",
+        message: parsed.message,
+      });
+    }
+    const bundle = (state.provider ??= { provider });
+    bundle.cli_state = makeStatus(provider, "cli_state");
+    return new Response(null, { status: 204 });
+  }
+
+  // kind = api_key (default path).
+  if (body.claude_session_json !== undefined) {
+    return jsonResponse(400, {
+      error: "claude_session_json_not_allowed_for_api_key_kind",
+      message: "Do not pass `claude_session_json` when `kind = api_key`.",
+    });
+  }
   if (!body.api_key || body.api_key.trim().length === 0) {
     return jsonResponse(400, {
-      error: "invalid_token",
+      error: "api_key_empty",
       message: "API key cannot be empty.",
     });
   }
-  state.provider = {
-    // Wire-format note: mirrors routes/credentials.rs::ProviderCredentialStatus.
-    provider,
-    kind: "api_key",
-    active: true,
-    last_validated_at: new Date().toISOString(),
-    last_used_at: null,
-  };
+  const bundle = (state.provider ??= { provider });
+  bundle.api_key = makeStatus(provider, "api_key");
   return new Response(null, { status: 204 });
 }
 
-export function mockDeleteProviderCredential(_provider: string): Response {
-  state.provider = null;
+export function mockDeleteProviderCredential(
+  _provider: string,
+  kind?: ProviderCredentialKind,
+): Response {
+  if (!state.provider) {
+    return new Response(null, { status: 204 });
+  }
+  if (kind === "api_key") {
+    state.provider.api_key = null;
+  } else if (kind === "cli_state") {
+    state.provider.cli_state = null;
+  } else {
+    // No kind → delete everything (matches backend back-compat).
+    state.provider = null;
+  }
+  // Collapse the parent to null when both slots are gone so the wire
+  // shape matches the backend (Option<>).
+  if (
+    state.provider &&
+    !state.provider.api_key &&
+    !state.provider.cli_state
+  ) {
+    state.provider = null;
+  }
   return new Response(null, { status: 204 });
 }
 

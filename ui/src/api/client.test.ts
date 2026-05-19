@@ -226,6 +226,64 @@ describe("per-user credentials client", () => {
     });
   });
 
+  // ── Task #40 — Claude `kind=cli_state` path. ──
+
+  it("setProviderCredential threads kind + claude_session_json into the POST body", async () => {
+    mockFetch(204);
+    const blob = JSON.stringify({
+      oauthAccount: {
+        accountUuid: "a",
+        emailAddress: "b@c.d",
+        organizationUuid: "o",
+      },
+    });
+    await setProviderCredential("claude", {
+      kind: "cli_state",
+      claude_session_json: blob,
+    });
+    expect(fetch).toHaveBeenCalledWith("/api/users/me/credentials/claude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "cli_state", claude_session_json: blob }),
+      credentials: "same-origin",
+    });
+  });
+
+  it("setClaudeSession is a thin wrapper that always posts kind=cli_state to /claude", async () => {
+    const { setClaudeSession } = await import("./client");
+    mockFetch(204);
+    const blob = "{}";
+    await setClaudeSession(blob);
+    expect(fetch).toHaveBeenCalledWith("/api/users/me/credentials/claude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "cli_state", claude_session_json: blob }),
+      credentials: "same-origin",
+    });
+  });
+
+  it("deleteProviderCredential appends ?kind= when a kind is supplied", async () => {
+    mockFetch(204);
+    await deleteProviderCredential("claude", "cli_state");
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/users/me/credentials/claude?kind=cli_state",
+      { method: "DELETE", credentials: "same-origin" },
+    );
+  });
+
+  it("deleteProviderCredential URL-encodes the kind value", async () => {
+    mockFetch(204);
+    await deleteProviderCredential("claude", "api_key");
+    // `api_key` happens to have no encodable characters, but the wrapper
+    // still runs it through encodeURIComponent. Pin the literal so a
+    // future refactor that swaps to template-literal concatenation still
+    // does the right thing.
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/users/me/credentials/claude?kind=api_key",
+      { method: "DELETE", credentials: "same-origin" },
+    );
+  });
+
   it("setGithubPat threads attribute_commits through the body", async () => {
     // Wire shape: github sub-object has only { login, scopes,
     // attribute_commits, last_validated_at } — no `has_pat`, no `mode`.

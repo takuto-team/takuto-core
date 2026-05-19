@@ -128,7 +128,17 @@ export async function fetchUserCredentials(): Promise<
   return res.json();
 }
 
-/** POST /api/users/me/credentials/{provider} — paste-and-save an API key. */
+/**
+ * POST /api/users/me/credentials/{provider} — paste-and-save a credential.
+ *
+ * Body is discriminated by `kind` (task #39):
+ *   - omitted / `"api_key"` → `api_key` field carries the bearer string.
+ *   - `"cli_state"` → `claude_session_json` field carries the full
+ *     `~/.claude.json` blob (Claude only).
+ *
+ * The server is the source of truth for validation; see
+ * `routes/credentials.rs::ApiKeyBody`.
+ */
 export async function setProviderCredential(
   provider: string,
   body: import("./types").SetProviderCredentialRequest,
@@ -146,16 +156,42 @@ export async function setProviderCredential(
   if (!res.ok) await rejectWithCredentialsError(res);
 }
 
-/** DELETE /api/users/me/credentials/{provider} — hard delete. */
-export async function deleteProviderCredential(provider: string): Promise<void> {
+/**
+ * Convenience wrapper for the Claude `kind = cli_state` path. Posts the
+ * raw `~/.claude.json` blob to the Claude credential endpoint.
+ *
+ * The blob is NOT validated client-side here — UI code should call
+ * `parseClaudeSessionBlob` first to surface obvious shape errors before
+ * the round-trip. The server runs the authoritative validation.
+ */
+export async function setClaudeSession(claudeSessionJson: string): Promise<void> {
+  return setProviderCredential("claude", {
+    kind: "cli_state",
+    claude_session_json: claudeSessionJson,
+  });
+}
+
+/**
+ * DELETE /api/users/me/credentials/{provider} — hard delete.
+ *
+ * Task #39: an optional `kind` query parameter scopes the delete to a
+ * single slot (api_key or cli_state). Omitting `kind` deletes every row
+ * for `(user, provider)` — matches the backend's back-compat behaviour.
+ */
+export async function deleteProviderCredential(
+  provider: string,
+  kind?: import("./types").ProviderCredentialKind,
+): Promise<void> {
   if (isMocksEnabled()) {
-    const r = mockDeleteProviderCredential(provider);
+    const r = mockDeleteProviderCredential(provider, kind);
     if (!r.ok) await rejectWithCredentialsError(r);
     return;
   }
-  const res = await api(`/api/users/me/credentials/${encodeURIComponent(provider)}`, {
-    method: "DELETE",
-  });
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  const res = await api(
+    `/api/users/me/credentials/${encodeURIComponent(provider)}${qs}`,
+    { method: "DELETE" },
+  );
   if (!res.ok && res.status !== 204) await rejectWithCredentialsError(res);
 }
 

@@ -74,12 +74,16 @@ export const ClaudeConnected: Story = {
   name: "Claude — ✅ connected",
   decorators: [
     withMocks({
+      // Bundle layout per #39 — { provider, api_key?, cli_state? }.
       provider: {
         provider: "claude",
-        kind: "api_key",
-        active: true,
-        last_validated_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
-        last_used_at: null,
+        api_key: {
+          provider: "claude",
+          kind: "api_key",
+          active: true,
+          last_validated_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+          last_used_at: null,
+        },
       },
       // Wire-format note: a missing PAT is `github: null` per
       // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
@@ -193,14 +197,64 @@ export const ProviderMismatch: Story = {
     withMocks({
       provider: {
         provider: "claude",
-        kind: "api_key",
-        active: true,
-        last_validated_at: new Date().toISOString(),
-        last_used_at: null,
+        api_key: {
+          provider: "claude",
+          kind: "api_key",
+          active: true,
+          last_validated_at: new Date().toISOString(),
+          last_used_at: null,
+        },
       },
       // Wire-format note: a missing PAT is `github: null` per
       // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
       // page reads the effective mode from /api/auth/status::github_mode.
+      github: null,
+    }),
+  ],
+};
+
+// ── Task #40 — Claude session-state mode (kind=cli_state) ──
+
+export const ClaudeSessionOnly: Story = {
+  name: "Claude — Session only (kind=cli_state, no API key)",
+  decorators: [
+    withMocks({
+      provider: {
+        provider: "claude",
+        cli_state: {
+          provider: "claude",
+          kind: "cli_state",
+          active: true,
+          last_validated_at: new Date().toISOString(),
+          last_used_at: null,
+        },
+      },
+      github: null,
+    }),
+  ],
+};
+
+export const ClaudeBothKindsConnected: Story = {
+  name: "Claude — both API key + Session connected",
+  decorators: [
+    withMocks({
+      provider: {
+        provider: "claude",
+        api_key: {
+          provider: "claude",
+          kind: "api_key",
+          active: true,
+          last_validated_at: new Date().toISOString(),
+          last_used_at: null,
+        },
+        cli_state: {
+          provider: "claude",
+          kind: "cli_state",
+          active: true,
+          last_validated_at: new Date().toISOString(),
+          last_used_at: null,
+        },
+      },
       github: null,
     }),
   ],

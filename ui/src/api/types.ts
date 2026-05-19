@@ -377,6 +377,31 @@ export interface UserProviderCredentialStatus {
 }
 
 /**
+ * Bundle returned by `GET /api/users/me/credentials` (task #39). For each
+ * deployment-active provider a user can hold **two** rows in parallel —
+ * one `api_key` row and one `cli_state` row — so the UI can render an
+ * independent "Connected" pill per kind. Matches the Rust struct
+ * `crates/maestro-web/src/routes/credentials.rs::ProviderCredentialBundle`.
+ *
+ * Both `api_key` and `cli_state` are independently nullable. The backend
+ * elides absent slots from the wire JSON (serde
+ * `skip_serializing_if = Option::is_none`), so consumers must treat the
+ * keys as truly optional.
+ *
+ * Only Claude accepts `cli_state` today — for every other provider the
+ * `cli_state` slot is always null. See 02_cursor_headless_auth.md
+ * amendment A1 in the architecture doc.
+ */
+export interface UserProviderCredentialBundle {
+  /** Provider name the bundle is for ("claude" / "cursor" / …). */
+  provider: string;
+  /** Present when the user has saved a bearer/API-key row. */
+  api_key?: UserProviderCredentialStatus | null;
+  /** Present when the user has uploaded a Claude `~/.claude.json` blob. */
+  cli_state?: UserProviderCredentialStatus | null;
+}
+
+/**
  * Possible effective GitHub auth modes for the deployment + user pair. This
  * value lives on `/api/auth/status::github_mode` — the per-user credential
  * status returned by `/api/users/me/credentials` does NOT carry it.
@@ -407,16 +432,42 @@ export interface UserGithubCredentialStatus {
 }
 
 export interface UserCredentialsStatus {
-  /** `null` when the user has not yet captured a provider credential. */
-  provider: UserProviderCredentialStatus | null;
+  /**
+   * `null` when the user has no credential of any kind for the active
+   * provider. When non-null, exposes the per-kind bundle (api_key +
+   * cli_state) — at least one of the two inner slots is non-null.
+   */
+  provider: UserProviderCredentialBundle | null;
   /** `null` when the user has not captured a PAT (App-only / missing mode). */
   github: UserGithubCredentialStatus | null;
 }
 
-/** Body for `POST /api/users/me/credentials/{provider}`. Cursor is A1 — the
- *  CLI-state path is dropped, every provider takes a raw API key here. */
+/**
+ * Body for `POST /api/users/me/credentials/{provider}`.
+ *
+ * Discriminated by `kind`:
+ *   - `kind` omitted / `"api_key"`: `api_key` required, `claude_session_json`
+ *     forbidden. The default — pre-task-#39 clients always use this.
+ *   - `kind = "cli_state"`: `claude_session_json` required, `api_key`
+ *     forbidden. **Only Claude** accepts this kind today; the server
+ *     rejects it for every other provider with
+ *     `error: "cli_state_only_supported_for_claude"`.
+ *
+ * Wire-shape note: matches `routes/credentials.rs::ApiKeyBody`. Cursor is
+ * still A1 (API-key only at the schema level — the discriminator simply
+ * never goes to `cli_state` there).
+ */
 export interface SetProviderCredentialRequest {
-  api_key: string;
+  /** Required when `kind` is omitted or `"api_key"`. */
+  api_key?: string;
+  /**
+   * Required when `kind = "cli_state"`. Full `~/.claude.json` blob; the
+   * server validates it parses and contains
+   * `oauthAccount.{accountUuid, emailAddress, organizationUuid}`.
+   */
+  claude_session_json?: string;
+  /** Defaults to `"api_key"` on the server when absent. */
+  kind?: ProviderCredentialKind;
 }
 
 /** Body for `POST /api/users/me/github-pat`. A3 rename applied. */

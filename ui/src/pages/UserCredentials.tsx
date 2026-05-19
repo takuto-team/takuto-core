@@ -38,8 +38,10 @@ import { useToast } from "../hooks/useToast";
 import type {
   AuthStatus,
   GithubAuthMode,
+  SetProviderCredentialRequest,
   UserCredentialsStatus,
 } from "../api/types";
+import { parseClaudeSessionBlob } from "../utils/claudeSession";
 
 interface Props {
   onLogout: () => void;
@@ -196,9 +198,13 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
             <AiCredentialPanel
               activeProvider={activeProvider}
               credentials={creds}
-              onSave={async (apiKey) => {
+              onSave={async (body) => {
                 try {
-                  await setProviderCredential(activeProvider, { api_key: apiKey });
+                  // Task #40: body is now the discriminated request shape
+                  // (`{ api_key }` or `{ kind: "cli_state",
+                  // claude_session_json }`). The panel constructs the
+                  // right body based on the active tab.
+                  await setProviderCredential(activeProvider, body);
                   // Refresh the server state BEFORE toasting "connected" so
                   // the pill flips at the same instant the user sees the
                   // success message. `refresh()` no longer toggles the
@@ -206,10 +212,13 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
                   // see the comment on `refresh` above for the root-cause
                   // analysis (#31 issue C).
                   await refresh();
-                  showToast(
-                    `${PROVIDER_LABEL[activeProvider] ?? activeProvider} connected.`,
-                    "success",
-                  );
+                  const providerLabel =
+                    PROVIDER_LABEL[activeProvider] ?? activeProvider;
+                  const what =
+                    body.kind === "cli_state"
+                      ? "session uploaded"
+                      : "connected";
+                  showToast(`${providerLabel} ${what}.`, "success");
                 } catch (e: unknown) {
                   handleSurfaceError(e, "Could not save your credential.");
                 }
@@ -261,8 +270,10 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
 interface AiCredentialPanelProps {
   activeProvider: string;
   credentials: UserCredentialsStatus | null;
-  onSave: (apiKey: string) => Promise<void>;
+  onSave: (body: SetProviderCredentialRequest) => Promise<void>;
 }
+
+type ClaudeAuthMethod = "api_key" | "cli_state";
 
 function AiCredentialPanel({
   activeProvider,
@@ -270,27 +281,77 @@ function AiCredentialPanel({
   onSave,
 }: AiCredentialPanelProps) {
   const [apiKey, setApiKey] = useState("");
+  const [sessionJson, setSessionJson] = useState("");
   const [saving, setSaving] = useState(false);
+  // Inline pre-flight validation error for the session blob. Set by the
+  // Save path so the user sees structured feedback BEFORE the server
+  // round-trip (#40 T-CLAUDE-UI-006). Cleared on each edit.
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [claudeTab, setClaudeTab] = useState<ClaudeAuthMethod>("api_key");
 
   const isPhase4 = PHASE_4_PROVIDERS.has(activeProvider);
-  // Wire-format note: the backend's row is named `provider.provider` (the
-  // provider this credential was sealed for) and `provider.active` (false
-  // only after a provider switch deactivated it). See
-  // `routes/credentials.rs::ProviderCredentialStatus`.
-  const hasMatchingCredential =
-    !!credentials?.provider &&
-    credentials.provider.provider === activeProvider &&
-    credentials.provider.active;
+  const isClaude = activeProvider === "claude";
+
+  // Wire-format note: the GET response now carries a bundle (api_key +
+  // cli_state slots) per task #39. See
+  // `routes/credentials.rs::ProviderCredentialBundle`.
+  const bundle = credentials?.provider ?? null;
+  const bundleMatches = !!bundle && bundle.provider === activeProvider;
+  const apiKeyActive = bundleMatches && !!bundle?.api_key?.active;
+  const cliStateActive = bundleMatches && !!bundle?.cli_state?.active;
+  // The card is "connected" if EITHER slot has an active row.
+  const hasMatchingCredential = apiKeyActive || cliStateActive;
 
   const label = PROVIDER_LABEL[activeProvider] ?? activeProvider;
-  const helper = useMemo(() => providerHelper(activeProvider), [activeProvider]);
-  const lastValidated = credentials?.provider?.last_validated_at ?? null;
+  const apiKeyHelper = useMemo(
+    () => providerHelper(activeProvider, "api_key"),
+    [activeProvider],
+  );
+  const sessionHelper = useMemo(
+    () => providerHelper(activeProvider, "cli_state"),
+    [activeProvider],
+  );
 
-  const submit = async () => {
+  /**
+   * Pick the most informative status pill label.
+   *   - Both kinds connected   → "API key + Session"
+   *   - Only api_key connected → "API key"
+   *   - Only cli_state         → "Session"
+   *   - Neither                → undefined (pill shows base copy)
+   */
+  const pillLabel = useMemo(() => {
+    if (apiKeyActive && cliStateActive) return "API key + Session";
+    if (apiKeyActive) return "API key";
+    if (cliStateActive) return "Session";
+    return undefined;
+  }, [apiKeyActive, cliStateActive]);
+
+  const submitApiKey = async () => {
     setSaving(true);
     try {
-      await onSave(apiKey);
+      await onSave({ api_key: apiKey });
       setApiKey("");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitSession = async () => {
+    // #40 T-CLAUDE-UI-006: client-side validation BEFORE the POST. Surface
+    // structured errors inline so the user can correct without a round-trip.
+    const result = parseClaudeSessionBlob(sessionJson);
+    if (!result.ok) {
+      setSessionError(result.message);
+      return;
+    }
+    setSessionError(null);
+    setSaving(true);
+    try {
+      await onSave({
+        kind: "cli_state",
+        claude_session_json: sessionJson,
+      });
+      setSessionJson("");
     } finally {
       setSaving(false);
     }
@@ -307,11 +368,7 @@ function AiCredentialPanel({
         </h2>
         <ConnectedStatusPill
           state={hasMatchingCredential ? "connected" : "missing"}
-          label={
-            hasMatchingCredential && lastValidated
-              ? `validated ${relativeTime(lastValidated)}`
-              : undefined
-          }
+          label={pillLabel}
         />
       </div>
 
@@ -323,6 +380,57 @@ function AiCredentialPanel({
             You'll be able to paste a key here once that lands.
           </p>
         </div>
+      ) : isClaude ? (
+        <>
+          {/* #40: Claude is the only provider that accepts cli_state today.
+              Render an "Auth method" segmented control so users on Claude
+              Code Pro/Team can upload their ~/.claude.json blob in addition
+              to (or instead of) a bearer API key. */}
+          <div
+            role="tablist"
+            aria-label="Claude auth method"
+            className="flex gap-1 p-1 bg-gray-950/60 border border-gray-800 rounded-lg w-fit"
+          >
+            <ClaudeAuthTabButton
+              isActive={claudeTab === "api_key"}
+              connected={apiKeyActive}
+              onClick={() => setClaudeTab("api_key")}
+              label="API key"
+            />
+            <ClaudeAuthTabButton
+              isActive={claudeTab === "cli_state"}
+              connected={cliStateActive}
+              onClick={() => setClaudeTab("cli_state")}
+              label="Claude Code session"
+            />
+          </div>
+
+          {claudeTab === "api_key" ? (
+            <CredentialPasteField
+              label="Claude API key"
+              value={apiKey}
+              onChange={setApiKey}
+              onSubmit={submitApiKey}
+              saving={saving}
+              placeholder="sk-ant-… or CLAUDE_CODE_OAUTH_TOKEN"
+              helper={apiKeyHelper}
+              saveLabel={apiKeyActive ? "Replace" : "Save"}
+            />
+          ) : (
+            <ClaudeSessionField
+              value={sessionJson}
+              onChange={(v) => {
+                setSessionJson(v);
+                if (sessionError) setSessionError(null);
+              }}
+              onSubmit={submitSession}
+              saving={saving}
+              error={sessionError}
+              connected={cliStateActive}
+              helper={sessionHelper}
+            />
+          )}
+        </>
       ) : (
         // Issues A + B from #31: no Rotate / Disconnect buttons.
         // The single Replace/Save button covers rotation; revocation lives
@@ -332,24 +440,170 @@ function AiCredentialPanel({
           label={`${label} API key`}
           value={apiKey}
           onChange={setApiKey}
-          onSubmit={submit}
+          onSubmit={submitApiKey}
           saving={saving}
           placeholder={`Paste your ${label} API key`}
-          helper={helper}
-          saveLabel={hasMatchingCredential ? "Replace" : "Save"}
+          helper={apiKeyHelper}
+          saveLabel={apiKeyActive ? "Replace" : "Save"}
         />
       )}
     </section>
   );
 }
 
-function providerHelper(provider: string): string {
+/**
+ * Tab button for the Claude auth-method selector. Renders a small dot
+ * indicator when that kind is already connected so the user can see at a
+ * glance which mode(s) they've already saved.
+ */
+function ClaudeAuthTabButton({
+  isActive,
+  connected,
+  onClick,
+  label,
+}: {
+  isActive: boolean;
+  connected: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={isActive}
+      onClick={onClick}
+      className={`px-3 py-1.5 text-xs rounded-md cursor-pointer transition-colors flex items-center gap-1.5 ${
+        isActive ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-200"
+      }`}
+    >
+      {connected && (
+        <span
+          aria-label="connected"
+          className="inline-block w-1.5 h-1.5 rounded-full bg-green-400"
+        />
+      )}
+      {label}
+    </button>
+  );
+}
+
+/**
+ * `~/.claude.json` paste field — large textarea with inline help and a
+ * client-side validation message slot. The Save handler runs the
+ * structural check (`parseClaudeSessionBlob`) before the POST so users see
+ * obvious shape problems without a round-trip.
+ */
+function ClaudeSessionField({
+  value,
+  onChange,
+  onSubmit,
+  saving,
+  error,
+  connected,
+  helper,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  saving: boolean;
+  error: string | null;
+  connected: boolean;
+  helper: string;
+}) {
+  const [showHelp, setShowHelp] = useState(false);
+  const canSubmit = !saving && value.trim().length > 0;
+  return (
+    <div className="flex flex-col gap-2">
+      <label
+        htmlFor="claude-session-textarea"
+        className="text-xs text-gray-400"
+      >
+        Paste contents of your local{" "}
+        <code className="text-gray-300">~/.claude.json</code>
+      </label>
+      <textarea
+        id="claude-session-textarea"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder='{ "oauthAccount": { "accountUuid": "…", "emailAddress": "you@example.com", "organizationUuid": "…" }, … }'
+        rows={12}
+        spellCheck={false}
+        autoComplete="off"
+        disabled={saving}
+        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-200 font-mono whitespace-pre"
+        aria-invalid={error !== null}
+        aria-describedby={error ? "claude-session-error" : undefined}
+      />
+      {error && (
+        <p
+          id="claude-session-error"
+          role="alert"
+          className="text-xs text-red-300 bg-red-950/40 border border-red-700/50 rounded px-2 py-1.5"
+        >
+          {error}
+        </p>
+      )}
+      <p className="text-xs text-gray-500">{helper}</p>
+      <p className="text-xs text-gray-500">
+        <button
+          type="button"
+          onClick={() => setShowHelp((v) => !v)}
+          className="text-blue-400 hover:text-blue-300 cursor-pointer"
+          aria-expanded={showHelp}
+        >
+          {showHelp ? "Hide" : "Where do I find it?"}
+        </button>
+      </p>
+      {showHelp && (
+        <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-3 text-xs text-gray-400 space-y-2">
+          <p>
+            On macOS / Linux, run{" "}
+            <code className="text-gray-300">cat ~/.claude.json</code> in
+            your shell and copy the output.
+          </p>
+          <p>
+            Maestro only needs the{" "}
+            <code className="text-gray-300">oauthAccount</code> block (with{" "}
+            <code className="text-gray-300">accountUuid</code>,{" "}
+            <code className="text-gray-300">emailAddress</code>, and{" "}
+            <code className="text-gray-300">organizationUuid</code>) but
+            pasting the full file is fine — the server ignores extra fields.
+          </p>
+          <p>
+            The bearer token is still set separately on the{" "}
+            <strong>API key</strong> tab.
+          </p>
+        </div>
+      )}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={onSubmit}
+          className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+        >
+          {saving ? "Saving…" : connected ? "Replace session" : "Save session"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function providerHelper(
+  provider: string,
+  kind: "api_key" | "cli_state",
+): string {
+  if (kind === "cli_state") {
+    // Only Claude renders this branch (task #39 amendment).
+    return "Required for Pro/Team accounts whose local `claude` uses `/login`. Maestro reads `oauthAccount` from this blob and writes it to the worker's `.claude.json` at workflow start. The bearer token is still set separately on the API key tab.";
+  }
   switch (provider) {
     case "cursor":
       // A1 regression guard: no ttyd / browser-flow vocabulary here.
       return "Cursor accepts only an API key. Generate one at cursor.com/dashboard and paste it above.";
     case "claude":
-      return "Get a Claude API key at anthropic.com/settings, or paste a CLAUDE_CODE_OAUTH_TOKEN. The server stores it encrypted; it never leaves your browser unencrypted.";
+      return "For direct Anthropic API or proxies that accept the same API key format. If you're on Pro/Team and your local `claude` uses `/login`, use 'Claude Code session' instead.";
     case "codex":
     case "opencode":
       return "Phase 4 ships the adapter.";
@@ -532,16 +786,6 @@ function describeMode(mode: GithubAuthMode): string {
   }
 }
 
-/** Tiny relative-time helper — used only for the "validated X ago" label. */
-function relativeTime(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const delta = Math.max(0, Date.now() - t);
-  const mins = Math.round(delta / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.round(hours / 24);
-  return `${days} day${days === 1 ? "" : "s"} ago`;
-}
+// #40 dropped the "validated X ago" label because the bundle has two
+// kinds with potentially different timestamps — the pill now shows the
+// auth-kind shape instead. The relativeTime helper was removed.
