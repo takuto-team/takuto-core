@@ -197,8 +197,13 @@ fn row_from_query(row: &rusqlite::Row) -> rusqlite::Result<ProviderCredentialRow
     })
 }
 
-/// Return the single active (`inactive = 0`) row for `(user_id, provider)`,
-/// if any. Used by the credential resolver when starting a workflow.
+/// Return ONE active (`inactive = 0`) row for `(user_id, provider)`. With
+/// task #39 Claude users can have both `api_key` and `cli_state` rows
+/// simultaneously, so the lookup is deterministic: prefer `api_key` first,
+/// then `cli_state`, then `oauth_token`. Existing callers that only need a
+/// presence probe ("does this user have ANY credential for this provider?")
+/// keep the same behaviour. Callers that need a specific kind use
+/// [`find_active_with_kind`].
 pub fn find_active(
     conn: &Connection,
     user_id: &str,
@@ -210,10 +215,44 @@ pub fn find_active(
                 created_at, updated_at, expires_at \
          FROM user_provider_credentials \
          WHERE user_id = ?1 AND provider = ?2 AND inactive = 0 \
+         ORDER BY CASE kind \
+                    WHEN 'api_key'     THEN 0 \
+                    WHEN 'cli_state'   THEN 1 \
+                    WHEN 'oauth_token' THEN 2 \
+                    ELSE 3 \
+                  END \
          LIMIT 1",
     )?;
     let row = stmt
         .query_row(params![user_id, provider], row_from_query)
+        .optional()?;
+    Ok(row)
+}
+
+/// Task #39: return the single active row for `(user_id, provider, kind)`
+/// (or `None`). This is what the worker bundle uses to assemble the
+/// per-kind tmpfs files separately — one Claude user might have api_key
+/// only, cli_state only, or both, and the bundle builder needs to query
+/// each independently.
+pub fn find_active_with_kind(
+    conn: &Connection,
+    user_id: &str,
+    provider: &str,
+    kind: ProviderCredentialKind,
+) -> Result<Option<ProviderCredentialRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce, \
+                metadata_json, inactive, last_validated_at, last_used_at, \
+                created_at, updated_at, expires_at \
+         FROM user_provider_credentials \
+         WHERE user_id = ?1 AND provider = ?2 AND kind = ?3 AND inactive = 0 \
+         LIMIT 1",
+    )?;
+    let row = stmt
+        .query_row(
+            params![user_id, provider, kind.as_str()],
+            row_from_query,
+        )
         .optional()?;
     Ok(row)
 }
@@ -245,6 +284,25 @@ pub fn delete(conn: &Connection, user_id: &str, provider: &str) -> Result<bool> 
     let n = conn.execute(
         "DELETE FROM user_provider_credentials WHERE user_id = ?1 AND provider = ?2",
         params![user_id, provider],
+    )?;
+    Ok(n > 0)
+}
+
+/// Task #39: hard-delete the single row for `(user_id, provider, kind)`,
+/// leaving any other-kind rows for the same `(user, provider)` intact.
+/// Drives the `DELETE /api/users/me/credentials/{provider}?kind=cli_state`
+/// flow so the UI can wipe just the session state without touching the
+/// api_key row (or vice versa).
+pub fn delete_with_kind(
+    conn: &Connection,
+    user_id: &str,
+    provider: &str,
+    kind: ProviderCredentialKind,
+) -> Result<bool> {
+    let n = conn.execute(
+        "DELETE FROM user_provider_credentials \
+         WHERE user_id = ?1 AND provider = ?2 AND kind = ?3",
+        params![user_id, provider, kind.as_str()],
     )?;
     Ok(n > 0)
 }

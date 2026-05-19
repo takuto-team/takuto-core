@@ -209,6 +209,15 @@ pub(crate) const BUNDLE_SOURCING_SH: &str = concat!(
     r#" export ANTHROPIC_API_KEY;"#,
     r#" rm -f /run/maestro-secrets/opencode || true;"#,
     r#" fi;"#,
+    // Task #39: Claude session-state (`~/.claude.json`). We `cp` (not source)
+    // because the file is JSON, not shell. Placed AFTER the legacy
+    // .claude.json restore from `~/.claude/backups/` in `wrap_command`'s
+    // preamble, so the per-user session-state always wins over a stale
+    // backup. The `cp` runs as the maestro user inside the container.
+    r#" if [ -f /run/maestro-secrets/claude_session.json ]; then"#,
+    r#" cp /run/maestro-secrets/claude_session.json "$HOME/.claude.json" || true;"#,
+    r#" rm -f /run/maestro-secrets/claude_session.json || true;"#,
+    r#" fi;"#,
     r#" if [ -f /run/maestro-secrets/gh ]; then"#,
     r#" GH_TOKEN="$(cat /run/maestro-secrets/gh)";"#,
     r#" export GH_TOKEN;"#,
@@ -2660,6 +2669,23 @@ mod tests {
                 "snippet must rm -f {file} after sourcing"
             );
         }
+
+        // Task #39: Claude session-state file uses `cp` (not source/export)
+        // because it carries JSON, not shell variables. Assert the
+        // dedicated cp + rm pair instead of the export pattern.
+        assert!(
+            BUNDLE_SOURCING_SH.contains("[ -f /run/maestro-secrets/claude_session.json ]"),
+            "snippet must source-test claude_session.json"
+        );
+        assert!(
+            BUNDLE_SOURCING_SH
+                .contains(r#"cp /run/maestro-secrets/claude_session.json "$HOME/.claude.json""#),
+            "snippet must cp claude_session.json onto $HOME/.claude.json"
+        );
+        assert!(
+            BUNDLE_SOURCING_SH.contains("rm -f /run/maestro-secrets/claude_session.json"),
+            "snippet must rm -f /run/maestro-secrets/claude_session.json after cp"
+        );
     }
 
     /// Task #36: drift-detection. Read `docker/worker-entrypoint.sh` from
@@ -2717,6 +2743,22 @@ mod tests {
                  (present in shell script)"
             );
         }
+
+        // Task #39: the cli_state mapping uses `cp` instead of source +
+        // export. Both the script and the Rust constant must reference the
+        // file AND the cp-onto-$HOME/.claude.json action.
+        assert!(
+            script.contains("/run/maestro-secrets/claude_session.json"),
+            "drift: worker-entrypoint.sh missing claude_session.json handling"
+        );
+        assert!(
+            script.contains("$HOME/.claude.json") || script.contains("HOME/.claude.json"),
+            "drift: worker-entrypoint.sh must cp the session blob onto $HOME/.claude.json"
+        );
+        assert!(
+            BUNDLE_SOURCING_SH.contains("/run/maestro-secrets/claude_session.json"),
+            "drift: BUNDLE_SOURCING_SH missing claude_session.json handling"
+        );
     }
 
     /// Task #36: when the runner has NO secrets bundle attached, the

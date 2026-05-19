@@ -39,6 +39,12 @@ pub const SECRET_FILE_CURSOR: &str = "cursor";
 pub const SECRET_FILE_CODEX: &str = "codex";
 pub const SECRET_FILE_OPENCODE: &str = "opencode";
 pub const SECRET_FILE_GH: &str = "gh";
+/// Task #39: Claude session-state file. Carries the contents of a paid /
+/// team Claude account's `~/.claude.json` (the OAuth `oauthAccount` block
+/// the CLI requires for "logged in"). When present alongside the api_key
+/// file, the worker `cp`s this onto `$HOME/.claude.json` before exec'ing
+/// the agent so Claude Code accepts the session.
+pub const SECRET_FILE_CLAUDE_SESSION: &str = "claude_session.json";
 
 /// The end-product of `build_for_workflow`. Lives for the duration of the
 /// agent step; dropping it removes the underlying tmpfs directory (which is
@@ -52,6 +58,14 @@ pub struct WorkerSecretsBundle {
     /// this provider; the provider CLI then reads ambient
     /// `CLAUDE_CODE_OAUTH_TOKEN` / `CURSOR_API_KEY` from `/etc/maestro/env`).
     pub provider_secret_file: Option<PathBuf>,
+    /// Task #39: Claude only. Host-side path to the unsealed
+    /// `claude_session.json` blob (the user's `~/.claude.json` contents
+    /// — `oauthAccount` block etc.). `Some` when a `kind=cli_state` row
+    /// exists for `(user_id, "claude")`; `None` otherwise. Independent of
+    /// `provider_secret_file` — a user can have one, the other, or both.
+    /// The worker `cp`s this onto `$HOME/.claude.json` before exec'ing
+    /// the agent so Claude Code accepts the session as "logged in".
+    pub claude_session_file: Option<PathBuf>,
     /// Absolute host-side path to the GitHub token file. `None` when the
     /// resolver returned `UnauthenticatedGit` (workflow can still spawn a
     /// container; the agent step itself will fail at `git push` time).
@@ -80,6 +94,7 @@ impl std::fmt::Debug for WorkerSecretsBundle {
         f.debug_struct("WorkerSecretsBundle")
             .field("provider", &self.provider.as_str())
             .field("has_provider_secret", &self.provider_secret_file.is_some())
+            .field("has_claude_session", &self.claude_session_file.is_some())
             .field("has_github_token", &self.github_token_file.is_some())
             .field("git_author_name", &self.git_author_name)
             .field("git_author_email", &self.git_author_email)
@@ -117,6 +132,7 @@ impl WorkerSecretsBundle {
         Self {
             provider,
             provider_secret_file: Some(provider_path),
+            claude_session_file: None,
             github_token_file: Some(gh_path),
             git_author_name: None,
             git_author_email: None,
@@ -152,7 +168,7 @@ pub async fn build(
     let dir = TempDir::new()
         .map_err(|e| MaestroError::Config(format!("failed to create secrets tmpdir: {e}")))?;
 
-    // ── Provider secret ──────────────────────────────────────────────────
+    // ── Provider secret (api_key) ────────────────────────────────────────
     let provider_secret_file = unseal_provider_credential(
         config,
         db,
@@ -162,6 +178,16 @@ pub async fn build(
         dir.path(),
     )
     .await?;
+
+    // ── Task #39: Claude `cli_state` row (optional, claude-only) ─────────
+    // Independent of `provider_secret_file`. When present, the worker
+    // `cp`s the unsealed JSON onto `$HOME/.claude.json` so Claude Code
+    // sees a populated `oauthAccount` block and accepts the session.
+    let claude_session_file = if matches!(provider, AiAgentProvider::Claude) {
+        unseal_claude_session(db, &master_key, workflow_user_id, dir.path()).await?
+    } else {
+        None
+    };
 
     // ── Provider sub-table: base_url + extra_args (non-secret) ───────────
     let base_url = match provider {
@@ -241,6 +267,7 @@ pub async fn build(
     Ok(WorkerSecretsBundle {
         provider,
         provider_secret_file,
+        claude_session_file,
         github_token_file,
         git_author_name,
         git_author_email,
@@ -249,6 +276,51 @@ pub async fn build(
         extra_env,
         _temp_dir: dir,
     })
+}
+
+/// Task #39: unseal the user's optional `kind = cli_state` row for Claude
+/// (the user's `~/.claude.json` blob) and write it to
+/// `<dir>/claude_session.json` (mode 0400). Returns `None` when the row
+/// doesn't exist — callers treat that as "API-key-only setup, no session
+/// state needed" and don't error.
+async fn unseal_claude_session(
+    db: &crate::db::Database,
+    master_key: &Arc<MasterKey>,
+    workflow_user_id: &str,
+    dir: &Path,
+) -> Result<Option<PathBuf>> {
+    let row = {
+        let conn = db.conn().lock().await;
+        provider_credentials::find_active_with_kind(
+            &conn,
+            workflow_user_id,
+            AiAgentProvider::Claude.as_str(),
+            provider_credentials::ProviderCredentialKind::CliState,
+        )
+        .map_err(|e| MaestroError::Config(format!("find_active_with_kind failed: {e}")))?
+    };
+    let Some(r) = row else {
+        return Ok(None);
+    };
+    let sealed = SealedBlob {
+        ciphertext: r.ciphertext,
+        nonce: r.nonce,
+        wrapped_dek: r.wrapped_dek,
+        wnonce: r.wnonce,
+    };
+    let plaintext = open(master_key, &sealed)
+        .map_err(|e| MaestroError::Config(format!("open(cli_state) failed: {e}")))?;
+    // Defense in depth: the validator already requires the four
+    // `oauthAccount` keys at save time, but we re-validate parseable JSON
+    // here so a corrupted seal doesn't deliver garbage to the worker.
+    if serde_json::from_slice::<serde_json::Value>(&plaintext).is_err() {
+        return Err(MaestroError::Config(
+            "cli_state blob is not valid JSON (corrupt seal or schema drift)".into(),
+        ));
+    }
+    let path = dir.join(SECRET_FILE_CLAUDE_SESSION);
+    write_secret_file(&path, &plaintext)?;
+    Ok(Some(path))
 }
 
 fn non_empty(s: &str) -> Option<String> {
@@ -274,12 +346,18 @@ async fn unseal_provider_credential(
     // Find the row by the pinned id when set; otherwise by (user, provider).
     // Pre-Phase-2b.3 we don't yet have an `id`-keyed lookup helper, so the
     // pinned row id is informational for now — we always do the
-    // (user_id, provider) lookup. Phase 2b.4+ can add the id-keyed lookup
-    // when provider-switch invalidation requires it.
+    // (user_id, provider, kind=api_key) lookup. Task #39: switched to the
+    // kind-explicit query so the lookup is unambiguous when a Claude user
+    // also has a `cli_state` row (UNIQUE(user_id, provider, kind)).
     let row = {
         let conn = db.conn().lock().await;
-        provider_credentials::find_active(&conn, workflow_user_id, &auth_pin.provider)
-            .map_err(|e| MaestroError::Config(format!("find_active failed: {e}")))?
+        provider_credentials::find_active_with_kind(
+            &conn,
+            workflow_user_id,
+            &auth_pin.provider,
+            provider_credentials::ProviderCredentialKind::ApiKey,
+        )
+        .map_err(|e| MaestroError::Config(format!("find_active_with_kind failed: {e}")))?
     };
 
     let plaintext = match row {
@@ -504,6 +582,24 @@ mod tests {
         Arc::new(GitAuthResolver::new(db, None))
     }
 
+    /// Task #39: seed a cli_state row carrying a minimal valid Claude
+    /// session blob. Uses the test DB's master key so `seal()`/`open()`
+    /// round-trip cleanly.
+    async fn seed_claude_cli_state(db: &Database, user_id: &str, json: &[u8]) {
+        let mk = db.master_key().unwrap().key.clone();
+        let sealed = seal(&mk, json).unwrap();
+        let conn = db.conn().lock().await;
+        provider_credentials::upsert(
+            &conn,
+            user_id,
+            "claude",
+            provider_credentials::ProviderCredentialKind::CliState,
+            &sealed,
+            r#"{"kind":"cli_state"}"#,
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn build_writes_provider_secret_file_when_credential_present() {
         let db = db_with_master_key();
@@ -712,6 +808,7 @@ mod tests {
         let bundle = WorkerSecretsBundle {
             provider: AiAgentProvider::Claude,
             provider_secret_file: Some(host_dir_path.join("claude")),
+            claude_session_file: None,
             github_token_file: Some(host_dir_path.join("gh")),
             git_author_name: Some("alice".into()),
             git_author_email: Some("alice@noreply".into()),
@@ -777,6 +874,7 @@ mod tests {
         let bundle = WorkerSecretsBundle {
             provider: AiAgentProvider::Claude,
             provider_secret_file: Some(dir.path().join("claude")),
+            claude_session_file: None,
             github_token_file: Some(dir.path().join("gh")),
             git_author_name: Some("alice".into()),
             git_author_email: Some("alice@noreply".into()),
@@ -789,6 +887,128 @@ mod tests {
         // Paths can appear; token bytes cannot — they're never set as fields.
         assert!(s.contains("WorkerSecretsBundle"));
         assert!(s.contains("has_provider_secret"));
+        assert!(s.contains("has_claude_session"));
         assert!(s.contains("has_github_token"));
+    }
+
+    // ─── Task #39: claude cli_state in bundle ────────────────────────────
+
+    /// Minimal valid Claude session blob — three required oauthAccount
+    /// keys + a couple of harmless extras the validator must ignore.
+    fn fixture_session_json() -> Vec<u8> {
+        serde_json::json!({
+            "oauthAccount": {
+                "accountUuid": "00000000-0000-0000-0000-000000000001",
+                "emailAddress": "alice@example.com",
+                "organizationUuid": "11111111-1111-1111-1111-111111111111",
+                "organizationType": "claude_team",
+                "seatTier": "team_standard",
+            },
+            "lastUpdateCheck": "2026-05-19T00:00:00Z",
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    /// Happy path: both api_key AND cli_state rows present → bundle has
+    /// BOTH files populated and the session file contents round-trip.
+    #[tokio::test]
+    async fn build_writes_claude_session_file_when_cli_state_row_present() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "claude", b"sk-ant").await;
+        let session_blob = fixture_session_json();
+        seed_claude_cli_state(&db, "u-alice", &session_blob).await;
+        let resolver = make_resolver(db.clone());
+        let cfg = fixed_config(AiAgentProvider::Claude);
+        let pin = fixed_pin(AiAgentProvider::Claude);
+
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect("build bundle");
+        let session_path = bundle
+            .claude_session_file
+            .as_ref()
+            .expect("claude_session_file must be Some when cli_state row exists");
+        let on_disk = std::fs::read(session_path).expect("read session file");
+        assert_eq!(on_disk, session_blob);
+        // The mount filename must match the documented constant so
+        // BUNDLE_SOURCING_SH's `cp` reads it.
+        assert!(
+            session_path.ends_with(SECRET_FILE_CLAUDE_SESSION),
+            "session file must use the SECRET_FILE_CLAUDE_SESSION name; got {session_path:?}"
+        );
+        // API key file is also present (the user has both rows).
+        assert!(bundle.provider_secret_file.is_some());
+    }
+
+    /// No cli_state row → `claude_session_file` is None (api_key path
+    /// unchanged). Saves succeed without it; this is the most common
+    /// case for direct-API users.
+    #[tokio::test]
+    async fn build_omits_session_file_when_no_cli_state_row() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "claude", b"sk-ant").await;
+        let resolver = make_resolver(db.clone());
+        let cfg = fixed_config(AiAgentProvider::Claude);
+        let pin = fixed_pin(AiAgentProvider::Claude);
+
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect("build bundle");
+        assert!(
+            bundle.claude_session_file.is_none(),
+            "claude_session_file must be None when no cli_state row exists"
+        );
+    }
+
+    /// Non-Claude provider with a (somehow) seeded cli_state row → bundle
+    /// MUST NOT write the session file (the unseal helper is gated on
+    /// `provider == Claude`). Defence-in-depth.
+    #[tokio::test]
+    async fn build_does_not_emit_session_file_for_non_claude_provider() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "cursor", b"sk-curs").await;
+        // Sneak a claude cli_state row in (UI rejects this at POST time,
+        // but the bundle builder must not key off non-active providers).
+        seed_claude_cli_state(&db, "u-alice", &fixture_session_json()).await;
+        let resolver = make_resolver(db.clone());
+        let cfg = fixed_config(AiAgentProvider::Cursor);
+        let pin = fixed_pin(AiAgentProvider::Cursor);
+
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect("build bundle");
+        assert!(
+            bundle.claude_session_file.is_none(),
+            "non-Claude bundle must NOT include claude_session_file even when \
+             a rogue cli_state row exists in the DB"
+        );
+    }
+
+    /// Corrupt cli_state blob (valid bytes through `seal`, but the
+    /// plaintext isn't valid JSON) → typed error at unseal time. Defence
+    /// in depth — the validator catches this at save time, but the
+    /// bundle builder must not silently ship garbage to the worker.
+    #[tokio::test]
+    async fn build_errors_when_cli_state_blob_is_not_json() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "claude", b"sk-ant").await;
+        // Skip the validator: write garbage bytes via the seed helper.
+        seed_claude_cli_state(&db, "u-alice", b"this is not json {[").await;
+        let resolver = make_resolver(db.clone());
+        let cfg = fixed_config(AiAgentProvider::Claude);
+        let pin = fixed_pin(AiAgentProvider::Claude);
+
+        let err = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect_err("invalid JSON must surface a typed error");
+        assert!(
+            err.to_string().contains("cli_state blob is not valid JSON"),
+            "error must explain the cli_state JSON problem; got: {err}"
+        );
     }
 }

@@ -49,6 +49,17 @@ if [ "${MAESTRO_AUTH_BUNDLE:-0}" = "1" ] && [ -d /run/maestro-secrets ]; then
         export ANTHROPIC_API_KEY
         rm -f /run/maestro-secrets/opencode || true
     fi
+    # Task #39: Claude session-state (`~/.claude.json`). When the user is
+    # on a team / Pro plan, the API key alone isn't enough — Claude Code
+    # requires a populated `oauthAccount` block in $HOME/.claude.json
+    # before it considers the session "logged in". The bundle ships the
+    # user's stored .claude.json contents and we `cp` it into place here.
+    # Placed AFTER the per-provider key blocks so the session credential
+    # always wins over any in-image stale state.
+    if [ -f /run/maestro-secrets/claude_session.json ]; then
+        cp /run/maestro-secrets/claude_session.json "$HOME/.claude.json" || true
+        rm -f /run/maestro-secrets/claude_session.json || true
+    fi
     # GitHub token. Used by `gh`, `git push`, and the inline credential
     # helper that other parts of the stack install on the fly.
     if [ -f /run/maestro-secrets/gh ]; then

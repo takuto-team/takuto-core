@@ -30,7 +30,7 @@
 //! Everywhere else, the code uses the column name.
 
 use axum::Json;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -54,13 +54,33 @@ const MAX_API_KEY_LEN: usize = 4096;
 // Response shapes
 // ---------------------------------------------------------------------------
 
-/// Returned by `GET /api/users/me/credentials`. The provider field is `None`
-/// when the user hasn't pasted any AI-provider credential yet; the github
-/// field is `None` when no PAT is stored.
+/// Returned by `GET /api/users/me/credentials`.
+///
+/// Task #39: with Claude `kind=cli_state` shipping, one user can have BOTH
+/// an `api_key` row AND a `cli_state` row for the same provider. The
+/// response now carries a [`ProviderCredentialBundle`] (api_key +
+/// cli_state slots) instead of a single status — back-compat is preserved
+/// because old clients reading `provider.kind` / `provider.active` can
+/// still read those nested under `provider.api_key.*`.
 #[derive(Debug, Serialize)]
 pub struct UserCredentialsStatus {
-    pub provider: Option<ProviderCredentialStatus>,
+    /// `None` when the user has no row at all for the active provider.
+    /// `Some` even when only one of (`api_key`, `cli_state`) is set — both
+    /// fields inside the bundle are optional independently.
+    pub provider: Option<ProviderCredentialBundle>,
     pub github: Option<GithubCredentialStatus>,
+}
+
+/// Task #39: per-provider credential bundle. One slot per `kind`. UI uses
+/// `provider.api_key.is_some()` and `provider.cli_state.is_some()` to
+/// render the two-pill state independently.
+#[derive(Debug, Serialize)]
+pub struct ProviderCredentialBundle {
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<ProviderCredentialStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cli_state: Option<ProviderCredentialStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -102,7 +122,27 @@ pub struct AdminGithubStatusResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyBody {
-    pub api_key: String,
+    /// Bearer / API key string. Required when `kind` is `api_key` (default).
+    /// Forbidden when `kind = cli_state`.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Task #39: Claude `~/.claude.json` blob (full JSON string).
+    /// Required when `kind = cli_state`. Forbidden otherwise.
+    #[serde(default)]
+    pub claude_session_json: Option<String>,
+    /// Discriminator. `None` defaults to `"api_key"` for back-compat with
+    /// pre-task-#39 clients that only ever wrote bearer keys.
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+/// Task #39: `DELETE /api/users/me/credentials/{provider}?kind=cli_state`
+/// query string. `kind = None` (omitted) deletes EVERY row for
+/// `(user, provider)` (back-compat).
+#[derive(Debug, Deserialize, Default)]
+pub struct DeleteProviderCredentialQuery {
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,21 +252,42 @@ pub async fn get_my_credentials(
     let active_provider_clone = active_provider.clone();
     let status = tokio::task::spawn_blocking(move || -> rusqlite::Result<UserCredentialsStatus> {
         let conn = db.conn().blocking_lock();
-        let provider = provider_credentials::find_active(&conn, &user_id, &active_provider_clone)
+        // Task #39: fetch the two kinds independently. We return a bundle
+        // (api_key + cli_state slots) so the UI can render the two-pill
+        // state per-kind. Bundle is `None` only when BOTH are absent.
+        let fetch = |kind: ProviderCredentialKind| -> rusqlite::Result<Option<ProviderCredentialStatus>> {
+            let r = provider_credentials::find_active_with_kind(
+                &conn,
+                &user_id,
+                &active_provider_clone,
+                kind,
+            )
             .map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
                     0,
                     rusqlite::types::Type::Null,
-                    format!("provider_credentials::find_active failed: {e}").into(),
+                    format!("find_active_with_kind({kind:?}) failed: {e}").into(),
                 )
-            })?
-            .map(|row| ProviderCredentialStatus {
+            })?;
+            Ok(r.map(|row| ProviderCredentialStatus {
                 provider: row.provider,
                 kind: row.kind.as_str().to_string(),
                 active: !row.inactive,
                 last_validated_at: row.last_validated_at,
                 last_used_at: row.last_used_at,
-            });
+            }))
+        };
+        let api_key = fetch(ProviderCredentialKind::ApiKey)?;
+        let cli_state = fetch(ProviderCredentialKind::CliState)?;
+        let provider = if api_key.is_none() && cli_state.is_none() {
+            None
+        } else {
+            Some(ProviderCredentialBundle {
+                provider: active_provider_clone.clone(),
+                api_key,
+                cli_state,
+            })
+        };
         let github = github_credentials::find(&conn, &user_id)
             .map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
@@ -253,8 +314,17 @@ pub async fn get_my_credentials(
     Ok(Json(status))
 }
 
-/// `POST /api/users/me/credentials/{provider}` — paste/rotate an AI-provider
-/// API key. Seals + upserts + audit-logs atomically.
+/// `POST /api/users/me/credentials/{provider}` — paste/rotate a credential.
+///
+/// Task #39: body grows two new fields. `kind` defaults to `"api_key"`
+/// when absent (back-compat). Validation matrix:
+///
+///   - `kind = "api_key"` → `api_key` field required, `claude_session_json`
+///     forbidden. Any provider accepts this.
+///   - `kind = "cli_state"` → `claude_session_json` field required (must
+///     parse as JSON AND contain `oauthAccount.{accountUuid, emailAddress,
+///     organizationUuid}`), `api_key` forbidden. **Only Claude** accepts
+///     this kind — every other provider rejects with `kind_not_supported`.
 pub async fn post_provider_credential(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
@@ -262,7 +332,47 @@ pub async fn post_provider_credential(
     Json(body): Json<ApiKeyBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let provider = normalise_provider(&provider)?;
-    validate_api_key_shape(&body.api_key)?;
+    let kind_str = body.kind.as_deref().unwrap_or("api_key");
+    let (kind, plaintext): (ProviderCredentialKind, Vec<u8>) = match kind_str {
+        "api_key" => {
+            if body.claude_session_json.is_some() {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "claude_session_json_not_allowed_for_api_key_kind",
+                ));
+            }
+            let key = body
+                .api_key
+                .as_deref()
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "api_key_required"))?;
+            validate_api_key_shape(key)?;
+            (ProviderCredentialKind::ApiKey, key.as_bytes().to_vec())
+        }
+        "cli_state" => {
+            // Only Claude accepts cli_state today; every other provider
+            // gets a structured rejection so future-proofing is clear.
+            if provider != "claude" {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "kind_not_supported_for_provider",
+                ));
+            }
+            if body.api_key.is_some() {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "api_key_not_allowed_for_cli_state_kind",
+                ));
+            }
+            let blob = body
+                .claude_session_json
+                .as_deref()
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "claude_session_json_required"))?;
+            validate_claude_session_blob(blob)?;
+            (ProviderCredentialKind::CliState, blob.as_bytes().to_vec())
+        }
+        _ => return Err(err(StatusCode::BAD_REQUEST, "unknown_kind")),
+    };
+
     let master = require_master_key(&state)?;
     let db = state
         .db
@@ -270,15 +380,17 @@ pub async fn post_provider_credential(
         .expect("db checked in require_master_key")
         .clone();
 
-    let sealed = seal(&master, body.api_key.as_bytes())
-        .map_err(|e| {
-            tracing::warn!(error = %e, "seal failed");
-            err(StatusCode::INTERNAL_SERVER_ERROR, "seal_failed")
-        })?;
+    let sealed = seal(&master, &plaintext).map_err(|e| {
+        tracing::warn!(error = %e, "seal failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "seal_failed")
+    })?;
     drop(master);
 
     let user_id = auth.user_id.clone();
     let provider_for_blocking = provider.clone();
+    // Per-kind metadata so audit-log reviewers can distinguish api_key
+    // rotations from cli_state rotations. Non-secret JSON only.
+    let metadata = serde_json::json!({ "kind": kind.as_str() }).to_string();
     let outcome = tokio::task::spawn_blocking(move || -> Result<UpsertOutcome, String> {
         let conn = db.conn().blocking_lock();
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -286,11 +398,17 @@ pub async fn post_provider_credential(
             &tx,
             &user_id,
             &provider_for_blocking,
-            ProviderCredentialKind::ApiKey,
+            kind,
             &sealed,
-            "{}",
+            &metadata,
         )
         .map_err(|e| e.to_string())?;
+        // Task #39: the kind ("api_key" / "cli_state") is recorded in the
+        // user_provider_credentials.metadata_json column above, NOT in
+        // credential_audit (which has no metadata slot). Admins reviewing
+        // audit can join by (user_id, provider) to confirm which kind
+        // rotated. The `error_code` column stays for actual error codes
+        // only.
         credential_audit::log(
             &tx,
             &user_id,
@@ -316,16 +434,77 @@ pub async fn post_provider_credential(
         UpsertOutcome::Created => StatusCode::CREATED,
         UpsertOutcome::Rotated => StatusCode::OK,
     };
-    Ok((status, Json(serde_json::json!({ "provider": provider }))))
+    Ok((
+        status,
+        Json(serde_json::json!({
+            "provider": provider,
+            "kind": kind.as_str(),
+        })),
+    ))
+}
+
+/// Task #39: validate a Claude session-state JSON blob.
+///
+/// Requirements (per Anthropic's `~/.claude.json` schema):
+///   - Must parse as JSON.
+///   - Must contain a top-level `oauthAccount` object.
+///   - Must contain `oauthAccount.accountUuid`, `oauthAccount.emailAddress`,
+///     `oauthAccount.organizationUuid` (the three keys Claude Code itself
+///     requires before treating the session as authenticated).
+///
+/// We accept extra fields silently — Anthropic adds keys over time and we
+/// don't want to break paste flows when they ship a new release. The blob
+/// is stored verbatim.
+fn validate_claude_session_blob(
+    blob: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if blob.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "claude_session_json_empty"));
+    }
+    if blob.len() > MAX_API_KEY_LEN * 16 {
+        // Session JSON is bigger than a bearer key — 64 KiB is generous;
+        // Anthropic's real blobs are ~10-20 KiB. Anything larger is
+        // almost certainly a paste mistake.
+        return Err(err(StatusCode::BAD_REQUEST, "claude_session_json_too_long"));
+    }
+    let parsed: serde_json::Value = serde_json::from_str(blob)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "claude_session_json_invalid"))?;
+    let oauth = parsed
+        .get("oauthAccount")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "claude_session_invalid"))?;
+    for key in ["accountUuid", "emailAddress", "organizationUuid"] {
+        let value = oauth.get(key);
+        let ok = match value {
+            Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+            _ => false,
+        };
+        if !ok {
+            return Err(err(StatusCode::BAD_REQUEST, "claude_session_invalid"));
+        }
+    }
+    Ok(())
 }
 
 /// `DELETE /api/users/me/credentials/{provider}` — hard delete + audit row.
+///
+/// Task #39: when `?kind=api_key` or `?kind=cli_state` is supplied, only
+/// that kind is wiped; the other-kind row stays intact. When `kind` is
+/// absent (legacy / "Wipe everything" UI), every row for `(user, provider)`
+/// is deleted (back-compat).
 pub async fn delete_provider_credential(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(provider): Path<String>,
+    Query(query): Query<DeleteProviderCredentialQuery>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let provider = normalise_provider(&provider)?;
+    let kind = match query.kind.as_deref() {
+        None => None,
+        Some("api_key") => Some(ProviderCredentialKind::ApiKey),
+        Some("cli_state") => Some(ProviderCredentialKind::CliState),
+        Some(_) => return Err(err(StatusCode::BAD_REQUEST, "unknown_kind")),
+    };
     let db = state
         .db
         .as_ref()
@@ -337,8 +516,17 @@ pub async fn delete_provider_credential(
     let deleted = tokio::task::spawn_blocking(move || -> Result<bool, String> {
         let conn = db.conn().blocking_lock();
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        let was_present = provider_credentials::delete(&tx, &user_id, &provider_for_blocking)
-            .map_err(|e| e.to_string())?;
+        let was_present = match kind {
+            Some(k) => provider_credentials::delete_with_kind(
+                &tx,
+                &user_id,
+                &provider_for_blocking,
+                k,
+            )
+            .map_err(|e| e.to_string())?,
+            None => provider_credentials::delete(&tx, &user_id, &provider_for_blocking)
+                .map_err(|e| e.to_string())?,
+        };
         if was_present {
             credential_audit::log(
                 &tx,
