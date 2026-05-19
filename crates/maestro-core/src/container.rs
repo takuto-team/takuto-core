@@ -209,13 +209,31 @@ pub(crate) const BUNDLE_SOURCING_SH: &str = concat!(
     r#" export ANTHROPIC_API_KEY;"#,
     r#" rm -f /run/maestro-secrets/opencode || true;"#,
     r#" fi;"#,
-    // Task #39: Claude session-state (`~/.claude.json`). We `cp` (not source)
-    // because the file is JSON, not shell. Placed AFTER the legacy
-    // .claude.json restore from `~/.claude/backups/` in `wrap_command`'s
-    // preamble, so the per-user session-state always wins over a stale
-    // backup. The `cp` runs as the maestro user inside the container.
+    // Task #41 (was #39): Claude session-state (`~/.claude.json`). The
+    // bundle ships ONLY the keys the user pasted (typically just
+    // `oauthAccount` for team-plan users on a custom proxy). A naive `cp`
+    // would wipe whatever the legacy backups-restore step put on disk —
+    // including `hasCompletedOnboarding`, `userID`, accumulated state —
+    // and Claude Code checks those fields too. We do a shallow JSON
+    // merge: existing keys win when bundle blob is silent on them;
+    // bundle keys (oauthAccount, etc.) win when present. `jq -s '.[0]
+    // * .[1]'` is the canonical jq incantation for this. jq is in the
+    // image (Dockerfile line 62). When jq is somehow missing OR there's
+    // no existing `.claude.json` to merge into, fall back to a plain
+    // overwrite (matches pre-#41 behaviour). Placed AFTER the legacy
+    // backups-restore so per-user session always wins over stale state.
     r#" if [ -f /run/maestro-secrets/claude_session.json ]; then"#,
+    r#" if [ -f "$HOME/.claude.json" ] && command -v jq >/dev/null 2>&1; then"#,
+    r#" __mtmp=$(mktemp);"#,
+    r#" if jq -s '.[0] * .[1]' "$HOME/.claude.json" /run/maestro-secrets/claude_session.json > "$__mtmp" 2>/dev/null; then"#,
+    r#" mv "$__mtmp" "$HOME/.claude.json";"#,
+    r#" else"#,
+    r#" rm -f "$__mtmp";"#,
     r#" cp /run/maestro-secrets/claude_session.json "$HOME/.claude.json" || true;"#,
+    r#" fi;"#,
+    r#" else"#,
+    r#" cp /run/maestro-secrets/claude_session.json "$HOME/.claude.json" || true;"#,
+    r#" fi;"#,
     r#" rm -f /run/maestro-secrets/claude_session.json || true;"#,
     r#" fi;"#,
     r#" if [ -f /run/maestro-secrets/gh ]; then"#,
@@ -2677,14 +2695,22 @@ mod tests {
             BUNDLE_SOURCING_SH.contains("[ -f /run/maestro-secrets/claude_session.json ]"),
             "snippet must source-test claude_session.json"
         );
+        // Task #41: the snippet shallow-merges the session blob into the
+        // existing $HOME/.claude.json via jq, with a `cp` fallback when
+        // jq is unavailable OR the target file doesn't yet exist. Assert
+        // BOTH paths are present so a regression to plain-cp gets caught.
+        assert!(
+            BUNDLE_SOURCING_SH.contains("jq -s '.[0] * .[1]'"),
+            "snippet must merge via jq's `.[0] * .[1]` shallow-merge"
+        );
         assert!(
             BUNDLE_SOURCING_SH
                 .contains(r#"cp /run/maestro-secrets/claude_session.json "$HOME/.claude.json""#),
-            "snippet must cp claude_session.json onto $HOME/.claude.json"
+            "snippet must keep a cp fallback for the no-jq / no-existing-file case"
         );
         assert!(
             BUNDLE_SOURCING_SH.contains("rm -f /run/maestro-secrets/claude_session.json"),
-            "snippet must rm -f /run/maestro-secrets/claude_session.json after cp"
+            "snippet must rm -f /run/maestro-secrets/claude_session.json after merge"
         );
     }
 
@@ -2744,16 +2770,27 @@ mod tests {
             );
         }
 
-        // Task #39: the cli_state mapping uses `cp` instead of source +
-        // export. Both the script and the Rust constant must reference the
-        // file AND the cp-onto-$HOME/.claude.json action.
+        // Task #39 / #41: the cli_state mapping doesn't use the standard
+        // source + export pattern. It writes the session blob onto
+        // $HOME/.claude.json via a `jq` shallow-merge (with a `cp`
+        // fallback). Both the script and the Rust constant must:
+        //   1. Reference the file path,
+        //   2. Reference $HOME/.claude.json as the merge target,
+        //   3. Carry the `jq -s '.[0] * .[1]'` invocation (so a regression
+        //      to plain-cp gets caught).
         assert!(
             script.contains("/run/maestro-secrets/claude_session.json"),
             "drift: worker-entrypoint.sh missing claude_session.json handling"
         );
         assert!(
             script.contains("$HOME/.claude.json") || script.contains("HOME/.claude.json"),
-            "drift: worker-entrypoint.sh must cp the session blob onto $HOME/.claude.json"
+            "drift: worker-entrypoint.sh must write the session blob onto $HOME/.claude.json"
+        );
+        assert!(
+            script.contains("jq -s '.[0] * .[1]'"),
+            "drift: worker-entrypoint.sh must merge via `jq -s '.[0] * .[1]'` \
+             (task #41); a plain `cp` wipes accumulated state. Update both \
+             the script and BUNDLE_SOURCING_SH in lockstep."
         );
         assert!(
             BUNDLE_SOURCING_SH.contains("/run/maestro-secrets/claude_session.json"),

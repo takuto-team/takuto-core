@@ -1140,6 +1140,266 @@ async fn t_claude_cli_state_007_get_shape_with_both_kinds_present() {
     assert_eq!(v["provider"]["cli_state"]["kind"], "cli_state");
 }
 
+// ---------------------------------------------------------------------------
+// Task #41: size-cap raise + jq-merge sourcing
+// ---------------------------------------------------------------------------
+
+/// T-CLI-STATE-CAP-001: a payload at exactly 1 MiB MUST be accepted. The
+/// blob carries the required `oauthAccount` keys plus a long padding string
+/// to hit the cap exactly.
+#[tokio::test]
+async fn t_cli_state_cap_001_one_mib_payload_accepted() {
+    let (state, cookie) = state_with_mock(MockGh::user_ok("alice", "repo")).await;
+
+    // Build a JSON blob whose serialized length is EXACTLY 1 MiB. The
+    // required fields plus a `pad` string that we size to fill the rest.
+    let required = serde_json::json!({
+        "oauthAccount": {
+            "accountUuid": "00000000-0000-0000-0000-000000000001",
+            "emailAddress": "alice@example.com",
+            "organizationUuid": "11111111-1111-1111-1111-111111111111",
+        },
+        "pad": "",
+    });
+    let baseline_len = required.to_string().len();
+    let target_len: usize = 1024 * 1024; // 1 MiB
+    let padding_needed = target_len.saturating_sub(baseline_len);
+    let mut padded = required.clone();
+    padded["pad"] = serde_json::Value::String("x".repeat(padding_needed));
+    let blob = padded.to_string();
+    assert_eq!(
+        blob.len(),
+        target_len,
+        "test setup: payload must be exactly 1 MiB"
+    );
+
+    let body = serde_json::json!({
+        "kind": "cli_state",
+        "claude_session_json": blob,
+    })
+    .to_string();
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(json_request(
+            "POST",
+            "/api/users/me/credentials/claude",
+            &cookie,
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "1 MiB payload must be accepted (saw {}): {}",
+        resp.status(),
+        std::str::from_utf8(&resp.into_body().collect().await.unwrap().to_bytes())
+            .unwrap_or("<non-utf8>")
+    );
+}
+
+/// T-CLI-STATE-CAP-002: 1 MiB + 1 byte → 400 `claude_session_json_too_long`.
+/// The error body must include the human-readable hint added in #41.
+#[tokio::test]
+async fn t_cli_state_cap_002_over_cap_returns_400_with_hint() {
+    let (state, cookie) = state_with_mock(MockGh::user_ok("alice", "repo")).await;
+
+    let required = serde_json::json!({
+        "oauthAccount": {
+            "accountUuid": "00000000-0000-0000-0000-000000000001",
+            "emailAddress": "alice@example.com",
+            "organizationUuid": "11111111-1111-1111-1111-111111111111",
+        },
+        "pad": "",
+    });
+    let baseline_len = required.to_string().len();
+    // Aim for 1 MiB + 1 byte once the pad string is in the blob.
+    let target_len: usize = 1024 * 1024 + 1;
+    let padding_needed = target_len.saturating_sub(baseline_len);
+    let mut padded = required.clone();
+    padded["pad"] = serde_json::Value::String("x".repeat(padding_needed));
+    let blob = padded.to_string();
+    assert!(
+        blob.len() > 1024 * 1024,
+        "test setup: payload must exceed 1 MiB; got {}",
+        blob.len()
+    );
+
+    let body = serde_json::json!({
+        "kind": "cli_state",
+        "claude_session_json": blob,
+    })
+    .to_string();
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(json_request(
+            "POST",
+            "/api/users/me/credentials/claude",
+            &cookie,
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let resp_body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+    assert_eq!(v["error"], "claude_session_json_too_long");
+    // Hint must be present and mention the 1 MiB cap (UX polish).
+    let message = v["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("1 MiB"),
+        "error message must mention the 1 MiB cap; got: {message}"
+    );
+    assert_eq!(v["max_bytes"], 1024 * 1024);
+}
+
+/// T-JQ-MERGE-001: directly exercise the `jq -s '.[0] * .[1]'` invocation
+/// the bundle sourcing snippet uses. This validates the actual shell
+/// behavior — assert oauthAccount from the right-hand wins, left-hand's
+/// `hasCompletedOnboarding` is preserved, nested objects merge per-key.
+/// Skipped silently when jq isn't installed locally (CI hosts that lack
+/// it shouldn't fail the suite — the Docker image always ships it).
+#[tokio::test]
+async fn t_jq_merge_001_session_overlay_preserves_existing_keys() {
+    if std::process::Command::new("jq")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        eprintln!("skip: jq not available on host; bundle uses it in the maestro image");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("maestro-t-41-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let existing = dir.join("existing.json");
+    let bundle_blob = dir.join("bundle.json");
+
+    // The "existing" file is what the legacy backups-restore would have
+    // placed on disk before the bundle's cli_state copy fires.
+    std::fs::write(
+        &existing,
+        serde_json::json!({
+            "hasCompletedOnboarding": true,
+            "userID": "u-alice",
+            "oauthAccount": {
+                "accountUuid": "OLD-uuid",
+                "emailAddress": "stale@example.com",
+            },
+            "tipsHistory": { "tip-1": 3 }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // The bundle blob is what the user pasted — typically just the
+    // oauthAccount sub-tree for team-plan users on a custom proxy.
+    std::fs::write(
+        &bundle_blob,
+        serde_json::json!({
+            "oauthAccount": {
+                "accountUuid": "NEW-uuid",
+                "emailAddress": "alice@example.com",
+                "organizationUuid": "11111111-1111-1111-1111-111111111111",
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // Run jq exactly as BUNDLE_SOURCING_SH would.
+    let out = std::process::Command::new("jq")
+        .args([
+            "-s",
+            ".[0] * .[1]",
+            existing.to_str().unwrap(),
+            bundle_blob.to_str().unwrap(),
+        ])
+        .output()
+        .expect("jq must run");
+    assert!(out.status.success(), "jq failed: {:?}", out.stderr);
+    let merged: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("jq output is JSON");
+
+    // Existing top-level keys absent from the bundle MUST survive.
+    assert_eq!(
+        merged["hasCompletedOnboarding"], true,
+        "merge must preserve hasCompletedOnboarding from existing .claude.json"
+    );
+    assert_eq!(merged["userID"], "u-alice");
+    assert_eq!(merged["tipsHistory"]["tip-1"], 3);
+    // oauthAccount is REPLACED wholesale by the bundle's version
+    // (jq's `*` is shallow at the top level — each top-level key is
+    // taken from the right-hand side when present). The new fields
+    // appear, the stale email is gone.
+    assert_eq!(merged["oauthAccount"]["accountUuid"], "NEW-uuid");
+    assert_eq!(merged["oauthAccount"]["emailAddress"], "alice@example.com");
+    assert_eq!(
+        merged["oauthAccount"]["organizationUuid"],
+        "11111111-1111-1111-1111-111111111111"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// T-JQ-MERGE-002: when the bundle ships ONLY `oauthAccount`, the merged
+/// file still has every other field from the existing `.claude.json` —
+/// this is the actual case task #41 is fixing (the user pastes just the
+/// session subset to avoid leaking unrelated state).
+#[tokio::test]
+async fn t_jq_merge_002_partial_paste_keeps_other_fields_intact() {
+    if std::process::Command::new("jq")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        eprintln!("skip: jq not available on host");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("maestro-t-41b-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let existing = dir.join("existing.json");
+    let bundle_blob = dir.join("bundle.json");
+
+    std::fs::write(
+        &existing,
+        r#"{"hasCompletedOnboarding":true,"numStartups":42,"customApiKeyResponses":{"approved":[]}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &bundle_blob,
+        r#"{"oauthAccount":{"accountUuid":"u","emailAddress":"e","organizationUuid":"o"}}"#,
+    )
+    .unwrap();
+
+    let out = std::process::Command::new("jq")
+        .args([
+            "-s",
+            ".[0] * .[1]",
+            existing.to_str().unwrap(),
+            bundle_blob.to_str().unwrap(),
+        ])
+        .output()
+        .expect("jq must run");
+    let merged: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("jq output is JSON");
+
+    // Every left-hand key survives.
+    assert_eq!(merged["hasCompletedOnboarding"], true);
+    assert_eq!(merged["numStartups"], 42);
+    assert!(merged["customApiKeyResponses"]["approved"].is_array());
+    // The bundle's oauthAccount is added on top.
+    assert_eq!(merged["oauthAccount"]["accountUuid"], "u");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // Suppress the "unused import" diagnostic on `Mutex` when the file grows.
 #[allow(dead_code)]
 fn _imports_in_scope(_m: std::marker::PhantomData<Mutex<()>>) {}

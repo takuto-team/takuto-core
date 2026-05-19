@@ -50,6 +50,15 @@ use crate::state::AppState;
 /// gzipped blob someone is trying to smuggle past the validator).
 const MAX_API_KEY_LEN: usize = 4096;
 
+/// Task #41: cap for `~/.claude.json` blobs accepted via the `kind=cli_state`
+/// flow. Bumped from 64 KiB (the original #39 cap) to **1 MiB** because real
+/// `.claude.json` files accumulate `tipsHistory`, `cachedGrowthBookFeatures`,
+/// startup-counter state, etc. over time and routinely exceed 64 KiB. The
+/// envelope-encryption layer handles any size (no AEAD ceiling); SQLite's
+/// BLOB column is unlimited. 1 MiB stays a sane upper bound — anything
+/// bigger is almost certainly a paste mistake (file path, dump, …).
+const MAX_CLAUDE_SESSION_JSON_LEN: usize = 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Response shapes
 // ---------------------------------------------------------------------------
@@ -461,11 +470,20 @@ fn validate_claude_session_blob(
     if blob.trim().is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "claude_session_json_empty"));
     }
-    if blob.len() > MAX_API_KEY_LEN * 16 {
-        // Session JSON is bigger than a bearer key — 64 KiB is generous;
-        // Anthropic's real blobs are ~10-20 KiB. Anything larger is
-        // almost certainly a paste mistake.
-        return Err(err(StatusCode::BAD_REQUEST, "claude_session_json_too_long"));
+    if blob.len() > MAX_CLAUDE_SESSION_JSON_LEN {
+        // Task #41: human-readable hint pointing at the most common cause
+        // (pasted a file path or a stale dump). Stable code preserved for
+        // the UI's error-toast switch.
+        return Err(err_with(
+            StatusCode::BAD_REQUEST,
+            "claude_session_json_too_long",
+            serde_json::json!({
+                "message": "Session JSON is larger than 1 MiB. Are you sure \
+                            you pasted only the ~/.claude.json contents and \
+                            not a file path or full disk dump?",
+                "max_bytes": MAX_CLAUDE_SESSION_JSON_LEN,
+            }),
+        ));
     }
     let parsed: serde_json::Value = serde_json::from_str(blob)
         .map_err(|_| err(StatusCode::BAD_REQUEST, "claude_session_json_invalid"))?;
