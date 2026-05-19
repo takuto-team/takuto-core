@@ -166,6 +166,57 @@ const WORKER_VOLUMES: &[&str] = &[
     "/etc/maestro:/etc/maestro:ro",
 ];
 
+/// Phase 2b.3 (04_architecture.md §6): shell snippet that sources every
+/// `/run/maestro-secrets/*` file into the matching env var, then `rm -f`s
+/// the on-disk copy. **Single source of truth** for both:
+///
+///   1. `worker-entrypoint.sh` — used when the worker container is spawned
+///      WITH `--entrypoint /usr/local/bin/worker-entrypoint.sh` (e.g.
+///      `wrap_shell_command`, `start_editor`, `start_run_command`).
+///   2. `ContainerRunner::wrap_command` — used by agent invocations
+///      (claude, cursor, codex, opencode) which pass no entrypoint and
+///      build their own inline `sh -c`. WITHOUT this block, the bundle's
+///      tmpfs files are mounted but NEVER sourced, so the agent CLI sees
+///      no token and reports "Not logged in" (task #36 bug).
+///
+/// The snippet is self-gated on `MAESTRO_AUTH_BUNDLE=1` so it is a no-op
+/// when the legacy passthrough path is active. It mirrors the env-mapping
+/// of `worker-entrypoint.sh` lines 24-58 exactly; a unit test asserts the
+/// snippet contains every documented (file → env) mapping so the two
+/// can't drift silently.
+///
+/// The snippet does NOT include a trailing newline so it composes cleanly
+/// inside a `;`-joined command string.
+pub(crate) const BUNDLE_SOURCING_SH: &str = concat!(
+    r#"if [ "${MAESTRO_AUTH_BUNDLE:-0}" = "1" ] && [ -d /run/maestro-secrets ]; then"#,
+    r#" if [ -f /run/maestro-secrets/claude ]; then"#,
+    r#" CLAUDE_CODE_OAUTH_TOKEN="$(cat /run/maestro-secrets/claude)";"#,
+    r#" export CLAUDE_CODE_OAUTH_TOKEN;"#,
+    r#" rm -f /run/maestro-secrets/claude || true;"#,
+    r#" fi;"#,
+    r#" if [ -f /run/maestro-secrets/cursor ]; then"#,
+    r#" CURSOR_API_KEY="$(cat /run/maestro-secrets/cursor)";"#,
+    r#" export CURSOR_API_KEY;"#,
+    r#" rm -f /run/maestro-secrets/cursor || true;"#,
+    r#" fi;"#,
+    r#" if [ -f /run/maestro-secrets/codex ]; then"#,
+    r#" OPENAI_API_KEY="$(cat /run/maestro-secrets/codex)";"#,
+    r#" export OPENAI_API_KEY;"#,
+    r#" rm -f /run/maestro-secrets/codex || true;"#,
+    r#" fi;"#,
+    r#" if [ -f /run/maestro-secrets/opencode ]; then"#,
+    r#" ANTHROPIC_API_KEY="$(cat /run/maestro-secrets/opencode)";"#,
+    r#" export ANTHROPIC_API_KEY;"#,
+    r#" rm -f /run/maestro-secrets/opencode || true;"#,
+    r#" fi;"#,
+    r#" if [ -f /run/maestro-secrets/gh ]; then"#,
+    r#" GH_TOKEN="$(cat /run/maestro-secrets/gh)";"#,
+    r#" export GH_TOKEN;"#,
+    r#" rm -f /run/maestro-secrets/gh || true;"#,
+    r#" fi;"#,
+    r#" fi"#,
+);
+
 /// Phase 2b.3.x helper: which `PASSTHROUGH_ENV` names a
 /// [`WorkerSecretsBundle`] takes over. Must match
 /// [`ContainerRunner::base_docker_args`]'s suppression list so callers
@@ -428,10 +479,30 @@ impl ContainerRunner {
         // Source the centralized GitHub App token so `gh` and git operations use a
         // fresh token. The token file is refreshed by Maestro's background service.
         let gh_token = r#"[ -f "$HOME/.config/gh/gh-app-token" ] && export GH_TOKEN="$(cat "$HOME/.config/gh/gh-app-token")";"#;
-        let cmd = format!(
-            "{restore}; {fix_perms}; {gh_token} exec {}",
-            shell_parts.join(" ")
-        );
+        // Phase 2b.3 / task #36 fix: when a `WorkerSecretsBundle` is
+        // attached, the agent CLI (claude / cursor / codex / opencode) must
+        // see its token via env. wrap_command does NOT go through
+        // worker-entrypoint.sh, so the bundle's tmpfs files reach the
+        // worker but nothing reads them — without this block the user gets
+        // "Not logged in". The snippet is self-gated on
+        // `MAESTRO_AUTH_BUNDLE=1` and is omitted entirely when no bundle
+        // is attached (keeps the legacy path's argv clean).
+        let bundle_source: &str = if self.has_secrets_bundle() {
+            BUNDLE_SOURCING_SH
+        } else {
+            ""
+        };
+        let cmd = if bundle_source.is_empty() {
+            format!(
+                "{restore}; {fix_perms}; {gh_token} exec {}",
+                shell_parts.join(" ")
+            )
+        } else {
+            format!(
+                "{restore}; {fix_perms}; {gh_token} {bundle_source}; exec {}",
+                shell_parts.join(" ")
+            )
+        };
         docker_args.push("sh".into());
         docker_args.push("-c".into());
         docker_args.push(cmd);
@@ -2554,6 +2625,169 @@ mod tests {
         assert!(!passthrough_is_bundled("GIT_AUTHOR_NAME"));
         assert!(!passthrough_is_bundled("GH_TOKEN_FOO")); // prefix match must NOT match
         assert!(!passthrough_is_bundled("")); // empty must not match
+    }
+
+    /// Task #36: the bundle-sourcing snippet must cover every
+    /// `/run/maestro-secrets/<file>` → env-var mapping documented in
+    /// `worker-entrypoint.sh` (lines 24-58). If the entrypoint adds a new
+    /// provider mapping, this constant must be updated in lockstep.
+    #[test]
+    fn bundle_sourcing_snippet_covers_every_documented_mapping() {
+        // Self-gated on the discriminator so it's a no-op when the bundle
+        // is absent (worker-entrypoint.sh's pre-Phase-2b.3 path).
+        assert!(
+            BUNDLE_SOURCING_SH.contains(r#"if [ "${MAESTRO_AUTH_BUNDLE:-0}" = "1" ]"#),
+            "snippet must self-gate on MAESTRO_AUTH_BUNDLE=1"
+        );
+        // Every file → env-var mapping from worker-entrypoint.sh.
+        for (file, env_var) in [
+            ("/run/maestro-secrets/claude", "CLAUDE_CODE_OAUTH_TOKEN"),
+            ("/run/maestro-secrets/cursor", "CURSOR_API_KEY"),
+            ("/run/maestro-secrets/codex", "OPENAI_API_KEY"),
+            ("/run/maestro-secrets/opencode", "ANTHROPIC_API_KEY"),
+            ("/run/maestro-secrets/gh", "GH_TOKEN"),
+        ] {
+            assert!(
+                BUNDLE_SOURCING_SH.contains(&format!("[ -f {file} ]")),
+                "snippet must source-test {file}"
+            );
+            assert!(
+                BUNDLE_SOURCING_SH.contains(&format!("export {env_var};")),
+                "snippet must export {env_var}"
+            );
+            assert!(
+                BUNDLE_SOURCING_SH.contains(&format!("rm -f {file}")),
+                "snippet must rm -f {file} after sourcing"
+            );
+        }
+    }
+
+    /// Task #36: drift-detection. Read `docker/worker-entrypoint.sh` from
+    /// disk and confirm the Rust [`BUNDLE_SOURCING_SH`] constant references
+    /// the same `/run/maestro-secrets/<file>` ↔ env-var mappings the
+    /// entrypoint hardcodes. If someone edits the shell script and adds a
+    /// new provider, this test fails until [`BUNDLE_SOURCING_SH`] is
+    /// updated in lockstep.
+    #[test]
+    fn bundle_sourcing_matches_worker_entrypoint_shell_script() {
+        // CARGO_MANIFEST_DIR for maestro-core is crates/maestro-core; the
+        // entrypoint lives at <repo>/docker/worker-entrypoint.sh.
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let script_path = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("docker/worker-entrypoint.sh"))
+            .expect("locate docker/worker-entrypoint.sh from manifest dir");
+        let script = match std::fs::read_to_string(&script_path) {
+            Ok(s) => s,
+            Err(e) => {
+                // Worktree / sparse-checkout safety: don't fail if the file
+                // truly isn't present (CI uses the full repo, this guards
+                // local edge cases).
+                eprintln!("skip: cannot read {script_path:?}: {e}");
+                return;
+            }
+        };
+        // Each mapping the snippet must keep in sync with the script.
+        for (file, env_var) in [
+            ("/run/maestro-secrets/claude", "CLAUDE_CODE_OAUTH_TOKEN"),
+            ("/run/maestro-secrets/cursor", "CURSOR_API_KEY"),
+            ("/run/maestro-secrets/codex", "OPENAI_API_KEY"),
+            ("/run/maestro-secrets/opencode", "ANTHROPIC_API_KEY"),
+            ("/run/maestro-secrets/gh", "GH_TOKEN"),
+        ] {
+            assert!(
+                script.contains(file),
+                "drift: worker-entrypoint.sh no longer sources {file}; \
+                 update BUNDLE_SOURCING_SH and this test in lockstep"
+            );
+            assert!(
+                script.contains(&format!("export {env_var}")),
+                "drift: worker-entrypoint.sh no longer exports {env_var}; \
+                 update BUNDLE_SOURCING_SH and this test in lockstep"
+            );
+            // And the Rust snippet must mirror it.
+            assert!(
+                BUNDLE_SOURCING_SH.contains(file),
+                "drift: BUNDLE_SOURCING_SH missing {file} (present in shell script)"
+            );
+            assert!(
+                BUNDLE_SOURCING_SH.contains(&format!("export {env_var};")),
+                "drift: BUNDLE_SOURCING_SH missing export {env_var} \
+                 (present in shell script)"
+            );
+        }
+    }
+
+    /// Task #36: when the runner has NO secrets bundle attached, the
+    /// `sh -c` payload built by `wrap_command` must NOT reference
+    /// `/run/maestro-secrets/` — keeps the legacy path's argv clean and
+    /// avoids any chance of confusing logs.
+    #[test]
+    fn wrap_command_without_bundle_does_not_source_run_maestro_secrets() {
+        let r = runner();
+        let (_program, args) = r.wrap_command("claude", &["--version"]);
+        // The shell command is the LAST docker arg (after `sh -c`).
+        let cmd = args.last().expect("cmd");
+        assert!(
+            !cmd.contains("/run/maestro-secrets/"),
+            "legacy wrap_command must not reference /run/maestro-secrets/; got: {cmd}"
+        );
+        assert!(
+            !cmd.contains("MAESTRO_AUTH_BUNDLE"),
+            "legacy wrap_command must not gate on MAESTRO_AUTH_BUNDLE; got: {cmd}"
+        );
+        // Sanity: existing legacy stanza is still there.
+        assert!(cmd.contains("$HOME/.config/gh/gh-app-token"));
+        assert!(cmd.starts_with("if [ ! -f \"$HOME/.claude.json\" ]"));
+        assert!(cmd.contains("exec claude --version"));
+    }
+
+    /// Task #36 — the core bug. When a bundle IS attached, `wrap_command`'s
+    /// `sh -c` payload MUST contain the bundle-sourcing block BEFORE the
+    /// `exec` so the agent CLI sees its token in env.
+    #[test]
+    fn wrap_command_with_bundle_sources_secrets_before_exec() {
+        let bundle = crate::auth::WorkerSecretsBundle::for_tests(
+            crate::config::AiAgentProvider::Claude,
+            vec![("MAESTRO_AUTH_BUNDLE".into(), "1".into())],
+        );
+        let r = runner().with_secrets_bundle(Arc::new(bundle));
+        let (_program, args) = r.wrap_command("claude", &["--version"]);
+        let cmd = args.last().expect("cmd");
+
+        // Bundle-sourcing block must be present.
+        assert!(
+            cmd.contains("/run/maestro-secrets/claude"),
+            "bundle-attached wrap_command must source /run/maestro-secrets/claude; got: {cmd}"
+        );
+        assert!(
+            cmd.contains("export CLAUDE_CODE_OAUTH_TOKEN"),
+            "bundle-attached wrap_command must export CLAUDE_CODE_OAUTH_TOKEN; got: {cmd}"
+        );
+        // And it must precede the `exec`, not run after.
+        let bundle_pos = cmd
+            .find("/run/maestro-secrets/claude")
+            .expect("bundle source position");
+        let exec_pos = cmd.find("exec claude").expect("exec position");
+        assert!(
+            bundle_pos < exec_pos,
+            "bundle sourcing must precede exec; bundle@{bundle_pos} exec@{exec_pos} in: {cmd}"
+        );
+        // And all five provider mappings must be present (defence in depth
+        // against accidentally narrowing the splice).
+        for file in [
+            "/run/maestro-secrets/claude",
+            "/run/maestro-secrets/cursor",
+            "/run/maestro-secrets/codex",
+            "/run/maestro-secrets/opencode",
+            "/run/maestro-secrets/gh",
+        ] {
+            assert!(
+                cmd.contains(file),
+                "bundle-attached wrap_command must reference {file}"
+            );
+        }
     }
 
     #[test]

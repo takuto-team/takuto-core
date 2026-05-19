@@ -96,6 +96,36 @@ impl WorkerSecretsBundle {
     pub fn host_dir(&self) -> &Path {
         self._temp_dir.path()
     }
+
+    /// Phase 2b.3 (task #36): construct a stub bundle for unit tests that
+    /// need to exercise the bundle-attached code paths without going
+    /// through the full `build()` async + DB pipeline. The `_temp_dir`
+    /// field is private to this module so callers in other crate modules
+    /// can't construct one by hand; this helper plugs the gap.
+    ///
+    /// Visibility: `pub(crate)`, `#[doc(hidden)]`, and `#[cfg(test)]` —
+    /// only compiled into test builds, never used outside.
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub(crate) fn for_tests(
+        provider: AiAgentProvider,
+        extra_env: Vec<(String, String)>,
+    ) -> Self {
+        let dir = tempfile::TempDir::new().expect("tempdir for test bundle");
+        let provider_path = dir.path().join("provider");
+        let gh_path = dir.path().join("gh");
+        Self {
+            provider,
+            provider_secret_file: Some(provider_path),
+            github_token_file: Some(gh_path),
+            git_author_name: None,
+            git_author_email: None,
+            base_url: None,
+            extra_args: vec![],
+            extra_env,
+            _temp_dir: dir,
+        }
+    }
 }
 
 /// Build a [`WorkerSecretsBundle`] for the workflow.
