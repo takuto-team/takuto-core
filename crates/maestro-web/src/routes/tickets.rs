@@ -635,6 +635,8 @@ mod tests {
             gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
             git_auth_resolver: None,
             path_token_registry: crate::session_registry::PathTokenRegistry::new(),
+            editor_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            run_command_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
 

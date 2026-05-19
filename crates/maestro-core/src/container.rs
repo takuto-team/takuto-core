@@ -189,6 +189,19 @@ const WORKER_VOLUMES: &[&str] = &[
 /// inside a `;`-joined command string.
 pub(crate) const BUNDLE_SOURCING_SH: &str = concat!(
     r#"if [ "${MAESTRO_AUTH_BUNDLE:-0}" = "1" ] && [ -d /run/maestro-secrets ]; then"#,
+    // Task #42: observability breadcrumb. When the bundle's discriminator
+    // env var is set but the bind-mounted directory has no files, the
+    // bundle's host-side TempDir has dropped out from under us — almost
+    // certainly because nothing held the Arc alive long enough. Emit a
+    // single grep-friendly stderr line so future regressions surface in
+    // the workflow / editor terminal instead of silently falling back to
+    // the deployment default. Without this breadcrumb, the only symptom
+    // is "claude says I'm not logged in" — exactly the diagnostic loop
+    // task #42 is closing.
+    r#" __bundle_present=$(ls -A /run/maestro-secrets 2>/dev/null | wc -l);"#,
+    r#" if [ "${__bundle_present:-0}" = "0" ]; then"#,
+    r#" echo "[maestro-bundle] MAESTRO_AUTH_BUNDLE=1 but /run/maestro-secrets/ is empty -- secret files vanished (host TempDir dropped). Check WorkerSecretsBundle lifetime in AppState." >&2;"#,
+    r#" fi;"#,
     r#" if [ -f /run/maestro-secrets/claude ]; then"#,
     r#" CLAUDE_CODE_OAUTH_TOKEN="$(cat /run/maestro-secrets/claude)";"#,
     r#" export CLAUDE_CODE_OAUTH_TOKEN;"#,
@@ -2712,6 +2725,24 @@ mod tests {
             BUNDLE_SOURCING_SH.contains("rm -f /run/maestro-secrets/claude_session.json"),
             "snippet must rm -f /run/maestro-secrets/claude_session.json after merge"
         );
+
+        // Task #42: observability breadcrumb. When MAESTRO_AUTH_BUNDLE=1
+        // but the mountpoint is empty, the snippet must emit a single
+        // grep-friendly stderr line. Without this, the bundle's lifetime
+        // bugs are invisible (everything silently no-ops).
+        assert!(
+            BUNDLE_SOURCING_SH.contains("[maestro-bundle]"),
+            "snippet must carry the [maestro-bundle] stderr tag for the \
+             empty-mountpoint case (task #42 observability)"
+        );
+        assert!(
+            BUNDLE_SOURCING_SH.contains(">&2"),
+            "the empty-mountpoint warning must go to stderr (not stdout)"
+        );
+        assert!(
+            BUNDLE_SOURCING_SH.contains("WorkerSecretsBundle lifetime"),
+            "warning must point at the WorkerSecretsBundle lifetime cause"
+        );
     }
 
     /// Task #36: drift-detection. Read `docker/worker-entrypoint.sh` from
@@ -2795,6 +2826,18 @@ mod tests {
         assert!(
             BUNDLE_SOURCING_SH.contains("/run/maestro-secrets/claude_session.json"),
             "drift: BUNDLE_SOURCING_SH missing claude_session.json handling"
+        );
+
+        // Task #42: the empty-mountpoint observability breadcrumb must be
+        // present in BOTH the script and the Rust constant. If it drifts
+        // out of one, future lifetime bugs go silent again.
+        assert!(
+            script.contains("[maestro-bundle]"),
+            "drift: worker-entrypoint.sh missing [maestro-bundle] empty-mountpoint warning (task #42)"
+        );
+        assert!(
+            BUNDLE_SOURCING_SH.contains("[maestro-bundle]"),
+            "drift: BUNDLE_SOURCING_SH missing [maestro-bundle] empty-mountpoint warning (task #42)"
         );
     }
 

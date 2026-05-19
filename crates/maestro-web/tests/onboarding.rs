@@ -60,6 +60,8 @@ fn test_state_no_db() -> AppState {
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
         git_auth_resolver: None,
         path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        editor_bundles: Arc::new(RwLock::new(HashMap::new())),
+        run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
     }
 }
 

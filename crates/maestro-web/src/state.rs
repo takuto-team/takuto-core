@@ -113,4 +113,26 @@ pub struct AppState {
     /// every incoming request, and the workflow `open_*` / `close_*` handlers
     /// register/deregister entries as session containers come and go.
     pub path_token_registry: PathTokenRegistry,
+    /// Task #42: keep the editor's `WorkerSecretsBundle` alive for the
+    /// container's lifetime so the bind-mounted `/run/maestro-secrets/`
+    /// stays populated. Without this map the `Arc` returned by
+    /// `build_editor_or_run_command_bundle` is the only strong reference;
+    /// when `start_editor` returns, the route handler's stack drops it,
+    /// the bundle's `TempDir` RAII fires, and the host tmpfs dir gets
+    /// `rm -rf`'d — leaving the still-running detached editor container
+    /// bind-mounted onto an empty directory. Keyed by ticket_key
+    /// (workflow id) since the editor is 1-per-workflow. Cleared in
+    /// `close_editor`, `delete_workflow`, and `mark_done`.
+    pub editor_bundles:
+        Arc<RwLock<HashMap<String, Arc<maestro_core::auth::WorkerSecretsBundle>>>>,
+    /// Task #42: keep run-command bundles alive for the lifetime of each
+    /// detached run-command container. Keyed by `(ticket_key, cmd_index)`
+    /// since a workflow can have multiple concurrent run-commands. Cleared
+    /// in `stop_run_command`, `delete_workflow`, and `mark_done`.
+    pub run_command_bundles: RunCommandBundlesMap,
 }
+
+/// Task #42: type alias for [`AppState::run_command_bundles`]. Aliased so
+/// the nested generic stays under clippy's `type_complexity` cap.
+pub type RunCommandBundlesMap =
+    Arc<RwLock<HashMap<(String, usize), Arc<maestro_core::auth::WorkerSecretsBundle>>>>;

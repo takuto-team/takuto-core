@@ -105,6 +105,8 @@ fn test_state_isolated() -> (AppState, TempDir) {
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
         git_auth_resolver,
         path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        editor_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        run_command_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
     (state, dir)
 }

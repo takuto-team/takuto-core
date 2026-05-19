@@ -85,6 +85,8 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
         git_auth_resolver,
         path_token_registry: crate::session_registry::PathTokenRegistry::new(),
+        editor_bundles: Arc::new(RwLock::new(HashMap::new())),
+        run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
     }
 }
 

@@ -1011,4 +1011,47 @@ mod tests {
             "error must explain the cli_state JSON problem; got: {err}"
         );
     }
+
+    /// Task #42: Arc-storage strategy proof. The route handlers stash an
+    /// `Arc<WorkerSecretsBundle>` clone in AppState so the bundle's
+    /// `TempDir` outlives the route's stack scope. This test asserts the
+    /// expected lifetime semantics: cloning the Arc does NOT trigger
+    /// cleanup, only dropping the LAST clone does. If anyone refactors
+    /// the bundle storage to a non-Arc shape (e.g. `Box<Bundle>`),
+    /// this test fails loudly.
+    #[test]
+    fn bundle_temp_dir_survives_clone_drop_until_last_arc_released() {
+        let bundle = Arc::new(WorkerSecretsBundle::for_tests(
+            AiAgentProvider::Claude,
+            vec![("MAESTRO_AUTH_BUNDLE".into(), "1".into())],
+        ));
+        let host_dir = bundle.host_dir().to_path_buf();
+        assert!(
+            host_dir.exists(),
+            "bundle's TempDir must exist immediately after construction"
+        );
+
+        // Clone the Arc twice — simulates AppState stashing one clone
+        // and the route handler passing a second to the container runner.
+        let arc1 = bundle.clone();
+        let arc2 = bundle.clone();
+        // Drop the original — TempDir must still survive.
+        drop(bundle);
+        assert!(
+            host_dir.exists(),
+            "TempDir must survive while clones are held"
+        );
+        // Drop arc1 — still one clone alive.
+        drop(arc1);
+        assert!(
+            host_dir.exists(),
+            "TempDir must survive while at least one Arc clone exists"
+        );
+        // Drop the last clone — RAII fires now.
+        drop(arc2);
+        assert!(
+            !host_dir.exists(),
+            "TempDir must be rm-rf'd when the last Arc clone drops"
+        );
+    }
 }

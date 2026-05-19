@@ -891,6 +891,22 @@ pub async fn stop_workflow(
     require_workflow_access(&state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
+    // Task #42: stop_workflow tears the worker container down too; drop
+    // its bundle Arcs so the TempDir RAII fires once the engine's clones
+    // (if any) also release. We don't go through cleanup_run_commands
+    // here because stop_workflow targets the agent worker, not editors
+    // or user-started run-commands — those have their own stop endpoints.
+    // But if the workflow was deleted/abandoned without close_editor
+    // firing, the editor_bundles entry can leak; clean it up
+    // defensively. Same for run_command_bundles.
+    {
+        let mut eb = state.editor_bundles.write().await;
+        eb.remove(&id);
+    }
+    {
+        let mut rcb = state.run_command_bundles.write().await;
+        rcb.retain(|(tk, _idx), _| tk != &id);
+    }
     state
         .engine
         .stop_workflow(&id)
@@ -946,7 +962,16 @@ async fn cleanup_run_commands(state: &AppState, ticket_key: &str) {
         }
         drop(run_cmds);
         container::stop_all_run_commands(ticket_key).await;
+        // Task #42: drop every bundle Arc for this ticket's run-commands.
+        // Each entry's last strong reference here fires the bundle's
+        // TempDir RAII cleanup. Done AFTER the container stop so the
+        // mounted secret files survive the container's last read.
+        let mut bundles = state.run_command_bundles.write().await;
+        bundles.retain(|(tk, _idx), _| tk != ticket_key);
     }
+    // Task #42: also drop the editor bundle for this ticket — delete /
+    // mark-done tear down both the editor and all run-commands at once.
+    state.editor_bundles.write().await.remove(ticket_key);
 }
 
 /// Return the generated report markdown for a workflow (from `lore/reports/<key>_report.md` in the worktree).
@@ -1252,6 +1277,20 @@ pub async fn open_editor(
     let secrets_bundle: Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> =
         build_editor_or_run_command_bundle(&state, &id, &auth.user_id).await;
 
+    // Task #42: persist the bundle Arc for the editor container's lifetime
+    // BEFORE we call into `start_editor`. The bind-mount on
+    // `/run/maestro-secrets/` points at the bundle's `TempDir`; when the
+    // `Arc` count hits zero the RAII fires and the host dir gets
+    // `rm -rf`'d, leaving the still-running detached container pointing
+    // at an empty directory. We clone the Arc into `state.editor_bundles`
+    // here so the route-handler stack scope is no longer the sole owner.
+    // Cleared in `close_editor` (and workflow teardown).
+    if let Some(ref b) = secrets_bundle {
+        let mut map = state.editor_bundles.write().await;
+        // Replace any prior entry (open-editor → close → open again).
+        map.insert(ticket_key.clone(), b.clone());
+    }
+
     let info = container::start_editor(
         &ticket_key,
         &worktree,
@@ -1268,7 +1307,17 @@ pub async fn open_editor(
         secrets_bundle.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .map_err(|e| {
+        // start_editor failed → no detached container was spawned. Drop
+        // the bundle entry we just stashed so the TempDir RAII fires now
+        // instead of leaking until process exit.
+        let st = state.clone();
+        let tk = ticket_key.clone();
+        tokio::spawn(async move {
+            st.editor_bundles.write().await.remove(&tk);
+        });
+        (StatusCode::INTERNAL_SERVER_ERROR, e)
+    })?;
 
     // Seed the server-side dynamic-forwards map with the static (Docker -p) port
     // mappings so that `GET /api/workflows` returns them immediately (no need to
@@ -1410,7 +1459,11 @@ pub async fn close_editor(
     // Clean up dynamic forward tracking and terminal state.
     state.dynamic_forwards.write().await.remove(&id);
     state.terminal_ports.write().await.remove(&id);
+    // Task #42: drop the bundle Arc — last strong reference triggers the
+    // TempDir RAII cleanup. Done AFTER stop_editor below so the secret
+    // files stay on disk for the container's final teardown read.
     container::stop_editor(&id).await;
+    state.editor_bundles.write().await.remove(&id);
     StatusCode::OK
 }
 
@@ -1744,6 +1797,15 @@ pub async fn start_run_command(
     let secrets_bundle: Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> =
         build_editor_or_run_command_bundle(&state, &id, &auth.user_id).await;
 
+    // Task #42: stash the bundle Arc keyed by (ticket, cmd_index). Same
+    // rationale as the editor branch: the run-command container is
+    // detached, so the route handler's stack scope can't be the sole
+    // owner of the bundle's `TempDir` lifetime.
+    if let Some(ref b) = secrets_bundle {
+        let mut map = state.run_command_bundles.write().await;
+        map.insert((ticket_key.clone(), index), b.clone());
+    }
+
     let spare_ports = container::start_run_command(
         &ticket_key,
         &worktree,
@@ -1756,7 +1818,15 @@ pub async fn start_run_command(
         secrets_bundle.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .map_err(|e| {
+        // Spawn failed → drop the stashed Arc.
+        let st = state.clone();
+        let key = (ticket_key.clone(), index);
+        tokio::spawn(async move {
+            st.run_command_bundles.write().await.remove(&key);
+        });
+        (StatusCode::INTERNAL_SERVER_ERROR, e)
+    })?;
 
     // Register in state BEFORE spawning background tasks so that events
     // emitted by the scanner/tracker always find an existing map entry
@@ -1853,6 +1923,14 @@ pub async fn stop_run_command(
 
     // Stop the container
     container::stop_run_command(&ticket_key, index).await;
+    // Task #42: drop the bundle Arc — last strong reference fires the
+    // TempDir RAII cleanup. Done AFTER stop_run_command so the secret
+    // files stay on disk for the container's final teardown read.
+    state
+        .run_command_bundles
+        .write()
+        .await
+        .remove(&(ticket_key.clone(), index));
 
     Ok(StatusCode::OK)
 }

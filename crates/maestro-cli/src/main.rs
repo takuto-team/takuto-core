@@ -993,6 +993,15 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
         git_auth_resolver,
         path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        // Task #42: hold per-workflow bundles alive for the lifetime of the
+        // detached editor / run-command containers. Cleared by the matching
+        // close / stop handlers and by workflow teardown.
+        editor_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        run_command_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
     };
     let app = build_router(app_state);
 

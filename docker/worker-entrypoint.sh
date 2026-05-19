@@ -22,6 +22,16 @@ done
 # `docker inspect <ctr>` does not leak them.
 # ────────────────────────────────────────────────────────────────────────
 if [ "${MAESTRO_AUTH_BUNDLE:-0}" = "1" ] && [ -d /run/maestro-secrets ]; then
+    # Task #42: observability breadcrumb. When the bundle's discriminator
+    # env var is set but /run/maestro-secrets/ is empty, the bundle's
+    # host-side TempDir has dropped out from under us. Emit a single
+    # grep-friendly stderr line so future regressions are visible in the
+    # workflow terminal instead of degrading silently into the
+    # deployment-default path.
+    __bundle_present=$(ls -A /run/maestro-secrets 2>/dev/null | wc -l)
+    if [ "${__bundle_present:-0}" = "0" ]; then
+        echo "[maestro-bundle] MAESTRO_AUTH_BUNDLE=1 but /run/maestro-secrets/ is empty -- secret files vanished (host TempDir dropped). Check WorkerSecretsBundle lifetime in AppState." >&2
+    fi
     # AI-provider tokens. Each file maps to one env var the provider CLI
     # picks up natively.
     if [ -f /run/maestro-secrets/claude ]; then
