@@ -680,6 +680,20 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // (plan-08), and BEFORE poller construction so we can resolve the
     // poller-owner user_id and pass it into both pollers.
     let resolved_data_dir = maestro_core::workflow::snapshot::resolve_data_dir();
+    // Task #43: sweep orphan WorkerSecretsBundle directories from a prior
+    // run (crash between TempDir creation and drop leaves them around).
+    // Safe to run unconditionally — best-effort, no-op when the dir is
+    // missing. Runs BEFORE the DB opens because it touches a sibling
+    // directory under data_dir, not the DB itself.
+    if let Some(dir) = resolved_data_dir.as_deref()
+        && let Err(e) = maestro_core::auth::bundle::cleanup_orphan_secrets(dir)
+    {
+        tracing::warn!(
+            data_dir = %dir.display(),
+            error = %e,
+            "WorkerSecretsBundle orphan sweep failed (continuing); old dirs may persist"
+        );
+    }
     let allow_auto_generate_secret_key = config.read().await.general.allow_auto_generate_secret_key;
     let db = match resolved_data_dir.as_deref() {
         Some(data_dir) => match maestro_core::db::Database::open(data_dir, allow_auto_generate_secret_key) {

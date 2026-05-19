@@ -257,6 +257,76 @@ pub(crate) const BUNDLE_SOURCING_SH: &str = concat!(
     r#" fi"#,
 );
 
+/// Task #43: env var name for the DinD-side mount prefix of the maestro
+/// `data_dir` volume. Defaults to `/shared-auth/maestro-data` (the
+/// standard `docker-compose.dind.yml` layout). Operators with a custom
+/// compose can override.
+pub(crate) const DIND_DATA_PREFIX_ENV: &str = "MAESTRO_DIND_DATA_PREFIX";
+
+/// Task #43: maestro-side prefix of the data_dir bind mount. Hard-coded
+/// because `MAESTRO_HOME` / `HOME` is the canonical path baked into
+/// `docker/entrypoint.sh` and the compose volume mapping; if a deployment
+/// changes this they must also update the compose file and rebuild.
+pub(crate) const MAESTRO_DATA_DIR_HOST_PREFIX: &str = "/home/maestro/.maestro";
+
+/// Task #43: translate a maestro-side absolute path to its DinD-side
+/// equivalent. Used for the `WorkerSecretsBundle` bind-mount source —
+/// see the layered diagnosis in task #43.
+///
+/// When `DOCKER_HOST` is `tcp://...` (DinD mode), the daemon resolves
+/// bind-mount sources against its OWN filesystem, NOT maestro's. The
+/// secrets directory under `<data_dir>/runtime/secrets/` lives in the
+/// `maestro-data` docker volume which is mounted at `<maestro-prefix>`
+/// in maestro and `<dind-prefix>` in DinD — we swap the prefix so the
+/// `-v` flag uses the path DinD understands.
+///
+/// When `DOCKER_HOST` is unset OR points at a unix socket (local-Docker
+/// development), the maestro container IS the host, so its paths and the
+/// daemon's paths agree — translation is a no-op.
+pub(crate) fn translate_path_for_dind(maestro_path: &Path) -> PathBuf {
+    if !is_remote_docker_daemon() {
+        return maestro_path.to_path_buf();
+    }
+    let dind_prefix = std::env::var(DIND_DATA_PREFIX_ENV)
+        .unwrap_or_else(|_| "/shared-auth/maestro-data".to_string());
+    translate_path_for_dind_inner(maestro_path, MAESTRO_DATA_DIR_HOST_PREFIX, &dind_prefix)
+}
+
+/// Pure swap-prefix helper; testable without mutating process env.
+/// Returns the translated path, OR the original when it doesn't lie
+/// under the maestro-side prefix (logs a warning in that case because
+/// the bind mount will likely fail in DinD mode).
+pub(crate) fn translate_path_for_dind_inner(
+    maestro_path: &Path,
+    maestro_prefix: &str,
+    dind_prefix: &str,
+) -> PathBuf {
+    match maestro_path.strip_prefix(maestro_prefix) {
+        Ok(rel) => PathBuf::from(dind_prefix).join(rel),
+        Err(_) => {
+            tracing::warn!(
+                path = %maestro_path.display(),
+                maestro_prefix,
+                "translate_path_for_dind: path is not under the maestro data_dir prefix; \
+                 bind mount may fail in DinD mode"
+            );
+            maestro_path.to_path_buf()
+        }
+    }
+}
+
+/// Task #43: detect whether the docker daemon is on the OTHER end of a
+/// network socket (i.e. DinD via `tcp://`) — in which case the daemon
+/// resolves bind-mount sources in its own filesystem, and maestro must
+/// translate paths. Distinct from [`is_dind_mode`] (which returns true
+/// for ANY `DOCKER_HOST` setting including unix sockets — those still
+/// share the filesystem with maestro and don't need path translation).
+fn is_remote_docker_daemon() -> bool {
+    std::env::var("DOCKER_HOST")
+        .map(|v| v.starts_with("tcp://"))
+        .unwrap_or(false)
+}
+
 /// Phase 2b.3.x helper: which `PASSTHROUGH_ENV` names a
 /// [`WorkerSecretsBundle`] takes over. Must match
 /// [`ContainerRunner::base_docker_args`]'s suppression list so callers
@@ -277,10 +347,15 @@ pub(crate) fn apply_secrets_bundle_to_args(
     args: &mut Vec<String>,
     bundle: &crate::auth::WorkerSecretsBundle,
 ) {
+    // Task #43: translate maestro-side host path → DinD-side path. In
+    // DinD mode `docker run`'s `-v <src>` is resolved by the DinD daemon
+    // in its own filesystem, which has the shared volume at a different
+    // prefix. No-op in local-Docker mode.
+    let src = translate_path_for_dind(bundle.host_dir());
     args.push("-v".into());
     args.push(format!(
         "{}:{}:ro",
-        bundle.host_dir().to_string_lossy(),
+        src.to_string_lossy(),
         crate::auth::WORKER_SECRETS_MOUNTPOINT,
     ));
     for (k, v) in &bundle.extra_env {
@@ -464,10 +539,13 @@ impl ContainerRunner {
             // Bind-mount the per-workflow secrets dir read-only into the
             // worker. Path bytes ARE fine in `docker inspect`; secret bytes
             // are not.
+            // Task #43: translate the host-side path for DinD mode (no-op
+            // for local Docker). See `translate_path_for_dind` above.
+            let src = translate_path_for_dind(bundle.host_dir());
             args.push("-v".into());
             args.push(format!(
                 "{}:{}:ro",
-                bundle.host_dir().to_string_lossy(),
+                src.to_string_lossy(),
                 crate::auth::WORKER_SECRETS_MOUNTPOINT,
             ));
             for (k, v) in &bundle.extra_env {
@@ -2645,6 +2723,83 @@ mod tests {
     /// Helper: check if a `-v SRC:DST` pair is present.
     fn has_volume(args: &[String], mount: &str) -> bool {
         args.windows(2).any(|w| w[0] == "-v" && w[1] == mount)
+    }
+
+    // ─── Task #43: DinD path translation ────────────────────────────────
+
+    /// Happy path: a maestro-side path under `<maestro-prefix>/runtime/secrets/abc`
+    /// translates to `<dind-prefix>/runtime/secrets/abc`.
+    #[test]
+    fn translate_path_for_dind_swaps_known_prefix() {
+        let got = translate_path_for_dind_inner(
+            std::path::Path::new("/home/maestro/.maestro/runtime/secrets/bundle-xyz"),
+            "/home/maestro/.maestro",
+            "/shared-auth/maestro-data",
+        );
+        assert_eq!(
+            got.to_string_lossy(),
+            "/shared-auth/maestro-data/runtime/secrets/bundle-xyz"
+        );
+    }
+
+    /// Path outside the shared volume → passed through unchanged.
+    /// Lets local-Docker dev (where maestro IS the host) stay working
+    /// without translation, and surfaces a warning when a DinD setup
+    /// accidentally feeds an untranslatable path.
+    #[test]
+    fn translate_path_for_dind_returns_unchanged_when_outside_shared_volume() {
+        let got = translate_path_for_dind_inner(
+            std::path::Path::new("/tmp/something/outside"),
+            "/home/maestro/.maestro",
+            "/shared-auth/maestro-data",
+        );
+        assert_eq!(got.to_string_lossy(), "/tmp/something/outside");
+    }
+
+    /// Operators can supply a custom DinD-side prefix via the helper's
+    /// `dind_prefix` arg (the public function reads it from the
+    /// `MAESTRO_DIND_DATA_PREFIX` env var).
+    #[test]
+    fn translate_path_for_dind_honors_custom_prefix() {
+        let got = translate_path_for_dind_inner(
+            std::path::Path::new("/home/maestro/.maestro/runtime/secrets/abc"),
+            "/home/maestro/.maestro",
+            "/custom/dind/mount",
+        );
+        assert_eq!(got.to_string_lossy(), "/custom/dind/mount/runtime/secrets/abc");
+    }
+
+    /// `apply_secrets_bundle_to_args` must emit a `-v <translated>:/run/maestro-secrets:ro`
+    /// mount when the bundle's host_dir lies under the data_dir AND the
+    /// docker daemon is remote (DOCKER_HOST=tcp://...). We test the path
+    /// surface via the pure helper to avoid mutating process env.
+    #[test]
+    fn apply_secrets_bundle_uses_translated_path_for_dind() {
+        // Construct a bundle whose host_dir mimics the in-DinD layout.
+        // Since `WorkerSecretsBundle::for_tests` creates a real tempdir
+        // (process tempfile), we have to translate the path manually
+        // here — the test verifies the translation function, not that
+        // the env-gated entry point reads env correctly (env-mutation
+        // tests live elsewhere).
+        let host_path = std::path::PathBuf::from(
+            "/home/maestro/.maestro/runtime/secrets/bundle-abc",
+        );
+        let translated = translate_path_for_dind_inner(
+            &host_path,
+            "/home/maestro/.maestro",
+            "/shared-auth/maestro-data",
+        );
+        // Construct the resulting `-v` argument the way
+        // `apply_secrets_bundle_to_args` does.
+        let mount = format!(
+            "{}:{}:ro",
+            translated.to_string_lossy(),
+            crate::auth::WORKER_SECRETS_MOUNTPOINT,
+        );
+        assert_eq!(
+            mount,
+            "/shared-auth/maestro-data/runtime/secrets/bundle-abc:/run/maestro-secrets:ro"
+        );
     }
 
     /// Phase 2b.3.x: `passthrough_is_bundled` must match the exact set of

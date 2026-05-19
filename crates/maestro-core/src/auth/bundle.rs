@@ -144,6 +144,84 @@ impl WorkerSecretsBundle {
     }
 }
 
+/// Task #43: filesystem location for per-workflow secret directories.
+/// Relative to the maestro `data_dir`. We deliberately don't expose this
+/// as a config knob — the path is referenced by the path-translation
+/// logic in `container.rs` (which swaps the data_dir prefix for the
+/// DinD-side equivalent), and that translation has to stay in lockstep.
+pub const SECRETS_DIR_REL: &str = "runtime/secrets";
+
+/// Task #43: resolve the host-side directory in which per-workflow secret
+/// tempdirs live, and create a fresh TempDir inside it.
+///
+/// Lives at `<data_dir>/runtime/secrets/<random>` when `data_dir` is
+/// available; falls back to the process tempdir when it isn't (in-memory
+/// test DB). The fallback path is fine for unit tests — they never bind
+/// the dir into a DinD container.
+fn secrets_dir_for_db(db: &crate::db::Database) -> Result<TempDir> {
+    if let Some(data_dir) = db.data_dir() {
+        let root = data_dir.join(SECRETS_DIR_REL);
+        std::fs::create_dir_all(&root).map_err(|e| {
+            MaestroError::Config(format!(
+                "failed to create secrets root {}: {e}",
+                root.display()
+            ))
+        })?;
+        tempfile::Builder::new()
+            .prefix("bundle-")
+            .tempdir_in(&root)
+            .map_err(|e| {
+                MaestroError::Config(format!(
+                    "failed to create bundle tempdir in {}: {e}",
+                    root.display()
+                ))
+            })
+    } else {
+        // No data_dir → in-memory DB → unit test path. Fall back to
+        // process tempdir (`/tmp/...`). Tests never reach the bind-mount
+        // resolver so this is safe.
+        TempDir::new().map_err(|e| {
+            MaestroError::Config(format!("failed to create bundle tempdir: {e}"))
+        })
+    }
+}
+
+/// Task #43: best-effort startup sweep. `<data_dir>/runtime/secrets/`
+/// accumulates orphan bundle dirs when maestro crashes between TempDir
+/// creation and drop. Call this once at process boot — every entry is a
+/// dead bundle dir from a previous run (the current run hasn't created
+/// any yet). Logs at info level so operators see the cleanup happen.
+pub fn cleanup_orphan_secrets(data_dir: &Path) -> std::io::Result<usize> {
+    let root = data_dir.join(SECRETS_DIR_REL);
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut swept = 0_usize;
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to remove orphan secrets dir; will retry on next boot"
+                );
+                continue;
+            }
+            swept += 1;
+        }
+    }
+    if swept > 0 {
+        tracing::info!(
+            data_dir = %data_dir.display(),
+            count = swept,
+            "Swept orphan WorkerSecretsBundle directories from a prior run"
+        );
+    }
+    Ok(swept)
+}
+
 /// Build a [`WorkerSecretsBundle`] for the workflow.
 ///
 /// Strict dependency injection — every input is passed explicitly so the
@@ -162,11 +240,14 @@ pub async fn build(
         MaestroError::Config("master_key_unavailable: cannot unseal worker secrets".into())
     })?.key.clone();
 
-    // tmpfs-style host directory. `TempDir::new()` creates a 0700-mode dir
-    // owned by the current uid. Bind-mounting it `:ro` into the worker
-    // prevents the worker from writing back.
-    let dir = TempDir::new()
-        .map_err(|e| MaestroError::Config(format!("failed to create secrets tmpdir: {e}")))?;
+    // Task #43: create the host-side secrets dir under
+    // `${data_dir}/runtime/secrets/` (per arch doc §3.3) rather than the
+    // process `/tmp`. The maestro container shares `${data_dir}` with the
+    // DinD sidecar via a docker volume, so DinD can resolve the bind-mount
+    // source. `/tmp` is NOT shared — that's the bug task #43 closes.
+    // When `data_dir` is None (in-memory test DB), fall back to the
+    // process tempdir so unit tests still work.
+    let dir = secrets_dir_for_db(db)?;
 
     // ── Provider secret (api_key) ────────────────────────────────────────
     let provider_secret_file = unseal_provider_credential(
@@ -1010,6 +1091,75 @@ mod tests {
             err.to_string().contains("cli_state blob is not valid JSON"),
             "error must explain the cli_state JSON problem; got: {err}"
         );
+    }
+
+    // ─── Task #43: data_dir-based secrets dir + cleanup ────────────────
+
+    /// Build a real Database backed by a temp data_dir (not in-memory) so
+    /// `data_dir()` returns a real path the bundle can sit under.
+    fn db_with_master_key_and_disk_data_dir() -> (Database, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("disk-backed tempdir");
+        let db = Database::open(dir.path(), true).expect("open disk DB")
+            .with_test_master_key(MasterKey::from_bytes([0xAA; 32]));
+        (db, dir)
+    }
+
+    /// When a disk-backed `data_dir` is available, the bundle's TempDir
+    /// is created under `<data_dir>/runtime/secrets/<random>` — NOT
+    /// under the process `/tmp` (the task #43 bug).
+    #[tokio::test]
+    async fn bundle_temp_dir_is_under_data_dir_runtime_secrets() {
+        let (db, data_dir_keepalive) = db_with_master_key_and_disk_data_dir();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "claude", b"sk-ant").await;
+        let resolver = make_resolver(db.clone());
+        let cfg = fixed_config(AiAgentProvider::Claude);
+        let pin = fixed_pin(AiAgentProvider::Claude);
+
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect("build bundle");
+        let host_dir = bundle.host_dir().to_path_buf();
+        let expected_root = data_dir_keepalive.path().join(SECRETS_DIR_REL);
+        assert!(
+            host_dir.starts_with(&expected_root),
+            "bundle's host_dir must live under {} (got: {})",
+            expected_root.display(),
+            host_dir.display()
+        );
+        // The dir is a real tempfile-style random child of secrets/.
+        assert!(host_dir.is_dir());
+    }
+
+    /// `cleanup_orphan_secrets` is best-effort: missing dir → Ok(0).
+    #[test]
+    fn cleanup_orphan_secrets_returns_zero_when_dir_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("does-not-exist");
+        let n = cleanup_orphan_secrets(&nonexistent).expect("must not error");
+        assert_eq!(n, 0);
+    }
+
+    /// Pre-seed `<data_dir>/runtime/secrets/` with two fake orphan
+    /// directories and a stray file; the sweep removes both dirs and
+    /// leaves the file alone (real-world it'd be empty anyway).
+    #[test]
+    fn cleanup_orphan_secrets_removes_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(SECRETS_DIR_REL);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join("orphan-a")).unwrap();
+        std::fs::write(root.join("orphan-a/claude"), "stale-token").unwrap();
+        std::fs::create_dir_all(root.join("orphan-b")).unwrap();
+        // A stray file at the same depth — sweep skips files (its `is_dir()`
+        // guard) so callers don't accidentally lose metadata.
+        std::fs::write(root.join("stray-file"), "metadata").unwrap();
+
+        let n = cleanup_orphan_secrets(dir.path()).expect("sweep ok");
+        assert_eq!(n, 2, "must remove both orphan dirs");
+        assert!(!root.join("orphan-a").exists());
+        assert!(!root.join("orphan-b").exists());
+        assert!(root.join("stray-file").exists(), "files outside dir entries survive");
     }
 
     /// Task #42: Arc-storage strategy proof. The route handlers stash an

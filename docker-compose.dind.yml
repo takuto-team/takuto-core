@@ -64,6 +64,13 @@ services:
     ports: !reset []
     environment:
       - DOCKER_HOST=tcp://127.0.0.1:2375
+      # Task #43: when maestro tells DinD to bind-mount `${data_dir}/runtime/secrets/`
+      # (the per-workflow WorkerSecretsBundle), DinD resolves the source in its OWN
+      # filesystem, not maestro's. The `maestro-data` volume above mounts at
+      # `/home/maestro/.maestro` in maestro and `/shared-auth/maestro-data` in DinD;
+      # this env var tells the path-translator which DinD-side prefix to swap in.
+      # Operators with a custom volume layout can override.
+      - MAESTRO_DIND_DATA_PREFIX=/shared-auth/maestro-data
     depends_on:
       dind:
         condition: service_healthy
