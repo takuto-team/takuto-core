@@ -929,6 +929,20 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         let prior_per_user_required = system_status.per_user_required;
         system_status = refreshed;
         system_status.per_user_required = prior_per_user_required;
+        // Task #37 (Phase 2c): probe the config directory for write-ability so
+        // a silently-failed `chown /etc/maestro` in entrypoint.sh surfaces as a
+        // dashboard banner rather than a confused "saves don't persist" UX. The
+        // probe is non-destructive (tempfile created + dropped). Emits at
+        // critical severity so it survives `apply_user_warning_filter`.
+        if let Some(w) = docker_hooks::check_config_dir_writable(&cli.config) {
+            tracing::warn!(
+                code = %w.code,
+                severity = %w.severity,
+                "Phase 2c boot warning: {}",
+                w.message
+            );
+            system_status.warnings.push(w);
+        }
         for w in &system_status.warnings {
             if w.severity == "critical" {
                 tracing::warn!(

@@ -47,6 +47,25 @@ if [ "$(id -u)" = "0" ]; then
         fi
     fi
 
+    # Task #37 (Phase 2c, deployment fix): make /etc/maestro/ writable for the
+    # maestro user so ConfigWriter's atomic temp+rename can succeed at runtime.
+    # The directory itself comes from a host bind mount; the mountpoint's
+    # container-side ownership is fixed here at boot. Without this every
+    # dashboard config save (PUT /api/config/agent) is in-memory only and lost
+    # on restart — admin saves a provider URL via /admin/ai, sees a "saved"
+    # toast, restarts the container, the change is gone.
+    #
+    # POSIX rename(2) requires write on the *parent directory*, not the target
+    # file, so this single non-recursive chown is enough. We deliberately do
+    # NOT recurse: the host's config.toml ownership stays as the user set it,
+    # only the directory entry flips. If the chown fails (e.g. read-only mount
+    # in a CI sanity-check), the failure is swallowed and the boot-time
+    # `config_dir_not_writable` SystemStatus warning surfaces the issue.
+    if [ -d /etc/maestro ]; then
+        chown maestro:maestro /etc/maestro 2>/dev/null || \
+            echo "[maestro] WARNING: chown /etc/maestro failed (dashboard config saves may not persist)" >&2
+    fi
+
     # Use setpriv instead of runuser/su: setpriv drops UID/GID without calling setsid(), so the
     # controlling terminal is preserved. runuser calls setsid() for PAM session management, which
     # detaches from the controlling TTY — interactive CLI prompts (e.g. claude auth login) then

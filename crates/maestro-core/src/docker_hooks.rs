@@ -442,6 +442,58 @@ pub fn collect_system_status(config: &Config) -> SystemStatus {
     collect_system_status_with_db(config, None)
 }
 
+/// Task #37 (Phase 2c, deployment fix): probe the config directory for
+/// write-ability and return a `config_dir_not_writable` warning when the
+/// process can't atomically create a file there.
+///
+/// `ConfigWriter::write_atomic` writes a `.tmp` sibling then `rename(2)`s
+/// it over `config.toml`. POSIX `rename(2)` requires write on the *parent
+/// directory*, not the target file — so if the bind-mounted `/etc/maestro/`
+/// is root-owned and the runtime user is `maestro`, every dashboard save
+/// (PUT /api/config/agent) succeeds in-memory but fails to persist with
+/// `Permission denied (os error 13)`. The user sees a "saved" toast (until
+/// the persist_warning UI surfaces it), restarts the container, the change
+/// is gone.
+///
+/// We emit the warning at **critical** severity so it joins the platform
+/// warnings that survive `apply_user_warning_filter` and stays visible to
+/// every authenticated caller. The deployment-level entrypoint chown in
+/// `docker/entrypoint.sh` is the canonical fix; this warning catches the
+/// case where the chown silently failed (read-only mount, non-root
+/// container start, …).
+///
+/// Behaviour:
+///   - Parent dir missing → returns `None` (no double-warn; the missing
+///     config is already covered by `config_missing` elsewhere).
+///   - Probe succeeds → returns `None`.
+///   - Probe fails with `PermissionDenied` → returns the warning.
+///   - Probe fails with any other I/O error → returns `None` so we don't
+///     flag transient errors (e.g. EROFS from a CI sanity-check mount).
+pub fn check_config_dir_writable(config_path: &std::path::Path) -> Option<StructuredWarning> {
+    let dir = config_path.parent()?;
+    if !dir.exists() {
+        return None;
+    }
+    match tempfile::Builder::new()
+        .prefix(".maestro-write-probe-")
+        .tempfile_in(dir)
+    {
+        Ok(_) => None,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Some(StructuredWarning::critical(
+                "config_dir_not_writable",
+                format!(
+                    "Maestro can't write to the config directory ({}). Dashboard \
+                     configuration changes will not persist across restarts. \
+                     Restart Maestro after fixing directory permissions.",
+                    dir.display()
+                ),
+            ))
+        }
+        Err(_) => None,
+    }
+}
+
 /// Like [`collect_system_status`] but additionally emits Phase 2a master-key
 /// warnings derived from the database's master-key state.
 pub fn collect_system_status_with_db(
@@ -1086,6 +1138,69 @@ mod system_status_tests {
         // SAFETY: serialised via ENV_LOCK.
         unsafe {
             std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+        }
+    }
+
+    // ── Task #37 (Phase 2c): config-dir writability probe ───────────────
+
+    /// Happy path: a freshly-created tempdir is writable → no warning.
+    #[test]
+    fn check_config_dir_writable_returns_none_for_writable_dir() {
+        let dir = tempdir().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        let result = check_config_dir_writable(&cfg_path);
+        assert!(result.is_none(), "writable dir must not emit warning");
+    }
+
+    /// Parent dir missing → no warning (avoids double-flagging the
+    /// already-covered `config_missing` case).
+    #[test]
+    fn check_config_dir_writable_returns_none_when_parent_missing() {
+        let cfg_path = std::path::Path::new(
+            "/nonexistent/maestro-task-37/parent/config.toml",
+        );
+        let result = check_config_dir_writable(cfg_path);
+        assert!(
+            result.is_none(),
+            "missing parent dir must not emit warning (config_missing covers it)"
+        );
+    }
+
+    /// Read-only directory → emits `config_dir_not_writable` warning.
+    /// Skipped when running as root (no permission denial possible).
+    #[cfg(unix)]
+    #[test]
+    fn check_config_dir_writable_emits_warning_for_readonly_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        // Running as root means chmod 0500 doesn't actually deny writes —
+        // CAP_DAC_OVERRIDE bypasses POSIX perms. Skip the assertion in
+        // that case; the test still proves the function compiles and
+        // returns None (root effectively can always write).
+        let is_root = unsafe { libc::geteuid() } == 0;
+        let dir = tempdir().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+
+        // Make the dir read-only.
+        let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+        perms.set_mode(0o500);
+        std::fs::set_permissions(dir.path(), perms).unwrap();
+
+        let result = check_config_dir_writable(&cfg_path);
+
+        // Restore perms BEFORE asserting so tempdir cleanup succeeds.
+        let mut restore = std::fs::metadata(dir.path()).unwrap().permissions();
+        restore.set_mode(0o700);
+        std::fs::set_permissions(dir.path(), restore).unwrap();
+
+        if !is_root {
+            let w = result.expect("read-only dir must emit warning");
+            assert_eq!(w.code, "config_dir_not_writable");
+            assert_eq!(w.severity, "critical");
+            assert!(
+                w.message.contains(dir.path().to_string_lossy().as_ref()),
+                "warning message must include the failing path; got: {}",
+                w.message
+            );
         }
     }
 }

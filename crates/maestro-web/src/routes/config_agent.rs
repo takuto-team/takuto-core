@@ -297,7 +297,16 @@ pub async fn put_agent_config(
     // event we're about to broadcast.
     // Phase 2a: pass the DB through so master-key warnings (which depend on
     // boot-time key resolution, not the patched config) are re-attached.
-    let refreshed = collect_system_status_with_db(&config_snapshot, state.db.as_ref());
+    let mut refreshed = collect_system_status_with_db(&config_snapshot, state.db.as_ref());
+    // Task #37 (Phase 2c): also re-probe config-dir write-ability on the
+    // refresh path. The dashboard typically triggers this branch via
+    // PUT /api/config/agent, so the user just attempted a save — surfacing
+    // the warning here means the next poll of /api/onboarding/status
+    // immediately exposes "your save didn't persist" without waiting for a
+    // restart.
+    if let Some(w) = maestro_core::docker_hooks::check_config_dir_writable(&state.config_path) {
+        refreshed.warnings.push(w);
+    }
     {
         let mut s = state.system_status.write().await;
         // Preserve per_user_required from the existing snapshot — it tracks
