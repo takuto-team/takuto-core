@@ -307,6 +307,27 @@ pub async fn put_agent_config(
     if let Some(w) = maestro_core::docker_hooks::check_config_dir_writable(&state.config_path) {
         refreshed.warnings.push(w);
     }
+    // Task #38 (Phase 2c continued): when the writer has had to fall back
+    // to the in-place path because `config.toml` is bind-mounted as a
+    // single file, surface an info-level diagnostic so admins know which
+    // write protocol is active. The flag latches `true` for the process
+    // lifetime — emit once-set-stay-set semantics. Severity is `info`
+    // (not critical) because saves SUCCEED via the fallback; this is
+    // purely a "you're on the alt path" notice, not a failure.
+    if let Some(ref writer) = state.config_writer
+        && writer
+            .used_inplace_fallback()
+            .load(std::sync::atomic::Ordering::Acquire)
+    {
+        refreshed
+            .warnings
+            .push(maestro_core::docker_hooks::StructuredWarning::info(
+                "config_file_bind_mounted",
+                "config.toml is bind-mounted as a single file. Dashboard saves \
+                 use in-place writes (atomic rename is unsupported on this \
+                 mount layout). Saves continue to work; this is informational.",
+            ));
+    }
     {
         let mut s = state.system_status.write().await;
         // Preserve per_user_required from the existing snapshot — it tracks

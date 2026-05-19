@@ -389,6 +389,20 @@ impl StructuredWarning {
             message: message.into(),
         }
     }
+
+    /// Public `info`-severity constructor used by other crates (currently
+    /// `maestro-web`'s `config_agent` handler for the task #38
+    /// `config_file_bind_mounted` diagnostic — a non-critical heads-up
+    /// that the deployment is on the in-place write fallback). Kept
+    /// public so the dashboard refresh path can push without going
+    /// through `collect_system_status`.
+    pub fn info(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            severity: "info".to_string(),
+            message: message.into(),
+        }
+    }
 }
 
 impl SystemStatus {

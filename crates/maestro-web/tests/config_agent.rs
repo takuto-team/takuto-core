@@ -133,6 +133,65 @@ async fn put_config_agent_as_admin_updates_and_persists() {
     assert!(on_disk.contains("claude-3-5-sonnet-latest"));
 }
 
+/// Task #38: when ConfigWriter has had to fall back to the in-place write
+/// path (`used_inplace_fallback` flag set), the next refresh of
+/// `system_status` from PUT /api/config/agent must include an info-level
+/// `config_file_bind_mounted` diagnostic. The dashboard reads
+/// `/api/onboarding/status` afterwards and surfaces it as a non-critical
+/// banner. We don't construct a real Linux bind mount in this test; we
+/// just latch the flag directly via the public accessor and verify the
+/// route handler picks it up.
+#[tokio::test]
+async fn put_config_agent_emits_config_file_bind_mounted_when_writer_flag_set() {
+    use std::sync::atomic::Ordering;
+
+    let dir = std::env::temp_dir().join(format!("maestro-task-38-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_path = dir.join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
+
+    let mut state = test_state_with_db();
+    let writer = Arc::new(ConfigWriter::new(config_path.clone()));
+    // Latch the flag BEFORE the request so the refresh path sees it. In
+    // production the writer would set this itself after an EBUSY fallback;
+    // exposing it via the public Arc<AtomicBool> accessor keeps the test
+    // independent of forcing a real Linux bind mount.
+    writer.used_inplace_fallback().store(true, Ordering::Release);
+    state.config_writer = Some(writer);
+    state.config_path = config_path.clone();
+
+    let cookie = register_and_login(&state).await;
+    let app = build_router(state.clone());
+
+    let resp = app
+        .oneshot(
+            Request::put("/api/config/agent")
+                .header("Content-Type", "application/json")
+                .header("Origin", "http://localhost:8080")
+                .header("Cookie", &cookie)
+                .body(Body::from(
+                    r#"{"providers":{"claude":{"model":"claude-3-5-sonnet-latest"}}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The handler refreshed system_status; the new warning must be there.
+    let snapshot = state.system_status.read().await.clone();
+    let bind_mount_warning = snapshot
+        .warnings
+        .iter()
+        .find(|w| w.code == "config_file_bind_mounted");
+    let w = bind_mount_warning
+        .expect("system_status must carry config_file_bind_mounted after fallback flag latched");
+    assert_eq!(
+        w.severity, "info",
+        "config_file_bind_mounted must be info-severity (saves succeeded)"
+    );
+}
+
 #[tokio::test]
 async fn put_config_agent_as_non_admin_returns_403_no_side_effects() {
     let state = test_state_with_db();
