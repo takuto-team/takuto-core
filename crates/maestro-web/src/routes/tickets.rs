@@ -105,11 +105,13 @@ async fn run_description_session(
         let cfg = state.config.read().await;
         (
             cfg.agent.provider,
-            if cfg.agent.model.trim().is_empty() {
-                None
-            } else {
-                Some(cfg.agent.model.trim().to_string())
-            },
+            // Task #44: route only feeds `model` into the Claude branch
+            // (`AiAgentProvider::Claude` → `ClaudeSession::run_prompt`),
+            // so resolve via the sub-table-aware helper. Previously
+            // sourced from the legacy `cfg.agent.model` directly, which
+            // ignored an empty sub-table value and forced a stale
+            // migrated model on every improve/prompt invocation.
+            cfg.agent.effective_claude_model().map(str::to_string),
             cfg.agent.cursor_cli.clone(),
             cfg.agent.cursor_model.clone(),
             cfg.agent.improve_timeout_secs,

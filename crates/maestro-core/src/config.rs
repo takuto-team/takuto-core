@@ -350,6 +350,32 @@ impl AgentConfig {
         }
         "Auto"
     }
+
+    /// Task #44: return the effective Claude model name, resolving in
+    /// precedence order:
+    /// 1. `[agent.providers.claude].model` (Phase 1 sub-table — the
+    ///    canonical location, written by `PUT /api/config/agent`).
+    /// 2. `[agent].model` (legacy flat field — kept one release for
+    ///    back-compat; populated by migration of old `config.toml`).
+    /// 3. `None` — let `claude` choose its own default model.
+    ///
+    /// Returning `Option` (not `&str` with a hardcoded fallback) is
+    /// deliberate: when both fields are empty/blank the caller MUST omit
+    /// the `--model` arg entirely, otherwise pantheon-style proxies that
+    /// don't support older opus-4-6/4-7 reject the request. Unlike
+    /// Cursor (where the CLI requires `--model`), Claude is happy to run
+    /// without one and pick its own current default.
+    pub fn effective_claude_model(&self) -> Option<&str> {
+        let sub = self.providers.claude.model.trim();
+        if !sub.is_empty() {
+            return Some(&self.providers.claude.model);
+        }
+        let legacy = self.model.trim();
+        if !legacy.is_empty() {
+            return Some(&self.model);
+        }
+        None
+    }
 }
 
 fn default_agent_step_repeat() -> u8 {
@@ -2465,5 +2491,69 @@ provider = "opencode"
         .expect("parse");
         assert_eq!(cfg.agent.provider, AiAgentProvider::OpenCode);
         assert_eq!(cfg.agent.provider.as_str(), "opencode");
+    }
+
+    // ─── Task #44: effective_claude_model precedence ────────────────────
+
+    fn agent_cfg(legacy: &str, sub: &str) -> AgentConfig {
+        let mut cfg = AgentConfig {
+            model: legacy.to_string(),
+            ..AgentConfig::default()
+        };
+        cfg.providers.claude.model = sub.to_string();
+        cfg
+    }
+
+    /// T-MODEL-RESOLVE-001: sub-table set, legacy set → sub-table wins.
+    #[test]
+    fn effective_claude_model_subtable_wins_over_legacy() {
+        let cfg = agent_cfg("legacy-old-model", "sub-new-model");
+        assert_eq!(cfg.effective_claude_model(), Some("sub-new-model"));
+    }
+
+    /// T-MODEL-RESOLVE-002: sub-table empty, legacy set → legacy used
+    /// (one-release back-compat for users still on the migrated layout).
+    #[test]
+    fn effective_claude_model_falls_back_to_legacy_when_subtable_empty() {
+        let cfg = agent_cfg("legacy-model", "");
+        assert_eq!(cfg.effective_claude_model(), Some("legacy-model"));
+    }
+
+    /// T-MODEL-RESOLVE-003: sub-table set, legacy empty → sub-table used.
+    #[test]
+    fn effective_claude_model_subtable_used_when_legacy_empty() {
+        let cfg = agent_cfg("", "sub-model");
+        assert_eq!(cfg.effective_claude_model(), Some("sub-model"));
+    }
+
+    /// T-MODEL-RESOLVE-004: both empty → None (omit `--model` arg). This
+    /// is the actual task #44 fix surface — pantheon-style proxies that
+    /// don't recognise the older migrated models need `--model` omitted
+    /// so claude picks a default the proxy DOES support.
+    #[test]
+    fn effective_claude_model_returns_none_when_both_empty() {
+        let cfg = agent_cfg("", "");
+        assert_eq!(cfg.effective_claude_model(), None);
+    }
+
+    /// T-MODEL-RESOLVE-005: sub-table whitespace-only → treated as empty.
+    /// Matches the trim semantics of the existing `effective_cursor_*`
+    /// helpers so a user pasting "   " into the dashboard input still
+    /// resolves to None / legacy.
+    #[test]
+    fn effective_claude_model_treats_whitespace_subtable_as_empty() {
+        let cfg = agent_cfg("legacy", "   ");
+        assert_eq!(
+            cfg.effective_claude_model(),
+            Some("legacy"),
+            "whitespace-only sub-table must fall through to legacy"
+        );
+
+        let cfg = agent_cfg("   ", "   ");
+        assert_eq!(
+            cfg.effective_claude_model(),
+            None,
+            "all-whitespace must resolve to None"
+        );
     }
 }

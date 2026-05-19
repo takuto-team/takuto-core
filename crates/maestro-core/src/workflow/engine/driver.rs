@@ -1222,11 +1222,14 @@ pub(super) async fn run_workflow_def_steps(
 
     let cfg = config.read().await;
     let timeout = cfg.agent.step_timeout_secs;
-    let claude_model = if cfg.agent.model.is_empty() {
-        None
-    } else {
-        Some(cfg.agent.model.clone())
-    };
+    // Task #44: resolve via the sub-table-aware helper so an empty
+    // `[agent.providers.claude].model` in /admin/ai correctly omits
+    // `--model` from the agent argv. The pre-#44 code read the legacy
+    // flat `cfg.agent.model` directly — which still holds a migrated
+    // value even after the user blanks the sub-table field — and forced
+    // an outdated model (`claude-opus-4-6`) on every spawn, which custom
+    // proxies (pantheon) don't accept.
+    let claude_model = cfg.agent.effective_claude_model().map(str::to_string);
     let cursor_model_buf = cfg.agent.cursor_model.clone();
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
