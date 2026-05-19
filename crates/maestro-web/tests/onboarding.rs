@@ -365,3 +365,303 @@ async fn auth_status_includes_phase0_mirrored_fields_on_clean_boot() {
     assert_eq!(json["github_mode"], "app");
     assert_eq!(json["degraded"], false);
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// T-ONB-FILTER-* (task #30): per-request warning filter
+//
+// `GET /api/onboarding/status` filters provider/gh warnings against the
+// calling user's stored credentials. Public callers (no cookie) still see
+// the raw warnings.
+// ────────────────────────────────────────────────────────────────────────
+
+/// Seed an authenticated user via the existing helper and return their
+/// session cookie + the resolved `user_id` (looked up by username).
+async fn register_admin_and_get_id(state: &AppState) -> (String, String) {
+    let cookie = maestro_web::test_helpers::register_and_login(state).await;
+    let db = state.db.clone().expect("test state must have a DB");
+    let user_id = tokio::task::spawn_blocking(move || {
+        let conn = db.conn().blocking_lock();
+        maestro_core::db::users::get_user_by_username(&conn, "admin")
+            .expect("db query")
+            .expect("admin must exist")
+            .id
+    })
+    .await
+    .expect("join");
+    (cookie, user_id)
+}
+
+/// Insert a provider credential row directly. Uses the test DB's master
+/// key so the `seal()` envelope matches what production would produce.
+async fn seed_provider_credential(state: &AppState, user_id: &str, provider: &str) {
+    let db = state.db.clone().expect("test DB");
+    let user_id = user_id.to_string();
+    let provider = provider.to_string();
+    tokio::task::spawn_blocking(move || {
+        let mk = db
+            .master_key()
+            .expect("test DB must have master key")
+            .key
+            .clone();
+        let sealed = maestro_core::auth::seal(&mk, b"sk-test-token").unwrap();
+        let conn = db.conn().blocking_lock();
+        maestro_core::db::provider_credentials::upsert(
+            &conn,
+            &user_id,
+            &provider,
+            maestro_core::db::provider_credentials::ProviderCredentialKind::ApiKey,
+            &sealed,
+            "{}",
+        )
+        .expect("seed provider credential");
+    })
+    .await
+    .expect("join");
+}
+
+/// Insert a GitHub PAT row directly via the DB helper.
+async fn seed_github_credential(state: &AppState, user_id: &str) {
+    let db = state.db.clone().expect("test DB");
+    let user_id = user_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let mk = db.master_key().expect("test DB master key").key.clone();
+        let sealed = maestro_core::auth::seal(&mk, b"ghp_test_pat").unwrap();
+        let conn = db.conn().blocking_lock();
+        maestro_core::db::github_credentials::upsert(
+            &conn,
+            &user_id,
+            &sealed,
+            "alice",
+            "[\"repo\"]",
+            true,
+        )
+        .expect("seed github credential");
+    })
+    .await
+    .expect("join");
+}
+
+/// Push the standard fixture into `system_status.warnings`: the active
+/// provider's `_not_authenticated` warning, `gh_auth_missing`, and a
+/// platform-level `master_key_unavailable` (which must always survive
+/// filtering).
+async fn seed_warnings(
+    state: &AppState,
+    provider_warning_code: &str,
+    include_gh: bool,
+    include_master_key: bool,
+) {
+    let mut s = state.system_status.write().await;
+    s.warnings.clear();
+    s.warnings.push(StructuredWarning {
+        code: provider_warning_code.into(),
+        severity: "critical".into(),
+        message: "fixture".into(),
+    });
+    if include_gh {
+        s.warnings.push(StructuredWarning {
+            code: "gh_auth_missing".into(),
+            severity: "critical".into(),
+            message: "fixture".into(),
+        });
+    }
+    if include_master_key {
+        s.warnings.push(StructuredWarning {
+            code: "master_key_unavailable".into(),
+            severity: "critical".into(),
+            message: "fixture".into(),
+        });
+    }
+}
+
+async fn warnings_for_request(state: AppState, cookie: Option<&str>) -> Vec<String> {
+    let mut req = Request::get("/api/onboarding/status");
+    if let Some(c) = cookie {
+        req = req.header("Cookie", c);
+    }
+    let app = build_router(state);
+    let resp = app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    v["warnings"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|w| w["code"].as_str().unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// T-ONB-FILTER-001 (P0): authenticated user with active claude credential
+/// + `provider = "claude"` in config → response warnings do NOT contain
+/// `claude_not_authenticated`. (Platform/admin warnings survive.)
+#[tokio::test]
+async fn t_onb_filter_001_active_provider_warning_dropped_for_user_with_credential() {
+    let state = test_state_with_db();
+    let (cookie, user_id) = register_admin_and_get_id(&state).await;
+    // Default config: provider = "claude". Seed a claude credential.
+    seed_provider_credential(&state, &user_id, "claude").await;
+    seed_warnings(&state, "claude_not_authenticated", false, true).await;
+    {
+        let mut s = state.system_status.write().await;
+        s.provider.selected = "claude".into();
+    }
+
+    let codes = warnings_for_request(state, Some(&cookie)).await;
+    assert!(
+        !codes.iter().any(|c| c == "claude_not_authenticated"),
+        "active provider warning must be filtered for user with credential; got {codes:?}"
+    );
+    assert!(
+        codes.iter().any(|c| c == "master_key_unavailable"),
+        "platform warning must survive; got {codes:?}"
+    );
+}
+
+/// T-ONB-FILTER-002 (P0): active provider Cursor, user has Claude cred but
+/// not Cursor → `cursor_not_authenticated` stays in the response.
+#[tokio::test]
+async fn t_onb_filter_002_mismatched_credential_does_not_filter_active_warning() {
+    let state = test_state_with_db();
+    let (cookie, user_id) = register_admin_and_get_id(&state).await;
+    // Seed CLAUDE credential, set active provider to CURSOR.
+    seed_provider_credential(&state, &user_id, "claude").await;
+    {
+        let mut cfg = state.config.write().await;
+        cfg.agent.provider = maestro_core::config::AiAgentProvider::Cursor;
+    }
+    seed_warnings(&state, "cursor_not_authenticated", false, false).await;
+    {
+        let mut s = state.system_status.write().await;
+        s.provider.selected = "cursor".into();
+    }
+
+    let codes = warnings_for_request(state, Some(&cookie)).await;
+    assert!(
+        codes.iter().any(|c| c == "cursor_not_authenticated"),
+        "active provider warning must stay when user has no matching credential; got {codes:?}"
+    );
+}
+
+/// T-ONB-FILTER-003 (P0): authenticated user without any credentials →
+/// active provider warning still present.
+#[tokio::test]
+async fn t_onb_filter_003_no_credential_user_still_sees_active_warning() {
+    let state = test_state_with_db();
+    let (cookie, _user_id) = register_admin_and_get_id(&state).await;
+    seed_warnings(&state, "claude_not_authenticated", false, false).await;
+    {
+        let mut s = state.system_status.write().await;
+        s.provider.selected = "claude".into();
+    }
+
+    let codes = warnings_for_request(state, Some(&cookie)).await;
+    assert!(
+        codes.iter().any(|c| c == "claude_not_authenticated"),
+        "active provider warning must stay for user with no credential; got {codes:?}"
+    );
+}
+
+/// T-ONB-FILTER-004 (P0): GitHub App configured → `gh_auth_missing`
+/// dropped regardless of user PAT.
+#[tokio::test]
+async fn t_onb_filter_004_gh_auth_missing_dropped_when_app_configured() {
+    let state = test_state_with_db();
+    let (cookie, _user_id) = register_admin_and_get_id(&state).await;
+    {
+        let mut cfg = state.config.write().await;
+        cfg.github.app_id = 12345;
+        cfg.github.app_installation_id = 67890;
+        cfg.github.app_private_key = "FAKE_PEM_BODY".into();
+        assert!(cfg.github.is_configured(), "test setup: app must be configured");
+    }
+    seed_warnings(&state, "claude_not_authenticated", true, false).await;
+
+    let codes = warnings_for_request(state, Some(&cookie)).await;
+    assert!(
+        !codes.iter().any(|c| c == "gh_auth_missing"),
+        "gh_auth_missing must be dropped when App is configured; got {codes:?}"
+    );
+}
+
+/// T-ONB-FILTER-005 (P0): App NOT configured + user has a PAT row →
+/// `gh_auth_missing` dropped.
+#[tokio::test]
+async fn t_onb_filter_005_gh_auth_missing_dropped_when_user_has_pat() {
+    let state = test_state_with_db();
+    let (cookie, user_id) = register_admin_and_get_id(&state).await;
+    // App stays unconfigured by default. Seed user PAT.
+    seed_github_credential(&state, &user_id).await;
+    seed_warnings(&state, "claude_not_authenticated", true, false).await;
+
+    let codes = warnings_for_request(state, Some(&cookie)).await;
+    assert!(
+        !codes.iter().any(|c| c == "gh_auth_missing"),
+        "gh_auth_missing must be dropped when user has PAT; got {codes:?}"
+    );
+}
+
+/// T-ONB-FILTER-006 (P0): App NOT configured + user has no PAT →
+/// `gh_auth_missing` stays.
+#[tokio::test]
+async fn t_onb_filter_006_gh_auth_missing_kept_when_neither_app_nor_pat() {
+    let state = test_state_with_db();
+    let (cookie, _user_id) = register_admin_and_get_id(&state).await;
+    seed_warnings(&state, "claude_not_authenticated", true, false).await;
+
+    let codes = warnings_for_request(state, Some(&cookie)).await;
+    assert!(
+        codes.iter().any(|c| c == "gh_auth_missing"),
+        "gh_auth_missing must stay when neither App nor user PAT; got {codes:?}"
+    );
+}
+
+/// T-ONB-FILTER-007 (P0): unauthenticated request → raw warnings returned
+/// (no filtering possible without a user).
+#[tokio::test]
+async fn t_onb_filter_007_unauthenticated_request_returns_raw_warnings() {
+    let state = test_state_with_db();
+    seed_warnings(&state, "claude_not_authenticated", true, true).await;
+    {
+        let mut s = state.system_status.write().await;
+        s.provider.selected = "claude".into();
+    }
+
+    let codes = warnings_for_request(state, None).await;
+    assert!(
+        codes.iter().any(|c| c == "claude_not_authenticated"),
+        "unauthenticated request must keep raw warnings; got {codes:?}"
+    );
+    assert!(codes.iter().any(|c| c == "gh_auth_missing"));
+    assert!(codes.iter().any(|c| c == "master_key_unavailable"));
+}
+
+/// T-ONB-FILTER-008 (P1): platform warnings (`master_key_unavailable`)
+/// survive filtering for all users, including ones with full credentials.
+#[tokio::test]
+async fn t_onb_filter_008_platform_warning_survives_for_fully_set_up_user() {
+    let state = test_state_with_db();
+    let (cookie, user_id) = register_admin_and_get_id(&state).await;
+    // Fully set up: provider cred + GH App configured + PAT seeded.
+    seed_provider_credential(&state, &user_id, "claude").await;
+    seed_github_credential(&state, &user_id).await;
+    {
+        let mut cfg = state.config.write().await;
+        cfg.github.app_id = 1;
+        cfg.github.app_installation_id = 1;
+        cfg.github.app_private_key = "FAKE".into();
+    }
+    seed_warnings(&state, "claude_not_authenticated", true, true).await;
+
+    let codes = warnings_for_request(state, Some(&cookie)).await;
+    // User-filterable warnings dropped.
+    assert!(!codes.iter().any(|c| c == "claude_not_authenticated"));
+    assert!(!codes.iter().any(|c| c == "gh_auth_missing"));
+    // Platform warning survives.
+    assert!(
+        codes.iter().any(|c| c == "master_key_unavailable"),
+        "platform warning must survive for fully-set-up user; got {codes:?}"
+    );
+}
