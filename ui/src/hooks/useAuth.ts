@@ -16,8 +16,15 @@ export function useAuth() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /**
+   * Fetch the signed-in user's identity. **Returns** its promise so callers
+   * (notably `checkAuth`) can await it before resolving their own state —
+   * otherwise `loading` flips false before `currentUser` is populated,
+   * which races admin-gated route gates (#34: admin user bounced to "/" on
+   * direct URL load while currentUser was still null).
+   */
   const fetchMe = useCallback(() => {
-    fetch("/api/auth/me", { credentials: "same-origin" })
+    return fetch("/api/auth/me", { credentials: "same-origin" })
       .then((r) => (r.ok ? (r.json() as Promise<CurrentUser>) : null))
       .then((u) => setCurrentUser(u ?? null))
       .catch(() => setCurrentUser(null));
@@ -31,13 +38,17 @@ export function useAuth() {
         setSetupRequired(data.setup_required);
         if (!data.dashboard_auth_enabled && !data.setup_required) {
           setLoggedIn(true);
-          fetchMe();
+          // **Return** fetchMe's promise so the outer `.finally(setLoading
+          // false)` runs only after currentUser has been set.
+          return fetchMe();
         } else if (data.setup_required) {
           setLoggedIn(false);
         } else {
           return fetch("/api/config", { credentials: "same-origin" }).then((r) => {
             setLoggedIn(r.ok);
-            if (r.ok) fetchMe();
+            // Same here — return the promise so loading=false waits for
+            // currentUser to be populated.
+            if (r.ok) return fetchMe();
           });
         }
       })
