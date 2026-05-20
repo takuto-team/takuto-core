@@ -28,17 +28,8 @@ pub fn humanize_agent_stream_line(provider: AiAgentProvider, raw: &str) -> Optio
     match provider {
         AiAgentProvider::Claude => humanize_claude_output(raw),
         AiAgentProvider::Cursor => humanize_cursor_output(raw),
-        // Phase 1: Codex and OpenCode have no adapter wired yet (Phase 4).
-        // The driver refuses to spawn sessions against them, so we never
-        // reach this code path at runtime. Falling back to raw passthrough
-        // keeps the humanizer total in case the stream is fed offline.
-        AiAgentProvider::Codex | AiAgentProvider::OpenCode => {
-            if raw.trim().is_empty() {
-                None
-            } else {
-                Some(raw.to_string())
-            }
-        }
+        AiAgentProvider::Codex => humanize_codex_output(raw),
+        AiAgentProvider::OpenCode => humanize_opencode_output(raw),
     }
 }
 
@@ -222,6 +213,148 @@ fn humanize_cursor_output(raw: &str) -> Option<String> {
     }
 }
 
+/// Humanize codex `exec --json` JSONL events into one-line dashboard text.
+///
+/// Codex events (see `codex/session.rs` and arch §7.1):
+///   `thread.started{thread_id}`            → "Codex session initialized"
+///   `turn.started`                         → suppressed (noise)
+///   `item.completed{agent_message,text}`   → the assistant text
+///   `item.completed{reasoning,...}`        → suppressed (chain-of-thought)
+///   `item.completed{command_execution,...}`→ short command preview
+///   `turn.completed`                       → "Codex session completed"
+///   `turn.failed{error.message}`           → "Codex error: <msg>"
+///   `error{message}`                       → "Codex error: <msg>"
+///
+/// Non-JSON lines (codex sometimes leaks tracing lines to stdout) pass
+/// through verbatim so operators can still see them — the line filter
+/// in `codex/session.rs::parse_codex_stream_json_output` skips them for
+/// the final output buffer, but the live dashboard wants visibility.
+fn humanize_codex_output(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.starts_with('{') {
+        return Some(raw.to_string());
+    }
+    let value: Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return Some(raw.to_string()),
+    };
+    let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match event_type {
+        "thread.started" => Some("Codex session initialized".to_string()),
+        "turn.started" => None,
+        "turn.completed" => Some("Codex session completed".to_string()),
+        "turn.failed" => {
+            let msg = value
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            Some(format!("Codex error: {msg}"))
+        }
+        "error" => {
+            let msg = value
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            Some(format!("Codex error: {msg}"))
+        }
+        "item.completed" => {
+            let item = value.get("item")?;
+            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match item_type {
+                "agent_message" => {
+                    let text = item.get("text").and_then(|v| v.as_str())?.trim();
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(text.to_string())
+                    }
+                }
+                "command_execution" => {
+                    let cmd = item
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(command)");
+                    Some(format!("$ {}", short_shell_command(cmd, 120)))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Humanize opencode `run --format json` JSONL events into dashboard text.
+///
+/// OpenCode events (see `opencode/session.rs` and arch §7.4):
+///   `step_start{sessionID}`               → "OpenCode session initialized"
+///   `text{part.text}`                     → the assistant text
+///   `tool_use`                            → suppressed (tool calls noise)
+///   `message.part.updated{thinking}`      → suppressed (chain-of-thought)
+///   `step_finish{reason:"stop"}`          → "OpenCode session completed"
+///   `step_finish{reason:"tool-calls"}`    → suppressed (intermediate)
+///   `error{...}`                          → "OpenCode error: <msg>"
+fn humanize_opencode_output(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.starts_with('{') {
+        return Some(raw.to_string());
+    }
+    let value: Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return Some(raw.to_string()),
+    };
+    let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match event_type {
+        "step_start" => Some("OpenCode session initialized".to_string()),
+        "step_finish" => {
+            let reason = value
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if reason == "stop" {
+                Some("OpenCode session completed".to_string())
+            } else {
+                None
+            }
+        }
+        "text" => {
+            // `part.text` is the canonical location; fall back to top-level
+            // `text` for legacy / partial events.
+            let text = value
+                .get("part")
+                .and_then(|p| p.get("text"))
+                .and_then(|v| v.as_str())
+                .or_else(|| value.get("text").and_then(|v| v.as_str()))?
+                .trim();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            }
+        }
+        "error" => {
+            let msg = value
+                .get("message")
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    value
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|v| v.as_str())
+                })
+                .unwrap_or("unknown error");
+            Some(format!("OpenCode error: {msg}"))
+        }
+        _ => None,
+    }
+}
+
 /// Shorten a shell command for one-line dashboard display (`max` is a character count).
 fn short_shell_command(cmd: &str, max_chars: usize) -> String {
     let cmd = cmd.trim();
@@ -370,6 +503,99 @@ mod tests {
 
     fn cursor_humanize(raw: &str) -> Option<String> {
         humanize_agent_stream_line(AiAgentProvider::Cursor, raw)
+    }
+
+    fn codex_humanize(raw: &str) -> Option<String> {
+        humanize_agent_stream_line(AiAgentProvider::Codex, raw)
+    }
+
+    fn opencode_humanize(raw: &str) -> Option<String> {
+        humanize_agent_stream_line(AiAgentProvider::OpenCode, raw)
+    }
+
+    // ── Codex humanizer ──────────────────────────────────────────────────
+
+    #[test]
+    fn codex_thread_started_yields_init_line() {
+        let raw = r#"{"type":"thread.started","thread_id":"019e44e5-615f-7681-a6a3-58dd23081c10"}"#;
+        assert_eq!(
+            codex_humanize(raw).as_deref(),
+            Some("Codex session initialized")
+        );
+    }
+
+    #[test]
+    fn codex_agent_message_yields_assistant_text() {
+        let raw = r#"{"type":"item.completed","item":{"type":"agent_message","text":"hello world"}}"#;
+        assert_eq!(codex_humanize(raw).as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn codex_reasoning_is_suppressed() {
+        let raw = r#"{"type":"item.completed","item":{"type":"reasoning","text":"chain of thought"}}"#;
+        assert_eq!(codex_humanize(raw), None);
+    }
+
+    #[test]
+    fn codex_turn_failed_surfaces_error_message() {
+        let raw = r#"{"type":"turn.failed","error":{"message":"unexpected status 401"}}"#;
+        let line = codex_humanize(raw).expect("must surface");
+        assert!(line.starts_with("Codex error:"), "{line}");
+        assert!(line.contains("401"), "{line}");
+    }
+
+    #[test]
+    fn codex_non_json_passes_through() {
+        // codex sometimes leaks tracing lines to stdout — keep them visible
+        // on the dashboard rather than filtering silently.
+        let raw = "2026-05-20T... ERROR codex_api::xyz: something failed";
+        assert_eq!(codex_humanize(raw).as_deref(), Some(raw));
+    }
+
+    // ── OpenCode humanizer ───────────────────────────────────────────────
+
+    #[test]
+    fn opencode_step_start_yields_init_line() {
+        let raw = r#"{"type":"step_start","sessionID":"ses_abc","part":{"type":"step-start"}}"#;
+        assert_eq!(
+            opencode_humanize(raw).as_deref(),
+            Some("OpenCode session initialized")
+        );
+    }
+
+    #[test]
+    fn opencode_text_part_yields_assistant_text() {
+        let raw = r#"{"type":"text","sessionID":"ses_abc","part":{"text":"hello world"}}"#;
+        assert_eq!(opencode_humanize(raw).as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn opencode_tool_use_is_suppressed() {
+        let raw = r#"{"type":"tool_use","sessionID":"ses_abc"}"#;
+        assert_eq!(opencode_humanize(raw), None);
+    }
+
+    #[test]
+    fn opencode_step_finish_stop_yields_completed_line() {
+        let raw = r#"{"type":"step_finish","sessionID":"ses_abc","reason":"stop"}"#;
+        assert_eq!(
+            opencode_humanize(raw).as_deref(),
+            Some("OpenCode session completed")
+        );
+    }
+
+    #[test]
+    fn opencode_step_finish_tool_calls_is_suppressed() {
+        let raw = r#"{"type":"step_finish","sessionID":"ses_abc","reason":"tool-calls"}"#;
+        assert_eq!(opencode_humanize(raw), None);
+    }
+
+    #[test]
+    fn opencode_error_surfaces_with_prefix() {
+        let raw = r#"{"type":"error","sessionID":"ses_abc","message":"no provider configured"}"#;
+        let line = opencode_humanize(raw).expect("must surface");
+        assert!(line.starts_with("OpenCode error:"), "{line}");
+        assert!(line.contains("no provider"), "{line}");
     }
 
     #[test]

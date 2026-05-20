@@ -14,6 +14,8 @@ use tracing::{debug, error, info, warn};
 use crate::actions::traits::ExternalActions;
 use crate::agent_prompt::{headless_instructions_suffix, report_injection_suffix};
 use crate::claude::session::ClaudeSession;
+use crate::codex::CodexSession;
+use crate::opencode::OpenCodeSession;
 use crate::config::{
     AgentStepConfig, AiAgentProvider, Config, cursor_model_for_cli, interpolate_agent_prompt,
     interpolate_command_template,
@@ -1265,6 +1267,17 @@ pub(super) async fn run_workflow_def_steps(
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
+    // Phase 4: codex and opencode share the same shape as claude/cursor —
+    // a single sub-table per provider with an optional `model` string.
+    // Empty string means "use the CLI's default" (no `-m` flag emitted).
+    let codex_model = {
+        let m = cfg.agent.providers.codex.model.trim();
+        if m.is_empty() { None } else { Some(m.to_string()) }
+    };
+    let opencode_model = {
+        let m = cfg.agent.providers.opencode.model.trim();
+        if m.is_empty() { None } else { Some(m.to_string()) }
+    };
     let ticketing_avail = {
         let wf = workflows.read().await;
         wf.get(ticket_key)
@@ -1300,6 +1313,8 @@ pub(super) async fn run_workflow_def_steps(
         &cursor_cli,
         cursor_model_pass,
         claude_model.as_deref(),
+        codex_model.as_deref(),
+        opencode_model.as_deref(),
         timeout,
         workflows,
         event_tx,
@@ -1351,6 +1366,8 @@ pub(super) async fn run_agent_step_sequence(
     cursor_cli: &str,
     cursor_model_pass: &str,
     claude_model: Option<&str>,
+    codex_model: Option<&str>,
+    opencode_model: Option<&str>,
     timeout: u64,
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
@@ -1685,16 +1702,30 @@ pub(super) async fn run_agent_step_sequence(
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),
-                    // Phase 1: Codex / OpenCode adapters are not yet wired
-                    // (Phase 4). Refuse to spawn a session with a clear,
-                    // typed error so the dashboard surfaces a recoverable
-                    // banner instead of a generic timeout.
-                    AiAgentProvider::Codex | AiAgentProvider::OpenCode => {
-                        Err(MaestroError::AiAgent(format!(
-                            "Provider \"{}\" is configured but not yet implemented (Phase 4). Switch to claude or cursor in [agent] provider.",
-                            ai_stream_provider.as_str()
-                        )))
-                    }
+                    AiAgentProvider::Codex => CodexSession::run_prompt(
+                        worktree_path,
+                        &full_prompt,
+                        cancel_token.child_token(),
+                        timeout,
+                        Some(line_tx),
+                        codex_model,
+                        resume_id,
+                        container_runner,
+                    )
+                    .await
+                    .map(|s| (s.session_id, s.output)),
+                    AiAgentProvider::OpenCode => OpenCodeSession::run_prompt(
+                        worktree_path,
+                        &full_prompt,
+                        cancel_token.child_token(),
+                        timeout,
+                        Some(line_tx),
+                        opencode_model,
+                        resume_id,
+                        container_runner,
+                    )
+                    .await
+                    .map(|s| (s.session_id, s.output)),
                 };
 
                 match session_result {
@@ -1736,11 +1767,8 @@ pub(super) async fn run_agent_step_sequence(
                             let msg = match ai_stream_provider {
                                 AiAgentProvider::Claude => "Agent step failed — check that Claude Code is authenticated in the container".to_string(),
                                 AiAgentProvider::Cursor => "Agent step failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli".to_string(),
-                                // Phase 1: Codex / OpenCode adapters land in Phase 4.
-                                AiAgentProvider::Codex | AiAgentProvider::OpenCode => format!(
-                                    "Provider \"{}\" is not yet implemented (Phase 4). Switch to claude or cursor in [agent] provider.",
-                                    ai_stream_provider.as_str()
-                                ),
+                                AiAgentProvider::Codex => "Agent step failed — check Codex (`codex login --with-api-key` or OPENAI_API_KEY) and agent.providers.codex.model".to_string(),
+                                AiAgentProvider::OpenCode => "Agent step failed — check OpenCode (`opencode auth login` or a project opencode.json) and agent.providers.opencode.model".to_string(),
                             };
                             return Err(MaestroError::AiAgent(msg));
                         }

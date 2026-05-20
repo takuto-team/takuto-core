@@ -10,9 +10,11 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use maestro_core::claude::session::ClaudeSession;
+use maestro_core::codex::CodexSession;
 use maestro_core::config::{AiAgentProvider, TicketingSystem, cursor_model_for_cli};
 use maestro_core::container::ContainerRunner;
 use maestro_core::cursor::session::CursorSession;
+use maestro_core::opencode::OpenCodeSession;
 use maestro_core::jira::client::JiraClient;
 
 use crate::auth::AuthenticatedUser;
@@ -101,7 +103,16 @@ async fn run_description_session(
     system_prompt: Option<&str>,
 ) -> Result<String, (StatusCode, String)> {
     // Snapshot the config fields we need before any await point.
-    let (provider, model, cursor_cli, cursor_model, improve_timeout, worker_image) = {
+    let (
+        provider,
+        model,
+        cursor_cli,
+        cursor_model,
+        codex_model,
+        opencode_model,
+        improve_timeout,
+        worker_image,
+    ) = {
         let cfg = state.config.read().await;
         (
             cfg.agent.provider,
@@ -114,6 +125,22 @@ async fn run_description_session(
             cfg.agent.effective_claude_model().map(str::to_string),
             cfg.agent.cursor_cli.clone(),
             cfg.agent.cursor_model.clone(),
+            {
+                let m = cfg.agent.providers.codex.model.trim();
+                if m.is_empty() {
+                    None
+                } else {
+                    Some(m.to_string())
+                }
+            },
+            {
+                let m = cfg.agent.providers.opencode.model.trim();
+                if m.is_empty() {
+                    None
+                } else {
+                    Some(m.to_string())
+                }
+            },
             cfg.agent.improve_timeout_secs,
             cfg.general.worker_image.clone(),
         )
@@ -261,17 +288,35 @@ async fn run_description_session(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             (sess.session_id, sess.output)
         }
-        // Phase 1 (04_architecture.md §12 Phase 4): Codex / OpenCode adapters
-        // are config-only placeholders. Improve/Prompt sessions refuse to run
-        // with a clear error so the dashboard shows a recoverable banner.
-        AiAgentProvider::Codex | AiAgentProvider::OpenCode => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!(
-                    "Provider \"{}\" is not yet implemented (Phase 4). Switch to claude or cursor in [agent] provider.",
-                    provider.as_str()
-                ),
-            ));
+        AiAgentProvider::Codex => {
+            let sess = CodexSession::run_prompt(
+                &worktree,
+                prompt,
+                cancel,
+                improve_timeout,
+                None, // line_tx
+                codex_model.as_deref(),
+                resume_id.as_deref(),
+                container_runner.as_ref(),
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            (sess.session_id, sess.output)
+        }
+        AiAgentProvider::OpenCode => {
+            let sess = OpenCodeSession::run_prompt(
+                &worktree,
+                prompt,
+                cancel,
+                improve_timeout,
+                None, // line_tx
+                opencode_model.as_deref(),
+                resume_id.as_deref(),
+                container_runner.as_ref(),
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            (sess.session_id, sess.output)
         }
     };
 

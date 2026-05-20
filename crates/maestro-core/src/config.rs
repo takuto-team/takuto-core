@@ -11,10 +11,9 @@ use crate::error::{MaestroError, Result};
 
 /// Which CLI implements ticket implementation / review / fix steps.
 ///
-/// Phase 1 (04_architecture.md §0 D1, A1, A2): four native adapters in v1.
-/// `Claude` and `Cursor` are wired today; `Codex` and `OpenCode` are enum
-/// placeholders only — workflow execution against them fails with a clear
-/// "not yet implemented (Phase 4)" error.
+/// Per 04_architecture.md §0 D1 / A1 / A2: four native adapters in v1.
+/// All four (Claude, Cursor, Codex, OpenCode) are wired as of Phase 4.
+/// The LM Studio recipe is anchored under OpenCode (A2).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AiAgentProvider {
@@ -49,10 +48,17 @@ impl AiAgentProvider {
         }
     }
 
-    /// `true` for providers whose runtime adapter is wired in v1. `Codex` and
-    /// `OpenCode` are config-only until Phase 4.
+    /// `true` for providers whose runtime adapter is wired. All four v1
+    /// providers (Claude, Cursor, Codex, OpenCode) are implemented as of
+    /// Phase 4.
     pub fn is_runtime_implemented(self) -> bool {
-        matches!(self, AiAgentProvider::Claude | AiAgentProvider::Cursor)
+        matches!(
+            self,
+            AiAgentProvider::Claude
+                | AiAgentProvider::Cursor
+                | AiAgentProvider::Codex
+                | AiAgentProvider::OpenCode
+        )
     }
 }
 
@@ -2241,11 +2247,12 @@ step_timeout_secs = 600
     }
 
     #[test]
-    fn ai_agent_provider_runtime_implemented_only_for_claude_cursor() {
+    fn ai_agent_provider_runtime_implemented_for_all_four_v1_providers() {
+        // Phase 4 wired codex + opencode adapters alongside claude + cursor.
         assert!(AiAgentProvider::Claude.is_runtime_implemented());
         assert!(AiAgentProvider::Cursor.is_runtime_implemented());
-        assert!(!AiAgentProvider::Codex.is_runtime_implemented());
-        assert!(!AiAgentProvider::OpenCode.is_runtime_implemented());
+        assert!(AiAgentProvider::Codex.is_runtime_implemented());
+        assert!(AiAgentProvider::OpenCode.is_runtime_implemented());
     }
 
     #[test]

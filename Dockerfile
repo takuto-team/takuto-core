@@ -185,29 +185,16 @@ RUN npm install -g @anthropic-ai/claude-code@latest
 RUN npm install -g @openai/codex
 
 # Task #48: bake opencode CLI (`[agent] provider = "opencode"`). Same
-# rationale as codex — Phase 4 adapter pending; bake the binary now.
-# Upstream ships an arch-aware musl-static tarball under
-# `sst/opencode/releases/latest/download/opencode-linux-<arch>.zip`. Build
-# is non-fatal: failure logs a WARN, doesn't fail the image build.
-RUN ARCH="$(dpkg --print-architecture)"; \
-    case "$ARCH" in \
-      amd64) OC_ARCH=x64 ;; \
-      arm64) OC_ARCH=arm64 ;; \
-      *)     OC_ARCH="" ;; \
-    esac; \
-    if [ -n "$OC_ARCH" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends unzip ca-certificates \
-      && curl -fSL --retry 3 --retry-delay 5 \
-         "https://github.com/sst/opencode/releases/latest/download/opencode-linux-${OC_ARCH}.zip" \
-         -o /tmp/opencode.zip \
-      && unzip -q /tmp/opencode.zip -d /tmp/opencode \
-      && install -m 0755 /tmp/opencode/opencode /usr/local/bin/opencode \
-      && rm -rf /tmp/opencode /tmp/opencode.zip /var/lib/apt/lists/* \
-      && opencode --version \
-      || echo "WARN: opencode install failed — opencode workflows will fail at spawn (re-run image build to retry)"; \
-    else \
-      echo "WARN: opencode prebuilt binary not available for $ARCH — skipping"; \
-    fi
+# rationale as codex — Phase 4 adapter landing now.
+#
+# Canonical distribution is the `opencode-ai` npm package (NOT `opencode`,
+# which is a different project on npm). The earlier "download a GitHub
+# release zip" approach pointed at a non-existent
+# `opencode-linux-<arch>.zip` asset and silently swallowed the failure —
+# every image left `/usr/local/bin/opencode` missing. npm is already
+# available from the Node install above.
+RUN npm install -g opencode-ai@latest \
+    && opencode --version
 
 # Cursor Agent CLI (for [agent] provider = "cursor"). The launcher resolves paths with realpath("$0");
 # copying only the script to /usr/local/bin breaks it (looks for index.js next to the copy). Install the

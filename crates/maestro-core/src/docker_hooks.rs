@@ -333,8 +333,8 @@ pub struct GitHubStatus {
 /// Provider integration state for the active AI agent (`[agent] provider`).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProviderStatus {
-    /// `"claude" | "cursor" | "codex" | "opencode" | "none"`. Only `claude` and
-    /// `cursor` are wired in v0; the other values are reserved for Phase 4.
+    /// `"claude" | "cursor" | "codex" | "opencode" | "none"`. All four
+    /// non-none values have runtime adapters as of Phase 4.
     pub selected: String,
     /// `true` when a deployment-wide env-var credential is present
     /// (`CLAUDE_CODE_OAUTH_TOKEN` / `CURSOR_API_KEY`).
@@ -673,49 +673,39 @@ pub fn collect_system_status_with_db(
                 }
             }
         }
-        // Phase 1 (04_architecture.md §0 D1, §12 Phase 4): Codex and OpenCode
-        // are config-only placeholders in v1. The adapter wiring lands in
-        // Phase 4. Until then, selecting one of these providers surfaces a
-        // critical warning so the dashboard renders "Coming in Phase 4" copy
-        // and the runtime refuses to spawn sessions.
-        AiAgentProvider::Codex => {
-            warnings.push(StructuredWarning::critical(
-                "provider_not_implemented",
-                "Provider \"codex\" is configured but the adapter is not yet wired (Phase 4). Workflows will fail until the adapter ships.",
-            ));
-            ProviderStatus {
-                selected: "codex".to_string(),
-                deployment_default_credential_present: false,
-                headless_capable: false,
-                custom_base_url: {
-                    let url = config.agent.providers.codex.base_url.trim();
-                    if url.is_empty() {
-                        None
-                    } else {
-                        Some(url.to_string())
-                    }
-                },
-            }
-        }
-        AiAgentProvider::OpenCode => {
-            warnings.push(StructuredWarning::critical(
-                "provider_not_implemented",
-                "Provider \"opencode\" is configured but the adapter is not yet wired (Phase 4). Workflows will fail until the adapter ships.",
-            ));
-            ProviderStatus {
-                selected: "opencode".to_string(),
-                deployment_default_credential_present: false,
-                headless_capable: false,
-                custom_base_url: {
-                    let url = config.agent.providers.opencode.base_url.trim();
-                    if url.is_empty() {
-                        None
-                    } else {
-                        Some(url.to_string())
-                    }
-                },
-            }
-        }
+        // Phase 4: Codex and OpenCode have full adapters. The headless_capable
+        // flag mirrors claude/cursor — true when there's a CLI binary on PATH
+        // in the worker image (both are baked into the maestro image today).
+        AiAgentProvider::Codex => ProviderStatus {
+            selected: "codex".to_string(),
+            deployment_default_credential_present: !std::env::var("OPENAI_API_KEY")
+                .unwrap_or_default()
+                .is_empty(),
+            headless_capable: true,
+            custom_base_url: {
+                let url = config.agent.providers.codex.base_url.trim();
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(url.to_string())
+                }
+            },
+        },
+        AiAgentProvider::OpenCode => ProviderStatus {
+            selected: "opencode".to_string(),
+            deployment_default_credential_present: !std::env::var("ANTHROPIC_API_KEY")
+                .unwrap_or_default()
+                .is_empty(),
+            headless_capable: true,
+            custom_base_url: {
+                let url = config.agent.providers.opencode.base_url.trim();
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(url.to_string())
+                }
+            },
+        },
     };
 
     SystemStatus {

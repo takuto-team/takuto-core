@@ -18,8 +18,8 @@
  *     `MyCredentialsSection.test.tsx`.
  *   - A3: per-user toggle is **"Attribute commits to me"** — NOT
  *     "Sign commits". v1 does NOT do GPG/SSH signing. Regression-guarded.
- *   - Codex / OpenCode adapters ship in Phase 4 — their cards are grey,
- *     read-only "Coming in Phase 4" boxes.
+ *   - All four v1 adapters (Claude, Cursor, Codex, OpenCode) are wired as
+ *     of Phase 4. Each renders a paste-an-API-key card.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -45,9 +45,6 @@ import type {
   UserCredentialsStatus,
 } from "../api/types";
 import { parseClaudeSessionBlob } from "../utils/claudeSession";
-
-/** Providers Phase 4 will ship; their card is read-only for Phase 2. */
-const PHASE_4_PROVIDERS: ReadonlySet<string> = new Set(["codex", "opencode"]);
 
 const PROVIDER_LABEL: Record<string, string> = {
   claude: "Claude",
@@ -271,7 +268,6 @@ export function AiCredentialPanel({
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [claudeTab, setClaudeTab] = useState<ClaudeAuthMethod>("api_key");
 
-  const isPhase4 = PHASE_4_PROVIDERS.has(activeProvider);
   const isClaude = activeProvider === "claude";
 
   // Wire-format note: the GET response now carries a bundle (api_key +
@@ -354,15 +350,7 @@ export function AiCredentialPanel({
         />
       </div>
 
-      {isPhase4 ? (
-        <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-4 text-sm text-gray-400">
-          <p>
-            <strong className="text-gray-200">Coming in Phase 4</strong> —{" "}
-            {label}'s adapter ships alongside the multi-provider stream parser.
-            You'll be able to paste a key here once that lands.
-          </p>
-        </div>
-      ) : isClaude ? (
+      {isClaude ? (
         <>
           {/* #40: Claude is the only provider that accepts cli_state today.
               Render an "Auth method" segmented control so users on Claude
@@ -587,8 +575,9 @@ function providerHelper(
     case "claude":
       return "For direct Anthropic API or proxies that accept the same API key format. If you're on Pro/Team and your local `claude` uses `/login`, use 'Claude Code session' instead.";
     case "codex":
+      return "OpenAI API key (sk-…). The Codex CLI reads OPENAI_API_KEY from the worker environment — Maestro bridges this from the value you paste here.";
     case "opencode":
-      return "Phase 4 ships the adapter.";
+      return "OpenCode credential (anthropic-style key or any provider key — depends on which provider you've configured in [agent.providers.opencode]). Note: opencode does NOT auto-read env vars; admin must configure a provider in opencode.json.";
     default:
       return "Paste the API key issued by your provider.";
   }

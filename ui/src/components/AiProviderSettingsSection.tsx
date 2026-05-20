@@ -52,12 +52,6 @@ const PROVIDER_LABEL: Record<AgentProviderId, string> = {
   none: "None",
 };
 
-/** Phase 4 lands the actual adapter for these — warn the admin until then. */
-const PHASE_4_PROVIDERS: ReadonlySet<AgentProviderId> = new Set<AgentProviderId>([
-  "codex",
-  "opencode",
-]);
-
 /**
  * Per-provider draft state. We carry every field so the form can render the
  * union (cursor.cli, codex.provider_name) without juggling discriminants in
@@ -330,7 +324,6 @@ export function ProviderForm({
   saving,
 }: ProviderFormProps) {
   const cursorBaseUrlDisabled = selectedProvider === "cursor";
-  const phase4Warning = PHASE_4_PROVIDERS.has(selectedProvider);
 
   // Tiny helper to avoid spreading the same `onDraftChange({ ...draft, k })`
   // boilerplate at every <input>.
@@ -356,12 +349,6 @@ export function ProviderForm({
             </option>
           ))}
         </select>
-        {phase4Warning && (
-          <p className="text-xs text-amber-300/90">
-            Provider implementation lands in Phase 4 — saving the config is
-            allowed, but workflows won't start until the adapter ships.
-          </p>
-        )}
       </section>
 
       {/* Model */}
