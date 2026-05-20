@@ -263,6 +263,8 @@ pub(super) async fn drive_workflow_def(
             &cancel_token,
             &log_writer,
             &agent_run_semaphore,
+            db.as_ref(),
+            git_auth_resolver.as_ref(),
         )
         .await
     }
@@ -555,6 +557,88 @@ async fn ensure_workflow_auth_pin(
     Ok(())
 }
 
+/// Phase 2b.3 — build a [`WorkerSecretsBundle`] for the workflow and return
+/// it as an `Arc` ready to hand to [`ContainerRunner::with_secrets_bundle`].
+///
+/// Why a helper: the bundle MUST be attached to every runner that spawns an
+/// agent worker — both the bootstrap runner (mise install / worktree init)
+/// AND the agent-step runner (`run_workflow_def_steps`). When only the
+/// bootstrap runner had it, claude / cursor / codex / opencode workers were
+/// spawned without `BUNDLE_SOURCING_SH` spliced in, so the agent never
+/// exported `CLAUDE_CODE_OAUTH_TOKEN` and `~/.claude.json` never got the
+/// `oauthAccount` merge — surfacing as "Not logged in · Please run /login"
+/// even though the bundle had built successfully earlier in the workflow.
+///
+/// Returns `None` (and logs a single line at debug or warn) when the
+/// pre-Phase-2b.3 legacy `PASSTHROUGH_ENV` path is the correct fallback:
+/// no resolver, no user_id, no db, or a build failure. Callers use
+/// `if let Some(bundle) = ... { runner = runner.with_secrets_bundle(bundle); }`.
+async fn try_attach_secrets_bundle(
+    ticket_key: &str,
+    config: &Arc<RwLock<Config>>,
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    db: Option<&Database>,
+    git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
+) -> Option<Arc<crate::auth::WorkerSecretsBundle>> {
+    let user_id: Option<String> = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).and_then(|w| w.user_id.clone())
+    };
+    let (resolver, uid, db_handle) = match (git_auth_resolver, user_id.as_deref(), db) {
+        (Some(r), Some(u), Some(d)) => (r, u, d),
+        _ => {
+            tracing::debug!(
+                ticket = %ticket_key,
+                has_resolver = git_auth_resolver.is_some(),
+                has_user = user_id.is_some(),
+                has_db = db.is_some(),
+                "Phase 2b.3 bundle path skipped — using legacy PASSTHROUGH_ENV"
+            );
+            return None;
+        }
+    };
+
+    // `ensure_workflow_auth_pin` is idempotent — the fast path returns
+    // immediately when the pin already exists (bootstrap usually writes it
+    // first). The agent-step call is a no-op in steady state.
+    if let Err(e) = ensure_workflow_auth_pin(ticket_key, config, db_handle, workflows, uid).await {
+        warn!(
+            ticket = %ticket_key,
+            user_id = %uid,
+            error = %e,
+            "auth pin failed — falling back to legacy PASSTHROUGH_ENV path"
+        );
+        return None;
+    }
+
+    let pin = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).and_then(|w| w.auth_pin.clone())
+    }?;
+
+    let cfg_snapshot = config.read().await.clone();
+    match crate::auth::bundle::build(&cfg_snapshot, db_handle, resolver, &pin, uid).await {
+        Ok(bundle) => {
+            info!(
+                ticket = %ticket_key,
+                user_id = %uid,
+                provider = %pin.provider,
+                "Worker secrets bundle attached (Phase 2b.3 path active)"
+            );
+            Some(Arc::new(bundle))
+        }
+        Err(e) => {
+            warn!(
+                ticket = %ticket_key,
+                user_id = %uid,
+                error = %e,
+                "build worker secrets bundle failed — falling back to legacy PASSTHROUGH_ENV path"
+            );
+            None
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn bootstrap_new_workflow(
     ticket_key: &str,
@@ -844,84 +928,12 @@ pub(super) async fn bootstrap_new_workflow(
 
         // Phase 2b.3: pin credentials + attach the per-workflow secrets
         // bundle so the worker entrypoint reads tokens from tmpfs files
-        // instead of `docker run -e` strings.
-        //
-        // Skip the bundle path when:
-        //   - the resolver was never attached to the engine (legacy
-        //     single-tenant / poller flows), OR
-        //   - the workflow has no `user_id` (legacy snapshots).
-        // In both cases the legacy `PASSTHROUGH_ENV` forwarding stays
-        // active so existing flows keep working.
-        let user_id: Option<String> = {
-            let wf = workflows.read().await;
-            wf.get(ticket_key).and_then(|w| w.user_id.clone())
-        };
-        match (git_auth_resolver, user_id.as_deref(), db) {
-            (Some(resolver), Some(uid), Some(db_handle)) => {
-                // Capture or refresh the workflow's auth pin.
-                if let Err(e) = ensure_workflow_auth_pin(
-                    ticket_key,
-                    config,
-                    db_handle,
-                    workflows,
-                    uid,
-                )
-                .await
-                {
-                    warn!(
-                        ticket = %ticket_key,
-                        user_id = %uid,
-                        error = %e,
-                        "auth pin failed — falling back to legacy PASSTHROUGH_ENV path"
-                    );
-                } else {
-                    // Read the pin we just wrote (or that was already there
-                    // from a previous bootstrap call).
-                    let pin = {
-                        let wf = workflows.read().await;
-                        wf.get(ticket_key).and_then(|w| w.auth_pin.clone())
-                    };
-                    if let Some(pin) = pin {
-                        let cfg_snapshot = config.read().await.clone();
-                        match crate::auth::bundle::build(
-                            &cfg_snapshot,
-                            db_handle,
-                            resolver,
-                            &pin,
-                            uid,
-                        )
-                        .await
-                        {
-                            Ok(bundle) => {
-                                info!(
-                                    ticket = %ticket_key,
-                                    user_id = %uid,
-                                    provider = %pin.provider,
-                                    "Worker secrets bundle attached (Phase 2b.3 path active)"
-                                );
-                                runner = runner.with_secrets_bundle(Arc::new(bundle));
-                            }
-                            Err(e) => {
-                                warn!(
-                                    ticket = %ticket_key,
-                                    user_id = %uid,
-                                    error = %e,
-                                    "build worker secrets bundle failed — falling back to legacy PASSTHROUGH_ENV path"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {
-                tracing::debug!(
-                    ticket = %ticket_key,
-                    has_resolver = git_auth_resolver.is_some(),
-                    has_user = user_id.is_some(),
-                    has_db = db.is_some(),
-                    "Phase 2b.3 bundle path skipped — using legacy PASSTHROUGH_ENV"
-                );
-            }
+        // instead of `docker run -e` strings. Skip / fallback handling
+        // lives in `try_attach_secrets_bundle`.
+        if let Some(bundle) =
+            try_attach_secrets_bundle(ticket_key, config, workflows, db, git_auth_resolver).await
+        {
+            runner = runner.with_secrets_bundle(bundle);
         }
 
         Some(runner)
@@ -1160,6 +1172,13 @@ pub(super) async fn run_workflow_def_steps(
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
     agent_run_semaphore: &Arc<Semaphore>,
+    // Phase 2b.3 — passed through so the agent-step runner can rebuild a
+    // fresh `WorkerSecretsBundle`. `None` preserves the legacy
+    // `PASSTHROUGH_ENV` path. The pin is already on the workflow at this
+    // point (bootstrap wrote it); the rebuild is idempotent in the sense
+    // that it re-unseals the same DB rows the pin references.
+    db: Option<&Database>,
+    git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
 ) -> Result<()> {
     let ticket = crate::jira::client::JiraTicket {
         key: ticket_key.to_string(),
@@ -1209,8 +1228,20 @@ pub(super) async fn run_workflow_def_steps(
             drop(cfg);
             img
         };
-        let runner =
+        let mut runner =
             ContainerRunner::new(ticket_key, worktree_path, &image).with_isolate_workspace();
+        // Phase 2b.3 (regression fix): the bootstrap runner gets a bundle
+        // attached but it goes out of scope when bootstrap returns. The
+        // *agent-step* runner constructed here is what actually spawns
+        // claude / cursor / codex / opencode, so it needs its own bundle
+        // — without it, `wrap_command` doesn't splice `BUNDLE_SOURCING_SH`
+        // and the agent CLI sees no `CLAUDE_CODE_OAUTH_TOKEN` /
+        // merged `.claude.json`, surfacing as "Not logged in".
+        if let Some(bundle) =
+            try_attach_secrets_bundle(ticket_key, config, workflows, db, git_auth_resolver).await
+        {
+            runner = runner.with_secrets_bundle(bundle);
+        }
         Some(runner)
     } else {
         return Err(MaestroError::Config(
