@@ -21,7 +21,10 @@ use crate::error::Result;
 pub enum CredentialAuditKind {
     AiProvider,
     GithubPat,
-    /// Reserved — Phase 3+ may add per-session ttyd state under this kind.
+    /// Reserved variant (carry-over from the original Cursor ttyd-capture
+    /// design that amendment A1 cancelled). Never written by current code.
+    /// Kept in the enum so any historical rows in pre-A1 databases still
+    /// deserialise cleanly; deleting would require a schema migration.
     CursorSession,
 }
 
