@@ -2,7 +2,11 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Phase 2 per-user credential surface — `/me/credentials`.
+ * Per-user credentials section — visible to every authenticated user.
+ *
+ * Lives inside the consolidated "AI Settings" tab on /config.html. Manages
+ * the caller's own AI provider credential (api_key + optional Claude
+ * cli_state) and their GitHub PAT.
  *
  * Source of truth: tmp/multi-agents/05_ux_design.md §2.2 (AI auth panel) +
  * §2.3 (GitHub auth panel) + 04_architecture.md §3 + §4.4.
@@ -11,7 +15,7 @@
  *   - A1: Cursor is **API-key only**. No ttyd capture, no CLI-state path.
  *     The Cursor card MUST NOT mention ttyd, "device login", "interactive
  *     terminal", or any browser-flow vocabulary. Regression-guarded in
- *     `UserCredentials.test.tsx`.
+ *     `MyCredentialsSection.test.tsx`.
  *   - A3: per-user toggle is **"Attribute commits to me"** — NOT
  *     "Sign commits". v1 does NOT do GPG/SSH signing. Regression-guarded.
  *   - Codex / OpenCode adapters ship in Phase 4 — their cards are grey,
@@ -19,7 +23,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   apiJson,
   // deleteGithubPat / deleteProviderCredential intentionally NOT imported —
@@ -32,8 +35,8 @@ import {
   setProviderCredential,
   UserCredentialsError,
 } from "../api/client";
-import { ConnectedStatusPill } from "../components/ConnectedStatusPill";
-import { CredentialPasteField } from "../components/CredentialPasteField";
+import { ConnectedStatusPill } from "./ConnectedStatusPill";
+import { CredentialPasteField } from "./CredentialPasteField";
 import { useToast } from "../hooks/useToast";
 import type {
   AuthStatus,
@@ -42,11 +45,6 @@ import type {
   UserCredentialsStatus,
 } from "../api/types";
 import { parseClaudeSessionBlob } from "../utils/claudeSession";
-
-interface Props {
-  onLogout: () => void;
-  authEnabled: boolean;
-}
 
 /** Providers Phase 4 will ship; their card is read-only for Phase 2. */
 const PHASE_4_PROVIDERS: ReadonlySet<string> = new Set(["codex", "opencode"]);
@@ -59,7 +57,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   gemini: "Gemini",
 };
 
-export function UserCredentials({ onLogout, authEnabled }: Props) {
+export function MyCredentialsSection() {
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -69,15 +67,13 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
   //
   // **Root cause of #31 issue C:** the previous `refresh()` set
   // `loading=true` for the *post-save* refetch as well, which unmounted the
-  // entire credential panel (it's behind `{!loading && <Panel/>}`). When
-  // the panel remounted with the fresh `credentials` prop, its local
-  // `apiKey`/`saving` state was reset, the toast had ALREADY fired during
-  // the loading window, and React's commit/batch ordering left the user
-  // looking at a freshly-mounted panel whose pill *was* "Connected" but
-  // whose perceived experience was: "I pressed Save, the page blanked, the
-  // pill is back to Not connected (until I refresh)." On slow networks the
-  // unmount window also collapsed back to the empty-state branch before
-  // remounting, which produced exactly the symptom the user reported.
+  // entire credential panel. When the panel remounted with the fresh
+  // `credentials` prop, its local `apiKey`/`saving` state was reset, the
+  // toast had ALREADY fired during the loading window, and React's
+  // commit/batch ordering left the user looking at a freshly-mounted panel
+  // whose pill *was* "Connected" but whose perceived experience was: "I
+  // pressed Save, the page blanked, the pill is back to Not connected
+  // (until I refresh)."
   //
   // The fix is structural — don't ever unmount the panel during a save.
   // The save handler stays linear: POST → await background refetch → toast.
@@ -101,7 +97,7 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
   }, []);
 
   // Initial mount: refetch, then flip `initialLoading` once. After this
-  // the panels are mounted for the lifetime of the page; save handlers
+  // the panels are mounted for the lifetime of the section; save handlers
   // call `refresh()` directly without touching `initialLoading`.
   useEffect(() => {
     let mounted = true;
@@ -149,117 +145,103 @@ export function UserCredentials({ onLogout, authEnabled }: Props) {
   );
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-14">
-            <Link
-              to="/"
-              className="flex items-center gap-2 text-gray-400 hover:text-gray-200 transition-colors text-sm"
+    <section
+      aria-labelledby="my-credentials-section-title"
+      className="flex flex-col gap-3"
+    >
+      <h2
+        id="my-credentials-section-title"
+        className="text-lg font-semibold text-white"
+      >
+        My credentials
+      </h2>
+      <p className="text-xs text-gray-500">
+        Your personal AI provider and GitHub tokens. Stored encrypted per-user;
+        workflows you start use these instead of the deployment default.
+      </p>
+
+      {initialLoading && <p className="text-sm text-gray-500">Loading…</p>}
+      {!initialLoading && loadError && (
+        <p className="text-sm text-red-400">{loadError}</p>
+      )}
+
+      {!initialLoading && (
+        <div className="flex flex-col gap-6">
+          {showProviderMismatch && (
+            <div
+              role="alert"
+              className="bg-amber-950/40 border border-amber-700/50 rounded-lg p-3 text-xs text-amber-200"
             >
-              &larr; Dashboard
-            </Link>
-            <span className="text-lg font-bold text-white">My credentials</span>
-            {authEnabled && (
-              <button
-                onClick={onLogout}
-                className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer"
-              >
-                Log out
-              </button>
-            )}
-          </div>
+              Your admin switched the AI provider to{" "}
+              <strong>{PROVIDER_LABEL[adminProvider!] ?? adminProvider}</strong>
+              . Your <strong>{PROVIDER_LABEL[userProvider!] ?? userProvider}</strong>{" "}
+              credential is paused — connect the new provider below to keep
+              running workflows.
+            </div>
+          )}
+
+          <AiCredentialPanel
+            activeProvider={activeProvider}
+            credentials={creds}
+            onSave={async (body) => {
+              try {
+                // Task #40: body is the discriminated request shape
+                // (`{ api_key }` or `{ kind: "cli_state",
+                // claude_session_json }`). The panel constructs the right
+                // body based on the active tab.
+                await setProviderCredential(activeProvider, body);
+                // Refresh the server state BEFORE toasting "connected" so
+                // the pill flips at the same instant the user sees the
+                // success message. `refresh()` no longer toggles the
+                // page-level loading flag, so the panel stays mounted.
+                await refresh();
+                const providerLabel =
+                  PROVIDER_LABEL[activeProvider] ?? activeProvider;
+                const what =
+                  body.kind === "cli_state"
+                    ? "session uploaded"
+                    : "connected";
+                showToast(`${providerLabel} ${what}.`, "success");
+              } catch (e: unknown) {
+                handleSurfaceError(e, "Could not save your credential.");
+              }
+            }}
+          />
+
+          <GitHubCredentialPanel
+            github={creds?.github ?? null}
+            authMode={auth?.github_mode as GithubAuthMode | undefined}
+            onSavePat={async (pat, attribute) => {
+              try {
+                // Capture login from the response *before* re-fetching so we
+                // can use it in the success toast. The refresh() call
+                // refreshes both `creds.github` and `auth.github_mode` (which
+                // flips app → app_plus_pat once the PAT lands).
+                const next = await setGithubPat({
+                  pat,
+                  attribute_commits: attribute,
+                });
+                await refresh();
+                showToast(
+                  `GitHub token saved — you're @${next.github?.login ?? "?"}.`,
+                  "success",
+                );
+              } catch (e: unknown) {
+                handleSurfaceError(e, "Could not save your GitHub token.");
+              }
+            }}
+            onToggleAttributeCommits={async (attribute) => {
+              try {
+                await patchGithubSettings({ attribute_commits: attribute });
+                await refresh();
+              } catch (e: unknown) {
+                handleSurfaceError(e, "Could not update GitHub settings.");
+              }
+            }}
+          />
         </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
-        {initialLoading && (
-          <p className="text-sm text-gray-500">Loading…</p>
-        )}
-        {!initialLoading && loadError && (
-          <p className="text-sm text-red-400">{loadError}</p>
-        )}
-
-        {!initialLoading && (
-          <>
-            {showProviderMismatch && (
-              <div
-                role="alert"
-                className="bg-amber-950/40 border border-amber-700/50 rounded-lg p-3 text-xs text-amber-200"
-              >
-                Your admin switched the AI provider to{" "}
-                <strong>{PROVIDER_LABEL[adminProvider!] ?? adminProvider}</strong>
-                . Your <strong>{PROVIDER_LABEL[userProvider!] ?? userProvider}</strong>{" "}
-                credential is paused — connect the new provider below to keep
-                running workflows.
-              </div>
-            )}
-
-            <AiCredentialPanel
-              activeProvider={activeProvider}
-              credentials={creds}
-              onSave={async (body) => {
-                try {
-                  // Task #40: body is now the discriminated request shape
-                  // (`{ api_key }` or `{ kind: "cli_state",
-                  // claude_session_json }`). The panel constructs the
-                  // right body based on the active tab.
-                  await setProviderCredential(activeProvider, body);
-                  // Refresh the server state BEFORE toasting "connected" so
-                  // the pill flips at the same instant the user sees the
-                  // success message. `refresh()` no longer toggles the
-                  // page-level loading flag, so the panel stays mounted —
-                  // see the comment on `refresh` above for the root-cause
-                  // analysis (#31 issue C).
-                  await refresh();
-                  const providerLabel =
-                    PROVIDER_LABEL[activeProvider] ?? activeProvider;
-                  const what =
-                    body.kind === "cli_state"
-                      ? "session uploaded"
-                      : "connected";
-                  showToast(`${providerLabel} ${what}.`, "success");
-                } catch (e: unknown) {
-                  handleSurfaceError(e, "Could not save your credential.");
-                }
-              }}
-            />
-
-            <GitHubCredentialPanel
-              github={creds?.github ?? null}
-              authMode={auth?.github_mode as GithubAuthMode | undefined}
-              onSavePat={async (pat, attribute) => {
-                try {
-                  // Capture login from the response *before* re-fetching so
-                  // we can use it in the success toast. The refresh() call
-                  // refreshes both `creds.github` and `auth.github_mode`
-                  // (which flips app → app_plus_pat once the PAT lands).
-                  const next = await setGithubPat({
-                    pat,
-                    attribute_commits: attribute,
-                  });
-                  await refresh();
-                  showToast(
-                    `GitHub token saved — you're @${next.github?.login ?? "?"}.`,
-                    "success",
-                  );
-                } catch (e: unknown) {
-                  handleSurfaceError(e, "Could not save your GitHub token.");
-                }
-              }}
-              onToggleAttributeCommits={async (attribute) => {
-                try {
-                  await patchGithubSettings({ attribute_commits: attribute });
-                  await refresh();
-                } catch (e: unknown) {
-                  handleSurfaceError(e, "Could not update GitHub settings.");
-                }
-              }}
-            />
-          </>
-        )}
-      </main>
-    </div>
+      )}
+    </section>
   );
 }
 
@@ -275,7 +257,7 @@ interface AiCredentialPanelProps {
 
 type ClaudeAuthMethod = "api_key" | "cli_state";
 
-function AiCredentialPanel({
+export function AiCredentialPanel({
   activeProvider,
   credentials,
   onSave,
@@ -363,9 +345,9 @@ function AiCredentialPanel({
       className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-4"
     >
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 id="ai-card-title" className="text-lg font-semibold text-white">
+        <h3 id="ai-card-title" className="text-lg font-semibold text-white">
           AI provider — {label}
-        </h2>
+        </h3>
         <ConnectedStatusPill
           state={hasMatchingCredential ? "connected" : "missing"}
           label={pillLabel}
@@ -490,9 +472,9 @@ function ClaudeAuthTabButton({
 
 /**
  * `~/.claude.json` paste field — large textarea with inline help and a
- * client-side validation message slot. The Save handler runs the
- * structural check (`parseClaudeSessionBlob`) before the POST so users see
- * obvious shape problems without a round-trip.
+ * client-side validation message slot. The Save handler runs the structural
+ * check (`parseClaudeSessionBlob`) before the POST so users see obvious
+ * shape problems without a round-trip.
  */
 function ClaudeSessionField({
   value,
@@ -559,8 +541,8 @@ function ClaudeSessionField({
         <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-3 text-xs text-gray-400 space-y-2">
           <p>
             On macOS / Linux, run{" "}
-            <code className="text-gray-300">cat ~/.claude.json</code> in
-            your shell and copy the output.
+            <code className="text-gray-300">cat ~/.claude.json</code> in your
+            shell and copy the output.
           </p>
           <p>
             Maestro only needs the{" "}
@@ -623,7 +605,7 @@ interface GitHubCredentialPanelProps {
   onToggleAttributeCommits: (next: boolean) => Promise<void>;
 }
 
-function GitHubCredentialPanel({
+export function GitHubCredentialPanel({
   github,
   authMode,
   onSavePat,
@@ -673,9 +655,9 @@ function GitHubCredentialPanel({
       className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-4"
     >
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 id="gh-card-title" className="text-lg font-semibold text-white">
+        <h3 id="gh-card-title" className="text-lg font-semibold text-white">
           GitHub
-        </h2>
+        </h3>
         <ConnectedStatusPill
           state={hasPat ? "connected" : effectiveMode === "app" ? "connected" : "missing"}
           label={describeMode(effectiveMode)}
@@ -692,8 +674,8 @@ function GitHubCredentialPanel({
       {effectiveMode === "pat_only" && !hasPat && (
         <p className="text-sm text-amber-300">
           No shared GitHub App is configured. Maestro can only talk to GitHub
-          via a personal access token — without one, GitHub-touching
-          workflows won't start.
+          via a personal access token — without one, GitHub-touching workflows
+          won't start.
         </p>
       )}
       {hasPat && (
@@ -766,7 +748,6 @@ function GitHubCredentialPanel({
           </>
         }
       />
-
     </section>
   );
 }
@@ -785,7 +766,3 @@ function describeMode(mode: GithubAuthMode): string {
       return "Not connected";
   }
 }
-
-// #40 dropped the "validated X ago" label because the bundle has two
-// kinds with potentially different timestamps — the pill now shows the
-// auth-kind shape instead. The relativeTime helper was removed.

@@ -10,7 +10,10 @@ import {
   cleanup,
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { AdminAiSettings, ProviderSwitchConfirm } from "./AdminAiSettings";
+import {
+  AiProviderSettingsSection,
+  ProviderSwitchConfirm,
+} from "./AiProviderSettingsSection";
 import { ToastProvider, ToastContainer } from "../hooks/useToast";
 
 beforeEach(() => {
@@ -101,7 +104,7 @@ describe("ProviderSwitchConfirm", () => {
 // ---------------------------------------------------------------------------
 // #35 — persist_warning surfacing on PUT /api/config/agent.
 //
-// These tests drive the full AdminAiSettings page through a mocked fetch
+// These tests drive the full AiProviderSettingsSection through a mocked fetch
 // so we exercise the actual save handler and confirm the right toast
 // variant appears. ToastContainer is rendered alongside so toast DOM is
 // inspectable.
@@ -111,7 +114,7 @@ function renderAdminPage() {
   return render(
     <ToastProvider>
       <MemoryRouter>
-        <AdminAiSettings onLogout={vi.fn()} authEnabled isAdmin />
+        <AiProviderSettingsSection />
         <ToastContainer />
       </MemoryRouter>
     </ToastProvider>,
@@ -171,7 +174,7 @@ function stubConfigFetch(putResponse: unknown) {
   );
 }
 
-describe("AdminAiSettings — persist_warning surfacing (#35)", () => {
+describe("AiProviderSettingsSection — persist_warning surfacing (#35)", () => {
   it("shows an ERROR toast when the server reports persisted=false + persist_warning", async () => {
     stubConfigFetch({
       ...(baseConfig() as Record<string, unknown>),

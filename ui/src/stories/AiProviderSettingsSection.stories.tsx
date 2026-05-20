@@ -9,12 +9,12 @@ import {
   ProviderForm,
   ProviderSwitchConfirm,
   type ProviderDraft,
-} from "../pages/AdminAiSettings";
+} from "../components/AiProviderSettingsSection";
 import { ToastProvider } from "../hooks/useToast";
 import type { AgentProviderId } from "../api/types";
 
 const meta = {
-  title: "Pages/AdminAiSettings",
+  title: "Components/AiProviderSettingsSection",
   parameters: {
     layout: "fullscreen",
     backgrounds: {

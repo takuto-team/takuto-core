@@ -27,7 +27,7 @@ import {
   fireEvent,
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { UserCredentials } from "./UserCredentials";
+import { MyCredentialsSection } from "./MyCredentialsSection";
 import { ToastProvider } from "../hooks/useToast";
 import {
   clearMocksOverride,
@@ -40,7 +40,7 @@ function renderPage() {
   return render(
     <ToastProvider>
       <MemoryRouter>
-        <UserCredentials onLogout={vi.fn()} authEnabled />
+        <MyCredentialsSection />
       </MemoryRouter>
     </ToastProvider>,
   );
@@ -100,7 +100,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("UserCredentials — A1 regression (Cursor is API-key only)", () => {
+describe("MyCredentialsSection — A1 regression (Cursor is API-key only)", () => {
   it("Cursor card shows the API-key copy AND never mentions ttyd / browser flows", async () => {
     stubAuthStatus("cursor");
     renderPage();
@@ -131,7 +131,7 @@ describe("UserCredentials — A1 regression (Cursor is API-key only)", () => {
   });
 });
 
-describe("UserCredentials — wire-format regression (#28)", () => {
+describe("MyCredentialsSection — wire-format regression (#28)", () => {
   it("renders the ✅ Connected pill when the server returns { provider, active } (the real wire shape)", async () => {
     stubAuthStatus("claude");
     // Hard-coded from `routes/credentials.rs::ProviderCredentialBundle` so a
@@ -200,7 +200,7 @@ describe("UserCredentials — wire-format regression (#28)", () => {
   });
 });
 
-describe("UserCredentials — wire-format regression #29 (GitHub side)", () => {
+describe("MyCredentialsSection — wire-format regression #29 (GitHub side)", () => {
   it("renders 'Connected' on the GitHub card when github = { login, scopes, attribute_commits, last_validated_at } (real wire shape)", async () => {
     stubAuthStatus("claude", "app_plus_pat");
     // Hard-coded from `routes/credentials.rs::GithubCredentialStatus` (no
@@ -265,7 +265,7 @@ describe("UserCredentials — wire-format regression #29 (GitHub side)", () => {
   });
 });
 
-describe("UserCredentials — A3 regression (Attribute commits, not Sign commits)", () => {
+describe("MyCredentialsSection — A3 regression (Attribute commits, not Sign commits)", () => {
   it("renders the toggle as 'Attribute commits to me' and never says 'Sign commits'", async () => {
     stubAuthStatus("claude", "app_plus_pat");
     resetMocks({
@@ -299,7 +299,7 @@ describe("UserCredentials — A3 regression (Attribute commits, not Sign commits
 // #31 issue A + B — Rotate / Disconnect / Remove-PAT buttons removed.
 // ---------------------------------------------------------------------------
 
-describe("UserCredentials — #31 issue A + B: no Rotate / Disconnect / Remove-PAT buttons", () => {
+describe("MyCredentialsSection — #31 issue A + B: no Rotate / Disconnect / Remove-PAT buttons", () => {
   it("AI provider card never renders Rotate or Disconnect buttons (connected state)", async () => {
     stubAuthStatus("claude");
     resetMocks({
@@ -358,7 +358,7 @@ describe("UserCredentials — #31 issue A + B: no Rotate / Disconnect / Remove-P
 // #31 issue C — pill flips synchronously on save without manual refresh.
 // ---------------------------------------------------------------------------
 
-describe("UserCredentials — #31 issue C: pill flips to Connected synchronously on save", () => {
+describe("MyCredentialsSection — #31 issue C: pill flips to Connected synchronously on save", () => {
   it("after a successful POST + refresh, the pill renders 'Connected' WITHOUT a manual page refresh", async () => {
     stubAuthStatus("claude");
     // Start with NO credential — pill should be "Not connected".
@@ -428,7 +428,7 @@ describe("UserCredentials — #31 issue C: pill flips to Connected synchronously
 // #40 — Claude "Auth method" selector + bundle wire shape.
 // ---------------------------------------------------------------------------
 
-describe("UserCredentials — #40 Claude auth-method selector", () => {
+describe("MyCredentialsSection — #40 Claude auth-method selector", () => {
   it("T-CLAUDE-UI-001 — selector is visible on the Claude card", async () => {
     stubAuthStatus("claude");
     resetMocks({ provider: null, github: null });

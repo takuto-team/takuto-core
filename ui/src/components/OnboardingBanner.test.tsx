@@ -69,7 +69,7 @@ describe.each([
   ["opencode_not_authenticated", "Set OpenCode credential"],
   ["gh_auth_missing", "Set GitHub PAT"],
 ])("OnboardingBanner — %s deep-link", (code, expectedLabel) => {
-  it(`renders a /me/credentials Link labelled "${expectedLabel}"`, () => {
+  it(`renders a /config.html?tab=ai Link labelled "${expectedLabel}"`, () => {
     renderBanner(
       statusWith([
         {
@@ -84,7 +84,7 @@ describe.each([
     }) as HTMLAnchorElement;
     expect(link).toBeTruthy();
     // Use endsWith because the rendered href is absolute under jsdom.
-    expect(link.getAttribute("href")).toBe("/me/credentials");
+    expect(link.getAttribute("href")).toBe("/config.html?tab=ai");
     expect(link.getAttribute("target")).toBeNull(); // internal — not new tab
   });
 
@@ -112,10 +112,10 @@ describe("OnboardingBanner — provider_not_implemented (admin-only)", () => {
     message: "Codex adapter ships in Phase 4.",
   };
 
-  it("shows a /admin/ai 'Change provider' link for admins", () => {
+  it("shows a /config.html?tab=ai 'Change provider' link for admins", () => {
     renderBanner(statusWith([warning]), { isAdmin: true });
     const link = screen.getByRole("link", { name: /change provider/i }) as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe("/admin/ai");
+    expect(link.getAttribute("href")).toBe("/config.html?tab=ai");
   });
 
   it("renders the greyed 'Ask your admin' hint for non-admins, with NO link", () => {
@@ -186,7 +186,7 @@ describe("OnboardingBanner — unknown code", () => {
 // ---------------------------------------------------------------------------
 
 describe("OnboardingBanner — multiple warnings", () => {
-  it("renders one link per warning even when they share /me/credentials", () => {
+  it("renders one link per warning even when they share /config.html?tab=ai", () => {
     renderBanner(
       statusWith([
         {

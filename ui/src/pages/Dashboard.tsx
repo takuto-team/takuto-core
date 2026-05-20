@@ -328,7 +328,6 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         repos={myRepos ?? []}
         activeRepoName={activeRepoName}
         onSelectRepo={setActiveRepoName}
-        isAdmin={isAdmin}
       />
 
       {/* Onboarding / preflight banner — driven by /api/onboarding/status with

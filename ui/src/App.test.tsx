@@ -5,8 +5,10 @@
  * Route-level guard tests for the #34 follow-up — admin-gated routes must
  * NOT bounce the user during the auth-loading window. The unit-level
  * `useAuth` race fix lives in `hooks/useAuth.test.ts`; this file exercises
- * the `<RequireAdmin>` guard that wraps `/admin/ai` (and any future
- * sibling admin route).
+ * the `<RequireAdmin>` guard, which today is unused by App.tsx (the
+ * /admin/ai page was folded into a tab in /config.html) but is kept
+ * exported for future admin-only routes. The tests still exercise the
+ * loading-vs-redirect logic — the example URL is illustrative.
  */
 
 import { describe, it, expect, afterEach } from "vitest";

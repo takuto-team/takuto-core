@@ -459,10 +459,10 @@ function CredentialsStep() {
         until you connect your own.
       </p>
       <Link
-        to="/me/credentials"
+        to="/config.html?tab=ai"
         className="inline-block mt-3 text-sm text-blue-400 hover:text-blue-300"
       >
-        Open My credentials →
+        Open AI Settings →
       </Link>
     </div>
   );

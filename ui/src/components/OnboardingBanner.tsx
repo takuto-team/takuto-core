@@ -49,37 +49,37 @@ type CtaSpec =
 const CTA_BY_CODE: Record<string, CtaSpec> = {
   claude_not_authenticated: {
     kind: "internal",
-    to: "/me/credentials",
+    to: "/config.html?tab=ai",
     label: "Set Claude credential",
     adminOnly: false,
   },
   cursor_not_authenticated: {
     kind: "internal",
-    to: "/me/credentials",
+    to: "/config.html?tab=ai",
     label: "Set Cursor credential",
     adminOnly: false,
   },
   codex_not_authenticated: {
     kind: "internal",
-    to: "/me/credentials",
+    to: "/config.html?tab=ai",
     label: "Set Codex credential",
     adminOnly: false,
   },
   opencode_not_authenticated: {
     kind: "internal",
-    to: "/me/credentials",
+    to: "/config.html?tab=ai",
     label: "Set OpenCode credential",
     adminOnly: false,
   },
   gh_auth_missing: {
     kind: "internal",
-    to: "/me/credentials",
+    to: "/config.html?tab=ai",
     label: "Set GitHub PAT",
     adminOnly: false,
   },
   provider_not_implemented: {
     kind: "internal",
-    to: "/admin/ai",
+    to: "/config.html?tab=ai",
     label: "Change provider",
     adminOnly: true,
   },
@@ -225,10 +225,13 @@ function WarningCta({
 
   // Admin-only CTAs collapse to a hint for non-admin users.
   if (spec.adminOnly && !isAdmin) {
-    // Per task: provider-switch hint copy is "Ask your admin to change the
-    // provider"; docs-link admin-only codes use the same hint pattern.
+    // Provider-switch warning gets the specific hint copy; other
+    // admin-only codes (docs links, secret-key issues) use the generic
+    // "Ask your admin to fix this". We discriminate on the warning *code*
+    // rather than the `to` URL because the URL collapsed to a shared
+    // /config.html?tab=ai destination when AI Settings was consolidated.
     const hint =
-      spec.kind === "internal" && spec.to === "/admin/ai"
+      warning.code === "provider_not_implemented"
         ? NON_ADMIN_HINT
         : "Ask your admin to fix this";
     return (

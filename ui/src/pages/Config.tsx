@@ -9,6 +9,7 @@ import { UsersTab } from "../components/UsersTab";
 import { SecurityTab } from "../components/SecurityTab";
 import { WorktreeSettingsTab } from "../components/WorktreeSettingsTab";
 import { MyRepositoriesTab } from "../components/MyRepositoriesTab";
+import { AiSettingsTab } from "../components/AiSettingsTab";
 
 interface Props {
   onLogout: () => void;
@@ -16,7 +17,13 @@ interface Props {
   isAdmin?: boolean;
 }
 
-const ALL_TABS = ["Security", "Users", "My Repositories", "Worktree Settings"] as const;
+const ALL_TABS = [
+  "Security",
+  "AI Settings",
+  "Users",
+  "My Repositories",
+  "Worktree Settings",
+] as const;
 type Tab = (typeof ALL_TABS)[number];
 
 // ---------------------------------------------------------------------------
@@ -148,11 +155,14 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
   // Plan-10 added "My Repositories" — also user-facing, no admin gate.
   const tabs = ALL_TABS.filter((t) => (t === "Users" ? isAdmin : true));
 
-  // Allow direct deep-linking via `?tab=repositories` (used by Header).
+  // Allow direct deep-linking via `?tab=<slug>` (used by Header, redirects
+  // from legacy /admin/ai and /me/credentials routes, and OnboardingBanner
+  // CTAs).
   const initialTab: Tab = (() => {
     if (typeof window === "undefined") return tabs[0];
     const params = new URLSearchParams(window.location.search);
     const slug = params.get("tab");
+    if (slug === "ai") return "AI Settings";
     if (slug === "repositories") return "My Repositories";
     if (slug === "worktree") return "Worktree Settings";
     if (slug === "users" && isAdmin) return "Users";
@@ -206,6 +216,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {tab === "Security" && <SecurityTabConnected />}
+        {tab === "AI Settings" && <AiSettingsTab isAdmin={!!isAdmin} />}
         {tab === "Users" && <UsersTabConnected />}
         {tab === "My Repositories" && <MyRepositoriesTab isAdmin={isAdmin} />}
         {tab === "Worktree Settings" && <WorktreeSettingsTab />}

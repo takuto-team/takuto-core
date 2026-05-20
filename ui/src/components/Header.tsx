@@ -13,12 +13,6 @@ interface Props {
   githubAppName?: string | null;
   onLogout: () => void;
   /**
-   * True when the current user has role=admin. Drives admin-only dropdown
-   * entries (e.g. "AI Settings" / `/admin/ai`). Optional + defaults to
-   * false so existing call sites and stories don't break.
-   */
-  isAdmin?: boolean;
-  /**
    * Plan-10: the user's added repositories. When the list is non-empty the
    * header shows a small picker (active repo + chevron) instead of the bare
    * "My Repositories" link.
@@ -56,7 +50,6 @@ export function Header({
   repos,
   activeRepoName,
   onSelectRepo,
-  isAdmin = false,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -219,28 +212,18 @@ export function Header({
                   >
                     My Repositories
                   </Link>
-                  {/* Phase 2 — per-user credential surface (every signed-in
-                      user can manage their own keys). */}
+                  {/* Consolidated "AI Settings" — per-user credentials are
+                      visible to every signed-in user; admin-only provider
+                      configuration appears inside the same tab for admins.
+                      Server enforces 403 on the underlying PUT
+                      /api/config/agent endpoint (04_architecture.md §2.3). */}
                   <Link
-                    to="/me/credentials"
+                    to="/config.html?tab=ai"
                     className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
                     onClick={() => setMenuOpen(false)}
                   >
-                    My credentials
+                    AI Settings
                   </Link>
-                  {/* Phase 1 — admin-only AI Settings surface. Hidden for
-                      non-admins client-side; server enforces 403 on the
-                      underlying PUT /api/config/agent endpoint
-                      (04_architecture.md §2.3). */}
-                  {isAdmin && (
-                    <Link
-                      to="/admin/ai"
-                      className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      AI Settings
-                    </Link>
-                  )}
                   {authEnabled && (
                     <button
                       onClick={() => { setMenuOpen(false); onLogout(); }}

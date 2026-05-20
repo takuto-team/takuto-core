@@ -2,9 +2,8 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { fn } from "storybook/test";
 import { MemoryRouter } from "react-router-dom";
-import { UserCredentials } from "../pages/UserCredentials";
+import { MyCredentialsSection } from "../components/MyCredentialsSection";
 import { ToastProvider } from "../hooks/useToast";
 import {
   resetMocks,
@@ -37,8 +36,8 @@ function withMocks(fixture: UserCredentialsStatus, failOnce?: () => void) {
 }
 
 const meta = {
-  title: "Pages/UserCredentials",
-  component: UserCredentials,
+  title: "Components/MyCredentialsSection",
+  component: MyCredentialsSection,
   parameters: {
     layout: "fullscreen",
     backgrounds: {
@@ -46,11 +45,11 @@ const meta = {
       values: [{ name: "dark", value: "#030712" }],
     },
   },
-  args: {
-    onLogout: fn(),
-    authEnabled: true,
-  },
-} satisfies Meta<typeof UserCredentials>;
+  // MyCredentialsSection takes no props — the old page-level
+  // onLogout/authEnabled belonged to the deleted page chrome. Stories that
+  // need a logout button live on the Config page's story instead.
+  args: {},
+} satisfies Meta<typeof MyCredentialsSection>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;

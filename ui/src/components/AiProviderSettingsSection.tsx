@@ -2,25 +2,31 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Phase 1 (auth-overhaul) — admin AI Settings page.
+ * Admin-only AI provider settings section.
+ *
+ * Lives inside the consolidated "AI Settings" tab on /config.html. The parent
+ * tab (`AiSettingsTab`) decides whether to render this section based on the
+ * caller's role; this file does NOT re-check `isAdmin` because the parent
+ * gate is the single source of truth. Server-side enforcement at
+ * `PUT /api/config/agent` is the real security boundary — this UI gate is
+ * cosmetic.
  *
  * Source of truth: tmp/multi-agents/04_architecture.md §2 and
  * tmp/multi-agents/05_ux_design.md §2.5 / §2.6.
  *
- * What this page is NOT:
- *   - Not a per-user credential surface (Phase 2 ships `/users/me/credentials`).
- *   - Not a provider "Test" button (deferred to Phase 2 alongside validation).
+ * What this section is NOT:
+ *   - Not a per-user credential surface (that's `MyCredentialsSection`).
+ *   - Not a provider "Test" button (deferred to a later phase).
  *
  * What it IS: a single PUT /api/config/agent panel that lets an admin pick
  * the active provider, edit its sub-table (base_url, model, extras,
  * allow_shared_default), and toggle the user-facing `available_providers`
  * whitelist. Switching the active provider triggers a confirm modal
- * (05_ux_design.md §2.6) because Phase 2 will mark every per-user credential
+ * (05_ux_design.md §2.6) because Phase 2 marks every per-user credential
  * for the previous provider as `inactive=1`.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { apiJson, putAgentConfig, AgentConfigError } from "../api/client";
 import { useToast } from "../hooks/useToast";
 import type {
@@ -33,12 +39,6 @@ import type {
   AgentProviderId,
   ConfigResponse,
 } from "../api/types";
-
-interface Props {
-  onLogout: () => void;
-  authEnabled: boolean;
-  isAdmin: boolean;
-}
 
 /** Providers wired in the v1 dashboard. `gemini` is a v2 placeholder. */
 const V1_PROVIDERS: AgentProviderId[] = ["claude", "cursor", "codex", "opencode"];
@@ -138,7 +138,7 @@ function patchFromDraft(
   }
 }
 
-export function AdminAiSettings({ onLogout, authEnabled, isAdmin }: Props) {
+export function AiProviderSettingsSection() {
   const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -219,13 +219,9 @@ export function AdminAiSettings({ onLogout, authEnabled, isAdmin }: Props) {
         setConfig(updated);
         // Backend returns `persisted: false` + `persist_warning: "<error>"`
         // when the in-memory patch succeeded but the on-disk write failed
-        // (e.g. read-only mount, EACCES). Previously the UI swallowed both
-        // fields and showed "saved" regardless — admins thought the change
-        // was permanent and were confused when it didn't survive restart.
-        // See `routes/config_agent.rs::PutAgentConfigResponse`.
-        //
-        // Strict `=== false` so a legacy server that doesn't return the
-        // field (undefined) is treated as "assume OK".
+        // (e.g. read-only mount, EACCES). Strict `=== false` so a legacy
+        // server that doesn't return the field (undefined) is treated as
+        // "assume OK". See `routes/config_agent.rs::PutAgentConfigResponse`.
         if (updated.persisted === false) {
           const reason = updated.persist_warning ?? "unknown error";
           showToast(
@@ -263,58 +259,38 @@ export function AdminAiSettings({ onLogout, authEnabled, isAdmin }: Props) {
     void persist(buildPatch());
   }, [persist, buildPatch]);
 
-  if (!isAdmin) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-sm text-gray-400">
-          Admin only — this page is hidden for non-admin users.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-14">
-            <Link
-              to="/"
-              className="flex items-center gap-2 text-gray-400 hover:text-gray-200 transition-colors text-sm"
-            >
-              &larr; Dashboard
-            </Link>
-            <span className="text-lg font-bold text-white">AI Provider Settings</span>
-            {authEnabled && (
-              <button
-                onClick={onLogout}
-                className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer"
-              >
-                Log out
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
+    <section
+      aria-labelledby="ai-provider-section-title"
+      className="flex flex-col gap-3"
+    >
+      <h2
+        id="ai-provider-section-title"
+        className="text-lg font-semibold text-white"
+      >
+        Provider settings
+      </h2>
+      <p className="text-xs text-gray-500">
+        Admin-only. Pick the active AI provider, configure its sub-table, and
+        choose which providers users can pick from.
+      </p>
 
-      <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {loading && <p className="text-sm text-gray-500">Loading…</p>}
-        {!loading && error && (
-          <p className="text-sm text-red-400">Could not load config: {error}</p>
-        )}
-        {!loading && !error && (
-          <ProviderForm
-            selectedProvider={selectedProvider}
-            onSelectProvider={handleSelectProvider}
-            draft={draft}
-            onDraftChange={setDraft}
-            availableProviders={availableProviders}
-            onToggleAvailable={toggleAvailable}
-            onSave={handleSave}
-            saving={saving}
-          />
-        )}
-      </main>
+      {loading && <p className="text-sm text-gray-500">Loading…</p>}
+      {!loading && error && (
+        <p className="text-sm text-red-400">Could not load config: {error}</p>
+      )}
+      {!loading && !error && (
+        <ProviderForm
+          selectedProvider={selectedProvider}
+          onSelectProvider={handleSelectProvider}
+          draft={draft}
+          onDraftChange={setDraft}
+          availableProviders={availableProviders}
+          onToggleAvailable={toggleAvailable}
+          onSave={handleSave}
+          saving={saving}
+        />
+      )}
 
       {pendingProviderSwitch && (
         <ProviderSwitchConfirm
@@ -324,12 +300,12 @@ export function AdminAiSettings({ onLogout, authEnabled, isAdmin }: Props) {
           onConfirm={handleConfirmSwitch}
         />
       )}
-    </div>
+    </section>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Provider form (extracted to keep AdminAiSettings small).
+// Provider form (extracted to keep the section small).
 // ---------------------------------------------------------------------------
 
 interface ProviderFormProps {
