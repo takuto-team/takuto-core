@@ -29,6 +29,12 @@ services:
       - ./.maestro/maestro.env:/etc/maestro/env:ro
       # Persistent state for maestro user
       - maestro-data:/home/maestro/.maestro
+      # Task #48: shared `maestro-tools` volume — populated at startup
+      # by `[provisioning].install_commands` and bind-mounted RO into
+      # every spawned worker / editor / run-command (see
+      # `docs/extending-maestro.md`). RW here because the maestro
+      # entrypoint writes into it during the SHA-gated install pass.
+      - maestro-tools:/opt/maestro-tools/bin
       - claude-auth:/home/maestro/.claude
       - cursor-auth:/home/maestro/.cursor
       - agents-data:/home/maestro/.agents
@@ -69,6 +75,12 @@ services:
 
 volumes:
   maestro-data:
+  # Task #48: admin-provisioned tools volume. See README "Extending
+  # Maestro" + `docs/extending-maestro.md`. Mounted RW into the maestro
+  # service (the entrypoint writes here) and RO into every spawned
+  # worker / editor / run-command. Wipe with `docker volume rm
+  # maestro-core_maestro-tools` to reset to a clean state.
+  maestro-tools:
   claude-auth:
   cursor-auth:
   agents-data:

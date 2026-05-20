@@ -66,6 +66,108 @@ if [ "$(id -u)" = "0" ]; then
             echo "[maestro] WARNING: chown /etc/maestro failed (dashboard config saves may not persist)" >&2
     fi
 
+    # ─── Task #48: bootstrap_provisioning ────────────────────────────────
+    #
+    # Read `[provisioning].install_commands` from /etc/maestro/config.toml
+    # via `maestro provisioning sha` + `maestro provisioning commands`,
+    # and install whatever the admin has requested into the shared
+    # `maestro-tools` volume. SHA-gated: an unchanged install_commands
+    # list takes the fast path and skips re-running.
+    #
+    # The volume is bind-mounted RO into every spawned worker / editor /
+    # run-command, and `/opt/maestro-tools/bin` is FIRST on PATH, so
+    # anything dropped here:
+    #   (a) is available to every container Maestro spawns, and
+    #   (b) SHADOWS baked tools of the same name (admin's pin-a-version
+    #       lever).
+    #
+    # Failure mode: per-command failures log a WARNING but do NOT abort
+    # the maestro boot. ONLY on full success (all commands exit 0) is
+    # the new SHA written, so partial-failure boots retry on the next
+    # restart.
+    #
+    # Skipped in `setup` / `test-workflow` modes (interactive flows that
+    # don't need the tools volume).
+    bootstrap_provisioning() {
+        local SHA_FILE=/opt/maestro-tools/.provisioning-sha
+        local BIN_DIR=/opt/maestro-tools/bin
+
+        if [ ! -f "$CONFIG_FILE_FOR_PROV" ]; then
+            echo "[maestro-provisioning] skip: no config file at $CONFIG_FILE_FOR_PROV"
+            return 0
+        fi
+
+        local CURRENT_SHA
+        if ! CURRENT_SHA=$(/usr/local/bin/maestro --config "$CONFIG_FILE_FOR_PROV" provisioning sha 2>/dev/null); then
+            echo "[maestro-provisioning] WARN: unable to compute provisioning SHA — skipping install pass" >&2
+            return 0
+        fi
+        CURRENT_SHA="${CURRENT_SHA%%[[:space:]]*}"
+
+        # Count commands so the log line is informative even on the fast
+        # path. Using NUL-separated reads keeps shell quoting safe.
+        local CMD_COUNT=0
+        while IFS= read -r -d '' _cmd; do
+            CMD_COUNT=$((CMD_COUNT + 1))
+        done < <(/usr/local/bin/maestro --config "$CONFIG_FILE_FOR_PROV" provisioning commands 2>/dev/null || true)
+
+        # Ensure the volume mountpoint exists and is owned by maestro
+        # (the install commands typically run `runuser -u maestro --`
+        # for user-scope operations and need a writable parent).
+        mkdir -p "$BIN_DIR"
+        chown -R maestro:maestro /opt/maestro-tools 2>/dev/null || true
+        chmod 0755 /opt/maestro-tools "$BIN_DIR"
+
+        # Fast path: SHA unchanged → skip.
+        if [ -f "$SHA_FILE" ]; then
+            local STORED_SHA
+            STORED_SHA=$(cat "$SHA_FILE" 2>/dev/null || true)
+            STORED_SHA="${STORED_SHA%%[[:space:]]*}"
+            if [ -n "$STORED_SHA" ] && [ "$STORED_SHA" = "$CURRENT_SHA" ]; then
+                echo "[maestro-provisioning] SHA matched, skipping ($CMD_COUNT commands; sha=$CURRENT_SHA)"
+                return 0
+            fi
+        fi
+
+        # Slow path: run each install_command. Empty list → write SHA + return.
+        if [ "$CMD_COUNT" -eq 0 ]; then
+            echo "$CURRENT_SHA" > "$SHA_FILE"
+            echo "[maestro-provisioning] no install_commands configured; recorded empty-list SHA"
+            return 0
+        fi
+
+        echo "[maestro-provisioning] running $CMD_COUNT install commands (sha=$CURRENT_SHA)..."
+        export MAESTRO_TOOLS_BIN="$BIN_DIR"
+        local IDX=0 OK=0 FAIL=0
+        while IFS= read -r -d '' _cmd; do
+            IDX=$((IDX + 1))
+            if bash -c "$_cmd"; then
+                echo "[maestro-provisioning] cmd $IDX/$CMD_COUNT: ok"
+                OK=$((OK + 1))
+            else
+                local RC=$?
+                echo "[maestro-provisioning] cmd $IDX/$CMD_COUNT: WARN (rc=$RC) — continuing" >&2
+                FAIL=$((FAIL + 1))
+            fi
+        done < <(/usr/local/bin/maestro --config "$CONFIG_FILE_FOR_PROV" provisioning commands 2>/dev/null)
+        unset MAESTRO_TOOLS_BIN
+
+        if [ "$FAIL" -eq 0 ]; then
+            echo "$CURRENT_SHA" > "$SHA_FILE"
+            echo "[maestro-provisioning] done: $OK/$CMD_COUNT ok; sha recorded ($CURRENT_SHA)"
+        else
+            echo "[maestro-provisioning] done: $OK/$CMD_COUNT ok, $FAIL failed; sha NOT recorded — retry on next boot" >&2
+        fi
+    }
+
+    # config.toml path the CLI reads — same default the rest of the
+    # entrypoint uses but resolved before setpriv (this var is also set
+    # in the maestro-user section below for the server itself).
+    CONFIG_FILE_FOR_PROV="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
+    if [ "${1:-}" != "setup" ] && [ "${1:-}" != "test-workflow" ]; then
+        bootstrap_provisioning || true
+    fi
+
     # Use setpriv instead of runuser/su: setpriv drops UID/GID without calling setsid(), so the
     # controlling terminal is preserved. runuser calls setsid() for PAM session management, which
     # detaches from the controlling TTY — interactive CLI prompts (e.g. claude auth login) then

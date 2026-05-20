@@ -18,6 +18,7 @@
 - [Multi-user model](#multi-user-model)
 - [Privacy & telemetry](#privacy--telemetry)
 - [Configuration reference](#configuration-reference)
+- [Extending Maestro — adding tools](#extending-maestro--adding-tools)
 - [Browser-based editor and web terminal](#browser-based-editor-and-web-terminal)
 - [Docker-in-Docker sidecar (optional)](#docker-in-docker-sidecar-optional)
 - [Dry mode](#dry-mode)
@@ -299,6 +300,74 @@ A few keys you'll touch first:
 | `[network] extra_egress_hosts` 🔒 | `[]` | Extra domains permitted through the egress firewall. |
 
 **Heads up:** `[commands]` and `[[run_commands]]` in `config.toml` are **ignored at load** (a startup warning is logged). Worktree init commands and dashboard run/stop buttons are per-user and live in the database — edit them via **Configuration → Worktree Settings** in the dashboard. See [docs/configuration.md § Ignored sections](docs/configuration.md#ignored-sections).
+
+---
+
+## Extending Maestro — adding tools
+
+You'll often need tools that aren't baked into the official image: `kubectl`, `terraform`, an internal vendor CLI, a pinned version of `claude`. Maestro has three extension paths; pick the one that matches your need.
+
+| Your need | Mechanism | Where to write it |
+|---|---|---|
+| Add a single binary CLI (kubectl, terraform, internal CLI) | **Provisioning** | `[provisioning].install_commands` in `config.toml` |
+| Pin a baked tool to a specific version | **Provisioning** (PATH shadowing) | `[provisioning].install_commands` |
+| Add system packages (apt) or libraries | **Custom Dockerfile** | New Dockerfile `FROM ghcr.io/morphet81/maestro:latest` |
+| Add an environment variable everywhere | **Compose override** | `docker-compose.override.yml` |
+| Mount an extra host directory | **Compose override** | `docker-compose.override.yml` |
+
+### Quickstart — Provisioning (the most common case)
+
+Edit `config.toml`:
+
+```toml
+[provisioning]
+install_commands = [
+  '[ -f "$MAESTRO_TOOLS_BIN/kubectl" ] || (curl -fsSLo "$MAESTRO_TOOLS_BIN/kubectl" https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x "$MAESTRO_TOOLS_BIN/kubectl")',
+]
+```
+
+Restart maestro — `kubectl` is now available to every workflow, the in-browser editor, every run-command. The install is SHA-gated: rebooting with the same `install_commands` list is a no-op (fast path); editing the list re-runs the install pass.
+
+### Quickstart — Pin claude to a specific version
+
+```toml
+[provisioning]
+install_commands = [
+  '[ -f "$MAESTRO_TOOLS_BIN/claude" ] || (npm install -g --prefix "$MAESTRO_TOOLS_BIN/.npm" @anthropic-ai/claude-code@2.1.140 && ln -sf "$MAESTRO_TOOLS_BIN/.npm/bin/claude" "$MAESTRO_TOOLS_BIN/claude")',
+]
+```
+
+PATH precedence makes the pinned version win over the baked `@latest`. The `maestro-tools` volume is bind-mounted into every Maestro-spawned container with `$PATH` prepended so the override propagates everywhere.
+
+### Quickstart — System packages via custom image
+
+```dockerfile
+# my-maestro.Dockerfile
+FROM ghcr.io/morphet81/maestro:latest
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        awscli postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+USER maestro
+```
+
+Wire it into `docker-compose.yml`:
+
+```yaml
+services:
+  maestro:
+    build:
+      context: .
+      dockerfile: my-maestro.Dockerfile
+```
+
+### Full reference
+
+See **[docs/extending-maestro.md](docs/extending-maestro.md)** for:
+- The three-tier model (Baked / Provisioning / Custom Image) with rationale.
+- The full `[provisioning]` reference: `$MAESTRO_TOOLS_BIN`, idempotency rules, SHA gate behavior, force-reinstall escape hatches.
+- The current tool inventory: which tools are baked, which are provisioning defaults, which were removed.
+- Troubleshooting common provisioning issues.
 
 ---
 

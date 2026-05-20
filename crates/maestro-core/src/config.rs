@@ -535,6 +535,58 @@ pub struct Config {
     /// that runs against real users without an explicit `[dev]` opt-in.
     #[serde(default)]
     pub dev: DevConfig,
+    /// Task #47: admin-supplied tool installs that run at maestro startup
+    /// and populate the shared `maestro-tools` volume. See
+    /// [`ProvisioningConfig`].
+    #[serde(default)]
+    pub provisioning: ProvisioningConfig,
+}
+
+/// Task #47: tool-provisioning block. List of shell commands that run as
+/// **root** in the maestro container at startup (before `setpriv` to the
+/// `maestro` user) to populate the shared `maestro-tools` Docker volume
+/// at `/opt/maestro-tools/bin`. The volume is bind-mounted **read-only**
+/// into every spawned worker / editor / run-command via
+/// `container.rs::base_docker_args`, so anything installed here is
+/// available to claude / cursor / scripts on `$PATH`.
+///
+/// **SHA-gated**: the canonical sha256 of the (sorted, JSON-encoded)
+/// `install_commands` list is written to
+/// `/opt/maestro-tools/.provisioning-sha` on full success. Subsequent
+/// boots compare the live config's SHA against the file; if they match
+/// the install pass is skipped (fast path). Edit the list (add, remove,
+/// reorder, or tweak a command) → SHA changes → install pass runs again.
+///
+/// **Per-command idempotency** is the admin's responsibility — guard
+/// each command with `[ -f "$MAESTRO_TOOLS_BIN/<name>" ] || …` (matching
+/// the defaults shipped in `config.toml.example`) so re-runs after
+/// adding an unrelated tool don't re-fetch the unchanged ones.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProvisioningConfig {
+    /// One shell command per element. Each runs via `bash -c "$cmd"` as
+    /// root, with `MAESTRO_TOOLS_BIN=/opt/maestro-tools/bin` exported.
+    /// Empty list (the default) → no-op fast path; the install pass
+    /// records its empty-list SHA and skips on subsequent boots.
+    #[serde(default)]
+    pub install_commands: Vec<String>,
+}
+
+impl Config {
+    /// Task #47: canonical sha256 of the `[provisioning].install_commands`
+    /// list. The bytes hashed are the JSON-encoded array of commands
+    /// (preserves order — the admin's order matters because a later
+    /// command can depend on artifacts from an earlier one). Whitespace
+    /// inside a command is part of its identity; whitespace between
+    /// elements is not (it's encoded as a single JSON array). Stable
+    /// across runs, machines, and serde-toml versions.
+    pub fn provisioning_sha(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let json = serde_json::to_string(&self.provisioning.install_commands)
+            .unwrap_or_else(|_| "[]".to_string());
+        let mut h = Sha256::new();
+        h.update(json.as_bytes());
+        format!("{:x}", h.finalize())
+    }
 }
 
 /// Dev-only knobs. Off by default in production. Never read inside any code path
@@ -2555,5 +2607,74 @@ provider = "opencode"
             None,
             "all-whitespace must resolve to None"
         );
+    }
+
+    // ─── Task #48: provisioning_sha ─────────────────────────────────────
+
+    fn config_with_provisioning(cmds: &[&str]) -> Config {
+        let mut cfg = Config::default();
+        cfg.provisioning.install_commands =
+            cmds.iter().map(|s| s.to_string()).collect();
+        cfg
+    }
+
+    /// T-PROV-SHA-001: same list → same SHA (the boot-side fast-path
+    /// gate works deterministically across restarts and machines).
+    #[test]
+    fn provisioning_sha_is_stable_for_same_content() {
+        let a = config_with_provisioning(&["cmd-1", "cmd-2"]);
+        let b = config_with_provisioning(&["cmd-1", "cmd-2"]);
+        assert_eq!(a.provisioning_sha(), b.provisioning_sha());
+        // And it's not a random uuid pretending to be a SHA — must be
+        // 64 lowercase hex chars (sha256 hex digest).
+        let sha = a.provisioning_sha();
+        assert_eq!(sha.len(), 64, "sha must be 64 hex chars; got {sha}");
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()
+            && (!c.is_ascii_alphabetic() || c.is_ascii_lowercase())));
+    }
+
+    /// T-PROV-SHA-002: edit a command → SHA changes (cache invalidation).
+    #[test]
+    fn provisioning_sha_changes_when_command_text_changes() {
+        let a = config_with_provisioning(&["install foo"]);
+        let b = config_with_provisioning(&["install bar"]);
+        assert_ne!(a.provisioning_sha(), b.provisioning_sha());
+    }
+
+    /// T-PROV-SHA-003: order matters (later commands can depend on
+    /// artifacts from earlier ones — `[a, b]` is NOT the same install
+    /// as `[b, a]`). The SHA must reflect that.
+    #[test]
+    fn provisioning_sha_order_sensitive() {
+        let a = config_with_provisioning(&["cmd-1", "cmd-2"]);
+        let b = config_with_provisioning(&["cmd-2", "cmd-1"]);
+        assert_ne!(a.provisioning_sha(), b.provisioning_sha());
+    }
+
+    /// T-PROV-SHA-004: empty list yields a known stable SHA so the
+    /// entrypoint can fast-path-skip even on the empty-config case
+    /// without re-running every boot.
+    #[test]
+    fn provisioning_sha_empty_list_is_stable_known_value() {
+        let cfg = Config::default();
+        assert!(cfg.provisioning.install_commands.is_empty());
+        // sha256 of `[]` (the JSON-encoded empty array) is well-known.
+        // Recompute on the fly so a change to the canonicalization
+        // scheme fails this test loudly rather than silently shifting
+        // the gate value.
+        use sha2::{Digest, Sha256};
+        let expected = format!("{:x}", Sha256::digest(b"[]"));
+        assert_eq!(cfg.provisioning_sha(), expected);
+    }
+
+    /// T-PROV-SHA-005: whitespace inside a command is part of the
+    /// command's identity — the canonicalizer must NOT collapse spaces
+    /// (admins may rely on multi-space formatting inside a heredoc /
+    /// args list).
+    #[test]
+    fn provisioning_sha_preserves_inner_whitespace() {
+        let a = config_with_provisioning(&["cmd  --flag  value"]);
+        let b = config_with_provisioning(&["cmd --flag value"]);
+        assert_ne!(a.provisioning_sha(), b.provisioning_sha());
     }
 }

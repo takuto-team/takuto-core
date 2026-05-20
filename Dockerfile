@@ -135,40 +135,20 @@ RUN curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-delay 5 https://sh.ru
     && /usr/local/cargo/bin/cargo --version \
     && /usr/local/cargo/bin/rustc --version
 
-# figma-cli (`fcli`) — optional Rust CLI for Figma integration.
-# amd64: prebuilt release tarball. Other architectures: skipped (Figma features unavailable).
-# Non-fatal: the build continues without fcli if the download fails.
-ARG FCLI_VERSION=v0.2.0
-RUN ARCH=$(dpkg --print-architecture); \
-    if [ "$ARCH" = "amd64" ]; then \
-      TARBALL="fcli-${FCLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"; \
-      curl -fsSL "https://github.com/morphet81/figma-cli/releases/download/${FCLI_VERSION}/${TARBALL}" -o /tmp/fcli.tar.gz \
-      && tar -xzf /tmp/fcli.tar.gz -C /tmp \
-      && install -m 0755 /tmp/fcli /usr/local/bin/fcli \
-      && rm -rf /tmp/fcli /tmp/fcli.tar.gz \
-      && fcli --version \
-      || echo "WARN: fcli install failed on $ARCH — Figma features unavailable"; \
-    else \
-      echo "WARN: fcli prebuilt binary not available for $ARCH — skipping"; \
-    fi
-
-# lokalise2 — Lokalise CLI v2 (Go). Optional — build continues without it.
-RUN ARCH=$(dpkg --print-architecture); \
-    case "$ARCH" in \
-      amd64) LOKA_ARCH=x86_64 ;; \
-      arm64) LOKA_ARCH=arm64 ;; \
-      *) LOKA_ARCH="" ;; \
-    esac; \
-    if [ -n "$LOKA_ARCH" ]; then \
-      curl -fSL --retry 3 --retry-delay 5 "https://github.com/lokalise/lokalise-cli-2-go/releases/latest/download/lokalise2_linux_${LOKA_ARCH}.tar.gz" -o /tmp/lokalise2.tar.gz \
-      && tar -xzf /tmp/lokalise2.tar.gz -C /tmp \
-      && install -m 0755 /tmp/lokalise2 /usr/local/bin/lokalise2 \
-      && rm -rf /tmp/lokalise2 /tmp/lokalise2.tar.gz \
-      && lokalise2 --version \
-      || echo "WARN: lokalise2 install failed — Lokalise features unavailable"; \
-    else \
-      echo "WARN: lokalise2 not available for $ARCH — skipping"; \
-    fi
+# ── Three-tier tool layout (task #48) ────────────────────────────────────
+#   BAKED        — required for advertised Maestro features (this Dockerfile).
+#   PROVISIONING — admin preferences installed at runtime into the
+#                  `maestro-tools` named volume via `[provisioning]` in
+#                  config.toml. See `docs/extending-maestro.md` for the
+#                  authoritative reference + decision table.
+#   REMOVED      — specialized one-off tools. Admins add via custom
+#                  Dockerfile `FROM maestro:latest` or compose override.
+#
+# Tools migrated OUT of the bake into `[provisioning]` defaults (task #48):
+#   fcli, lokalise2, figma-cli — see config.toml.example.
+# Tools REMOVED entirely (admin handles via custom image):
+#   awscli — only a small minority of deployments need it.
+# ─────────────────────────────────────────────────────────────────────────
 
 # Node.js 23+ (official tarball). Cursor Agent runs `node --use-system-ca`, which exists only on Node >= 23.9
 # on Linux; NodeSource 20.x rejects that flag with "bad option: --use-system-ca".
@@ -196,6 +176,38 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 
 # Install Claude Code CLI (latest version, globally accessible to all users)
 RUN npm install -g @anthropic-ai/claude-code@latest
+
+# Task #48: bake codex CLI (`[agent] provider = "codex"`). The Phase 4
+# runtime adapter isn't wired yet (selecting codex still surfaces
+# `provider_not_implemented` in SystemStatus) — baking the binary now
+# means the image is ready to run codex workflows the moment the adapter
+# lands, with no rebuild required.
+RUN npm install -g @openai/codex
+
+# Task #48: bake opencode CLI (`[agent] provider = "opencode"`). Same
+# rationale as codex — Phase 4 adapter pending; bake the binary now.
+# Upstream ships an arch-aware musl-static tarball under
+# `sst/opencode/releases/latest/download/opencode-linux-<arch>.zip`. Build
+# is non-fatal: failure logs a WARN, doesn't fail the image build.
+RUN ARCH="$(dpkg --print-architecture)"; \
+    case "$ARCH" in \
+      amd64) OC_ARCH=x64 ;; \
+      arm64) OC_ARCH=arm64 ;; \
+      *)     OC_ARCH="" ;; \
+    esac; \
+    if [ -n "$OC_ARCH" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends unzip ca-certificates \
+      && curl -fSL --retry 3 --retry-delay 5 \
+         "https://github.com/sst/opencode/releases/latest/download/opencode-linux-${OC_ARCH}.zip" \
+         -o /tmp/opencode.zip \
+      && unzip -q /tmp/opencode.zip -d /tmp/opencode \
+      && install -m 0755 /tmp/opencode/opencode /usr/local/bin/opencode \
+      && rm -rf /tmp/opencode /tmp/opencode.zip /var/lib/apt/lists/* \
+      && opencode --version \
+      || echo "WARN: opencode install failed — opencode workflows will fail at spawn (re-run image build to retry)"; \
+    else \
+      echo "WARN: opencode prebuilt binary not available for $ARCH — skipping"; \
+    fi
 
 # Cursor Agent CLI (for [agent] provider = "cursor"). The launcher resolves paths with realpath("$0");
 # copying only the script to /usr/local/bin breaks it (looks for index.js next to the copy). Install the
@@ -235,15 +247,24 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && ln -s "/opt/openvscode-server-v${OPENVSCODE_VERSION}-linux-${VS_ARCH}/bin/openvscode-server" /usr/local/bin/openvscode-server \
     && rm -f /tmp/openvscode.tar.gz
 
-# Install AWS CLI (optional, for CodeArtifact npm registry auth)
-RUN apt-get update && apt-get install -y --no-install-recommends unzip \
-    && curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
-    && unzip -q /tmp/awscliv2.zip -d /tmp \
-    && /tmp/aws/install \
-    && rm -rf /tmp/awscliv2.zip /tmp/aws /var/lib/apt/lists/*
+# Task #48: AWS CLI v2 was previously baked here; removed because it's
+# only required for the minority of deployments that authenticate npm to
+# CodeArtifact. Admins who need it add a custom Dockerfile:
+#
+#   FROM maestro:latest
+#   RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+#       && curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/aws.zip \
+#       && unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install \
+#       && rm -rf /tmp/aws*
+#
+# See `docs/extending-maestro.md` for the full custom-image pattern.
 
-# Install figma-cli (npm global)
-RUN npm install -g figma-cli || echo "WARN: figma-cli install failed, Figma features will be unavailable"
+# Task #48: figma-cli was previously baked here; migrated to a
+# `[provisioning]` default in `config.toml.example` (admin can disable
+# by removing the line, or pin to a specific version by editing it).
+# `fcli` and `lokalise2` were migrated for the same reason — same
+# rationale: clean single-binary installs that admins routinely want to
+# pin / swap, not core requirements of any advertised feature.
 
 # Copy egress rules script
 COPY docker/egress-rules.sh /usr/local/bin/egress-rules.sh
@@ -305,7 +326,17 @@ ENV MISE_CACHE_DIR=/home/maestro/.cache/mise
 ENV MISE_CONFIG_DIR=/home/maestro/.config/mise
 ENV MISE_TRUST_ALL_CONFIGS=1
 ENV MISE_YES=1
-ENV PATH="/home/maestro/.npm-global/bin:/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Task #48: prepend the `maestro-tools` volume mount so anything dropped
+# there by the `[provisioning]` install pass at boot SHADOWS baked tools
+# of the same name. That gives admins a no-rebuild lever to pin a tool
+# to a specific version (or swap an entire binary) without changing the
+# image. The volume mountpoint is created here (mode 0755, owned by
+# maestro:maestro) so the entrypoint can write to it under setpriv;
+# the named volume itself is declared in `docker-compose.yml`.
+RUN mkdir -p /opt/maestro-tools/bin \
+    && chown -R maestro:maestro /opt/maestro-tools \
+    && chmod 0755 /opt/maestro-tools /opt/maestro-tools/bin
+ENV PATH="/opt/maestro-tools/bin:/home/maestro/.npm-global/bin:/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 RUN printf '%s\n' \
     'export MISE_DATA_DIR=/home/maestro/.local/share/mise' \

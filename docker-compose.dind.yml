@@ -30,6 +30,12 @@ services:
       - workspace:/workspace
       - workspaces:/workspaces
       - maestro-data:/shared-auth/maestro-data
+      # Task #48: mount the `maestro-tools` volume here too so the DinD
+      # daemon can reference it by name when bind-mounting into spawned
+      # workers / editors / run-commands via `-v maestro-tools:/opt/maestro-tools/bin:ro`.
+      # Named volumes resolve in DinD's own volume namespace, so DinD
+      # MUST have a mount keeping the volume alive in its scope.
+      - maestro-tools:/opt/maestro-tools/bin
       - dind-storage:/var/lib/docker
       # Auth volumes — workers bind-mount from /shared-auth/* into standard home paths
       - claude-auth:/shared-auth/claude
@@ -77,5 +83,7 @@ services:
 
 volumes:
   maestro-data:
+  # Task #48: see `docker-compose.yml` and `docs/extending-maestro.md`.
+  maestro-tools:
   dind-storage:
   vscode-data:

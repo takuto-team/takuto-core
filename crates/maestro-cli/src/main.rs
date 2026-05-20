@@ -129,6 +129,28 @@ enum Commands {
         #[command(subcommand)]
         action: KeysAction,
     },
+    /// Task #47: read-only accessors over `[provisioning].install_commands`
+    /// for the docker entrypoint shell. The entrypoint can't parse TOML
+    /// itself, so this subcommand exposes the canonical SHA and the
+    /// command list in shell-safe form.
+    Provisioning {
+        #[command(subcommand)]
+        action: ProvisioningAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProvisioningAction {
+    /// Print the canonical sha256 of `[provisioning].install_commands` to
+    /// stdout (followed by a single newline). The entrypoint compares
+    /// this against `/opt/maestro-tools/.provisioning-sha` to decide
+    /// whether to skip the install pass.
+    Sha,
+    /// Print each install command to stdout, NUL-separated, terminated by
+    /// a final NUL. NUL is the only byte that can't appear inside a
+    /// shell command string, so the entrypoint can safely iterate via
+    /// `read -d ''`.
+    Commands,
 }
 
 #[derive(Subcommand)]
@@ -349,6 +371,45 @@ async fn run_github_app_token(config_path: &std::path::Path) -> ExitCode {
 /// re-paste their credentials afterwards.
 ///
 /// Refusal cases (non-zero exit):
+/// Task #48: read-only accessors over `[provisioning].install_commands`
+/// for the docker entrypoint shell. The entrypoint can't parse TOML
+/// itself, so this subcommand exposes the canonical SHA and the command
+/// list. Both write to stdout so the entrypoint can capture via
+/// `$(maestro provisioning sha)` / a `while read` loop.
+///
+/// Exit code is 0 on success even when the install_commands list is
+/// empty (the entrypoint takes the no-op fast path).
+fn run_provisioning(config_path: &std::path::Path, action: &ProvisioningAction) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config {}: {e}", config_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    match action {
+        ProvisioningAction::Sha => {
+            println!("{}", config.provisioning_sha());
+        }
+        ProvisioningAction::Commands => {
+            // NUL-terminated stream — `0x00` is the only byte that can't
+            // appear inside a POSIX shell command, so the entrypoint can
+            // iterate via `while IFS= read -r -d '' cmd; do ... done`.
+            use std::io::Write;
+            let mut out = std::io::stdout().lock();
+            for cmd in &config.provisioning.install_commands {
+                if out.write_all(cmd.as_bytes()).is_err()
+                    || out.write_all(&[0u8]).is_err()
+                {
+                    return ExitCode::FAILURE;
+                }
+            }
+            let _ = out.flush();
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 /// - `--yes-i-am-sure` not passed
 /// - any workflow in a non-terminal, non-paused state per the snapshot file
 ///   (graceful-shutdown the server first; see QA T-KEYS-002)
@@ -495,6 +556,9 @@ fn main() -> ExitCode {
         Some(Commands::Keys {
             action: KeysAction::Reset { yes_i_am_sure },
         }) => run_keys_reset(&cli.config, *yes_i_am_sure),
+        Some(Commands::Provisioning { action }) => {
+            run_provisioning(&cli.config, action)
+        }
         None => match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()

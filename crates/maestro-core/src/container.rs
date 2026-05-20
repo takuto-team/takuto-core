@@ -400,6 +400,21 @@ pub fn build_volume_args(worktree_path: &Path, isolate_workspace: bool) -> Vec<S
             mounts.push("/workspace:/workspace".to_string());
         }
     }
+    // Task #48: mount the `maestro-tools` named volume read-only into
+    // every spawned worker / editor / run-command. The maestro container
+    // populates this volume at startup via the `[provisioning]` install
+    // commands (see `docs/extending-maestro.md`). The volume is a Docker
+    // NAMED volume — no host-path translation is needed even in DinD
+    // mode because the DinD daemon and maestro share the same volume by
+    // name (the maestro service mounts it RW; DinD inherits the same
+    // volume via `docker-compose.dind.yml`).
+    //
+    // `:ro` so workers can't pollute the volume; only the maestro boot
+    // pass writes to it. The `ENV PATH` in the Dockerfile prepends
+    // `/opt/maestro-tools/bin` so anything dropped here shadows the
+    // baked-in tools (admin's lever for pinning a tool to a specific
+    // version).
+    mounts.push("maestro-tools:/opt/maestro-tools/bin:ro".to_string());
     mounts
 }
 

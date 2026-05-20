@@ -231,6 +231,65 @@ extra_egress_hosts = []
 # Use only in trusted environments; `extra_egress_hosts` is ignored when this is enabled.
 # allow_all_https = false
 
+# ─── [provisioning] — admin-installed tools (task #48) ──────────────────
+#
+# Shell commands that install tools into the shared `maestro-tools`
+# Docker volume on maestro startup. The volume is bind-mounted READ-ONLY
+# into every container Maestro spawns (workers, editors, run-commands)
+# at `/opt/maestro-tools/bin`, and the maestro image prepends that path
+# to `$PATH` — so anything installed here is on PATH everywhere AND can
+# OVERRIDE a baked tool by name (PATH precedence).
+#
+# Behavior:
+#   • SHA-gated: maestro hashes the (canonicalized) `install_commands`
+#     list. If the SHA matches the recorded one in
+#     `/opt/maestro-tools/.provisioning-sha`, the install pass is SKIPPED.
+#     Edit this list → SHA changes → installs run again.
+#   • Each command runs as ROOT via `bash -c "$cmd"`. To run as the
+#     maestro user (e.g. `mise install`), wrap with `runuser -u maestro --`.
+#   • `$MAESTRO_TOOLS_BIN` expands to `/opt/maestro-tools/bin`.
+#   • Per-command failures log a WARNING but do NOT abort maestro boot.
+#     The SHA is only recorded on FULL success — partial-failure boots
+#     retry on the next restart.
+#
+# Decision guide (when do I use this vs a custom image?):
+#   • Single binary CLI tool (kubectl, terraform, a vendor CLI) → here.
+#   • Pin a baked tool to a specific version → here (PATH shadowing).
+#   • System packages (apt, libraries) → custom Dockerfile `FROM maestro:latest`.
+#   • Extra env vars / mounts → docker-compose.override.yml.
+# See `docs/extending-maestro.md` for the full reference.
+#
+# Force re-install (admin escape hatch):
+#   docker exec --user root maestro-core-maestro-1 \
+#     rm /opt/maestro-tools/.provisioning-sha && docker compose restart maestro
+#
+# Wipe all customizations and start fresh:
+#   docker volume rm maestro-core_maestro-tools && docker compose up -d
+[provisioning]
+install_commands = [
+  # fcli (Figma CLI). Migrated out of the baked image so admins can pin
+  # the version or skip the install. amd64 prebuilt; other arches skipped.
+  '[ -f "$MAESTRO_TOOLS_BIN/fcli" ] || (ARCH=$(dpkg --print-architecture); [ "$ARCH" = "amd64" ] && curl -fsSL https://github.com/morphet81/figma-cli/releases/download/v0.2.0/fcli-v0.2.0-x86_64-unknown-linux-gnu.tar.gz -o /tmp/fcli.tar.gz && tar -xzf /tmp/fcli.tar.gz -C /tmp && install -m 0755 /tmp/fcli "$MAESTRO_TOOLS_BIN/fcli" && rm -rf /tmp/fcli /tmp/fcli.tar.gz || echo "WARN: fcli skipped on $ARCH")',
+
+  # lokalise2 (Lokalise CLI v2). Single Go binary.
+  '[ -f "$MAESTRO_TOOLS_BIN/lokalise2" ] || (ARCH=$(dpkg --print-architecture); case "$ARCH" in amd64) LA=x86_64;; arm64) LA=arm64;; *) LA="";; esac; [ -n "$LA" ] && curl -fSL https://github.com/lokalise/lokalise-cli-2-go/releases/latest/download/lokalise2_linux_${LA}.tar.gz -o /tmp/lk.tar.gz && tar -xzf /tmp/lk.tar.gz -C /tmp && install -m 0755 /tmp/lokalise2 "$MAESTRO_TOOLS_BIN/lokalise2" && rm -rf /tmp/lokalise2 /tmp/lk.tar.gz || echo "WARN: lokalise2 skipped on $ARCH")',
+
+  # figma-cli (npm-based). Installed into the tools volume so workers
+  # see it without a global npm prefix override.
+  '[ -f "$MAESTRO_TOOLS_BIN/figma-cli" ] || (npm install -g --prefix "$MAESTRO_TOOLS_BIN/.npm" figma-cli && ln -sf "$MAESTRO_TOOLS_BIN/.npm/bin/figma-cli" "$MAESTRO_TOOLS_BIN/figma-cli")',
+
+  # ─── Examples (uncomment to enable) ────────────────────────────────
+  #
+  # Pin claude to a specific version (overrides the baked @latest):
+  #   '[ -f "$MAESTRO_TOOLS_BIN/claude" ] || (npm install -g --prefix "$MAESTRO_TOOLS_BIN/.npm" @anthropic-ai/claude-code@2.1.140 && ln -sf "$MAESTRO_TOOLS_BIN/.npm/bin/claude" "$MAESTRO_TOOLS_BIN/claude")',
+  #
+  # Install kubectl for workflows that hit a Kubernetes cluster:
+  #   '[ -f "$MAESTRO_TOOLS_BIN/kubectl" ] || (curl -fsSLo "$MAESTRO_TOOLS_BIN/kubectl" https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x "$MAESTRO_TOOLS_BIN/kubectl")',
+  #
+  # Install AWS CLI v2 (removed from the bake — admin opts in here):
+  #   '[ -f "$MAESTRO_TOOLS_BIN/aws" ] || (curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/aws.zip && unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install --bin-dir "$MAESTRO_TOOLS_BIN" --install-dir "$MAESTRO_TOOLS_BIN/aws-cli" --update && rm -rf /tmp/aws*)',
+]
+
 # --- Dev-only knobs (leave commented in production) ---
 # When `mock_agent = true`, ClaudeSession::run_prompt and CursorSession::run_prompt
 # short-circuit into a scripted mock session — no real `claude` or `agent` process

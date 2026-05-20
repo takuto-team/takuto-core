@@ -477,6 +477,52 @@ The dashboard renders a **"Merged"** badge (purple pill with a checkmark icon, s
 - **`GitAuthResolver::revalidate_pat_for_workflow(user_id, gh, orgs)` (Phase 2b.3.x)** — best-effort PAT revalidation invoked at workflow restore (`persistence.rs`) **and** Paused→Resumed transition (`transitions.rs`) via `tokio::spawn`, so it never blocks the driver respawn. Skips silently when the user has no PAT row (App-only flows). On failure, writes a `credential_audit` row (event=`validation_failed`, mapped `error_code`) and the engine broadcasts a new `WorkflowEvent { event_type: "auth_warning", ticket_key, user_id, auth_warning_code, auth_warning_message }` on the existing event channel — clients pick this up over the same `/ws` subscription as state changes. The `auth_warning_code` is a stable identifier (`sso_authorization_required`, `master_key_unavailable`, `resolver_internal`, …) produced by `auth_resolver::auth_warning_payload`. Wired through `WorkflowEngine::with_gh_client(Arc<dyn GhClient>)` (CLI installs `RealGhClient`; tests inject a mock). Without a `gh_client` set, revalidation is silently skipped so legacy tests keep passing.
 - **`maestro docker-hooks build|startup`**: runs `build_commands` or `compose_up_commands` from config as **`bash -c`** in `git.repo_path` (used by Dockerfile `RUN` and entrypoint; **`sh`** on Debian is often dash and lacks `pipefail`). Hook children get **`HOME`**, **`MAESTRO_HOME`** (compose: `/home/maestro`), and **`CURSOR_CONFIG_DIR`** so writes to **`~/.claude`** / **`~/.cursor`** hit named volumes, not **`/.claude`** when **`HOME`** is unset.
 
+## Tool layout and extensibility
+
+**Principle:** *Baked = required for advertised features. Provisioning = admin preferences. Removed = specialized use cases.*
+
+Maestro ships a three-tier extension model for adding tools to the workflow environment without forking the upstream image. When you (or an AI agent) consider adding or removing a tool, apply this rule of thumb:
+
+| Question | Tier |
+|---|---|
+| Is this needed for an advertised Maestro feature? | **Bake** in the Dockerfile |
+| Is it an opt-in convenience that some admins want? | **Provisioning default** in `config.toml.example` |
+| Is it specialized (one user in a hundred)? | **Don't add** — document the custom-image pattern |
+
+### Mechanism 1 — Baked (Dockerfile)
+
+Bake set as of task #48:
+
+- **Foundation system layer** — `ca-certificates`, `curl`, `docker.io`, `git`, `jq`, `iptables`, `iproute2`, `openssh-client`, `python3`, `socat`, Playwright Chromium system deps.
+- **Runtimes** — Node.js 23.11.0 (`node`, `npm`), Rust toolchain (`rustup` + `cargo` + `rustfmt` + `clippy`, stable).
+- **VCS / ticketing** — `gh` (GitHub CLI, apt), `acli` (Atlassian CLI, apt), `mise`.
+- **AI provider CLIs (all four advertised providers)** — `claude` (npm `@anthropic-ai/claude-code@latest`), `cursor-agent` (custom installer with full `/usr/local/share` package), `codex` (npm `@openai/codex`), `opencode` (musl-static tarball from `sst/opencode` releases). Codex + opencode are baked even though their Phase 4 runtime adapters aren't wired yet — the binaries exist so the image is ready the moment the adapter lands.
+- **Editor** — `openvscode-server`.
+- **Process tools** — `sudo` (with the narrow `/usr/bin/bash` sudoers rule for the docker-hook sudo path).
+
+Removed from the bake (task #48), now `[provisioning]` defaults: `fcli`, `lokalise2`, `figma-cli`. Removed entirely: AWS CLI v2 (admin opt-in via custom image OR a commented `[provisioning]` example in `config.toml.example`).
+
+### Mechanism 2 — Provisioning (`[provisioning].install_commands`)
+
+Admin-controlled shell commands that run at maestro startup as **root** in the maestro container, with `MAESTRO_TOOLS_BIN=/opt/maestro-tools/bin` exported. The directory is a Docker NAMED volume (`maestro-tools`) mounted RW into the maestro service and DinD, and RO into every spawned worker / editor / run-command via `container.rs::build_volume_args`. `ENV PATH="/opt/maestro-tools/bin:..."` in the Dockerfile prepends the volume, so a binary dropped there SHADOWS a baked tool of the same name — the admin's pin-a-version lever.
+
+**SHA-gating.** The canonical sha256 of the JSON-encoded (order-preserving) `install_commands` list is recorded at `/opt/maestro-tools/.provisioning-sha`. Subsequent boots compare the live config's SHA against the file; matching SHA → fast-path skip. Edit the list (add, remove, reorder, tweak a command) → SHA changes → install pass runs. `Config::provisioning_sha()` in `config.rs` is the single source of truth.
+
+**Entrypoint integration.** `docker/entrypoint.sh::bootstrap_provisioning` is called in the ROOT section BEFORE `setpriv`, after the chowns and before the egress rules. It shells out to `maestro provisioning sha` and `maestro provisioning commands` (NUL-separated) — the CLI subcommand exists because the entrypoint can't parse TOML directly. Per-command failures log a WARN and continue; the SHA file is ONLY written on full success, so partial-failure boots retry on the next restart.
+
+### Mechanism 3 — Custom Dockerfile (`FROM maestro:latest`)
+
+For system packages (apt-managed libs, daemons), multi-path installs, or anything the `/opt/maestro-tools/bin` single-directory volume can't hold. Documented in `README.md` and `docs/extending-maestro.md`. Admins maintain their own `my-maestro.Dockerfile` + `docker-compose.yml` `build:` block.
+
+### Rules for AI agents modifying the codebase
+
+1. **Don't add new baked tools without a clear advertised-feature link.** If you find yourself wanting to bake a tool, first check whether `[provisioning]` covers the case — most often it does. The bake set increases image size for every deployment forever; the bar is "Maestro literally fails without it".
+2. **Don't move a baked agent CLI to provisioning.** `claude`, `cursor-agent`, `codex`, `opencode` are advertised providers — they MUST be baked because workflows fail at spawn if they're missing.
+3. **PATH order is part of the design contract.** `/opt/maestro-tools/bin` is FIRST so provisioning shadows bake; `/home/maestro/.npm-global/bin` second so npm globals work; `/home/maestro/.local/share/mise/shims` next so mise wins over baked Node/etc. Reordering these breaks documented admin escape hatches.
+4. **Worker spawn paths MUST mount the tools volume.** `build_volume_args` in `container.rs` appends `maestro-tools:/opt/maestro-tools/bin:ro` to every spawn. If you add a new spawn path (a new container kind), make sure it also calls `build_volume_args` OR adds the mount explicitly; otherwise the workflow's `kubectl` / `terraform` / pinned `claude` won't be there.
+
+Cross-references: `README.md` § Extending Maestro (user-facing quickstart), `docs/extending-maestro.md` (full reference + troubleshooting), `config.toml.example` § `[provisioning]` (default commands + inline patterns), `Dockerfile` (the authoritative bake list, with the three-tier comment block at the migration site).
+
 ## Testing and quality
 
 From repo root: `cargo build`, `cargo test`, `cargo check`.
