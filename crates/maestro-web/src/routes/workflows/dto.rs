@@ -236,3 +236,40 @@ pub(super) fn build_run_commands_status(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal `Workflow` in `Pending` state with the given `driver_started` value.
+    fn wf_pending(driver_started: bool) -> Workflow {
+        let mut w = Workflow::new(
+            "T-1".into(),
+            "summary".into(),
+            true,
+            false,
+            maestro_core::config::TicketingSystem::None,
+            None,
+            "test-workspace".into(),
+        );
+        w.driver_started = driver_started;
+        w
+    }
+
+    #[test]
+    fn can_start_pending_not_started() {
+        assert!(can_start_workflow(&wf_pending(false)));
+    }
+
+    #[test]
+    fn can_start_false_when_started() {
+        assert!(!can_start_workflow(&wf_pending(true)));
+    }
+
+    #[test]
+    fn can_start_false_when_not_pending() {
+        let mut w = wf_pending(false);
+        w.state = WorkflowState::Done;
+        assert!(!can_start_workflow(&w));
+    }
+}
