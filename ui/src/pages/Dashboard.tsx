@@ -6,17 +6,16 @@ import { Link } from "react-router-dom";
 import {
   apiJson,
   apiPost,
-  fetchOnboardingStatus,
   listMyRepositories,
   type RepositoryRow,
 } from "../api/client";
 import type {
   ConfigResponse,
-  SystemStatus,
   WorkflowDefinition,
   WorkflowEvent,
 } from "../api/types";
 import { useToast } from "../hooks/useToast";
+import { useOnboardingStatus } from "../hooks/useOnboardingStatus";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useWorkflows } from "../hooks/useWorkflows";
 import { usePolling } from "../hooks/usePolling";
@@ -47,22 +46,9 @@ interface Props {
 export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
-  // Phase 0 banner: `undefined` = fetch in flight, `null` = endpoint 404'd
-  // (older server, fall back to ConfigResponse.preflight_error), otherwise
-  // the structured status. See 04_architecture.md §1.
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null | undefined>(
-    undefined,
-  );
-
-  const refreshOnboardingStatus = useCallback(() => {
-    fetchOnboardingStatus()
-      .then(setSystemStatus)
-      .catch(() => {
-        // Network or 5xx — treat as "endpoint not available" so the legacy
-        // preflight_error string is rendered instead of a blank banner.
-        setSystemStatus(null);
-      });
-  }, []);
+  // Phase 0 banner state — see useOnboardingStatus for tri-state semantics
+  // and the focus-listener refetch.
+  const { systemStatus, refresh: refreshOnboardingStatus } = useOnboardingStatus();
   const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts, dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState: _resetState } = useWorkflows();
   const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
   const defsFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -130,16 +116,6 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     fetchWorkflowDefs();
     refreshHasAnyRepo();
   }, [fetchWorkflowDefs, refreshHasAnyRepo]);
-
-  // Phase 0 onboarding status — fetch on mount and refetch when the window
-  // regains focus. The `onboarding_changed` WS event handler in
-  // handleEventWithDefs covers server-pushed updates once Phase 1 ships it.
-  useEffect(() => {
-    refreshOnboardingStatus();
-    const onFocus = () => refreshOnboardingStatus();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refreshOnboardingStatus]);
 
   // Wrap handleEvent to also re-fetch definitions on relevant events
   const handleEventWithDefs = useCallback(
