@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 # Stage 1a: Build React dashboard
-FROM node:23-bookworm-slim AS ui-builder
+# Renovate-managed digest, refresh weekly (audit 2026-05-21 §3.5 — pin all bases by @sha256).
+FROM node:23-bookworm-slim@sha256:86191b94d2a163be41f3dc7fe5e5fcaca8ba2f1be7275d98a06343483c17414a AS ui-builder
 
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
@@ -11,7 +12,8 @@ COPY VERSION /VERSION
 RUN npm run build
 
 # Stage 1b: Build Rust binary
-FROM rust:1.88-bookworm AS builder
+# Renovate-managed digest, refresh weekly (audit 2026-05-21 §3.5 — pin all bases by @sha256).
+FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS builder
 
 WORKDIR /app
 # Without this, Cargo hides progress in non-TTY Docker builds — looks hung for many minutes.
@@ -37,7 +39,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && cp /app/target/release/maestro /out/maestro
 
 # Stage 2: Runtime
-FROM debian:bookworm-slim AS runtime
+# Renovate-managed digest, refresh weekly (audit 2026-05-21 §3.5 — pin all bases by @sha256).
+FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
 
 ARG MAESTRO_VERSION=dev
 LABEL org.opencontainers.image.version="${MAESTRO_VERSION}"
