@@ -1,20 +1,19 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { DiffView } from "../DiffView";
-import { useToast } from "../../hooks/useToast";
 import { useTicketDetail } from "../../hooks/useTicketDetail";
 import { useTicketCountdown } from "../../hooks/useTicketCountdown";
 import { useStartWorkflow } from "../../hooks/useStartWorkflow";
 import { useTicketEditor } from "../../hooks/useTicketEditor";
-import { TicketDetailAiPanel } from "./TicketDetailAiPanel";
+import { useTicketImproveWithAI } from "../../hooks/useTicketImproveWithAI";
 import { TicketDetailHeader } from "./TicketDetailHeader";
 import { TicketDetailView } from "./TicketDetailView";
 import { TicketEditor } from "./TicketEditor";
+import { TicketImproveWithAI, type PendingImprovement } from "./TicketImproveWithAI";
 import { StartWorkflowRepoBanner } from "./StartWorkflowRepoBanner";
 import { StartWorkflowFooter } from "./StartWorkflowFooter";
-import type { PendingImprovement } from "./TicketImproveWithAI";
 
 const DEFAULT_IMPROVE_TIMEOUT_SECS = 300;
 
@@ -51,9 +50,6 @@ export function TicketDetailModal({
   );
   const { countdown, start: startCountdown, stop: stopCountdown } =
     useTicketCountdown(improveTimeoutSecs);
-  const [improving, setImproving] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const { showToast } = useToast();
   const editor = useTicketEditor({ summary, markdown, setMarkdown, ticketKey, onSaved });
   const {
     editMode, editText, editTitle, activeTab, sideBySide, debouncedText, saving, editDirty,
@@ -61,81 +57,22 @@ export function TicketDetailModal({
     handleStartEdit, handleCancelEdit, handleSaveDescription, handleSideBySideChange,
     applyImprovement,
   } = editor;
-  const [prompting, setPrompting] = useState(false);
   const [pendingImprovement, setPendingImprovement] =
     useState<PendingImprovement | null>(null);
+  const improve = useTicketImproveWithAI({
+    ticketKey, markdown, editTitle, improveTimeoutSecs,
+    startCountdown, stopCountdown,
+    pendingImprovement, setPendingImprovement,
+    applyImprovementToEditor: applyImprovement,
+  });
+  const {
+    improving, prompting, setPrompting,
+    handleImprove, handleCancelImprove,
+    handleConfirmImprovement, handleDiscardImprovement, handleImprovement,
+  } = improve;
 
   // Plan-10: repository selector — only shown when starting a workflow.
   const { repos, repositoryId, setRepositoryId, loadingRepos } = useStartWorkflow(showStartButton);
-
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
-
-  const handleImprove = async () => {
-    setImproving(true);
-    startCountdown(improveTimeoutSecs);
-
-    abortRef.current = new AbortController();
-    try {
-      const res = await fetch(`/api/tickets/${encodeURIComponent(ticketKey)}/improve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ description: markdown, summary: editTitle }),
-        signal: abortRef.current.signal,
-      });
-      abortRef.current = null;
-      if (!res.ok) {
-        const text = await res.text();
-        showToast(text || "Failed to improve ticket description");
-        return;
-      }
-      const data = await res.json() as { improved_description: string; improved_summary?: string };
-      setPendingImprovement({
-        originalDescription: markdown,
-        improvedDescription: data.improved_description,
-        improvedSummary: data.improved_summary,
-      });
-    } catch (e) {
-      abortRef.current = null;
-      if (e instanceof Error && e.name !== "AbortError") {
-        showToast("Failed to improve ticket description");
-      }
-    } finally {
-      setImproving(false);
-      stopCountdown();
-    }
-  };
-
-  const handleCancelImprove = () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setImproving(false);
-    stopCountdown();
-  };
-
-  const handleConfirmImprovement = () => {
-    if (!pendingImprovement) return;
-    const { improvedDescription, improvedSummary } = pendingImprovement;
-    applyImprovement(improvedDescription, improvedSummary);
-    setPendingImprovement(null);
-  };
-
-  const handleDiscardImprovement = () => {
-    setPendingImprovement(null);
-  };
-
-  /** Called by AiPromptPanel when the AI returns an improved version. */
-  const handleImprovement = (
-    originalDescription: string,
-    improvedDescription: string,
-    improvedSummary?: string
-  ) => {
-    setPendingImprovement({ originalDescription, improvedDescription, improvedSummary });
-  };
 
   // When a diff is pending, widen the modal like side-by-side edit mode.
   const isWide = sideBySide || pendingImprovement !== null;
@@ -174,27 +111,11 @@ export function TicketDetailModal({
         />
 
         {/* Diff review banner */}
-        {pendingImprovement && (
-          <div className="border-b px-4 py-2 flex items-center justify-between bg-purple-900/20 border-purple-700/30">
-            <span className="text-xs text-purple-300">
-              Review AI changes — confirm to enter edit mode with the updated description
-            </span>
-            <div className="flex gap-2">
-              <button
-                onClick={handleDiscardImprovement}
-                className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-              >
-                Discard
-              </button>
-              <button
-                onClick={handleConfirmImprovement}
-                className="text-xs px-3 py-1 rounded-lg bg-green-700 text-white hover:bg-green-600 cursor-pointer"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        )}
+        <TicketImproveWithAI.Banner
+          pendingImprovement={pendingImprovement}
+          onDiscardImprovement={handleDiscardImprovement}
+          onConfirmImprovement={handleConfirmImprovement}
+        />
 
         {/* Edit banner — only in edit mode and not while reviewing a diff */}
         <TicketEditor.Banner
@@ -240,7 +161,7 @@ export function TicketDetailModal({
 
         {/* AI Prompt Panel — hidden while reviewing a diff */}
         {!loading && !pendingImprovement && (
-          <TicketDetailAiPanel
+          <TicketImproveWithAI
             ticketKey={ticketKey}
             ticketTitle={editMode ? editTitle : summary}
             ticketDescription={editMode ? editText : markdown}
@@ -255,25 +176,14 @@ export function TicketDetailModal({
         {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-gray-800 gap-3">
           <div className="flex gap-2">
-            {!pendingImprovement && (
-              <>
-                <button
-                  onClick={handleImprove}
-                  disabled={improving || editMode || prompting}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
-                >
-                  {improving ? "Improving..." : "Improve with AI"}
-                </button>
-                {!editMode && (
-                  <button
-                    onClick={handleStartEdit}
-                    className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-                  >
-                    Edit
-                  </button>
-                )}
-              </>
-            )}
+            <TicketImproveWithAI.FooterButtons
+              pendingImprovement={pendingImprovement}
+              improving={improving}
+              editMode={editMode}
+              prompting={prompting}
+              onImprove={handleImprove}
+              onStartEdit={handleStartEdit}
+            />
           </div>
           <StartWorkflowFooter
             showStartButton={showStartButton}
