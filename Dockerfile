@@ -38,6 +38,24 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && cargo build --release \
     && cp /app/target/release/maestro /out/maestro
 
+# Maestro runtime image — kitchen-sink bake, per the project's "code-quality
+# vs. ergonomics" trade-off: every advertised feature works on a vanilla
+# `docker compose up` with no extra setup steps. The cost is image size +
+# audit surface (Playwright Chromium libs, four AI provider CLIs, an editor,
+# a terminal, a build toolchain). The mitigations are:
+#   • Two image targets — `runtime-base` = `maestro:slim` (no Rust, no
+#     build-essential), `runtime-build-tools` = `maestro:full` (default).
+#   • Every FROM is pinned by `@sha256:` digest (Renovate-refreshed weekly).
+#   • Every direct download (ttyd, Node, Cursor agent, openvscode-server)
+#     verifies a per-arch sha256 against an ARG-pinned digest.
+#   • Every npm global is pinned via ARG; the one-line bump knob lives in
+#     this file rather than `@latest`.
+#   • Provisioning tier (`[provisioning]` in config.toml) lets admins drop
+#     extra tools into a named volume that SHADOWS the bake — no rebuild.
+# See `lore/code-quality-principles.md` for the broader trade-off rationale
+# and `lore/audits/2026-05-21-clean-code.md` §3.5 for the audit findings
+# this image hardening pass addresses.
+#
 # Stage 2a: Runtime base (= image target `maestro:slim`).
 # Renovate-managed digest, refresh weekly (audit 2026-05-21 §3.5 — pin all bases by @sha256).
 # Contains everything a deployed maestro server NEEDS to run its workflows except
@@ -415,6 +433,25 @@ EXPOSE 8080
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chmod=0755 docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
 COPY --chmod=0755 docker/test-workflow.sh /usr/local/bin/test-workflow.sh
+
+# Audit §3.5 — explicit non-root identity declaration. The runtime image declares
+# the `maestro` user identity here so the build chain (and any `docker history`
+# reader) can audit the non-root-by-default posture without grepping entrypoint.sh.
+#
+# The directive is immediately followed by `USER root` because the entrypoint
+# still needs root for:
+#   1. iptables (egress rules) — capabilities are bound to the container's
+#      capability set, not to the calling UID, so even with CAP_NET_ADMIN a
+#      non-root caller can't run iptables without ambient caps;
+#   2. chown of named volumes that arrive root-owned from the host;
+#   3. the [provisioning] install pass that writes to /opt/maestro-tools.
+# `docker/entrypoint.sh` setpriv's back to maestro for the actual maestro
+# server process (see entrypoint.sh ~line 178). A future entrypoint refactor
+# (sudo-elevate via the existing /bin/bash sudoers rule) can move `USER maestro`
+# to immediately before `ENTRYPOINT`; that change is out of Phase 3 scope
+# because the brief explicitly forbids rewriting `entrypoint.sh`.
+USER maestro
+USER root
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["--config", "/etc/maestro/config.toml"]
