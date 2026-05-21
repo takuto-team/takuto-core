@@ -11,6 +11,7 @@ import { useTicketDetail } from "../../hooks/useTicketDetail";
 import { useTicketCountdown } from "../../hooks/useTicketCountdown";
 import { TicketDetailAiPanel } from "./TicketDetailAiPanel";
 import { TicketDetailHeader } from "./TicketDetailHeader";
+import { TicketDetailView } from "./TicketDetailView";
 
 const DEFAULT_IMPROVE_TIMEOUT_SECS = 300;
 
@@ -365,9 +366,7 @@ export function TicketDetailModal({
         {/* Content area */}
         <div className={`flex-1 min-h-0 ${(editMode && sideBySide) || pendingImprovement ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
           {loading ? (
-            <div className="flex-1 overflow-y-auto p-6">
-              <p className="text-gray-500 text-sm">Loading description...</p>
-            </div>
+            <TicketDetailView markdown={markdown} loading={true} />
           ) : pendingImprovement ? (
             <DiffView
               oldText={pendingImprovement.originalDescription}
@@ -403,9 +402,7 @@ export function TicketDetailModal({
               </div>
             )
           ) : (
-            <div className="flex-1 overflow-y-auto p-6">
-              <MarkdownPreview markdown={markdown} />
-            </div>
+            <TicketDetailView markdown={markdown} loading={false} />
           )}
         </div>
 
