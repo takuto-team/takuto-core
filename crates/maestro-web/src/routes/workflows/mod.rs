@@ -14,13 +14,13 @@ use crate::auth::AuthenticatedUser;
 use maestro_core::container::{self};
 use maestro_core::jira::ticket_browse_url;
 use maestro_core::workflow::dashboard_progress;
-use maestro_core::workflow::definitions::{DiscoveredWorkflow, discover_workflows};
 use maestro_core::workflow::engine::Workflow;
 use maestro_core::workflow::state::WorkflowState;
 
 use crate::session_registry::{SessionRoute, SessionRouteKind};
 use crate::state::{AppState, DynamicPortForward};
 
+mod definitions;
 mod dto;
 mod editor;
 mod lifecycle;
@@ -28,6 +28,7 @@ mod manual;
 mod port_tracking;
 mod run_commands;
 
+pub use definitions::{list_workflow_definitions, retry_workflow_def, run_workflow_def};
 pub use dto::{
     RunCommandStatus, TerminalLineDto, WorkflowCountsResponse, WorkflowSummary,
 };
@@ -508,48 +509,6 @@ pub struct WorkflowReportResponse {
 
 
 
-/// List all discovered workflow definitions from the workflows directory.
-pub async fn list_workflow_definitions(
-    State(state): State<AppState>,
-) -> Json<Vec<DiscoveredWorkflow>> {
-    let dir = state.engine.workflows_dir.clone();
-    let result = discover_workflows(&dir);
-    Json(result.workflows)
-}
-
-/// Start a specific workflow definition for a ticket.
-pub async fn run_workflow_def(
-    State(state): State<AppState>,
-    Path((id, def_name)): Path<(String, String)>,
-    Extension(auth): Extension<AuthenticatedUser>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
-        .await
-        .map_err(|s| (s, "Workflow not found".into()))?;
-    state
-        .engine
-        .start_workflow_def(&id, &def_name)
-        .await
-        .map(|()| StatusCode::ACCEPTED)
-        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
-}
-
-/// Retry a failed workflow definition for a ticket (resets Error -> Idle, then starts).
-pub async fn retry_workflow_def(
-    State(state): State<AppState>,
-    Path((id, def_name)): Path<(String, String)>,
-    Extension(auth): Extension<AuthenticatedUser>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
-        .await
-        .map_err(|s| (s, "Workflow not found".into()))?;
-    state
-        .engine
-        .retry_workflow_def(&id, &def_name)
-        .await
-        .map(|()| StatusCode::ACCEPTED)
-        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
-}
 
 /// Phase 2b.3.x: try to build a `WorkerSecretsBundle` for a side-channel
 /// container (browser editor, dev-server run command) tied to a workflow.
