@@ -89,10 +89,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# ttyd — lightweight web-based terminal (used by the dashboard "Open terminal" button)
-RUN ARCH=$(dpkg --print-architecture) \
-    && case "$ARCH" in amd64) TTYD_ARCH=x86_64 ;; arm64) TTYD_ARCH=aarch64 ;; *) echo "Unsupported arch: $ARCH" && exit 1 ;; esac \
-    && curl -fSL --retry 3 --retry-delay 5 "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd \
+# ttyd — lightweight web-based terminal (used by the dashboard "Open terminal" button).
+# Pinned by version + per-arch sha256 (audit §3.5 — verify checksums on every direct download).
+ARG TTYD_VERSION=1.7.7
+ARG TTYD_SHA256_X86_64=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55
+ARG TTYD_SHA256_AARCH64=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165
+RUN set -eux \
+    && ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) TTYD_ARCH=x86_64; TTYD_SHA256="${TTYD_SHA256_X86_64}" ;; \
+         arm64) TTYD_ARCH=aarch64; TTYD_SHA256="${TTYD_SHA256_AARCH64}" ;; \
+         *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fSL --retry 3 --retry-delay 5 \
+         "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${TTYD_ARCH}" \
+         -o /usr/local/bin/ttyd \
+    && echo "${TTYD_SHA256}  /usr/local/bin/ttyd" | sha256sum -c - \
     && chmod +x /usr/local/bin/ttyd
 
 
@@ -156,15 +168,21 @@ RUN curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-delay 5 https://sh.ru
 # Node.js 23+ (official tarball). Cursor Agent runs `node --use-system-ca`, which exists only on Node >= 23.9
 # on Linux; NodeSource 20.x rejects that flag with "bad option: --use-system-ca".
 ARG NODE_VERSION=23.11.0
-RUN ARCH="$(dpkg --print-architecture)" \
+# Pinned per-arch sha256, sourced from https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt
+# (audit §3.5 — verify checksums on every direct download).
+ARG NODE_SHA256_X64=66f768a7f2d89ecdda8fe1e33ee71ac04ed9180111cbf1c5fb944655fe7c90c7
+ARG NODE_SHA256_ARM64=12b29a87a7ccd7e1b97392d1e1533470d596578dad900430cff403e404fe72a7
+RUN set -eux \
+    && ARCH="$(dpkg --print-architecture)" \
     && case "$ARCH" in \
-      amd64) NODE_ARCH=x64 ;; \
-      arm64) NODE_ARCH=arm64 ;; \
-      *) echo "unsupported architecture: $ARCH"; exit 1 ;; \
-    esac \
+         amd64) NODE_ARCH=x64; NODE_SHA256="${NODE_SHA256_X64}" ;; \
+         arm64) NODE_ARCH=arm64; NODE_SHA256="${NODE_SHA256_ARM64}" ;; \
+         *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;; \
+       esac \
     && curl -fSL --retry 3 --retry-delay 5 \
        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" \
        -o /tmp/node.tar.gz \
+    && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
     && rm -f /tmp/node.tar.gz \
     && node --version && npm --version
@@ -177,37 +195,52 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI (latest version, globally accessible to all users)
-RUN npm install -g @anthropic-ai/claude-code@latest
-
-# Task #48: bake codex CLI (`[agent] provider = "codex"`). The Phase 4
-# runtime adapter isn't wired yet (selecting codex still surfaces
-# `provider_not_implemented` in SystemStatus) — baking the binary now
-# means the image is ready to run codex workflows the moment the adapter
-# lands, with no rebuild required.
-RUN npm install -g @openai/codex
-
-# Task #48: bake opencode CLI (`[agent] provider = "opencode"`). Same
-# rationale as codex — Phase 4 adapter landing now.
-#
-# Canonical distribution is the `opencode-ai` npm package (NOT `opencode`,
-# which is a different project on npm). The earlier "download a GitHub
-# release zip" approach pointed at a non-existent
-# `opencode-linux-<arch>.zip` asset and silently swallowed the failure —
-# every image left `/usr/local/bin/opencode` missing. npm is already
-# available from the Node install above.
-RUN npm install -g opencode-ai@latest \
+# Baked AI provider CLIs. Versions pinned via ARG (audit §3.5 — no @latest in image build).
+# Each ARG is the one-line bump knob; refresh together with the per-CLI release cadence.
+#  • claude        — `@anthropic-ai/claude-code` (Claude Code CLI for [agent] provider = "claude")
+#  • codex         — `@openai/codex`             (Codex CLI for [agent] provider = "codex")
+#  • opencode      — `opencode-ai`               (OpenCode CLI for [agent] provider = "opencode";
+#                    canonical distribution is the `opencode-ai` package, NOT `opencode`)
+ARG CLAUDE_CODE_VERSION=2.1.146
+ARG CODEX_VERSION=0.132.0
+ARG OPENCODE_AI_VERSION=1.15.6
+RUN npm install -g \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        "@openai/codex@${CODEX_VERSION}" \
+        "opencode-ai@${OPENCODE_AI_VERSION}" \
     && opencode --version
 
 # Cursor Agent CLI (for [agent] provider = "cursor"). The launcher resolves paths with realpath("$0");
-# copying only the script to /usr/local/bin breaks it (looks for index.js next to the copy). Install the
-# full package under /usr/local and symlink agent into PATH.
-RUN curl -fsSL https://cursor.com/install | bash \
-    && AGENT_REAL="$(readlink -f /root/.local/bin/agent)" \
-    && cp -a /root/.local/share/cursor-agent /usr/local/share/cursor-agent \
-    && ln -sf "/usr/local/share/cursor-agent${AGENT_REAL#/root/.local/share/cursor-agent}" /usr/local/bin/agent \
+# the package must be installed as a directory tree so `index.js` sits next to the `cursor-agent` script
+# (a symlink alone to /usr/local/bin breaks the realpath lookup).
+#
+# Pinned tarball replaces upstream `curl … | bash` (audit §3.5):
+#   • reproducible — the installer URL pins to a moving lab build otherwise.
+#   • supply-chain — a compromised install script can no longer inject arbitrary code at build time.
+# To bump: download the new tarball from downloads.cursor.com/lab/<version>/linux/<arch>/agent-cli-package.tar.gz,
+# update CURSOR_AGENT_VERSION + the two per-arch sha256 ARGs.
+ARG CURSOR_AGENT_VERSION=2026.05.20-2b5dd59
+ARG CURSOR_AGENT_SHA256_X64=27453acdea679d1570ab5adbbef9d19ecbf4c3efc8df687338c7fc156a693e18
+ARG CURSOR_AGENT_SHA256_ARM64=baf2f0aa1ca890f0b71480fba2db40bacff4eb56b9408c940d574ce39d8ab3fc
+RUN set -eux \
+    && ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
+         amd64) CURSOR_ARCH=x64; CURSOR_SHA256="${CURSOR_AGENT_SHA256_X64}" ;; \
+         arm64) CURSOR_ARCH=arm64; CURSOR_SHA256="${CURSOR_AGENT_SHA256_ARM64}" ;; \
+         *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && CURSOR_DEST="/usr/local/share/cursor-agent/versions/${CURSOR_AGENT_VERSION}" \
+    && mkdir -p "${CURSOR_DEST}" \
+    && curl -fSL --retry 3 --retry-delay 5 \
+         "https://downloads.cursor.com/lab/${CURSOR_AGENT_VERSION}/linux/${CURSOR_ARCH}/agent-cli-package.tar.gz" \
+         -o /tmp/cursor-agent.tar.gz \
+    && echo "${CURSOR_SHA256}  /tmp/cursor-agent.tar.gz" | sha256sum -c - \
+    && tar --strip-components=1 -xzf /tmp/cursor-agent.tar.gz -C "${CURSOR_DEST}" \
+    && rm -f /tmp/cursor-agent.tar.gz \
+    && ln -sf "${CURSOR_DEST}/cursor-agent" /usr/local/bin/agent \
+    && ln -sf "${CURSOR_DEST}/cursor-agent" /usr/local/bin/cursor-agent \
     && chmod -R a+rX /usr/local/share/cursor-agent \
-    && test -f "$(dirname "$(readlink -f /usr/local/bin/agent)")/index.js"
+    && test -f "${CURSOR_DEST}/index.js"
 
 # Playwright is not baked into this image: isolated workflow workers use the project's @playwright/test
 # version and download Chromium into ~/.cache/ms-playwright (persisted via docker-compose.dind.yml
@@ -225,14 +258,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
     && (apt-get install -y --no-install-recommends acli || echo "WARN: acli not available for $(dpkg --print-architecture)") \
     && rm -rf /var/lib/apt/lists/*
 
-# openvscode-server — browser-based VS Code for manual worktree editing via dashboard
+# openvscode-server — browser-based VS Code for manual worktree editing via dashboard.
 # Release tarballs use x64/arm64/armhf, not dpkg's amd64/arm64.
+# Pinned per-arch sha256 (audit §3.5 — verify checksums on every direct download).
 ARG OPENVSCODE_VERSION=1.109.5
-RUN ARCH="$(dpkg --print-architecture)" \
-    && case "$ARCH" in amd64) VS_ARCH=x64 ;; arm64) VS_ARCH=arm64 ;; *) echo "Unsupported arch: $ARCH" && exit 1 ;; esac \
+ARG OPENVSCODE_SHA256_X64=b433bf4f0227321a7014d8460d10a8f958adc0f45aa79bd889e84e65e8f88363
+ARG OPENVSCODE_SHA256_ARM64=36d9c14036489b63de84ebace837fcacf7e60e669a0dc715802c5443684ea4dc
+RUN set -eux \
+    && ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
+         amd64) VS_ARCH=x64; OVS_SHA256="${OPENVSCODE_SHA256_X64}" ;; \
+         arm64) VS_ARCH=arm64; OVS_SHA256="${OPENVSCODE_SHA256_ARM64}" ;; \
+         *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
     && curl -fSL --retry 3 --retry-delay 5 \
-       "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v${OPENVSCODE_VERSION}/openvscode-server-v${OPENVSCODE_VERSION}-linux-${VS_ARCH}.tar.gz" \
-       -o /tmp/openvscode.tar.gz \
+         "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v${OPENVSCODE_VERSION}/openvscode-server-v${OPENVSCODE_VERSION}-linux-${VS_ARCH}.tar.gz" \
+         -o /tmp/openvscode.tar.gz \
+    && echo "${OVS_SHA256}  /tmp/openvscode.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/openvscode.tar.gz -C /opt \
     && ln -s "/opt/openvscode-server-v${OPENVSCODE_VERSION}-linux-${VS_ARCH}/bin/openvscode-server" /usr/local/bin/openvscode-server \
     && rm -f /tmp/openvscode.tar.gz
