@@ -33,173 +33,102 @@ interface Props {
 }
 
 export function TicketDetailModal({
-  ticketKey,
-  summary,
-  description: initialDescription,
-  ticketingSystem,
-  showStartButton,
-  improveTimeoutSecs = DEFAULT_IMPROVE_TIMEOUT_SECS,
-  onStart,
-  onClose,
-  onSaved,
+  ticketKey, summary, description: initialDescription, ticketingSystem, showStartButton,
+  improveTimeoutSecs = DEFAULT_IMPROVE_TIMEOUT_SECS, onStart, onClose, onSaved,
 }: Props) {
-  const { markdown, setMarkdown, loading } = useTicketDetail(
-    ticketKey,
-    initialDescription,
-    ticketingSystem,
-  );
-  const { countdown, start: startCountdown, stop: stopCountdown } =
-    useTicketCountdown(improveTimeoutSecs);
-  const editor = useTicketEditor({ summary, markdown, setMarkdown, ticketKey, onSaved });
-  const {
-    editMode, editText, editTitle, activeTab, sideBySide, debouncedText, saving, editDirty,
-    setEditText, setEditTitle, setActiveTab,
-    handleStartEdit, handleCancelEdit, handleSaveDescription, handleSideBySideChange,
-    applyImprovement,
-  } = editor;
-  const [pendingImprovement, setPendingImprovement] =
-    useState<PendingImprovement | null>(null);
-  const improve = useTicketImproveWithAI({
-    ticketKey, markdown, editTitle, improveTimeoutSecs,
+  const { markdown, setMarkdown, loading } = useTicketDetail(ticketKey, initialDescription, ticketingSystem);
+  const { countdown, start: startCountdown, stop: stopCountdown } = useTicketCountdown(improveTimeoutSecs);
+  const e = useTicketEditor({ summary, markdown, setMarkdown, ticketKey, onSaved });
+  const [pendingImprovement, setPendingImprovement] = useState<PendingImprovement | null>(null);
+  const i = useTicketImproveWithAI({
+    ticketKey, markdown, editTitle: e.editTitle, improveTimeoutSecs,
     startCountdown, stopCountdown,
     pendingImprovement, setPendingImprovement,
-    applyImprovementToEditor: applyImprovement,
+    applyImprovementToEditor: e.applyImprovement,
   });
-  const {
-    improving, prompting, setPrompting,
-    handleImprove, handleCancelImprove,
-    handleConfirmImprovement, handleDiscardImprovement, handleImprovement,
-  } = improve;
-
-  // Plan-10: repository selector — only shown when starting a workflow.
   const { repos, repositoryId, setRepositoryId, loadingRepos } = useStartWorkflow(showStartButton);
 
   // When a diff is pending, widen the modal like side-by-side edit mode.
-  const isWide = sideBySide || pendingImprovement !== null;
+  const isWide = e.sideBySide || pendingImprovement !== null;
+  const contentClass = `flex-1 min-h-0 ${(e.editMode && e.sideBySide) || pendingImprovement ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`;
+  const maxWidth = isWide ? "min(2580px, calc(100vw - 48px))" : "min(1280px, calc(100vw - 24px))";
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="bg-gray-900 border border-gray-700 rounded-xl w-full mx-4 flex flex-col relative transition-[max-width] duration-300 ease-in-out"
-        style={{
-          maxWidth: isWide
-            ? "min(2580px, calc(100vw - 48px))"
-            : "min(1280px, calc(100vw - 24px))",
-          height: "calc(100vh - 48px)",
-        }}
-        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth, height: "calc(100vh - 48px)" }}
+        onClick={(ev) => ev.stopPropagation()}
       >
-        {/* Header */}
         <TicketDetailHeader
-          ticketKey={ticketKey}
-          summary={summary}
-          editing={editMode && !pendingImprovement}
-          editTitle={editTitle}
-          onEditTitleChange={setEditTitle}
+          ticketKey={ticketKey} summary={summary}
+          editing={e.editMode && !pendingImprovement}
+          editTitle={e.editTitle} onEditTitleChange={e.setEditTitle}
           pendingImprovedSummary={pendingImprovement?.improvedSummary}
           onClose={onClose}
         />
-
-        {/* Plan-10 repo selector — required when starting a workflow. */}
         <StartWorkflowRepoBanner
-          showStartButton={showStartButton}
-          repos={repos}
-          repositoryId={repositoryId}
-          setRepositoryId={setRepositoryId}
-          loadingRepos={loadingRepos}
-          onClose={onClose}
+          showStartButton={showStartButton} repos={repos}
+          repositoryId={repositoryId} setRepositoryId={setRepositoryId}
+          loadingRepos={loadingRepos} onClose={onClose}
         />
-
-        {/* Diff review banner */}
         <TicketImproveWithAI.Banner
           pendingImprovement={pendingImprovement}
-          onDiscardImprovement={handleDiscardImprovement}
-          onConfirmImprovement={handleConfirmImprovement}
+          onDiscardImprovement={i.handleDiscardImprovement}
+          onConfirmImprovement={i.handleConfirmImprovement}
         />
-
-        {/* Edit banner — only in edit mode and not while reviewing a diff */}
         <TicketEditor.Banner
-          editMode={editMode}
-          pendingImprovement={pendingImprovement}
-          editDirty={editDirty}
-          saving={saving}
-          onCancelEdit={handleCancelEdit}
-          onSaveDescription={handleSaveDescription}
+          editMode={e.editMode} pendingImprovement={pendingImprovement}
+          editDirty={e.editDirty} saving={e.saving}
+          onCancelEdit={e.handleCancelEdit} onSaveDescription={e.handleSaveDescription}
         />
-
-        {/* Tab bar — only visible in edit mode and not while reviewing a diff */}
         <TicketEditor.TabBar
-          editMode={editMode}
-          pendingImprovement={pendingImprovement}
-          sideBySide={sideBySide}
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          onSideBySideChange={handleSideBySideChange}
+          editMode={e.editMode} pendingImprovement={pendingImprovement}
+          sideBySide={e.sideBySide} activeTab={e.activeTab} setActiveTab={e.setActiveTab}
+          onSideBySideChange={e.handleSideBySideChange}
         />
-
-        {/* Content area */}
-        <div className={`flex-1 min-h-0 ${(editMode && sideBySide) || pendingImprovement ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
+        <div className={contentClass}>
           {loading ? (
             <TicketDetailView markdown={markdown} loading={true} />
           ) : pendingImprovement ? (
-            <DiffView
-              oldText={pendingImprovement.originalDescription}
-              newText={pendingImprovement.improvedDescription}
-            />
-          ) : editMode ? (
+            <DiffView oldText={pendingImprovement.originalDescription} newText={pendingImprovement.improvedDescription} />
+          ) : e.editMode ? (
             <TicketEditor.Content
-              sideBySide={sideBySide}
-              activeTab={activeTab}
-              editText={editText}
-              setEditText={setEditText}
-              debouncedText={debouncedText}
+              sideBySide={e.sideBySide} activeTab={e.activeTab}
+              editText={e.editText} setEditText={e.setEditText} debouncedText={e.debouncedText}
             />
           ) : (
             <TicketDetailView markdown={markdown} loading={false} />
           )}
         </div>
-
-        {/* AI Prompt Panel — hidden while reviewing a diff */}
         {!loading && !pendingImprovement && (
           <TicketImproveWithAI
             ticketKey={ticketKey}
-            ticketTitle={editMode ? editTitle : summary}
-            ticketDescription={editMode ? editText : markdown}
-            improving={improving}
-            countdown={countdown}
-            onCancelImprove={handleCancelImprove}
-            onLoadingChange={setPrompting}
-            onImprovement={handleImprovement}
+            ticketTitle={e.editMode ? e.editTitle : summary}
+            ticketDescription={e.editMode ? e.editText : markdown}
+            improving={i.improving} countdown={countdown}
+            onCancelImprove={i.handleCancelImprove}
+            onLoadingChange={i.setPrompting}
+            onImprovement={i.handleImprovement}
           />
         )}
-
-        {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-gray-800 gap-3">
           <div className="flex gap-2">
             <TicketImproveWithAI.FooterButtons
               pendingImprovement={pendingImprovement}
-              improving={improving}
-              editMode={editMode}
-              prompting={prompting}
-              onImprove={handleImprove}
-              onStartEdit={handleStartEdit}
+              improving={i.improving} editMode={e.editMode} prompting={i.prompting}
+              onImprove={i.handleImprove} onStartEdit={e.handleStartEdit}
             />
           </div>
           <StartWorkflowFooter
-            showStartButton={showStartButton}
-            pendingImprovement={pendingImprovement}
-            editMode={editMode}
-            editText={editText}
-            editTitle={editTitle}
-            markdown={markdown}
-            summary={summary}
-            repositoryId={repositoryId}
-            loadingRepos={loadingRepos}
-            onStart={onStart}
-            onClose={onClose}
-            onCancelEdit={handleCancelEdit}
-            onDiscardImprovement={handleDiscardImprovement}
-            onConfirmImprovement={handleConfirmImprovement}
+            showStartButton={showStartButton} pendingImprovement={pendingImprovement}
+            editMode={e.editMode} editText={e.editText} editTitle={e.editTitle}
+            markdown={markdown} summary={summary}
+            repositoryId={repositoryId} loadingRepos={loadingRepos}
+            onStart={onStart} onClose={onClose}
+            onCancelEdit={e.handleCancelEdit}
+            onDiscardImprovement={i.handleDiscardImprovement}
+            onConfirmImprovement={i.handleConfirmImprovement}
           />
         </div>
       </div>
