@@ -1,11 +1,12 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { apiJson, apiPost } from "../api/client";
-import type { ConfigResponse, WorkflowEvent } from "../api/types";
+import { apiPost } from "../api/client";
+import type { WorkflowEvent } from "../api/types";
 import { useToast } from "../hooks/useToast";
+import { useConfig } from "../hooks/useConfig";
 import { useOnboardingStatus } from "../hooks/useOnboardingStatus";
 import { useMyRepositories } from "../hooks/useMyRepositories";
 import { useWorkflowDefinitions } from "../hooks/useWorkflowDefinitions";
@@ -35,65 +36,38 @@ interface Props {
 
 export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   const { showToast } = useToast();
-  const [config, setConfig] = useState<ConfigResponse | null>(null);
-  // Phase 0 banner state — see useOnboardingStatus for tri-state semantics
-  // and the focus-listener refetch.
+  const config = useConfig();
   const { systemStatus, refresh: refreshOnboardingStatus } = useOnboardingStatus();
-  const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts, dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState: _resetState } = useWorkflows();
-  const { workflowDefs, refresh: fetchWorkflowDefs, scheduleRefresh: scheduleWorkflowDefsRefresh } = useWorkflowDefinitions();
-
-  // Plan-10: track the caller's added repositories. Drives the empty-state CTA,
-  // gates the "+" picker, and feeds the header repo-switcher dropdown.
-  // `activeRepoName` is persisted in localStorage (see useMyRepositories).
+  const wf = useWorkflows();
+  const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts,
+          dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState: _resetState } = wf;
+  const { workflowDefs, refresh: fetchWorkflowDefs, scheduleRefresh: scheduleWorkflowDefsRefresh } =
+    useWorkflowDefinitions();
   const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
-
   const modals = useDashboardModals(config);
 
-  // Wrap handleEvent to also re-fetch definitions on relevant events
-  const handleEventWithDefs = useCallback(
-    (evt: WorkflowEvent) => {
-      handleEvent(evt);
-
-      // Re-fetch definitions when definitions change or workflows update (debounced)
-      if (
-        evt.event_type === "workflow_definitions_changed" ||
+  // Wrap handleEvent to also re-fetch definitions + onboarding on relevant events.
+  const handleEventWithDefs = useCallback((evt: WorkflowEvent) => {
+    handleEvent(evt);
+    if (evt.event_type === "workflow_definitions_changed" ||
         evt.event_type === "workflow_updated" ||
-        evt.event_type === "step_completed"
-      ) {
-        scheduleWorkflowDefsRefresh();
-      }
-
-      // Phase 0: re-fetch onboarding status on the dedicated server-pushed
-      // event. The event itself ships in Phase 1; declaring the handler now
-      // means we'll pick up server-side state changes the moment it does.
-      if (evt.event_type === "onboarding_changed") {
-        refreshOnboardingStatus();
-      }
-
-      // Phase 1: admin switched the deployment-wide AI provider. Surface a
-      // toast + re-fetch /api/auth/status (degraded / provider_selected may
-      // have flipped) and /api/onboarding/status (banner state). No
-      // credential-storage UI work yet — that ships with Phase 2.
-      if (evt.event_type === "provider_changed") {
-        handleProviderChangedEvent(evt, {
-          showToast,
-          refreshOnboardingStatus,
-        });
-      }
-    },
-    [handleEvent, scheduleWorkflowDefsRefresh, refreshOnboardingStatus, showToast]
-  );
+        evt.event_type === "step_completed") {
+      scheduleWorkflowDefsRefresh();
+    }
+    if (evt.event_type === "onboarding_changed") refreshOnboardingStatus();
+    if (evt.event_type === "provider_changed") {
+      handleProviderChangedEvent(evt, { showToast, refreshOnboardingStatus });
+    }
+  }, [handleEvent, scheduleWorkflowDefsRefresh, refreshOnboardingStatus, showToast]);
 
   const { connected } = useWebSocket(handleEventWithDefs);
   const prevConnected = useRef(false);
   const polling = usePolling();
 
-  // Fetch global counts on mount.
-  useEffect(() => {
-    fetchCounts();
-  }, [fetchCounts]);
-
-  // Re-fetch workflows, definitions, and counts on WebSocket reconnect (connected: false → true)
+  // Consolidated mount + reconnect refetch (designer plan). Fires once on
+  // initial WebSocket connect (prevConnected.current false → connected true)
+  // and again on every reconnect edge. useWorkflowDefinitions self-fetches
+  // on its own mount, so the call here is the reconnect-side refresh.
   useEffect(() => {
     if (connected && !prevConnected.current) {
       fetchWorkflows();
@@ -102,13 +76,6 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     }
     prevConnected.current = connected;
   }, [connected, fetchWorkflows, fetchWorkflowDefs, fetchCounts]);
-
-  // Load config
-  useEffect(() => {
-    apiJson<ConfigResponse>("/api/config")
-      .then(setConfig)
-      .catch(() => {});
-  }, []);
 
   const ticketingSystem = config?.ticketing_system || "none";
   const dryMode = config?.general?.dry_mode || false;
@@ -121,63 +88,45 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   }, [ticketingSystem, modals]);
 
   const handleTicketSelected = useCallback(
-    (key: string, summary: string, description?: string, url?: string) => {
-      modals.openDetail({ key, summary, description, url, showStart: true });
-    },
+    (key: string, summary: string, description?: string, url?: string) =>
+      modals.openDetail({ key, summary, description, url, showStart: true }),
     [modals]
   );
 
-  const handleAddToDashboard = useCallback(async (description: string, summary: string, repositoryId: string) => {
-    if (modals.modal.kind !== "detail") return;
-    if (!repositoryId) {
-      showToast("Pick a repository before adding a workflow.");
-      return;
-    }
-    const ticket = modals.modal.ticket;
-    try {
-      const res = await apiPost("/api/workflows/start-manual", {
-        ticket_key: ticket.key,
-        ticket_summary: summary,
-        ticket_description: description,
-        repository_id: repositoryId,
-        ...(ticket.url ? { issue_url: ticket.url } : {}),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `HTTP ${res.status}`);
-      }
-      modals.close();
-      fetchWorkflows();
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Failed to add workflow");
-    }
-  }, [modals, fetchWorkflows, showToast]);
-
-  const handlePasteSubmit = useCallback(
-    async (name: string, description: string, repositoryId: string) => {
-      if (!repositoryId) {
-        showToast("Pick a repository before adding a workflow.");
-        return;
-      }
+  const handleAddToDashboard = useCallback(
+    async (description: string, summary: string, repositoryId: string) => {
+      if (modals.modal.kind !== "detail") return;
+      if (!repositoryId) { showToast("Pick a repository before adding a workflow."); return; }
+      const ticket = modals.modal.ticket;
       try {
         const res = await apiPost("/api/workflows/start-manual", {
-          ticket_key: name,
-          ticket_summary: name || "Manual item",
-          ticket_description: description,
+          ticket_key: ticket.key, ticket_summary: summary, ticket_description: description,
           repository_id: repositoryId,
+          ...(ticket.url ? { issue_url: ticket.url } : {}),
         });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || `HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
         modals.close();
         fetchWorkflows();
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Failed to add workflow");
       }
-    },
-    [modals, fetchWorkflows, showToast]
-  );
+    }, [modals, fetchWorkflows, showToast]);
+
+  const handlePasteSubmit = useCallback(
+    async (name: string, description: string, repositoryId: string) => {
+      if (!repositoryId) { showToast("Pick a repository before adding a workflow."); return; }
+      try {
+        const res = await apiPost("/api/workflows/start-manual", {
+          ticket_key: name, ticket_summary: name || "Manual item",
+          ticket_description: description, repository_id: repositoryId,
+        });
+        if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+        modals.close();
+        fetchWorkflows();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Failed to add workflow");
+      }
+    }, [modals, fetchWorkflows, showToast]);
 
   const handleShowDescription = useCallback((key: string, summary: string, description?: string) => {
     // For Jira, don't pass cached description — the modal fetches fresh from the preview API.
@@ -186,50 +135,33 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     modals.openDetail({ key, summary, description: desc, showStart: false });
   }, [ticketingSystem, modals]);
 
-  // Plan-10: there is no "active repo" any more. The empty-state CTA links to
-  // the My Repositories tab; the per-card badge tells the user which repo
-  // each workflow belongs to.
+  // Plan-10: empty-state CTA links to My Repositories; per-card badges show repo per workflow.
   const repoExists = (hasAnyRepo ?? true);
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Polling label at the very top */}
       <PollingLabel
-        paused={polling.paused}
-        toggling={polling.toggling}
-        ticketingSystem={ticketingSystem}
-        onToggle={polling.toggle}
+        paused={polling.paused} toggling={polling.toggling}
+        ticketingSystem={ticketingSystem} onToggle={polling.toggle}
       />
-
       <Header
-        connected={connected}
-        authEnabled={authEnabled}
+        connected={connected} authEnabled={authEnabled}
         githubAppConfigured={githubAppConfigured}
         githubAppInstallationId={githubAppInstallationId}
-        githubAppName={config?.github_app_name}
-        onLogout={onLogout}
-        repos={myRepos ?? []}
-        activeRepoName={activeRepoName}
+        githubAppName={config?.github_app_name} onLogout={onLogout}
+        repos={myRepos ?? []} activeRepoName={activeRepoName}
         onSelectRepo={setActiveRepoName}
       />
-
-      {/* Onboarding / preflight banner — driven by /api/onboarding/status with
-          a fallback to ConfigResponse.preflight_error for older servers.
-          `isAdmin` drives the per-warning deep-link visibility (admin-only
-          CTAs collapse to greyed text for regular users). */}
       <OnboardingBanner
         status={systemStatus}
         legacyPreflightError={config?.preflight_error ?? null}
         isAdmin={isAdmin}
       />
-
-      {/* Dry mode banner */}
       {dryMode && (
         <div className="bg-amber-900/30 border-b border-amber-700/50 px-4 py-2 text-center text-xs text-amber-300">
           Dry mode is enabled &mdash; Jira/GitHub side effects are skipped
         </div>
       )}
-
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
         <SummaryStats counts={counts} />
         {hasAnyRepo === false ? (
@@ -246,42 +178,28 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
           </div>
         ) : (
           <WorkflowGrid
-            workflows={workflows}
-            orderKeys={orderKeys}
-            terminalStates={terminalStates}
-            dynamicForwards={dynamicForwards}
-            workflowDefs={workflowDefs}
-            onRefresh={fetchWorkflows}
-            onShowDescription={handleShowDescription}
-            onReport={modals.openReport}
+            workflows={workflows} orderKeys={orderKeys}
+            terminalStates={terminalStates} dynamicForwards={dynamicForwards}
+            workflowDefs={workflowDefs} onRefresh={fetchWorkflows}
+            onShowDescription={handleShowDescription} onReport={modals.openReport}
             onAddWorkflow={handleAddWorkflow}
-            canAddWorkflow={hasAnyRepo === true}
-            repoExists={repoExists}
-            onSetupProject={undefined}
-            activeRepoName={activeRepoName}
+            canAddWorkflow={hasAnyRepo === true} repoExists={repoExists}
+            onSetupProject={undefined} activeRepoName={activeRepoName}
           />
         )}
       </main>
-
       <DashboardModals
-        modal={modals.modal}
-        close={modals.close}
-        ticketingSystem={ticketingSystem}
-        activeRepoName={activeRepoName}
-        config={config}
-        workflows={workflows}
+        modal={modals.modal} close={modals.close}
+        ticketingSystem={ticketingSystem} activeRepoName={activeRepoName}
+        config={config} workflows={workflows}
         onTicketSelected={handleTicketSelected}
         onAddToDashboard={handleAddToDashboard}
         onPasteSubmit={handlePasteSubmit}
         onSaved={fetchWorkflows}
       />
-
-      {/* Version footer */}
       <footer className="py-3 text-center">
         <span className="text-xs text-gray-600">Maestro v{__APP_VERSION__}</span>
       </footer>
-
-      {/* System error alerts (bottom-right) */}
       <SystemErrorAlert errors={systemErrors} onDismiss={dismissError} />
     </div>
   );
