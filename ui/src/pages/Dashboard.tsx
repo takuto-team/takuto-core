@@ -3,18 +3,12 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import {
-  apiJson,
-  apiPost,
-} from "../api/client";
-import type {
-  ConfigResponse,
-  WorkflowDefinition,
-  WorkflowEvent,
-} from "../api/types";
+import { apiJson, apiPost } from "../api/client";
+import type { ConfigResponse, WorkflowEvent } from "../api/types";
 import { useToast } from "../hooks/useToast";
 import { useOnboardingStatus } from "../hooks/useOnboardingStatus";
 import { useMyRepositories } from "../hooks/useMyRepositories";
+import { useWorkflowDefinitions } from "../hooks/useWorkflowDefinitions";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useWorkflows } from "../hooks/useWorkflows";
 import { usePolling } from "../hooks/usePolling";
@@ -49,24 +43,12 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   // and the focus-listener refetch.
   const { systemStatus, refresh: refreshOnboardingStatus } = useOnboardingStatus();
   const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts, dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState: _resetState } = useWorkflows();
-  const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
-  const defsFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { workflowDefs, refresh: fetchWorkflowDefs, scheduleRefresh: scheduleWorkflowDefsRefresh } = useWorkflowDefinitions();
 
   // Plan-10: track the caller's added repositories. Drives the empty-state CTA,
   // gates the "+" picker, and feeds the header repo-switcher dropdown.
   // `activeRepoName` is persisted in localStorage (see useMyRepositories).
   const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
-
-  const fetchWorkflowDefs = useCallback(() => {
-    apiJson<WorkflowDefinition[]>("/api/workflow-definitions")
-      .then(setWorkflowDefs)
-      .catch(() => {});
-  }, []);
-
-  // Fetch definitions on mount
-  useEffect(() => {
-    fetchWorkflowDefs();
-  }, [fetchWorkflowDefs]);
 
   // Wrap handleEvent to also re-fetch definitions on relevant events
   const handleEventWithDefs = useCallback(
@@ -79,8 +61,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         evt.event_type === "workflow_updated" ||
         evt.event_type === "step_completed"
       ) {
-        if (defsFetchTimer.current) clearTimeout(defsFetchTimer.current);
-        defsFetchTimer.current = setTimeout(fetchWorkflowDefs, 500);
+        scheduleWorkflowDefsRefresh();
       }
 
       // Phase 0: re-fetch onboarding status on the dedicated server-pushed
@@ -101,7 +82,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         });
       }
     },
-    [handleEvent, fetchWorkflowDefs, refreshOnboardingStatus, showToast]
+    [handleEvent, scheduleWorkflowDefsRefresh, refreshOnboardingStatus, showToast]
   );
 
   const { connected } = useWebSocket(handleEventWithDefs);
