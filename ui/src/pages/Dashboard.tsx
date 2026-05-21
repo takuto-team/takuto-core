@@ -6,8 +6,6 @@ import { Link } from "react-router-dom";
 import {
   apiJson,
   apiPost,
-  listMyRepositories,
-  type RepositoryRow,
 } from "../api/client";
 import type {
   ConfigResponse,
@@ -16,6 +14,7 @@ import type {
 } from "../api/types";
 import { useToast } from "../hooks/useToast";
 import { useOnboardingStatus } from "../hooks/useOnboardingStatus";
+import { useMyRepositories } from "../hooks/useMyRepositories";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useWorkflows } from "../hooks/useWorkflows";
 import { usePolling } from "../hooks/usePolling";
@@ -55,55 +54,8 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
 
   // Plan-10: track the caller's added repositories. Drives the empty-state CTA,
   // gates the "+" picker, and feeds the header repo-switcher dropdown.
-  const [myRepos, setMyRepos] = useState<RepositoryRow[] | null>(null);
-  const hasAnyRepo = myRepos === null ? null : myRepos.length > 0;
-
-  const refreshHasAnyRepo = useCallback(() => {
-    listMyRepositories()
-      .then(setMyRepos)
-      .catch(() => setMyRepos([]));
-  }, []);
-
-  // Active repo for dashboard filtering. `null` = "All repositories".
-  // Persisted in localStorage so the choice survives page reloads. Scoped to
-  // the caller via the same key for simplicity; if the user changes accounts
-  // on the same browser the stale name is harmless — the picker just shows
-  // "All repositories" because the name won't match any of `myRepos`.
-  const ACTIVE_REPO_KEY = "maestro.activeRepoName";
-  const [activeRepoName, setActiveRepoNameState] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(ACTIVE_REPO_KEY);
-    } catch {
-      return null;
-    }
-  });
-  const setActiveRepoName = useCallback((name: string | null) => {
-    setActiveRepoNameState(name);
-    try {
-      if (name === null) localStorage.removeItem(ACTIVE_REPO_KEY);
-      else localStorage.setItem(ACTIVE_REPO_KEY, name);
-    } catch {
-      /* ignore quota / disabled storage */
-    }
-  }, []);
-
-  // Sync `activeRepoName` with the user's current `myRepos` set:
-  //   - Drop the saved active repo if it's no longer in the user's list (a
-  //     removal in the Config tab — or another browser tab).
-  //   - If exactly ONE repo remains and nothing is selected, auto-select it.
-  //     This is the dashboard's expected behaviour after a removal that leaves
-  //     a single repo — the user shouldn't have to manually pick from the
-  //     header picker to see their items.
-  useEffect(() => {
-    if (myRepos === null) return;
-    if (activeRepoName !== null && !myRepos.some((r) => r.name === activeRepoName)) {
-      setActiveRepoName(null);
-      return;
-    }
-    if (myRepos.length === 1 && activeRepoName === null) {
-      setActiveRepoName(myRepos[0].name);
-    }
-  }, [myRepos, activeRepoName, setActiveRepoName]);
+  // `activeRepoName` is persisted in localStorage (see useMyRepositories).
+  const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
 
   const fetchWorkflowDefs = useCallback(() => {
     apiJson<WorkflowDefinition[]>("/api/workflow-definitions")
@@ -114,8 +66,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   // Fetch definitions on mount
   useEffect(() => {
     fetchWorkflowDefs();
-    refreshHasAnyRepo();
-  }, [fetchWorkflowDefs, refreshHasAnyRepo]);
+  }, [fetchWorkflowDefs]);
 
   // Wrap handleEvent to also re-fetch definitions on relevant events
   const handleEventWithDefs = useCallback(
