@@ -10,6 +10,7 @@ import { useToast } from "../../hooks/useToast";
 import { useTicketDetail } from "../../hooks/useTicketDetail";
 import { useTicketCountdown } from "../../hooks/useTicketCountdown";
 import { TicketDetailAiPanel } from "./TicketDetailAiPanel";
+import { TicketDetailHeader } from "./TicketDetailHeader";
 
 const DEFAULT_IMPROVE_TIMEOUT_SECS = 300;
 
@@ -229,26 +230,15 @@ export function TicketDetailModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <div className="min-w-0 flex-1">
-            <span className="font-mono text-xs text-blue-400">{ticketKey}</span>
-            {editMode && !pendingImprovement ? (
-              <input
-                type="text"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                className="block w-full mt-1 bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-lg font-medium text-white"
-              />
-            ) : (
-              <h3 className="text-lg font-medium text-white truncate">
-                {pendingImprovement?.improvedSummary ?? summary}
-              </h3>
-            )}
-          </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 cursor-pointer text-xl flex-shrink-0 ml-4">
-            &times;
-          </button>
-        </div>
+        <TicketDetailHeader
+          ticketKey={ticketKey}
+          summary={summary}
+          editing={editMode && !pendingImprovement}
+          editTitle={editTitle}
+          onEditTitleChange={setEditTitle}
+          pendingImprovedSummary={pendingImprovement?.improvedSummary}
+          onClose={onClose}
+        />
 
         {/* Plan-10 repo selector — required when starting a workflow. */}
         {showStartButton && (
