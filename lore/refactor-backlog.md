@@ -15,6 +15,14 @@ All items must obey `CODING_STANDARDS.md` §5: minimum viable change, one logica
 
 ---
 
+## Status (2026-05-21)
+
+The 2026-05-21 clean-code audit (`lore/audits/2026-05-21-clean-code.md`) executed Phases 1, 3, and 5 of the plan in `lore/audits/2026-05-21-plan.md` — module splits (`config/`, `routes/workflows/`), Docker image hardening, and React UI component splits respectively. See `git log --since=2026-05-21` for the commit trail.
+
+**Phases 2 (typed `MaestroError`) and 4 (async hygiene) were deferred to this backlog per the option-2 wrap decision** — captured below as `P1-D-1` and `P1-D-2`. The audit context (worst offender rankings, systemic smells, prioritised fix order) is in the audit file; the verbatim scope / ACs / risks / verifier blocks are reproduced here so a future picker can work without flipping documents. Several P0/P1 entries below were superseded by earlier work — see the "Overlap" section of `lore/audits/2026-05-21-plan.md` for a per-item status.
+
+---
+
 ## P0 — Top-priority fixes (audit §8)
 
 ### P0-1 · Split `crates/maestro-core/src/container.rs` into a `container/` module
@@ -537,6 +545,162 @@ We accept the kitchen-sink trade-off (see `lore/code-quality-principles.md`) but
 
 ---
 
+## P1 — Deferred from 2026-05-21 audit (option-2 wrap)
+
+These two entries reproduce Phase 2 and Phase 4 of `lore/audits/2026-05-21-plan.md` verbatim (Scope, Acceptance criteria, Commit shape, Risks, Verifier). They were deferred when the 2026-05-21 sprint scoped down to Phases 1, 3, 5 only. **Read these alongside the audit (`lore/audits/2026-05-21-clean-code.md`, §4 systemic smells, §6 cut plans) and the plan (`lore/audits/2026-05-21-plan.md`, cross-phase invariants)** before picking either item up — the audit captures the *why* (blast-radius ranking, baseline metric counts) and the plan captures the *order constraint* (Phase 4 originally depended on Phase 2 + Phase 1; Phase 1 has shipped, so the remaining dependency is `P1-D-1 → P1-D-2`).
+
+---
+
+### P1-D-1 · Phase 2 — Restructure `MaestroError` with typed payloads
+
+**Owner:** backend
+
+**Source documents:** `lore/audits/2026-05-21-clean-code.md` §3 worst offender #8 (`error.rs:13`), §4 "Stringly-typed `MaestroError`"; `lore/audits/2026-05-21-plan.md` §"Phase 2".
+
+**Audit drivers:** §4 "Stringly-typed `MaestroError`" (11/16 variants wrap `String`; 33 `Result<_, String>` signatures); §3 worst offender #8 (`error.rs:13`).
+
+#### Scope
+
+- `crates/maestro-core/src/error.rs` — replace `String`-wrapped variants with typed payloads:
+  - `Jira { ticket: String, action: String, source: Box<dyn std::error::Error + Send + Sync> }`
+  - `Git { op: String, path: PathBuf, stderr: String }`
+  - `GitHubApp { source: Box<dyn std::error::Error + Send + Sync> }`
+  - `Claude { source: Box<dyn std::error::Error + Send + Sync> }`
+  - `AiAgent { provider: String, source: Box<dyn std::error::Error + Send + Sync> }`
+  - `Database(#[from] rusqlite::Error)` — replace the manual `impl From` block with `#[from]` on the variant.
+  - `Auth { kind: AuthKind, source: Box<dyn std::error::Error + Send + Sync> }` where `AuthKind` is a new enum (`Pin`, `Token`, `MasterKey`, …).
+  - `Config { section: String, reason: String }`
+  - Add `#[from] reqwest::Error`, `#[from] serde_json::Error`, `#[from] chrono::ParseError` where they currently lose their cause through `.to_string()`.
+- Sweep every `Result<_, String>` signature (33 per audit) and replace with `Result<_, MaestroError>`. Touched crates:
+  - `crates/maestro-core/src/**`
+  - `crates/maestro-web/src/routes/**` (post-Phase-1 split)
+  - `crates/maestro-cli/src/main.rs` — including `run_server`'s `Box<dyn Error>` return type → `Result<(), MaestroError>`.
+- Sweep every `MaestroError::*(e.to_string())` call site (audit lists 41 such); replace with `?` where `#[from]` covers it, or `MaestroError::Variant { source: Box::new(e), … }` otherwise.
+
+#### Out of scope
+
+- **No** new file moves. Phase 1 already reshaped the layout.
+- **No** error-handling logic changes beyond payload typing — same fallback behaviour, same retry policy, same user-visible message text (the `#[error("…")]` strings are preserved verbatim where they exist).
+- **No** changes to `tokio::spawn` patterns, lock-across-await sites, or `.clone()` cleanup — those are `P1-D-2`.
+- **No** touching error sites in `test_helpers.rs` or `#[cfg(test)]` blocks — they already use `unwrap()` and that is acceptable per CODING_STANDARDS §2.
+
+#### Acceptance criteria
+
+- `grep -rnE "Result<[^,]+, ?String>" crates/*/src --include="*.rs" | wc -l` returns **0**.
+- `grep -rnE "MaestroError::\w+\([^)]*\.to_string\(\)" crates/ --include="*.rs" | wc -l` returns **0** (down from ~41).
+- `grep -nE "Box<dyn .*Error>" crates/maestro-cli/src/main.rs` returns **0**.
+- `grep -cE "^\s+(Jira|Git|GitHubApp|Claude|AiAgent|Database|Auth|Config)\s*\(String\)" crates/maestro-core/src/error.rs` returns **0**.
+- `grep -cE "#\[from\]" crates/maestro-core/src/error.rs` returns **≥ 5** (Io + TomlParse already present, plus rusqlite, reqwest, serde_json, chrono).
+- The manual `impl From<rusqlite::Error> for MaestroError` block at the bottom of `error.rs` is gone (replaced by `#[from]` on the variant).
+- A new unit test in `error.rs` asserts `MaestroError::from(rusqlite_err).source().is_some()` — i.e. the wrapped cause is recoverable, not stringified.
+- `cargo build --workspace` exits 0 with **zero warnings**.
+- `cargo test --workspace` exits 0.
+- The public signature of `run_server` is `pub async fn run_server(...) -> Result<(), MaestroError>`; verify with `grep -nE "fn run_server" crates/maestro-cli/src/main.rs`.
+
+#### Commit shape
+
+- **One PR, ~6–8 commits.**
+  1. Restructure `error.rs` variants (compiler errors expected across the workspace from now on; do not fix yet).
+  2. Add `#[from]` impls and the new test.
+  3–N. Sweep call sites, one crate at a time (`maestro-core`, then `maestro-web`, then `maestro-cli`). Each commit leaves `cargo build` green.
+  - Final commit: delete any remaining `Result<_, String>` aliases / re-exports.
+
+#### Risks and mitigations
+
+- **Risk:** Promoting `Database(String)` to `Database(#[from] rusqlite::Error)` changes the variant's tuple arity; any `match MaestroError::Database(s)` site breaks. **Mitigation:** the compiler flags every site; fix them mechanically in the same commit. The audit listed the hot sites — `crates/maestro-core/src/db/credentials.rs`, `db/auth.rs`, etc.
+- **Risk:** `Box<dyn Error>` in the variant payload looks like it violates CODING_STANDARDS §2 ("no `Box<dyn Error>` in public API"). **Mitigation:** the §2 rule applies to **return types**, not internal `#[source]` fields. `MaestroError` itself remains the public return type; the boxed source is an implementation detail of one variant. Add an inline comment in `error.rs` documenting this distinction.
+- **Risk:** sweeping `Result<_, String>` may surface latent bugs where a handler relied on `.map_err(|e| e.to_string())` to flatten an `anyhow`-style chain. **Mitigation:** keep the test suite green between every commit; if a test starts failing on the typed error, the failure mode was already wrong and the test is the source of truth.
+
+#### Verifier
+
+The tester runs:
+1. `cargo test --workspace`
+2. The three `grep` ACs above (`Result<_, String>` count, `to_string()` call sites, `Box<dyn .*Error>` count).
+3. Adds a new test that pattern-matches on a typed `MaestroError::Database { .. }` or `MaestroError::Jira { ticket, .. }` variant from a real failure path and confirms the payload fields carry structured data.
+
+---
+
+### P1-D-2 · Phase 4 — Async hygiene (`tokio::spawn` JoinSet, `await_holding_lock`, `eprintln!` sweep)
+
+**Owner:** backend
+
+**Source documents:** `lore/audits/2026-05-21-clean-code.md` §3 worst offender #9 (`docker_hooks.rs`), §4 "Fire-and-forget `tokio::spawn`", §4 "Lock-across-`.await`", §4 "`eprintln!` in production paths"; `lore/audits/2026-05-21-plan.md` §"Phase 4".
+
+**Audit drivers:** §4 "Fire-and-forget `tokio::spawn`" (21 of 34 spawns drop their handle); §4 "Lock-across-`.await`" (heuristic 328 sites); §4 "`eprintln!` in production paths" (42, of which 19 in `docker_hooks.rs`); §3 worst offender #9.
+
+**Depends on `P1-D-1`** (typed `MaestroError`). Originally also depended on Phase 1 module splits, which have shipped.
+
+#### Scope
+
+- **Enable `clippy::await_holding_lock` workspace-wide.** Add to `crates/maestro-core/src/lib.rs` and `crates/maestro-web/src/lib.rs`:
+  ```rust
+  #![deny(clippy::await_holding_lock)]
+  ```
+  Or, preferred, add to root `Cargo.toml`:
+  ```toml
+  [workspace.lints.clippy]
+  await_holding_lock = "deny"
+  ```
+  Fix every flagged site.
+- **Route every fire-and-forget `tokio::spawn` through a `JoinSet`** owned by the relevant lifetime holder:
+  - `WorkflowEngine` gains a `tasks: tokio::task::JoinSet<()>` field (or `Arc<Mutex<JoinSet<()>>>` if cross-task abort is needed).
+  - `AppState` gains a `background_tasks: tokio::task::JoinSet<()>` field.
+  - Every spawn site uses `engine.tasks.spawn(...)` / `state.background_tasks.spawn(...)`.
+  - Graceful shutdown drains the `JoinSet` on engine/app teardown (this is already partially wired via `CancellationToken`; integrate the `JoinSet` with the existing token).
+- **Replace 42 `eprintln!`/`println!` in `crates/*/src/**`** with `tracing::info!`/`tracing::warn!`/`tracing::error!` per the call's existing severity. `docker_hooks.rs` (19 sites) is the hot spot.
+- **Replace the 5 prod-path `unwrap()`/`expect()`** flagged in the audit:
+  - `crates/maestro-cli/src/main.rs:1204` (`SIGTERM` handler install) → `.expect("static invariant: signal handler installation cannot fail on supported platforms")` with an inline `// SAFETY:` comment, or propagate via `?` if practical.
+  - `crates/maestro-cli/src/main.rs:1216` (Ctrl+C handler) → same.
+  - Any remaining hits in `crates/maestro-core/src/{server,routes}/**` outside test files.
+- Production-code count: `cargo test --workspace` files like `github_app.rs`, `skill_resolve.rs`, `config_watcher.rs` use `.unwrap()` inside `#[cfg(test)]` blocks — those are **out of scope** (test code is allowed per CODING_STANDARDS §2).
+
+#### Out of scope
+
+- **No** file moves (Phase 1 has shipped).
+- **No** error-type changes (`P1-D-1`'s job — do that first).
+- **No** `.clone()` reduction — the audit flagged 793 clones; that is a separate item beyond this phase. This phase only touches lines that have a `tokio::spawn`, a lock-across-await, or a `println!`/`eprintln!`/`unwrap()` on them.
+- **No** UI changes.
+- **No** new `tracing` subscribers — assume the existing `tracing_subscriber` setup; only the call sites change.
+
+#### Acceptance criteria
+
+- `cargo clippy --workspace --all-targets -- -D warnings` exits 0. (The `await_holding_lock` lint is enabled and every flagged site is fixed.)
+- `grep -rnE "tokio::spawn\(" crates/*/src --include="*.rs" | grep -vE "(joinset|tasks|background_tasks)\.spawn\(" | wc -l` returns **0**. Every spawn goes through a `JoinSet`.
+- `grep -rnE "^\s+(eprintln|println)!" crates/*/src --include="*.rs" | grep -v "^.*tests\.rs:" | grep -v "#\[cfg(test)\]" | wc -l` returns **0**.
+- `grep -rnE "\.(unwrap|expect)\(" crates/*/src --include="*.rs" | grep -vE "(tests?\.rs|test_helpers|#\[cfg\(test\)\])" | wc -l` returns **≤ 0 sites without an adjacent `// SAFETY:` comment**. (Any remaining `.expect("static invariant: …")` must be preceded by a `// SAFETY:` line — verify with `awk` script: every match in production code has a `// SAFETY:` on the previous non-blank line.)
+- `WorkflowEngine` struct definition contains a `JoinSet` field; `grep -nE "JoinSet" crates/maestro-core/src/workflow/engine/mod.rs` returns ≥ 1.
+- `AppState` contains a `JoinSet` field; `grep -nE "JoinSet" crates/maestro-web/src/state.rs` returns ≥ 1.
+- `cargo build --workspace` exits 0 with **zero warnings**.
+- `cargo test --workspace` exits 0.
+- A new test in `engine/mod.rs` (or a new `engine/shutdown.rs`) asserts: spawn a background task that loops on a `tokio::time::sleep`; call `engine.shutdown()`; assert the task's `JoinHandle` aborts within 100 ms.
+
+#### Commit shape
+
+- **One PR, ~6 commits:**
+  1. Enable `clippy::await_holding_lock` and fix every flagged site (one commit per crate if it's noisy).
+  2. Add `JoinSet` field to `WorkflowEngine`; migrate `WorkflowEngine`-owned spawns.
+  3. Add `JoinSet` field to `AppState`; migrate `AppState`-owned spawns.
+  4. Wire `JoinSet` drain into the existing `CancellationToken` shutdown path; add the shutdown test.
+  5. Replace `println!`/`eprintln!` → `tracing::*` across `docker_hooks.rs` and the other 23 sites.
+  6. Replace the 5 prod-path `unwrap()`/`expect()` per the list above.
+
+#### Risks and mitigations
+
+- **Risk:** enabling `await_holding_lock` produces a large lint wall (heuristic 260+ matches). **Mitigation:** prioritise by lock type — `std::sync::Mutex` held across `.await` is a real bug; `parking_lot::RwLock::read()` released before `.await` is benign and clippy will not flag it. The lint only catches the former. Expect ~10–30 real flags, not 260.
+- **Risk:** retrofitting `JoinSet` ownership on `WorkflowEngine` may require an `Arc<Mutex<JoinSet>>` if spawns happen from cloned handles. **Mitigation:** keep the `JoinSet` behind a `tokio::sync::Mutex` only if cross-task spawn is genuinely needed; otherwise own it directly and route all spawns through engine-owned methods.
+- **Risk:** swapping `eprintln!` → `tracing::warn!` in `docker_hooks.rs` may change output destination during test runs that capture stderr. **Mitigation:** the test suite uses `tracing_test` or equivalent; verify a sample test's expected output still matches.
+- **Risk:** the SIGTERM/Ctrl+C `expect` calls actually can't fail on Linux/macOS; rewriting them with `?` adds noise. **Mitigation:** keep `.expect(...)` with a precise message and an inline `// SAFETY: signal handler installation is infallible on tokio-supported platforms` comment — this is the rare case CODING_STANDARDS §2 permits.
+
+#### Verifier
+
+The tester runs:
+1. `cargo clippy --workspace --all-targets -- -D warnings`
+2. `cargo test --workspace` including the new shutdown test
+3. The four `grep` ACs above (`tokio::spawn`, `println!`, `unwrap()`, `Box<dyn Error>`)
+4. A local smoke run: start a workflow, send `SIGTERM` to the server, confirm the workflow's background tasks are aborted (no orphaned `tokio` threads in `ps`).
+
+---
+
 ## Cross-cutting acceptance gates (apply to every item)
 
 These apply on top of each item's own criteria — never weaken or replace them:
@@ -556,5 +720,8 @@ These apply on top of each item's own criteria — never weaken or replace them:
 
 - **P0:** 4
 - **P1:** 10
+- **P1 (deferred from 2026-05-21 audit):** 2 (`P1-D-1`, `P1-D-2`)
 - **P2:** 5
-- **Total:** 19
+- **Total:** 21
+
+See the "Status (2026-05-21)" section near the top of this file for which P0/P1 entries above were shipped or superseded; the per-item overlap matrix is in `lore/audits/2026-05-21-plan.md` §"Overlap with `lore/refactor-backlog.md`".
