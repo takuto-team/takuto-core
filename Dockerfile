@@ -61,37 +61,86 @@ ENV MAESTRO_REGISTRY_IMAGE=ghcr.io/morphet81/maestro:${MAESTRO_VERSION}
 # Do not force the primary GID to match the host: macOS "staff" is often GID 20, which is `dialout` on Debian and already exists.
 ARG MAESTRO_UID=999
 
-# docker.io — Debian provides the `docker` CLI (bookworm has no `docker-cli` package in default repos).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    docker.io \
-    git \
-    jq \
-    iptables \
-    iproute2 \
-    openssh-client \
-    python3 \
-    socat \
-    # Playwright Chromium system dependencies
-    libglib2.0-0 \
-    libnss3 \
-    libnspr4 \
-    libdbus-1-3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libatspi2.0-0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2 \
+# Foundational apt block — all apt-managed packages + 3rd-party apt repos
+# (mise, gh, acli) + the maestro user + sudoers, in ONE RUN. The runtime
+# stage was previously 26 RUN layers (audit §3.5); collapsing related apt
+# work into one cache-friendly layer is the bulk of the reduction.
+#
+#   • docker.io is Debian's `docker` CLI (bookworm has no `docker-cli`).
+#   • Playwright Chromium system deps are baked so workers can run browser tests.
+#   • sudo + the narrow `/bin/bash` sudoers rule serves [docker] hook commands;
+#     `bash` is explicit because `sudo env bash` matches /usr/bin/env and would
+#     fail the rule.
+#   • acli is amd64-only via apt; `|| echo WARN` keeps arm64 builds working
+#     (the few admins who need acli on arm64 install a binary release via
+#     `[provisioning]`).
+#   • The maestro user is created in the same layer so the sudoers entry can
+#     be `visudo -cf`-validated against a real user immediately.
+RUN set -eux \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        gnupg2 \
+    # ── 3rd-party apt repos (mise / gh / acli) ─────────────────────────────
+    && install -dm 755 /etc/apt/keyrings \
+    && curl -fsSL https://mise.jdx.dev/gpg-key.pub \
+         -o /etc/apt/keyrings/mise-archive-keyring.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.asc arch=$(dpkg --print-architecture)] https://mise.jdx.dev/deb stable main" \
+         > /etc/apt/sources.list.d/mise.list \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+         > /etc/apt/sources.list.d/github-cli.list \
+    && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc \
+         | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/acli-archive-keyring.gpg] https://acli.atlassian.com/linux/deb stable main" \
+         > /etc/apt/sources.list.d/acli.list \
+    # ── Install foundational + Playwright + apt-managed CLIs ───────────────
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        docker.io \
+        git \
+        jq \
+        iptables \
+        iproute2 \
+        openssh-client \
+        python3 \
+        socat \
+        sudo \
+        mise \
+        gh \
+        libglib2.0-0 \
+        libnss3 \
+        libnspr4 \
+        libdbus-1-3 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libcups2 \
+        libdrm2 \
+        libxkbcommon0 \
+        libatspi2.0-0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxrandr2 \
+        libgbm1 \
+        libpango-1.0-0 \
+        libcairo2 \
+        libasound2 \
+    && (apt-get install -y --no-install-recommends acli \
+        || echo "WARN: acli not available for $(dpkg --print-architecture)") \
+    # ── Maestro user + sudoers ─────────────────────────────────────────────
+    && groupadd maestro \
+    && useradd -u "${MAESTRO_UID}" -g maestro -m -s /bin/bash maestro \
+    && printf '%s\n' \
+        'maestro ALL=(root) NOPASSWD: /usr/bin/bash, /bin/bash, /usr/bin/bash *, /bin/bash *' \
+        > /etc/sudoers.d/maestro-hook-bash \
+    && chmod 0440 /etc/sudoers.d/maestro-hook-bash \
+    && visudo -cf /etc/sudoers.d/maestro-hook-bash \
+    && mise --version \
     && rm -rf /var/lib/apt/lists/*
 
 # ttyd — lightweight web-based terminal (used by the dashboard "Open terminal" button).
@@ -113,15 +162,10 @@ RUN set -eux \
     && chmod +x /usr/local/bin/ttyd
 
 
-# mise — version manager for Node, Python, Ruby, etc. (project `.mise.toml` / `.tool-versions`)
-RUN install -dm 755 /etc/apt/keyrings \
-    && curl -fsSL https://mise.jdx.dev/gpg-key.pub -o /etc/apt/keyrings/mise-archive-keyring.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.asc arch=$(dpkg --print-architecture)] https://mise.jdx.dev/deb stable main" \
-       | tee /etc/apt/sources.list.d/mise.list > /dev/null \
-    && apt-get update && apt-get install -y --no-install-recommends mise \
-    && rm -rf /var/lib/apt/lists/* \
-    && mise --version
-
+# mise was previously installed in its own RUN here; it now lives in the
+# foundational apt block above. The repo + key + install + `mise --version`
+# smoke-check all happen in that single RUN.
+#
 # NOTE: build toolchains (build-essential, autoconf, libssl-dev, libyaml-dev, …)
 # and the Rust toolchain live in the `runtime-build-tools` stage below, not
 # here. `runtime-base` deliberately omits them so the slim image is smaller
@@ -171,13 +215,7 @@ RUN set -eux \
     && rm -f /tmp/node.tar.gz \
     && node --version && npm --version
 
-# Install gh CLI (official apt repository)
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-    | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
+# gh CLI is installed in the foundational apt block above.
 
 # Baked AI provider CLIs. Versions pinned via ARG (audit §3.5 — no @latest in image build).
 # Each ARG is the one-line bump knob; refresh together with the per-CLI release cadence.
@@ -231,16 +269,8 @@ RUN set -eux \
 # playwright-cache → /shared-auth/playwright-cache). Forcing a mismatched browser revision caused subtle
 # visual snapshot drift vs local/CI.
 
-# Install acli (Atlassian CLI) via official apt repo
-RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg2 \
-    && mkdir -p -m 755 /etc/apt/keyrings \
-    && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
-    && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/acli-archive-keyring.gpg] https://acli.atlassian.com/linux/deb stable main" \
-       | tee /etc/apt/sources.list.d/acli.list > /dev/null \
-    && apt-get update \
-    && (apt-get install -y --no-install-recommends acli || echo "WARN: acli not available for $(dpkg --print-architecture)") \
-    && rm -rf /var/lib/apt/lists/*
+# acli (Atlassian CLI) is installed in the foundational apt block above; the
+# `|| echo WARN` fallback there keeps arm64 builds working.
 
 # openvscode-server — browser-based VS Code for manual worktree editing via dashboard.
 # Release tarballs use x64/arm64/armhf, not dpkg's amd64/arm64.
@@ -282,10 +312,8 @@ RUN set -eux \
 # rationale: clean single-binary installs that admins routinely want to
 # pin / swap, not core requirements of any advertised feature.
 
-# Copy egress rules script
-COPY docker/egress-rules.sh /usr/local/bin/egress-rules.sh
-RUN chmod +x /usr/local/bin/egress-rules.sh
-
+# Copy egress rules script (executable bit set via BuildKit --chmod, no chmod RUN).
+COPY --chmod=0755 docker/egress-rules.sh /usr/local/bin/egress-rules.sh
 
 # Copy Maestro binary from builder (see builder stage: binary staged under `/out` for cache-friendly builds)
 COPY --from=builder /out/maestro /usr/local/bin/maestro
@@ -301,36 +329,47 @@ RUN mkdir -p /workspace \
 # Ship example files as reference for distributed-image users.
 # Runtime config is NOT baked in — users must volume-mount config.toml, maestro.env,
 # and workflows/ (see docker-compose.yml). The entrypoint validates the mount.
-RUN mkdir -p /etc/maestro/examples/workflows
+# The parent dirs are auto-created by BuildKit's COPY (no separate mkdir RUN);
+# /etc/maestro/examples/workflows is also covered by the consolidated mkdir RUN below.
 COPY config.toml.example /etc/maestro/examples/config.toml.example
 COPY maestro.env.example /etc/maestro/examples/maestro.env.example
 COPY workflows/implement_ticket.example.toml workflows/address_pr_comments.example.toml workflows/merge_base.example.toml /etc/maestro/examples/workflows/
 
-# Create non-root user (Claude Code refuses --dangerously-skip-permissions as root).
-# Default UID 999; override MAESTRO_UID via compose for host engine sockets. Group `maestro` gets the next free GID.
-RUN groupadd maestro \
-    && useradd -u "${MAESTRO_UID}" -g maestro -m -s /bin/bash maestro
+# Maestro user, sudo install, and sudoers rule are set up in the foundational
+# apt block above (so visudo can validate against the real user in the same
+# layer). Claude Code refuses --dangerously-skip-permissions as root, hence
+# the non-root identity for the maestro server process at runtime.
 
-# Startup hooks run as maestro; config may use `sudo /usr/bin/bash` for root-owned volume paths.
-# (Use bash explicitly — `sudo env bash` would match /usr/bin/env and fail the sudoers rule.)
-RUN apt-get update && apt-get install -y --no-install-recommends sudo \
-    && printf '%s\n' \
-       'maestro ALL=(root) NOPASSWD: /usr/bin/bash, /bin/bash, /usr/bin/bash *, /bin/bash *' \
-       > /etc/sudoers.d/maestro-hook-bash \
-    && chmod 0440 /etc/sudoers.d/maestro-hook-bash \
-    && visudo -cf /etc/sudoers.d/maestro-hook-bash \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /home/maestro/.local/share/mise/shims \
-    /home/maestro/.cache/mise \
-    /home/maestro/.config/mise \
-    /home/maestro/.npm \
-    /home/maestro/.npm-global/lib \
-    /home/maestro/.npm-global/bin \
-    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config /home/maestro/.npm /home/maestro/.npm-global
+# All maestro-owned directory creation + ownership in one layer:
+#   • Maestro home dirs (mise data/cache/config, npm cache, npm-global prefix)
+#   • /opt/maestro-tools volume mountpoint (Task #48: shadows baked tools at runtime)
+#   • /workspace (legacy single-workspace) + /workspaces (per-project clones)
+#   • /etc/maestro/examples/workflows (reference files shipped with the image)
 # Rust toolchain ownership transfer happens in `runtime-build-tools` (the only
 # stage that installs rustup/cargo). `runtime-base` has empty $RUSTUP_HOME /
 # $CARGO_HOME directories so chowning them here would be a no-op.
+RUN set -eux \
+    && mkdir -p \
+        /home/maestro/.local/share/mise/shims \
+        /home/maestro/.cache/mise \
+        /home/maestro/.config/mise \
+        /home/maestro/.npm \
+        /home/maestro/.npm-global/lib \
+        /home/maestro/.npm-global/bin \
+        /opt/maestro-tools/bin \
+        /workspace/logs \
+        /workspaces \
+        /etc/maestro/examples/workflows \
+    && chown -R maestro:maestro \
+        /home/maestro/.local \
+        /home/maestro/.cache \
+        /home/maestro/.config \
+        /home/maestro/.npm \
+        /home/maestro/.npm-global \
+        /opt/maestro-tools \
+        /workspace \
+        /workspaces \
+    && chmod 0755 /opt/maestro-tools /opt/maestro-tools/bin
 
 # npm cache dir (for npx and package installs)
 ENV NPM_CONFIG_CACHE=/home/maestro/.npm
@@ -345,46 +384,37 @@ ENV MISE_YES=1
 # there by the `[provisioning]` install pass at boot SHADOWS baked tools
 # of the same name. That gives admins a no-rebuild lever to pin a tool
 # to a specific version (or swap an entire binary) without changing the
-# image. The volume mountpoint is created here (mode 0755, owned by
-# maestro:maestro) so the entrypoint can write to it under setpriv;
+# image. The volume mountpoint was created in the combined mkdir RUN above;
 # the named volume itself is declared in `docker-compose.yml`.
-RUN mkdir -p /opt/maestro-tools/bin \
-    && chown -R maestro:maestro /opt/maestro-tools \
-    && chmod 0755 /opt/maestro-tools /opt/maestro-tools/bin
 ENV PATH="/opt/maestro-tools/bin:/home/maestro/.npm-global/bin:/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-RUN printf '%s\n' \
-    'export MISE_DATA_DIR=/home/maestro/.local/share/mise' \
-    'export MISE_CACHE_DIR=/home/maestro/.cache/mise' \
-    'export MISE_CONFIG_DIR=/home/maestro/.config/mise' \
-    'export MISE_TRUST_ALL_CONFIGS=1' \
-    'export MISE_YES=1' \
-    'export PATH="$MISE_DATA_DIR/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
-    > /etc/profile.d/zz-maestro-mise.sh \
-    && chmod 644 /etc/profile.d/zz-maestro-mise.sh
-
-# Source custom env file on any shell login
-RUN echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /etc/profile.d/maestro-env.sh \
-    && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' >> /home/maestro/.bashrc
-
-# Create workspace and log directories with correct ownership.
-# /workspaces is the base directory for user-cloned project repositories.
-RUN mkdir -p /workspace /workspace/logs /workspaces \
-    && chown -R maestro:maestro /workspace /workspaces
+# Login-shell defaults — write both profile.d files + .bashrc in one RUN.
+RUN set -eux \
+    && printf '%s\n' \
+        'export MISE_DATA_DIR=/home/maestro/.local/share/mise' \
+        'export MISE_CACHE_DIR=/home/maestro/.cache/mise' \
+        'export MISE_CONFIG_DIR=/home/maestro/.config/mise' \
+        'export MISE_TRUST_ALL_CONFIGS=1' \
+        'export MISE_YES=1' \
+        'export PATH="$MISE_DATA_DIR/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+        > /etc/profile.d/zz-maestro-mise.sh \
+    && chmod 644 /etc/profile.d/zz-maestro-mise.sh \
+    && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' \
+        >> /etc/profile.d/maestro-env.sh \
+    && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' \
+        >> /home/maestro/.bashrc
 
 WORKDIR /workspace
 
 EXPOSE 8080
 
-# Entrypoint: apply egress rules (if NET_ADMIN capability is available), then start Maestro
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
-RUN chmod +x /usr/local/bin/worker-entrypoint.sh
-
-COPY docker/test-workflow.sh /usr/local/bin/test-workflow.sh
-RUN chmod +x /usr/local/bin/test-workflow.sh
+# Entrypoint scripts — executable bit set via BuildKit --chmod, no chmod RUNs.
+# The entrypoint applies egress rules (if NET_ADMIN capability is available),
+# chowns named volumes that arrive root-owned, runs the [provisioning] install
+# pass, then setpriv's to the maestro user and execs the maestro server.
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+COPY --chmod=0755 docker/test-workflow.sh /usr/local/bin/test-workflow.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["--config", "/etc/maestro/config.toml"]
