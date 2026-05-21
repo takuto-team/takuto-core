@@ -2,16 +2,16 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useEffect, useRef, useState } from "react";
-import { apiPost } from "../../api/client";
-import { MarkdownPreview } from "../MarkdownPreview";
 import { DiffView } from "../DiffView";
 import { useToast } from "../../hooks/useToast";
 import { useTicketDetail } from "../../hooks/useTicketDetail";
 import { useTicketCountdown } from "../../hooks/useTicketCountdown";
 import { useStartWorkflow } from "../../hooks/useStartWorkflow";
+import { useTicketEditor } from "../../hooks/useTicketEditor";
 import { TicketDetailAiPanel } from "./TicketDetailAiPanel";
 import { TicketDetailHeader } from "./TicketDetailHeader";
 import { TicketDetailView } from "./TicketDetailView";
+import { TicketEditor } from "./TicketEditor";
 import { StartWorkflowRepoBanner } from "./StartWorkflowRepoBanner";
 import { StartWorkflowFooter } from "./StartWorkflowFooter";
 import type { PendingImprovement } from "./TicketImproveWithAI";
@@ -51,28 +51,22 @@ export function TicketDetailModal({
   );
   const { countdown, start: startCountdown, stop: stopCountdown } =
     useTicketCountdown(improveTimeoutSecs);
-  const [editTitle, setEditTitle] = useState(summary);
   const [improving, setImproving] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const { showToast } = useToast();
-  const [editMode, setEditMode] = useState(false);
-  const [editText, setEditText] = useState("");
-  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
-  const [sideBySide, setSideBySide] = useState(false);
-  const [debouncedText, setDebouncedText] = useState("");
-  const [saving, setSaving] = useState(false);
+  const editor = useTicketEditor({ summary, markdown, setMarkdown, ticketKey, onSaved });
+  const {
+    editMode, editText, editTitle, activeTab, sideBySide, debouncedText, saving, editDirty,
+    setEditText, setEditTitle, setActiveTab,
+    handleStartEdit, handleCancelEdit, handleSaveDescription, handleSideBySideChange,
+    applyImprovement,
+  } = editor;
   const [prompting, setPrompting] = useState(false);
   const [pendingImprovement, setPendingImprovement] =
     useState<PendingImprovement | null>(null);
 
   // Plan-10: repository selector — only shown when starting a workflow.
   const { repos, repositoryId, setRepositoryId, loadingRepos } = useStartWorkflow(showStartButton);
-
-  // Debounce editText for the side-by-side preview pane (400 ms)
-  useEffect(() => {
-    const id = setTimeout(() => setDebouncedText(editText), 400);
-    return () => clearTimeout(id);
-  }, [editText]);
 
   useEffect(() => {
     return () => {
@@ -126,15 +120,8 @@ export function TicketDetailModal({
   const handleConfirmImprovement = () => {
     if (!pendingImprovement) return;
     const { improvedDescription, improvedSummary } = pendingImprovement;
-    setEditText(improvedDescription);
-    setDebouncedText(improvedDescription);
-    if (improvedSummary) setEditTitle(improvedSummary);
+    applyImprovement(improvedDescription, improvedSummary);
     setPendingImprovement(null);
-    if (!editMode) {
-      setActiveTab("write");
-      setSideBySide(false);
-      setEditMode(true);
-    }
   };
 
   const handleDiscardImprovement = () => {
@@ -149,54 +136,6 @@ export function TicketDetailModal({
   ) => {
     setPendingImprovement({ originalDescription, improvedDescription, improvedSummary });
   };
-
-  const handleStartEdit = () => {
-    setEditText(markdown);
-    setEditTitle(summary);
-    setDebouncedText(markdown);
-    setActiveTab("write");
-    setSideBySide(false);
-    setEditMode(true);
-  };
-
-  const handleSaveDescription = async () => {
-    setSaving(true);
-    try {
-      const payload: Record<string, string> = { description: editText };
-      if (editTitle !== summary) {
-        payload.summary = editTitle;
-      }
-      const res = await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, payload);
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `HTTP ${res.status}`);
-      }
-      setMarkdown(editText);
-      requestAnimationFrame(() => {
-        setEditMode(false);
-        setActiveTab("write");
-        setSideBySide(false);
-      });
-      onSaved?.();
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Failed to save");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleCancelEdit = () => {
-    setEditMode(false);
-    setActiveTab("write");
-    setSideBySide(false);
-  };
-
-  const handleSideBySideChange = (checked: boolean) => {
-    setSideBySide(checked);
-    if (!checked) setActiveTab("write");
-  };
-
-  const editDirty = editMode && (editText !== markdown || editTitle !== summary);
 
   // When a diff is pending, widen the modal like side-by-side edit mode.
   const isWide = sideBySide || pendingImprovement !== null;
@@ -258,67 +197,24 @@ export function TicketDetailModal({
         )}
 
         {/* Edit banner — only in edit mode and not while reviewing a diff */}
-        {editMode && !pendingImprovement && (
-          <div className={`border-b px-4 py-2 flex items-center justify-between ${editDirty ? "bg-blue-900/20 border-blue-700/30" : "bg-gray-800/30 border-gray-800"}`}>
-            <span className={`text-xs ${editDirty ? "text-blue-300" : "text-gray-500"}`}>
-              {editDirty ? "Description modified — save to update the ticket" : "Editing description"}
-            </span>
-            <div className="flex gap-2">
-              <button
-                onClick={handleCancelEdit}
-                className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-              >
-                Discard
-              </button>
-              <button
-                onClick={handleSaveDescription}
-                disabled={saving || !editDirty}
-                className="text-xs px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
-              >
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-        )}
+        <TicketEditor.Banner
+          editMode={editMode}
+          pendingImprovement={pendingImprovement}
+          editDirty={editDirty}
+          saving={saving}
+          onCancelEdit={handleCancelEdit}
+          onSaveDescription={handleSaveDescription}
+        />
 
         {/* Tab bar — only visible in edit mode and not while reviewing a diff */}
-        {editMode && !pendingImprovement && (
-          <div className="flex items-center px-6 py-2 border-b border-gray-800 gap-2">
-            {!sideBySide && (
-              <div className="flex gap-1">
-                <button
-                  onClick={() => setActiveTab("write")}
-                  className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${
-                    activeTab === "write"
-                      ? "bg-gray-800 text-gray-200 border border-gray-700"
-                      : "text-gray-500 hover:text-gray-300"
-                  }`}
-                >
-                  Write
-                </button>
-                <button
-                  onClick={() => setActiveTab("preview")}
-                  className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${
-                    activeTab === "preview"
-                      ? "bg-gray-800 text-gray-200 border border-gray-700"
-                      : "text-gray-500 hover:text-gray-300"
-                  }`}
-                >
-                  Preview
-                </button>
-              </div>
-            )}
-            <label className="ml-auto flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={sideBySide}
-                onChange={(e) => handleSideBySideChange(e.target.checked)}
-                className="w-3 h-3 accent-blue-500"
-              />
-              Side by side
-            </label>
-          </div>
-        )}
+        <TicketEditor.TabBar
+          editMode={editMode}
+          pendingImprovement={pendingImprovement}
+          sideBySide={sideBySide}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          onSideBySideChange={handleSideBySideChange}
+        />
 
         {/* Content area */}
         <div className={`flex-1 min-h-0 ${(editMode && sideBySide) || pendingImprovement ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`}>
@@ -330,34 +226,13 @@ export function TicketDetailModal({
               newText={pendingImprovement.improvedDescription}
             />
           ) : editMode ? (
-            sideBySide ? (
-              <>
-                <div className="flex-1 overflow-y-auto p-4 border-r border-gray-800">
-                  <textarea
-                    value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
-                    className="w-full h-full min-h-64 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-none"
-                    autoFocus
-                  />
-                </div>
-                <div className="flex-1 overflow-y-auto p-4">
-                  <MarkdownPreview markdown={debouncedText} />
-                </div>
-              </>
-            ) : activeTab === "write" ? (
-              <div className="flex-1 flex flex-col p-6 min-h-0">
-                <textarea
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
-                  className="w-full flex-1 bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 font-mono resize-none"
-                  autoFocus
-                />
-              </div>
-            ) : (
-              <div className="flex-1 overflow-y-auto p-6">
-                <MarkdownPreview markdown={editText} />
-              </div>
-            )
+            <TicketEditor.Content
+              sideBySide={sideBySide}
+              activeTab={activeTab}
+              editText={editText}
+              setEditText={setEditText}
+              debouncedText={debouncedText}
+            />
           ) : (
             <TicketDetailView markdown={markdown} loading={false} />
           )}
