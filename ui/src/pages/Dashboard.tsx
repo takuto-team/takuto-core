@@ -9,6 +9,7 @@ import { useToast } from "../hooks/useToast";
 import { useOnboardingStatus } from "../hooks/useOnboardingStatus";
 import { useMyRepositories } from "../hooks/useMyRepositories";
 import { useWorkflowDefinitions } from "../hooks/useWorkflowDefinitions";
+import { useDashboardModals } from "../hooks/useDashboardModals";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useWorkflows } from "../hooks/useWorkflows";
 import { usePolling } from "../hooks/usePolling";
@@ -16,11 +17,7 @@ import { Header } from "../components/Header";
 import { PollingLabel } from "../components/PollingLabel";
 import { SummaryStats } from "../components/SummaryStats";
 import { WorkflowGrid } from "../components/WorkflowGrid";
-import { TicketPickerModal } from "../components/modals/TicketPickerModal";
-import { TicketDetailModal } from "../components/modals/TicketDetailModal";
-import { PasteDescriptionModal } from "../components/modals/PasteDescriptionModal";
-import { ReportModal } from "../components/modals/ReportModal";
-import { NoJiraAlertModal } from "../components/modals/NoJiraAlertModal";
+import { DashboardModals } from "../components/DashboardModals";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { SystemErrorAlert } from "../components/SystemErrorAlert";
 import { handleProviderChangedEvent } from "../utils/providerChanged";
@@ -49,6 +46,8 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   // gates the "+" picker, and feeds the header repo-switcher dropdown.
   // `activeRepoName` is persisted in localStorage (see useMyRepositories).
   const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
+
+  const modals = useDashboardModals(config);
 
   // Wrap handleEvent to also re-fetch definitions on relevant events
   const handleEventWithDefs = useCallback(
@@ -104,19 +103,6 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     prevConnected.current = connected;
   }, [connected, fetchWorkflows, fetchWorkflowDefs, fetchCounts]);
 
-  // Modal state
-  const [showPicker, setShowPicker] = useState(false);
-  const [showPaste, setShowPaste] = useState(false);
-  const [showNoJira, setShowNoJira] = useState(false);
-  const [detailModal, setDetailModal] = useState<{
-    key: string;
-    summary: string;
-    description?: string;
-    url?: string;
-    showStart: boolean;
-  } | null>(null);
-  const [reportKey, setReportKey] = useState<string | null>(null);
-
   // Load config
   useEffect(() => {
     apiJson<ConfigResponse>("/api/config")
@@ -124,59 +110,48 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
       .catch(() => {});
   }, []);
 
-  // Show no-jira alert once
-  useEffect(() => {
-    if (config && config.ticketing_system === "none") {
-      const dismissed = sessionStorage.getItem("noJiraAlertDismissed");
-      if (!dismissed) setShowNoJira(true);
-    }
-  }, [config]);
-
   const ticketingSystem = config?.ticketing_system || "none";
   const dryMode = config?.general?.dry_mode || false;
   const githubAppConfigured = config?.github_app_configured || false;
   const githubAppInstallationId = config?.github?.app_installation_id || undefined;
 
   const handleAddWorkflow = useCallback(() => {
-    if (ticketingSystem === "none") {
-      setShowPaste(true);
-    } else {
-      setShowPicker(true);
-    }
-  }, [ticketingSystem]);
+    if (ticketingSystem === "none") modals.openPaste();
+    else modals.openPicker();
+  }, [ticketingSystem, modals]);
 
   const handleTicketSelected = useCallback(
     (key: string, summary: string, description?: string, url?: string) => {
-      setShowPicker(false);
-      setDetailModal({ key, summary, description, url, showStart: true });
+      modals.openDetail({ key, summary, description, url, showStart: true });
     },
-    []
+    [modals]
   );
 
   const handleAddToDashboard = useCallback(async (description: string, summary: string, repositoryId: string) => {
-    if (!detailModal) return;
+    if (modals.modal.kind !== "detail") return;
     if (!repositoryId) {
       showToast("Pick a repository before adding a workflow.");
       return;
     }
+    const ticket = modals.modal.ticket;
     try {
       const res = await apiPost("/api/workflows/start-manual", {
-        ticket_key: detailModal.key,
+        ticket_key: ticket.key,
         ticket_summary: summary,
         ticket_description: description,
         repository_id: repositoryId,
-        ...(detailModal.url ? { issue_url: detailModal.url } : {}),
+        ...(ticket.url ? { issue_url: ticket.url } : {}),
       });
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || `HTTP ${res.status}`);
       }
-      setDetailModal(null);
+      modals.close();
       fetchWorkflows();
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Failed to add workflow");
     }
-  }, [detailModal, fetchWorkflows, showToast]);
+  }, [modals, fetchWorkflows, showToast]);
 
   const handlePasteSubmit = useCallback(
     async (name: string, description: string, repositoryId: string) => {
@@ -195,21 +170,21 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
           const text = await res.text();
           throw new Error(text || `HTTP ${res.status}`);
         }
-        setShowPaste(false);
+        modals.close();
         fetchWorkflows();
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Failed to add workflow");
       }
     },
-    [fetchWorkflows, showToast]
+    [modals, fetchWorkflows, showToast]
   );
 
   const handleShowDescription = useCallback((key: string, summary: string, description?: string) => {
     // For Jira, don't pass cached description — the modal fetches fresh from the preview API.
     // For None and GitHub, use the in-memory description (it's the source of truth or a good cache).
     const desc = ticketingSystem === "jira" ? undefined : description;
-    setDetailModal({ key, summary, description: desc, showStart: false });
-  }, [ticketingSystem]);
+    modals.openDetail({ key, summary, description: desc, showStart: false });
+  }, [ticketingSystem, modals]);
 
   // Plan-10: there is no "active repo" any more. The empty-state CTA links to
   // the My Repositories tab; the per-card badge tells the user which repo
@@ -278,7 +253,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
             workflowDefs={workflowDefs}
             onRefresh={fetchWorkflows}
             onShowDescription={handleShowDescription}
-            onReport={setReportKey}
+            onReport={modals.openReport}
             onAddWorkflow={handleAddWorkflow}
             canAddWorkflow={hasAnyRepo === true}
             repoExists={repoExists}
@@ -288,45 +263,18 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         )}
       </main>
 
-      {/* Modals */}
-      {showPicker && (
-        <TicketPickerModal
-          ticketingSystem={ticketingSystem}
-          activeRepoName={activeRepoName}
-          onSelect={handleTicketSelected}
-          onClose={() => setShowPicker(false)}
-        />
-      )}
-      {showPaste && (
-        <PasteDescriptionModal
-          onSubmit={handlePasteSubmit}
-          onClose={() => setShowPaste(false)}
-        />
-      )}
-      {detailModal && (
-        <TicketDetailModal
-          ticketKey={detailModal.key}
-          summary={detailModal.summary}
-          description={detailModal.description}
-          ticketingSystem={ticketingSystem}
-          showStartButton={detailModal.showStart}
-          improveTimeoutSecs={config?.agent?.improve_timeout_secs}
-          onStart={handleAddToDashboard}
-          onClose={() => setDetailModal(null)}
-          onSaved={fetchWorkflows}
-        />
-      )}
-      {reportKey && workflows[reportKey] && workflows[reportKey].generate_report && workflows[reportKey].has_report && (
-        <ReportModal workflow={workflows[reportKey]} onClose={() => setReportKey(null)} />
-      )}
-      {showNoJira && (
-        <NoJiraAlertModal
-          onClose={() => {
-            setShowNoJira(false);
-            sessionStorage.setItem("noJiraAlertDismissed", "1");
-          }}
-        />
-      )}
+      <DashboardModals
+        modal={modals.modal}
+        close={modals.close}
+        ticketingSystem={ticketingSystem}
+        activeRepoName={activeRepoName}
+        config={config}
+        workflows={workflows}
+        onTicketSelected={handleTicketSelected}
+        onAddToDashboard={handleAddToDashboard}
+        onPasteSubmit={handlePasteSubmit}
+        onSaved={fetchWorkflows}
+      />
 
       {/* Version footer */}
       <footer className="py-3 text-center">
