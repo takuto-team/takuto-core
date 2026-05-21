@@ -1,22 +1,17 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { apiJson, apiPost, listMyRepositories, type RepositoryRow } from "../../api/client";
-import type { TicketPreview } from "../../api/types";
+import { apiPost, listMyRepositories, type RepositoryRow } from "../../api/client";
 import { MarkdownPreview } from "../MarkdownPreview";
-import { AiPromptPanel } from "../AiPromptPanel";
 import { DiffView } from "../DiffView";
 import { useToast } from "../../hooks/useToast";
+import { useTicketDetail } from "../../hooks/useTicketDetail";
+import { useTicketCountdown } from "../../hooks/useTicketCountdown";
+import { TicketDetailAiPanel } from "./TicketDetailAiPanel";
 
 const DEFAULT_IMPROVE_TIMEOUT_SECS = 300;
-
-function formatCountdown(secs: number): string {
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}:${String(s).padStart(2, "0")} remaining until timeout`;
-}
 
 interface PendingImprovement {
   originalDescription: string;
@@ -50,14 +45,16 @@ export function TicketDetailModal({
   onClose,
   onSaved,
 }: Props) {
-  const [markdown, setMarkdown] = useState(initialDescription || "");
-  const [loading, setLoading] = useState(!initialDescription && ticketingSystem !== "none");
+  const { markdown, setMarkdown, loading } = useTicketDetail(
+    ticketKey,
+    initialDescription,
+    ticketingSystem,
+  );
+  const { countdown, start: startCountdown, stop: stopCountdown } =
+    useTicketCountdown(improveTimeoutSecs);
   const [editTitle, setEditTitle] = useState(summary);
   const [improving, setImproving] = useState(false);
-  const [countdown, setCountdown] = useState(improveTimeoutSecs);
   const abortRef = useRef<AbortController | null>(null);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const improveStartRef = useRef<number | null>(null);
   const { showToast } = useToast();
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
@@ -73,14 +70,6 @@ export function TicketDetailModal({
   const [repos, setRepos] = useState<RepositoryRow[]>([]);
   const [repositoryId, setRepositoryId] = useState("");
   const [loadingRepos, setLoadingRepos] = useState(showStartButton);
-
-  useEffect(() => {
-    if (initialDescription || ticketingSystem === "none" || ticketingSystem === "github") return;
-    apiJson<TicketPreview>(`/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`)
-      .then((data) => setMarkdown(data.description_markdown || ""))
-      .catch(() => setMarkdown("*Failed to load description*"))
-      .finally(() => setLoading(false));
-  }, [ticketKey, initialDescription, ticketingSystem]);
 
   useEffect(() => {
     if (!showStartButton) return;
@@ -103,20 +92,12 @@ export function TicketDetailModal({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
-      if (countdownRef.current) clearInterval(countdownRef.current);
     };
   }, []);
 
   const handleImprove = async () => {
     setImproving(true);
-    improveStartRef.current = Date.now();
-    setCountdown(improveTimeoutSecs);
-
-    if (countdownRef.current) clearInterval(countdownRef.current);
-    countdownRef.current = setInterval(() => {
-      const elapsed = (Date.now() - (improveStartRef.current ?? Date.now())) / 1000;
-      setCountdown(Math.max(0, Math.round(improveTimeoutSecs - elapsed)));
-    }, 500);
+    startCountdown(improveTimeoutSecs);
 
     abortRef.current = new AbortController();
     try {
@@ -146,10 +127,7 @@ export function TicketDetailModal({
       }
     } finally {
       setImproving(false);
-      if (countdownRef.current) {
-        clearInterval(countdownRef.current);
-        countdownRef.current = null;
-      }
+      stopCountdown();
     }
   };
 
@@ -157,10 +135,7 @@ export function TicketDetailModal({
     abortRef.current?.abort();
     abortRef.current = null;
     setImproving(false);
-    if (countdownRef.current) {
-      clearInterval(countdownRef.current);
-      countdownRef.current = null;
-    }
+    stopCountdown();
   };
 
   const handleConfirmImprovement = () => {
@@ -253,21 +228,6 @@ export function TicketDetailModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Improve overlay with countdown */}
-        {improving && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-900/85 backdrop-blur-sm rounded-xl">
-            <div className="w-8 h-8 border-2 border-gray-600 border-t-blue-400 rounded-full animate-spin" />
-            <p className="mt-4 text-sm text-gray-300">Improving description...</p>
-            <p className="mt-1 text-xs text-gray-500">{formatCountdown(countdown)}</p>
-            <button
-              onClick={handleCancelImprove}
-              className="mt-4 text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
           <div className="min-w-0 flex-1">
@@ -461,11 +421,13 @@ export function TicketDetailModal({
 
         {/* AI Prompt Panel — hidden while reviewing a diff */}
         {!loading && !pendingImprovement && (
-          <AiPromptPanel
+          <TicketDetailAiPanel
             ticketKey={ticketKey}
             ticketTitle={editMode ? editTitle : summary}
             ticketDescription={editMode ? editText : markdown}
-            disabled={improving}
+            improving={improving}
+            countdown={countdown}
+            onCancelImprove={handleCancelImprove}
             onLoadingChange={setPrompting}
             onImprovement={handleImprovement}
           />

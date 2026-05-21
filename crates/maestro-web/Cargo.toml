@@ -3,6 +3,15 @@ name = "maestro-web"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# `test-utils` exposes `crate::test_helpers` so external integration tests
+# under `crates/maestro-web/tests/` can build the shared AppState / temp-DB
+# factories. The module is gated out of release builds — see
+# lore/code-quality-principles.md §6 ("Test scaffolding does not ship in the
+# production crate surface"). Enabled automatically during `cargo test` via
+# the self dev-dependency below; never enable as a default feature.
+test-utils = []
+
 [dependencies]
 maestro-core = { workspace = true }
 tokio = { workspace = true }
@@ -38,3 +47,9 @@ http-body-util = "0.1"
 # Phase 2b.1: the credentials integration test implements the
 # `maestro_core::auth::GhClient` trait, which is `#[async_trait]`.
 async-trait = { workspace = true }
+# Self dev-dep — activates the `test-utils` feature during `cargo test`,
+# `cargo bench`, and example builds so external integration tests under
+# `tests/` can use `crate::test_helpers`. Production builds (no dev-deps,
+# no `cfg(test)`) compile the module out per
+# lore/code-quality-principles.md §6.
+maestro-web = { path = ".", features = ["test-utils"] }

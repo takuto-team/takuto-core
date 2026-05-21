@@ -1096,6 +1096,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "maestro-core",
+ "maestro-web",
  "mime_guess",
  "rusqlite",
  "rust-embed",

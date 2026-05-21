@@ -1,6 +1,8 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+mod auth_pin;
+mod bootstrap;
 mod context;
 mod definitions;
 mod driver;
@@ -8,6 +10,8 @@ mod event_bus;
 mod lifecycle;
 mod persistence;
 mod repository;
+mod resolve;
+mod step_runner;
 mod transitions;
 mod types;
 

@@ -71,3 +71,15 @@ libc = "0.2"
 # Internal crates
 maestro-core = { path = "crates/maestro-core" }
 maestro-web = { path = "crates/maestro-web" }
+
+# Release profile — see lore/code-quality-principles.md §5 (the release build
+# is the standing configuration; do not override per-commit).
+#   strip = "symbols"   — drop symbol tables from the final binary.
+#   lto = "thin"        — cross-crate optimisation; ~3-5× link time vs. off,
+#                         but typically 10-20% smaller / faster binaries.
+#   codegen-units = 1   — one codegen unit per crate so LLVM can apply the
+#                         widest inlining + dead-code elimination.
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1

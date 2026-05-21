@@ -1,0 +1,114 @@
+# Code Quality Principles — project decisions from the 2026-05 audit
+
+This file captures the standing decisions that came out of the May 2026 clean-code audit.
+They are **project lore**: future contributors (humans and AI agents) should read them before proposing changes that contradict them, and update this file in the same task if a decision is ever reversed.
+
+Companion: `CODING_STANDARDS.md` (the rules) and `lore/refactor-backlog.md` (the work list).
+
+---
+
+## 1 · We enforce `CODING_STANDARDS.md` §1 file-size rules retroactively
+
+`CODING_STANDARDS.md` §1 sets:
+
+- **Rust:** ~300 LOC of non-test logic per file. Beyond that, split into a `module/` directory with a thin `mod.rs` facade — the `workflow/engine/` pattern is the reference.
+- **React:** ~150 LOC per component. Beyond that, extract sub-components / hooks.
+
+These thresholds apply to **existing** code, not only new code. The refactor backlog lists every current violator (`container.rs`, `engine/driver.rs`, `routes/workflows.rs`, `config.rs`, `MyCredentialsSection.tsx`, `TicketDetailModal.tsx`, `AiProviderSettingsSection.tsx`, `Dashboard.tsx`, `api/client.ts`). When you touch one of these files for an unrelated change:
+
+- If your change is small (≤ 20 lines), make the change and leave the file size alone — don't smuggle a split into an unrelated PR (CODING_STANDARDS §5 "minimum viable change").
+- If your change is large (a new feature, a significant refactor inside the file), **split the file as part of the same task**.
+
+When adding **new** code, never create a file that ships over the threshold.
+
+---
+
+## 2 · We accept the bundled-runtime-image trade-off
+
+The runtime Docker image bakes:
+
+- Full Rust toolchain (`rustup`, `cargo`, `rustfmt`, `clippy`)
+- `build-essential` + system headers
+- All four advertised AI provider CLIs (`claude`, `cursor-agent`, `codex`, `opencode`) — even those whose runtime adapters aren't wired yet (Phase 4 codex / opencode are baked because the binary must exist the moment the adapter lands).
+- `openvscode-server`
+- Playwright Chromium system dependencies
+
+This makes the image larger than a "slim" Rust web service would be. We deliberately accept that cost because:
+
+1. **Zero first-run install latency for advertised features.** Workflows can spawn `claude` / `cursor-agent` / `codex` / `opencode` immediately on a fresh container.
+2. **The provisioning + custom-Dockerfile escape hatches already cover admin preferences.** AGENTS.md § "Tool layout and extensibility" documents the three-tier model. The "kitchen sink" is the baked tier — it stays kitchen-sink on purpose.
+
+We **do** document this inline in `Dockerfile` (preamble comment at the runtime stage) and expose `WITH_CODEX` / `WITH_OPENCODE` / `WITH_CURSOR` build args for admins who want a slimmer derivative image. The default image is unchanged.
+
+When you want to add a tool: re-read AGENTS.md § "Tool layout and extensibility" first. The bar for baking a new tool is "Maestro literally fails without it" — most cases belong in `[provisioning]`.
+
+---
+
+## 3 · We migrate to typed `#[from]` error wiring across `MaestroError`
+
+`crates/maestro-core/src/error.rs` had 10 of 13 variants carrying `String` payloads. Forty-one call sites used `.map_err(|e| MaestroError::*(e.to_string()))`, which discards `std::error::Error::source()` — `tracing` and log output never see the root cause.
+
+Going forward:
+
+- New `MaestroError` variants **must** carry a typed payload — either a `#[from] SourceError` for unambiguous one-to-one conversions, or a `#[source] Box<dyn std::error::Error + Send + Sync>` field for variants that intentionally aggregate multiple source types.
+- `String`-payload variants are accepted **only** for genuinely-string-shaped errors (e.g. a hand-written domain rejection message — "ticket not found").
+- `?` is the default propagation idiom (CODING_STANDARDS §2). Reach for explicit `.map_err(…)` only when you genuinely need to add context.
+- The CODING_STANDARDS §2 "Never expose `Box<dyn Error>` in a public API" rule still holds: the boxed source lives **inside** a `MaestroError` variant's `#[source]` field — it is not a public return type. Public functions return `Result<T, MaestroError>` as before.
+
+Logging contract reminder (CODING_STANDARDS §2): **log at the handling site, not the origination site**. Once errors carry their full source chain, the handling site can call `tracing::error!(error = ?e, "context")` and `tracing` walks the chain automatically.
+
+---
+
+## 4 · `Workflow` and `AppState` field visibility is part of the encapsulation contract
+
+`Workflow` (`crates/maestro-core/src/workflow/engine/types.rs`) and `AppState` (`crates/maestro-web/src/state.rs`) both had ~30 `pub` fields. External code mutated `workflow.state = …` directly, bypassing the state machine.
+
+Going forward:
+
+- **Public on `Workflow`:** `id`, `ticket_key`, `state`, `started_at`. Anything else is `pub(crate)` minimum.
+- **State transitions go through accessor methods**, never direct assignment. The state machine in `workflow/state.rs` is authoritative; adding a new transition means adding a method, not letting callers write a field.
+- **`AppState`** — `pub(crate)` by default; `pub` only at the **true** crate boundary (a field actually read by `maestro-cli` or by an integration test outside the crate).
+- **CODING_STANDARDS §2** "`pub(crate)` by default for internal items; `pub` only at true crate boundaries" is the standing rule. Restoring widely-public fields requires an explicit comment justifying why the encapsulation invariant doesn't apply.
+
+This is non-negotiable for `Workflow.state`: any future PR that introduces a `wf.state = …` write outside the state-machine module is a regression.
+
+---
+
+## 5 · CI is the enforcement layer for the §2 quality bar
+
+`CODING_STANDARDS.md` §2 says "`cargo build` must produce **zero warnings** before any commit." Without CI gating, that rule has been aspirational.
+
+Going forward:
+
+- `.github/workflows/` runs, on every PR:
+  - `cargo build --workspace --all-targets`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo test --workspace`
+  - `npm --prefix ui ci && npm --prefix ui run build`
+- A warning on `main` is a release-blocker, not a future task. If a transient nightly toolchain issue surfaces a warning we can't fix today, **the policy is to pin the toolchain** in `rust-toolchain.toml`, not to relax the gate.
+- The release profile (`strip = "symbols"`, `lto = "thin"`, `codegen-units = 1`) is the standing release build configuration; do not override it per-commit.
+
+---
+
+## 6 · Test scaffolding does not ship in the production crate surface
+
+Today `crates/maestro-web/src/lib.rs` exposes `pub mod test_helpers;` without `#[cfg(test)]`. CODING_STANDARDS §2 puts tests in `#[cfg(test)] mod tests` at the bottom of the file they test.
+
+Going forward:
+
+- Test helpers shared across **multiple** test files live behind a `test-utils` cargo feature **or** in a sister `*-testing` crate listed as `[dev-dependencies]`. They never appear in a `pub mod` without a `cfg` gate.
+- `.unwrap()` / `.expect()` inside a properly-gated test helper is fine. `.unwrap()` in a `pub mod` that ships to production is a §2 violation regardless of intent.
+- New shared test scaffolding must be added behind the feature flag from day one. Promoting test code to production needs an explicit comment justifying it (e.g. "this fixture is the production implementation; the test variant lives at …").
+
+---
+
+## When to update this file
+
+Update this file when a **project-level decision** changes — for example:
+
+- We change our mind on the bundled-image trade-off (slim down).
+- We adopt or replace `thiserror`.
+- We add or remove a CI gate.
+- We carve out an explicit exception to a §1 / §2 / §3 rule that future contributors must know about.
+
+Routine refactors that follow these principles do **not** need to touch this file — they update `lore/refactor-backlog.md` instead (or just close the item).

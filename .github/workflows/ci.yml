@@ -1,0 +1,84 @@
+name: CI
+
+# Enforces the §2 quality bar from CODING_STANDARDS.md and the standing CI
+# decisions in lore/code-quality-principles.md §5:
+#
+#   - cargo build --workspace --all-targets        (zero warnings)
+#   - cargo clippy --workspace --all-targets -- -D warnings
+#   - cargo test  --workspace
+#   - npm ci && npm run build  (frontend, with strict TypeScript)
+#
+# A warning on `main` is a release-blocker, not a future task. If a transient
+# toolchain issue surfaces a warning we cannot fix today, pin the toolchain in
+# rust-toolchain.toml — do not relax the gate.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref so we don't pay for stale CI when
+# someone pushes a fix-up commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust (build · clippy · test)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --locked
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked
+
+  ui:
+    name: UI (npm build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: npm run build
+        run: npm run build
