@@ -2,24 +2,21 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { apiPost, listMyRepositories, type RepositoryRow } from "../../api/client";
+import { apiPost } from "../../api/client";
 import { MarkdownPreview } from "../MarkdownPreview";
 import { DiffView } from "../DiffView";
 import { useToast } from "../../hooks/useToast";
 import { useTicketDetail } from "../../hooks/useTicketDetail";
 import { useTicketCountdown } from "../../hooks/useTicketCountdown";
+import { useStartWorkflow } from "../../hooks/useStartWorkflow";
 import { TicketDetailAiPanel } from "./TicketDetailAiPanel";
 import { TicketDetailHeader } from "./TicketDetailHeader";
 import { TicketDetailView } from "./TicketDetailView";
+import { StartWorkflowRepoBanner } from "./StartWorkflowRepoBanner";
+import { StartWorkflowFooter } from "./StartWorkflowFooter";
+import type { PendingImprovement } from "./TicketImproveWithAI";
 
 const DEFAULT_IMPROVE_TIMEOUT_SECS = 300;
-
-interface PendingImprovement {
-  originalDescription: string;
-  improvedDescription: string;
-  improvedSummary?: string;
-}
 
 interface Props {
   ticketKey: string;
@@ -69,21 +66,7 @@ export function TicketDetailModal({
     useState<PendingImprovement | null>(null);
 
   // Plan-10: repository selector — only shown when starting a workflow.
-  const [repos, setRepos] = useState<RepositoryRow[]>([]);
-  const [repositoryId, setRepositoryId] = useState("");
-  const [loadingRepos, setLoadingRepos] = useState(showStartButton);
-
-  useEffect(() => {
-    if (!showStartButton) return;
-    setLoadingRepos(true);
-    listMyRepositories()
-      .then((rs) => {
-        setRepos(rs);
-        if (rs.length > 0) setRepositoryId(rs[0].id);
-      })
-      .catch(() => setRepos([]))
-      .finally(() => setLoadingRepos(false));
-  }, [showStartButton]);
+  const { repos, repositoryId, setRepositoryId, loadingRepos } = useStartWorkflow(showStartButton);
 
   // Debounce editText for the side-by-side preview pane (400 ms)
   useEffect(() => {
@@ -242,40 +225,14 @@ export function TicketDetailModal({
         />
 
         {/* Plan-10 repo selector — required when starting a workflow. */}
-        {showStartButton && (
-          <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-3">
-            <label className="text-xs text-gray-400 shrink-0">Repository:</label>
-            {loadingRepos ? (
-              <span className="text-xs text-gray-500">Loading…</span>
-            ) : repos.length === 0 ? (
-              <span className="text-xs text-amber-300">
-                No repositories on your dashboard.{" "}
-                <Link
-                  to="/config.html?tab=repositories"
-                  className="underline hover:text-amber-100"
-                  onClick={onClose}
-                >
-                  Add one
-                </Link>{" "}
-                before starting a workflow.
-              </span>
-            ) : repos.length === 1 ? (
-              <span className="text-xs text-gray-300 font-mono">{repos[0].name}</span>
-            ) : (
-              <select
-                value={repositoryId}
-                onChange={(e) => setRepositoryId(e.target.value)}
-                className="bg-gray-950 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 font-mono"
-              >
-                {repos.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-        )}
+        <StartWorkflowRepoBanner
+          showStartButton={showStartButton}
+          repos={repos}
+          repositoryId={repositoryId}
+          setRepositoryId={setRepositoryId}
+          loadingRepos={loadingRepos}
+          onClose={onClose}
+        />
 
         {/* Diff review banner */}
         {pendingImprovement && (
@@ -443,36 +400,22 @@ export function TicketDetailModal({
               </>
             )}
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={
-                pendingImprovement
-                  ? handleDiscardImprovement
-                  : editMode
-                  ? handleCancelEdit
-                  : onClose
-              }
-              className="text-xs px-4 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-            >
-              {pendingImprovement ? "Discard" : editMode ? "Cancel" : "Close"}
-            </button>
-            {pendingImprovement ? (
-              <button
-                onClick={handleConfirmImprovement}
-                className="text-xs px-4 py-1.5 rounded-lg bg-green-700 text-white hover:bg-green-600 cursor-pointer"
-              >
-                Confirm
-              </button>
-            ) : showStartButton && onStart ? (
-              <button
-                onClick={() => onStart(editMode ? editText : markdown, editMode ? editTitle : summary, repositoryId)}
-                disabled={!repositoryId || loadingRepos}
-                className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              >
-                Add to Dashboard
-              </button>
-            ) : null}
-          </div>
+          <StartWorkflowFooter
+            showStartButton={showStartButton}
+            pendingImprovement={pendingImprovement}
+            editMode={editMode}
+            editText={editText}
+            editTitle={editTitle}
+            markdown={markdown}
+            summary={summary}
+            repositoryId={repositoryId}
+            loadingRepos={loadingRepos}
+            onStart={onStart}
+            onClose={onClose}
+            onCancelEdit={handleCancelEdit}
+            onDiscardImprovement={handleDiscardImprovement}
+            onConfirmImprovement={handleConfirmImprovement}
+          />
         </div>
       </div>
     </div>
