@@ -38,9 +38,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && cargo build --release \
     && cp /app/target/release/maestro /out/maestro
 
-# Stage 2: Runtime
+# Stage 2a: Runtime base (= image target `maestro:slim`).
 # Renovate-managed digest, refresh weekly (audit 2026-05-21 §3.5 — pin all bases by @sha256).
-FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
+# Contains everything a deployed maestro server NEEDS to run its workflows except
+# build toolchains (no Rust, no build-essential). For users who do not run Rust
+# workflows or build native dependencies inside workers, `maestro:slim` is the
+# smaller, lower-attack-surface image. Build with:
+#   docker build --target runtime-base -t maestro:slim .
+FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime-base
 
 ARG MAESTRO_VERSION=dev
 LABEL org.opencontainers.image.version="${MAESTRO_VERSION}"
@@ -117,38 +122,17 @@ RUN install -dm 755 /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/* \
     && mise --version
 
-# Compiler + headers for mise-installed runtimes built from source (e.g. ruby-build → OpenSSL + Ruby).
-# Without these, `mise install` fails on tools like ruby when no prebuilt binary exists (common on arm64).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    autoconf \
-    bison \
-    build-essential \
-    libffi-dev \
-    libgmp-dev \
-    libreadline-dev \
-    libssl-dev \
-    libyaml-dev \
-    patch \
-    perl \
-    pkg-config \
-    zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Rust toolchain — baked system-wide so it is available in every container
-# (editor, ephemeral workers, terminal) regardless of volume state.
-# RUSTUP_HOME/CARGO_HOME are NOT volume-mounted, so the install lives in the
-# image layer. Other runtimes (Java, Ruby, Go, …) are best managed via `mise`
-# and the shared mise volume; Rust is special because many Rust workflows need
-# `cargo` in ephemeral workers that start before any mise install can run.
+# NOTE: build toolchains (build-essential, autoconf, libssl-dev, libyaml-dev, …)
+# and the Rust toolchain live in the `runtime-build-tools` stage below, not
+# here. `runtime-base` deliberately omits them so the slim image is smaller
+# and has less attack surface. See audit §3.5 / lore/audits/2026-05-21-plan.md
+# Phase 3 — "Runtime bundles build toolchains".
+# RUSTUP_HOME / CARGO_HOME are declared here so `ENV PATH` (further down) can
+# reference $RUSTUP_HOME / $CARGO_HOME consistently across both image targets;
+# the directories are empty in `runtime-base` and populated in
+# `runtime-build-tools`.
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
-RUN curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-delay 5 https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal \
-    && /usr/local/cargo/bin/rustup component add rustfmt clippy \
-    && chmod -R a+r /usr/local/rustup /usr/local/cargo \
-    && find /usr/local/cargo/bin -type f -exec chmod a+x {} \; \
-    && /usr/local/cargo/bin/cargo --version \
-    && /usr/local/cargo/bin/rustc --version
 
 # ── Three-tier tool layout (task #48) ────────────────────────────────────
 #   BAKED        — required for advertised Maestro features (this Dockerfile).
@@ -343,11 +327,10 @@ RUN mkdir -p /home/maestro/.local/share/mise/shims \
     /home/maestro/.npm \
     /home/maestro/.npm-global/lib \
     /home/maestro/.npm-global/bin \
-    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config /home/maestro/.npm /home/maestro/.npm-global \
-    # Transfer rustup/cargo ownership so maestro can install toolchain versions at runtime.
-    # (The image ships a pre-installed stable toolchain, but a project's .mise.toml may
-    # request a different version; rustup needs to write to RUSTUP_HOME/tmp/ for that.)
-    && chown -R maestro:maestro /usr/local/rustup /usr/local/cargo
+    && chown -R maestro:maestro /home/maestro/.local /home/maestro/.cache /home/maestro/.config /home/maestro/.npm /home/maestro/.npm-global
+# Rust toolchain ownership transfer happens in `runtime-build-tools` (the only
+# stage that installs rustup/cargo). `runtime-base` has empty $RUSTUP_HOME /
+# $CARGO_HOME directories so chowning them here would be a no-op.
 
 # npm cache dir (for npx and package installs)
 ENV NPM_CONFIG_CACHE=/home/maestro/.npm
@@ -405,3 +388,54 @@ RUN chmod +x /usr/local/bin/test-workflow.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["--config", "/etc/maestro/config.toml"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2b: Runtime + build tools (= image target `maestro:full`, default target).
+#
+# `FROM runtime-base` inherits everything in the slim image. This layer adds
+# the C toolchain (gcc + headers) needed by `mise install` when building
+# language runtimes from source (e.g. ruby-build → OpenSSL + Ruby on arm64
+# where no prebuilt binary exists), and the Rust toolchain so Rust workflows
+# can run `cargo build` inside ephemeral workers without bootstrapping rustup
+# every time.
+#
+# This is the DEFAULT build target — plain `docker build .` and
+# `docker compose build` produce `maestro:full`. Admins who want the smaller
+# slim image opt in with `--target runtime-base`.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM runtime-base AS runtime-build-tools
+
+# Compiler + headers for mise-installed runtimes built from source (e.g. ruby-build → OpenSSL + Ruby).
+# Without these, `mise install` fails on tools like ruby when no prebuilt binary exists (common on arm64).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    autoconf \
+    bison \
+    build-essential \
+    libffi-dev \
+    libgmp-dev \
+    libreadline-dev \
+    libssl-dev \
+    libyaml-dev \
+    patch \
+    perl \
+    pkg-config \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust toolchain — baked system-wide so it is available in every container
+# (editor, ephemeral workers, terminal) regardless of volume state.
+# RUSTUP_HOME/CARGO_HOME are NOT volume-mounted, so the install lives in the
+# image layer. Other runtimes (Java, Ruby, Go, …) are best managed via `mise`
+# and the shared mise volume; Rust is special because many Rust workflows need
+# `cargo` in ephemeral workers that start before any mise install can run.
+RUN curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-delay 5 https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal \
+    && /usr/local/cargo/bin/rustup component add rustfmt clippy \
+    && chmod -R a+r /usr/local/rustup /usr/local/cargo \
+    && find /usr/local/cargo/bin -type f -exec chmod a+x {} \; \
+    && /usr/local/cargo/bin/cargo --version \
+    && /usr/local/cargo/bin/rustc --version \
+    # Transfer rustup/cargo ownership so maestro can install toolchain versions at runtime.
+    # (The image ships a pre-installed stable toolchain, but a project's .mise.toml may
+    # request a different version; rustup needs to write to RUSTUP_HOME/tmp/ for that.)
+    && chown -R maestro:maestro /usr/local/rustup /usr/local/cargo
