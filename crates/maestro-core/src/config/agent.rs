@@ -68,11 +68,11 @@ pub struct AgentConfig {
     /// **Deprecated (Phase 1)**: legacy top-level Cursor CLI binary. Moved to
     /// `[agent.providers.cursor].cli`. Still parsed for one release; migrated
     /// at load time and overwritten on next save (see `Config::load`).
-    #[serde(default = "default_cursor_cli")]
+    #[serde(default = "super::agent_legacy::default_cursor_cli")]
     pub cursor_cli: String,
     /// **Deprecated (Phase 1)**: legacy top-level Cursor model. Moved to
     /// `[agent.providers.cursor].model`. Migrated at load time.
-    #[serde(default = "default_cursor_model")]
+    #[serde(default = "super::agent_legacy::default_cursor_model")]
     pub cursor_model: String,
     /// Timeout per agent session (applies to all providers).
     #[serde(default = "default_step_timeout")]
@@ -212,14 +212,6 @@ fn default_improve_timeout() -> u64 {
     300
 }
 
-fn default_cursor_cli() -> String {
-    "agent".to_string()
-}
-
-fn default_cursor_model() -> String {
-    "Auto".to_string()
-}
-
 pub(super) fn default_step_timeout() -> u64 {
     1800
 }
@@ -241,8 +233,8 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             provider: AiAgentProvider::default(),
-            cursor_cli: default_cursor_cli(),
-            cursor_model: default_cursor_model(),
+            cursor_cli: super::agent_legacy::default_cursor_cli(),
+            cursor_model: super::agent_legacy::default_cursor_model(),
             step_timeout_secs: default_step_timeout(),
             improve_timeout_secs: default_improve_timeout(),
             model: String::new(),
@@ -253,90 +245,6 @@ impl Default for AgentConfig {
 }
 
 impl AgentConfig {
-    /// Phase 1 migration (04_architecture.md §8): copy values from the legacy
-    /// flat `[agent].cursor_cli` / `cursor_model` / `model` fields into the
-    /// new `[agent.providers.<name>]` sub-tables when the sub-table key is
-    /// empty. Idempotent — running it twice produces the same result.
-    ///
-    /// Emits a `tracing::warn!` per migrated key. The file is **not** rewritten
-    /// at load time; the next save via `ConfigWriter` writes the new shape.
-    pub fn migrate_legacy_flat_fields(&mut self) {
-        // Cursor: flat cursor_cli → providers.cursor.cli. Migrate when the
-        // sub-table is empty AND the legacy field carries a non-default
-        // value. The legacy default ("agent") is also `effective_cursor_cli`'s
-        // fallback when the sub-table is empty, so skipping migration in
-        // that case keeps the on-disk shape minimal.
-        if self.providers.cursor.cli.trim().is_empty()
-            && !self.cursor_cli.trim().is_empty()
-            && self.cursor_cli != default_cursor_cli()
-        {
-            tracing::warn!(
-                from = "agent.cursor_cli",
-                to = "agent.providers.cursor.cli",
-                "config: legacy field migrated to [agent.providers.cursor]"
-            );
-            self.providers.cursor.cli = self.cursor_cli.clone();
-        }
-        // Cursor: flat cursor_model → providers.cursor.model.
-        if self.providers.cursor.model.trim().is_empty()
-            && !self.cursor_model.trim().is_empty()
-            && self.cursor_model != default_cursor_model()
-        {
-            tracing::warn!(
-                from = "agent.cursor_model",
-                to = "agent.providers.cursor.model",
-                "config: legacy field migrated to [agent.providers.cursor]"
-            );
-            self.providers.cursor.model = self.cursor_model.clone();
-        }
-        // Generic model: flat agent.model → providers.<active>.model.
-        if !self.model.trim().is_empty() {
-            let dest = match self.provider {
-                AiAgentProvider::Claude => &mut self.providers.claude.model,
-                AiAgentProvider::Cursor => &mut self.providers.cursor.model,
-                AiAgentProvider::Codex => &mut self.providers.codex.model,
-                AiAgentProvider::OpenCode => &mut self.providers.opencode.model,
-            };
-            if dest.trim().is_empty() {
-                tracing::warn!(
-                    from = "agent.model",
-                    to = "agent.providers.<active>.model",
-                    provider = %self.provider.as_str(),
-                    "config: legacy field migrated to active provider sub-table"
-                );
-                *dest = self.model.clone();
-            }
-        }
-    }
-
-    /// Return the effective Cursor CLI binary, preferring the sub-table value
-    /// when non-empty, then the legacy flat field, then the hard-coded default.
-    pub fn effective_cursor_cli(&self) -> &str {
-        let sub = self.providers.cursor.cli.trim();
-        if !sub.is_empty() {
-            return &self.providers.cursor.cli;
-        }
-        let legacy = self.cursor_cli.trim();
-        if !legacy.is_empty() {
-            return &self.cursor_cli;
-        }
-        "agent"
-    }
-
-    /// Return the effective Cursor model, preferring the sub-table value
-    /// when non-empty, then the legacy flat field, then the hard-coded default.
-    pub fn effective_cursor_model(&self) -> &str {
-        let sub = self.providers.cursor.model.trim();
-        if !sub.is_empty() {
-            return &self.providers.cursor.model;
-        }
-        let legacy = self.cursor_model.trim();
-        if !legacy.is_empty() {
-            return &self.cursor_model;
-        }
-        "Auto"
-    }
-
     /// Task #44: return the effective Claude model name, resolving in
     /// precedence order:
     /// 1. `[agent.providers.claude].model` (Phase 1 sub-table — the

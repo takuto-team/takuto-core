@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 mod agent;
+mod agent_legacy;
 mod general;
 mod git;
 mod jira;
