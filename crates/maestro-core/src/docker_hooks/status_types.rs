@@ -160,3 +160,69 @@ impl Default for SystemStatus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lock-in: the `SystemStatus::default()` shape feeds the boot-time HTTP
+    /// contract consumed by the dashboard. Any field rename / removed default
+    /// is an observable wire change; assert the full shape so the split
+    /// can't silently drift.
+    #[test]
+    fn lock_in_system_status_default_shape() {
+        let s = SystemStatus::default();
+
+        assert!(s.config_toml_ok, "config_toml_ok default");
+
+        assert_eq!(s.github.mode, "missing");
+        assert!(!s.github.app_configured);
+        assert_eq!(s.github.app_id, None);
+        assert_eq!(s.github.app_name, None);
+
+        assert_eq!(s.provider.selected, "claude");
+        assert!(!s.provider.deployment_default_credential_present);
+        assert!(!s.provider.headless_capable);
+        assert_eq!(s.provider.custom_base_url, None);
+
+        assert_eq!(s.ticketing.system, "none");
+        assert!(!s.ticketing.acli_ok);
+
+        assert!(!s.per_user_required);
+        assert!(s.warnings.is_empty());
+
+        // has_critical() is false on a default snapshot.
+        assert!(!s.has_critical());
+    }
+
+    /// Lock-in: the three `StructuredWarning` constructors map to the
+    /// `severity` discriminant the dashboard switches on. Any reshuffle of
+    /// the constructor → severity wiring is an observable contract break.
+    #[test]
+    fn lock_in_structured_warning_constructors() {
+        let c = StructuredWarning::critical("gh_auth_missing", "gh CLI not authenticated");
+        assert_eq!(c.code, "gh_auth_missing");
+        assert_eq!(c.severity, "critical");
+        assert_eq!(c.message, "gh CLI not authenticated");
+
+        let w = StructuredWarning::warning("acli_not_authenticated", "acli jira auth");
+        assert_eq!(w.code, "acli_not_authenticated");
+        assert_eq!(w.severity, "warning");
+        assert_eq!(w.message, "acli jira auth");
+
+        let i = StructuredWarning::info("config_file_bind_mounted", "in-place fallback");
+        assert_eq!(i.code, "config_file_bind_mounted");
+        assert_eq!(i.severity, "info");
+        assert_eq!(i.message, "in-place fallback");
+
+        // has_critical() flips when any critical warning is present.
+        let mut s = SystemStatus::default();
+        assert!(!s.has_critical());
+        s.warnings.push(StructuredWarning::warning("x", "x"));
+        s.warnings.push(StructuredWarning::info("y", "y"));
+        assert!(!s.has_critical(), "non-critical warnings must not trip has_critical");
+        s.warnings
+            .push(StructuredWarning::critical("z", "z"));
+        assert!(s.has_critical());
+    }
+}
