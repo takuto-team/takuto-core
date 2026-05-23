@@ -24,7 +24,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::auth::{open, GhClient, SealedBlob};
-use crate::db::credential_audit::{self, CredentialAuditKind};
 use crate::db::github_credentials;
 use crate::db::Database;
 use crate::github_app::GitHubAppTokenManager;
@@ -32,6 +31,7 @@ use crate::github_app::GitHubAppTokenManager;
 pub mod audit;
 pub mod decision;
 pub mod errors;
+pub mod validator;
 
 pub use decision::{decide_token_source, GitAction, GithubAuthMode, TokenSource};
 pub use errors::{auth_warning_payload, GitAuthError, GitAuthResult, GitToken, SecretToken};
@@ -111,106 +111,41 @@ impl GitAuthResolver {
     }
 
     /// Phase 2b.3.x: re-validate a user's PAT against the live `gh` shim at
-    /// workflow restore / resume time. Returns `Ok(())` when:
-    /// - the user has no PAT row (App-only / Missing modes — the App side
-    ///   handles its own token rotation via the background writer), OR
-    /// - the PAT still validates against `gh api user` AND every org in
-    ///   `orgs` accepts it (no `X-GitHub-SSO` block).
-    ///
-    /// On failure, writes a `credential_audit` row with
-    /// `event = "validation_failed", outcome = "error", error_code = <code>`
-    /// before returning the typed error so the workflow driver can surface
-    /// a `WorkflowEvent::AuthWarning`.
+    /// workflow restore / resume time. Thin delegator to
+    /// [`validator::revalidate_pat_for_workflow`] — see that fn for
+    /// behaviour.
     pub async fn revalidate_pat_for_workflow(
         &self,
         user_id: &str,
         gh: &dyn GhClient,
         orgs: &[String],
     ) -> GitAuthResult<()> {
-        // Skip silently for App-only / Missing modes.
-        if !self.user_has_pat(user_id).await? {
-            return Ok(());
-        }
-        let pat = self.unseal_user_pat(user_id).await?;
-        let result = crate::auth::validate_pat(gh, pat.expose(), orgs).await;
-        if let Err(ref e) = result {
-            // Audit the failure.
-            let code = match e {
-                crate::auth::PatValidationError::InvalidPat => "invalid_pat",
-                crate::auth::PatValidationError::InsufficientScopes { .. } => {
-                    "insufficient_scopes"
-                }
-                crate::auth::PatValidationError::SsoAuthorizationRequired { .. } => {
-                    "sso_authorization_required"
-                }
-                crate::auth::PatValidationError::Transport(_) => "gh_transport_error",
-            };
-            let conn = self.db.conn().lock().await;
-            let _ = credential_audit::log(
-                &conn,
-                user_id,
-                None,
-                CredentialAuditKind::GithubPat,
-                None,
-                "validation_failed",
-                "error",
-                Some(code),
-            );
-        }
-        match result {
-            Ok(_) => Ok(()),
-            Err(crate::auth::PatValidationError::SsoAuthorizationRequired { org, sso_url }) => {
-                Err(GitAuthError::SsoAuthorizationRequired { org, sso_url })
-            }
-            Err(crate::auth::PatValidationError::InvalidPat) => Err(GitAuthError::Internal {
-                message: "PAT no longer valid (revoked or expired)".into(),
-            }),
-            Err(crate::auth::PatValidationError::InsufficientScopes { missing }) => {
-                Err(GitAuthError::Internal {
-                    message: format!(
-                        "PAT lost required scopes; missing: {}",
-                        missing.join(", ")
-                    ),
-                })
-            }
-            Err(crate::auth::PatValidationError::Transport(m)) => Err(GitAuthError::Internal {
-                message: format!("PAT revalidation transport error: {m}"),
-            }),
-        }
+        validator::revalidate_pat_for_workflow(self, user_id, gh, orgs).await
     }
 
-    /// Phase 2b.3 calls this at workflow start to re-check SSO authorisation
-    /// for every org the workflow will touch. Phase 2b.2 only exposes it;
-    /// the driver invocation lands later.
+    /// Phase 2b.3: SSO-only revalidation. Thin delegator to
+    /// [`validator::revalidate_sso`] — see that fn for behaviour.
     pub async fn revalidate_sso(
         &self,
         user_id: &str,
         gh: &dyn GhClient,
         orgs: &[String],
     ) -> GitAuthResult<()> {
-        // No PAT → nothing to revalidate. Return Ok so callers don't have to
-        // branch on mode; SSO only matters for PAT-bearing flows.
-        if !self.user_has_pat(user_id).await? {
-            return Ok(());
-        }
-        let pat = self.unseal_user_pat(user_id).await?;
-        match crate::auth::validate_pat(gh, pat.expose(), orgs).await {
-            Ok(_) => Ok(()),
-            Err(crate::auth::PatValidationError::SsoAuthorizationRequired { org, sso_url }) => {
-                Err(GitAuthError::SsoAuthorizationRequired { org, sso_url })
-            }
-            // Other validation failures aren't fatal at this layer — they'll
-            // surface again when a subsequent action tries to use the PAT.
-            // The SSO check is specifically about org access loss.
-            Err(other) => Err(GitAuthError::Internal {
-                message: format!("PAT revalidation failed: {other:?}"),
-            }),
-        }
+        validator::revalidate_sso(self, user_id, gh, orgs).await
     }
 
     // ── Internals ─────────────────────────────────────────────────────────
 
-    async fn user_has_pat(&self, user_id: &str) -> GitAuthResult<bool> {
+    /// Sibling-module access to the `Database` handle. Used by
+    /// [`validator`] for the `credential_audit::log` write on validation
+    /// failure. Crate-external callers must not depend on this — the
+    /// resolver's public surface is `mode_for_user` / `token_for` /
+    /// `revalidate_*`.
+    pub(super) fn db(&self) -> &Database {
+        &self.db
+    }
+
+    pub(super) async fn user_has_pat(&self, user_id: &str) -> GitAuthResult<bool> {
         let conn = self.db.conn().lock().await;
         let row = github_credentials::find(&conn, user_id).map_err(|e| GitAuthError::Internal {
             message: format!("github_credentials::find failed: {e}"),
@@ -229,7 +164,7 @@ impl GitAuthResolver {
         Ok(row.map(|r| r.sign_commits).unwrap_or(true))
     }
 
-    async fn unseal_user_pat(&self, user_id: &str) -> GitAuthResult<SecretToken> {
+    pub(super) async fn unseal_user_pat(&self, user_id: &str) -> GitAuthResult<SecretToken> {
         let mk = self.db.master_key().ok_or_else(|| {
             GitAuthError::MasterKeyUnavailable {
                 user_id: user_id.to_string(),
