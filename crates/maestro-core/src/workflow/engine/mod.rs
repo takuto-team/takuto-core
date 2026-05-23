@@ -46,28 +46,28 @@ pub struct WorkflowEngine {
     /// Limits concurrent heavy work (mise/install/agent sessions) across workflows. Paused workflows do not hold a permit.
     agent_run_semaphore: Arc<Semaphore>,
     /// When set, workflow drivers that exit with [`MaestroError::Cancelled`] do not move the workflow to Error (graceful container shutdown + snapshot).
-    pub suppress_cancelled_as_error: Arc<AtomicBool>,
+    pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
     /// `true` when acli (Atlassian CLI) is authenticated. When `false`, workflows skip all Jira
     /// operations (assign, transition, retrieve details) and the poller is not started.
-    pub jira_available: Arc<AtomicBool>,
+    pub(crate) jira_available: Arc<AtomicBool>,
     /// Which ticketing system is configured for this engine run.
-    pub ticketing_system: TicketingSystem,
+    pub(crate) ticketing_system: TicketingSystem,
     /// Directory containing dynamic workflow definition YAML files, resolved at construction time.
-    pub workflows_dir: PathBuf,
+    pub(crate) workflows_dir: PathBuf,
     /// Optional SQLite handle used by the bootstrap driver to look up per-workspace
     /// `worktree_init_commands` overrides. `None` when running without a DB (e.g.
     /// some test paths) — the driver then falls back to the global config.
-    pub db: Option<Database>,
+    pub(crate) db: Option<Database>,
     /// Phase 2b.3 (04_architecture.md §6): optional `GitAuthResolver` used to
     /// pin credentials at workflow start and build per-step
     /// `WorkerSecretsBundle`s. `None` when running without the resolver
     /// (legacy poller / single-tenant) — the worker falls back to the
     /// ambient-env `PASSTHROUGH_ENV` path.
-    pub git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    pub(crate) git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
     /// Phase 2b.3.x: `GhClient` used by the engine for at-resume PAT
     /// revalidation. Defaults to a `RealGhClient`. Test fixtures override
     /// via [`Self::with_gh_client`] to inject a mock.
-    pub gh_client: Arc<dyn crate::auth::GhClient>,
+    pub(crate) gh_client: Arc<dyn crate::auth::GhClient>,
     // Service structs
     persistence: WorkflowPersistence,
     lifecycle: WorkflowLifecycle,
@@ -215,6 +215,49 @@ impl WorkflowEngine {
     /// Claude). Returns a fresh `Arc` handle to the shared instance.
     pub fn actions(&self) -> Arc<dyn ExternalActions> {
         self.actions.clone()
+    }
+
+    /// Flag flipped on graceful container shutdown so cancelled drivers do not
+    /// move workflows to `Error`. Returns a fresh `Arc` handle.
+    pub fn suppress_cancelled_as_error(&self) -> Arc<AtomicBool> {
+        self.suppress_cancelled_as_error.clone()
+    }
+
+    /// `true` when acli (Atlassian CLI) is authenticated. Returns a fresh `Arc`
+    /// handle so callers can share the live flag without holding the engine.
+    pub fn jira_available(&self) -> Arc<AtomicBool> {
+        self.jira_available.clone()
+    }
+
+    /// Which ticketing system is configured for this engine run.
+    pub fn ticketing_system(&self) -> TicketingSystem {
+        self.ticketing_system
+    }
+
+    /// Directory containing dynamic workflow definition TOML files.
+    pub fn workflows_dir(&self) -> &std::path::Path {
+        &self.workflows_dir
+    }
+
+    /// Optional SQLite handle used by the bootstrap driver. `None` when running
+    /// without a DB (e.g. some test paths).
+    pub fn db(&self) -> Option<&Database> {
+        self.db.as_ref()
+    }
+
+    /// Optional `GitAuthResolver` used to pin credentials at workflow start.
+    /// Returns a cloned `Option<Arc<...>>` so callers can share the resolver
+    /// without holding the engine.
+    pub fn git_auth_resolver(
+        &self,
+    ) -> Option<Arc<crate::github::auth_resolver::GitAuthResolver>> {
+        self.git_auth_resolver.clone()
+    }
+
+    /// `GhClient` used by the engine for at-resume PAT revalidation. Returns a
+    /// fresh `Arc` handle to the shared trait object.
+    pub fn gh_client(&self) -> Arc<dyn crate::auth::GhClient> {
+        self.gh_client.clone()
     }
 
     /// Convenience accessor for the inner `Arc<RwLock<HashMap<String, Workflow>>>`.

@@ -19,7 +19,7 @@ use super::require_workflow_access;
 pub async fn list_workflow_definitions(
     State(state): State<AppState>,
 ) -> Json<Vec<DiscoveredWorkflow>> {
-    let dir = state.engine.workflows_dir.clone();
+    let dir = state.engine.workflows_dir().to_path_buf();
     let result = discover_workflows(&dir);
     Json(result.workflows)
 }
