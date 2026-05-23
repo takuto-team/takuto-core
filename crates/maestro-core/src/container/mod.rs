@@ -26,6 +26,7 @@ pub(crate) mod port_scanner;
 pub(crate) mod reap;
 pub(crate) mod run_command;
 pub(crate) mod runner;
+pub(crate) mod secrets_bundle;
 pub(crate) mod terminal;
 pub(crate) mod volumes;
 
@@ -57,7 +58,7 @@ pub use terminal::{
 // `#[cfg(test)]` paths today; the `#[allow]` silences the unused-import
 // warning in non-test builds without breaking the stable path.
 #[allow(unused_imports)]
-pub(crate) use runner::apply_secrets_bundle_to_args;
+pub(crate) use secrets_bundle::apply_secrets_bundle_to_args;
 
 // ---------------------------------------------------------------------------
 // Shared helpers used by ≥ 2 sub-modules
