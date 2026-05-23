@@ -102,6 +102,24 @@ Going forward:
 
 ---
 
+## 7 · Module splits
+
+When we split one of the audit's worst-offender files, the cut plan lives in a dated spec under `lore/audits/`. Each spec pins the exact target file list, the per-file LOC budget, the public surface that must remain stable, and an explicit non-goals list — so the split is mechanical and reviewable against the audit's §9 cut plan rather than re-debated PR-by-PR.
+
+- **2026-05-23** — `crates/maestro-core/src/container/runner.rs` (1,513 LOC) split into `mod.rs` + `runner.rs` + `dind_paths.rs` + `volumes.rs` + `secrets_bundle.rs` + `docker_args.rs` + `wrap_command.rs`. Spec: [`lore/audits/2026-05-23-runner-split-spec.md`](audits/2026-05-23-runner-split-spec.md).
+- **2026-05-23** — `crates/maestro-core/src/github/auth_resolver.rs` (1,381 LOC) split into `mod.rs` + `resolver.rs` + `decision.rs` + `validator.rs` + `audit.rs` + `errors.rs` under `github/auth_resolver/`. The directory keeps the existing `auth_resolver` module name (not the audit's descriptive `auth/` label) so every `crate::github::auth_resolver::*` import resolves without a re-export shim — same precedent as the runner split. Spec: [`lore/audits/2026-05-23-auth-resolver-split-spec.md`](audits/2026-05-23-auth-resolver-split-spec.md).
+- **2026-05-23** — `crates/maestro-core/src/docker_hooks.rs` (1,216 LOC) split into `mod.rs` + `process.rs` + `cursor_auth.rs` + `gh_auth.rs` + `hook_runner.rs` + `status_types.rs` + `status.rs` under `docker_hooks/`. The audit's 10-module cut plan is condensed to 7 because the four provider probes are short `match` arms (not standalone files) and there is no Claude-specific filesystem walker to justify a sibling `claude_auth.rs`. The directory keeps the existing `docker_hooks` module name so every `maestro_core::docker_hooks::*` import (17 call sites across `maestro-web` and `maestro-cli`) resolves without a shim. Spec: [`lore/audits/2026-05-23-docker-hooks-split-spec.md`](audits/2026-05-23-docker-hooks-split-spec.md).
+
+---
+
+## 8 · Encapsulation
+
+When we demote a god-struct's `pub` fields to `pub(crate)` and add typed accessor methods, the cut plan lives in a dated spec under `lore/audits/`. The spec pins the per-field demote/keep decision, the cross-crate call-site count, the accessor naming rule, and an explicit non-goals list — so the change is mechanical and reviewable against the audit's §8 priority list rather than re-debated PR-by-PR. The accessor naming rule is the single source of truth for new fields: callers move from `engine.<field>` to `engine.<field>()` with the same downstream API. `Arc<X>` accessors return `Arc<X>` by clone (preserves `.read().await` and dyn-dispatch chains); `Copy` types return by value; owned non-`Copy` types (`PathBuf`, `Database`) return `&T` by reference so callers `.clone()` only when they need ownership. Adding a `pub` field to one of these structs after the demote is a regression — add an accessor instead.
+
+- **2026-05-24** — `WorkflowEngine` (`crates/maestro-core/src/workflow/engine/mod.rs:47-82`) had 9 `pub` fields; demoted to `pub(crate)` with 9 typed accessor methods. One cross-crate call site (`crates/maestro-web/src/routes/workflows/definitions.rs:28`) was updated from `state.engine.workflows_dir.clone()` to `state.engine.workflows_dir().clone()`; every other read goes through method shims (`workflows_arc()`, `subscribe()`, `event_sender()`) that already existed. `AppState` carving and `WorkflowEngine` sub-struct extraction are deferred phase-2 work. Spec: [`lore/audits/2026-05-24-engine-demote-pubs-spec.md`](audits/2026-05-24-engine-demote-pubs-spec.md).
+
+---
+
 ## When to update this file
 
 Update this file when a **project-level decision** changes — for example:
