@@ -385,4 +385,27 @@ mod tests {
             );
         }
     }
+
+    /// Lock-in test for `build_sh_payload`'s exact wire-format. Locks the
+    /// composition order (`RESTORE; FIX_PERMS; GH_TOKEN exec <user>`),
+    /// the `; ` and ` ` separators, the `exec ` keyword, and the
+    /// shell-escaped argv joining for the no-bundle branch. Any drift in
+    /// the format string or argument quoting fails this test.
+    ///
+    /// Intentionally uses the module-level snippet constants in the
+    /// expected value so the runtime constants themselves remain the
+    /// single source of truth (covered separately by
+    /// `bundle_sourcing_snippet_covers_every_documented_mapping`), while
+    /// this test pins the surrounding assembly byte-for-byte.
+    #[test]
+    fn lock_in_build_sh_payload_no_bundle_exact_output() {
+        let actual = build_sh_payload(false, "echo", &["hello", "world"]);
+        let expected = format!(
+            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} exec echo hello world"
+        );
+        assert_eq!(
+            actual, expected,
+            "build_sh_payload(false, ...) wire-format drifted"
+        );
+    }
 }

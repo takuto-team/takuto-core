@@ -141,6 +141,71 @@ mod tests {
         }
     }
 
+    /// Lock-in test for `build_volume_args` exact output. Pins:
+    ///   1. The complete legacy mount list (isolated=false) byte-for-byte.
+    ///   2. The exact isolated-mode mount list — `/workspace:/workspace`
+    ///      replaced by the worktree + `.git` + `.maestro:ro` trio,
+    ///      remaining mounts preserved in order, and the
+    ///      `maestro-tools:/opt/maestro-tools/bin:ro` mount appended last.
+    /// Any drift in mount strings, ordering, or the isolation splice
+    /// fails this test.
+    #[test]
+    fn lock_in_build_volume_args_legacy_and_isolated_exact_output() {
+        let wt = PathBuf::from("/workspace/worktrees/feat-proj-42");
+
+        // Legacy: WORKER_VOLUMES in order, then maestro-tools tail.
+        let legacy_expected: Vec<String> = vec![
+            "/workspace:/workspace".to_string(),
+            "/shared-auth/claude:/home/maestro/.claude".to_string(),
+            "/shared-auth/cursor:/home/maestro/.cursor".to_string(),
+            "/shared-auth/agents:/home/maestro/.agents".to_string(),
+            "/shared-auth/gh:/home/maestro/.config/gh".to_string(),
+            "/shared-auth/acli:/home/maestro/.config/acli".to_string(),
+            "/shared-auth/fcli:/home/maestro/.config/fcli".to_string(),
+            "/shared-auth/npm:/home/maestro/.npm".to_string(),
+            "/shared-auth/mise-data:/home/maestro/.local/share/mise".to_string(),
+            "/shared-auth/mise-cache:/home/maestro/.cache/mise".to_string(),
+            "/shared-auth/aws:/home/maestro/.aws".to_string(),
+            "/shared-auth/playwright-cache:/home/maestro/.cache/ms-playwright".to_string(),
+            "/shared-auth/vscode:/home/maestro/.openvscode-server".to_string(),
+            "/etc/maestro:/etc/maestro:ro".to_string(),
+            "maestro-tools:/opt/maestro-tools/bin:ro".to_string(),
+        ];
+        assert_eq!(
+            build_volume_args(&wt, false),
+            legacy_expected,
+            "build_volume_args legacy (isolate=false) wire-format drifted"
+        );
+
+        // Isolated: drop /workspace:/workspace, keep order of remaining
+        // WORKER_VOLUMES, then append worktree+.git+.maestro trio, then
+        // the maestro-tools tail.
+        let isolated_expected: Vec<String> = vec![
+            "/shared-auth/claude:/home/maestro/.claude".to_string(),
+            "/shared-auth/cursor:/home/maestro/.cursor".to_string(),
+            "/shared-auth/agents:/home/maestro/.agents".to_string(),
+            "/shared-auth/gh:/home/maestro/.config/gh".to_string(),
+            "/shared-auth/acli:/home/maestro/.config/acli".to_string(),
+            "/shared-auth/fcli:/home/maestro/.config/fcli".to_string(),
+            "/shared-auth/npm:/home/maestro/.npm".to_string(),
+            "/shared-auth/mise-data:/home/maestro/.local/share/mise".to_string(),
+            "/shared-auth/mise-cache:/home/maestro/.cache/mise".to_string(),
+            "/shared-auth/aws:/home/maestro/.aws".to_string(),
+            "/shared-auth/playwright-cache:/home/maestro/.cache/ms-playwright".to_string(),
+            "/shared-auth/vscode:/home/maestro/.openvscode-server".to_string(),
+            "/etc/maestro:/etc/maestro:ro".to_string(),
+            "/workspace/worktrees/feat-proj-42:/workspace/worktrees/feat-proj-42".to_string(),
+            "/workspace/.git:/workspace/.git".to_string(),
+            "/workspace/.maestro:/workspace/.maestro:ro".to_string(),
+            "maestro-tools:/opt/maestro-tools/bin:ro".to_string(),
+        ];
+        assert_eq!(
+            build_volume_args(&wt, true),
+            isolated_expected,
+            "build_volume_args isolated (isolate=true) wire-format drifted"
+        );
+    }
+
     #[test]
     fn build_volume_args_isolated_shallow_path_falls_back() {
         // A shallow path like `/tmp` has no grandparent, so isolation cannot
