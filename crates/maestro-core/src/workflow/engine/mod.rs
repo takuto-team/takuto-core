@@ -39,7 +39,7 @@ pub use driver::resolve_worktree_init_commands;
 pub use types::{MarkDoneOutcome, TerminalLine, Workflow, WorkflowEvent};
 
 pub struct WorkflowEngine {
-    pub config: Arc<RwLock<Config>>,
+    pub(crate) config: Arc<RwLock<Config>>,
     pub(crate) repository: Arc<WorkflowRepository>,
     pub(crate) event_bus: Arc<WorkflowEventBus>,
     pub actions: Arc<dyn ExternalActions>,
@@ -203,6 +203,12 @@ impl WorkflowEngine {
         self.persistence.set_git_auth_resolver(resolver.clone());
         self.transitions.set_git_auth_resolver(resolver);
         self
+    }
+
+    /// Shared workflow configuration. Returns a fresh `Arc` handle; the underlying
+    /// `RwLock<Config>` is the same value seen by every other clone.
+    pub fn config(&self) -> Arc<RwLock<Config>> {
+        self.config.clone()
     }
 
     /// Convenience accessor for the inner `Arc<RwLock<HashMap<String, Workflow>>>`.
