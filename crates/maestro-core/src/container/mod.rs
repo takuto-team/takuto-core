@@ -21,6 +21,7 @@
 //!   their dedicated port scanner.
 
 pub(crate) mod dind_paths;
+pub(crate) mod docker_args;
 pub(crate) mod editor;
 pub(crate) mod port_scanner;
 pub(crate) mod reap;
