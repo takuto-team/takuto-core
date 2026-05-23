@@ -13,31 +13,15 @@ use tracing::{error, info, warn};
 
 use super::sanitize_ticket_key;
 
-// `WORKER_ENV`, `PASSTHROUGH_ENV`, and the `base_docker_args` builder
-// live in `super::docker_args`. Re-exported so internal callers using
-// `super::runner::{WORKER_ENV, PASSTHROUGH_ENV}` (e.g. `editor.rs`,
-// `run_command.rs`) keep compiling unchanged.
+// `pub(crate) use` re-exports of items now living in sibling modules
+// (`docker_args`, `volumes`, `secrets_bundle`) so external callers
+// reaching `super::runner::*` (e.g. `editor.rs`, `run_command.rs`) keep
+// compiling unchanged. Shell snippets live in `super::wrap_command`.
 pub(crate) use super::docker_args::{PASSTHROUGH_ENV, WORKER_ENV};
-
-// `WORKER_VOLUMES` (the shared-mount list) and `build_volume_args` (the
-// per-issue isolation switch) live in `super::volumes`. Re-export
-// `build_volume_args` so internal callers using
-// `super::runner::build_volume_args` (e.g. `editor.rs`, `run_command.rs`)
-// keep compiling unchanged.
+pub(crate) use super::secrets_bundle::{apply_secrets_bundle_to_args, passthrough_is_bundled};
 pub(crate) use super::volumes::build_volume_args;
 
-// The `BUNDLE_SOURCING_SH` snippet (and the three legacy snippets —
-// `RESTORE_SNIPPET`, `FIX_PERMS_SNIPPET`, `GH_TOKEN_SNIPPET`) live in
-// `super::wrap_command`, where [`build_sh_payload`] composes them into
-// the final `sh -c` body. `ContainerRunner::wrap_command` (below) calls
-// that helper.
 static DOCKER_AVAILABLE: OnceLock<bool> = OnceLock::new();
-
-// `apply_secrets_bundle_to_args`, `passthrough_is_bundled`, and the
-// `SECRET_PASSTHROUGH` list live in `super::secrets_bundle`. Re-export
-// the public-from-this-module surface so internal callers (notably
-// `super::editor`, `super::run_command`) keep compiling unchanged.
-pub(crate) use super::secrets_bundle::{apply_secrets_bundle_to_args, passthrough_is_bundled};
 
 /// Runs AI agent commands inside isolated Docker containers so each workflow
 /// gets its own filesystem and network namespace.
@@ -46,23 +30,14 @@ pub struct ContainerRunner {
     image: String,
     worktree_path: PathBuf,
     step_counter: std::sync::atomic::AtomicU32,
-    /// When `true`, replace the broad `/workspace:/workspace` mount with targeted
-    /// bind mounts for just the worktree path, `.git`, and `.maestro`. This prevents
-    /// a container from accessing any other issue's worktree.
+    /// When `true`, replace `/workspace:/workspace` with targeted mounts
+    /// for the worktree, `.git`, and `.maestro` — see `super::volumes`.
     isolate_workspace: bool,
-    /// Phase 2b.3 (04_architecture.md §6): optional per-workflow secrets
-    /// bundle. When `Some`, the runner bind-mounts the bundle's tmpfs
-    /// directory at `/run/maestro-secrets:ro`, sets `MAESTRO_AUTH_BUNDLE=1`
-    /// so the worker entrypoint sources the secret files into env vars (then
-    /// `rm`s them inside the container), adds non-secret env vars like
-    /// `ANTHROPIC_BASE_URL` and the `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
-    /// attribution names. Tokens are NEVER passed as `-e KEY=value` to
-    /// `docker run` — the threat is `docker inspect <ctr>` leaking the
-    /// bytes.
-    ///
-    /// When `None`, the runner falls back to the legacy `PASSTHROUGH_ENV`
-    /// path which forwards ambient `CLAUDE_CODE_OAUTH_TOKEN` /
-    /// `CURSOR_API_KEY` from the host (single-tenant / poller workflows).
+    /// Phase 2b.3: optional per-workflow secrets bundle. When `Some`,
+    /// `super::docker_args::base_docker_args` bind-mounts the bundle's
+    /// tmpfs at `/run/maestro-secrets:ro` and `super::wrap_command`
+    /// sources it. When `None`, ambient `PASSTHROUGH_ENV` carries tokens.
+    /// See `04_architecture.md §6`.
     secrets_bundle: Option<Arc<crate::auth::WorkerSecretsBundle>>,
 }
 
@@ -86,16 +61,12 @@ impl ContainerRunner {
         self
     }
 
-    /// Phase 2b.3 (04_architecture.md §6): attach a per-workflow secrets
-    /// bundle. The runner will bind-mount the bundle's tmpfs directory
-    /// read-only at `/run/maestro-secrets`, set `MAESTRO_AUTH_BUNDLE=1` so
-    /// the worker entrypoint knows to source the files, and export the
-    /// non-secret env vars (`ANTHROPIC_BASE_URL`, `GIT_AUTHOR_*` /
-    /// `GIT_COMMITTER_*`). Token bytes are NEVER passed via `-e`.
-    pub fn with_secrets_bundle(
-        mut self,
-        bundle: Arc<crate::auth::WorkerSecretsBundle>,
-    ) -> Self {
+    /// Phase 2b.3: attach a per-workflow secrets bundle. The runner
+    /// bind-mounts the bundle's tmpfs at `/run/maestro-secrets:ro`,
+    /// sets `MAESTRO_AUTH_BUNDLE=1`, and exports the bundle's non-secret
+    /// env vars. Token bytes are NEVER passed via `-e`. See
+    /// `04_architecture.md §6` and `super::secrets_bundle`.
+    pub fn with_secrets_bundle(mut self, bundle: Arc<crate::auth::WorkerSecretsBundle>) -> Self {
         self.secrets_bundle = Some(bundle);
         self
     }
@@ -131,6 +102,11 @@ impl ContainerRunner {
         })
     }
 
+    /// Phase 2b.3: bundle's `extra_args` (provider sub-table). `None` when no bundle attached.
+    pub fn provider_extra_args(&self) -> Option<&[String]> {
+        self.secrets_bundle.as_ref().map(|b| b.extra_args.as_slice())
+    }
+
     /// Returns a unique container name for this ticket, incrementing an internal counter.
     pub fn next_container_name(&self) -> String {
         let n = self
@@ -140,10 +116,9 @@ impl ContainerRunner {
         format!("maestro-worker-{sanitized}-{n}")
     }
 
-    /// Build the common `docker run` prefix (flags, env, volumes, workdir, entrypoint)
-    /// before the image name and user command. Thin wrapper around the
-    /// free function in [`super::docker_args`] — passes the runner's
-    /// per-instance state through without exposing it via accessors.
+    /// Common `docker run` prefix (flags, env, volumes, workdir, entrypoint)
+    /// before the image and user command. Thin wrapper around the free function
+    /// in [`super::docker_args`] — passes runner state through without accessors.
     fn base_docker_args(&self, container_name: &str, entrypoint: Option<&str>) -> Vec<String> {
         super::docker_args::base_docker_args(
             container_name,
@@ -154,26 +129,15 @@ impl ContainerRunner {
         )
     }
 
-    /// Phase 2b.3: return the bundle's `extra_args` (provider sub-table
-    /// `extra_args`). Callers append these to the agent argv. `None` when no
-    /// bundle is attached.
-    pub fn provider_extra_args(&self) -> Option<&[String]> {
-        self.secrets_bundle.as_ref().map(|b| b.extra_args.as_slice())
-    }
-
-    /// Wrap a direct command (`program` + `args`) into a `docker run` invocation.
-    ///
-    /// Uses `sh -c` so we can restore `.claude.json` from backup, fix
-    /// permissions on shared volumes, source the GitHub App token, and
-    /// (when a bundle is attached) source the per-workflow secrets
-    /// before exec-ing the actual program. The shell payload itself is
-    /// assembled by [`super::wrap_command::build_sh_payload`] from the
-    /// named snippet constants at the top of that file.
+    /// Wrap a direct command (`program` + `args`) into a `docker run`
+    /// invocation. The `sh -c` payload (restore / fix-perms / gh-token /
+    /// bundle-source / exec) is assembled by
+    /// [`super::wrap_command::build_sh_payload`].
     pub fn wrap_command(&self, program: &str, args: &[&str]) -> (String, Vec<String>) {
         let name = self.next_container_name();
         let mut docker_args = self.base_docker_args(&name, None);
-        // Without `--user`, `docker run` defaults to root and writes root-owned files on the
-        // bind-mounted repo/worktree; the Maestro process (user `maestro`) cannot remove them later.
+        // `--user`: without it, `docker run` defaults to root and would write
+        // root-owned files on the bind-mounted worktree that maestro can't remove.
         docker_args.push("--user".into());
         docker_args.push("maestro:maestro".into());
         docker_args.push(self.image.clone());
@@ -215,9 +179,7 @@ impl ContainerRunner {
     /// Auto-detect the worker image by inspecting the running Maestro container,
     /// falling back to a locally-present `maestro:latest`, then `MAESTRO_REGISTRY_IMAGE`.
     pub async fn discover_worker_image() -> Option<String> {
-        // Inspect the current container by hostname (Docker sets HOSTNAME to the
-        // container ID). This works regardless of the compose project name — no
-        // hardcoded container_name needed.
+        // Hostname is the container ID (Docker default); works regardless of compose project.
         let container_id = std::env::var("HOSTNAME").unwrap_or_default();
         let output = if !container_id.is_empty() {
             tokio::process::Command::new("docker")
@@ -233,40 +195,16 @@ impl ContainerRunner {
             && output.status.success()
         {
             let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !image.is_empty() {
-                // Verify the image actually exists in DinD before using it — the name from
-                // docker inspect may point to a registry tag (e.g. ghcr.io/…:dev) that was
-                // never pulled into DinD (local dev builds).
-                let exists = tokio::process::Command::new("docker")
-                    .args(["image", "inspect", &image])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .await
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                if exists {
-                    info!(image = %image, "Discovered worker image from running Maestro container");
-                    return Some(image);
-                }
-                info!(
-                    image = %image,
-                    "Image from docker inspect not present in DinD — trying maestro:latest"
-                );
+            // Verify the image is in DinD before using it — `docker inspect` may name
+            // a registry tag that was never pulled into DinD (local dev builds).
+            if !image.is_empty() && image_exists_in_dind(&image).await {
+                info!(image = %image, "Discovered worker image from running Maestro container");
+                return Some(image);
             }
         }
 
-        // Check if maestro:latest is present locally in DinD (e.g. loaded via `make load-worker`).
-        // This is the correct image for local development builds.
-        let local_latest = tokio::process::Command::new("docker")
-            .args(["image", "inspect", "maestro:latest"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if local_latest {
+        // maestro:latest in DinD (e.g. via `make load-worker`) — local dev builds.
+        if image_exists_in_dind("maestro:latest").await {
             info!("Using local maestro:latest as worker image");
             return Some("maestro:latest".to_string());
         }
@@ -284,6 +222,19 @@ impl ContainerRunner {
         );
         None
     }
+}
+
+/// `docker image inspect <name>` → does the image exist in the current daemon?
+/// Stderr / stdout silenced; falsy on any error.
+async fn image_exists_in_dind(image: &str) -> bool {
+    tokio::process::Command::new("docker")
+        .args(["image", "inspect", image])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
