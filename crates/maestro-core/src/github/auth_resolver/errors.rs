@@ -173,4 +173,79 @@ mod tests {
         // Internal must not leak the message into the code field.
         assert!(!c.contains("boom"));
     }
+
+    /// Lock-in test for `auth_warning_payload`'s `(category, message)` tuple
+    /// across every `GitAuthError` variant. The dashboard renders these
+    /// strings verbatim, so they form a wire contract that must not drift.
+    ///
+    /// One sample input per variant; payload-bearing variants
+    /// (`SsoAuthorizationRequired`, `GitHubAppTokenFetchFailed`, `Internal`)
+    /// exercise the interpolation/clone paths so the format strings are
+    /// pinned, not just the category tags.
+    #[test]
+    fn lock_in_auth_warning_payload_shapes() {
+        // Variant 1: SsoAuthorizationRequired — message interpolates org + sso_url.
+        let err = GitAuthError::SsoAuthorizationRequired {
+            org: "acme-corp".into(),
+            sso_url: "https://github.com/orgs/acme-corp/sso?return_to=x".into(),
+        };
+        assert_eq!(
+            auth_warning_payload(&err),
+            (
+                "sso_authorization_required",
+                "SSO authorization required for org acme-corp: authorize at \
+                 https://github.com/orgs/acme-corp/sso?return_to=x"
+                    .to_string(),
+            ),
+        );
+
+        // Variant 2: UnauthenticatedGit — static message; payload fields ignored.
+        let err = GitAuthError::UnauthenticatedGit {
+            user_id: "u-alice".into(),
+            action: "push",
+        };
+        assert_eq!(
+            auth_warning_payload(&err),
+            (
+                "unauthenticated_git",
+                "GitHub authentication missing for this workflow's owner".to_string(),
+            ),
+        );
+
+        // Variant 3: MasterKeyUnavailable — static message; user_id ignored.
+        let err = GitAuthError::MasterKeyUnavailable {
+            user_id: "u-bob".into(),
+        };
+        assert_eq!(
+            auth_warning_payload(&err),
+            (
+                "master_key_unavailable",
+                "Master key not loaded; per-user credentials cannot be unsealed".to_string(),
+            ),
+        );
+
+        // Variant 4: GitHubAppTokenFetchFailed — message is the upstream string verbatim.
+        let err = GitAuthError::GitHubAppTokenFetchFailed {
+            message: "jwt: clock skew exceeds 60s".into(),
+        };
+        assert_eq!(
+            auth_warning_payload(&err),
+            (
+                "github_app_token_fetch_failed",
+                "jwt: clock skew exceeds 60s".to_string(),
+            ),
+        );
+
+        // Variant 5: Internal — note this maps to the generic `auth_warning`
+        // category (NOT `resolver_internal`, which is the `.code()` value).
+        // The dashboard surfaces these as generic warnings so we don't leak
+        // internal taxonomy to the UI.
+        let err = GitAuthError::Internal {
+            message: "sqlx: pool closed".into(),
+        };
+        assert_eq!(
+            auth_warning_payload(&err),
+            ("auth_warning", "sqlx: pool closed".to_string()),
+        );
+    }
 }

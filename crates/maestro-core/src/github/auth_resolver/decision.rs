@@ -459,4 +459,125 @@ mod tests {
         assert_eq!(GithubAuthMode::PatOnly.to_string(), "pat_required");
         assert_eq!(GithubAuthMode::Missing.to_string(), "missing");
     }
+
+    /// Lock-in test for the full `decide_token_source` truth table.
+    ///
+    /// The single-cell tests above protect against accidental tweaks to one
+    /// row; this test pins the **entire** matrix in one `assert_eq!` so a
+    /// reviewer can see — and a future refactor cannot quietly reshape —
+    /// every `(GitAction × GithubAuthMode × attribute_commits)` outcome at
+    /// once. If this fails, look at the diff: the right-hand side is the
+    /// canonical decision matrix.
+    #[test]
+    fn lock_in_decision_table_exhaustive() {
+        // 8 actions × 4 modes × 2 attribute_commits flags = 64 cells.
+        let actions = [
+            GitAction::Clone,
+            GitAction::Fetch,
+            GitAction::Push,
+            GitAction::PullRequestCreate,
+            GitAction::PullRequestComment,
+            GitAction::PullRequestReview,
+            GitAction::IssueComment,
+            GitAction::WebhookEventIngest,
+        ];
+        let modes = [
+            GithubAuthMode::AppPlusPat,
+            GithubAuthMode::AppOnly,
+            GithubAuthMode::PatOnly,
+            GithubAuthMode::Missing,
+        ];
+        let attrs = [true, false];
+
+        let mut actual: Vec<((GitAction, GithubAuthMode, bool), Option<TokenSource>)> = Vec::new();
+        for &action in &actions {
+            for &mode in &modes {
+                for &attr in &attrs {
+                    let got = decide_token_source(action, mode, attr).unwrap();
+                    actual.push(((action, mode, attr), got));
+                }
+            }
+        }
+
+        // Canonical expected matrix: each row is
+        //   ((action, mode, attribute_commits), Option<TokenSource>).
+        let expected: Vec<((GitAction, GithubAuthMode, bool), Option<TokenSource>)> = vec![
+            // Clone — read-only → App where App exists, else PAT, else None.
+            ((GitAction::Clone, GithubAuthMode::AppPlusPat, true), Some(TokenSource::App)),
+            ((GitAction::Clone, GithubAuthMode::AppPlusPat, false), Some(TokenSource::App)),
+            ((GitAction::Clone, GithubAuthMode::AppOnly, true), Some(TokenSource::App)),
+            ((GitAction::Clone, GithubAuthMode::AppOnly, false), Some(TokenSource::App)),
+            ((GitAction::Clone, GithubAuthMode::PatOnly, true), Some(TokenSource::UserPat)),
+            ((GitAction::Clone, GithubAuthMode::PatOnly, false), Some(TokenSource::UserPat)),
+            ((GitAction::Clone, GithubAuthMode::Missing, true), None),
+            ((GitAction::Clone, GithubAuthMode::Missing, false), None),
+            // Fetch — same shape as Clone.
+            ((GitAction::Fetch, GithubAuthMode::AppPlusPat, true), Some(TokenSource::App)),
+            ((GitAction::Fetch, GithubAuthMode::AppPlusPat, false), Some(TokenSource::App)),
+            ((GitAction::Fetch, GithubAuthMode::AppOnly, true), Some(TokenSource::App)),
+            ((GitAction::Fetch, GithubAuthMode::AppOnly, false), Some(TokenSource::App)),
+            ((GitAction::Fetch, GithubAuthMode::PatOnly, true), Some(TokenSource::UserPat)),
+            ((GitAction::Fetch, GithubAuthMode::PatOnly, false), Some(TokenSource::UserPat)),
+            ((GitAction::Fetch, GithubAuthMode::Missing, true), None),
+            ((GitAction::Fetch, GithubAuthMode::Missing, false), None),
+            // Push — only row where AppPlusPat depends on attribute_commits.
+            ((GitAction::Push, GithubAuthMode::AppPlusPat, true), Some(TokenSource::UserPat)),
+            ((GitAction::Push, GithubAuthMode::AppPlusPat, false), Some(TokenSource::App)),
+            ((GitAction::Push, GithubAuthMode::AppOnly, true), Some(TokenSource::App)),
+            ((GitAction::Push, GithubAuthMode::AppOnly, false), Some(TokenSource::App)),
+            ((GitAction::Push, GithubAuthMode::PatOnly, true), Some(TokenSource::UserPat)),
+            ((GitAction::Push, GithubAuthMode::PatOnly, false), Some(TokenSource::UserPat)),
+            ((GitAction::Push, GithubAuthMode::Missing, true), None),
+            ((GitAction::Push, GithubAuthMode::Missing, false), None),
+            // PullRequestCreate — attributed write.
+            ((GitAction::PullRequestCreate, GithubAuthMode::AppPlusPat, true), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestCreate, GithubAuthMode::AppPlusPat, false), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestCreate, GithubAuthMode::AppOnly, true), Some(TokenSource::App)),
+            ((GitAction::PullRequestCreate, GithubAuthMode::AppOnly, false), Some(TokenSource::App)),
+            ((GitAction::PullRequestCreate, GithubAuthMode::PatOnly, true), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestCreate, GithubAuthMode::PatOnly, false), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestCreate, GithubAuthMode::Missing, true), None),
+            ((GitAction::PullRequestCreate, GithubAuthMode::Missing, false), None),
+            // PullRequestComment.
+            ((GitAction::PullRequestComment, GithubAuthMode::AppPlusPat, true), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestComment, GithubAuthMode::AppPlusPat, false), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestComment, GithubAuthMode::AppOnly, true), Some(TokenSource::App)),
+            ((GitAction::PullRequestComment, GithubAuthMode::AppOnly, false), Some(TokenSource::App)),
+            ((GitAction::PullRequestComment, GithubAuthMode::PatOnly, true), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestComment, GithubAuthMode::PatOnly, false), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestComment, GithubAuthMode::Missing, true), None),
+            ((GitAction::PullRequestComment, GithubAuthMode::Missing, false), None),
+            // PullRequestReview.
+            ((GitAction::PullRequestReview, GithubAuthMode::AppPlusPat, true), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestReview, GithubAuthMode::AppPlusPat, false), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestReview, GithubAuthMode::AppOnly, true), Some(TokenSource::App)),
+            ((GitAction::PullRequestReview, GithubAuthMode::AppOnly, false), Some(TokenSource::App)),
+            ((GitAction::PullRequestReview, GithubAuthMode::PatOnly, true), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestReview, GithubAuthMode::PatOnly, false), Some(TokenSource::UserPat)),
+            ((GitAction::PullRequestReview, GithubAuthMode::Missing, true), None),
+            ((GitAction::PullRequestReview, GithubAuthMode::Missing, false), None),
+            // IssueComment.
+            ((GitAction::IssueComment, GithubAuthMode::AppPlusPat, true), Some(TokenSource::UserPat)),
+            ((GitAction::IssueComment, GithubAuthMode::AppPlusPat, false), Some(TokenSource::UserPat)),
+            ((GitAction::IssueComment, GithubAuthMode::AppOnly, true), Some(TokenSource::App)),
+            ((GitAction::IssueComment, GithubAuthMode::AppOnly, false), Some(TokenSource::App)),
+            ((GitAction::IssueComment, GithubAuthMode::PatOnly, true), Some(TokenSource::UserPat)),
+            ((GitAction::IssueComment, GithubAuthMode::PatOnly, false), Some(TokenSource::UserPat)),
+            ((GitAction::IssueComment, GithubAuthMode::Missing, true), None),
+            ((GitAction::IssueComment, GithubAuthMode::Missing, false), None),
+            // WebhookEventIngest — always App where App exists.
+            ((GitAction::WebhookEventIngest, GithubAuthMode::AppPlusPat, true), Some(TokenSource::App)),
+            ((GitAction::WebhookEventIngest, GithubAuthMode::AppPlusPat, false), Some(TokenSource::App)),
+            ((GitAction::WebhookEventIngest, GithubAuthMode::AppOnly, true), Some(TokenSource::App)),
+            ((GitAction::WebhookEventIngest, GithubAuthMode::AppOnly, false), Some(TokenSource::App)),
+            ((GitAction::WebhookEventIngest, GithubAuthMode::PatOnly, true), Some(TokenSource::UserPat)),
+            ((GitAction::WebhookEventIngest, GithubAuthMode::PatOnly, false), Some(TokenSource::UserPat)),
+            ((GitAction::WebhookEventIngest, GithubAuthMode::Missing, true), None),
+            ((GitAction::WebhookEventIngest, GithubAuthMode::Missing, false), None),
+        ];
+
+        assert_eq!(actual, expected);
+        // Sanity: 8 actions × 4 modes × 2 flags.
+        assert_eq!(actual.len(), 64);
+    }
 }
