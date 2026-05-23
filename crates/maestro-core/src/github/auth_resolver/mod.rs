@@ -29,6 +29,7 @@ use crate::db::github_credentials;
 use crate::db::Database;
 use crate::github_app::GitHubAppTokenManager;
 
+pub mod audit;
 pub mod decision;
 pub mod errors;
 
@@ -308,25 +309,8 @@ impl GitAuthResolver {
         // `last_validated_at` as a debounce signal (Phase 2b.3 may switch
         // this to a dedicated last_used_at column on user_github_credentials
         // — TODO: blind spot, low priority).
-        let should_audit = should_audit_first_use(last_used.as_deref());
-        if should_audit {
-            let now = chrono::Utc::now()
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string();
-            let conn = self.db.conn().lock().await;
-            // touch_last_validated bumps the column we're using as the
-            // debounce flag.
-            let _ = github_credentials::touch_last_validated(&conn, user_id, &now);
-            let _ = credential_audit::log(
-                &conn,
-                user_id,
-                Some(user_id),
-                CredentialAuditKind::GithubPat,
-                None,
-                "used",
-                "ok",
-                None,
-            );
+        if audit::should_audit_first_use(last_used.as_deref()) {
+            audit::record_first_use(&self.db, user_id).await;
         }
 
         let author_name = login.clone();
@@ -345,23 +329,8 @@ impl GitAuthResolver {
     }
 }
 
-/// "First use in the last minute" debounce. Returns `true` if we should
-/// emit an audit row for this use. `last_used` is the previous
-/// `last_validated_at` string we co-opt as a debounce flag.
-fn should_audit_first_use(last_used: Option<&str>) -> bool {
-    let Some(prev) = last_used else {
-        return true;
-    };
-    // Anything we can't parse as RFC-3339 we audit (conservatively re-emit).
-    let prev_dt = match chrono::DateTime::parse_from_rfc3339(prev) {
-        Ok(dt) => dt.with_timezone(&chrono::Utc),
-        Err(_) => return true,
-    };
-    chrono::Utc::now() - prev_dt > chrono::Duration::seconds(60)
-}
-
 // ---------------------------------------------------------------------------
-// Tests — decision matrix (28 cells) + integration
+// Tests — integration
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
