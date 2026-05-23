@@ -3,20 +3,16 @@
 
 //! Config-driven shell hooks for Docker image build and container startup.
 
+mod process;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 use serde_json::Value as JsonValue;
 
 use crate::config::{AiAgentProvider, Config, TicketingSystem};
 use crate::error::{MaestroError, Result};
-
-fn preflight_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/home/maestro"))
-}
+use process::{auth_cmd_ok, preflight_home};
 
 /// Cursor CLI stores browser-login state under `CURSOR_CONFIG_DIR` (default `~/.cursor`).
 /// `agent status` often returns non-zero without a TTY even when login succeeded, and the JSON schema
@@ -160,38 +156,6 @@ fn json_value_has_auth_fields(v: &JsonValue) -> bool {
     }
 }
 
-#[cfg(unix)]
-fn configure_auth_command_unix(cmd: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setpgid(0, 0);
-            Ok(())
-        });
-    }
-}
-
-#[cfg(not(unix))]
-fn configure_auth_command_unix(_cmd: &mut Command) {}
-
-#[cfg(unix)]
-fn kill_process_group_best_effort(child: &mut std::process::Child) {
-    let pid = child.id();
-    if pid > 0 {
-        unsafe {
-            let _ = libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-#[cfg(not(unix))]
-fn kill_process_group_best_effort(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 /// Run each non-empty command with `bash -c` in `cwd`, inheriting stdio (for logs during build/up).
 /// Debian `sh` is often **dash**, which does not support `set -o pipefail` and other bash-isms used in hooks.
 pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result<()> {
@@ -245,42 +209,6 @@ pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result
         eprintln!("[maestro docker-hooks:{label}] ({n}/{total}) finished successfully.");
     }
     Ok(())
-}
-
-/// Run an auth probe with a wall-clock timeout so `docker compose up` cannot hang forever
-/// (e.g. Cursor `agent status` waiting on network without a client-side deadline).
-fn auth_cmd_ok(program: &str, args: &[&str]) -> bool {
-    let timeout = if args == ["status"] {
-        Duration::from_secs(45)
-    } else {
-        Duration::from_secs(30)
-    };
-
-    let mut cmd = Command::new(program);
-    cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
-    configure_auth_command_unix(&mut cmd);
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) => {}
-            Err(_) => {
-                kill_process_group_best_effort(&mut child);
-                return false;
-            }
-        }
-        if start.elapsed() >= timeout {
-            kill_process_group_best_effort(&mut child);
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// Result of the preflight check. Hard failures (gh, provider) are still returned as `Err`.
