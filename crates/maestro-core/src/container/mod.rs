@@ -20,6 +20,7 @@
 //! - [`run_command`]: per-step user-defined run-command containers and
 //!   their dedicated port scanner.
 
+pub(crate) mod dind_paths;
 pub(crate) mod editor;
 pub(crate) mod port_scanner;
 pub(crate) mod reap;
