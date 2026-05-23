@@ -30,6 +30,7 @@ pub(crate) mod runner;
 pub(crate) mod secrets_bundle;
 pub(crate) mod terminal;
 pub(crate) mod volumes;
+pub(crate) mod wrap_command;
 
 // ---------------------------------------------------------------------------
 // Re-exports — preserve the pre-split public surface
