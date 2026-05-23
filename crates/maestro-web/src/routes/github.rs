@@ -102,7 +102,7 @@ pub async fn list_github_issues(
 
     let gh_token = state
         .engine
-        .actions
+        .actions()
         .get_gh_installation_token(&repo_path)
         .await;
 

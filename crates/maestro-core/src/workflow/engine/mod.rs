@@ -42,7 +42,7 @@ pub struct WorkflowEngine {
     pub(crate) config: Arc<RwLock<Config>>,
     pub(crate) repository: Arc<WorkflowRepository>,
     pub(crate) event_bus: Arc<WorkflowEventBus>,
-    pub actions: Arc<dyn ExternalActions>,
+    pub(crate) actions: Arc<dyn ExternalActions>,
     /// Limits concurrent heavy work (mise/install/agent sessions) across workflows. Paused workflows do not hold a permit.
     agent_run_semaphore: Arc<Semaphore>,
     /// When set, workflow drivers that exit with [`MaestroError::Cancelled`] do not move the workflow to Error (graceful container shutdown + snapshot).
@@ -209,6 +209,12 @@ impl WorkflowEngine {
     /// `RwLock<Config>` is the same value seen by every other clone.
     pub fn config(&self) -> Arc<RwLock<Config>> {
         self.config.clone()
+    }
+
+    /// Trait object that performs all external side-effects (git, Jira, GitHub,
+    /// Claude). Returns a fresh `Arc` handle to the shared instance.
+    pub fn actions(&self) -> Arc<dyn ExternalActions> {
+        self.actions.clone()
     }
 
     /// Convenience accessor for the inner `Arc<RwLock<HashMap<String, Workflow>>>`.

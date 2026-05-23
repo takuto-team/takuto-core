@@ -41,7 +41,7 @@ pub async fn list_github_repos(
 
     let gh_token = state
         .engine
-        .actions
+        .actions()
         .get_gh_installation_token(workspaces)
         .await;
 
@@ -256,7 +256,7 @@ pub(crate) async fn do_clone(
         //    Mode `db: None` tests and pre-Phase-2b.2 poller calls go through here.
         _ => state
             .engine
-            .actions
+            .actions()
             .get_gh_installation_token(token_cwd)
             .await,
     };

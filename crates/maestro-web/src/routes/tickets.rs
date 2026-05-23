@@ -543,7 +543,7 @@ pub async fn update_ticket_description(
             // works without personal user authentication.
             let gh_token = state
                 .engine
-                .actions
+                .actions()
                 .get_gh_installation_token(&repo_path)
                 .await;
 
