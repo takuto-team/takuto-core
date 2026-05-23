@@ -27,6 +27,7 @@ pub(crate) mod reap;
 pub(crate) mod run_command;
 pub(crate) mod runner;
 pub(crate) mod terminal;
+pub(crate) mod volumes;
 
 // ---------------------------------------------------------------------------
 // Re-exports — preserve the pre-split public surface
@@ -44,7 +45,8 @@ pub use run_command::{
     RunCommandInfo, is_run_command_running, run_command_container_name,
     run_run_command_port_scanner, start_run_command, stop_all_run_commands, stop_run_command,
 };
-pub use runner::{ContainerRunner, build_volume_args};
+pub use runner::ContainerRunner;
+pub use volumes::build_volume_args;
 pub use terminal::{
     find_running_terminal, parse_terminal_auth_from_pgrep, start_terminal, stop_terminal,
 };
