@@ -13,7 +13,7 @@ use maestro_core::config_watcher::reload_config_from_disk;
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
-use crate::state::AppState;
+use crate::state::{AuthState, ConfigState};
 
 /// Wraps the redacted config with extra runtime flags that are not in `config.toml`.
 #[derive(Serialize)]
@@ -50,10 +50,10 @@ pub async fn get_version() -> Json<serde_json::Value> {
     }))
 }
 
-pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
+pub async fn get_config(State(cfg): State<ConfigState>) -> Json<ConfigResponse> {
     // Clone needed values and release the read lock before any filesystem I/O.
     let (config_clone, active_repo_path_str, github_configured, app_name_raw) = {
-        let config = state.config.config.read().await;
+        let config = cfg.config.read().await;
         let path = config.git.repo_path.clone();
         let gh_configured = config.github.is_configured();
         let app_name = if gh_configured && !config.github.app_name.is_empty() {
@@ -87,10 +87,10 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     Json(ConfigResponse {
         github_app_configured: github_configured,
         config: config_clone,
-        jira_available: state.config.jira_available.load(Ordering::Relaxed),
-        ticketing_system: state.config.ticketing_system.to_string(),
-        preflight_error: state.config.preflight_error.clone(),
-        config_writable: state.config.config_writer.is_some(),
+        jira_available: cfg.jira_available.load(Ordering::Relaxed),
+        ticketing_system: cfg.ticketing_system.to_string(),
+        preflight_error: cfg.preflight_error.clone(),
+        config_writable: cfg.config_writer.is_some(),
         repo_exists,
         repo_name,
         repo_html_url,
@@ -114,16 +114,17 @@ pub struct UpdateConfigResponse {
 }
 
 pub async fn update_config(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
+    State(cfg): State<ConfigState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(patch): Json<RuntimeDashboardConfigPatch>,
 ) -> Result<Json<UpdateConfigResponse>, (StatusCode, String)> {
-    require_admin_for(&state.auth, &auth)
+    require_admin_for(&auth_state, &auth)
         .await
         .map_err(|s| (s, String::new()))?;
     // Apply patch under write lock, then clone and release.
     let config_snapshot = {
-        let mut config = state.config.config.write().await;
+        let mut config = cfg.config.write().await;
         config
             .apply_runtime_dashboard_patch(patch)
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -132,7 +133,7 @@ pub async fn update_config(
 
     // Persist to disk OUTSIDE the lock — blocking I/O no longer holds the
     // write guard, so concurrent readers are not stalled.
-    let (persisted, persist_warning) = if let Some(ref writer) = state.config.config_writer {
+    let (persisted, persist_warning) = if let Some(ref writer) = cfg.config_writer {
         match writer.write_config(&config_snapshot) {
             Ok(()) => (true, None),
             Err(e) => {
@@ -159,13 +160,14 @@ pub async fn update_config(
 /// Reads the config file, parses, validates, and replaces the in-memory
 /// config. Returns the new config on success or a `400` with the error.
 pub async fn reload_config(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
+    State(cfg): State<ConfigState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Config>, (StatusCode, String)> {
-    require_admin_for(&state.auth, &auth)
+    require_admin_for(&auth_state, &auth)
         .await
         .map_err(|s| (s, String::new()))?;
-    reload_config_from_disk(&state.config.config_path, &state.config.config)
+    reload_config_from_disk(&cfg.config_path, &cfg.config)
         .await
         .map_err(|e| {
             (
@@ -174,7 +176,7 @@ pub async fn reload_config(
             )
         })?;
 
-    let config = state.config.config.read().await;
+    let config = cfg.config.read().await;
     Ok(Json(config.redacted_for_api_clone()))
 }
 

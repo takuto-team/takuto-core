@@ -27,7 +27,7 @@ use maestro_core::workflow::engine::WorkflowEvent;
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
 use crate::routes::config::UpdateConfigResponse;
-use crate::state::AppState;
+use crate::state::{AuthState, ConfigState, EngineState};
 
 // ---------------------------------------------------------------------------
 // Request bodies — every field optional, deny_unknown_fields throughout.
@@ -174,11 +174,13 @@ fn apply_codex_patch(target: &mut CodexProviderConfig, patch: CodexProviderPatch
 /// raw value first, then deserialize manually so the 400 path stays in
 /// control of the handler.
 pub async fn put_agent_config(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
+    State(engine): State<EngineState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(raw): Json<serde_json::Value>,
 ) -> Result<Json<UpdateConfigResponse>, (StatusCode, String)> {
-    require_admin_for(&state.auth, &auth)
+    require_admin_for(&auth_state, &auth)
         .await
         .map_err(|s| (s, String::new()))?;
 
@@ -230,7 +232,7 @@ pub async fn put_agent_config(
 
     // Apply under write lock, then clone + release before any I/O.
     let (config_snapshot, provider_change) = {
-        let mut config = state.config.config.write().await;
+        let mut config = cfg_state.config.write().await;
         let previous_provider = config.agent.provider.as_str().to_string();
 
         if let Some(provider_str) = patch.provider {
@@ -273,7 +275,7 @@ pub async fn put_agent_config(
     };
 
     // Persist to disk OUTSIDE the lock.
-    let (persisted, persist_warning) = if let Some(ref writer) = state.config.config_writer {
+    let (persisted, persist_warning) = if let Some(ref writer) = cfg_state.config_writer {
         match writer.write_config(&config_snapshot) {
             Ok(()) => (true, None),
             Err(e) => {
@@ -297,14 +299,14 @@ pub async fn put_agent_config(
     // event we're about to broadcast.
     // Phase 2a: pass the DB through so master-key warnings (which depend on
     // boot-time key resolution, not the patched config) are re-attached.
-    let mut refreshed = collect_system_status_with_db(&config_snapshot, state.auth.db.as_ref());
+    let mut refreshed = collect_system_status_with_db(&config_snapshot, auth_state.db.as_ref());
     // Task #37 (Phase 2c): also re-probe config-dir write-ability on the
     // refresh path. The dashboard typically triggers this branch via
     // PUT /api/config/agent, so the user just attempted a save — surfacing
     // the warning here means the next poll of /api/onboarding/status
     // immediately exposes "your save didn't persist" without waiting for a
     // restart.
-    if let Some(w) = maestro_core::docker_hooks::check_config_dir_writable(&state.config.config_path) {
+    if let Some(w) = maestro_core::docker_hooks::check_config_dir_writable(&cfg_state.config_path) {
         refreshed.warnings.push(w);
     }
     // Task #38 (Phase 2c continued): when the writer has had to fall back
@@ -314,7 +316,7 @@ pub async fn put_agent_config(
     // lifetime — emit once-set-stay-set semantics. Severity is `info`
     // (not critical) because saves SUCCEED via the fallback; this is
     // purely a "you're on the alt path" notice, not a failure.
-    if let Some(ref writer) = state.config.config_writer
+    if let Some(ref writer) = cfg_state.config_writer
         && writer
             .used_inplace_fallback()
             .load(std::sync::atomic::Ordering::Acquire)
@@ -329,7 +331,7 @@ pub async fn put_agent_config(
             ));
     }
     {
-        let mut s = state.engine.system_status.write().await;
+        let mut s = engine.system_status.write().await;
         // Preserve per_user_required from the existing snapshot — it tracks
         // DB availability (set once at boot in run_server), not anything
         // collect_system_status sees from a Config alone.
@@ -342,7 +344,7 @@ pub async fn put_agent_config(
     // Phase 2 ships per-user credentials).
     if let Some((from, to)) = provider_change {
         info!(from = %from, to = %to, "Active AI provider changed via PUT /api/config/agent");
-        state.engine.engine.broadcast_event(WorkflowEvent {
+        engine.engine.broadcast_event(WorkflowEvent {
             event_type: "provider_changed".to_string(),
             workflow_id: String::new(),
             ticket_key: String::new(),

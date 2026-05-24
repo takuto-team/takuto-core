@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use maestro_core::jira::client::{JiraClient, TicketDescriptionPreview};
 
-use crate::state::AppState;
+use crate::state::ConfigState;
 
 #[derive(Serialize)]
 pub struct TodoTicketRow {
@@ -21,9 +21,9 @@ pub struct TodoTicketRow {
 
 /// All **To Do** issues for configured projects (every issue type), backlog order — for the manual-start picker.
 pub async fn list_todo_tickets_manual(
-    State(state): State<AppState>,
+    State(cfg): State<ConfigState>,
 ) -> Result<Json<Vec<TodoTicketRow>>, (StatusCode, String)> {
-    let config = state.config.config.read().await;
+    let config = cfg.config.read().await;
     if config.jira.project_keys.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -55,10 +55,10 @@ pub async fn list_todo_tickets_manual(
 
 /// **Summary** and **description** for the manual-start detail modal (`description_markdown`: plain string or ADF → Markdown).
 pub async fn get_ticket_preview(
-    State(state): State<AppState>,
+    State(cfg): State<ConfigState>,
     Path(key): Path<String>,
 ) -> Result<Json<TicketDescriptionPreview>, (StatusCode, String)> {
-    let config = state.config.config.read().await;
+    let config = cfg.config.read().await;
     if config.jira.project_keys.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,

@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use maestro_core::docker_hooks::{StructuredWarning, SystemStatus};
 
-use crate::state::AppState;
+use crate::state::{AuthState, ConfigState, EngineState};
 
 /// Phase 2b.4: codes that the per-request filter may drop based on the
 /// calling user's stored credentials. Anything not on this list — platform
@@ -83,10 +83,12 @@ pub struct UserOnboardingSummary {
 /// if the user has at least one active provider credential row — saving the
 /// user a wizard click after they've already pasted their key.
 pub async fn onboarding_status(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
+    State(engine): State<EngineState>,
     headers: HeaderMap,
 ) -> Json<OnboardingStatusBody> {
-    let mut status = state.engine.system_status.read().await.clone();
+    let mut status = engine.system_status.read().await.clone();
 
     let active_provider = status.provider.selected.clone();
 
@@ -96,7 +98,7 @@ pub async fn onboarding_status(
     // per-request filter logic and matches the source of truth that
     // `collect_system_status` itself consults).
     let github_app_configured = {
-        let cfg = state.config.config.read().await;
+        let cfg = cfg_state.config.read().await;
         cfg.github.is_configured()
     };
 
@@ -113,7 +115,7 @@ pub async fn onboarding_status(
     let (user_onboarding, user_filter): (
         Option<UserOnboardingSummary>,
         Option<UserCredentialState>,
-    ) = if let Some(db) = state.auth.db.as_ref() {
+    ) = if let Some(db) = auth.db.as_ref() {
         let cookie = crate::auth::session_cookie_from_headers(&headers)
             .map(|s| s.to_string())
             .unwrap_or_default();
