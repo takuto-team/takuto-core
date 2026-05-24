@@ -61,10 +61,10 @@ pub struct CredentialAuditRow {
     pub at: String,
 }
 
-/// Append a single audit row. Failures bubble up as `MaestroError::Database`
-/// — the credential handler propagates them so a busted audit table fails
-/// the operation closed (we want a credential write + audit row to be
-/// atomic; the handler runs both in the same transaction).
+/// Append a single audit row. Failures bubble up as `MaestroError::Db`
+/// (`DbError::Sqlite`) — the credential handler propagates them so a busted
+/// audit table fails the operation closed (we want a credential write +
+/// audit row to be atomic; the handler runs both in the same transaction).
 #[allow(clippy::too_many_arguments)]
 pub fn log(
     conn: &Connection,

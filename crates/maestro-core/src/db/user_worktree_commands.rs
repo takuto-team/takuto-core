@@ -25,7 +25,9 @@ use std::collections::HashMap;
 use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
+
+use super::DbError;
 
 /// A single run-command entry. Surfaced on workflow cards as a button labelled
 /// `name` that, when clicked, executes `command` inside the worktree.
@@ -51,9 +53,10 @@ pub struct UserWorktreeCommandsRow {
 
 /// Get the row for `(user_id, workspace_name)`, or `None` if no row exists.
 ///
-/// JSON parse failures surface as `MaestroError::Database` — a corrupted row
-/// is treated as a hard error here (unlike the batched lookup, which logs and
-/// omits so a single bad row doesn't poison the whole dashboard).
+/// JSON parse failures surface as `DbError::CommandsJsonDecode` (envelope:
+/// `MaestroError::Db`) — a corrupted row is treated as a hard error here
+/// (unlike the batched lookup, which logs and omits so a single bad row
+/// doesn't poison the whole dashboard).
 pub fn get(
     conn: &Connection,
     user_id: &str,
@@ -116,29 +119,36 @@ pub fn upsert(
 ) -> Result<()> {
     // NUL-byte guard across every string value we're about to persist.
     if user_id.contains('\0') || workspace_name.contains('\0') {
-        return Err(MaestroError::DatabaseStr(
-            "user_id or workspace_name contains a NUL byte".into(),
-        ));
+        return Err(DbError::NulByte {
+            field: "user_id_or_workspace_name",
+        }
+        .into());
     }
     for cmd in init_commands {
         if cmd.contains('\0') {
-            return Err(MaestroError::DatabaseStr(
-                "init command contains a NUL byte".into(),
-            ));
+            return Err(DbError::NulByte {
+                field: "init_command",
+            }
+            .into());
         }
     }
     for rc in run_commands {
         if rc.name.contains('\0') || rc.command.contains('\0') {
-            return Err(MaestroError::DatabaseStr(
-                "run command name or command contains a NUL byte".into(),
-            ));
+            return Err(DbError::NulByte {
+                field: "run_command_name_or_command",
+            }
+            .into());
         }
     }
 
-    let init_json = serde_json::to_string(init_commands)
-        .map_err(|e| MaestroError::DatabaseStr(format!("serializing init_commands: {e}")))?;
-    let run_json = serde_json::to_string(run_commands)
-        .map_err(|e| MaestroError::DatabaseStr(format!("serializing run_commands: {e}")))?;
+    let init_json = serde_json::to_string(init_commands).map_err(|e| DbError::CommandsJsonEncode {
+        column: "init_commands_json",
+        source: e,
+    })?;
+    let run_json = serde_json::to_string(run_commands).map_err(|e| DbError::CommandsJsonEncode {
+        column: "run_commands_json",
+        source: e,
+    })?;
     let now = chrono::Utc::now().timestamp();
 
     conn.execute(
@@ -238,7 +248,8 @@ pub fn get_run_commands_for_pairs(
 /// columns.
 ///
 /// Returns `rusqlite::Result<Result<UserWorktreeCommandsRow, MaestroError>>`
-/// — outer = SQLite errors, inner = JSON errors. Callers flatten with `??`.
+/// — outer = SQLite errors, inner = JSON errors (`DbError::CommandsJsonDecode`
+/// wrapped in `MaestroError::Db`). Callers flatten with `??`.
 fn row_to_user_worktree_commands(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<Result<UserWorktreeCommandsRow>> {
@@ -250,14 +261,20 @@ fn row_to_user_worktree_commands(
 
     let parsed: Result<(Vec<String>, Vec<RunCommand>)> = (|| {
         let init = serde_json::from_str::<Vec<String>>(&init_json).map_err(|e| {
-            MaestroError::DatabaseStr(format!(
-                "decoding init_commands_json for ({user_id},{workspace_name}): {e}"
-            ))
+            DbError::CommandsJsonDecode {
+                column: "init_commands_json",
+                user_id: user_id.clone(),
+                workspace_name: workspace_name.clone(),
+                source: e,
+            }
         })?;
         let run = serde_json::from_str::<Vec<RunCommand>>(&run_json).map_err(|e| {
-            MaestroError::DatabaseStr(format!(
-                "decoding run_commands_json for ({user_id},{workspace_name}): {e}"
-            ))
+            DbError::CommandsJsonDecode {
+                column: "run_commands_json",
+                user_id: user_id.clone(),
+                workspace_name: workspace_name.clone(),
+                source: e,
+            }
         })?;
         Ok((init, run))
     })();
