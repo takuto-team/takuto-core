@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::GitHubAppConfig;
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 use crate::process;
 
 pub mod error;
@@ -113,15 +113,8 @@ impl GitHubAppTokenManager {
     /// message when the key is malformed or missing.
     pub fn new(config: &GitHubAppConfig) -> Result<Self> {
         let key_pem = Self::resolve_private_key(config)?;
-        let encoding_key = EncodingKey::from_rsa_pem(key_pem.as_bytes()).map_err(|e| {
-            #[allow(deprecated)]
-            MaestroError::GitHubAppStr(format!(
-                "Invalid RSA private key in [github] config: {e}. \
-                 Ensure app_private_key contains a valid PEM-encoded RSA private key \
-                 (or app_private_key_path points to one). The key should begin with \
-                 '-----BEGIN RSA PRIVATE KEY-----'."
-            ))
-        })?;
+        let encoding_key = EncodingKey::from_rsa_pem(key_pem.as_bytes())
+            .map_err(|source| GitHubAppError::InvalidPrivateKey { source })?;
 
         Ok(Self {
             app_id: config.app_id,
@@ -156,10 +149,7 @@ impl GitHubAppTokenManager {
         let has_path = !config.app_private_key_path.trim().is_empty();
 
         if has_inline && has_path {
-            #[allow(deprecated)]
-            return Err(MaestroError::GitHubAppStr(
-                "Set either [github] app_private_key or app_private_key_path, not both".into(),
-            ));
+            return Err(GitHubAppError::PrivateKeyConfigConflict.into());
         }
 
         if has_inline {
@@ -168,21 +158,16 @@ impl GitHubAppTokenManager {
 
         if has_path {
             let path = config.app_private_key_path.trim();
-            return std::fs::read_to_string(path).map_err(|e| {
-                #[allow(deprecated)]
-                MaestroError::GitHubAppStr(format!(
-                    "Cannot read [github] app_private_key_path '{path}': {e}. \
-                     Verify the file exists and is readable."
-                ))
+            return std::fs::read_to_string(path).map_err(|source| {
+                GitHubAppError::PrivateKeyRead {
+                    path: PathBuf::from(path),
+                    source,
+                }
+                .into()
             });
         }
 
-        #[allow(deprecated)]
-        Err(MaestroError::GitHubAppStr(
-            "GitHub App private key not configured. Set [github] app_private_key (PEM content) \
-             or app_private_key_path (path to PEM file)."
-                .into(),
-        ))
+        Err(GitHubAppError::PrivateKeyMissing.into())
     }
 
     // -- JWT --
@@ -198,10 +183,8 @@ impl GitHubAppTokenManager {
         };
 
         let header = Header::new(Algorithm::RS256);
-        encode(&header, &claims, &self.encoding_key).map_err(|e| {
-            #[allow(deprecated)]
-            MaestroError::GitHubAppStr(format!("Failed to generate JWT: {e}"))
-        })
+        encode(&header, &claims, &self.encoding_key)
+            .map_err(|source| GitHubAppError::JwtSigning { source }.into())
     }
 
     // -- Installation token --
@@ -272,23 +255,19 @@ impl GitHubAppTokenManager {
         .await?;
 
         if !output.success() {
-            #[allow(deprecated)]
-            return Err(MaestroError::GitHubAppStr(format!(
-                "curl request to GitHub API failed (exit {}): {}",
-                output.exit_code,
-                output.stderr.trim()
-            )));
+            return Err(GitHubAppError::HttpRequestFailed {
+                exit_code: output.exit_code,
+                stderr: output.stderr.trim().to_string(),
+            }
+            .into());
         }
 
         // Try to parse as a successful token response.
         if let Ok(resp) = serde_json::from_str::<InstallationTokenResponse>(&output.stdout) {
             let expires_at = chrono::DateTime::parse_from_rfc3339(&resp.expires_at)
-                .map_err(|e| {
-                    #[allow(deprecated)]
-                    MaestroError::GitHubAppStr(format!(
-                        "Failed to parse token expiry '{0}': {e}",
-                        resp.expires_at
-                    ))
+                .map_err(|source| GitHubAppError::ExpiresAtParse {
+                    raw: resp.expires_at.clone(),
+                    source,
                 })?
                 .with_timezone(&Utc);
 
@@ -304,51 +283,47 @@ impl GitHubAppTokenManager {
 
         // Parse as a GitHub API error for an actionable message.
         if let Ok(api_err) = serde_json::from_str::<GitHubApiError>(&output.stdout) {
-            #[allow(deprecated)]
-            return Err(MaestroError::GitHubAppStr(self.format_api_error(&api_err)));
+            return Err(self.format_api_error(&api_err).into());
         }
 
-        #[allow(deprecated)]
-        Err(MaestroError::GitHubAppStr(format!(
-            "Unexpected GitHub API response: {}",
-            output.stdout.trim()
-        )))
+        Err(GitHubAppError::UnexpectedApiResponse {
+            body: output.stdout.trim().to_string(),
+        }
+        .into())
     }
 
-    fn format_api_error(&self, err: &GitHubApiError) -> String {
-        let msg = &err.message;
-        let doc = if err.documentation_url.is_empty() {
-            String::new()
-        } else {
-            format!(" See {}", err.documentation_url)
-        };
+    /// Classify a structured GitHub API error response into the matching
+    /// typed `GitHubAppError` variant. Returns a typed variant rather than
+    /// a `String` so the source-chain Display walks via `Error::source()` and
+    /// the four lock-in tests assert against `Display` substrings only.
+    fn format_api_error(&self, err: &GitHubApiError) -> GitHubAppError {
+        let msg = err.message.clone();
+        let documentation_url = err.documentation_url.clone();
 
         if msg.contains("Not Found") || msg.contains("not found") {
-            format!(
-                "GitHub App installation not found (installation_id = {}). \
-                 Verify [github] app_installation_id is correct and the App is installed \
-                 on your org/repo. Find installation IDs at \
-                 https://github.com/settings/installations{doc}",
-                self.installation_id
-            )
+            GitHubAppError::ApiInstallationNotFound {
+                installation_id: self.installation_id,
+                documentation_url,
+            }
         } else if msg.contains("could not be decoded")
             || msg.contains("Unauthorized")
             || msg.contains("Bad credentials")
         {
-            format!(
-                "GitHub App JWT authentication failed: {msg}. \
-                 Check [github] app_id ({}) and ensure the private key matches this App.{doc}",
-                self.app_id
-            )
+            GitHubAppError::ApiJwtRejected {
+                app_id: self.app_id,
+                message: msg,
+                documentation_url,
+            }
         } else if msg.contains("Resource not accessible") || msg.contains("permission") {
-            format!(
-                "GitHub App lacks required permissions: {msg}. \
-                 The App needs at minimum: contents (write), pull_requests (write), \
-                 metadata (read). Update permissions at \
-                 https://github.com/settings/apps{doc}",
-            )
+            GitHubAppError::ApiPermissionDenied {
+                message: msg,
+                documentation_url,
+            }
         } else {
-            format!("GitHub API error: {msg}{doc}")
+            GitHubAppError::ApiOther {
+                message: msg,
+                documentation_url,
+            }
         }
     }
 
@@ -423,11 +398,11 @@ impl GitHubAppTokenManager {
         )
         .await?;
         if !name_out.success() {
-            #[allow(deprecated)]
-            return Err(MaestroError::GitHubAppStr(format!(
-                "git config user.name failed: {}",
-                name_out.stderr.trim()
-            )));
+            return Err(GitHubAppError::GitConfigFailed {
+                setting: "user.name",
+                stderr: name_out.stderr.trim().to_string(),
+            }
+            .into());
         }
 
         let email_out = process::run_command(
@@ -438,11 +413,11 @@ impl GitHubAppTokenManager {
         )
         .await?;
         if !email_out.success() {
-            #[allow(deprecated)]
-            return Err(MaestroError::GitHubAppStr(format!(
-                "git config user.email failed: {}",
-                email_out.stderr.trim()
-            )));
+            return Err(GitHubAppError::GitConfigFailed {
+                setting: "user.email",
+                stderr: email_out.stderr.trim().to_string(),
+            }
+            .into());
         }
 
         info!(
@@ -485,7 +460,7 @@ impl GitHubAppTokenManager {
 
             // Initial write — fetch immediately so workers have a token from the start.
             if let Err(e) = refresh_and_write(&mgr, &cwd, &token_path).await {
-                warn!(error = %e, "Initial GitHub App token write failed; will retry");
+                warn!(error = ?e, "Initial GitHub App token write failed; will retry");
             }
 
             loop {
@@ -496,7 +471,7 @@ impl GitHubAppTokenManager {
                     }
                     _ = tokio::time::sleep(std::time::Duration::from_secs(TOKEN_REFRESH_POLL_SECS)) => {
                         if let Err(e) = refresh_and_write(&mgr, &cwd, &token_path).await {
-                            error!(error = %e, "GitHub App token refresh failed; workers may use a stale token");
+                            error!(error = ?e, "GitHub App token refresh failed; workers may use a stale token");
                         }
                     }
                 }
@@ -515,20 +490,14 @@ async fn refresh_and_write(mgr: &GitHubAppTokenManager, cwd: &Path, path: &Path)
 /// Atomic write: write to a temp sibling, then rename.
 pub fn write_token_file(path: &Path, token: &str) -> Result<()> {
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, token).map_err(|e| {
-        #[allow(deprecated)]
-        MaestroError::GitHubAppStr(format!(
-            "Failed to write token file '{}': {e}",
-            tmp.display()
-        ))
+    std::fs::write(&tmp, token).map_err(|source| GitHubAppError::TokenFileWrite {
+        path: tmp.clone(),
+        source,
     })?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        #[allow(deprecated)]
-        MaestroError::GitHubAppStr(format!(
-            "Failed to rename token file '{}' → '{}': {e}",
-            tmp.display(),
-            path.display()
-        ))
+    std::fs::rename(&tmp, path).map_err(|source| GitHubAppError::TokenFileRename {
+        from: tmp.clone(),
+        to: path.to_path_buf(),
+        source,
     })?;
     info!(path = %path.display(), "GitHub App token file updated");
     Ok(())
@@ -557,7 +526,7 @@ pub fn try_create_token_manager(config: &GitHubAppConfig) -> Option<Arc<GitHubAp
         }
         Err(e) => {
             warn!(
-                error = %e,
+                error = ?e,
                 "GitHub App configuration present but invalid — falling back to personal gh auth. \
                  Fix the [github] section in config.toml to enable bot-attributed commits and PRs."
             );
@@ -671,7 +640,12 @@ mod tests {
             message: "Not Found".into(),
             documentation_url: String::new(),
         };
-        let msg = mgr.format_api_error(&err);
+        let typed = mgr.format_api_error(&err);
+        assert!(matches!(
+            typed,
+            GitHubAppError::ApiInstallationNotFound { .. }
+        ));
+        let msg = typed.to_string();
         assert!(msg.contains("installation not found"));
         assert!(msg.contains("app_installation_id"));
     }
@@ -683,10 +657,18 @@ mod tests {
             message: "could not be decoded".into(),
             documentation_url: "https://docs.github.com/".into(),
         };
-        let msg = mgr.format_api_error(&err);
+        let typed = mgr.format_api_error(&err);
+        // `documentation_url` is now carried as a typed field (not inlined in
+        // Display); assert directly on the variant rather than the message.
+        match &typed {
+            GitHubAppError::ApiJwtRejected {
+                documentation_url, ..
+            } => assert_eq!(documentation_url, "https://docs.github.com/"),
+            other => panic!("expected ApiJwtRejected, got {other:?}"),
+        }
+        let msg = typed.to_string();
         assert!(msg.contains("JWT authentication failed"));
         assert!(msg.contains("42")); // app_id
-        assert!(msg.contains("https://docs.github.com/"));
     }
 
     #[test]
@@ -696,7 +678,9 @@ mod tests {
             message: "Resource not accessible by integration".into(),
             documentation_url: String::new(),
         };
-        let msg = mgr.format_api_error(&err);
+        let typed = mgr.format_api_error(&err);
+        assert!(matches!(typed, GitHubAppError::ApiPermissionDenied { .. }));
+        let msg = typed.to_string();
         assert!(msg.contains("lacks required permissions"));
         assert!(msg.contains("pull_requests"));
     }
@@ -708,7 +692,9 @@ mod tests {
             message: "Something unexpected".into(),
             documentation_url: String::new(),
         };
-        let msg = mgr.format_api_error(&err);
+        let typed = mgr.format_api_error(&err);
+        assert!(matches!(typed, GitHubAppError::ApiOther { .. }));
+        let msg = typed.to_string();
         assert!(msg.contains("Something unexpected"));
     }
 
