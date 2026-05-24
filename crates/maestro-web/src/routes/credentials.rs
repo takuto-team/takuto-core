@@ -43,7 +43,7 @@ use maestro_core::db::provider_credentials::{self, ProviderCredentialKind, Upser
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
-use crate::state::AppState;
+use crate::state::{AuthState, ConfigState};
 
 /// API key length cap. PATs / OAuth tokens / API keys are all comfortably
 /// under 4 KiB; anything bigger is almost certainly a paste mistake (or a
@@ -225,10 +225,9 @@ fn normalise_provider(provider: &str) -> Result<String, (StatusCode, Json<serde_
 /// load at boot. Read endpoints don't need this guard because they never
 /// seal — only writes do.
 fn require_master_key(
-    state: &AppState,
+    auth_state: &AuthState,
 ) -> Result<std::sync::Arc<maestro_core::auth::MasterKey>, (StatusCode, Json<serde_json::Value>)> {
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
@@ -245,18 +244,18 @@ fn require_master_key(
 /// bytes and NO tokens; only enough metadata for the dashboard to render
 /// "credential set / not set / last validated" UI.
 pub async fn get_my_credentials(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<UserCredentialsStatus>, (StatusCode, Json<serde_json::Value>)> {
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
         .clone();
 
     let active_provider = {
-        let cfg = state.config.config.read().await;
+        let cfg = cfg_state.config.read().await;
         cfg.agent.provider.as_str().to_string()
     };
     let user_id = auth.user_id.clone();
@@ -337,7 +336,7 @@ pub async fn get_my_credentials(
 ///     organizationUuid}`), `api_key` forbidden. **Only Claude** accepts
 ///     this kind — every other provider rejects with `kind_not_supported`.
 pub async fn post_provider_credential(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(provider): Path<String>,
     Json(body): Json<ApiKeyBody>,
@@ -384,9 +383,8 @@ pub async fn post_provider_credential(
         _ => return Err(err(StatusCode::BAD_REQUEST, "unknown_kind")),
     };
 
-    let master = require_master_key(&state)?;
-    let db = state
-        .auth
+    let master = require_master_key(&auth_state)?;
+    let db = auth_state
         .db
         .as_ref()
         .expect("db checked in require_master_key")
@@ -514,7 +512,7 @@ fn validate_claude_session_blob(
 /// absent (legacy / "Wipe everything" UI), every row for `(user, provider)`
 /// is deleted (back-compat).
 pub async fn delete_provider_credential(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(provider): Path<String>,
     Query(query): Query<DeleteProviderCredentialQuery>,
@@ -526,8 +524,7 @@ pub async fn delete_provider_credential(
         Some("cli_state") => Some(ProviderCredentialKind::CliState),
         Some(_) => return Err(err(StatusCode::BAD_REQUEST, "unknown_kind")),
     };
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
@@ -582,16 +579,15 @@ pub async fn delete_provider_credential(
 /// seal, upsert, audit-log. On validation failure: 400 + structured error
 /// + audit row with `outcome = "error"`.
 pub async fn post_github_pat(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<GithubPatBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     if body.pat.trim().is_empty() || body.pat.len() > MAX_API_KEY_LEN {
         return Err(err(StatusCode::BAD_REQUEST, "invalid_pat"));
     }
-    let master = require_master_key(&state)?;
-    let db = state
-        .auth
+    let master = require_master_key(&auth_state)?;
+    let db = auth_state
         .db
         .as_ref()
         .expect("db checked in require_master_key")
@@ -601,7 +597,7 @@ pub async fn post_github_pat(
     // the SSO check is a no-op until Phase 2b.2 wires it to [git].repo_path.
     let orgs: Vec<String> = Vec::new();
 
-    let validated = match validate_pat(state.auth.gh_client.as_ref(), &body.pat, &orgs).await {
+    let validated = match validate_pat(auth_state.gh_client.as_ref(), &body.pat, &orgs).await {
         Ok(v) => v,
         Err(e) => {
             let code = e.code();
@@ -711,11 +707,10 @@ pub async fn post_github_pat(
 
 /// `DELETE /api/users/me/github-pat` — hard delete + audit.
 pub async fn delete_github_pat(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
@@ -755,12 +750,11 @@ pub async fn delete_github_pat(
 
 /// `PATCH /api/users/me/github` — toggle the commit-attribution flag.
 pub async fn patch_github_attribution(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<PatchGithubBody>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
@@ -805,15 +799,14 @@ pub async fn patch_github_attribution(
 
 /// `GET /api/admin/users/{id}/github-status` — admin-only.
 pub async fn get_admin_github_status(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(target_user_id): Path<String>,
 ) -> Result<Json<AdminGithubStatusResponse>, (StatusCode, Json<serde_json::Value>)> {
-    require_admin_for(&state.auth, &auth)
+    require_admin_for(&auth_state, &auth)
         .await
         .map_err(|s| err(s, "forbidden"))?;
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?

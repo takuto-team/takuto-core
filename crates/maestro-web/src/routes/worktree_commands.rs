@@ -44,7 +44,7 @@ use maestro_core::db::repositories;
 use maestro_core::db::user_worktree_commands::{self, RunCommand, UserWorktreeCommandsRow};
 
 use crate::auth::AuthenticatedUser;
-use crate::state::AppState;
+use crate::state::AuthState;
 
 // ---------------------------------------------------------------------------
 // Constants — validation limits.
@@ -351,11 +351,10 @@ fn db_error(e: maestro_core::error::MaestroError) -> (StatusCode, String) {
 
 /// `GET /api/worktree-commands` — the caller's rows.
 pub async fn list_my_rows(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<UserCommandsEntry>>, (StatusCode, String)> {
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
@@ -379,14 +378,13 @@ pub async fn list_my_rows(
 /// `GET /api/worktree-commands/{workspace}` — the caller's row for that
 /// workspace, or 404 if absent.
 pub async fn get_my_row(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(workspace): Path<String>,
 ) -> Result<Json<UserCommandsEntry>, (StatusCode, String)> {
     validate_workspace_name(&workspace)?;
 
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
@@ -410,7 +408,7 @@ pub async fn get_my_row(
 
 /// `PUT /api/worktree-commands/{workspace}` — upsert both kinds atomically.
 pub async fn put_my_row(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(workspace): Path<String>,
     Json(body): Json<PutBody>,
@@ -422,8 +420,7 @@ pub async fn put_my_row(
     let run_bytes = run_json_bytes(&body.run_commands);
     validate_combined_size(&init_bytes, &run_bytes)?;
 
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
@@ -489,14 +486,13 @@ fn truncate_80(s: &str) -> String {
 
 /// `DELETE /api/worktree-commands/{workspace}` — remove the caller's row.
 pub async fn delete_my_row(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(workspace): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     validate_workspace_name(&workspace)?;
 
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
@@ -553,11 +549,10 @@ pub async fn delete_my_row(
 /// old `active` field is dropped (there is no "active repo" concept after
 /// plan-10).
 pub async fn list_workspaces_with_has_commands(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<WorkspaceWithHasCommands>>, (StatusCode, String)> {
-    let db = state
-        .auth
+    let db = auth_state
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?

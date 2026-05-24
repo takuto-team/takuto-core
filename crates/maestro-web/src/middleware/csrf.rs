@@ -25,13 +25,13 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-use crate::state::AppState;
+use crate::state::ConfigState;
 
 /// Axum middleware enforcing the Origin/Referer allowlist on mutating requests.
 ///
 /// Wire via `axum::middleware::from_fn_with_state(state, csrf::csrf_middleware)`.
 pub async fn csrf_middleware(
-    State(state): State<AppState>,
+    State(cfg): State<ConfigState>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -55,7 +55,7 @@ pub async fn csrf_middleware(
     // explicit list when configured, or an auto-computed default derived from
     // `host`/`port` when empty.
     let allowed_origins: Vec<String> = {
-        let config = state.config.config.read().await;
+        let config = cfg.config.read().await;
         config.web.resolved_cors_origins()
     };
 

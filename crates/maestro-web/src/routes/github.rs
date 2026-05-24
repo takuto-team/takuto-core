@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::AuthenticatedUser;
-use crate::state::AppState;
+use crate::state::{AuthState, EngineState};
 
 // Re-export so tickets.rs can import via `crate::routes::github::parse_github_repo`.
 pub use maestro_core::github::parse_github_repo;
@@ -37,7 +37,8 @@ pub struct ListIssuesQuery {
 /// pass the repository name explicitly and must have it associated in
 /// `user_repositories` (403 otherwise).
 pub async fn list_github_issues(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Query(query): Query<ListIssuesQuery>,
 ) -> Result<Json<Vec<GithubIssueRow>>, (StatusCode, String)> {
@@ -51,7 +52,7 @@ pub async fn list_github_issues(
         }
     };
 
-    let Some(db) = state.auth.db.clone() else {
+    let Some(db) = auth_state.db.clone() else {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             "database unavailable".into(),
@@ -100,8 +101,7 @@ pub async fn list_github_issues(
         )
     })?;
 
-    let gh_token = state
-        .engine
+    let gh_token = engine
         .engine
         .actions()
         .get_gh_installation_token(&repo_path)

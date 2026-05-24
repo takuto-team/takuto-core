@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 
-use crate::state::AppState;
+use crate::state::{AuthState, EngineState};
 use maestro_core::workflow::snapshot::WORKSPACES_DIR;
 
 // ── GitHub repo listing (unchanged from plan-09) ─────────────────────────────
@@ -34,13 +34,12 @@ pub struct RepoListQuery {
 
 /// `GET /api/github/repos` — list GitHub repos accessible by the authenticated user.
 pub async fn list_github_repos(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
     Query(query): Query<RepoListQuery>,
 ) -> Result<Json<Vec<GitHubRepoRow>>, (StatusCode, String)> {
     let workspaces = std::path::Path::new(WORKSPACES_DIR);
 
-    let gh_token = state
-        .engine
+    let gh_token = engine
         .engine
         .actions()
         .get_gh_installation_token(workspaces)
@@ -232,7 +231,8 @@ impl Drop for CloneGuard {
 /// to perform the actual filesystem clone after the per-process lock has been
 /// acquired and the destination path resolved.
 pub(crate) async fn do_clone(
-    state: &AppState,
+    engine: &EngineState,
+    auth_state: &AuthState,
     full_name: &str,
     token_cwd: &std::path::Path,
     clone_target: &std::path::Path,
@@ -241,7 +241,7 @@ pub(crate) async fn do_clone(
     use maestro_core::github::auth_resolver::GitAction;
 
     // 1. Prefer the resolver path when both a user_id and a resolver exist.
-    let gh_token = match (user_id, state.auth.git_auth_resolver.as_ref()) {
+    let gh_token = match (user_id, auth_state.git_auth_resolver.as_ref()) {
         (Some(uid), Some(resolver)) => match resolver.token_for(GitAction::Clone, uid).await {
             Ok(tok) => Some(tok.bearer.expose().to_string()),
             // Resolver returned UnauthenticatedGit (Mode Missing) — surface
@@ -255,8 +255,7 @@ pub(crate) async fn do_clone(
         },
         // 2. Legacy path: ask the App directly via the existing actions trait.
         //    Mode `db: None` tests and pre-Phase-2b.2 poller calls go through here.
-        _ => state
-            .engine
+        _ => engine
             .engine
             .actions()
             .get_gh_installation_token(token_cwd)

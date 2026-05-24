@@ -25,7 +25,7 @@ use maestro_core::workflow::snapshot::WORKSPACES_DIR;
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::repos::{CloneGuard, do_clone, read_git_remote_url, sanitize_clone_error};
-use crate::state::AppState;
+use crate::state::{AuthState, EngineState};
 
 /// Plan-10 Step 4.2 URL validation.
 ///
@@ -93,9 +93,10 @@ fn db_error(e: maestro_core::error::MaestroError) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-fn require_db(state: &AppState) -> Result<maestro_core::db::Database, (StatusCode, String)> {
-    state
-        .auth
+fn require_db(
+    auth_state: &AuthState,
+) -> Result<maestro_core::db::Database, (StatusCode, String)> {
+    auth_state
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))
@@ -207,10 +208,10 @@ fn row_to_dto(
 /// `GET /api/repositories` — list MY repositories with `added_at` + per-row
 /// co-user counts so the UI can warn the caller before a purge.
 pub async fn list_mine(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<RepositoryDto>>, (StatusCode, String)> {
-    let db = require_db(&state)?;
+    let db = require_db(&auth_state)?;
     let user_id = auth.user_id.clone();
     let dtos = tokio::task::spawn_blocking(move || -> maestro_core::error::Result<_> {
         let conn = db.conn().blocking_lock();
@@ -248,10 +249,10 @@ pub async fn list_mine(
 /// `GET /api/repositories/_available` — registered repos the caller has not
 /// yet added. Same shape as `GET /api/repositories` minus `added_at`.
 pub async fn list_available(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<RepositoryDto>>, (StatusCode, String)> {
-    let db = require_db(&state)?;
+    let db = require_db(&auth_state)?;
     let user_id = auth.user_id.clone();
     let rows = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -267,11 +268,12 @@ pub async fn list_available(
 
 /// `POST /api/repositories` — dispatch on `{repository_id}` vs `{repo_url}`.
 pub async fn add(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<AddRepositoryBody>,
 ) -> Result<(StatusCode, Json<RepositoryDto>), (StatusCode, String)> {
-    let db = require_db(&state)?;
+    let db = require_db(&auth_state)?;
 
     match (body.repository_id, body.repo_url) {
         (Some(_), Some(_)) => Err((
@@ -283,7 +285,9 @@ pub async fn add(
             "Provide either repository_id or repo_url".into(),
         )),
         (Some(repo_id), None) => add_existing(&db, &auth, &repo_id).await,
-        (None, Some(repo_url)) => add_via_clone(&state, &db, &auth, &repo_url).await,
+        (None, Some(repo_url)) => {
+            add_via_clone(&engine, &auth_state, &db, &auth, &repo_url).await
+        }
     }
 }
 
@@ -328,7 +332,8 @@ async fn add_existing(
 }
 
 async fn add_via_clone(
-    state: &AppState,
+    engine: &EngineState,
+    auth_state: &AuthState,
     db: &maestro_core::db::Database,
     auth: &AuthenticatedUser,
     repo_url: &str,
@@ -339,8 +344,7 @@ async fn add_via_clone(
     let normalized_url = format!("https://github.com/{full_name}");
 
     // 2. Acquire process-level clone lock.
-    if state
-        .engine
+    if engine
         .clone_in_progress
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -351,7 +355,7 @@ async fn add_via_clone(
         ));
     }
     // From here on, every early-return must release via `_guard`.
-    let _guard = CloneGuard(state.engine.clone_in_progress.clone());
+    let _guard = CloneGuard(engine.clone_in_progress.clone());
 
     // 3. Look up an existing `repositories` row by repo_url. If found,
     //    just associate (idempotent) and return 200.
@@ -415,7 +419,8 @@ async fn add_via_clone(
     // Phase 2b.2: pass the authenticated caller so do_clone can ask the
     // GitAuthResolver to pick App vs user PAT per the §4.2 matrix.
     let clone_result = do_clone(
-        state,
+        engine,
+        auth_state,
         &full_name,
         token_cwd,
         &clone_target,
@@ -497,7 +502,7 @@ async fn add_via_clone(
 /// Always-purge per plan-10 Step 5 + reviewer rec #5 with the user-confirmed
 /// behaviour: drop the on-disk clone when the caller was the last user.
 pub async fn delete(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(repository_id): Path<String>,
     body: Option<Json<DeleteRepositoryBody>>,
@@ -507,7 +512,7 @@ pub async fn delete(
         return Err((StatusCode::FORBIDDEN, "force_purge requires admin".into()));
     }
 
-    let db = require_db(&state)?;
+    let db = require_db(&auth_state)?;
 
     // 1. Active-workflow check, scoped correctly:
     //    - force_purge (admin): refuse if ANY user has an active workflow on

@@ -32,7 +32,7 @@ use axum::http::HeaderValue;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::state::AppState;
+use crate::state::ConfigState;
 
 /// Content-Security-Policy applied to dashboard responses. Tight defaults that
 /// permit the React bundle (which uses `wasm-unsafe-eval` for some
@@ -48,7 +48,7 @@ const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains";
 /// branch can know whether this was a `/s/*` proxy response (which needs a
 /// looser header policy).
 pub async fn security_headers_middleware(
-    State(state): State<AppState>,
+    State(cfg): State<ConfigState>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -63,7 +63,7 @@ pub async fn security_headers_middleware(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.eq_ignore_ascii_case("https"))
         .unwrap_or(false);
-    let https_context = resolve_https_context(&state, xfp_is_https).await;
+    let https_context = resolve_https_context(&cfg, xfp_is_https).await;
 
     let mut response = next.run(request).await;
     apply_headers(response.headers_mut(), is_proxy_path, https_context);
@@ -109,11 +109,11 @@ fn apply_headers(
 /// Dev C owns the canonical `resolve_cookie_secure(&WebConfig, &HeaderMap)`
 /// helper in `auth.rs` (plan-02 AC-2). When that lands and exposes a
 /// `state.cookie_secure_resolved` snapshot, prefer it over this local mirror.
-async fn resolve_https_context(state: &AppState, xfp_is_https: bool) -> bool {
+async fn resolve_https_context(cfg: &ConfigState, xfp_is_https: bool) -> bool {
     if xfp_is_https {
         return true;
     }
-    let config = state.config.config.read().await;
+    let config = cfg.config.read().await;
     config
         .web
         .cors_origins

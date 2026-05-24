@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
-use crate::state::AppState;
+use crate::state::AuthState;
 
 /// Plan-10 no-op polling-status payload.
 ///
@@ -37,25 +37,25 @@ fn disabled() -> PollingStatus {
     }
 }
 
-pub async fn get_polling_status(State(_state): State<AppState>) -> axum::Json<PollingStatus> {
+pub async fn get_polling_status(State(_auth): State<AuthState>) -> axum::Json<PollingStatus> {
     axum::Json(disabled())
 }
 
 pub async fn pause_polling(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<axum::Json<PollingStatus>, StatusCode> {
     // Admin gate stays so the dashboard's pause/resume controls don't surprise
     // non-admins with a 200, but the body is a no-op.
-    require_admin_for(&state.auth, &auth).await?;
+    require_admin_for(&auth_state, &auth).await?;
     Ok(axum::Json(disabled()))
 }
 
 pub async fn resume_polling(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<axum::Json<PollingStatus>, StatusCode> {
-    require_admin_for(&state.auth, &auth).await?;
+    require_admin_for(&auth_state, &auth).await?;
     Ok(axum::Json(disabled()))
 }
 

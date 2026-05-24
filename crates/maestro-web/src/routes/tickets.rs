@@ -20,7 +20,7 @@ use maestro_core::jira::client::JiraClient;
 use crate::auth::AuthenticatedUser;
 use crate::routes::github::parse_github_repo;
 use crate::routes::workflows::require_workflow_access;
-use crate::state::AppState;
+use crate::state::{AuthState, ConfigState, EngineState};
 
 const IMPROVE_SYSTEM_PROMPT: &str = "\
 You are a technical writer who improves software ticket descriptions. \
@@ -65,15 +65,20 @@ const MAX_IMPROVE_DESCRIPTION_LEN: usize = 100 * 1024;
 /// the workflow keyed by `ticket_key`. Falls back to `cfg.git.repo_path` when
 /// the workflow has no `repository_id` (legacy snapshots) or when no DB is
 /// attached (test paths).
-async fn resolve_workflow_repo_path(state: &AppState, ticket_key: &str) -> PathBuf {
+async fn resolve_workflow_repo_path(
+    engine: &EngineState,
+    auth_state: &AuthState,
+    cfg_state: &ConfigState,
+    ticket_key: &str,
+) -> PathBuf {
     let (repo_id, ws_name) = {
-        let wf_arc = state.engine.engine.workflows_arc();
+        let wf_arc = engine.engine.workflows_arc();
         let wf = wf_arc.read().await;
         wf.get(ticket_key)
             .map(|w| (w.repository_id.clone(), w.workspace_name.clone()))
             .unwrap_or_default()
     };
-    if let Some(database) = state.auth.db.as_ref() {
+    if let Some(database) = auth_state.db.as_ref() {
         let conn = database.conn().lock().await;
         if let Some(id) = repo_id.as_deref()
             && let Ok(Some(row)) = maestro_core::db::repositories::get(&conn, id)
@@ -86,7 +91,7 @@ async fn resolve_workflow_repo_path(state: &AppState, ticket_key: &str) -> PathB
             return PathBuf::from(&row.local_path);
         }
     }
-    let cfg = state.config.config.read().await;
+    let cfg = cfg_state.config.read().await;
     PathBuf::from(&cfg.git.repo_path)
 }
 
@@ -96,7 +101,9 @@ async fn resolve_workflow_repo_path(state: &AppState, ticket_key: &str) -> PathB
 /// writes the new session ID back so the next call continues in the same context.
 /// Falls back gracefully when the ticket has no associated workflow in the map.
 async fn run_description_session(
-    state: &AppState,
+    engine: &EngineState,
+    auth_state: &AuthState,
+    cfg_state: &ConfigState,
     ticket_key: &str,
     user_id: &str,
     prompt: &str,
@@ -113,7 +120,7 @@ async fn run_description_session(
         improve_timeout,
         worker_image,
     ) = {
-        let cfg = state.config.config.read().await;
+        let cfg = cfg_state.config.read().await;
         (
             cfg.agent.provider,
             // Task #44: route only feeds `model` into the Claude branch
@@ -148,7 +155,7 @@ async fn run_description_session(
 
     // Read the persisted description session ID for this workflow (if any).
     let resume_id: Option<String> = {
-        let wf_arc = state.engine.engine.workflows_arc();
+        let wf_arc = engine.engine.workflows_arc();
         let wf = wf_arc.read().await;
         wf.get(ticket_key)
             .and_then(|w| w.description_session_id.clone())
@@ -185,8 +192,8 @@ async fn run_description_session(
         // The first case surfaces 503; the second surfaces 503 + a
         // structured `credential_required` error so the dashboard can
         // prompt the user to paste an API key.
-        if let Some(ref resolver) = state.auth.git_auth_resolver
-            && let Some(db) = state.auth.db.as_ref()
+        if let Some(ref resolver) = auth_state.git_auth_resolver
+            && let Some(db) = auth_state.db.as_ref()
         {
             if db.master_key().is_none() {
                 return Err((
@@ -194,7 +201,7 @@ async fn run_description_session(
                     "master_key_unavailable".into(),
                 ));
             }
-            let cfg_snapshot = state.config.config.read().await.clone();
+            let cfg_snapshot = cfg_state.config.read().await.clone();
             match maestro_core::auth::bundle::build_for_endpoint(
                 &cfg_snapshot,
                 db,
@@ -322,21 +329,23 @@ async fn run_description_session(
 
     // Persist the session ID back to the workflow so the next call resumes it.
     {
-        let wf_arc = state.engine.engine.workflows_arc();
+        let wf_arc = engine.engine.workflows_arc();
         let mut wf = wf_arc.write().await;
         if let Some(w) = wf.get_mut(ticket_key) {
             w.description_session_id = Some(session_id);
         }
     }
     // Best-effort snapshot so the session survives a restart.
-    let _ = state.engine.engine.sync_workflow_snapshot().await;
+    let _ = engine.engine.sync_workflow_snapshot().await;
 
     Ok(output)
 }
 
 /// `POST /api/tickets/{key}/improve` — run a headless Claude session to improve the ticket description.
 pub async fn improve_ticket(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
     Path(key): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<ImproveTicketBody>,
@@ -344,7 +353,7 @@ pub async fn improve_ticket(
     // AC-2: only the workflow owner may invoke this. The helper returns
     // `NOT_FOUND` for both "missing" and "wrong owner" so existence is not
     // leaked across users.
-    require_workflow_access(&state.engine, &state.auth, &auth, &key)
+    require_workflow_access(&engine, &auth_state, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
     if body.description.len() > MAX_IMPROVE_DESCRIPTION_LEN {
@@ -373,9 +382,16 @@ technically precise. Add acceptance criteria if none are present. Keep the origi
         prompt.push_str(&format!("\n\n**Additional instructions:** {extra}"));
     }
 
-    let output =
-        run_description_session(&state, &key, &auth.user_id, &prompt, Some(IMPROVE_SYSTEM_PROMPT))
-            .await?;
+    let output = run_description_session(
+        &engine,
+        &auth_state,
+        &cfg_state,
+        &key,
+        &auth.user_id,
+        &prompt,
+        Some(IMPROVE_SYSTEM_PROMPT),
+    )
+    .await?;
 
     // Parse "Title\n---\nDescription" format from AI output.
     let (improved_summary, improved_description) =
@@ -421,13 +437,15 @@ pub struct PromptTicketResponse {
 
 /// `POST /api/tickets/{key}/prompt` — run a headless Claude session with a custom user prompt and ticket context.
 pub async fn prompt_ticket(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
     Path(key): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<PromptTicketBody>,
 ) -> Result<Json<PromptTicketResponse>, (StatusCode, String)> {
     // AC-2: only the workflow owner may invoke this.
-    require_workflow_access(&state.engine, &state.auth, &auth, &key)
+    require_workflow_access(&engine, &auth_state, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
     // Validate prompt is not empty
@@ -472,31 +490,40 @@ pub async fn prompt_ticket(
         description = body.ticket_description,
     );
 
-    let output =
-        run_description_session(&state, &key, &auth.user_id, &prompt, Some(PROMPT_SYSTEM_PROMPT))
-            .await?;
+    let output = run_description_session(
+        &engine,
+        &auth_state,
+        &cfg_state,
+        &key,
+        &auth.user_id,
+        &prompt,
+        Some(PROMPT_SYSTEM_PROMPT),
+    )
+    .await?;
 
     Ok(Json(PromptTicketResponse { response: output }))
 }
 
 /// `POST /api/tickets/{key}/update-description` — persist the improved description to the ticketing system.
 pub async fn update_ticket_description(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
     Path(key): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<UpdateDescriptionBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // AC-2: only the workflow owner may invoke this.
-    require_workflow_access(&state.engine, &state.auth, &auth, &key)
+    require_workflow_access(&engine, &auth_state, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
     // Plan-10: resolve the cwd for `gh` / `acli` from the workflow's
     // repository_id rather than the global cfg.git.repo_path.
-    let workflow_repo_path = resolve_workflow_repo_path(&state, &key).await;
-    match state.config.ticketing_system {
+    let workflow_repo_path = resolve_workflow_repo_path(&engine, &auth_state, &cfg_state, &key).await;
+    match cfg_state.ticketing_system {
         TicketingSystem::None => {
             // No external ticketing system — persist to the in-memory workflow.
-            let wf_arc = state.engine.engine.workflows_arc();
+            let wf_arc = engine.engine.workflows_arc();
             let mut workflows = wf_arc.write().await;
             if let Some(wf) = workflows.get_mut(&key) {
                 wf.ticket_description = body.description.clone();
@@ -506,12 +533,12 @@ pub async fn update_ticket_description(
             }
             drop(workflows);
             // Best-effort snapshot sync so the edit survives a restart.
-            let _ = state.engine.engine.sync_workflow_snapshot().await;
+            let _ = engine.engine.sync_workflow_snapshot().await;
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::GitHub => {
             let remote = {
-                let config = state.config.config.read().await;
+                let config = cfg_state.config.read().await;
                 config.git.remote.clone()
             };
             let repo_path = workflow_repo_path.clone();
@@ -541,8 +568,7 @@ pub async fn update_ticket_description(
 
             // Inject GitHub App installation token when configured so `gh api`
             // works without personal user authentication.
-            let gh_token = state
-                .engine
+            let gh_token = engine
                 .engine
                 .actions()
                 .get_gh_installation_token(&repo_path)
@@ -594,7 +620,7 @@ pub async fn update_ticket_description(
             // `GET /api/workflows` returns the freshly saved value — prevents the
             // dashboard from showing stale text when the user reopens the modal.
             {
-                let wf_arc = state.engine.engine.workflows_arc();
+                let wf_arc = engine.engine.workflows_arc();
                 let mut workflows = wf_arc.write().await;
                 if let Some(wf) = workflows.get_mut(&key) {
                     wf.ticket_description = body.description.clone();
@@ -603,7 +629,7 @@ pub async fn update_ticket_description(
                     }
                 }
                 drop(workflows);
-                let _ = state.engine.engine.sync_workflow_snapshot().await;
+                let _ = engine.engine.sync_workflow_snapshot().await;
             }
 
             Ok(Json(serde_json::json!({})))
@@ -619,7 +645,7 @@ pub async fn update_ticket_description(
             // `GET /api/workflows` returns the freshly saved value — prevents the
             // dashboard from showing stale text when the user reopens the modal.
             {
-                let wf_arc = state.engine.engine.workflows_arc();
+                let wf_arc = engine.engine.workflows_arc();
                 let mut workflows = wf_arc.write().await;
                 if let Some(wf) = workflows.get_mut(&key) {
                     wf.ticket_description = body.description.clone();
@@ -628,7 +654,7 @@ pub async fn update_ticket_description(
                     }
                 }
                 drop(workflows);
-                let _ = state.engine.engine.sync_workflow_snapshot().await;
+                let _ = engine.engine.sync_workflow_snapshot().await;
             }
 
             Ok(Json(serde_json::json!({})))
@@ -648,6 +674,8 @@ mod tests {
     use maestro_core::actions::dry_run::DryRunActions;
     use maestro_core::config::{Config, TicketingSystem};
     use maestro_core::workflow::engine::{Workflow, WorkflowEngine};
+
+    use crate::state::AppState;
 
     /// Build a minimal `AppState` for testing `update_ticket_description` in `None` mode.
     fn test_app_state_none() -> AppState {
@@ -740,7 +768,9 @@ mod tests {
         insert_workflow(&state.engine.engine, "T-1", "Old Summary", "Old description").await;
 
         let result = update_ticket_description(
-            State(state.clone()),
+            State(state.engine.clone()),
+            State(state.auth.clone()),
+            State(state.config.clone()),
             Path("T-1".to_string()),
             Extension(test_auth()),
             Json(UpdateDescriptionBody {
@@ -767,7 +797,9 @@ mod tests {
         insert_workflow(&state.engine.engine, "T-2", "Old Summary", "Old description").await;
 
         let result = update_ticket_description(
-            State(state.clone()),
+            State(state.engine.clone()),
+            State(state.auth.clone()),
+            State(state.config.clone()),
             Path("T-2".to_string()),
             Extension(test_auth()),
             Json(UpdateDescriptionBody {
@@ -796,7 +828,9 @@ mod tests {
         // No workflow inserted — the key "T-3" does not exist.
 
         let result = update_ticket_description(
-            State(state.clone()),
+            State(state.engine.clone()),
+            State(state.auth.clone()),
+            State(state.config.clone()),
             Path("T-3".to_string()),
             Extension(test_auth()),
             Json(UpdateDescriptionBody {
