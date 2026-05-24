@@ -86,7 +86,7 @@ pub async fn onboarding_status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Json<OnboardingStatusBody> {
-    let mut status = state.system_status.read().await.clone();
+    let mut status = state.engine.system_status.read().await.clone();
 
     let active_provider = status.provider.selected.clone();
 
@@ -96,7 +96,7 @@ pub async fn onboarding_status(
     // per-request filter logic and matches the source of truth that
     // `collect_system_status` itself consults).
     let github_app_configured = {
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         cfg.github.is_configured()
     };
 
@@ -113,7 +113,7 @@ pub async fn onboarding_status(
     let (user_onboarding, user_filter): (
         Option<UserOnboardingSummary>,
         Option<UserCredentialState>,
-    ) = if let Some(db) = state.db.as_ref() {
+    ) = if let Some(db) = state.auth.db.as_ref() {
         let cookie = crate::auth::session_cookie_from_headers(&headers)
             .map(|s| s.to_string())
             .unwrap_or_default();

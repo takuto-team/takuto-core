@@ -51,7 +51,7 @@ pub async fn list_github_issues(
         }
     };
 
-    let Some(db) = state.db.clone() else {
+    let Some(db) = state.auth.db.clone() else {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             "database unavailable".into(),
@@ -101,6 +101,7 @@ pub async fn list_github_issues(
     })?;
 
     let gh_token = state
+        .engine
         .engine
         .actions()
         .get_gh_installation_token(&repo_path)

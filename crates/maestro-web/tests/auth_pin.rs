@@ -142,7 +142,7 @@ fn auth_pin_is_independent_of_active_provider_at_read_time() {
 #[tokio::test]
 async fn pin_for_workflow_captures_active_provider_from_config() {
     let state = maestro_web::test_helpers::test_state_with_db();
-    let db = state.db.as_ref().expect("db").clone();
+    let db = state.auth.db.as_ref().expect("db").clone();
     let mk = db.master_key().expect("master key").key.clone();
 
     // Seed user + claude credential.
@@ -162,7 +162,7 @@ async fn pin_for_workflow_captures_active_provider_from_config() {
     }
 
     let cfg = {
-        let mut c = state.config.read().await.clone();
+        let mut c = state.config.config.read().await.clone();
         c.agent.provider = AiAgentProvider::Claude;
         c
     };

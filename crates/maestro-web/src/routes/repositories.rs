@@ -95,6 +95,7 @@ fn db_error(e: maestro_core::error::MaestroError) -> (StatusCode, String) {
 
 fn require_db(state: &AppState) -> Result<maestro_core::db::Database, (StatusCode, String)> {
     state
+        .auth
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))
@@ -339,6 +340,7 @@ async fn add_via_clone(
 
     // 2. Acquire process-level clone lock.
     if state
+        .engine
         .clone_in_progress
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -349,7 +351,7 @@ async fn add_via_clone(
         ));
     }
     // From here on, every early-return must release via `_guard`.
-    let _guard = CloneGuard(state.clone_in_progress.clone());
+    let _guard = CloneGuard(state.engine.clone_in_progress.clone());
 
     // 3. Look up an existing `repositories` row by repo_url. If found,
     //    just associate (idempotent) and return 200.

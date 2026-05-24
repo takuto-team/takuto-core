@@ -23,7 +23,7 @@ pub struct TodoTicketRow {
 pub async fn list_todo_tickets_manual(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<TodoTicketRow>>, (StatusCode, String)> {
-    let config = state.config.read().await;
+    let config = state.config.config.read().await;
     if config.jira.project_keys.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -58,7 +58,7 @@ pub async fn get_ticket_preview(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<Json<TicketDescriptionPreview>, (StatusCode, String)> {
-    let config = state.config.read().await;
+    let config = state.config.config.read().await;
     if config.jira.project_keys.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -125,7 +125,7 @@ mod tests {
         // Configure project keys as ["PROJ"] but request a ticket from "OTHER" project.
         let state = test_state_with_db();
         {
-            let mut cfg = state.config.write().await;
+            let mut cfg = state.config.config.write().await;
             cfg.jira.project_keys = vec!["PROJ".to_string()];
         }
         let cookie = register_and_login(&state).await;

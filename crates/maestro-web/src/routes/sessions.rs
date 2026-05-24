@@ -262,7 +262,7 @@ pub async fn proxy_or_static_fallback(
     let proxy_route = find_dynamic_port_route(&state, req.headers()).await;
 
     if let Some((token, route)) = proxy_route {
-        let auth_user_id = authenticate_request(state.db.as_ref(), req.headers())
+        let auth_user_id = authenticate_request(state.auth.db.as_ref(), req.headers())
             .await
             .ok()
             .flatten();
@@ -286,14 +286,14 @@ async fn find_dynamic_port_route(
     // Try referer first (most reliable — carries the exact token).
     if let Some(referer) = headers.get(header::REFERER).and_then(|v| v.to_str().ok())
         && let Some(token) = extract_token_from_referer(referer)
-        && let Some(route) = state.path_token_registry.lookup(&token).await
+        && let Some(route) = state.editor.path_token_registry.lookup(&token).await
         && route.kind == SessionRouteKind::DynamicPort
     {
         return Some((token, route));
     }
     // Fall back to cookie (covers deep dependency chains without referer).
     let token = extract_dynamic_port_cookie(headers)?;
-    let route = state.path_token_registry.lookup(&token).await?;
+    let route = state.editor.path_token_registry.lookup(&token).await?;
     (route.kind == SessionRouteKind::DynamicPort).then_some((token, route))
 }
 
@@ -364,12 +364,12 @@ fn extract_token_from_referer(referer: &str) -> Option<String> {
 
 /// Top-level handler registered at `/s/{*rest}`.
 ///
-/// When a user database is configured (`state.db` is `Some`), the handler
+/// When a user database is configured (`state.auth.db` is `Some`), the handler
 /// requires a valid `maestro_session` cookie before proceeding. This prevents
 /// access if the URL leaks — the unguessable path token remains a defence in
 /// depth, but is no longer the sole gatekeeper.
 pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) -> Response<Body> {
-    let auth_user_id = match authenticate_request(state.db.as_ref(), req.headers()).await {
+    let auth_user_id = match authenticate_request(state.auth.db.as_ref(), req.headers()).await {
         Ok(uid) => uid,
         Err(()) => {
             return Response::builder()
@@ -389,7 +389,7 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
         None => return redirect_to_trailing_slash(token, query.as_deref()),
         Some(r) => r,
     };
-    let route = match state.path_token_registry.lookup(token).await {
+    let route = match state.editor.path_token_registry.lookup(token).await {
         Some(r) => r,
         None => {
             tracing::warn!(
@@ -642,7 +642,9 @@ mod tests {
 
         use crate::server::build_router;
         use crate::session_registry::{PathTokenRegistry, SessionRoute, SessionRouteKind};
-        use crate::state::AppState;
+        use crate::state::{
+            AppState, AuthState, ConfigState, EditorState, EngineState, RunCommandState,
+        };
 
         fn test_state() -> AppState {
             let config = Arc::new(RwLock::new(Config::default()));
@@ -658,28 +660,40 @@ mod tests {
                 TicketingSystem::None,
                 std::env::temp_dir(),
             ));
-            AppState {
-                engine,
-                config,
-                db: None,
-                polling_paused: Arc::new(AtomicBool::new(false)),
-                jira_available,
-                ticketing_system: TicketingSystem::None,
-                editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-                dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-                terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-                run_commands: Arc::new(RwLock::new(HashMap::new())),
-                preflight_error: None,
-                system_status: std::sync::Arc::new(tokio::sync::RwLock::new(maestro_core::docker_hooks::SystemStatus::default())),
-                config_path: std::env::temp_dir().join("config.toml"),
-                config_writer: None,
-                clone_in_progress: Arc::new(AtomicBool::new(false)),
-                gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-            git_auth_resolver: None,
-            path_token_registry: PathTokenRegistry::new(),
-            editor_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            run_command_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            }
+            AppState::new(
+                EngineState {
+                    engine,
+                    polling_paused: Arc::new(AtomicBool::new(false)),
+                    clone_in_progress: Arc::new(AtomicBool::new(false)),
+                    system_status: Arc::new(RwLock::new(
+                        maestro_core::docker_hooks::SystemStatus::default(),
+                    )),
+                },
+                AuthState {
+                    db: None,
+                    gh_client: Arc::new(maestro_core::auth::RealGhClient::new()),
+                    git_auth_resolver: None,
+                },
+                ConfigState {
+                    config,
+                    config_path: std::env::temp_dir().join("config.toml"),
+                    config_writer: None,
+                    ticketing_system: TicketingSystem::None,
+                    jira_available,
+                    preflight_error: None,
+                },
+                EditorState {
+                    editor_scanners: Arc::new(RwLock::new(HashMap::new())),
+                    dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
+                    terminal_ports: Arc::new(RwLock::new(HashMap::new())),
+                    editor_bundles: Arc::new(RwLock::new(HashMap::new())),
+                    path_token_registry: PathTokenRegistry::new(),
+                },
+                RunCommandState {
+                    run_commands: Arc::new(RwLock::new(HashMap::new())),
+                    run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
+                },
+            )
         }
 
         /// Registered token with no upstream listener → 502 Bad Gateway.
@@ -689,6 +703,7 @@ mod tests {
         async fn proxy_known_token_no_upstream_returns_502() {
             let state = test_state();
             let token = state
+                .editor
                 .path_token_registry
                 .register_with_token(
                     "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
@@ -745,6 +760,7 @@ mod tests {
             let state = test_state();
             let token_str = "eeee5555ffff6666aaaa7777bbbb8888";
             state
+                .editor
                 .path_token_registry
                 .register_with_token(
                     token_str.to_string(),
@@ -788,6 +804,7 @@ mod tests {
         async fn proxy_returns_401_when_db_present_but_no_cookie() {
             let state = crate::test_helpers::test_state_with_db();
             state
+                .editor
                 .path_token_registry
                 .register_with_token(
                     "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
@@ -819,6 +836,7 @@ mod tests {
         async fn proxy_returns_401_when_db_present_with_invalid_cookie() {
             let state = crate::test_helpers::test_state_with_db();
             state
+                .editor
                 .path_token_registry
                 .register_with_token(
                     "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
@@ -855,7 +873,7 @@ mod tests {
             let cookie = crate::test_helpers::register_and_login(&state).await;
             // Look up the admin user's ID so the route ownership check passes.
             let admin_user_id = {
-                let db = state.db.as_ref().unwrap();
+                let db = state.auth.db.as_ref().unwrap();
                 let conn = db.conn().lock().await;
                 maestro_core::db::users::get_user_by_username(&conn, "admin")
                     .unwrap()
@@ -863,6 +881,7 @@ mod tests {
                     .id
             };
             state
+                .editor
                 .path_token_registry
                 .register_with_token(
                     "aaaa1111bbbb2222cccc3333dddd4444".to_string(),
@@ -899,6 +918,7 @@ mod tests {
             let cookie = crate::test_helpers::register_and_login(&state).await;
             // Register a route owned by a different user.
             state
+                .editor
                 .path_token_registry
                 .register_with_token(
                     "aaaa1111bbbb2222cccc3333dddd4444".to_string(),

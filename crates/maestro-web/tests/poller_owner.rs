@@ -62,28 +62,41 @@ fn build_state(data_dir: &std::path::Path) -> AppState {
     let git_auth_resolver = Some(Arc::new(
         maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
     ));
-    AppState {
-        engine,
-        config,
-        db: Some(db),
-        polling_paused: Arc::new(AtomicBool::new(false)),
-        jira_available,
-        ticketing_system: TicketingSystem::None,
-        editor_scanners: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        dynamic_forwards: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        terminal_ports: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        preflight_error: None,
-        system_status: std::sync::Arc::new(tokio::sync::RwLock::new(maestro_core::docker_hooks::SystemStatus::default())),
-        config_path: data_dir.join("config.toml"),
-        config_writer: None,
-        clone_in_progress: Arc::new(AtomicBool::new(false)),
-        gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-        git_auth_resolver,
-        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
-        editor_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        run_command_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-    }
+    use maestro_web::state::{AuthState, ConfigState, EditorState, EngineState, RunCommandState};
+    AppState::new(
+        EngineState {
+            engine,
+            polling_paused: Arc::new(AtomicBool::new(false)),
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
+            system_status: Arc::new(RwLock::new(
+                maestro_core::docker_hooks::SystemStatus::default(),
+            )),
+        },
+        AuthState {
+            db: Some(db),
+            gh_client: Arc::new(maestro_core::auth::RealGhClient::new()),
+            git_auth_resolver,
+        },
+        ConfigState {
+            config,
+            config_path: data_dir.join("config.toml"),
+            config_writer: None,
+            ticketing_system: TicketingSystem::None,
+            jira_available,
+            preflight_error: None,
+        },
+        EditorState {
+            editor_scanners: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            dynamic_forwards: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            terminal_ports: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            editor_bundles: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        },
+        RunCommandState {
+            run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            run_command_bundles: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        },
+    )
 }
 
 /// Pre-seed a workspace snapshot at `{data_dir}/workspaces/{ws}/workflow_snapshot.json`
@@ -168,7 +181,7 @@ async fn orphan_migration_e2e() {
         // Look up the admin's user_id — this is what the migration should
         // assign to the orphan workflow so the admin sees it in their list.
         let admin_id = {
-            let db = state.db.as_ref().unwrap().clone();
+            let db = state.auth.db.as_ref().unwrap().clone();
             tokio::task::spawn_blocking(move || {
                 let conn = db.conn().blocking_lock();
                 maestro_core::db::users::get_user_by_username(&conn, "admin")
@@ -182,6 +195,7 @@ async fn orphan_migration_e2e() {
 
         let restored = state
             .engine
+            .engine
             .restore_persisted_workflows()
             .await
             .expect("restore");
@@ -189,7 +203,7 @@ async fn orphan_migration_e2e() {
 
         // Sanity: before migration, the workflow is orphaned and invisible.
         {
-            let wf_arc = state.engine.workflows_arc();
+            let wf_arc = state.engine.engine.workflows_arc();
             let map = wf_arc.read().await;
             let w = map.get("POLLED-1").expect("workflow present after restore");
             assert!(
@@ -205,7 +219,7 @@ async fn orphan_migration_e2e() {
         // (Dev A's startup reconciliation does this for real boots; this test
         // bypasses startup, so we do it inline.)
         {
-            let db = state.db.as_ref().unwrap().clone();
+            let db = state.auth.db.as_ref().unwrap().clone();
             let admin_id_clone = admin_id.clone();
             let ws_name_owned = ws_name.to_string();
             tokio::task::spawn_blocking(move || {
@@ -229,13 +243,14 @@ async fn orphan_migration_e2e() {
         // Run the migration helper using the admin's user_id as owner.
         let migrated = state
             .engine
+            .engine
             .migrate_orphan_workflows_to_owner(&admin_id)
             .await;
         assert_eq!(migrated, 1, "exactly one workflow should migrate");
 
         // After migration the workflow carries the admin's user_id.
         {
-            let wf_arc = state.engine.workflows_arc();
+            let wf_arc = state.engine.engine.workflows_arc();
             let map = wf_arc.read().await;
             let w = map.get("POLLED-1").expect("workflow still present");
             assert_eq!(
@@ -290,6 +305,7 @@ async fn orphan_migration_e2e() {
 
         let restored = state
             .engine
+            .engine
             .restore_persisted_workflows()
             .await
             .expect("restore");
@@ -299,7 +315,7 @@ async fn orphan_migration_e2e() {
 
         // Orphan should still have user_id = None.
         {
-            let wf_arc = state.engine.workflows_arc();
+            let wf_arc = state.engine.engine.workflows_arc();
             let map = wf_arc.read().await;
             let w = map.get("POLLED-2").expect("workflow present");
             assert!(

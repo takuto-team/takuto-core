@@ -355,6 +355,7 @@ pub async fn list_my_rows(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<UserCommandsEntry>>, (StatusCode, String)> {
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
@@ -385,6 +386,7 @@ pub async fn get_my_row(
     validate_workspace_name(&workspace)?;
 
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
@@ -421,6 +423,7 @@ pub async fn put_my_row(
     validate_combined_size(&init_bytes, &run_bytes)?;
 
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
@@ -493,6 +496,7 @@ pub async fn delete_my_row(
     validate_workspace_name(&workspace)?;
 
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
@@ -553,6 +557,7 @@ pub async fn list_workspaces_with_has_commands(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<WorkspaceWithHasCommands>>, (StatusCode, String)> {
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?

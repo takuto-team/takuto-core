@@ -19,7 +19,7 @@ use super::require_workflow_access;
 pub async fn list_workflow_definitions(
     State(state): State<AppState>,
 ) -> Json<Vec<DiscoveredWorkflow>> {
-    let dir = state.engine.workflows_dir().to_path_buf();
+    let dir = state.engine.engine.workflows_dir().to_path_buf();
     let result = discover_workflows(&dir);
     Json(result.workflows)
 }
@@ -34,6 +34,7 @@ pub async fn run_workflow_def(
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
     state
+        .engine
         .engine
         .start_workflow_def(&id, &def_name)
         .await
@@ -51,6 +52,7 @@ pub async fn retry_workflow_def(
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
     state
+        .engine
         .engine
         .retry_workflow_def(&id, &def_name)
         .await

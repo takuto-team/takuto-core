@@ -79,8 +79,8 @@ async fn put_config_agent_as_admin_updates_and_persists() {
     std::fs::write(&config_path, "").unwrap();
 
     let mut state = test_state_with_db();
-    state.config_writer = Some(Arc::new(ConfigWriter::new(config_path.clone())));
-    state.config_path = config_path.clone();
+    state.config.config_writer = Some(Arc::new(ConfigWriter::new(config_path.clone())));
+    state.config.config_path = config_path.clone();
 
     let cookie = register_and_login(&state).await;
     let app = build_router(state.clone());
@@ -117,7 +117,7 @@ async fn put_config_agent_as_admin_updates_and_persists() {
     );
 
     // Verify the in-memory config got patched.
-    let cfg = state.config.read().await;
+    let cfg = state.config.config.read().await;
     assert_eq!(cfg.agent.providers.claude.model, "claude-3-5-sonnet-latest");
     assert_eq!(
         cfg.agent.providers.claude.base_url,
@@ -157,8 +157,8 @@ async fn put_config_agent_emits_config_file_bind_mounted_when_writer_flag_set() 
     // exposing it via the public Arc<AtomicBool> accessor keeps the test
     // independent of forcing a real Linux bind mount.
     writer.used_inplace_fallback().store(true, Ordering::Release);
-    state.config_writer = Some(writer);
-    state.config_path = config_path.clone();
+    state.config.config_writer = Some(writer);
+    state.config.config_path = config_path.clone();
 
     let cookie = register_and_login(&state).await;
     let app = build_router(state.clone());
@@ -179,7 +179,7 @@ async fn put_config_agent_emits_config_file_bind_mounted_when_writer_flag_set() 
     assert_eq!(resp.status(), StatusCode::OK);
 
     // The handler refreshed system_status; the new warning must be there.
-    let snapshot = state.system_status.read().await.clone();
+    let snapshot = state.engine.system_status.read().await.clone();
     let bind_mount_warning = snapshot
         .warnings
         .iter()
@@ -215,7 +215,7 @@ async fn put_config_agent_as_non_admin_returns_403_no_side_effects() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // Confirm the config was not mutated.
-    let cfg = state.config.read().await;
+    let cfg = state.config.config.read().await;
     assert_eq!(cfg.agent.providers.claude.model, "");
 }
 
@@ -226,7 +226,7 @@ async fn put_config_agent_denied_extra_arg_returns_400_no_side_effects() {
 
     // Capture the pre-state for comparison.
     let pre = {
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         cfg.agent.providers.claude.extra_args.clone()
     };
 
@@ -254,7 +254,7 @@ async fn put_config_agent_denied_extra_arg_returns_400_no_side_effects() {
     );
 
     // Confirm extra_args was not mutated.
-    let cfg = state.config.read().await;
+    let cfg = state.config.config.read().await;
     assert_eq!(cfg.agent.providers.claude.extra_args, pre);
 }
 
@@ -294,13 +294,13 @@ async fn put_config_agent_changing_provider_broadcasts_provider_changed_event() 
     std::fs::write(&config_path, "").unwrap();
 
     let mut state = test_state_with_db();
-    state.config_writer = Some(Arc::new(ConfigWriter::new(config_path.clone())));
-    state.config_path = config_path.clone();
+    state.config.config_writer = Some(Arc::new(ConfigWriter::new(config_path.clone())));
+    state.config.config_path = config_path.clone();
 
     let cookie = register_and_login(&state).await;
 
     // Subscribe BEFORE sending the request so we don't miss the broadcast.
-    let mut rx = state.engine.subscribe();
+    let mut rx = state.engine.engine.subscribe();
 
     let app = build_router(state.clone());
     let resp = app
@@ -335,7 +335,7 @@ async fn put_config_agent_changing_provider_broadcasts_provider_changed_event() 
     assert_eq!(evt.affected_users.as_deref(), Some(&[][..]));
 
     // In-memory state reflects the new provider.
-    let cfg = state.config.read().await;
+    let cfg = state.config.config.read().await;
     assert_eq!(cfg.agent.provider, AiAgentProvider::Cursor);
 }
 
@@ -347,11 +347,11 @@ async fn put_config_agent_same_provider_does_not_broadcast() {
     std::fs::write(&config_path, "").unwrap();
 
     let mut state = test_state_with_db();
-    state.config_writer = Some(Arc::new(ConfigWriter::new(config_path.clone())));
-    state.config_path = config_path.clone();
+    state.config.config_writer = Some(Arc::new(ConfigWriter::new(config_path.clone())));
+    state.config.config_path = config_path.clone();
 
     let cookie = register_and_login(&state).await;
-    let mut rx = state.engine.subscribe();
+    let mut rx = state.engine.engine.subscribe();
 
     let app = build_router(state.clone());
     let resp = app
@@ -405,7 +405,7 @@ async fn put_config_agent_unknown_provider_value_returns_400() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // Provider unchanged.
-    let cfg = state.config.read().await;
+    let cfg = state.config.config.read().await;
     assert_eq!(cfg.agent.provider, AiAgentProvider::Claude);
 }
 
@@ -421,8 +421,8 @@ async fn put_config_agent_refreshes_system_status_for_auth_status() {
     std::fs::write(&config_path, "").unwrap();
 
     let mut state = test_state_with_db();
-    state.config_writer = Some(Arc::new(ConfigWriter::new(config_path.clone())));
-    state.config_path = config_path.clone();
+    state.config.config_writer = Some(Arc::new(ConfigWriter::new(config_path.clone())));
+    state.config.config_path = config_path.clone();
 
     let cookie = register_and_login(&state).await;
 

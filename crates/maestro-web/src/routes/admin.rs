@@ -55,7 +55,7 @@ pub(crate) async fn require_admin(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<User, StatusCode> {
-    let db = state.db.as_ref().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = state.auth.db.as_ref().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let raw_cookie = session_cookie_from_headers(headers).ok_or(StatusCode::UNAUTHORIZED)?;
     let cookie = raw_cookie.to_string();
@@ -92,7 +92,7 @@ pub async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> im
         return status.into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -132,7 +132,7 @@ pub async fn create_user(
         return status.into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -189,7 +189,7 @@ pub async fn get_user(
         return status.into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -236,7 +236,7 @@ pub async fn update_user(
             .into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -308,7 +308,7 @@ pub async fn suspend_user(
             .into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -347,7 +347,7 @@ pub async fn unsuspend_user(
         return status.into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -387,7 +387,7 @@ pub async fn unlock_user(
         return status.into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -452,7 +452,7 @@ pub async fn delete_user(
             .into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -484,7 +484,7 @@ pub async fn export_users(State(state): State<AppState>, headers: HeaderMap) -> 
         return status.into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -529,7 +529,7 @@ pub async fn import_users(
         return status.into_response();
     }
 
-    let db = match state.db.as_ref() {
+    let db = match state.auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -655,28 +655,41 @@ mod tests {
         let git_auth_resolver = Some(Arc::new(
             maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
         ));
-        AppState {
-            engine,
-            config,
-            db: Some(db),
-            polling_paused: Arc::new(AtomicBool::new(false)),
-            jira_available,
-            ticketing_system: TicketingSystem::None,
-            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-            run_commands: Arc::new(RwLock::new(HashMap::new())),
-            preflight_error: None,
-            system_status: std::sync::Arc::new(tokio::sync::RwLock::new(maestro_core::docker_hooks::SystemStatus::default())),
-            config_path: std::env::temp_dir().join("config.toml"),
-            config_writer: None,
-            clone_in_progress: Arc::new(AtomicBool::new(false)),
-            gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-            git_auth_resolver,
-            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-            editor_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            run_command_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        }
+        use crate::state::{AuthState, ConfigState, EditorState, EngineState, RunCommandState};
+        AppState::new(
+            EngineState {
+                engine,
+                polling_paused: Arc::new(AtomicBool::new(false)),
+                clone_in_progress: Arc::new(AtomicBool::new(false)),
+                system_status: Arc::new(RwLock::new(
+                    maestro_core::docker_hooks::SystemStatus::default(),
+                )),
+            },
+            AuthState {
+                db: Some(db),
+                gh_client: Arc::new(maestro_core::auth::RealGhClient::new()),
+                git_auth_resolver,
+            },
+            ConfigState {
+                config,
+                config_path: std::env::temp_dir().join("config.toml"),
+                config_writer: None,
+                ticketing_system: TicketingSystem::None,
+                jira_available,
+                preflight_error: None,
+            },
+            EditorState {
+                editor_scanners: Arc::new(RwLock::new(HashMap::new())),
+                dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
+                terminal_ports: Arc::new(RwLock::new(HashMap::new())),
+                editor_bundles: Arc::new(RwLock::new(HashMap::new())),
+                path_token_registry: crate::session_registry::PathTokenRegistry::new(),
+            },
+            RunCommandState {
+                run_commands: Arc::new(RwLock::new(HashMap::new())),
+                run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
+            },
+        )
     }
 
     /// Register the first user (admin) and return the DB session cookie value.

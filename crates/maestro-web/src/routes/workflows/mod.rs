@@ -49,7 +49,7 @@ pub(crate) async fn require_workflow_access(
     auth: &AuthenticatedUser,
     ticket_key: &str,
 ) -> Result<(), StatusCode> {
-    let wf_arc = state.engine.workflows_arc();
+    let wf_arc = state.engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(ticket_key).ok_or(StatusCode::NOT_FOUND)?;
     if w.user_id.as_deref() != Some(&auth.user_id) {
@@ -59,7 +59,7 @@ pub(crate) async fn require_workflow_access(
     // Defensive back-compat: when `repository_id` is `None`, fall back to
     // matching `workspace_name` against the user's repo names. Without a DB
     // attached (test paths), skip the gate entirely.
-    let Some(database) = state.db.as_ref() else {
+    let Some(database) = state.auth.db.as_ref() else {
         return Ok(());
     };
     let workflow_repo_id = w.repository_id.clone();
@@ -104,15 +104,15 @@ pub(super) async fn build_editor_or_run_command_bundle(
     workflow_id_or_ticket_key: &str,
     user_id: &str,
 ) -> Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> {
-    let resolver = state.git_auth_resolver.as_ref()?;
-    let db = state.db.as_ref()?;
+    let resolver = state.auth.git_auth_resolver.as_ref()?;
+    let db = state.auth.db.as_ref()?;
     db.master_key()?;
-    let cfg_snapshot = state.config.read().await.clone();
+    let cfg_snapshot = state.config.config.read().await.clone();
 
     // If the workflow already pinned its credentials, prefer that pin so
     // the editor sees the same row the agent path used.
     let pin = {
-        let wf_arc = state.engine.workflows_arc();
+        let wf_arc = state.engine.engine.workflows_arc();
         let wf = wf_arc.read().await;
         wf.get(workflow_id_or_ticket_key)
             .and_then(|w| w.auth_pin.clone())

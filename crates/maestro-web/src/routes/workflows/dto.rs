@@ -206,7 +206,7 @@ pub(super) fn extract_error(state: &WorkflowState) -> Option<String> {
 /// Build the run command status list for a given workflow's ticket key.
 pub(super) fn build_run_commands_status(
     configured: &[maestro_core::db::user_worktree_commands::RunCommand],
-    active_cmds: Option<&Vec<crate::state::RunCommandState>>,
+    active_cmds: Option<&Vec<crate::state::ActiveRunCommand>>,
 ) -> Vec<RunCommandStatus> {
     configured
         .iter()

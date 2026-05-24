@@ -49,6 +49,7 @@ pub async fn start_manual_workflow(
     Json(body): Json<StartManualWorkflowBody>,
 ) -> Result<Json<StartManualWorkflowResponse>, (StatusCode, String)> {
     let jira_on = state
+        .config
         .jira_available
         .load(std::sync::atomic::Ordering::Relaxed);
 
@@ -78,7 +79,7 @@ pub async fn start_manual_workflow(
     };
 
     let max_manual = {
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         if jira_on && cfg.jira.project_keys.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -89,7 +90,7 @@ pub async fn start_manual_workflow(
     };
 
     {
-        let wf_arc = state.engine.workflows_arc();
+        let wf_arc = state.engine.engine.workflows_arc();
         let map = wf_arc.read().await;
         if let Some(existing) = map.get(&ticket_key) {
             // Terminal-state entries (Done / Stopped / Error) are safe to replace —
@@ -119,7 +120,7 @@ pub async fn start_manual_workflow(
 
     if max_manual > 0 {
         // Count per-user, not global.
-        let wf_arc = state.engine.workflows_arc();
+        let wf_arc = state.engine.engine.workflows_arc();
         let map = wf_arc.read().await;
         let n = map
             .values()
@@ -153,7 +154,7 @@ pub async fn start_manual_workflow(
     // Plan-10: resolve the workflow's repository_id. When the body specifies
     // one, validate the caller has it associated; otherwise, default to the
     // most-recently-added repo. Reject when the caller has zero repos.
-    let repository_id = if let Some(database) = state.db.as_ref() {
+    let repository_id = if let Some(database) = state.auth.db.as_ref() {
         let conn = database.conn().lock().await;
         let user_repos = maestro_core::db::repositories::list_for_user(&conn, &auth.user_id)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -192,6 +193,7 @@ pub async fn start_manual_workflow(
     };
 
     let workflow_id = state
+        .engine
         .engine
         .add_to_dashboard(
             ticket_key.clone(),

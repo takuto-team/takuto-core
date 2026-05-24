@@ -74,7 +74,7 @@ async fn create_and_login_user(
 }
 
 async fn user_id_for(state: &AppState, username: &str) -> String {
-    let db = state.db.clone().expect("test state must have a DB");
+    let db = state.auth.db.clone().expect("test state must have a DB");
     let username = username.to_string();
     tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -94,7 +94,7 @@ async fn seed_repository(
     local_path: &str,
     associate_with: &[&str],
 ) -> String {
-    let db = state.db.clone().expect("test state must have a DB");
+    let db = state.auth.db.clone().expect("test state must have a DB");
     let name_owned = name.to_string();
     let local_path_owned = local_path.to_string();
     let user_ids: Vec<String> = associate_with.iter().map(|s| s.to_string()).collect();
@@ -130,6 +130,7 @@ async fn seed_workflow(
     wf.user_id = Some(user_id.to_string());
     wf.repository_id = repository_id;
     state
+        .engine
         .engine
         .workflows_arc()
         .write()

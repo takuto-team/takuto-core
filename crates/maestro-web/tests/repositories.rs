@@ -86,28 +86,41 @@ fn test_state_isolated() -> (AppState, TempDir) {
     let git_auth_resolver = Some(Arc::new(
         maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
     ));
-    let state = AppState {
-        engine,
-        config,
-        db: Some(db),
-        polling_paused: Arc::new(AtomicBool::new(false)),
-        jira_available,
-        ticketing_system: TicketingSystem::None,
-        editor_scanners: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        dynamic_forwards: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        terminal_ports: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        preflight_error: None,
-        system_status: std::sync::Arc::new(tokio::sync::RwLock::new(maestro_core::docker_hooks::SystemStatus::default())),
-        config_path: dir.path().join("config.toml"),
-        config_writer: None,
-        clone_in_progress: Arc::new(AtomicBool::new(false)),
-        gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-        git_auth_resolver,
-        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
-        editor_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        run_command_bundles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-    };
+    use maestro_web::state::{AuthState, ConfigState, EditorState, EngineState, RunCommandState};
+    let state = AppState::new(
+        EngineState {
+            engine,
+            polling_paused: Arc::new(AtomicBool::new(false)),
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
+            system_status: Arc::new(RwLock::new(
+                maestro_core::docker_hooks::SystemStatus::default(),
+            )),
+        },
+        AuthState {
+            db: Some(db),
+            gh_client: Arc::new(maestro_core::auth::RealGhClient::new()),
+            git_auth_resolver,
+        },
+        ConfigState {
+            config,
+            config_path: dir.path().join("config.toml"),
+            config_writer: None,
+            ticketing_system: TicketingSystem::None,
+            jira_available,
+            preflight_error: None,
+        },
+        EditorState {
+            editor_scanners: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            dynamic_forwards: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            terminal_ports: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            editor_bundles: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        },
+        RunCommandState {
+            run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            run_command_bundles: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        },
+    );
     (state, dir)
 }
 
@@ -172,7 +185,7 @@ async fn seed_repository(
     repo_url: Option<&str>,
     local_path: &str,
 ) -> String {
-    let db = state.db.as_ref().expect("db").clone();
+    let db = state.auth.db.as_ref().expect("db").clone();
     let name = name.to_string();
     let repo_url = repo_url.map(|s| s.to_string());
     let local_path = local_path.to_string();
@@ -485,7 +498,7 @@ async fn ac7_last_user_remove_purges_disk() {
     assert!(!local_path.exists(), "on-disk clone must be purged");
 
     // The DB row is gone.
-    let db = state.db.as_ref().unwrap().clone();
+    let db = state.auth.db.as_ref().unwrap().clone();
     let r1_clone = r1.clone();
     let row = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -519,7 +532,7 @@ async fn ac9_non_last_user_remove_keeps_disk_and_row() {
 
     // On-disk + DB row preserved.
     assert!(local_path.exists(), "shared clone must NOT be purged");
-    let db = state.db.as_ref().unwrap().clone();
+    let db = state.auth.db.as_ref().unwrap().clone();
     let r1_clone = r1.clone();
     let row = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -570,7 +583,7 @@ async fn ac8_admin_force_purge_drops_row_for_everyone() {
 
     // Filesystem + DB row + every association is gone.
     assert!(!local_path.exists());
-    let db = state.db.as_ref().unwrap().clone();
+    let db = state.auth.db.as_ref().unwrap().clone();
     let r1_clone = r1.clone();
     let row = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -616,7 +629,7 @@ async fn ac11_user_delete_cascades_to_associations() {
     post_repositories(&state, &bob_cookie, &body).await;
 
     // Delete bob via the admin endpoint.
-    let db = state.db.as_ref().unwrap().clone();
+    let db = state.auth.db.as_ref().unwrap().clone();
     let db_for_delete = db.clone();
     tokio::task::spawn_blocking(move || {
         let conn = db_for_delete.conn().blocking_lock();
@@ -651,7 +664,7 @@ async fn ac11_user_delete_cascades_to_associations() {
 /// Fetch the user_id of an existing username, directly from the DB. Used by
 /// the AC-16 tests to seed workflow snapshots with realistic user_ids.
 async fn user_id_for(state: &AppState, username: &str) -> String {
-    let db = state.db.as_ref().expect("db required").clone();
+    let db = state.auth.db.as_ref().expect("db required").clone();
     let username = username.to_string();
     tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -948,7 +961,7 @@ async fn ac5_repo_url_already_known_short_circuits_clone_with_200() {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrency — AC-15 (lock test via state.clone_in_progress).
+// Concurrency — AC-15 (lock test via state.engine.clone_in_progress).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -957,6 +970,7 @@ async fn ac15_clone_in_progress_returns_409_when_locked() {
     let cookie = register_admin(&state).await;
     // Force the lock to "busy" so the dispatch fails fast without shelling out.
     state
+        .engine
         .clone_in_progress
         .store(true, std::sync::atomic::Ordering::Release);
 

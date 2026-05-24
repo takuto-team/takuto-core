@@ -41,28 +41,39 @@ fn test_state_no_db() -> AppState {
         TicketingSystem::None,
         std::env::temp_dir(),
     ));
-    AppState {
-        engine,
-        config,
-        db: None,
-        polling_paused: Arc::new(AtomicBool::new(false)),
-        jira_available,
-        ticketing_system: TicketingSystem::None,
-        editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-        dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-        terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-        run_commands: Arc::new(RwLock::new(HashMap::new())),
-        preflight_error: None,
-        system_status: Arc::new(RwLock::new(SystemStatus::default())),
-        config_path: std::env::temp_dir().join("config.toml"),
-        config_writer: None,
-        clone_in_progress: Arc::new(AtomicBool::new(false)),
-        gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-        git_auth_resolver: None,
-        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
-        editor_bundles: Arc::new(RwLock::new(HashMap::new())),
-        run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
-    }
+    use maestro_web::state::{AuthState, ConfigState, EditorState, EngineState, RunCommandState};
+    AppState::new(
+        EngineState {
+            engine,
+            polling_paused: Arc::new(AtomicBool::new(false)),
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
+            system_status: Arc::new(RwLock::new(SystemStatus::default())),
+        },
+        AuthState {
+            db: None,
+            gh_client: Arc::new(maestro_core::auth::RealGhClient::new()),
+            git_auth_resolver: None,
+        },
+        ConfigState {
+            config,
+            config_path: std::env::temp_dir().join("config.toml"),
+            config_writer: None,
+            ticketing_system: TicketingSystem::None,
+            jira_available,
+            preflight_error: None,
+        },
+        EditorState {
+            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
+            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
+            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
+            editor_bundles: Arc::new(RwLock::new(HashMap::new())),
+            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        },
+        RunCommandState {
+            run_commands: Arc::new(RwLock::new(HashMap::new())),
+            run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
+        },
+    )
 }
 
 /// Public access: no session cookie required to read `/api/onboarding/status`.
@@ -127,7 +138,7 @@ async fn onboarding_status_is_public_and_returns_system_status_shape() {
 async fn auth_status_reports_degraded_when_critical_warning_present() {
     let state = test_state_with_db();
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         s.warnings.push(StructuredWarning {
             code: "claude_not_authenticated".into(),
             severity: "critical".into(),
@@ -200,7 +211,7 @@ async fn register_first_admin_response_includes_redirect_to_onboarding() {
 async fn health_ok_and_onboarding_exposes_warnings_when_everything_broken() {
     let state = test_state_with_db();
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         s.warnings.push(StructuredWarning {
             code: "claude_not_authenticated".into(),
             severity: "critical".into(),
@@ -256,7 +267,7 @@ async fn health_ok_and_onboarding_exposes_warnings_when_everything_broken() {
 async fn auth_status_setup_required_and_degraded_when_no_users_and_critical() {
     let state = test_state_with_db(); // DB present, zero users registered.
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         s.warnings.push(StructuredWarning {
             code: "claude_not_authenticated".into(),
             severity: "critical".into(),
@@ -344,7 +355,7 @@ async fn boots_in_degraded_mode_when_database_is_unavailable() {
 async fn auth_status_includes_phase0_mirrored_fields_on_clean_boot() {
     let state = test_state_with_db();
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         s.provider.selected = "cursor".into();
         s.github.mode = "app".into();
     }
@@ -380,7 +391,7 @@ async fn auth_status_includes_phase0_mirrored_fields_on_clean_boot() {
 /// session cookie + the resolved `user_id` (looked up by username).
 async fn register_admin_and_get_id(state: &AppState) -> (String, String) {
     let cookie = maestro_web::test_helpers::register_and_login(state).await;
-    let db = state.db.clone().expect("test state must have a DB");
+    let db = state.auth.db.clone().expect("test state must have a DB");
     let user_id = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
         maestro_core::db::users::get_user_by_username(&conn, "admin")
@@ -396,7 +407,7 @@ async fn register_admin_and_get_id(state: &AppState) -> (String, String) {
 /// Insert a provider credential row directly. Uses the test DB's master
 /// key so the `seal()` envelope matches what production would produce.
 async fn seed_provider_credential(state: &AppState, user_id: &str, provider: &str) {
-    let db = state.db.clone().expect("test DB");
+    let db = state.auth.db.clone().expect("test DB");
     let user_id = user_id.to_string();
     let provider = provider.to_string();
     tokio::task::spawn_blocking(move || {
@@ -423,7 +434,7 @@ async fn seed_provider_credential(state: &AppState, user_id: &str, provider: &st
 
 /// Insert a GitHub PAT row directly via the DB helper.
 async fn seed_github_credential(state: &AppState, user_id: &str) {
-    let db = state.db.clone().expect("test DB");
+    let db = state.auth.db.clone().expect("test DB");
     let user_id = user_id.to_string();
     tokio::task::spawn_blocking(move || {
         let mk = db.master_key().expect("test DB master key").key.clone();
@@ -453,7 +464,7 @@ async fn seed_warnings(
     include_gh: bool,
     include_master_key: bool,
 ) {
-    let mut s = state.system_status.write().await;
+    let mut s = state.engine.system_status.write().await;
     s.warnings.clear();
     s.warnings.push(StructuredWarning {
         code: provider_warning_code.into(),
@@ -507,7 +518,7 @@ async fn t_onb_filter_001_active_provider_warning_dropped_for_user_with_credenti
     seed_provider_credential(&state, &user_id, "claude").await;
     seed_warnings(&state, "claude_not_authenticated", false, true).await;
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         s.provider.selected = "claude".into();
     }
 
@@ -531,12 +542,12 @@ async fn t_onb_filter_002_mismatched_credential_does_not_filter_active_warning()
     // Seed CLAUDE credential, set active provider to CURSOR.
     seed_provider_credential(&state, &user_id, "claude").await;
     {
-        let mut cfg = state.config.write().await;
+        let mut cfg = state.config.config.write().await;
         cfg.agent.provider = maestro_core::config::AiAgentProvider::Cursor;
     }
     seed_warnings(&state, "cursor_not_authenticated", false, false).await;
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         s.provider.selected = "cursor".into();
     }
 
@@ -555,7 +566,7 @@ async fn t_onb_filter_003_no_credential_user_still_sees_active_warning() {
     let (cookie, _user_id) = register_admin_and_get_id(&state).await;
     seed_warnings(&state, "claude_not_authenticated", false, false).await;
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         s.provider.selected = "claude".into();
     }
 
@@ -573,7 +584,7 @@ async fn t_onb_filter_004_gh_auth_missing_dropped_when_app_configured() {
     let state = test_state_with_db();
     let (cookie, _user_id) = register_admin_and_get_id(&state).await;
     {
-        let mut cfg = state.config.write().await;
+        let mut cfg = state.config.config.write().await;
         cfg.github.app_id = 12345;
         cfg.github.app_installation_id = 67890;
         cfg.github.app_private_key = "FAKE_PEM_BODY".into();
@@ -627,7 +638,7 @@ async fn t_onb_filter_007_unauthenticated_request_returns_raw_warnings() {
     let state = test_state_with_db();
     seed_warnings(&state, "claude_not_authenticated", true, true).await;
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         s.provider.selected = "claude".into();
     }
 
@@ -650,7 +661,7 @@ async fn t_onb_filter_008_platform_warning_survives_for_fully_set_up_user() {
     seed_provider_credential(&state, &user_id, "claude").await;
     seed_github_credential(&state, &user_id).await;
     {
-        let mut cfg = state.config.write().await;
+        let mut cfg = state.config.config.write().await;
         cfg.github.app_id = 1;
         cfg.github.app_installation_id = 1;
         cfg.github.app_private_key = "FAKE".into();

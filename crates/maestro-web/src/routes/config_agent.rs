@@ -159,9 +159,9 @@ fn apply_codex_patch(target: &mut CodexProviderConfig, patch: CodexProviderPatch
 /// Steps (matches 04_architecture.md §2.3):
 /// 1. `require_admin_for` — 403 for non-admin.
 /// 2. Pre-validate `extra_args` against the deny-list before grabbing the lock.
-/// 3. Apply patch under `state.config.write().await`. Validator failure → 400.
+/// 3. Apply patch under `state.config.config.write().await`. Validator failure → 400.
 /// 4. Clone + drop the lock, then persist via `ConfigWriter::write_config`.
-/// 5. Refresh `state.system_status` from the patched config so the
+/// 5. Refresh `state.engine.system_status` from the patched config so the
 ///    dashboard's next `/api/auth/status` / `/api/onboarding/status` call
 ///    reflects the new provider / degraded state without a process restart.
 /// 6. If the active provider changed, broadcast a `provider_changed`
@@ -230,7 +230,7 @@ pub async fn put_agent_config(
 
     // Apply under write lock, then clone + release before any I/O.
     let (config_snapshot, provider_change) = {
-        let mut config = state.config.write().await;
+        let mut config = state.config.config.write().await;
         let previous_provider = config.agent.provider.as_str().to_string();
 
         if let Some(provider_str) = patch.provider {
@@ -273,7 +273,7 @@ pub async fn put_agent_config(
     };
 
     // Persist to disk OUTSIDE the lock.
-    let (persisted, persist_warning) = if let Some(ref writer) = state.config_writer {
+    let (persisted, persist_warning) = if let Some(ref writer) = state.config.config_writer {
         match writer.write_config(&config_snapshot) {
             Ok(()) => (true, None),
             Err(e) => {
@@ -288,7 +288,7 @@ pub async fn put_agent_config(
         (false, None)
     };
 
-    // Phase 1 AC-4: refresh `state.system_status` so subsequent reads of
+    // Phase 1 AC-4: refresh `state.engine.system_status` so subsequent reads of
     // `/api/onboarding/status` and the three mirrored fields on
     // `/api/auth/status` reflect the new provider / degraded state without
     // a process restart. We do this regardless of whether the disk write
@@ -297,14 +297,14 @@ pub async fn put_agent_config(
     // event we're about to broadcast.
     // Phase 2a: pass the DB through so master-key warnings (which depend on
     // boot-time key resolution, not the patched config) are re-attached.
-    let mut refreshed = collect_system_status_with_db(&config_snapshot, state.db.as_ref());
+    let mut refreshed = collect_system_status_with_db(&config_snapshot, state.auth.db.as_ref());
     // Task #37 (Phase 2c): also re-probe config-dir write-ability on the
     // refresh path. The dashboard typically triggers this branch via
     // PUT /api/config/agent, so the user just attempted a save — surfacing
     // the warning here means the next poll of /api/onboarding/status
     // immediately exposes "your save didn't persist" without waiting for a
     // restart.
-    if let Some(w) = maestro_core::docker_hooks::check_config_dir_writable(&state.config_path) {
+    if let Some(w) = maestro_core::docker_hooks::check_config_dir_writable(&state.config.config_path) {
         refreshed.warnings.push(w);
     }
     // Task #38 (Phase 2c continued): when the writer has had to fall back
@@ -314,7 +314,7 @@ pub async fn put_agent_config(
     // lifetime — emit once-set-stay-set semantics. Severity is `info`
     // (not critical) because saves SUCCEED via the fallback; this is
     // purely a "you're on the alt path" notice, not a failure.
-    if let Some(ref writer) = state.config_writer
+    if let Some(ref writer) = state.config.config_writer
         && writer
             .used_inplace_fallback()
             .load(std::sync::atomic::Ordering::Acquire)
@@ -329,7 +329,7 @@ pub async fn put_agent_config(
             ));
     }
     {
-        let mut s = state.system_status.write().await;
+        let mut s = state.engine.system_status.write().await;
         // Preserve per_user_required from the existing snapshot — it tracks
         // DB availability (set once at boot in run_server), not anything
         // collect_system_status sees from a Config alone.
@@ -342,7 +342,7 @@ pub async fn put_agent_config(
     // Phase 2 ships per-user credentials).
     if let Some((from, to)) = provider_change {
         info!(from = %from, to = %to, "Active AI provider changed via PUT /api/config/agent");
-        state.engine.broadcast_event(WorkflowEvent {
+        state.engine.engine.broadcast_event(WorkflowEvent {
             event_type: "provider_changed".to_string(),
             workflow_id: String::new(),
             ticket_key: String::new(),

@@ -66,7 +66,7 @@ pub async fn auth_status(
     // Phase 1: system_status is mutable (refreshed after PUT /api/config/agent),
     // so take a snapshot under the read lock and drop it before any other awaits.
     let (provider_selected, github_mode, degraded) = {
-        let s = state.system_status.read().await;
+        let s = state.engine.system_status.read().await;
         (
             s.provider.selected.clone(),
             s.github.mode.clone(),
@@ -78,7 +78,7 @@ pub async fn auth_status(
     // per-user credential state. The endpoint stays public (no auth gate);
     // an unauthenticated request reports `provider_credential_present:
     // false` and the rest of the fields exactly as before.
-    let provider_credential_present = if let Some(ref db) = state.db {
+    let provider_credential_present = if let Some(ref db) = state.auth.db {
         let active_provider = provider_selected.clone();
         let cookie = crate::auth::session_cookie_from_headers(&headers)
             .map(|s| s.to_string())
@@ -109,7 +109,7 @@ pub async fn auth_status(
         false
     };
 
-    if let Some(ref db) = state.db {
+    if let Some(ref db) = state.auth.db {
         let db = db.clone();
         let count = tokio::task::spawn_blocking(move || {
             let conn = db.conn().blocking_lock();
@@ -164,7 +164,7 @@ pub async fn login(
     jar: CookieJar,
     Json(body): Json<LoginBody>,
 ) -> impl IntoResponse {
-    let Some(ref db) = state.db else {
+    let Some(ref db) = state.auth.db else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Database not available").into_response();
     };
 
@@ -269,7 +269,7 @@ pub async fn login(
     }
 
     // Step 5: session rotation + create session.
-    let kick = state.config.read().await.web.kick_other_sessions_on_login;
+    let kick = state.config.config.read().await.web.kick_other_sessions_on_login;
     let db_clone = db.clone();
     let user_id = user.id.clone();
     let token = tokio::task::spawn_blocking(move || {
@@ -289,7 +289,7 @@ pub async fn login(
     };
 
     let secure = {
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         resolve_cookie_secure(&cfg.web, &headers)
     };
 
@@ -310,7 +310,7 @@ pub async fn logout(
     jar: CookieJar,
 ) -> impl IntoResponse {
     // If this is a DB session, delete the server-side session record.
-    if let Some(ref db) = state.db {
+    if let Some(ref db) = state.auth.db {
         // Extract the cookie value from the jar.
         if let Some(cookie) = jar.get(SESSION_COOKIE_NAME) {
             let cookie_val = cookie.value().to_string();
@@ -327,7 +327,7 @@ pub async fn logout(
     // session cookie it replaces — some browsers refuse to overwrite a
     // `Secure` cookie with a non-`Secure` one.
     let secure = {
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         resolve_cookie_secure(&cfg.web, &headers)
     };
 
@@ -354,10 +354,10 @@ pub async fn me(
 ) -> impl IntoResponse {
     use crate::auth::{session_cookie_from_headers, validate_db_session};
 
-    let Some(ref db) = state.db else {
+    let Some(ref db) = state.auth.db else {
         // Legacy auth — no user model, return a synthetic admin.
         return Json(serde_json::json!({
-            "username": state.config.read().await.web.dashboard_username.trim(),
+            "username": state.config.config.read().await.web.dashboard_username.trim(),
             "role": "admin",
         }))
         .into_response();
@@ -407,7 +407,7 @@ pub async fn change_password(
 ) -> impl IntoResponse {
     use crate::auth::{session_cookie_from_headers, validate_db_session};
 
-    let Some(ref db) = state.db else {
+    let Some(ref db) = state.auth.db else {
         return StatusCode::BAD_REQUEST.into_response();
     };
 
@@ -470,7 +470,7 @@ pub async fn change_password(
     match result {
         Ok(Ok((new_token, _))) => {
             let secure = {
-                let cfg = state.config.read().await;
+                let cfg = state.config.config.read().await;
                 resolve_cookie_secure(&cfg.web, &headers)
             };
             let cookie = Cookie::build((SESSION_COOKIE_NAME, new_token))
@@ -518,7 +518,7 @@ pub async fn regenerate_recovery_codes(
 ) -> impl IntoResponse {
     use crate::auth::{session_cookie_from_headers, validate_db_session};
 
-    let Some(ref db) = state.db else {
+    let Some(ref db) = state.auth.db else {
         return StatusCode::BAD_REQUEST.into_response();
     };
 
@@ -568,7 +568,7 @@ pub async fn recover(
     State(state): State<AppState>,
     Json(body): Json<RecoverBody>,
 ) -> impl IntoResponse {
-    let Some(ref db) = state.db else {
+    let Some(ref db) = state.auth.db else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Database not available"})),
@@ -744,12 +744,12 @@ struct RegisterResponse {
 /// Register the first user (admin) when the database exists but has no users.
 ///
 /// Returns **201 Created** with recovery codes on success. Only available when
-/// `state.db` is `Some` and the users table is empty.
+/// `state.auth.db` is `Some` and the users table is empty.
 pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterBody>,
 ) -> impl IntoResponse {
-    let Some(ref db) = state.db else {
+    let Some(ref db) = state.auth.db else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Database not available"})),

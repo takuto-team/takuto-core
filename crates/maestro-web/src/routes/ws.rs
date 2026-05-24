@@ -16,7 +16,7 @@ pub async fn ws_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let Some(ref db) = state.db else {
+    let Some(ref db) = state.auth.db else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
 
@@ -60,8 +60,8 @@ pub fn should_deliver_event(evt: &WorkflowEvent, viewer_user_id: &str) -> bool {
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState, viewer_user_id: String) {
-    let mut rx = state.engine.subscribe();
-    let receiver_count = state.engine.event_subscriber_count();
+    let mut rx = state.engine.engine.subscribe();
+    let receiver_count = state.engine.engine.event_subscriber_count();
     info!(
         receivers = receiver_count,
         user = %viewer_user_id,

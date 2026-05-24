@@ -55,7 +55,7 @@ pub async fn csrf_middleware(
     // explicit list when configured, or an auto-computed default derived from
     // `host`/`port` when empty.
     let allowed_origins: Vec<String> = {
-        let config = state.config.read().await;
+        let config = state.config.config.read().await;
         config.web.resolved_cors_origins()
     };
 

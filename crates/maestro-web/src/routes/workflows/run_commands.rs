@@ -42,7 +42,7 @@ pub async fn list_run_commands(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<RunCommandsStatusResponse>, (StatusCode, String)> {
-    let wf_arc = state.engine.workflows_arc();
+    let wf_arc = state.engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
@@ -54,7 +54,7 @@ pub async fn list_run_commands(
     // Per-user-per-workspace lookup (plan-09). Owner-less workflows return
     // an empty list.
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
-        match (owner_user_id.as_deref(), state.db.as_ref()) {
+        match (owner_user_id.as_deref(), state.auth.db.as_ref()) {
             (Some(uid), Some(database)) => {
                 let conn = database.conn().lock().await;
                 maestro_core::db::user_worktree_commands::get(&conn, uid, &workspace_name)
@@ -66,7 +66,7 @@ pub async fn list_run_commands(
             _ => Vec::new(),
         };
 
-    let run_cmds_state = state.run_commands.read().await;
+    let run_cmds_state = state.run_command.run_commands.read().await;
     let commands = build_run_commands_status(&configured, run_cmds_state.get(&id));
 
     Ok(Json(RunCommandsStatusResponse { commands }))
@@ -84,7 +84,7 @@ pub async fn start_run_command(
 
     // Resolve owner + workspace before opening the DB to keep the workflow
     // read-lock short.
-    let wf_arc = state.engine.workflows_arc();
+    let wf_arc = state.engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
@@ -94,7 +94,7 @@ pub async fn start_run_command(
     drop(workflows);
 
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
-        match (owner_user_id.as_deref(), state.db.as_ref()) {
+        match (owner_user_id.as_deref(), state.auth.db.as_ref()) {
             (Some(uid), Some(database)) => {
                 let conn = database.conn().lock().await;
                 maestro_core::db::user_worktree_commands::get(&conn, uid, &workspace_name)
@@ -116,7 +116,7 @@ pub async fn start_run_command(
     let rc_name = rc.name.clone();
     let rc_command = rc.command.clone();
     let dynamic_ports = {
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         cfg.editor.dynamic_ports
     };
 
@@ -151,7 +151,7 @@ pub async fn start_run_command(
 
     // Check if already running
     {
-        let run_cmds = state.run_commands.read().await;
+        let run_cmds = state.run_command.run_commands.read().await;
         if let Some(active) = run_cmds.get(&ticket_key)
             && active.iter().any(|c| c.cmd_index == index)
         {
@@ -190,7 +190,7 @@ pub async fn start_run_command(
     // detached, so the route handler's stack scope can't be the sole
     // owner of the bundle's `TempDir` lifetime.
     if let Some(ref b) = secrets_bundle {
-        let mut map = state.run_command_bundles.write().await;
+        let mut map = state.run_command.run_command_bundles.write().await;
         map.insert((ticket_key.clone(), index), b.clone());
     }
 
@@ -211,7 +211,7 @@ pub async fn start_run_command(
         let st = state.clone();
         let key = (ticket_key.clone(), index);
         tokio::spawn(async move {
-            st.run_command_bundles.write().await.remove(&key);
+            st.run_command.run_command_bundles.write().await.remove(&key);
         });
         (StatusCode::INTERNAL_SERVER_ERROR, e)
     })?;
@@ -223,9 +223,9 @@ pub async fn start_run_command(
     let scanner_cancel = cancel.clone();
     let tracker_cancel = cancel.clone();
     {
-        let mut run_cmds = state.run_commands.write().await;
+        let mut run_cmds = state.run_command.run_commands.write().await;
         let entry = run_cmds.entry(ticket_key.clone()).or_default();
-        entry.push(crate::state::RunCommandState {
+        entry.push(crate::state::ActiveRunCommand {
             cmd_index: index,
             name: rc_name.clone(),
             scanner_cancel: cancel,
@@ -234,10 +234,10 @@ pub async fn start_run_command(
     }
 
     // Start background port scanner for this run command
-    let event_tx = state.engine.event_sender();
+    let event_tx = state.engine.engine.event_sender();
     let ticket_for_scanner = ticket_key.clone();
 
-    let run_cmds_map = state.run_commands.clone();
+    let run_cmds_map = state.run_command.run_commands.clone();
     let ticket_for_tracker = ticket_key.clone();
 
     // Spawn port scanner
@@ -264,8 +264,8 @@ pub async fn start_run_command(
         reserved_token,
         proxy_base,
         run_cmds_map,
-        state.path_token_registry.clone(),
-        state.engine.subscribe(),
+        state.editor.path_token_registry.clone(),
+        state.engine.engine.subscribe(),
         tracker_cancel,
     ));
 
@@ -284,7 +284,7 @@ pub async fn stop_run_command(
     require_workflow_access(&state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    let wf_arc = state.engine.workflows_arc();
+    let wf_arc = state.engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
@@ -294,12 +294,12 @@ pub async fn stop_run_command(
 
     // Cancel scanner, deregister proxy token, and remove from state
     {
-        let mut run_cmds = state.run_commands.write().await;
+        let mut run_cmds = state.run_command.run_commands.write().await;
         if let Some(cmds) = run_cmds.get_mut(&ticket_key) {
             if let Some(pos) = cmds.iter().position(|c| c.cmd_index == index) {
                 cmds[pos].scanner_cancel.cancel();
                 if let Some(ref fwd) = cmds[pos].forwarded_port {
-                    state.path_token_registry.remove(&fwd.path_token).await;
+                    state.editor.path_token_registry.remove(&fwd.path_token).await;
                 }
                 cmds.remove(pos);
             }
@@ -315,6 +315,7 @@ pub async fn stop_run_command(
     // TempDir RAII cleanup. Done AFTER stop_run_command so the secret
     // files stay on disk for the container's final teardown read.
     state
+        .run_command
         .run_command_bundles
         .write()
         .await

@@ -26,7 +26,9 @@ use maestro_core::jira::poller::JiraPoller;
 use maestro_core::workflow::engine::WorkflowEngine;
 use maestro_core::repo_reconcile;
 use maestro_web::server::build_router;
-use maestro_web::state::AppState;
+use maestro_web::state::{
+    AppState, AuthState, ConfigState, EditorState, EngineState, RunCommandState,
+};
 
 /// Resolve the owner of poller-created workflows at startup.
 ///
@@ -1044,43 +1046,56 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // The same Arc lives on both AppState (for HTTP-handler use) and the
     // workflow engine (for driver-task use).
 
-    let app_state = AppState {
-        engine: engine.clone(),
-        config: config.clone(),
-        db,
-        polling_paused,
-        jira_available: jira_available.clone(),
-        ticketing_system,
-        editor_scanners: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
-        dynamic_forwards: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
-        terminal_ports: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
-        run_commands: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
-        preflight_error,
-        system_status: std::sync::Arc::new(tokio::sync::RwLock::new(system_status)),
-        config_path: config_path.clone(),
-        config_writer: Some(config_writer.clone()),
-        clone_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-        git_auth_resolver,
-        path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
-        // Task #42: hold per-workflow bundles alive for the lifetime of the
-        // detached editor / run-command containers. Cleared by the matching
-        // close / stop handlers and by workflow teardown.
-        editor_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
-        run_command_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
-    };
+    let app_state = AppState::new(
+        EngineState {
+            engine: engine.clone(),
+            polling_paused,
+            clone_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_status: std::sync::Arc::new(tokio::sync::RwLock::new(system_status)),
+        },
+        AuthState {
+            db,
+            gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
+            git_auth_resolver,
+        },
+        ConfigState {
+            config: config.clone(),
+            config_path: config_path.clone(),
+            config_writer: Some(config_writer.clone()),
+            ticketing_system,
+            jira_available: jira_available.clone(),
+            preflight_error,
+        },
+        EditorState {
+            editor_scanners: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            dynamic_forwards: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            terminal_ports: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            // Task #42: hold per-workflow bundles alive for the lifetime of the
+            // detached editor containers. Cleared by the matching
+            // close handlers and by workflow teardown.
+            editor_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            path_token_registry: maestro_web::session_registry::PathTokenRegistry::new(),
+        },
+        RunCommandState {
+            run_commands: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            // Task #42: hold per-workflow bundles alive for the lifetime of the
+            // detached run-command containers. Cleared by the matching
+            // stop handlers and by workflow teardown.
+            run_command_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+        },
+    );
     let app = build_router(app_state);
 
     let web_host = config.read().await.web.host.clone();

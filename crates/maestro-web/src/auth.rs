@@ -475,7 +475,7 @@ pub async fn dashboard_auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let Some(ref db) = state.db else {
+    let Some(ref db) = state.auth.db else {
         // No database — reject all protected requests.
         return StatusCode::UNAUTHORIZED.into_response();
     };

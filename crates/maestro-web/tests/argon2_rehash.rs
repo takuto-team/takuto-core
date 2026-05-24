@@ -29,7 +29,7 @@ async fn successful_login_rehashes_legacy_argon2_default_hash() {
     // params via direct SQL — simulating an old credential row.
     let _ = register_and_login(&state).await;
 
-    let db = state.db.clone().expect("test state has a db");
+    let db = state.auth.db.clone().expect("test state has a db");
     let legacy = legacy_argon2_default_hash_for_tests("testpassword1234")
         .expect("legacy argon2 hash helper");
     let legacy_clone = legacy.clone();
@@ -57,7 +57,7 @@ async fn successful_login_rehashes_legacy_argon2_default_hash() {
 
     // Confirm the row now uses legacy params.
     let stored: Vec<u8> = {
-        let db = state.db.clone().expect("db");
+        let db = state.auth.db.clone().expect("db");
         let cred_id = cred_id.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db.conn().blocking_lock();
@@ -92,7 +92,7 @@ async fn successful_login_rehashes_legacy_argon2_default_hash() {
 
     // The row should now hold a fresh, current-params hash.
     let after: Vec<u8> = {
-        let db = state.db.clone().expect("db");
+        let db = state.auth.db.clone().expect("db");
         let cred_id = cred_id.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db.conn().blocking_lock();
@@ -151,7 +151,7 @@ async fn current_param_hash_is_not_rewritten_on_login() {
     let state = test_state_with_db();
     let _ = register_and_login(&state).await;
 
-    let db = state.db.clone().expect("db");
+    let db = state.auth.db.clone().expect("db");
     let cred_id: String = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
         conn.query_row(
@@ -167,7 +167,7 @@ async fn current_param_hash_is_not_rewritten_on_login() {
     .unwrap();
 
     // Snapshot the current-params hash before login.
-    let db = state.db.clone().expect("db");
+    let db = state.auth.db.clone().expect("db");
     let cred_id_for_before = cred_id.clone();
     let before: Vec<u8> = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -196,7 +196,7 @@ async fn current_param_hash_is_not_rewritten_on_login() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let db = state.db.clone().expect("db");
+    let db = state.auth.db.clone().expect("db");
     let cred_id_for_after = cred_id.clone();
     let after: Vec<u8> = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();

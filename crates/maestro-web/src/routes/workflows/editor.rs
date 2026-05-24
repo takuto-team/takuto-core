@@ -44,8 +44,8 @@ pub async fn open_editor(
     require_workflow_access(&state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    let cfg = state.config.read().await;
-    let wf_arc = state.engine.workflows_arc();
+    let cfg = state.config.config.read().await;
+    let wf_arc = state.engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
@@ -94,11 +94,11 @@ pub async fn open_editor(
     // `/run/maestro-secrets/` points at the bundle's `TempDir`; when the
     // `Arc` count hits zero the RAII fires and the host dir gets
     // `rm -rf`'d, leaving the still-running detached container pointing
-    // at an empty directory. We clone the Arc into `state.editor_bundles`
+    // at an empty directory. We clone the Arc into `state.editor.editor_bundles`
     // here so the route-handler stack scope is no longer the sole owner.
     // Cleared in `close_editor` (and workflow teardown).
     if let Some(ref b) = secrets_bundle {
-        let mut map = state.editor_bundles.write().await;
+        let mut map = state.editor.editor_bundles.write().await;
         // Replace any prior entry (open-editor → close → open again).
         map.insert(ticket_key.clone(), b.clone());
     }
@@ -126,7 +126,7 @@ pub async fn open_editor(
         let st = state.clone();
         let tk = ticket_key.clone();
         tokio::spawn(async move {
-            st.editor_bundles.write().await.remove(&tk);
+            st.editor.editor_bundles.write().await.remove(&tk);
         });
         (StatusCode::INTERNAL_SERVER_ERROR, e)
     })?;
@@ -138,7 +138,7 @@ pub async fn open_editor(
     {
         let mut entries = Vec::new();
         for (cp, hp) in &info.port_mappings {
-            let path_token = state.path_token_registry.register(SessionRoute {
+            let path_token = state.editor.path_token_registry.register(SessionRoute {
                 kind: SessionRouteKind::DynamicPort,
                 host_port: *hp,
                 ticket_key: ticket_key.clone(),
@@ -152,7 +152,7 @@ pub async fn open_editor(
                 path_token,
             });
         }
-        let mut fwd = state.dynamic_forwards.write().await;
+        let mut fwd = state.editor.dynamic_forwards.write().await;
         fwd.insert(ticket_key.clone(), entries);
     }
 
@@ -161,14 +161,14 @@ pub async fn open_editor(
         let scanner_ticket = ticket_key.clone();
         let scanner_spare = info.spare_ports.clone();
         let scanner_vscode = info.vscode_port;
-        let scanner_event_tx = state.engine.event_sender();
+        let scanner_event_tx = state.engine.engine.event_sender();
         let scanner_cancel = tokio_util::sync::CancellationToken::new();
         let scanner_cancel_clone = scanner_cancel.clone();
 
         // Cancel any prior scanner for this ticket so we don't end up with two
         // scanners racing to grab spare ports.
         {
-            let mut scanners = state.editor_scanners.write().await;
+            let mut scanners = state.editor.editor_scanners.write().await;
             if let Some(old) = scanners.insert(ticket_key.clone(), scanner_cancel.clone()) {
                 old.cancel();
             }
@@ -191,15 +191,15 @@ pub async fn open_editor(
         // `dynamic_forwards` in sync with the port scanner's forwarded/unforwarded
         // events.  This allows the list endpoint to return current port data without
         // per-workflow Docker calls.
-        let dyn_fwd = state.dynamic_forwards.clone();
-        let rx = state.engine.subscribe();
+        let dyn_fwd = state.editor.dynamic_forwards.clone();
+        let rx = state.engine.engine.subscribe();
         let tracker_ticket = ticket_key.clone();
         let tracker_cancel = {
-            let scanners = state.editor_scanners.read().await;
+            let scanners = state.editor.editor_scanners.read().await;
             scanners.get(&ticket_key).cloned()
         };
         if let Some(cancel_tok) = tracker_cancel {
-            let registry = state.path_token_registry.clone();
+            let registry = state.editor.path_token_registry.clone();
             let tracker_user_id = auth.user_id.clone();
             tokio::spawn(track_port_forwards(tracker_ticket, tracker_user_id, dyn_fwd, registry, rx, cancel_tok));
         }
@@ -215,6 +215,7 @@ pub async fn open_editor(
     let path_token = info.path_token.clone();
     if !path_token.is_empty() {
         let _ = state
+            .editor
             .path_token_registry
             .register_with_token(
                 path_token.clone(),
@@ -263,19 +264,19 @@ pub async fn close_editor(
     // a hung connection or — worse — a successful upgrade right as the
     // backend dies. Both editor and terminal entries for this ticket are
     // removed because closing the editor implicitly tears down the terminal.
-    let _ = state.path_token_registry.remove_for_ticket(&id).await;
+    let _ = state.editor.path_token_registry.remove_for_ticket(&id).await;
     // Cancel port scanner first so it doesn't try to scan a dying container.
-    if let Some(token) = state.editor_scanners.write().await.remove(&id) {
+    if let Some(token) = state.editor.editor_scanners.write().await.remove(&id) {
         token.cancel();
     }
     // Clean up dynamic forward tracking and terminal state.
-    state.dynamic_forwards.write().await.remove(&id);
-    state.terminal_ports.write().await.remove(&id);
+    state.editor.dynamic_forwards.write().await.remove(&id);
+    state.editor.terminal_ports.write().await.remove(&id);
     // Task #42: drop the bundle Arc — last strong reference triggers the
     // TempDir RAII cleanup. Done AFTER stop_editor below so the secret
     // files stay on disk for the container's final teardown read.
     container::stop_editor(&id).await;
-    state.editor_bundles.write().await.remove(&id);
+    state.editor.editor_bundles.write().await.remove(&id);
     StatusCode::OK
 }
 
@@ -304,11 +305,12 @@ pub async fn open_terminal(
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
     // Reuse existing terminal if already recorded in the in-memory map.
-    if let Some((port, token)) = state.terminal_ports.read().await.get(&id).cloned() {
+    if let Some((port, token)) = state.editor.terminal_ports.read().await.get(&id).cloned() {
         // GH-45: re-use the existing path token if one is already registered
         // for this terminal; otherwise register one now (covers the case of a
         // terminal that was started before the proxy registry shipped).
         let path_token = match state
+            .editor
             .path_token_registry
             .find_token_for(&id, SessionRouteKind::Terminal)
             .await
@@ -316,6 +318,7 @@ pub async fn open_terminal(
             Some(t) => t,
             None => {
                 state
+                    .editor
                     .path_token_registry
                     .register(SessionRoute {
                         kind: SessionRouteKind::Terminal,
@@ -344,11 +347,13 @@ pub async fn open_terminal(
     // Ask the container for the actual port and token (via pgrep) rather than trusting the now-empty map.
     if let Some((port, token)) = container::find_running_terminal(&id).await {
         state
+            .editor
             .terminal_ports
             .write()
             .await
             .insert(id.clone(), (port, token.clone()));
         let path_token = state
+            .editor
             .path_token_registry
             .register(SessionRoute {
                 kind: SessionRouteKind::Terminal,
@@ -377,6 +382,7 @@ pub async fn open_terminal(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     state
+        .editor
         .terminal_ports
         .write()
         .await
@@ -385,6 +391,7 @@ pub async fn open_terminal(
     // GH-45: register a fresh CSPRNG path token so the terminal is reachable
     // only via `/s/<path-token>/<ttyd-token>/` on the dashboard origin.
     let path_token = state
+        .editor
         .path_token_registry
         .register(SessionRoute {
             kind: SessionRouteKind::Terminal,
@@ -419,10 +426,11 @@ pub async fn close_terminal(
     // ticket are intentionally left alone so closing the terminal doesn't
     // also break the editor.
     let _ = state
+        .editor
         .path_token_registry
         .remove_for_ticket_kind(&id, SessionRouteKind::Terminal)
         .await;
-    state.terminal_ports.write().await.remove(&id);
+    state.editor.terminal_ports.write().await.remove(&id);
     container::stop_terminal(&id).await;
     StatusCode::OK
 }

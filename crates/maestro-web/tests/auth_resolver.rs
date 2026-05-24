@@ -25,7 +25,7 @@ async fn appstate_resolver_mode_a_clone_picks_app() {
     let state = maestro_web::test_helpers::test_state_with_db();
     // test_state_with_db wires the resolver with no App. Build a fresh
     // resolver with a fake App attached to surface Mode A behaviour.
-    let db = state.db.as_ref().expect("db").clone();
+    let db = state.auth.db.as_ref().expect("db").clone();
     let app = Some(Arc::new(
         maestro_core::github_app::GitHubAppTokenManager::for_tests(7, 9),
     ));
@@ -69,7 +69,7 @@ async fn appstate_resolver_mode_a_clone_picks_app() {
 #[tokio::test]
 async fn appstate_resolver_mode_b_push_with_attribution_picks_user_pat() {
     let state = maestro_web::test_helpers::test_state_with_db();
-    let db = state.db.as_ref().expect("db").clone();
+    let db = state.auth.db.as_ref().expect("db").clone();
     let app = Some(Arc::new(
         maestro_core::github_app::GitHubAppTokenManager::for_tests(7, 9),
     ));
@@ -104,7 +104,7 @@ async fn appstate_resolver_mode_b_push_with_attribution_picks_user_pat() {
 #[tokio::test]
 async fn appstate_resolver_mode_b_push_without_attribution_picks_app() {
     let state = maestro_web::test_helpers::test_state_with_db();
-    let db = state.db.as_ref().expect("db").clone();
+    let db = state.auth.db.as_ref().expect("db").clone();
     let app = Some(Arc::new(
         maestro_core::github_app::GitHubAppTokenManager::for_tests(11, 22),
     ));
@@ -127,7 +127,7 @@ async fn appstate_resolver_mode_b_push_without_attribution_picks_app() {
 #[tokio::test]
 async fn appstate_resolver_mode_c_every_action_uses_user_pat() {
     let state = maestro_web::test_helpers::test_state_with_db();
-    let db = state.db.as_ref().expect("db").clone();
+    let db = state.auth.db.as_ref().expect("db").clone();
     // No App configured — pass None to surface Mode C.
     let resolver = GitAuthResolver::new(db.clone(), None);
 
@@ -168,7 +168,7 @@ async fn appstate_resolver_mode_c_every_action_uses_user_pat() {
 #[tokio::test]
 async fn appstate_resolver_missing_every_action_errors_unauthenticated() {
     let state = maestro_web::test_helpers::test_state_with_db();
-    let db = state.db.as_ref().expect("db").clone();
+    let db = state.auth.db.as_ref().expect("db").clone();
     let resolver = GitAuthResolver::new(db.clone(), None);
 
     seed_user(&db, "u-missing").await;
@@ -204,7 +204,7 @@ async fn appstate_resolver_missing_every_action_errors_unauthenticated() {
 async fn appstate_git_auth_resolver_is_wired_when_db_present() {
     let state = maestro_web::test_helpers::test_state_with_db();
     assert!(
-        state.git_auth_resolver.is_some(),
+        state.auth.git_auth_resolver.is_some(),
         "test_state_with_db must wire a resolver (db is Some)"
     );
 }

@@ -228,6 +228,7 @@ fn require_master_key(
     state: &AppState,
 ) -> Result<std::sync::Arc<maestro_core::auth::MasterKey>, (StatusCode, Json<serde_json::Value>)> {
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
@@ -248,13 +249,14 @@ pub async fn get_my_credentials(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<UserCredentialsStatus>, (StatusCode, Json<serde_json::Value>)> {
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
         .clone();
 
     let active_provider = {
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         cfg.agent.provider.as_str().to_string()
     };
     let user_id = auth.user_id.clone();
@@ -384,6 +386,7 @@ pub async fn post_provider_credential(
 
     let master = require_master_key(&state)?;
     let db = state
+        .auth
         .db
         .as_ref()
         .expect("db checked in require_master_key")
@@ -524,6 +527,7 @@ pub async fn delete_provider_credential(
         Some(_) => return Err(err(StatusCode::BAD_REQUEST, "unknown_kind")),
     };
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
@@ -587,6 +591,7 @@ pub async fn post_github_pat(
     }
     let master = require_master_key(&state)?;
     let db = state
+        .auth
         .db
         .as_ref()
         .expect("db checked in require_master_key")
@@ -596,7 +601,7 @@ pub async fn post_github_pat(
     // the SSO check is a no-op until Phase 2b.2 wires it to [git].repo_path.
     let orgs: Vec<String> = Vec::new();
 
-    let validated = match validate_pat(state.gh_client.as_ref(), &body.pat, &orgs).await {
+    let validated = match validate_pat(state.auth.gh_client.as_ref(), &body.pat, &orgs).await {
         Ok(v) => v,
         Err(e) => {
             let code = e.code();
@@ -710,6 +715,7 @@ pub async fn delete_github_pat(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
@@ -754,6 +760,7 @@ pub async fn patch_github_attribution(
     Json(body): Json<PatchGithubBody>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
@@ -806,6 +813,7 @@ pub async fn get_admin_github_status(
         .await
         .map_err(|s| err(s, "forbidden"))?;
     let db = state
+        .auth
         .db
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?

@@ -30,6 +30,7 @@ pub async fn pause_workflow(
         .map_err(|s| (s, "Workflow not found".into()))?;
     state
         .engine
+        .engine
         .pause_workflow(&id)
         .await
         .map(|()| StatusCode::OK)
@@ -48,6 +49,7 @@ pub async fn resume_workflow(
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
     state
+        .engine
         .engine
         .resume_workflow(&id)
         .await
@@ -69,6 +71,7 @@ pub async fn resume_from_error(
 
     state
         .engine
+        .engine
         .resume_from_error(&id)
         .await
         .map(|()| StatusCode::OK)
@@ -87,6 +90,7 @@ pub async fn retry_workflow(
     cleanup_run_commands(&state, &id).await;
 
     state
+        .engine
         .engine
         .retry_workflow(&id)
         .await
@@ -117,14 +121,15 @@ pub async fn stop_workflow(
     // firing, the editor_bundles entry can leak; clean it up
     // defensively. Same for run_command_bundles.
     {
-        let mut eb = state.editor_bundles.write().await;
+        let mut eb = state.editor.editor_bundles.write().await;
         eb.remove(&id);
     }
     {
-        let mut rcb = state.run_command_bundles.write().await;
+        let mut rcb = state.run_command.run_command_bundles.write().await;
         rcb.retain(|(tk, _idx), _| tk != &id);
     }
     state
+        .engine
         .engine
         .stop_workflow(&id)
         .await
@@ -145,6 +150,7 @@ pub async fn mark_work_done(
 
     state
         .engine
+        .engine
         .mark_work_done(&id)
         .await
         .map(Json)
@@ -164,6 +170,7 @@ pub async fn delete_workflow(
 
     state
         .engine
+        .engine
         .delete_workflow(&id)
         .await
         .map(|()| StatusCode::OK)
@@ -172,7 +179,7 @@ pub async fn delete_workflow(
 
 /// Stop all run commands and clean up state for a workflow.
 pub(super) async fn cleanup_run_commands(state: &AppState, ticket_key: &str) {
-    let mut run_cmds = state.run_commands.write().await;
+    let mut run_cmds = state.run_command.run_commands.write().await;
     if let Some(cmds) = run_cmds.remove(ticket_key) {
         for cmd in &cmds {
             cmd.scanner_cancel.cancel();
@@ -183,10 +190,10 @@ pub(super) async fn cleanup_run_commands(state: &AppState, ticket_key: &str) {
         // Each entry's last strong reference here fires the bundle's
         // TempDir RAII cleanup. Done AFTER the container stop so the
         // mounted secret files survive the container's last read.
-        let mut bundles = state.run_command_bundles.write().await;
+        let mut bundles = state.run_command.run_command_bundles.write().await;
         bundles.retain(|(tk, _idx), _| tk != ticket_key);
     }
     // Task #42: also drop the editor bundle for this ticket — delete /
     // mark-done tear down both the editor and all run-commands at once.
-    state.editor_bundles.write().await.remove(ticket_key);
+    state.editor.editor_bundles.write().await.remove(ticket_key);
 }

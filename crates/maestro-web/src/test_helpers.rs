@@ -21,7 +21,7 @@ use maestro_core::db::Database;
 use maestro_core::workflow::engine::WorkflowEngine;
 
 use crate::server::build_router;
-use crate::state::AppState;
+use crate::state::{AppState, AuthState, ConfigState, EditorState, EngineState, RunCommandState};
 
 /// Create a fresh [`Database`] backed by a unique temp directory.
 ///
@@ -66,28 +66,40 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
     let git_auth_resolver = Some(Arc::new(
         maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
     ));
-    AppState {
-        engine,
-        config,
-        db: Some(db),
-        polling_paused: Arc::new(AtomicBool::new(false)),
-        jira_available,
-        ticketing_system: TicketingSystem::None,
-        editor_scanners: Arc::new(RwLock::new(HashMap::new())),
-        dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
-        terminal_ports: Arc::new(RwLock::new(HashMap::new())),
-        run_commands: Arc::new(RwLock::new(HashMap::new())),
-        preflight_error: None,
-        system_status: std::sync::Arc::new(tokio::sync::RwLock::new(maestro_core::docker_hooks::SystemStatus::default())),
-        config_path: std::env::temp_dir().join("config.toml"),
-        config_writer: None,
-        clone_in_progress: Arc::new(AtomicBool::new(false)),
-        gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
-        git_auth_resolver,
-        path_token_registry: crate::session_registry::PathTokenRegistry::new(),
-        editor_bundles: Arc::new(RwLock::new(HashMap::new())),
-        run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
-    }
+    AppState::new(
+        EngineState {
+            engine,
+            polling_paused: Arc::new(AtomicBool::new(false)),
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
+            system_status: Arc::new(RwLock::new(
+                maestro_core::docker_hooks::SystemStatus::default(),
+            )),
+        },
+        AuthState {
+            db: Some(db),
+            gh_client: Arc::new(maestro_core::auth::RealGhClient::new()),
+            git_auth_resolver,
+        },
+        ConfigState {
+            config,
+            config_path: std::env::temp_dir().join("config.toml"),
+            config_writer: None,
+            ticketing_system: TicketingSystem::None,
+            jira_available,
+            preflight_error: None,
+        },
+        EditorState {
+            editor_scanners: Arc::new(RwLock::new(HashMap::new())),
+            dynamic_forwards: Arc::new(RwLock::new(HashMap::new())),
+            terminal_ports: Arc::new(RwLock::new(HashMap::new())),
+            editor_bundles: Arc::new(RwLock::new(HashMap::new())),
+            path_token_registry: crate::session_registry::PathTokenRegistry::new(),
+        },
+        RunCommandState {
+            run_commands: Arc::new(RwLock::new(HashMap::new())),
+            run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
+        },
+    )
 }
 
 /// Origin header to attach to mutating requests in tests. Matches the

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use axum::extract::FromRef;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -35,7 +36,7 @@ pub type DynamicForwardsMap = Arc<RwLock<HashMap<String, Vec<DynamicPortForward>
 
 /// State for a single active run command.
 #[derive(Debug, Clone)]
-pub struct RunCommandState {
+pub struct ActiveRunCommand {
     /// Index of the command in the `[[run_commands]]` config array.
     pub cmd_index: usize,
     /// Name from config.
@@ -46,36 +47,26 @@ pub struct RunCommandState {
     pub forwarded_port: Option<DynamicPortForward>,
 }
 
-/// Map of active run commands: `ticket_key → vec of RunCommandState`.
-pub type RunCommandsMap = Arc<RwLock<HashMap<String, Vec<RunCommandState>>>>;
+/// Map of active run commands: `ticket_key → vec of ActiveRunCommand`.
+pub type RunCommandsMap = Arc<RwLock<HashMap<String, Vec<ActiveRunCommand>>>>;
 
+/// Task #42: type alias for [`RunCommandState::run_command_bundles`]. Aliased
+/// so the nested generic stays under clippy's `type_complexity` cap.
+pub type RunCommandBundlesMap =
+    Arc<RwLock<HashMap<(String, usize), Arc<maestro_core::auth::WorkerSecretsBundle>>>>;
+
+/// Live mutable handles for long-running background work: the workflow engine,
+/// the two `AtomicBool` gates (poller pause, in-flight repo clone), and the
+/// integration health snapshot that `PUT /api/config/agent` mutates at runtime.
 #[derive(Clone)]
-pub struct AppState {
+pub struct EngineState {
+    /// The workflow engine driving every workflow task.
     pub engine: Arc<WorkflowEngine>,
-    pub config: Arc<RwLock<Config>>,
-    /// SQLite database for multi-user authentication and access control.
-    /// `None` when the database has not been initialized (e.g., during tests that don't need it).
-    pub db: Option<maestro_core::db::Database>,
     /// Shared with `JiraPoller`: when `true`, poller skips `poll_once` (dashboard pause/resume or
     /// `[general] auto_polling = false` in `config.toml` at startup).
     pub polling_paused: Arc<AtomicBool>,
-    /// `true` when acli (Atlassian CLI) passed preflight authentication.
-    /// When `false`: no Jira polling, no Jira operations in workflows, manual description entry only.
-    pub jira_available: Arc<AtomicBool>,
-    /// Ticketing system configured at startup (read-only, from `[general] ticketing_system`).
-    pub ticketing_system: TicketingSystem,
-    /// Cancellation tokens for background port scanners, keyed by ticket_key.
-    pub editor_scanners: Arc<RwLock<HashMap<String, CancellationToken>>>,
-    /// Active dynamic port forwards per editor, keyed by ticket_key: `(detected_port, host_port)`.
-    pub dynamic_forwards: DynamicForwardsMap,
-    /// Spare port and auth token allocated for ttyd web terminal per editor, keyed by ticket_key.
-    pub terminal_ports: Arc<RwLock<HashMap<String, (u16, String)>>>,
-    /// Active run command processes, keyed by ticket_key.
-    pub run_commands: RunCommandsMap,
-    /// **Deprecated (Phase 0).** Non-empty when preflight failed at startup
-    /// (e.g. `gh` not authenticated). Kept for one release as a fallback when
-    /// the DB is unavailable; the UI should read [`system_status`] instead.
-    pub preflight_error: Option<String>,
+    /// `true` while an async `POST /api/repos/clone` operation is in progress.
+    pub clone_in_progress: Arc<AtomicBool>,
     /// Structured auth + integration snapshot (Phase 0). Served by
     /// `GET /api/onboarding/status` and mirrored as three fields into
     /// `GET /api/auth/status`.
@@ -86,13 +77,16 @@ pub struct AppState {
     /// `onboarding_status` reflect the new provider / degraded state without
     /// requiring a process restart (Phase 1 AC-4).
     pub system_status: Arc<RwLock<maestro_core::docker_hooks::SystemStatus>>,
-    /// Path to the config file on disk (for reload and persistence operations).
-    pub config_path: PathBuf,
-    /// Writer for atomic config persistence. `None` when the config file is not
-    /// writable (e.g., the path is not set or the filesystem is read-only).
-    pub config_writer: Option<Arc<ConfigWriter>>,
-    /// `true` while an async `POST /api/repos/clone` operation is in progress.
-    pub clone_in_progress: Arc<AtomicBool>,
+}
+
+/// The DB plus the two GitHub-auth shims. Every protected route's middleware
+/// reads `db`; `gh_client` and `git_auth_resolver` are read by PAT/credentials
+/// handlers.
+#[derive(Clone)]
+pub struct AuthState {
+    /// SQLite database for multi-user authentication and access control.
+    /// `None` when the database has not been initialized (e.g., during tests that don't need it).
+    pub db: Option<maestro_core::db::Database>,
     /// Phase 2b.1: injectable shim around the `gh` CLI for per-user PAT
     /// validation. Production uses [`maestro_core::auth::RealGhClient`];
     /// tests inject a `MockGhClient` so the suite never touches github.com.
@@ -106,13 +100,42 @@ pub struct AppState {
     /// `Some(resolver)`. Test fixtures with no DB use `None` and the
     /// per-route helpers fall back to the legacy App-only token path.
     pub git_auth_resolver: Option<Arc<maestro_core::github::auth_resolver::GitAuthResolver>>,
-    /// Registry of unguessable session path tokens (GH-45 shared-port proxy).
-    /// Maps `{path-token} → SessionRoute` so `/s/{token}/...` requests can be
-    /// dispatched to the right loopback backend (editor or terminal). The
-    /// `routes::sessions::proxy_session` handler reads from this registry on
-    /// every incoming request, and the workflow `open_*` / `close_*` handlers
-    /// register/deregister entries as session containers come and go.
-    pub path_token_registry: PathTokenRegistry,
+}
+
+/// The live `Config` plus how to persist it plus boot-time integration flags
+/// read out of `[general]` plus the Phase-0 deprecated preflight string.
+#[derive(Clone)]
+pub struct ConfigState {
+    /// The live in-memory configuration (hot-swappable via `ConfigWatcher`).
+    pub config: Arc<RwLock<Config>>,
+    /// Path to the config file on disk (for reload and persistence operations).
+    pub config_path: PathBuf,
+    /// Writer for atomic config persistence. `None` when the config file is not
+    /// writable (e.g., the path is not set or the filesystem is read-only).
+    pub config_writer: Option<Arc<ConfigWriter>>,
+    /// Ticketing system configured at startup (read-only, from `[general] ticketing_system`).
+    pub ticketing_system: TicketingSystem,
+    /// `true` when acli (Atlassian CLI) passed preflight authentication.
+    /// When `false`: no Jira polling, no Jira operations in workflows, manual description entry only.
+    pub jira_available: Arc<AtomicBool>,
+    /// **Deprecated (Phase 0).** Non-empty when preflight failed at startup
+    /// (e.g. `gh` not authenticated). Kept for one release as a fallback when
+    /// the DB is unavailable; the UI should read `system_status` instead.
+    pub preflight_error: Option<String>,
+}
+
+/// Editor session container state — all 5 are keyed by `ticket_key` and
+/// registered/cleared by the same lifecycle (open editor / close editor).
+/// `path_token_registry` belongs here because `sessions::proxy_session`
+/// resolves the token → editor backend on every `/s/{token}/…` request.
+#[derive(Clone)]
+pub struct EditorState {
+    /// Cancellation tokens for background port scanners, keyed by ticket_key.
+    pub editor_scanners: Arc<RwLock<HashMap<String, CancellationToken>>>,
+    /// Active dynamic port forwards per editor, keyed by ticket_key: `(detected_port, host_port)`.
+    pub dynamic_forwards: DynamicForwardsMap,
+    /// Spare port and auth token allocated for ttyd web terminal per editor, keyed by ticket_key.
+    pub terminal_ports: Arc<RwLock<HashMap<String, (u16, String)>>>,
     /// Task #42: keep the editor's `WorkerSecretsBundle` alive for the
     /// container's lifetime so the bind-mounted `/run/maestro-secrets/`
     /// stays populated. Without this map the `Arc` returned by
@@ -125,6 +148,22 @@ pub struct AppState {
     /// `close_editor`, `delete_workflow`, and `mark_done`.
     pub editor_bundles:
         Arc<RwLock<HashMap<String, Arc<maestro_core::auth::WorkerSecretsBundle>>>>,
+    /// Registry of unguessable session path tokens (GH-45 shared-port proxy).
+    /// Maps `{path-token} → SessionRoute` so `/s/{token}/...` requests can be
+    /// dispatched to the right loopback backend (editor or terminal). The
+    /// `routes::sessions::proxy_session` handler reads from this registry on
+    /// every incoming request, and the workflow `open_*` / `close_*` handlers
+    /// register/deregister entries as session containers come and go.
+    pub path_token_registry: PathTokenRegistry,
+}
+
+/// Run-command companion to [`EditorState`]. Two fields are intentional —
+/// adding a third (e.g. a future `run_command_scanners` map) is the natural
+/// extension point.
+#[derive(Clone)]
+pub struct RunCommandState {
+    /// Active run command processes, keyed by ticket_key.
+    pub run_commands: RunCommandsMap,
     /// Task #42: keep run-command bundles alive for the lifetime of each
     /// detached run-command container. Keyed by `(ticket_key, cmd_index)`
     /// since a workflow can have multiple concurrent run-commands. Cleared
@@ -132,7 +171,66 @@ pub struct AppState {
     pub run_command_bundles: RunCommandBundlesMap,
 }
 
-/// Task #42: type alias for [`AppState::run_command_bundles`]. Aliased so
-/// the nested generic stays under clippy's `type_complexity` cap.
-pub type RunCommandBundlesMap =
-    Arc<RwLock<HashMap<(String, usize), Arc<maestro_core::auth::WorkerSecretsBundle>>>>;
+/// Top-level application state — composed of 5 focused sub-structs so route
+/// handlers extract only the slice they read via Axum's `FromRef`.
+///
+/// Construct via [`AppState::new`]; the 5 composition fields are
+/// `pub(crate)` so handlers in this crate can name them when migrating, but
+/// no struct-literal construction is possible from outside the crate.
+#[derive(Clone)]
+pub struct AppState {
+    pub engine: EngineState,
+    pub auth: AuthState,
+    pub config: ConfigState,
+    pub editor: EditorState,
+    pub run_command: RunCommandState,
+}
+
+impl AppState {
+    /// Compose an [`AppState`] from its 5 sub-states.
+    pub fn new(
+        engine: EngineState,
+        auth: AuthState,
+        config: ConfigState,
+        editor: EditorState,
+        run_command: RunCommandState,
+    ) -> Self {
+        Self {
+            engine,
+            auth,
+            config,
+            editor,
+            run_command,
+        }
+    }
+}
+
+impl FromRef<AppState> for EngineState {
+    fn from_ref(state: &AppState) -> Self {
+        state.engine.clone()
+    }
+}
+
+impl FromRef<AppState> for AuthState {
+    fn from_ref(state: &AppState) -> Self {
+        state.auth.clone()
+    }
+}
+
+impl FromRef<AppState> for ConfigState {
+    fn from_ref(state: &AppState) -> Self {
+        state.config.clone()
+    }
+}
+
+impl FromRef<AppState> for EditorState {
+    fn from_ref(state: &AppState) -> Self {
+        state.editor.clone()
+    }
+}
+
+impl FromRef<AppState> for RunCommandState {
+    fn from_ref(state: &AppState) -> Self {
+        state.run_command.clone()
+    }
+}

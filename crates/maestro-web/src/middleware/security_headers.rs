@@ -113,7 +113,7 @@ async fn resolve_https_context(state: &AppState, xfp_is_https: bool) -> bool {
     if xfp_is_https {
         return true;
     }
-    let config = state.config.read().await;
+    let config = state.config.config.read().await;
     config
         .web
         .cors_origins

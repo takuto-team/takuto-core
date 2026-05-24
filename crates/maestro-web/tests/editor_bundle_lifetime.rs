@@ -8,7 +8,7 @@
 // The user's editor terminal showed `/run/maestro-secrets/` was empty
 // (`total 4`, only `.` and `..`) because the bundle's `TempDir` was
 // dropping after the `start_editor` route returned. The fix stashes the
-// bundle's `Arc` into `state.editor_bundles` (and `state.run_command_bundles`
+// bundle's `Arc` into `state.editor.editor_bundles` (and `state.run_command.run_command_bundles`
 // for run-command containers) so the host-side directory survives until
 // the matching close/stop handler removes the entry.
 //
@@ -44,17 +44,17 @@ async fn t_freshly_constructed_appstate_has_empty_bundle_maps() {
     // `TempDir` whose host path no longer exists.
     let state = test_state_with_db();
     assert!(
-        state.editor_bundles.read().await.is_empty(),
+        state.editor.editor_bundles.read().await.is_empty(),
         "freshly constructed AppState must have an empty editor_bundles map"
     );
     assert!(
-        state.run_command_bundles.read().await.is_empty(),
+        state.run_command.run_command_bundles.read().await.is_empty(),
         "freshly constructed AppState must have an empty run_command_bundles map"
     );
 }
 
 /// End-to-end TempDir lifecycle: construct a real bundle, stash its Arc
-/// in `state.editor_bundles`, drop the original clone (simulating the
+/// in `state.editor.editor_bundles`, drop the original clone (simulating the
 /// route handler's stack scope going out of scope), and assert the
 /// host-side `TempDir` is still on disk. Then remove the map entry and
 /// assert the TempDir is gone.
@@ -74,12 +74,12 @@ async fn t_editor_bundle_temp_dir_outlives_route_handler_scope() {
     // doesn't insist on a user credential. We're testing lifecycle, not
     // credential resolution.
     {
-        let mut cfg = state.config.write().await;
+        let mut cfg = state.config.config.write().await;
         cfg.agent.providers.claude.allow_shared_default = true;
     }
     // Seed a user so `validate_db_session` / `find_active_with_kind` don't
     // panic on a missing user row.
-    let db = state.db.clone().expect("test DB");
+    let db = state.auth.db.clone().expect("test DB");
     let user_id = "u-task-42";
     tokio::task::spawn_blocking({
         let db = db.clone();
@@ -98,15 +98,16 @@ async fn t_editor_bundle_temp_dir_outlives_route_handler_scope() {
 
     // Mirror what `build_editor_or_run_command_bundle` does for an
     // editor-open path with no pin (no auth_pin in test).
-    let cfg_snapshot = state.config.read().await.clone();
+    let cfg_snapshot = state.config.config.read().await.clone();
     let resolver = state
+        .auth
         .git_auth_resolver
         .as_ref()
         .expect("test helper installs a resolver")
         .clone();
     let bundle = maestro_core::auth::bundle::build_for_endpoint(
         &cfg_snapshot,
-        state.db.as_ref().unwrap(),
+        state.auth.db.as_ref().unwrap(),
         &resolver,
         user_id,
     )
@@ -122,7 +123,7 @@ async fn t_editor_bundle_temp_dir_outlives_route_handler_scope() {
     // Stash a clone the way `start_editor` does.
     let ticket = "task-42-ticket".to_string();
     {
-        let mut map = state.editor_bundles.write().await;
+        let mut map = state.editor.editor_bundles.write().await;
         map.insert(ticket.clone(), bundle_arc.clone());
     }
 
@@ -136,7 +137,7 @@ async fn t_editor_bundle_temp_dir_outlives_route_handler_scope() {
     );
 
     // Simulate close_editor: remove the map entry.
-    let removed = state.editor_bundles.write().await.remove(&ticket);
+    let removed = state.editor.editor_bundles.write().await.remove(&ticket);
     assert!(removed.is_some(), "map entry must be present before close");
     drop(removed);
 
@@ -154,10 +155,10 @@ async fn t_editor_bundle_temp_dir_outlives_route_handler_scope() {
 async fn t_run_command_bundle_map_is_keyed_by_ticket_and_index() {
     let state = test_state_with_db();
     {
-        let mut cfg = state.config.write().await;
+        let mut cfg = state.config.config.write().await;
         cfg.agent.providers.claude.allow_shared_default = true;
     }
-    let db = state.db.clone().expect("test DB");
+    let db = state.auth.db.clone().expect("test DB");
     let user_id = "u-task-42b";
     tokio::task::spawn_blocking({
         let db = db.clone();
@@ -175,12 +176,12 @@ async fn t_run_command_bundle_map_is_keyed_by_ticket_and_index() {
     .unwrap();
 
     // Build two distinct bundles (one for cmd_index 0, one for cmd_index 1).
-    let cfg_snapshot = state.config.read().await.clone();
-    let resolver = state.git_auth_resolver.as_ref().unwrap().clone();
+    let cfg_snapshot = state.config.config.read().await.clone();
+    let resolver = state.auth.git_auth_resolver.as_ref().unwrap().clone();
     let mk_bundle = || async {
         let b = maestro_core::auth::bundle::build_for_endpoint(
             &cfg_snapshot,
-            state.db.as_ref().unwrap(),
+            state.auth.db.as_ref().unwrap(),
             &resolver,
             user_id,
         )
@@ -196,7 +197,7 @@ async fn t_run_command_bundle_map_is_keyed_by_ticket_and_index() {
 
     let ticket = "task-42b-ticket".to_string();
     {
-        let mut map = state.run_command_bundles.write().await;
+        let mut map = state.run_command.run_command_bundles.write().await;
         map.insert((ticket.clone(), 0), a.clone());
         map.insert((ticket.clone(), 1), b.clone());
     }
@@ -209,6 +210,7 @@ async fn t_run_command_bundle_map_is_keyed_by_ticket_and_index() {
 
     // Remove just cmd_index 0 — the other must survive.
     state
+        .run_command
         .run_command_bundles
         .write()
         .await
@@ -218,6 +220,7 @@ async fn t_run_command_bundle_map_is_keyed_by_ticket_and_index() {
 
     // Workflow teardown wipes everything for this ticket.
     state
+        .run_command
         .run_command_bundles
         .write()
         .await

@@ -41,6 +41,7 @@ pub async fn list_github_repos(
 
     let gh_token = state
         .engine
+        .engine
         .actions()
         .get_gh_installation_token(workspaces)
         .await;
@@ -240,7 +241,7 @@ pub(crate) async fn do_clone(
     use maestro_core::github::auth_resolver::GitAction;
 
     // 1. Prefer the resolver path when both a user_id and a resolver exist.
-    let gh_token = match (user_id, state.git_auth_resolver.as_ref()) {
+    let gh_token = match (user_id, state.auth.git_auth_resolver.as_ref()) {
         (Some(uid), Some(resolver)) => match resolver.token_for(GitAction::Clone, uid).await {
             Ok(tok) => Some(tok.bearer.expose().to_string()),
             // Resolver returned UnauthenticatedGit (Mode Missing) — surface
@@ -255,6 +256,7 @@ pub(crate) async fn do_clone(
         // 2. Legacy path: ask the App directly via the existing actions trait.
         //    Mode `db: None` tests and pre-Phase-2b.2 poller calls go through here.
         _ => state
+            .engine
             .engine
             .actions()
             .get_gh_installation_token(token_cwd)

@@ -101,7 +101,7 @@ async fn seed_workflow(state: &AppState, key: &str, user_id: &str) {
     );
     wf.user_id = Some(user_id.to_string());
     let repository_id = {
-        let db = state.db.as_ref().expect("test state must have a DB").clone();
+        let db = state.auth.db.as_ref().expect("test state must have a DB").clone();
         let user_id_owned = user_id.to_string();
         let workspace_owned = workspace.clone();
         tokio::task::spawn_blocking(move || {
@@ -129,6 +129,7 @@ async fn seed_workflow(state: &AppState, key: &str, user_id: &str) {
     wf.repository_id = Some(repository_id);
     state
         .engine
+        .engine
         .workflows_arc()
         .write()
         .await
@@ -138,7 +139,7 @@ async fn seed_workflow(state: &AppState, key: &str, user_id: &str) {
 /// Look up `user_id` from the database by username — needed so the seeded
 /// workflow's `user_id` matches the cookie-derived auth user_id.
 async fn user_id_for(state: &AppState, username: &str) -> String {
-    let db = state.db.clone().expect("test state must have a DB");
+    let db = state.auth.db.clone().expect("test state must have a DB");
     let username = username.to_string();
     tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();

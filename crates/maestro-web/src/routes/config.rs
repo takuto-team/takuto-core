@@ -53,7 +53,7 @@ pub async fn get_version() -> Json<serde_json::Value> {
 pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     // Clone needed values and release the read lock before any filesystem I/O.
     let (config_clone, active_repo_path_str, github_configured, app_name_raw) = {
-        let config = state.config.read().await;
+        let config = state.config.config.read().await;
         let path = config.git.repo_path.clone();
         let gh_configured = config.github.is_configured();
         let app_name = if gh_configured && !config.github.app_name.is_empty() {
@@ -87,10 +87,10 @@ pub async fn get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     Json(ConfigResponse {
         github_app_configured: github_configured,
         config: config_clone,
-        jira_available: state.jira_available.load(Ordering::Relaxed),
-        ticketing_system: state.ticketing_system.to_string(),
-        preflight_error: state.preflight_error.clone(),
-        config_writable: state.config_writer.is_some(),
+        jira_available: state.config.jira_available.load(Ordering::Relaxed),
+        ticketing_system: state.config.ticketing_system.to_string(),
+        preflight_error: state.config.preflight_error.clone(),
+        config_writable: state.config.config_writer.is_some(),
         repo_exists,
         repo_name,
         repo_html_url,
@@ -123,7 +123,7 @@ pub async fn update_config(
         .map_err(|s| (s, String::new()))?;
     // Apply patch under write lock, then clone and release.
     let config_snapshot = {
-        let mut config = state.config.write().await;
+        let mut config = state.config.config.write().await;
         config
             .apply_runtime_dashboard_patch(patch)
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -132,7 +132,7 @@ pub async fn update_config(
 
     // Persist to disk OUTSIDE the lock — blocking I/O no longer holds the
     // write guard, so concurrent readers are not stalled.
-    let (persisted, persist_warning) = if let Some(ref writer) = state.config_writer {
+    let (persisted, persist_warning) = if let Some(ref writer) = state.config.config_writer {
         match writer.write_config(&config_snapshot) {
             Ok(()) => (true, None),
             Err(e) => {
@@ -165,7 +165,7 @@ pub async fn reload_config(
     require_admin_for(&state, &auth)
         .await
         .map_err(|s| (s, String::new()))?;
-    reload_config_from_disk(&state.config_path, &state.config)
+    reload_config_from_disk(&state.config.config_path, &state.config.config)
         .await
         .map_err(|e| {
             (
@@ -174,7 +174,7 @@ pub async fn reload_config(
             )
         })?;
 
-    let config = state.config.read().await;
+    let config = state.config.config.read().await;
     Ok(Json(config.redacted_for_api_clone()))
 }
 
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(json["general"]["max_concurrent_workflows"], 5);
 
         // Verify it's also updated in the in-memory config.
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         assert_eq!(cfg.general.max_concurrent_workflows, 5);
     }
 
@@ -302,7 +302,7 @@ mod tests {
         // Set a legacy dashboard password in the in-memory config so the test
         // can verify it is preserved when an empty string is sent.
         {
-            let mut cfg = state.config.write().await;
+            let mut cfg = state.config.config.write().await;
             cfg.web.dashboard_password = "supersecret".to_string();
         }
 
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         // Verify the password was preserved (not cleared).
-        let cfg = state.config.read().await;
+        let cfg = state.config.config.read().await;
         assert_eq!(cfg.web.dashboard_password, "supersecret");
     }
 

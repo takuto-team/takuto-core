@@ -340,6 +340,7 @@ pub fn build_router(state: AppState) -> Router {
     let cors_layer = {
         let config = state
             .config
+            .config
             .try_read()
             .expect("config lock should be available during router construction");
         build_cors_layer(&config.web)
