@@ -121,6 +121,24 @@ When we demote a god-struct's `pub` fields to `pub(crate)` and add typed accesso
 
 ---
 
+## 9 · Typed errors
+
+When we carve one of `MaestroError`'s String-payload variants into a typed sub-enum, the cut plan lives in a dated spec under `lore/audits/`. The architecture-binding spec pins (a) the 8 target sub-enums and their module paths, (b) the final `MaestroError` envelope shape, (c) the structural rules sub-enum variants must follow, (d) the per-subsystem deprecation path. Each subsequent per-subsystem spec executes a single migration against those pins — the architecture is not re-debated PR-by-PR. The standing rules from §3 (typed `#[from]` payloads, no `e.to_string()` flattening, log at the handling site with `error = ?e` to walk the chain) are the operating contract; this section's specs are how we get there one subsystem at a time.
+
+The pinned conventions for new sub-enum variants:
+
+- **Foreign error wrapped → `#[from] source`** on a single variant per source type.
+- **Operation context → named fields** (`path`, `version`, `user_id`, `column`) — typed identifiers, not free-form sentences.
+- **No `format!` inside `#[error("…")]`** — reference fields by name (`{path}`, `{source}`); one line per variant, no terminal punctuation.
+- **No `String` payload** on a sub-enum variant. If a variant feels like it needs free-form text, the design is wrong — split it or push the context into named fields.
+- **No public accessors** beyond `thiserror` derives. Callers match on variants.
+
+The `MaestroError` envelope target is **transparent `#[from]` per sub-enum** (`MaestroError::Db(#[from] DbError)`, `MaestroError::Jira(#[from] JiraError)`, …), with the existing String variants kept as `#[deprecated]` shims during the migration and removed by a final cleanup PR once every caller is off them. The hybrid alternative (keep `Database(String)` as a permanent peer of `Db(DbError)`) is explicitly rejected — it leaves two ways to express the same failure and defeats the source-chain win that motivates §3.
+
+- **2026-05-24** — db subsystem (`MaestroError::Database(String)`, 18 workspace-wide constructors / 10 inside `crates/maestro-core/src/db/`). First migration; also lands the architecture-binding spec for the next 7 phases (`JiraError`, `GitError`, `GitHubAppError`, `AgentError`, `ClaudeError`, `AuthError`, `ConfigError`). `DbError` lands at `crates/maestro-core/src/db/error.rs` with 6 variants (`Sqlite #[from] rusqlite::Error`, `Migrations`, `DataDir`, `NulByte`, `CommandsJsonEncode`, `CommandsJsonDecode`); `MaestroError` gains `#[error(transparent)] Db(#[from] DbError)`; `impl From<rusqlite::Error> for MaestroError` is rewritten through `DbError::Sqlite` so every `?`-propagation keeps working with a preserved source chain. Migration is 6 atomic commits: land the type + envelope, migrate `mod.rs` / `schema.rs` / `users.rs` / `user_worktree_commands.rs` one file at a time, lock in with a structural test asserting zero `MaestroError::Database(` constructors under `db/`. `MaestroError::Database(String)` stays as a deprecated shim for non-db callers (admin / worktree_commands routes) — removed by the cleanup PR after the AuthError + ConfigError phases. Spec: [`lore/audits/2026-05-24-typed-errors-spec.md`](audits/2026-05-24-typed-errors-spec.md).
+
+---
+
 ## When to update this file
 
 Update this file when a **project-level decision** changes — for example:
