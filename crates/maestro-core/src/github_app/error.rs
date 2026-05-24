@@ -152,3 +152,284 @@ pub enum GitHubAppError {
         source: std::io::Error,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    //! Lock-in tests for the typed GitHub App error surface.
+    //!
+    //! These tests pin two contracts against future drift:
+    //!   1. The `Display` rendering of every `GitHubAppError` variant — the
+    //!      messages flow into log lines and (via `MaestroError`) HTTP error
+    //!      bodies, so a silent reword would be observable to operators.
+    //!   2. The `#[from] GitHubAppError` chain into `MaestroError::GitHubApp(..)`
+    //!      — every `?`-propagation inside `crates/maestro-core/src/github_app`
+    //!      relies on this exact path; if a refactor accidentally wraps via a
+    //!      different variant (e.g. the deprecated `GitHubAppStr` shim) these
+    //!      tests fail.
+    use super::*;
+    use crate::error::MaestroError;
+
+    /// Produce a deterministic `jsonwebtoken::errors::Error` for tests. We use
+    /// `EncodingKey::from_rsa_pem` on obviously-bad bytes so the Display is
+    /// whatever the upstream crate emits for malformed PEM input — pinned
+    /// exactly to lock against silent dependency-version drift.
+    fn sample_jwt_error() -> jsonwebtoken::errors::Error {
+        match jsonwebtoken::EncodingKey::from_rsa_pem(b"not a pem") {
+            Ok(_) => panic!("expected from_rsa_pem to reject malformed PEM"),
+            Err(e) => e,
+        }
+    }
+
+    /// Produce a deterministic `chrono::format::ParseError` for tests.
+    fn sample_chrono_parse_error() -> chrono::format::ParseError {
+        "not-a-date"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap_err()
+    }
+
+    /// Produce a deterministic `std::io::Error` for tests. Display is not
+    /// interpolated by any variant's `#[error(..)]` template, so the kind
+    /// chosen here is irrelevant to the lock-in assertions.
+    fn sample_io_error() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "lock-in")
+    }
+
+    #[test]
+    fn lock_in_github_app_error_display() {
+        // 1. InvalidPrivateKey — interpolates {source}; pinned via real
+        //    jsonwebtoken parse failure.
+        let invalid_key = GitHubAppError::InvalidPrivateKey {
+            source: sample_jwt_error(),
+        };
+        assert_eq!(
+            format!("{}", invalid_key),
+            format!(
+                "invalid RSA private key in [github] config: {}",
+                sample_jwt_error()
+            )
+        );
+
+        // 2. PrivateKeyConfigConflict — static.
+        assert_eq!(
+            format!("{}", GitHubAppError::PrivateKeyConfigConflict),
+            "set either [github] app_private_key or app_private_key_path, not both"
+        );
+
+        // 3. PrivateKeyRead — interpolates path.
+        let private_key_read = GitHubAppError::PrivateKeyRead {
+            path: PathBuf::from("/etc/maestro/gh-app.pem"),
+            source: sample_io_error(),
+        };
+        assert_eq!(
+            format!("{}", private_key_read),
+            "cannot read [github] app_private_key_path /etc/maestro/gh-app.pem"
+        );
+
+        // 4. PrivateKeyMissing — static.
+        assert_eq!(
+            format!("{}", GitHubAppError::PrivateKeyMissing),
+            "GitHub App private key not configured — set [github] app_private_key or app_private_key_path"
+        );
+
+        // 5. JwtSigning — static (no {source} interpolation).
+        let jwt_signing = GitHubAppError::JwtSigning {
+            source: sample_jwt_error(),
+        };
+        assert_eq!(
+            format!("{}", jwt_signing),
+            "failed to generate GitHub App JWT"
+        );
+
+        // 6. HttpRequestFailed — interpolates exit_code + stderr.
+        let http_failed = GitHubAppError::HttpRequestFailed {
+            exit_code: 22,
+            stderr: "Could not resolve host: api.github.com".to_string(),
+        };
+        assert_eq!(
+            format!("{}", http_failed),
+            "curl request to GitHub API failed (exit 22): Could not resolve host: api.github.com"
+        );
+
+        // 7. ExpiresAtParse — interpolates raw (not source).
+        let expires_at_parse = GitHubAppError::ExpiresAtParse {
+            raw: "not-a-date".to_string(),
+            source: sample_chrono_parse_error(),
+        };
+        assert_eq!(
+            format!("{}", expires_at_parse),
+            "failed to parse token expiry not-a-date"
+        );
+
+        // 8. ApiInstallationNotFound — interpolates installation_id (not doc URL).
+        let api_not_found = GitHubAppError::ApiInstallationNotFound {
+            installation_id: 999_888,
+            documentation_url: "https://docs.github.com/rest".to_string(),
+        };
+        assert_eq!(
+            format!("{}", api_not_found),
+            "GitHub App installation not found (installation_id = 999888) — verify [github] app_installation_id is correct and the App is installed on your org/repo"
+        );
+
+        // 9. ApiJwtRejected — interpolates app_id + message.
+        let api_jwt = GitHubAppError::ApiJwtRejected {
+            app_id: 42,
+            message: "could not be decoded".to_string(),
+            documentation_url: "https://docs.github.com/rest".to_string(),
+        };
+        assert_eq!(
+            format!("{}", api_jwt),
+            "GitHub App JWT authentication failed (app_id = 42): could not be decoded"
+        );
+
+        // 10. ApiPermissionDenied — interpolates message.
+        let api_perm = GitHubAppError::ApiPermissionDenied {
+            message: "Resource not accessible by integration".to_string(),
+            documentation_url: String::new(),
+        };
+        assert_eq!(
+            format!("{}", api_perm),
+            "GitHub App lacks required permissions: Resource not accessible by integration — needs contents (write), pull_requests (write), metadata (read)"
+        );
+
+        // 11. ApiOther — interpolates message.
+        let api_other = GitHubAppError::ApiOther {
+            message: "Something unexpected".to_string(),
+            documentation_url: String::new(),
+        };
+        assert_eq!(
+            format!("{}", api_other),
+            "GitHub API error: Something unexpected"
+        );
+
+        // 12. UnexpectedApiResponse — interpolates body.
+        let unexpected = GitHubAppError::UnexpectedApiResponse {
+            body: "<html>404</html>".to_string(),
+        };
+        assert_eq!(
+            format!("{}", unexpected),
+            "unexpected GitHub API response: <html>404</html>"
+        );
+
+        // 13. GitConfigFailed — interpolates setting + stderr.
+        let git_config = GitHubAppError::GitConfigFailed {
+            setting: "user.name",
+            stderr: "fatal: not in a git repo".to_string(),
+        };
+        assert_eq!(
+            format!("{}", git_config),
+            "git config user.name failed: fatal: not in a git repo"
+        );
+
+        // 14. TokenFileWrite — interpolates path (not source).
+        let token_write = GitHubAppError::TokenFileWrite {
+            path: PathBuf::from("/var/lib/maestro/gh-app-token"),
+            source: sample_io_error(),
+        };
+        assert_eq!(
+            format!("{}", token_write),
+            "failed to write token file /var/lib/maestro/gh-app-token"
+        );
+
+        // 15. TokenFileRename — interpolates from + to (not source).
+        let token_rename = GitHubAppError::TokenFileRename {
+            from: PathBuf::from("/var/lib/maestro/gh-app-token.tmp"),
+            to: PathBuf::from("/var/lib/maestro/gh-app-token"),
+            source: sample_io_error(),
+        };
+        assert_eq!(
+            format!("{}", token_rename),
+            "failed to rename token file /var/lib/maestro/gh-app-token.tmp → /var/lib/maestro/gh-app-token"
+        );
+    }
+
+    #[test]
+    fn lock_in_github_app_error_into_maestro_error() {
+        // Walk every variant through `MaestroError::from(..)` to guarantee the
+        // `#[from] GitHubAppError` chain — not the deprecated `GitHubAppStr`
+        // shim — is what `?`-propagation hits.
+
+        let cases: Vec<GitHubAppError> = vec![
+            GitHubAppError::InvalidPrivateKey {
+                source: sample_jwt_error(),
+            },
+            GitHubAppError::PrivateKeyConfigConflict,
+            GitHubAppError::PrivateKeyRead {
+                path: PathBuf::from("/etc/maestro/gh-app.pem"),
+                source: sample_io_error(),
+            },
+            GitHubAppError::PrivateKeyMissing,
+            GitHubAppError::JwtSigning {
+                source: sample_jwt_error(),
+            },
+            GitHubAppError::HttpRequestFailed {
+                exit_code: 22,
+                stderr: "Could not resolve host".to_string(),
+            },
+            GitHubAppError::ExpiresAtParse {
+                raw: "not-a-date".to_string(),
+                source: sample_chrono_parse_error(),
+            },
+            GitHubAppError::ApiInstallationNotFound {
+                installation_id: 1,
+                documentation_url: String::new(),
+            },
+            GitHubAppError::ApiJwtRejected {
+                app_id: 1,
+                message: "bad jwt".to_string(),
+                documentation_url: String::new(),
+            },
+            GitHubAppError::ApiPermissionDenied {
+                message: "perm".to_string(),
+                documentation_url: String::new(),
+            },
+            GitHubAppError::ApiOther {
+                message: "other".to_string(),
+                documentation_url: String::new(),
+            },
+            GitHubAppError::UnexpectedApiResponse {
+                body: "junk".to_string(),
+            },
+            GitHubAppError::GitConfigFailed {
+                setting: "user.name",
+                stderr: "stderr".to_string(),
+            },
+            GitHubAppError::TokenFileWrite {
+                path: PathBuf::from("/tmp/t"),
+                source: sample_io_error(),
+            },
+            GitHubAppError::TokenFileRename {
+                from: PathBuf::from("/tmp/a"),
+                to: PathBuf::from("/tmp/b"),
+                source: sample_io_error(),
+            },
+        ];
+        assert_eq!(cases.len(), 15, "must cover every GitHubAppError variant");
+
+        for err in cases {
+            let wrapped: MaestroError = err.into();
+            assert!(
+                matches!(
+                    wrapped,
+                    MaestroError::GitHubApp(
+                        GitHubAppError::InvalidPrivateKey { .. }
+                            | GitHubAppError::PrivateKeyConfigConflict
+                            | GitHubAppError::PrivateKeyRead { .. }
+                            | GitHubAppError::PrivateKeyMissing
+                            | GitHubAppError::JwtSigning { .. }
+                            | GitHubAppError::HttpRequestFailed { .. }
+                            | GitHubAppError::ExpiresAtParse { .. }
+                            | GitHubAppError::ApiInstallationNotFound { .. }
+                            | GitHubAppError::ApiJwtRejected { .. }
+                            | GitHubAppError::ApiPermissionDenied { .. }
+                            | GitHubAppError::ApiOther { .. }
+                            | GitHubAppError::UnexpectedApiResponse { .. }
+                            | GitHubAppError::GitConfigFailed { .. }
+                            | GitHubAppError::TokenFileWrite { .. }
+                            | GitHubAppError::TokenFileRename { .. }
+                    )
+                ),
+                "expected MaestroError::GitHubApp(GitHubAppError::<variant>), got {wrapped:?}"
+            );
+        }
+    }
+}
