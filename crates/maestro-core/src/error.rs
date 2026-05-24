@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use crate::claude::ClaudeError;
 use crate::db::DbError;
 
 #[derive(Debug, thiserror::Error)]
@@ -15,9 +16,6 @@ pub enum MaestroError {
 
     #[error("GitHub App error: {0}")]
     GitHubApp(String),
-
-    #[error("Claude session error: {0}")]
-    Claude(String),
 
     #[error("AI agent error: {0}")]
     AiAgent(String),
@@ -49,6 +47,22 @@ pub enum MaestroError {
     #[deprecated(note = "use MaestroError::Db with a typed DbError instead")]
     #[error("Database error: {0}")]
     DatabaseStr(String),
+
+    /// Typed Claude session error envelope. New code path — produced inside
+    /// `crates/maestro-core/src/claude/` via `ClaudeError::Variant` then
+    /// `?`-propagated through this `#[from]`.
+    #[error(transparent)]
+    Claude(#[from] ClaudeError),
+
+    /// Deprecated free-form String shim for the Claude subsystem. Lands with
+    /// zero callers (the migration commit collapses two of the four original
+    /// `MaestroError::Claude(String)` sites to direct propagation and rewrites
+    /// the other two to `ClaudeError`). Kept only to honour the typed-errors
+    /// architecture spec's A.4 deprecation path — removed by the post-phase-8
+    /// cleanup PR.
+    #[deprecated(note = "use MaestroError::Claude with a typed ClaudeError instead")]
+    #[error("Claude session error: {0}")]
+    ClaudeStr(String),
 
     #[error("Authentication error: {0}")]
     Auth(String),

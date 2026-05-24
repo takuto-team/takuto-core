@@ -170,7 +170,10 @@ async fn run_claude_session(
     } else {
         ProcessHandle::spawn("claude", args, worktree, cancel_token).await
     }
-    .map_err(|e| MaestroError::Claude(format!("Failed to spawn Claude Code: {e}")))?;
+    .map_err(|e| {
+        #[allow(deprecated)]
+        MaestroError::ClaudeStr(format!("Failed to spawn Claude Code: {e}"))
+    })?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await
@@ -199,14 +202,16 @@ async fn run_claude_session(
                 } else {
                     "(no output)".to_string()
                 };
-                return Err(MaestroError::Claude(format!(
+                #[allow(deprecated)]
+                return Err(MaestroError::ClaudeStr(format!(
                     "Claude Code exited with code {}: {}",
                     output.exit_code, detail
                 )));
             }
 
             if output.stdout.trim().is_empty() {
-                return Err(MaestroError::Claude(
+                #[allow(deprecated)]
+                return Err(MaestroError::ClaudeStr(
                     "Claude Code session produced no output — check that Claude is authenticated in the container".to_string()
                 ));
             }
@@ -230,9 +235,12 @@ async fn run_claude_session(
             warn!(timeout_secs = secs, "Claude Code session timed out");
             Err(MaestroError::Timeout(secs))
         }
-        Err(e) => Err(MaestroError::Claude(format!(
-            "Claude Code session error: {e}"
-        ))),
+        Err(e) => {
+            #[allow(deprecated)]
+            Err(MaestroError::ClaudeStr(format!(
+                "Claude Code session error: {e}"
+            )))
+        }
     }
 }
 
