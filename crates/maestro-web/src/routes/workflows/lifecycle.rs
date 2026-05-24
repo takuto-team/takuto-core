@@ -14,22 +14,22 @@ use maestro_core::container;
 use maestro_core::workflow::engine::MarkDoneOutcome;
 
 use crate::auth::AuthenticatedUser;
-use crate::state::AppState;
+use crate::state::{AuthState, EditorState, EngineState, RunCommandState};
 
 use super::require_workflow_access;
 
 /// Pause a running workflow. Delegates to WorkflowEngine::pause_workflow
 /// which sets Paused state and broadcasts a WebSocket event.
 pub async fn pause_workflow(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    state
-        .engine
+    engine
         .engine
         .pause_workflow(&id)
         .await
@@ -41,15 +41,15 @@ pub async fn pause_workflow(
 /// which restores the source state and broadcasts a WebSocket event.
 /// The drive_workflow loop's wait_if_paused will detect the un-pause and continue.
 pub async fn resume_workflow(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    state
-        .engine
+    engine
         .engine
         .resume_workflow(&id)
         .await
@@ -60,17 +60,19 @@ pub async fn resume_workflow(
 /// Resume a failed/stopped workflow from the last failed step, reusing the existing worktree and
 /// skipping already-succeeded steps. The worktree must still exist on disk.
 pub async fn resume_from_error(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    cleanup_run_commands(&state, &id).await;
+    cleanup_run_commands(&editor, &run_command, &id).await;
 
-    state
-        .engine
+    engine
         .engine
         .resume_from_error(&id)
         .await
@@ -80,17 +82,19 @@ pub async fn resume_from_error(
 
 /// Retry a failed/stopped/completed workflow. Removes the old workflow and starts fresh.
 pub async fn retry_workflow(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    cleanup_run_commands(&state, &id).await;
+    cleanup_run_commands(&editor, &run_command, &id).await;
 
-    state
-        .engine
+    engine
         .engine
         .retry_workflow(&id)
         .await
@@ -105,11 +109,14 @@ pub async fn retry_workflow(
 /// - Spawns a fire-and-forget task to unassign the Jira ticket and move it back to "To Do"
 /// - Broadcasts a WebSocket event
 pub async fn stop_workflow(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
     // Task #42: stop_workflow tears the worker container down too; drop
@@ -121,15 +128,14 @@ pub async fn stop_workflow(
     // firing, the editor_bundles entry can leak; clean it up
     // defensively. Same for run_command_bundles.
     {
-        let mut eb = state.editor.editor_bundles.write().await;
+        let mut eb = editor.editor_bundles.write().await;
         eb.remove(&id);
     }
     {
-        let mut rcb = state.run_command.run_command_bundles.write().await;
+        let mut rcb = run_command.run_command_bundles.write().await;
         rcb.retain(|(tk, _idx), _| tk != &id);
     }
-    state
-        .engine
+    engine
         .engine
         .stop_workflow(&id)
         .await
@@ -139,17 +145,19 @@ pub async fn stop_workflow(
 
 /// Jira transition to configured **Done** status and remove worktree; removes the workflow on full success.
 pub async fn mark_work_done(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<MarkDoneOutcome>, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    cleanup_run_commands(&state, &id).await;
+    cleanup_run_commands(&editor, &run_command, &id).await;
 
-    state
-        .engine
+    engine
         .engine
         .mark_work_done(&id)
         .await
@@ -159,17 +167,19 @@ pub async fn mark_work_done(
 
 /// Remove workflow from the map (not **running**), best-effort worktree cleanup, no Jira changes.
 pub async fn delete_workflow(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    cleanup_run_commands(&state, &id).await;
+    cleanup_run_commands(&editor, &run_command, &id).await;
 
-    state
-        .engine
+    engine
         .engine
         .delete_workflow(&id)
         .await
@@ -178,8 +188,12 @@ pub async fn delete_workflow(
 }
 
 /// Stop all run commands and clean up state for a workflow.
-pub(super) async fn cleanup_run_commands(state: &AppState, ticket_key: &str) {
-    let mut run_cmds = state.run_command.run_commands.write().await;
+pub(super) async fn cleanup_run_commands(
+    editor: &EditorState,
+    run_command: &RunCommandState,
+    ticket_key: &str,
+) {
+    let mut run_cmds = run_command.run_commands.write().await;
     if let Some(cmds) = run_cmds.remove(ticket_key) {
         for cmd in &cmds {
             cmd.scanner_cancel.cancel();
@@ -190,10 +204,10 @@ pub(super) async fn cleanup_run_commands(state: &AppState, ticket_key: &str) {
         // Each entry's last strong reference here fires the bundle's
         // TempDir RAII cleanup. Done AFTER the container stop so the
         // mounted secret files survive the container's last read.
-        let mut bundles = state.run_command.run_command_bundles.write().await;
+        let mut bundles = run_command.run_command_bundles.write().await;
         bundles.retain(|(tk, _idx), _| tk != ticket_key);
     }
     // Task #42: also drop the editor bundle for this ticket — delete /
     // mark-done tear down both the editor and all run-commands at once.
-    state.editor.editor_bundles.write().await.remove(ticket_key);
+    editor.editor_bundles.write().await.remove(ticket_key);
 }

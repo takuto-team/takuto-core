@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use maestro_core::workflow::state::WorkflowState;
 
 use crate::auth::AuthenticatedUser;
-use crate::state::AppState;
+use crate::state::{AuthState, ConfigState, EngineState};
 
 #[derive(Deserialize)]
 pub struct StartManualWorkflowBody {
@@ -44,12 +44,13 @@ pub struct StartManualWorkflowResponse {
 /// `MANUAL-{timestamp}` key is generated. The `ticket_description` field is stored on the workflow
 /// so the agent prompt can use it.
 pub async fn start_manual_workflow(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(cfg): State<ConfigState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<StartManualWorkflowBody>,
 ) -> Result<Json<StartManualWorkflowResponse>, (StatusCode, String)> {
-    let jira_on = state
-        .config
+    let jira_on = cfg
         .jira_available
         .load(std::sync::atomic::Ordering::Relaxed);
 
@@ -79,18 +80,18 @@ pub async fn start_manual_workflow(
     };
 
     let max_manual = {
-        let cfg = state.config.config.read().await;
-        if jira_on && cfg.jira.project_keys.is_empty() {
+        let cfg_guard = cfg.config.read().await;
+        if jira_on && cfg_guard.jira.project_keys.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
                 "No Jira project keys configured".into(),
             ));
         }
-        cfg.general.max_concurrent_manual_workflows
+        cfg_guard.general.max_concurrent_manual_workflows
     };
 
     {
-        let wf_arc = state.engine.engine.workflows_arc();
+        let wf_arc = engine.engine.workflows_arc();
         let map = wf_arc.read().await;
         if let Some(existing) = map.get(&ticket_key) {
             // Terminal-state entries (Done / Stopped / Error) are safe to replace —
@@ -120,7 +121,7 @@ pub async fn start_manual_workflow(
 
     if max_manual > 0 {
         // Count per-user, not global.
-        let wf_arc = state.engine.engine.workflows_arc();
+        let wf_arc = engine.engine.workflows_arc();
         let map = wf_arc.read().await;
         let n = map
             .values()
@@ -154,7 +155,7 @@ pub async fn start_manual_workflow(
     // Plan-10: resolve the workflow's repository_id. When the body specifies
     // one, validate the caller has it associated; otherwise, default to the
     // most-recently-added repo. Reject when the caller has zero repos.
-    let repository_id = if let Some(database) = state.auth.db.as_ref() {
+    let repository_id = if let Some(database) = auth_state.db.as_ref() {
         let conn = database.conn().lock().await;
         let user_repos = maestro_core::db::repositories::list_for_user(&conn, &auth.user_id)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -192,8 +193,7 @@ pub async fn start_manual_workflow(
         None
     };
 
-    let workflow_id = state
-        .engine
+    let workflow_id = engine
         .engine
         .add_to_dashboard(
             ticket_key.clone(),

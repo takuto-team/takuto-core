@@ -344,7 +344,7 @@ pub async fn improve_ticket(
     // AC-2: only the workflow owner may invoke this. The helper returns
     // `NOT_FOUND` for both "missing" and "wrong owner" so existence is not
     // leaked across users.
-    require_workflow_access(&state, &auth, &key)
+    require_workflow_access(&state.engine, &state.auth, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
     if body.description.len() > MAX_IMPROVE_DESCRIPTION_LEN {
@@ -427,7 +427,7 @@ pub async fn prompt_ticket(
     Json(body): Json<PromptTicketBody>,
 ) -> Result<Json<PromptTicketResponse>, (StatusCode, String)> {
     // AC-2: only the workflow owner may invoke this.
-    require_workflow_access(&state, &auth, &key)
+    require_workflow_access(&state.engine, &state.auth, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
     // Validate prompt is not empty
@@ -487,7 +487,7 @@ pub async fn update_ticket_description(
     Json(body): Json<UpdateDescriptionBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // AC-2: only the workflow owner may invoke this.
-    require_workflow_access(&state, &auth, &key)
+    require_workflow_access(&state.engine, &state.auth, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
     // Plan-10: resolve the cwd for `gh` / `acli` from the workflow's

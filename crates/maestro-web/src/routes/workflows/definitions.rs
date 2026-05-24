@@ -11,30 +11,30 @@ use axum::http::StatusCode;
 use maestro_core::workflow::definitions::{DiscoveredWorkflow, discover_workflows};
 
 use crate::auth::AuthenticatedUser;
-use crate::state::AppState;
+use crate::state::{AuthState, EngineState};
 
 use super::require_workflow_access;
 
 /// List all discovered workflow definitions from the workflows directory.
 pub async fn list_workflow_definitions(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
 ) -> Json<Vec<DiscoveredWorkflow>> {
-    let dir = state.engine.engine.workflows_dir().to_path_buf();
+    let dir = engine.engine.workflows_dir().to_path_buf();
     let result = discover_workflows(&dir);
     Json(result.workflows)
 }
 
 /// Start a specific workflow definition for a ticket.
 pub async fn run_workflow_def(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
     Path((id, def_name)): Path<(String, String)>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    state
-        .engine
+    engine
         .engine
         .start_workflow_def(&id, &def_name)
         .await
@@ -44,15 +44,15 @@ pub async fn run_workflow_def(
 
 /// Retry a failed workflow definition for a ticket (resets Error -> Idle, then starts).
 pub async fn retry_workflow_def(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
     Path((id, def_name)): Path<(String, String)>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    state
-        .engine
+    engine
         .engine
         .retry_workflow_def(&id, &def_name)
         .await

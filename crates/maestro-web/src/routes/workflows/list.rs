@@ -19,7 +19,9 @@ use maestro_core::workflow::state::WorkflowState;
 
 use crate::auth::AuthenticatedUser;
 use crate::session_registry::{SessionRoute, SessionRouteKind};
-use crate::state::{AppState, DynamicPortForward};
+use crate::state::{
+    AuthState, ConfigState, DynamicPortForward, EditorState, EngineState, RunCommandState,
+};
 
 use super::dto::{
     TerminalLineDto, WorkflowCountsResponse, WorkflowSummary, build_issue_url,
@@ -30,17 +32,21 @@ use super::dto::{
 use super::require_workflow_access;
 
 pub async fn list_workflows(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Json<Vec<WorkflowSummary>> {
-    let cfg = state.config.config.read().await;
+    let cfg = cfg_state.config.read().await;
     // Plan-10: workflow visibility is gated by the caller's `user_repositories`
     // associations. Build two HashSets in ONE batched query so the in-memory
     // filter below is O(1) per workflow.
     let (allowed_repo_ids, allowed_repo_names): (
         std::collections::HashSet<String>,
         std::collections::HashSet<String>,
-    ) = if let Some(database) = state.auth.db.as_ref() {
+    ) = if let Some(database) = auth_state.db.as_ref() {
         let conn = database.conn().lock().await;
         match maestro_core::db::repositories::list_for_user(&conn, &auth.user_id) {
             Ok(repos) => {
@@ -69,17 +75,16 @@ pub async fn list_workflows(
             std::collections::HashSet::new(),
         )
     };
-    let no_db = state.auth.db.is_none();
-    let wf_arc = state.engine.engine.workflows_arc();
+    let no_db = auth_state.db.is_none();
+    let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
-    let dyn_fwd = state.editor.dynamic_forwards.read().await;
-    let run_cmds_state = state.run_command.run_commands.read().await;
+    let dyn_fwd = editor.dynamic_forwards.read().await;
+    let run_cmds_state = run_command.run_commands.read().await;
     // Build terminal URLs via the path-token registry so the frontend uses
     // the `/s/<token>/...` proxy path instead of a direct `localhost:<port>` URL.
     // Single-pass bulk lookup: acquire the registry read lock once rather than
     // N times in a serial loop (avoids O(K²) linear scans at scale).
-    let terminal_ports_snap: Vec<(String, String)> = state
-        .editor
+    let terminal_ports_snap: Vec<(String, String)> = editor
         .terminal_ports
         .read()
         .await
@@ -87,7 +92,7 @@ pub async fn list_workflows(
         .map(|(k, (_port, ttyd_token))| (k.clone(), ttyd_token.clone()))
         .collect();
     let terminal_urls: HashMap<String, String> = {
-        let registry = state.editor.path_token_registry.inner_read().await;
+        let registry = editor.path_token_registry.inner_read().await;
         terminal_ports_snap
             .iter()
             .filter_map(|(ticket_key, ttyd_token)| {
@@ -146,7 +151,7 @@ pub async fn list_workflows(
     let run_commands_by_pair: HashMap<
         (String, String),
         Vec<maestro_core::db::user_worktree_commands::RunCommand>,
-    > = match (pairs.is_empty(), state.auth.db.as_ref()) {
+    > = match (pairs.is_empty(), auth_state.db.as_ref()) {
         (false, Some(database)) => {
             let conn = database.conn().lock().await;
             let pair_refs: Vec<(&str, &str)> = pairs
@@ -235,10 +240,10 @@ pub async fn list_workflows(
 
 /// Per-user workflow counts for the dashboard summary bar.
 pub async fn workflow_counts(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Json<WorkflowCountsResponse> {
-    let wf_arc = state.engine.engine.workflows_arc();
+    let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let mut running = 0u32;
     let mut completed = 0u32;
@@ -260,18 +265,22 @@ pub async fn workflow_counts(
 }
 
 pub async fn get_workflow(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<WorkflowSummary>, StatusCode> {
-    let cfg = state.config.config.read().await;
+    let cfg = cfg_state.config.read().await;
     // Plan-10: visibility is gated by `require_workflow_access`, which checks
     // both user_id ownership AND repo association. The legacy
     // workspace_name-equals-current-workspace check is dropped because there
     // is no longer a single "current workspace" — every workflow knows its
     // own repo.
-    require_workflow_access(&state, &auth, &id).await?;
-    let wf_arc = state.engine.engine.workflows_arc();
+    require_workflow_access(&engine, &auth_state, &auth, &id).await?;
+    let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
@@ -282,7 +291,7 @@ pub async fn get_workflow(
     // mappings seeded at open-editor time and dynamically-detected socat forwards).
     // Fall back to Docker-queried port mappings for editors opened before this
     // Maestro process started (server restart).
-    let dyn_fwd = state.editor.dynamic_forwards.read().await;
+    let dyn_fwd = editor.dynamic_forwards.read().await;
     let port_mappings: Vec<(u16, String)> = if let Some(forwards) = dyn_fwd.get(&ticket_key) {
         forwards.iter().map(|f| (f.container_port, f.proxy_url.clone())).collect()
     } else {
@@ -297,7 +306,7 @@ pub async fn get_workflow(
         let mut entries = Vec::new();
         let mut result = Vec::new();
         for (cp, hp) in &raw {
-            let path_token = state.editor.path_token_registry.register(SessionRoute {
+            let path_token = editor.path_token_registry.register(SessionRoute {
                 kind: SessionRouteKind::DynamicPort,
                 host_port: *hp,
                 ticket_key: ticket_key.clone(),
@@ -313,7 +322,7 @@ pub async fn get_workflow(
             });
         }
         if !entries.is_empty() {
-            let mut fwd = state.editor.dynamic_forwards.write().await;
+            let mut fwd = editor.dynamic_forwards.write().await;
             fwd.entry(ticket_key.clone()).or_insert(entries);
         }
         result
@@ -351,16 +360,14 @@ pub async fn get_workflow(
         ticketing_system: w.ticketing_system.to_string(),
         can_resume_from_error: can_resume_from_error(w),
         terminal_url: {
-            let ttyd_token = state
-                .editor
+            let ttyd_token = editor
                 .terminal_ports
                 .read()
                 .await
                 .get(&ticket_key)
                 .map(|(_port, token)| token.clone());
             match ttyd_token {
-                Some(t) => state
-                    .editor
+                Some(t) => editor
                     .path_token_registry
                     .find_token_for(&ticket_key, SessionRouteKind::Terminal)
                     .await
@@ -373,7 +380,7 @@ pub async fn get_workflow(
             // Owner-less workflows, or workflows whose owner has no row, get an
             // empty list (no buttons rendered on the card).
             let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
-                match (w.user_id.as_deref(), state.auth.db.as_ref()) {
+                match (w.user_id.as_deref(), auth_state.db.as_ref()) {
                     (Some(uid), Some(database)) => {
                         let conn = database.conn().lock().await;
                         maestro_core::db::user_worktree_commands::get(
@@ -388,7 +395,7 @@ pub async fn get_workflow(
                     }
                     _ => Vec::new(),
                 };
-            let run_cmds_state = state.run_command.run_commands.read().await;
+            let run_cmds_state = run_command.run_commands.read().await;
             build_run_commands_status(&configured, run_cmds_state.get(&ticket_key))
         },
         generate_report: cfg.general.generate_report,
@@ -408,12 +415,13 @@ pub async fn get_workflow(
 
 /// Return the generated report markdown for a workflow (from `lore/reports/<key>_report.md` in the worktree).
 pub async fn get_workflow_report(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<WorkflowReportResponse>, StatusCode> {
-    require_workflow_access(&state, &auth, &id).await?;
-    let wf_arc = state.engine.engine.workflows_arc();
+    require_workflow_access(&engine, &auth_state, &auth, &id).await?;
+    let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let worktree_path = w

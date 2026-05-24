@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use maestro_core::container::{self, ContainerRunner};
 
 use crate::auth::AuthenticatedUser;
-use crate::state::AppState;
+use crate::state::{AuthState, ConfigState, EditorState, EngineState, RunCommandState};
 
 use super::dto::{RunCommandStatus, build_run_commands_status};
 use super::port_tracking::run_command_port_tracker;
@@ -39,10 +39,12 @@ pub struct StartRunCommandResponse {
 
 /// List the status of all configured run commands for a workflow.
 pub async fn list_run_commands(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(run_command): State<RunCommandState>,
     Path(id): Path<String>,
 ) -> Result<Json<RunCommandsStatusResponse>, (StatusCode, String)> {
-    let wf_arc = state.engine.engine.workflows_arc();
+    let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
@@ -54,7 +56,7 @@ pub async fn list_run_commands(
     // Per-user-per-workspace lookup (plan-09). Owner-less workflows return
     // an empty list.
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
-        match (owner_user_id.as_deref(), state.auth.db.as_ref()) {
+        match (owner_user_id.as_deref(), auth_state.db.as_ref()) {
             (Some(uid), Some(database)) => {
                 let conn = database.conn().lock().await;
                 maestro_core::db::user_worktree_commands::get(&conn, uid, &workspace_name)
@@ -66,7 +68,7 @@ pub async fn list_run_commands(
             _ => Vec::new(),
         };
 
-    let run_cmds_state = state.run_command.run_commands.read().await;
+    let run_cmds_state = run_command.run_commands.read().await;
     let commands = build_run_commands_status(&configured, run_cmds_state.get(&id));
 
     Ok(Json(RunCommandsStatusResponse { commands }))
@@ -74,17 +76,21 @@ pub async fn list_run_commands(
 
 /// Start a run command for a workflow.
 pub async fn start_run_command(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(cfg): State<ConfigState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Path((id, index)): Path<(String, usize)>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<StartRunCommandResponse>, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
 
     // Resolve owner + workspace before opening the DB to keep the workflow
     // read-lock short.
-    let wf_arc = state.engine.engine.workflows_arc();
+    let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
@@ -94,7 +100,7 @@ pub async fn start_run_command(
     drop(workflows);
 
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
-        match (owner_user_id.as_deref(), state.auth.db.as_ref()) {
+        match (owner_user_id.as_deref(), auth_state.db.as_ref()) {
             (Some(uid), Some(database)) => {
                 let conn = database.conn().lock().await;
                 maestro_core::db::user_worktree_commands::get(&conn, uid, &workspace_name)
@@ -116,8 +122,8 @@ pub async fn start_run_command(
     let rc_name = rc.name.clone();
     let rc_command = rc.command.clone();
     let dynamic_ports = {
-        let cfg = state.config.config.read().await;
-        cfg.editor.dynamic_ports
+        let cfg_guard = cfg.config.read().await;
+        cfg_guard.editor.dynamic_ports
     };
 
     let workflows = wf_arc.read().await;
@@ -151,7 +157,7 @@ pub async fn start_run_command(
 
     // Check if already running
     {
-        let run_cmds = state.run_command.run_commands.read().await;
+        let run_cmds = run_command.run_commands.read().await;
         if let Some(active) = run_cmds.get(&ticket_key)
             && active.iter().any(|c| c.cmd_index == index)
         {
@@ -183,14 +189,14 @@ pub async fn start_run_command(
     // often `git push` / `gh` to publish preview deploys, so the GitHub
     // side of the bundle is the value-add here.
     let secrets_bundle: Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> =
-        build_editor_or_run_command_bundle(&state, &id, &auth.user_id).await;
+        build_editor_or_run_command_bundle(&engine, &auth_state, &cfg, &id, &auth.user_id).await;
 
     // Task #42: stash the bundle Arc keyed by (ticket, cmd_index). Same
     // rationale as the editor branch: the run-command container is
     // detached, so the route handler's stack scope can't be the sole
     // owner of the bundle's `TempDir` lifetime.
     if let Some(ref b) = secrets_bundle {
-        let mut map = state.run_command.run_command_bundles.write().await;
+        let mut map = run_command.run_command_bundles.write().await;
         map.insert((ticket_key.clone(), index), b.clone());
     }
 
@@ -208,10 +214,14 @@ pub async fn start_run_command(
     .await
     .map_err(|e| {
         // Spawn failed → drop the stashed Arc.
-        let st = state.clone();
+        let run_command_clone = run_command.clone();
         let key = (ticket_key.clone(), index);
         tokio::spawn(async move {
-            st.run_command.run_command_bundles.write().await.remove(&key);
+            run_command_clone
+                .run_command_bundles
+                .write()
+                .await
+                .remove(&key);
         });
         (StatusCode::INTERNAL_SERVER_ERROR, e)
     })?;
@@ -223,7 +233,7 @@ pub async fn start_run_command(
     let scanner_cancel = cancel.clone();
     let tracker_cancel = cancel.clone();
     {
-        let mut run_cmds = state.run_command.run_commands.write().await;
+        let mut run_cmds = run_command.run_commands.write().await;
         let entry = run_cmds.entry(ticket_key.clone()).or_default();
         entry.push(crate::state::ActiveRunCommand {
             cmd_index: index,
@@ -234,10 +244,10 @@ pub async fn start_run_command(
     }
 
     // Start background port scanner for this run command
-    let event_tx = state.engine.engine.event_sender();
+    let event_tx = engine.engine.event_sender();
     let ticket_for_scanner = ticket_key.clone();
 
-    let run_cmds_map = state.run_command.run_commands.clone();
+    let run_cmds_map = run_command.run_commands.clone();
     let ticket_for_tracker = ticket_key.clone();
 
     // Spawn port scanner
@@ -264,8 +274,8 @@ pub async fn start_run_command(
         reserved_token,
         proxy_base,
         run_cmds_map,
-        state.editor.path_token_registry.clone(),
-        state.engine.engine.subscribe(),
+        editor.path_token_registry.clone(),
+        engine.engine.subscribe(),
         tracker_cancel,
     ));
 
@@ -277,14 +287,17 @@ pub async fn start_run_command(
 
 /// Stop a running run command.
 pub async fn stop_run_command(
-    State(state): State<AppState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(editor): State<EditorState>,
+    State(run_command): State<RunCommandState>,
     Path((id, index)): Path<(String, usize)>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_workflow_access(&state, &auth, &id)
+    require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    let wf_arc = state.engine.engine.workflows_arc();
+    let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows
         .get(&id)
@@ -294,12 +307,12 @@ pub async fn stop_run_command(
 
     // Cancel scanner, deregister proxy token, and remove from state
     {
-        let mut run_cmds = state.run_command.run_commands.write().await;
+        let mut run_cmds = run_command.run_commands.write().await;
         if let Some(cmds) = run_cmds.get_mut(&ticket_key) {
             if let Some(pos) = cmds.iter().position(|c| c.cmd_index == index) {
                 cmds[pos].scanner_cancel.cancel();
                 if let Some(ref fwd) = cmds[pos].forwarded_port {
-                    state.editor.path_token_registry.remove(&fwd.path_token).await;
+                    editor.path_token_registry.remove(&fwd.path_token).await;
                 }
                 cmds.remove(pos);
             }
@@ -314,8 +327,7 @@ pub async fn stop_run_command(
     // Task #42: drop the bundle Arc — last strong reference fires the
     // TempDir RAII cleanup. Done AFTER stop_run_command so the secret
     // files stay on disk for the container's final teardown read.
-    state
-        .run_command
+    run_command
         .run_command_bundles
         .write()
         .await
