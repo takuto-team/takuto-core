@@ -6,6 +6,7 @@ use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::claude::ClaudeError;
 use crate::container::ContainerRunner;
 use crate::error::{MaestroError, Result};
 use crate::process::{OutputLine, ProcessHandle};
@@ -169,11 +170,7 @@ async fn run_claude_session(
         ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
     } else {
         ProcessHandle::spawn("claude", args, worktree, cancel_token).await
-    }
-    .map_err(|e| {
-        #[allow(deprecated)]
-        MaestroError::ClaudeStr(format!("Failed to spawn Claude Code: {e}"))
-    })?;
+    }?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await
@@ -202,18 +199,15 @@ async fn run_claude_session(
                 } else {
                     "(no output)".to_string()
                 };
-                #[allow(deprecated)]
-                return Err(MaestroError::ClaudeStr(format!(
-                    "Claude Code exited with code {}: {}",
-                    output.exit_code, detail
-                )));
+                return Err(ClaudeError::NonZeroExit {
+                    exit_code: output.exit_code,
+                    detail,
+                }
+                .into());
             }
 
             if output.stdout.trim().is_empty() {
-                #[allow(deprecated)]
-                return Err(MaestroError::ClaudeStr(
-                    "Claude Code session produced no output — check that Claude is authenticated in the container".to_string()
-                ));
+                return Err(ClaudeError::EmptyOutput.into());
             }
 
             // Extract the real session ID from the init event
@@ -235,12 +229,7 @@ async fn run_claude_session(
             warn!(timeout_secs = secs, "Claude Code session timed out");
             Err(MaestroError::Timeout(secs))
         }
-        Err(e) => {
-            #[allow(deprecated)]
-            Err(MaestroError::ClaudeStr(format!(
-                "Claude Code session error: {e}"
-            )))
-        }
+        Err(e) => Err(e),
     }
 }
 
