@@ -32,7 +32,7 @@ use tokio::sync::Mutex;
 use tracing::warn;
 
 use crate::auth::{MasterKey, MasterKeySource, load_or_init_master_key};
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 
 /// State of the deployment master key. Held on `Database` so the web layer
 /// can:
@@ -83,11 +83,9 @@ impl Database {
     /// caller logs and surfaces a critical warning in `SystemStatus` so the
     /// dashboard renders degraded-mode copy instead of crashing.
     pub fn open(data_dir: &Path, allow_auto_generate_secret_key: bool) -> Result<Self> {
-        std::fs::create_dir_all(data_dir).map_err(|e| {
-            MaestroError::DatabaseStr(format!(
-                "Failed to create data directory {}: {e}",
-                data_dir.display()
-            ))
+        std::fs::create_dir_all(data_dir).map_err(|e| DbError::DataDir {
+            path: data_dir.to_path_buf(),
+            source: e,
         })?;
 
         let db_path = data_dir.join("maestro.db");
