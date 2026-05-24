@@ -441,7 +441,7 @@ pub async fn put_my_row(
             &run_commands,
         )?;
         user_worktree_commands::get(&conn, &user_id, &lookup_name)?.ok_or_else(|| {
-            maestro_core::error::MaestroError::Database(
+            maestro_core::error::MaestroError::DatabaseStr(
                 "row was just upserted but vanished".into(),
             )
         })

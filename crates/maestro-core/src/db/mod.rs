@@ -8,6 +8,7 @@
 
 pub mod credential_audit;
 pub mod credentials;
+pub mod error;
 pub mod github_credentials;
 pub mod login_attempts;
 pub mod migration;
@@ -18,6 +19,8 @@ pub mod repositories;
 pub mod schema;
 pub mod users;
 pub mod user_worktree_commands;
+
+pub use error::DbError;
 
 #[cfg(test)]
 mod tests_phase2a_master_key;
@@ -81,7 +84,7 @@ impl Database {
     /// dashboard renders degraded-mode copy instead of crashing.
     pub fn open(data_dir: &Path, allow_auto_generate_secret_key: bool) -> Result<Self> {
         std::fs::create_dir_all(data_dir).map_err(|e| {
-            MaestroError::Database(format!(
+            MaestroError::DatabaseStr(format!(
                 "Failed to create data directory {}: {e}",
                 data_dir.display()
             ))

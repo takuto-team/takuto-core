@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use crate::db::DbError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum MaestroError {
     #[error("Jira error: {0}")]
@@ -33,8 +35,20 @@ pub enum MaestroError {
     #[error("Workflow cancelled")]
     Cancelled,
 
+    /// Typed db error envelope. New code path — produced inside
+    /// `crates/maestro-core/src/db/` via `DbError::Variant` then
+    /// `?`-propagated through this `#[from]`.
+    #[error(transparent)]
+    Db(#[from] DbError),
+
+    /// Deprecated free-form String shim for non-db callers. Retained so that
+    /// callers outside `crates/maestro-core/src/db/` (admin / worktree_commands
+    /// routes today) keep compiling while the typed-errors migration progresses.
+    /// Will be removed by the cleanup PR after the AuthError + ConfigError
+    /// phases land.
+    #[deprecated(note = "use MaestroError::Db with a typed DbError instead")]
     #[error("Database error: {0}")]
-    Database(String),
+    DatabaseStr(String),
 
     #[error("Authentication error: {0}")]
     Auth(String),
@@ -54,7 +68,7 @@ pub enum MaestroError {
 
 impl From<rusqlite::Error> for MaestroError {
     fn from(e: rusqlite::Error) -> Self {
-        MaestroError::Database(e.to_string())
+        MaestroError::Db(DbError::Sqlite(e))
     }
 }
 

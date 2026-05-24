@@ -116,29 +116,29 @@ pub fn upsert(
 ) -> Result<()> {
     // NUL-byte guard across every string value we're about to persist.
     if user_id.contains('\0') || workspace_name.contains('\0') {
-        return Err(MaestroError::Database(
+        return Err(MaestroError::DatabaseStr(
             "user_id or workspace_name contains a NUL byte".into(),
         ));
     }
     for cmd in init_commands {
         if cmd.contains('\0') {
-            return Err(MaestroError::Database(
+            return Err(MaestroError::DatabaseStr(
                 "init command contains a NUL byte".into(),
             ));
         }
     }
     for rc in run_commands {
         if rc.name.contains('\0') || rc.command.contains('\0') {
-            return Err(MaestroError::Database(
+            return Err(MaestroError::DatabaseStr(
                 "run command name or command contains a NUL byte".into(),
             ));
         }
     }
 
     let init_json = serde_json::to_string(init_commands)
-        .map_err(|e| MaestroError::Database(format!("serializing init_commands: {e}")))?;
+        .map_err(|e| MaestroError::DatabaseStr(format!("serializing init_commands: {e}")))?;
     let run_json = serde_json::to_string(run_commands)
-        .map_err(|e| MaestroError::Database(format!("serializing run_commands: {e}")))?;
+        .map_err(|e| MaestroError::DatabaseStr(format!("serializing run_commands: {e}")))?;
     let now = chrono::Utc::now().timestamp();
 
     conn.execute(
@@ -250,12 +250,12 @@ fn row_to_user_worktree_commands(
 
     let parsed: Result<(Vec<String>, Vec<RunCommand>)> = (|| {
         let init = serde_json::from_str::<Vec<String>>(&init_json).map_err(|e| {
-            MaestroError::Database(format!(
+            MaestroError::DatabaseStr(format!(
                 "decoding init_commands_json for ({user_id},{workspace_name}): {e}"
             ))
         })?;
         let run = serde_json::from_str::<Vec<RunCommand>>(&run_json).map_err(|e| {
-            MaestroError::Database(format!(
+            MaestroError::DatabaseStr(format!(
                 "decoding run_commands_json for ({user_id},{workspace_name}): {e}"
             ))
         })?;

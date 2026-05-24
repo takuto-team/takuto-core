@@ -565,7 +565,7 @@ pub async fn import_users(
                     to_create.push(export);
                 }
                 Err(e) => {
-                    return Err(maestro_core::error::MaestroError::Database(e.to_string()));
+                    return Err(maestro_core::error::MaestroError::DatabaseStr(e.to_string()));
                 }
             }
         }
@@ -573,7 +573,7 @@ pub async fn import_users(
         // Wrap all inserts in a single transaction for atomicity.
         let tx = conn
             .unchecked_transaction()
-            .map_err(|e| maestro_core::error::MaestroError::Database(e.to_string()))?;
+            .map_err(|e| maestro_core::error::MaestroError::DatabaseStr(e.to_string()))?;
 
         let mut created = Vec::new();
         for export in to_create {
@@ -591,12 +591,12 @@ pub async fn import_users(
                     now,
                 ],
             )
-            .map_err(|e| maestro_core::error::MaestroError::Database(e.to_string()))?;
+            .map_err(|e| maestro_core::error::MaestroError::DatabaseStr(e.to_string()))?;
             created.push(export.username.clone());
         }
 
         tx.commit()
-            .map_err(|e| maestro_core::error::MaestroError::Database(e.to_string()))?;
+            .map_err(|e| maestro_core::error::MaestroError::DatabaseStr(e.to_string()))?;
 
         Ok(ImportSummary { created, skipped })
     })
