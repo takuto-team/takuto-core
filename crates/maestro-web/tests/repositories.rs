@@ -185,7 +185,7 @@ async fn seed_repository(
     repo_url: Option<&str>,
     local_path: &str,
 ) -> String {
-    let db = state.auth.db.as_ref().expect("db").clone();
+    let db = state.auth().db.as_ref().expect("db").clone();
     let name = name.to_string();
     let repo_url = repo_url.map(|s| s.to_string());
     let local_path = local_path.to_string();
@@ -498,7 +498,7 @@ async fn ac7_last_user_remove_purges_disk() {
     assert!(!local_path.exists(), "on-disk clone must be purged");
 
     // The DB row is gone.
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let r1_clone = r1.clone();
     let row = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -532,7 +532,7 @@ async fn ac9_non_last_user_remove_keeps_disk_and_row() {
 
     // On-disk + DB row preserved.
     assert!(local_path.exists(), "shared clone must NOT be purged");
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let r1_clone = r1.clone();
     let row = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -583,7 +583,7 @@ async fn ac8_admin_force_purge_drops_row_for_everyone() {
 
     // Filesystem + DB row + every association is gone.
     assert!(!local_path.exists());
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let r1_clone = r1.clone();
     let row = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -629,7 +629,7 @@ async fn ac11_user_delete_cascades_to_associations() {
     post_repositories(&state, &bob_cookie, &body).await;
 
     // Delete bob via the admin endpoint.
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let db_for_delete = db.clone();
     tokio::task::spawn_blocking(move || {
         let conn = db_for_delete.conn().blocking_lock();
@@ -664,7 +664,7 @@ async fn ac11_user_delete_cascades_to_associations() {
 /// Fetch the user_id of an existing username, directly from the DB. Used by
 /// the AC-16 tests to seed workflow snapshots with realistic user_ids.
 async fn user_id_for(state: &AppState, username: &str) -> String {
-    let db = state.auth.db.as_ref().expect("db required").clone();
+    let db = state.auth().db.as_ref().expect("db required").clone();
     let username = username.to_string();
     tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -961,7 +961,7 @@ async fn ac5_repo_url_already_known_short_circuits_clone_with_200() {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrency — AC-15 (lock test via state.engine.clone_in_progress).
+// Concurrency — AC-15 (lock test via state.engine().clone_in_progress).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -970,7 +970,7 @@ async fn ac15_clone_in_progress_returns_409_when_locked() {
     let cookie = register_admin(&state).await;
     // Force the lock to "busy" so the dispatch fails fast without shelling out.
     state
-        .engine
+        .engine()
         .clone_in_progress
         .store(true, std::sync::atomic::Ordering::Release);
 

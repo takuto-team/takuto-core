@@ -103,7 +103,7 @@ async fn recover_with(state: &AppState, body_json: &str) -> (StatusCode, String)
 
 /// Look up a user's `id` from the database. Used by the unlock route tests.
 async fn user_id_for(state: &AppState, username: &str) -> String {
-    let db = state.auth.db.as_ref().expect("test state has a db").clone();
+    let db = state.auth().db.as_ref().expect("test state has a db").clone();
     let username = username.to_string();
     tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -232,7 +232,7 @@ async fn unknown_username_never_locks() {
     // Snapshot row count after admin setup — register_and_login records an
     // admin success row, which is expected. We assert the count does NOT
     // grow when subsequent attempts are made against a non-existent user.
-    let db_handle = state.auth.db.as_ref().unwrap().clone();
+    let db_handle = state.auth().db.as_ref().unwrap().clone();
     let baseline: i64 = {
         let db = db_handle.clone();
         tokio::task::spawn_blocking(move || {

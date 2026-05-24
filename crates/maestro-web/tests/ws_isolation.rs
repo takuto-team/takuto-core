@@ -97,12 +97,12 @@ async fn engine_broadcast_round_trips_user_id_through_filter() {
     let state = test_state_with_db();
 
     // Two independent subscribers — modelling alice's and bob's WS loops.
-    let mut alice_rx = state.engine.engine.subscribe();
-    let mut bob_rx = state.engine.engine.subscribe();
+    let mut alice_rx = state.engine().engine.subscribe();
+    let mut bob_rx = state.engine().engine.subscribe();
 
     // Emit an event scoped to alice. We bypass start_workflow and just push
     // a raw event onto the bus to keep the test focused on filter semantics.
-    let event_tx = state.engine.engine.event_sender();
+    let event_tx = state.engine().engine.event_sender();
     let alice_event = make_event("PROJ-A1", Some("alice-id"));
     event_tx
         .send(alice_event.clone())

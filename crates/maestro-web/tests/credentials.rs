@@ -87,7 +87,7 @@ impl GhClient for MockGh {
 /// Build a state with a fresh DB + the supplied mock gh client + a logged-in admin.
 async fn state_with_mock(gh: Arc<dyn GhClient>) -> (AppState, String) {
     let mut state = maestro_web::test_helpers::test_state_with_db();
-    state.auth.gh_client = gh;
+    state.auth_mut().gh_client = gh;
     let cookie = register_and_login(&state).await;
     (state, cookie)
 }
@@ -98,7 +98,7 @@ async fn state_with_mock(gh: Arc<dyn GhClient>) -> (AppState, String) {
 fn break_master_key(state: &mut AppState) {
     let dir = std::env::temp_dir().join(format!("maestro-cred-degraded-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    state.auth.db = Some(
+    state.auth_mut().db = Some(
         maestro_core::db::Database::open(&dir, false)
             .expect("open DB with auto-gen disabled"),
     );
@@ -106,7 +106,7 @@ fn break_master_key(state: &mut AppState) {
 
 /// Count `credential_audit` rows in the DB.
 async fn audit_row_count(state: &AppState) -> i64 {
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
         conn.query_row("SELECT COUNT(*) FROM credential_audit", [], |r| r.get::<_, i64>(0))
@@ -467,7 +467,7 @@ async fn patch_attribute_commits_flips_sign_commits_column() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // Verify the SQLite column is now 0.
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let value: i64 = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
         conn.query_row(

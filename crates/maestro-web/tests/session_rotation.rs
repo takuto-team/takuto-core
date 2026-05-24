@@ -93,7 +93,7 @@ async fn me_status(state: &AppState, cookie: &str) -> StatusCode {
 }
 
 async fn user_id_for(state: &AppState, username: &str) -> String {
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let username = username.to_string();
     tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
@@ -140,7 +140,7 @@ async fn second_login_keeps_prior_session_when_flag_disabled() {
 
     let state = test_state_with_db();
     {
-        let mut cfg = state.config.config.write().await;
+        let mut cfg = state.config().config.write().await;
         cfg.web.kick_other_sessions_on_login = false;
     }
     let _admin = register_and_login(&state).await;
@@ -211,7 +211,7 @@ async fn sliding_extend_only_when_threshold_crossed() {
     let alice_id = user_id_for(&state, "alice").await;
 
     // Snapshot baseline last_seen_at right after login.
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let alice_uid = alice_id.clone();
     let initial_last_seen: i64 = tokio::task::spawn_blocking({
         let db = db.clone();
@@ -305,7 +305,7 @@ async fn absolute_ttl_rejects_and_deletes_old_session() {
     let alice_cookie = login_with_username(&state, "alice", "alice_passWORD1!").await;
 
     // Force the row to look "ancient": created 31 days ago, last_seen now.
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let ancient = t0 - (SESSION_ABSOLUTE_TTL_SECS as i64) - 60;
     tokio::task::spawn_blocking({
         let db = db.clone();
@@ -370,7 +370,7 @@ async fn logout_deletes_session_row() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let db = state.auth.db.as_ref().unwrap().clone();
+    let db = state.auth().db.as_ref().unwrap().clone();
     let alice_rows: i64 = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
         conn.query_row(

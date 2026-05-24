@@ -82,7 +82,7 @@ async fn cookie_secure_when_configured_true() {
     let _ = register_and_login(&state).await;
 
     {
-        let mut cfg = state.config.config.write().await;
+        let mut cfg = state.config().config.write().await;
         cfg.web.cookie_secure = Some(true);
     }
 
@@ -108,7 +108,7 @@ async fn cookie_secure_when_https_origin_present() {
     let _ = register_and_login(&state).await;
 
     {
-        let mut cfg = state.config.config.write().await;
+        let mut cfg = state.config().config.write().await;
         cfg.web.cors_origins = vec![
             TEST_ORIGIN.into(),
             "https://maestro.example.com".into(),
@@ -149,7 +149,7 @@ async fn explicit_cookie_secure_false_overrides_auto_detect() {
     let _ = register_and_login(&state).await;
 
     {
-        let mut cfg = state.config.config.write().await;
+        let mut cfg = state.config().config.write().await;
         cfg.web.cookie_secure = Some(false);
         cfg.web.cors_origins = vec![
             TEST_ORIGIN.into(),
@@ -173,7 +173,7 @@ async fn logout_cookie_inherits_secure_resolution() {
     let admin_cookie = register_and_login(&state).await;
 
     {
-        let mut cfg = state.config.config.write().await;
+        let mut cfg = state.config().config.write().await;
         cfg.web.cookie_secure = Some(true);
     }
 

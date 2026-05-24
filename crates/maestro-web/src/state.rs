@@ -175,15 +175,16 @@ pub struct RunCommandState {
 /// handlers extract only the slice they read via Axum's `FromRef`.
 ///
 /// Construct via [`AppState::new`]; the 5 composition fields are
-/// `pub(crate)` so handlers in this crate can name them when migrating, but
-/// no struct-literal construction is possible from outside the crate.
+/// `pub(crate)` so no cross-crate struct-literal construction is possible.
+/// External code (integration tests, the CLI) reads sub-states via the
+/// thin accessor methods below.
 #[derive(Clone)]
 pub struct AppState {
-    pub engine: EngineState,
-    pub auth: AuthState,
-    pub config: ConfigState,
-    pub editor: EditorState,
-    pub run_command: RunCommandState,
+    pub(crate) engine: EngineState,
+    pub(crate) auth: AuthState,
+    pub(crate) config: ConfigState,
+    pub(crate) editor: EditorState,
+    pub(crate) run_command: RunCommandState,
 }
 
 impl AppState {
@@ -202,6 +203,60 @@ impl AppState {
             editor,
             run_command,
         }
+    }
+
+    /// Live mutable handles for long-running background work. Cross-crate
+    /// readers (integration tests) reach the engine slice through this
+    /// accessor; in-crate handlers extract `State<EngineState>` directly.
+    pub fn engine(&self) -> &EngineState {
+        &self.engine
+    }
+
+    /// DB + GitHub-auth shims. Cross-crate accessor (see [`Self::engine`]).
+    pub fn auth(&self) -> &AuthState {
+        &self.auth
+    }
+
+    /// Live `Config` + persistence shims. Cross-crate accessor.
+    pub fn config(&self) -> &ConfigState {
+        &self.config
+    }
+
+    /// Editor / terminal session container state. Cross-crate accessor.
+    pub fn editor(&self) -> &EditorState {
+        &self.editor
+    }
+
+    /// Run-command session container state. Cross-crate accessor.
+    pub fn run_command(&self) -> &RunCommandState {
+        &self.run_command
+    }
+
+    /// Mutable engine slice (test fixtures only — production hot-swaps go
+    /// through `engine.engine`'s interior mutability instead).
+    pub fn engine_mut(&mut self) -> &mut EngineState {
+        &mut self.engine
+    }
+
+    /// Mutable auth slice (test fixtures swap in mock `gh_client` / `db`).
+    pub fn auth_mut(&mut self) -> &mut AuthState {
+        &mut self.auth
+    }
+
+    /// Mutable config slice (test fixtures override `config_path` and
+    /// `config_writer` to point at a temp dir).
+    pub fn config_mut(&mut self) -> &mut ConfigState {
+        &mut self.config
+    }
+
+    /// Mutable editor slice (test fixtures swap session maps).
+    pub fn editor_mut(&mut self) -> &mut EditorState {
+        &mut self.editor
+    }
+
+    /// Mutable run-command slice (test fixtures swap session maps).
+    pub fn run_command_mut(&mut self) -> &mut RunCommandState {
+        &mut self.run_command
     }
 }
 

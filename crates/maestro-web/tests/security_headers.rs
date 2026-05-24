@@ -222,7 +222,7 @@ async fn hsts_emitted_when_x_forwarded_proto_https() {
 async fn hsts_emitted_when_cors_origins_has_https() {
     let state = test_state_with_db();
     {
-        let mut cfg = state.config.config.write().await;
+        let mut cfg = state.config().config.write().await;
         cfg.web.cors_origins = vec!["https://maestro.example.com".to_string()];
     }
     let app = build_router(state);

@@ -181,7 +181,7 @@ async fn orphan_migration_e2e() {
         // Look up the admin's user_id — this is what the migration should
         // assign to the orphan workflow so the admin sees it in their list.
         let admin_id = {
-            let db = state.auth.db.as_ref().unwrap().clone();
+            let db = state.auth().db.as_ref().unwrap().clone();
             tokio::task::spawn_blocking(move || {
                 let conn = db.conn().blocking_lock();
                 maestro_core::db::users::get_user_by_username(&conn, "admin")
@@ -194,7 +194,7 @@ async fn orphan_migration_e2e() {
         };
 
         let restored = state
-            .engine
+            .engine()
             .engine
             .restore_persisted_workflows()
             .await
@@ -203,7 +203,7 @@ async fn orphan_migration_e2e() {
 
         // Sanity: before migration, the workflow is orphaned and invisible.
         {
-            let wf_arc = state.engine.engine.workflows_arc();
+            let wf_arc = state.engine().engine.workflows_arc();
             let map = wf_arc.read().await;
             let w = map.get("POLLED-1").expect("workflow present after restore");
             assert!(
@@ -219,7 +219,7 @@ async fn orphan_migration_e2e() {
         // (Dev A's startup reconciliation does this for real boots; this test
         // bypasses startup, so we do it inline.)
         {
-            let db = state.auth.db.as_ref().unwrap().clone();
+            let db = state.auth().db.as_ref().unwrap().clone();
             let admin_id_clone = admin_id.clone();
             let ws_name_owned = ws_name.to_string();
             tokio::task::spawn_blocking(move || {
@@ -242,7 +242,7 @@ async fn orphan_migration_e2e() {
 
         // Run the migration helper using the admin's user_id as owner.
         let migrated = state
-            .engine
+            .engine()
             .engine
             .migrate_orphan_workflows_to_owner(&admin_id)
             .await;
@@ -250,7 +250,7 @@ async fn orphan_migration_e2e() {
 
         // After migration the workflow carries the admin's user_id.
         {
-            let wf_arc = state.engine.engine.workflows_arc();
+            let wf_arc = state.engine().engine.workflows_arc();
             let map = wf_arc.read().await;
             let w = map.get("POLLED-1").expect("workflow still present");
             assert_eq!(
@@ -304,7 +304,7 @@ async fn orphan_migration_e2e() {
         let admin_cookie = register_and_login(&state).await;
 
         let restored = state
-            .engine
+            .engine()
             .engine
             .restore_persisted_workflows()
             .await
@@ -315,7 +315,7 @@ async fn orphan_migration_e2e() {
 
         // Orphan should still have user_id = None.
         {
-            let wf_arc = state.engine.engine.workflows_arc();
+            let wf_arc = state.engine().engine.workflows_arc();
             let map = wf_arc.read().await;
             let w = map.get("POLLED-2").expect("workflow present");
             assert!(
