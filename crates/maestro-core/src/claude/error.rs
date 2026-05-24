@@ -32,3 +32,58 @@ pub enum ClaudeError {
     )]
     EmptyOutput,
 }
+
+#[cfg(test)]
+mod tests {
+    //! Lock-in tests for the typed Claude-error surface.
+    //!
+    //! These tests pin two contracts against future drift:
+    //!   1. The `Display` rendering of every `ClaudeError` variant — the
+    //!      messages flow into log lines and (via `MaestroError`) HTTP error
+    //!      bodies, so a silent reword would be observable to operators.
+    //!   2. The `#[from] ClaudeError` chain into `MaestroError::Claude(..)` —
+    //!      every `?`-propagation inside `crates/maestro-core/src/claude/`
+    //!      relies on this exact path; if a refactor accidentally wraps via
+    //!      a different variant (e.g. the deprecated `ClaudeStr` shim) these
+    //!      tests fail.
+    use super::*;
+    use crate::error::MaestroError;
+
+    #[test]
+    fn lock_in_claude_error_display() {
+        let non_zero = ClaudeError::NonZeroExit {
+            exit_code: 137,
+            detail: "killed by OOM".to_string(),
+        };
+        assert_eq!(
+            format!("{}", non_zero),
+            "Claude Code exited with code 137: killed by OOM"
+        );
+
+        let empty = ClaudeError::EmptyOutput;
+        assert_eq!(
+            format!("{}", empty),
+            "Claude Code session produced no output — check that Claude is authenticated in the container"
+        );
+    }
+
+    #[test]
+    fn lock_in_claude_error_into_maestro_error() {
+        let non_zero = ClaudeError::NonZeroExit {
+            exit_code: 2,
+            detail: "(no output)".to_string(),
+        };
+        let wrapped: MaestroError = non_zero.into();
+        assert!(matches!(
+            wrapped,
+            MaestroError::Claude(ClaudeError::NonZeroExit { .. })
+        ));
+
+        let empty = ClaudeError::EmptyOutput;
+        let wrapped: MaestroError = empty.into();
+        assert!(matches!(
+            wrapped,
+            MaestroError::Claude(ClaudeError::EmptyOutput)
+        ));
+    }
+}
