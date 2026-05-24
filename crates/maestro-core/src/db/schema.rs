@@ -366,9 +366,11 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> Result<()> {
     )?;
 
     if final_version != SCHEMA_VERSION {
-        return Err(crate::error::MaestroError::DatabaseStr(format!(
-            "Schema migration failed: expected version {SCHEMA_VERSION}, got {final_version}"
-        )));
+        return Err(crate::db::DbError::Migrations {
+            expected: SCHEMA_VERSION,
+            actual: final_version,
+        }
+        .into());
     }
 
     Ok(())
