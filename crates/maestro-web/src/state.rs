@@ -289,3 +289,96 @@ impl FromRef<AppState> for RunCommandState {
         state.run_command.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use axum::extract::FromRef;
+    use maestro_core::config::TicketingSystem;
+
+    use super::{AppState, AuthState, ConfigState, EditorState, EngineState, RunCommandState};
+
+    /// Lock-in: the 5 sub-state slices carved out of [`AppState`] must each
+    /// be extractable via Axum's `FromRef` and their documented fields must
+    /// be reachable through the resulting slice. If anyone collapses a
+    /// sub-state back into `AppState` (regressing the carve), the
+    /// corresponding `FromRef` impl disappears and this test stops compiling.
+    /// If anyone changes a field type / drops a field, the per-field
+    /// assertions below force a deliberate update.
+    #[tokio::test]
+    async fn appstate_substruct_boundary_via_fromref() {
+        let state = crate::test_helpers::test_state_with_db();
+
+        // 1. EngineState — 4 fields (engine, polling_paused, clone_in_progress,
+        //    system_status). The test fixture wires both AtomicBools to
+        //    `false` and a default `SystemStatus` snapshot.
+        let engine_state = <EngineState as FromRef<AppState>>::from_ref(&state);
+        assert!(!engine_state.polling_paused.load(Ordering::Relaxed));
+        assert!(!engine_state.clone_in_progress.load(Ordering::Relaxed));
+        assert_eq!(
+            engine_state.engine.ticketing_system(),
+            TicketingSystem::None,
+        );
+        assert!(engine_state.engine.workflows_dir().is_absolute());
+        // `system_status` is `Arc<RwLock<…>>` — exercise the read guard.
+        let _snapshot = engine_state.system_status.read().await;
+
+        // 2. AuthState — 3 fields (db, gh_client, git_auth_resolver). The
+        //    fixture seeds Some(db) + Some(resolver) + a real `gh_client`.
+        let auth_state = <AuthState as FromRef<AppState>>::from_ref(&state);
+        assert!(auth_state.db.is_some());
+        assert!(auth_state.git_auth_resolver.is_some());
+        let cloned_gh = std::sync::Arc::clone(&auth_state.gh_client);
+        assert!(std::sync::Arc::strong_count(&cloned_gh) >= 2);
+
+        // 3. ConfigState — 6 fields (config, config_path, config_writer,
+        //    ticketing_system, jira_available, preflight_error). The fixture
+        //    points `config_path` at `temp_dir()/config.toml`, ticketing at
+        //    `None`, and leaves writer / preflight empty.
+        let config_state = <ConfigState as FromRef<AppState>>::from_ref(&state);
+        assert_eq!(
+            config_state
+                .config_path
+                .file_name()
+                .and_then(|s| s.to_str()),
+            Some("config.toml"),
+        );
+        assert!(matches!(
+            config_state.ticketing_system,
+            TicketingSystem::None,
+        ));
+        assert!(!config_state.jira_available.load(Ordering::Relaxed));
+        assert!(config_state.config_writer.is_none());
+        assert!(config_state.preflight_error.is_none());
+        let _live_cfg = config_state.config.read().await;
+
+        // 4. EditorState — 5 fields (editor_scanners, dynamic_forwards,
+        //    terminal_ports, editor_bundles, path_token_registry). The
+        //    fixture starts every map empty and the registry fresh.
+        let editor_state = <EditorState as FromRef<AppState>>::from_ref(&state);
+        assert_eq!(editor_state.editor_scanners.read().await.len(), 0);
+        assert_eq!(editor_state.dynamic_forwards.read().await.len(), 0);
+        assert_eq!(editor_state.terminal_ports.read().await.len(), 0);
+        assert_eq!(editor_state.editor_bundles.read().await.len(), 0);
+        // PathTokenRegistry has no length getter — assert the public
+        // surface answers `None` for an unknown token in a fresh registry.
+        assert!(
+            editor_state
+                .path_token_registry
+                .lookup("__lock_in_unknown__")
+                .await
+                .is_none(),
+        );
+
+        // 5. RunCommandState — 2 fields (run_commands, run_command_bundles).
+        //    Both maps empty in the fixture.
+        let run_command_state =
+            <RunCommandState as FromRef<AppState>>::from_ref(&state);
+        assert_eq!(run_command_state.run_commands.read().await.len(), 0);
+        assert_eq!(
+            run_command_state.run_command_bundles.read().await.len(),
+            0,
+        );
+    }
+}
