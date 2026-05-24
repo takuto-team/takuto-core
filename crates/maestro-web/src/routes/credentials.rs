@@ -809,7 +809,7 @@ pub async fn get_admin_github_status(
     Extension(auth): Extension<AuthenticatedUser>,
     Path(target_user_id): Path<String>,
 ) -> Result<Json<AdminGithubStatusResponse>, (StatusCode, Json<serde_json::Value>)> {
-    require_admin_for(&state, &auth)
+    require_admin_for(&state.auth, &auth)
         .await
         .map_err(|s| err(s, "forbidden"))?;
     let db = state

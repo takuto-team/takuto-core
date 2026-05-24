@@ -178,7 +178,7 @@ pub async fn put_agent_config(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(raw): Json<serde_json::Value>,
 ) -> Result<Json<UpdateConfigResponse>, (StatusCode, String)> {
-    require_admin_for(&state, &auth)
+    require_admin_for(&state.auth, &auth)
         .await
         .map_err(|s| (s, String::new()))?;
 

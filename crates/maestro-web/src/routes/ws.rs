@@ -9,14 +9,15 @@ use maestro_core::workflow::engine::WorkflowEvent;
 use tracing::{info, warn};
 
 use crate::auth::{session_cookie_from_headers, validate_db_session};
-use crate::state::AppState;
+use crate::state::{AuthState, EngineState};
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
+    State(engine): State<EngineState>,
 ) -> impl IntoResponse {
-    let Some(ref db) = state.auth.db else {
+    let Some(ref db) = auth.db else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
 
@@ -39,7 +40,7 @@ pub async fn ws_handler(
             return StatusCode::UNAUTHORIZED.into_response();
         };
         info!(user = %viewer_user_id, "WebSocket upgrade requested");
-        return ws.on_upgrade(move |socket| handle_socket(socket, state, viewer_user_id));
+        return ws.on_upgrade(move |socket| handle_socket(socket, engine, viewer_user_id));
     }
 
     StatusCode::UNAUTHORIZED.into_response()
@@ -59,9 +60,9 @@ pub fn should_deliver_event(evt: &WorkflowEvent, viewer_user_id: &str) -> bool {
     }
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState, viewer_user_id: String) {
-    let mut rx = state.engine.engine.subscribe();
-    let receiver_count = state.engine.engine.event_subscriber_count();
+async fn handle_socket(mut socket: WebSocket, engine: EngineState, viewer_user_id: String) {
+    let mut rx = engine.engine.subscribe();
+    let receiver_count = engine.engine.event_subscriber_count();
     info!(
         receivers = receiver_count,
         user = %viewer_user_id,

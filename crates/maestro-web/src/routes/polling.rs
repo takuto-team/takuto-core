@@ -47,7 +47,7 @@ pub async fn pause_polling(
 ) -> Result<axum::Json<PollingStatus>, StatusCode> {
     // Admin gate stays so the dashboard's pause/resume controls don't surprise
     // non-admins with a 200, but the body is a no-op.
-    require_admin_for(&state, &auth).await?;
+    require_admin_for(&state.auth, &auth).await?;
     Ok(axum::Json(disabled()))
 }
 
@@ -55,7 +55,7 @@ pub async fn resume_polling(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<axum::Json<PollingStatus>, StatusCode> {
-    require_admin_for(&state, &auth).await?;
+    require_admin_for(&state.auth, &auth).await?;
     Ok(axum::Json(disabled()))
 }
 

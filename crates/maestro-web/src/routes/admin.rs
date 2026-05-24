@@ -17,7 +17,7 @@ use maestro_core::db::models::{
 };
 
 use crate::auth::{AuthenticatedUser, session_cookie_from_headers, validate_db_session};
-use crate::state::AppState;
+use crate::state::AuthState;
 
 // ---------------------------------------------------------------------------
 // Admin authorisation helpers
@@ -33,7 +33,7 @@ use crate::state::AppState;
 /// Use [`Extension(auth): Extension<AuthenticatedUser>`] in the handler
 /// signature and call this as the first line of the handler body.
 pub(crate) async fn require_admin_for(
-    _state: &AppState,
+    _auth_state: &AuthState,
     auth: &AuthenticatedUser,
 ) -> Result<(), StatusCode> {
     if auth.role == UserRole::Admin {
@@ -52,10 +52,13 @@ pub(crate) async fn require_admin_for(
 /// Returns the authenticated admin [`User`] on success, or the appropriate HTTP
 /// status code on failure.
 pub(crate) async fn require_admin(
-    state: &AppState,
+    auth_state: &AuthState,
     headers: &HeaderMap,
 ) -> Result<User, StatusCode> {
-    let db = state.auth.db.as_ref().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = auth_state
+        .db
+        .as_ref()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let raw_cookie = session_cookie_from_headers(headers).ok_or(StatusCode::UNAUTHORIZED)?;
     let cookie = raw_cookie.to_string();
@@ -87,12 +90,12 @@ pub(crate) async fn require_admin(
 // ---------------------------------------------------------------------------
 
 /// `GET /api/users` -- List all users (admin only).
-pub async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(status) = require_admin(&state, &headers).await {
+pub async fn list_users(State(auth): State<AuthState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(status) = require_admin(&auth, &headers).await {
         return status.into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -124,15 +127,15 @@ struct CreateUserResponse {
 
 /// `POST /api/users` -- Create a new user (admin only).
 pub async fn create_user(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
     headers: HeaderMap,
     Json(body): Json<CreateUserRequest>,
 ) -> impl IntoResponse {
-    if let Err(status) = require_admin(&state, &headers).await {
+    if let Err(status) = require_admin(&auth, &headers).await {
         return status.into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -181,15 +184,15 @@ pub async fn create_user(
 
 /// `GET /api/users/{id}` -- Get a single user (admin only).
 pub async fn get_user(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(status) = require_admin(&state, &headers).await {
+    if let Err(status) = require_admin(&auth, &headers).await {
         return status.into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -214,12 +217,12 @@ pub async fn get_user(
 
 /// `PATCH /api/users/{id}` -- Update a user (admin only).
 pub async fn update_user(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<UpdateUserRequest>,
 ) -> impl IntoResponse {
-    let admin = match require_admin(&state, &headers).await {
+    let admin = match require_admin(&auth, &headers).await {
         Ok(user) => user,
         Err(status) => return status.into_response(),
     };
@@ -236,7 +239,7 @@ pub async fn update_user(
             .into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -290,11 +293,11 @@ pub async fn update_user(
 
 /// `POST /api/users/{id}/suspend` -- Suspend a user (admin only).
 pub async fn suspend_user(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let admin = match require_admin(&state, &headers).await {
+    let admin = match require_admin(&auth, &headers).await {
         Ok(user) => user,
         Err(status) => return status.into_response(),
     };
@@ -308,7 +311,7 @@ pub async fn suspend_user(
             .into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -339,15 +342,15 @@ pub async fn suspend_user(
 
 /// `POST /api/users/{id}/unsuspend` -- Unsuspend a user (admin only).
 pub async fn unsuspend_user(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(status) = require_admin(&state, &headers).await {
+    if let Err(status) = require_admin(&auth, &headers).await {
         return status.into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -379,15 +382,15 @@ pub async fn unsuspend_user(
 /// Deletes both `kind = 'password'` and `kind = 'recovery'` rows so the user's
 /// next login starts from a clean slate. Returns **204 No Content**.
 pub async fn unlock_user(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(status) = require_admin(&state, &headers).await {
+    if let Err(status) = require_admin(&auth, &headers).await {
         return status.into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -434,11 +437,11 @@ pub async fn unlock_user(
 
 /// `DELETE /api/users/{id}` -- Delete a user and all associated data (admin only).
 pub async fn delete_user(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let admin = match require_admin(&state, &headers).await {
+    let admin = match require_admin(&auth, &headers).await {
         Ok(user) => user,
         Err(status) => return status.into_response(),
     };
@@ -452,7 +455,7 @@ pub async fn delete_user(
             .into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -479,12 +482,12 @@ pub async fn delete_user(
 }
 
 /// `GET /api/users/export` -- Export all users (admin only).
-pub async fn export_users(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(status) = require_admin(&state, &headers).await {
+pub async fn export_users(State(auth): State<AuthState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(status) = require_admin(&auth, &headers).await {
         return status.into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -521,15 +524,15 @@ pub async fn export_users(State(state): State<AppState>, headers: HeaderMap) -> 
 /// Creates users from the import list. Skips users whose username already exists.
 /// Imported users have no password set (admin must set one separately).
 pub async fn import_users(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
     headers: HeaderMap,
     Json(body): Json<Vec<UserExport>>,
 ) -> impl IntoResponse {
-    if let Err(status) = require_admin(&state, &headers).await {
+    if let Err(status) = require_admin(&auth, &headers).await {
         return status.into_response();
     }
 
-    let db = match state.auth.db.as_ref() {
+    let db = match auth.db.as_ref() {
         Some(db) => db.clone(),
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };

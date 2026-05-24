@@ -118,7 +118,7 @@ pub async fn update_config(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(patch): Json<RuntimeDashboardConfigPatch>,
 ) -> Result<Json<UpdateConfigResponse>, (StatusCode, String)> {
-    require_admin_for(&state, &auth)
+    require_admin_for(&state.auth, &auth)
         .await
         .map_err(|s| (s, String::new()))?;
     // Apply patch under write lock, then clone and release.
@@ -162,7 +162,7 @@ pub async fn reload_config(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Config>, (StatusCode, String)> {
-    require_admin_for(&state, &auth)
+    require_admin_for(&state.auth, &auth)
         .await
         .map_err(|s| (s, String::new()))?;
     reload_config_from_disk(&state.config.config_path, &state.config.config)

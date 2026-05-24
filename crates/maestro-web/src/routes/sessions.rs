@@ -42,7 +42,7 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::{session_cookie_from_headers, validate_db_session};
 use crate::session_registry::{SessionRoute, SessionRouteKind};
-use crate::state::AppState;
+use crate::state::{AuthState, EditorState};
 
 /// Hop-by-hop headers (RFC 7230 §6.1) that must NOT be forwarded.
 ///
@@ -247,7 +247,8 @@ fn sanitise_request_headers(req: &mut Request<Body>, host_port: u16, is_upgrade:
 /// Registered as the `fallback` handler, replacing the static file handler
 /// for requests that match a known proxy session via referer.
 pub async fn proxy_or_static_fallback(
-    State(state): State<AppState>,
+    State(auth): State<AuthState>,
+    State(editor): State<EditorState>,
     req: Request<Body>,
 ) -> Response<Body> {
     // Unknown `/api/*` paths must NOT fall through to the SPA bundle — a route
@@ -259,10 +260,10 @@ pub async fn proxy_or_static_fallback(
     }
 
     // Find a DynamicPort route via referer or cookie.
-    let proxy_route = find_dynamic_port_route(&state, req.headers()).await;
+    let proxy_route = find_dynamic_port_route(&editor, req.headers()).await;
 
     if let Some((token, route)) = proxy_route {
-        let auth_user_id = authenticate_request(state.auth.db.as_ref(), req.headers())
+        let auth_user_id = authenticate_request(auth.db.as_ref(), req.headers())
             .await
             .ok()
             .flatten();
@@ -280,20 +281,20 @@ pub async fn proxy_or_static_fallback(
 /// Strategy 2: `maestro_dynamic_port` cookie → set when the user last
 ///   visited a DynamicPort HTML page, catches deep JS import chains.
 async fn find_dynamic_port_route(
-    state: &AppState,
+    editor: &EditorState,
     headers: &axum::http::HeaderMap,
 ) -> Option<(String, SessionRoute)> {
     // Try referer first (most reliable — carries the exact token).
     if let Some(referer) = headers.get(header::REFERER).and_then(|v| v.to_str().ok())
         && let Some(token) = extract_token_from_referer(referer)
-        && let Some(route) = state.editor.path_token_registry.lookup(&token).await
+        && let Some(route) = editor.path_token_registry.lookup(&token).await
         && route.kind == SessionRouteKind::DynamicPort
     {
         return Some((token, route));
     }
     // Fall back to cookie (covers deep dependency chains without referer).
     let token = extract_dynamic_port_cookie(headers)?;
-    let route = state.editor.path_token_registry.lookup(&token).await?;
+    let route = editor.path_token_registry.lookup(&token).await?;
     (route.kind == SessionRouteKind::DynamicPort).then_some((token, route))
 }
 
@@ -368,8 +369,12 @@ fn extract_token_from_referer(referer: &str) -> Option<String> {
 /// requires a valid `maestro_session` cookie before proceeding. This prevents
 /// access if the URL leaks — the unguessable path token remains a defence in
 /// depth, but is no longer the sole gatekeeper.
-pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) -> Response<Body> {
-    let auth_user_id = match authenticate_request(state.auth.db.as_ref(), req.headers()).await {
+pub async fn proxy_session(
+    State(auth): State<AuthState>,
+    State(editor): State<EditorState>,
+    req: Request<Body>,
+) -> Response<Body> {
+    let auth_user_id = match authenticate_request(auth.db.as_ref(), req.headers()).await {
         Ok(uid) => uid,
         Err(()) => {
             return Response::builder()
@@ -389,7 +394,7 @@ pub async fn proxy_session(State(state): State<AppState>, req: Request<Body>) ->
         None => return redirect_to_trailing_slash(token, query.as_deref()),
         Some(r) => r,
     };
-    let route = match state.editor.path_token_registry.lookup(token).await {
+    let route = match editor.path_token_registry.lookup(token).await {
         Some(r) => r,
         None => {
             tracing::warn!(

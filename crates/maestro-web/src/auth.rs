@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use crate::state::AppState;
+use crate::state::AuthState;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -471,11 +471,11 @@ pub struct AuthenticatedUser {
 /// If no database is available or no valid session exists, all protected
 /// requests are rejected with 401.
 pub async fn dashboard_auth_middleware(
-    State(state): State<AppState>,
+    State(auth_state): State<AuthState>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let Some(ref db) = state.auth.db else {
+    let Some(ref db) = auth_state.db else {
         // No database — reject all protected requests.
         return StatusCode::UNAUTHORIZED.into_response();
     };
