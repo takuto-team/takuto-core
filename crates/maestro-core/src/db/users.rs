@@ -41,7 +41,7 @@ pub fn create_user(conn: &rusqlite::Connection, username: &str, role: UserRole) 
         {
             return MaestroError::Auth(format!("Username '{username}' already exists"));
         }
-        MaestroError::DatabaseStr(e.to_string())
+        MaestroError::from(super::DbError::Sqlite(e))
     })?;
 
     tx.commit()?;
