@@ -28,6 +28,9 @@ use crate::config::GitHubAppConfig;
 use crate::error::{MaestroError, Result};
 use crate::process;
 
+pub mod error;
+pub use error::GitHubAppError;
+
 /// Well-known path where the background task writes the current installation token.
 /// Worker containers read this file on every `gh` / `git` invocation so they always
 /// use a valid, non-expired token — even for steps that run longer than 1 hour.
@@ -111,7 +114,8 @@ impl GitHubAppTokenManager {
     pub fn new(config: &GitHubAppConfig) -> Result<Self> {
         let key_pem = Self::resolve_private_key(config)?;
         let encoding_key = EncodingKey::from_rsa_pem(key_pem.as_bytes()).map_err(|e| {
-            MaestroError::GitHubApp(format!(
+            #[allow(deprecated)]
+            MaestroError::GitHubAppStr(format!(
                 "Invalid RSA private key in [github] config: {e}. \
                  Ensure app_private_key contains a valid PEM-encoded RSA private key \
                  (or app_private_key_path points to one). The key should begin with \
@@ -152,7 +156,8 @@ impl GitHubAppTokenManager {
         let has_path = !config.app_private_key_path.trim().is_empty();
 
         if has_inline && has_path {
-            return Err(MaestroError::GitHubApp(
+            #[allow(deprecated)]
+            return Err(MaestroError::GitHubAppStr(
                 "Set either [github] app_private_key or app_private_key_path, not both".into(),
             ));
         }
@@ -164,14 +169,16 @@ impl GitHubAppTokenManager {
         if has_path {
             let path = config.app_private_key_path.trim();
             return std::fs::read_to_string(path).map_err(|e| {
-                MaestroError::GitHubApp(format!(
+                #[allow(deprecated)]
+                MaestroError::GitHubAppStr(format!(
                     "Cannot read [github] app_private_key_path '{path}': {e}. \
                      Verify the file exists and is readable."
                 ))
             });
         }
 
-        Err(MaestroError::GitHubApp(
+        #[allow(deprecated)]
+        Err(MaestroError::GitHubAppStr(
             "GitHub App private key not configured. Set [github] app_private_key (PEM content) \
              or app_private_key_path (path to PEM file)."
                 .into(),
@@ -191,8 +198,10 @@ impl GitHubAppTokenManager {
         };
 
         let header = Header::new(Algorithm::RS256);
-        encode(&header, &claims, &self.encoding_key)
-            .map_err(|e| MaestroError::GitHubApp(format!("Failed to generate JWT: {e}")))
+        encode(&header, &claims, &self.encoding_key).map_err(|e| {
+            #[allow(deprecated)]
+            MaestroError::GitHubAppStr(format!("Failed to generate JWT: {e}"))
+        })
     }
 
     // -- Installation token --
@@ -263,7 +272,8 @@ impl GitHubAppTokenManager {
         .await?;
 
         if !output.success() {
-            return Err(MaestroError::GitHubApp(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::GitHubAppStr(format!(
                 "curl request to GitHub API failed (exit {}): {}",
                 output.exit_code,
                 output.stderr.trim()
@@ -274,7 +284,8 @@ impl GitHubAppTokenManager {
         if let Ok(resp) = serde_json::from_str::<InstallationTokenResponse>(&output.stdout) {
             let expires_at = chrono::DateTime::parse_from_rfc3339(&resp.expires_at)
                 .map_err(|e| {
-                    MaestroError::GitHubApp(format!(
+                    #[allow(deprecated)]
+                    MaestroError::GitHubAppStr(format!(
                         "Failed to parse token expiry '{0}': {e}",
                         resp.expires_at
                     ))
@@ -293,10 +304,12 @@ impl GitHubAppTokenManager {
 
         // Parse as a GitHub API error for an actionable message.
         if let Ok(api_err) = serde_json::from_str::<GitHubApiError>(&output.stdout) {
-            return Err(MaestroError::GitHubApp(self.format_api_error(&api_err)));
+            #[allow(deprecated)]
+            return Err(MaestroError::GitHubAppStr(self.format_api_error(&api_err)));
         }
 
-        Err(MaestroError::GitHubApp(format!(
+        #[allow(deprecated)]
+        Err(MaestroError::GitHubAppStr(format!(
             "Unexpected GitHub API response: {}",
             output.stdout.trim()
         )))
@@ -410,7 +423,8 @@ impl GitHubAppTokenManager {
         )
         .await?;
         if !name_out.success() {
-            return Err(MaestroError::GitHubApp(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::GitHubAppStr(format!(
                 "git config user.name failed: {}",
                 name_out.stderr.trim()
             )));
@@ -424,7 +438,8 @@ impl GitHubAppTokenManager {
         )
         .await?;
         if !email_out.success() {
-            return Err(MaestroError::GitHubApp(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::GitHubAppStr(format!(
                 "git config user.email failed: {}",
                 email_out.stderr.trim()
             )));
@@ -501,13 +516,15 @@ async fn refresh_and_write(mgr: &GitHubAppTokenManager, cwd: &Path, path: &Path)
 pub fn write_token_file(path: &Path, token: &str) -> Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, token).map_err(|e| {
-        MaestroError::GitHubApp(format!(
+        #[allow(deprecated)]
+        MaestroError::GitHubAppStr(format!(
             "Failed to write token file '{}': {e}",
             tmp.display()
         ))
     })?;
     std::fs::rename(&tmp, path).map_err(|e| {
-        MaestroError::GitHubApp(format!(
+        #[allow(deprecated)]
+        MaestroError::GitHubAppStr(format!(
             "Failed to rename token file '{}' → '{}': {e}",
             tmp.display(),
             path.display()

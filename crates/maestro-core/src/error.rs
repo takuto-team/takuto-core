@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::claude::ClaudeError;
 use crate::db::DbError;
+use crate::github_app::GitHubAppError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MaestroError {
@@ -13,9 +14,6 @@ pub enum MaestroError {
 
     #[error("Git error: {0}")]
     Git(String),
-
-    #[error("GitHub App error: {0}")]
-    GitHubApp(String),
 
     #[error("AI agent error: {0}")]
     AiAgent(String),
@@ -63,6 +61,21 @@ pub enum MaestroError {
     #[deprecated(note = "use MaestroError::Claude with a typed ClaudeError instead")]
     #[error("Claude session error: {0}")]
     ClaudeStr(String),
+
+    /// Typed GitHub App authentication error envelope. New code path —
+    /// produced inside `crates/maestro-core/src/github_app{.rs,/}` via
+    /// `GitHubAppError::Variant` then `?`-propagated through this `#[from]`.
+    #[error(transparent)]
+    GitHubApp(#[from] GitHubAppError),
+
+    /// Deprecated free-form String shim for the GitHub App subsystem. Lands
+    /// with zero callers (the migration commit collapses every original
+    /// `MaestroError::GitHubApp(String)` site to a typed `GitHubAppError`
+    /// variant). Kept only to honour the typed-errors architecture spec's
+    /// A.4 deprecation path — removed by the post-phase-8 cleanup PR.
+    #[deprecated(note = "use MaestroError::GitHubApp with a typed GitHubAppError instead")]
+    #[error("GitHub App error: {0}")]
+    GitHubAppStr(String),
 
     #[error("Authentication error: {0}")]
     Auth(String),
