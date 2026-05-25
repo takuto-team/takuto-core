@@ -204,7 +204,7 @@ pub(super) async fn bootstrap_new_workflow(
             }
             Err(e) => {
                 step_log.output.push(format!("[DRY/SKIP] {e}"));
-                warn!(ticket = ticket_key, error = %e, "Failed to assign ticket, continuing");
+                warn!(ticket = ticket_key, error = ?e, "Failed to assign ticket, continuing");
             }
         }
         match actions
@@ -218,7 +218,7 @@ pub(super) async fn bootstrap_new_workflow(
             }
             Err(e) => {
                 step_log.output.push(format!("[DRY/SKIP] {e}"));
-                warn!(ticket = ticket_key, error = %e, "Failed to transition ticket, continuing");
+                warn!(ticket = ticket_key, error = ?e, "Failed to transition ticket, continuing");
             }
         }
         step_log.complete(StepStatus::Success);

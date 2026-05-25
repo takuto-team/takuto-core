@@ -14,6 +14,7 @@ use super::traits::ExternalActions;
 use crate::config::Config;
 use crate::error::{MaestroError, Result};
 use crate::git::worktree_remove;
+use crate::jira::JiraError;
 
 use crate::github_app::GitHubAppTokenManager;
 use crate::process::{self, CommandOutput};
@@ -91,11 +92,11 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !output.success() {
-            #[allow(deprecated)]
-            return Err(MaestroError::JiraStr(format!(
-                "Failed to assign ticket {key}: {}",
-                output.stderr
-            )));
+            return Err(JiraError::AssignFailed {
+                key: key.to_string(),
+                stderr: output.stderr,
+            }
+            .into());
         }
         Ok(())
     }
@@ -119,11 +120,12 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !output.success() {
-            #[allow(deprecated)]
-            return Err(MaestroError::JiraStr(format!(
-                "Failed to transition ticket {key} to {status}: {}",
-                output.stderr
-            )));
+            return Err(JiraError::TransitionFailed {
+                key: key.to_string(),
+                status: status.to_string(),
+                stderr: output.stderr,
+            }
+            .into());
         }
         Ok(())
     }
@@ -146,11 +148,11 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !output.success() {
-            #[allow(deprecated)]
-            return Err(MaestroError::JiraStr(format!(
-                "Failed to unassign ticket {key}: {}",
-                output.stderr
-            )));
+            return Err(JiraError::UnassignFailed {
+                key: key.to_string(),
+                stderr: output.stderr,
+            }
+            .into());
         }
         Ok(())
     }
@@ -173,11 +175,11 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !output.success() {
-            #[allow(deprecated)]
-            return Err(MaestroError::JiraStr(format!(
-                "Failed to get ticket details for {key}: {}",
-                output.stderr
-            )));
+            return Err(JiraError::GetDetailsFailed {
+                key: key.to_string(),
+                stderr: output.stderr,
+            }
+            .into());
         }
         Ok(output.stdout)
     }

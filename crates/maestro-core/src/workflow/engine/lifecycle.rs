@@ -190,13 +190,13 @@ impl WorkflowLifecycle {
             .await;
             tokio::spawn(async move {
                 if let Err(e) = actions.assign_ticket(&repo_path, &key).await {
-                    warn!(ticket = %key, error = %e, "Failed to assign ticket at add-to-dashboard (best-effort)");
+                    warn!(ticket = %key, error = ?e, "Failed to assign ticket at add-to-dashboard (best-effort)");
                 }
                 if let Err(e) = actions
                     .transition_ticket(&repo_path, &key, "In Progress")
                     .await
                 {
-                    warn!(ticket = %key, error = %e, "Failed to transition ticket at add-to-dashboard (best-effort)");
+                    warn!(ticket = %key, error = ?e, "Failed to transition ticket at add-to-dashboard (best-effort)");
                 }
             });
         }
@@ -329,13 +329,13 @@ impl WorkflowLifecycle {
             let key = ticket_key.to_string();
             let repo_path_clone = repo_path.clone();
             if let Err(e) = actions.unassign_ticket(&repo_path_clone, &key).await {
-                warn!(ticket = %key, error = %e, "Failed to unassign ticket on delete (best-effort)");
+                warn!(ticket = %key, error = ?e, "Failed to unassign ticket on delete (best-effort)");
             }
             if let Err(e) = actions
                 .transition_ticket(&repo_path_clone, &key, "To Do")
                 .await
             {
-                warn!(ticket = %key, error = %e, "Failed to transition ticket back to To Do on delete (best-effort)");
+                warn!(ticket = %key, error = ?e, "Failed to transition ticket back to To Do on delete (best-effort)");
             }
         }
 

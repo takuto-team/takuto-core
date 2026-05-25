@@ -336,13 +336,13 @@ impl WorkflowTransitions {
 
             tokio::spawn(async move {
                 if let Err(e) = actions.unassign_ticket(&repo_path, &ticket_for_jira).await {
-                    warn!(error = %e, ticket = %ticket_for_jira, "Failed to unassign ticket on stop");
+                    warn!(error = ?e, ticket = %ticket_for_jira, "Failed to unassign ticket on stop");
                 }
                 if let Err(e) = actions
                     .transition_ticket(&repo_path, &ticket_for_jira, "To Do")
                     .await
                 {
-                    warn!(error = %e, ticket = %ticket_for_jira, "Failed to transition ticket back to To Do on stop");
+                    warn!(error = ?e, ticket = %ticket_for_jira, "Failed to transition ticket back to To Do on stop");
                 }
             });
         }

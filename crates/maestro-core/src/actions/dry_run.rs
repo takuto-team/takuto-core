@@ -13,6 +13,7 @@ use super::traits::ExternalActions;
 use crate::error::{MaestroError, Result};
 use crate::git::worktree_remove;
 use crate::github_app::GitHubAppTokenManager;
+use crate::jira::JiraError;
 use crate::process::{self, CommandOutput};
 
 pub struct DryRunActions {
@@ -74,11 +75,11 @@ impl ExternalActions for DryRunActions {
         )
         .await?;
         if !output.success() {
-            #[allow(deprecated)]
-            return Err(MaestroError::JiraStr(format!(
-                "Failed to get ticket details for {key}: {}",
-                output.stderr
-            )));
+            return Err(JiraError::GetDetailsFailed {
+                key: key.to_string(),
+                stderr: output.stderr,
+            }
+            .into());
         }
         Ok(output.stdout)
     }
