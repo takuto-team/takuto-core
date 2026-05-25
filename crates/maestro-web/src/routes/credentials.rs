@@ -384,10 +384,13 @@ pub async fn post_provider_credential(
     };
 
     let master = require_master_key(&auth_state)?;
+    // SAFETY: `require_master_key` returns `Err` when the DB is missing
+    // (no master key without a DB), so reaching this point guarantees
+    // `auth_state.db.is_some()`.
     let db = auth_state
         .db
         .as_ref()
-        .expect("db checked in require_master_key")
+        .expect("require_master_key gated db.is_some()")
         .clone();
 
     let sealed = seal(&master, &plaintext).map_err(|e| {
@@ -587,10 +590,13 @@ pub async fn post_github_pat(
         return Err(err(StatusCode::BAD_REQUEST, "invalid_pat"));
     }
     let master = require_master_key(&auth_state)?;
+    // SAFETY: `require_master_key` returns `Err` when the DB is missing
+    // (no master key without a DB), so reaching this point guarantees
+    // `auth_state.db.is_some()`.
     let db = auth_state
         .db
         .as_ref()
-        .expect("db checked in require_master_key")
+        .expect("require_master_key gated db.is_some()")
         .clone();
 
     // Phase 2b.1 does not yet parse remote URLs — pass an empty org list so

@@ -470,8 +470,12 @@ async fn add_via_clone(
         )?;
         let inserted = maestro_core::db::repositories::add_for_user(&conn, &actor_id, &repo_id)?;
         // Re-read to get the canonical row (in case of a racing peer).
+        // SAFETY: The two lines above upserted into `repositories` then
+        // joined into `user_repositories` inside the same connection (and
+        // therefore the same SQLite transaction-implicit serialised view).
+        // The row is guaranteed to exist.
         let row = maestro_core::db::repositories::get(&conn, &repo_id)?
-            .expect("row just inserted/upserted");
+            .expect("row was just upserted in the same connection");
         Ok((row, inserted))
     })
     .await

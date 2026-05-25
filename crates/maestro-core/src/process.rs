@@ -184,8 +184,21 @@ impl ProcessHandle {
     }
 
     pub async fn wait_with_output(mut self) -> Result<CommandOutput> {
-        let stdout = self.child.stdout.take().expect("stdout was already taken");
-        let stderr = self.child.stderr.take().expect("stderr was already taken");
+        // SAFETY: `ProcessHandle::spawn` always configures
+        // `Stdio::piped()` for both streams, and `take()` is called exactly
+        // once per stream per `ProcessHandle` (consumed by `wait_with_output`
+        // or `wait_with_streaming_timeout`, never both). The `None` arm here
+        // would require a buggy second consumer in the same process.
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .expect("ProcessHandle::spawn pipes stdout; take() called once");
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .expect("ProcessHandle::spawn pipes stderr; take() called once");
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
@@ -245,8 +258,18 @@ impl ProcessHandle {
         mut self,
         line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
     ) -> Result<CommandOutput> {
-        let stdout = self.child.stdout.take().expect("stdout was already taken");
-        let stderr = self.child.stderr.take().expect("stderr was already taken");
+        // SAFETY: See `wait_with_output` — `ProcessHandle::spawn` pipes both
+        // streams and `take()` is called exactly once per stream per handle.
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .expect("ProcessHandle::spawn pipes stdout; take() called once");
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .expect("ProcessHandle::spawn pipes stderr; take() called once");
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();

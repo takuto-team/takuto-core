@@ -215,6 +215,9 @@ pub fn generate_connection_token() -> String {
 ///   silent token reuse.
 pub fn generate_session_path_token() -> String {
     let mut buf = [0u8; 16];
+    // SAFETY: `getrandom::fill` only fails when the OS CSPRNG is
+    // unavailable. See the function-level doc comment above for the full
+    // rationale — token reuse is unacceptable, so panicking is correct.
     getrandom::fill(&mut buf).expect("OS CSPRNG (getrandom) must be available");
     let mut out = String::with_capacity(32);
     for byte in buf {

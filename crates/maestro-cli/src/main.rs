@@ -1209,8 +1209,12 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{SignalKind, signal};
+                // SAFETY: `signal(SIGTERM)` only fails on a system that does
+                // not support tokio's signal driver (no Unix process flag, no
+                // tokio runtime). Both are guaranteed by the cfg(unix) gate +
+                // the `#[tokio::main]`-equivalent runtime we already entered.
                 let mut sigterm = signal(SignalKind::terminate())
-                    .expect("failed to install SIGTERM handler");
+                    .expect("signal(SIGTERM) cannot fail under cfg(unix) + tokio runtime");
                 tokio::select! {
                     _ = ctrl_c => {
                         info!("Received SIGINT, initiating graceful shutdown");
@@ -1222,7 +1226,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             #[cfg(not(unix))]
             {
-                ctrl_c.await.expect("failed to install Ctrl+C handler");
+                // SAFETY: `ctrl_c().await` only fails on a system without a
+                // ctrl_c hook (none of our supported targets), or if no tokio
+                // runtime is active — both impossible here.
+                ctrl_c.await.expect("ctrl_c() cannot fail under tokio runtime");
                 info!("Received Ctrl+C, initiating graceful shutdown");
             }
         } => {

@@ -105,7 +105,11 @@ fn hmac_key(password: &str) -> [u8; 32] {
 }
 
 fn sign_message(key: &[u8; 32], msg: &[u8]) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(key.as_slice()).expect("HMAC key length");
+    // SAFETY: `Hmac::new_from_slice` only fails on invalid key length, and
+    // the type signature `&[u8; 32]` guarantees a 32-byte key — SHA-256
+    // accepts any length up to its block size (64 bytes), so 32 is valid.
+    let mut mac = HmacSha256::new_from_slice(key.as_slice())
+        .expect("HMAC-SHA256 accepts any key length ≤ 64 bytes; key is &[u8; 32]");
     mac.update(msg);
     mac.finalize().into_bytes().into()
 }

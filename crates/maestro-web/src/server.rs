@@ -91,7 +91,10 @@ pub fn build_router(state: AppState) -> Router {
             .burst_size(10)
             .key_extractor(LoginKeyExtractor)
             .finish()
-            .expect("static governor config"),
+            // SAFETY: `GovernorConfigBuilder::finish()` only fails when the
+            // per-second / burst values are zero. Both are non-zero literals
+            // above (`.per_second(60)` / `.burst_size(10)`).
+            .expect("static governor config with non-zero per_second + burst_size"),
     );
     let login_rate_limited = Router::new()
         .route("/auth/login", post(routes::auth::login))
@@ -335,14 +338,16 @@ pub fn build_router(state: AppState) -> Router {
 
     // Read the config outside of an async context to avoid panicking on
     // tokio::sync::RwLock::blocking_read() inside the runtime.
-    // Safety: build_router is called once at startup; the try_read() will
-    // succeed because no writer is active during router construction.
     let cors_layer = {
+        // SAFETY: `build_router` is called once at startup before any spawned
+        // task takes a write lock on `state.config.config`. `try_read()` only
+        // returns `Err` when a writer is active or queued, which is impossible
+        // at this point in the boot sequence.
         let config = state
             .config
             .config
             .try_read()
-            .expect("config lock should be available during router construction");
+            .expect("config RwLock uncontended during startup router construction");
         build_cors_layer(&config.web)
     };
 
@@ -437,7 +442,12 @@ pub async fn serve_static(uri: Uri) -> Response<Body> {
             if path.ends_with(".html") || path.ends_with(".js") || path.ends_with(".css") {
                 res = res.header(header::CACHE_CONTROL, "no-store, max-age=0");
             }
-            res.body(Body::from(content.data.to_vec())).unwrap()
+            // SAFETY: `Response::builder().body(Body::from(Vec<u8>))` only
+            // fails on malformed header values, and every header set above
+            // is either a static `&'static str` mime or one of two pinned
+            // `CACHE_CONTROL` constants. Body::from(Vec<u8>) is infallible.
+            res.body(Body::from(content.data.to_vec()))
+                .expect("static headers + Body::from(Vec) cannot fail")
         }
         None => {
             // SPA fallback: serve index.html for routes handled by React Router
@@ -445,17 +455,19 @@ pub async fn serve_static(uri: Uri) -> Response<Body> {
             if (!path.contains('.') || path.ends_with(".html"))
                 && let Some(index) = Assets::get("index.html")
             {
+                // SAFETY: see above — static headers + Body::from(Vec) is infallible.
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, "text/html")
                     .header(header::CACHE_CONTROL, "no-store, max-age=0")
                     .body(Body::from(index.data.to_vec()))
-                    .unwrap();
+                    .expect("static headers + Body::from(Vec) cannot fail");
             }
+            // SAFETY: see above — static headers + Body::from(&str) is infallible.
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from("Not Found"))
-                .unwrap()
+                .expect("static headers + Body::from(&str) cannot fail")
         }
     }
 }

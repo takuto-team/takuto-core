@@ -184,7 +184,10 @@ pub async fn start_manual_workflow(
                 .iter()
                 .max_by_key(|r| r.created_at)
                 .map(|r| r.id.clone())
-                .expect("user_repos non-empty"),
+                // SAFETY: `user_repos.is_empty()` is rejected with 400
+                // above, so the iterator has at least one element and
+                // `max_by_key` returns `Some`.
+                .expect("user_repos.is_empty() returned 400 above"),
         };
         Some(chosen_id)
     } else {

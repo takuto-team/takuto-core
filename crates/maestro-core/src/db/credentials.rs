@@ -66,25 +66,32 @@ pub fn legacy_argon2_default_hash_for_tests(password: &str) -> Result<Vec<u8>> {
 /// PHC string's embedded params; the instance returned here is only used to
 /// drive the verifier (it does **not** override the stored params).
 fn current_argon2_password() -> Argon2<'static> {
+    // SAFETY: `Params::new` rejects values outside Argon2's published
+    // ranges (m_cost ≥ 8 × p_cost, t_cost ≥ 1, p_cost ∈ 1..2²⁴-1, etc.).
+    // The CURRENT_* constants are checked at the top of this file and
+    // covered by `params_within_argon2_bounds` in tests.
     let params = Params::new(
         CURRENT_M_COST,
         CURRENT_T_COST_PASSWORD,
         CURRENT_P_COST,
         None,
     )
-    .expect("static argon2 password params are valid");
+    .expect("CURRENT_* constants are within Argon2id parameter bounds");
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
 /// Argon2id instance with current recovery-code-hashing parameters (stronger `t_cost`).
 fn current_argon2_recovery() -> Argon2<'static> {
+    // SAFETY: same Argon2 bounds argument as `current_argon2_password`;
+    // CURRENT_T_COST_RECOVERY (≥ 1) and the shared constants are covered
+    // by `params_within_argon2_bounds`.
     let params = Params::new(
         CURRENT_M_COST,
         CURRENT_T_COST_RECOVERY,
         CURRENT_P_COST,
         None,
     )
-    .expect("static argon2 recovery params are valid");
+    .expect("CURRENT_* constants are within Argon2id parameter bounds");
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 

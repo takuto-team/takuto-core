@@ -127,10 +127,12 @@ pub fn parse_session_path(path: &str) -> Option<(&str, Option<&str>)> {
 /// Build a 404 with no body. Per GH-45 #6, the body must NOT contain the
 /// token, the kind, or any other discoverable information.
 fn not_found() -> Response<Body> {
+    // SAFETY: Response::builder() with only a `StatusCode` set + an empty
+    // body cannot fail — no header validation, no body construction risk.
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(Body::empty())
-        .expect("404 builder is infallible")
+        .expect("status + empty body is infallible")
 }
 
 /// Build a 308 redirect to add a trailing slash to a `/s/{token}` URL.
@@ -147,11 +149,14 @@ fn redirect_to_trailing_slash(token: &str, query: Option<&str>) -> Response<Body
         Some(q) if !q.is_empty() => format!("/s/{token}/?{q}"),
         _ => format!("/s/{token}/"),
     };
+    // SAFETY: `location` is constructed above by string-concatenating a
+    // pre-validated path token with `/`; both segments are ASCII so the
+    // `LOCATION` header value parse cannot fail.
     Response::builder()
         .status(StatusCode::PERMANENT_REDIRECT)
         .header(header::LOCATION, location)
         .body(Body::empty())
-        .expect("redirect builder is infallible")
+        .expect("LOCATION header is ASCII, body is empty")
 }
 
 /// `true` if the request is a WebSocket upgrade.
@@ -230,8 +235,10 @@ fn sanitise_request_headers(req: &mut Request<Body>, host_port: u16, is_upgrade:
             req.headers_mut().remove(*name);
         }
     }
+    // SAFETY: `upstream_host()` returns a literal `127.0.0.1` and `host_port`
+    // is a `u16` rendered as decimal — both ASCII, both valid HTTP token chars.
     let host = HeaderValue::from_str(&format!("{}:{host_port}", upstream_host()))
-        .expect("host header is ascii");
+        .expect("upstream_host() is ASCII, port is decimal u16");
     req.headers_mut().insert(HOST, host);
 }
 
@@ -377,10 +384,12 @@ pub async fn proxy_session(
     let auth_user_id = match authenticate_request(auth.db.as_ref(), req.headers()).await {
         Ok(uid) => uid,
         Err(()) => {
+            // SAFETY: Response::builder() with only a `StatusCode` set + an
+            // empty body cannot fail — no header validation involved.
             return Response::builder()
                 .status(StatusCode::UNAUTHORIZED)
                 .body(Body::empty())
-                .expect("401 builder is infallible");
+                .expect("status + empty body is infallible");
         }
     };
 
@@ -618,9 +627,13 @@ async fn forward_websocket(
             headers.insert(name.clone(), value.clone());
         }
     }
+    // SAFETY: The builder has only `SWITCHING_PROTOCOLS` set and headers
+    // copied from a valid `parts.headers` (already parsed by hyper from a
+    // real upstream response). `.body(Body::empty())` finalises an
+    // already-valid builder; failure here is impossible.
     response
         .body(Body::empty())
-        .expect("101 response is well-formed")
+        .expect("status + copied valid headers + empty body is infallible")
 }
 
 #[cfg(test)]

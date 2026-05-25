@@ -48,9 +48,13 @@ pub fn init_license_tier() {
              Expected one of: community, cloud, enterprise."
         );
     });
+    // SAFETY: `OnceLock::set` only fails when the cell is already initialised.
+    // `init_license_tier` is called exactly once from `maestro-cli/src/main.rs`
+    // during startup before any spawned task. A second call is a programming
+    // error and panics deterministically.
     CURRENT_TIER
         .set(tier)
-        .expect("init_license_tier called more than once");
+        .expect("init_license_tier must be called exactly once at startup");
     tracing::info!("License tier: {tier}");
 }
 
