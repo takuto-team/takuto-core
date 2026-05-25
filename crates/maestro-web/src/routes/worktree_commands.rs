@@ -440,11 +440,8 @@ pub async fn put_my_row(
             &init_commands,
             &run_commands,
         )?;
-        user_worktree_commands::get(&conn, &user_id, &lookup_name)?.ok_or_else(|| {
-            maestro_core::error::MaestroError::DatabaseStr(
-                "row was just upserted but vanished".into(),
-            )
-        })
+        user_worktree_commands::get(&conn, &user_id, &lookup_name)?
+            .ok_or(maestro_core::db::DbError::RowDisappearedAfterUpsert.into())
     })
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?

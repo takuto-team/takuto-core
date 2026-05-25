@@ -60,6 +60,12 @@ pub enum DbError {
         #[source]
         source: serde_json::Error,
     },
+
+    /// `routes/worktree_commands.rs:449` — `get()` returned `None` immediately
+    /// after `upsert()` succeeded. Race-condition / corruption guard mirroring
+    /// `AuthError::UserDisappearedAfterUpdate`.
+    #[error("row was just upserted but vanished")]
+    RowDisappearedAfterUpsert,
 }
 
 #[cfg(test)]
@@ -134,6 +140,9 @@ mod tests {
             format!("{}", dec),
             "decoding run_commands_json for (u1,ws1) failed"
         );
+
+        let vanished = DbError::RowDisappearedAfterUpsert;
+        assert_eq!(format!("{}", vanished), "row was just upserted but vanished");
     }
 
     #[test]
@@ -188,6 +197,11 @@ mod tests {
         assert!(matches!(
             MaestroError::from(dec),
             MaestroError::Db(DbError::CommandsJsonDecode { .. })
+        ));
+
+        assert!(matches!(
+            MaestroError::from(DbError::RowDisappearedAfterUpsert),
+            MaestroError::Db(DbError::RowDisappearedAfterUpsert)
         ));
     }
 }

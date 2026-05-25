@@ -6,8 +6,9 @@
 //! PR-reviewer assignment, and the workflow-engine bootstrap steps (`mise install`
 //! and worktree-init commands).
 //!
-//! Replaces `MaestroError::Git(String)` (now `MaestroError::GitStr(String)`,
-//! `#[deprecated]`). Each variant captures structured operation context —
+//! Replaces the historical `MaestroError::Git(String)` (the `*Str(String)`
+//! deprecated shim was removed in the post-§8 #2 cleanup PR).
+//! Each variant captures structured operation context —
 //! command stderr, branch name, exit code, file path — instead of `format!`-ed
 //! sentences. Two sites in `workflow/engine/bootstrap.rs` collapse to direct
 //! `?` propagation because they previously wrapped an inner `MaestroError` in

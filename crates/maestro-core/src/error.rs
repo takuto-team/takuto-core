@@ -1,6 +1,15 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+//! `MaestroError` — the workspace's outermost error envelope.
+//!
+//! Per the typed-errors migration (audit 2026-05-21 §8 #2, completed in
+//! `lore/audits/2026-05-24-typed-errors-spec.md` and the 8 per-subsystem
+//! specs landed across 2026-05-24 / 2026-05-25), the envelope is now a
+//! thin `#[from]`-only composition over typed sub-enums. The 8 free-form
+//! `*Str(String)` deprecated shims that bridged the migration were
+//! removed in the post-§8 #2 cleanup PR (2026-05-25).
+
 use std::path::PathBuf;
 
 use crate::actions::AgentError;
@@ -14,57 +23,28 @@ use crate::jira::JiraError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MaestroError {
-    /// Typed Jira subsystem error envelope. New code path — produced inside
-    /// `crates/maestro-core/src/jira/` (and the five `actions/{real,dry_run}.rs`
-    /// near-duplicate `acli` invocations) via `JiraError::Variant` then
+    /// Typed Jira subsystem error envelope. Produced inside
+    /// `crates/maestro-core/src/jira/` and the five `actions/{real,dry_run}.rs`
+    /// near-duplicate `acli` invocations via `JiraError::Variant` then
     /// `?`-propagated through this `#[from]`.
     #[error(transparent)]
     Jira(#[from] JiraError),
 
-    /// Deprecated free-form String shim for the Jira subsystem. Lands with
-    /// zero callers (the migration commit collapses every original
-    /// `MaestroError::Jira(String)` site to a typed `JiraError` variant).
-    /// Kept only to honour the typed-errors architecture spec's A.4
-    /// deprecation path — removed by the post-phase-8 cleanup PR.
-    #[deprecated(note = "use MaestroError::Jira with a typed JiraError instead")]
-    #[error("Jira error: {0}")]
-    JiraStr(String),
-
-    /// Typed git / `gh`-CLI / bootstrap-step error envelope. New code path —
-    /// produced inside `crates/maestro-core/src/git/`,
+    /// Typed git / `gh`-CLI / bootstrap-step error envelope. Produced
+    /// inside `crates/maestro-core/src/git/`,
     /// `crates/maestro-core/src/actions/{real,dry_run,gh_github}.rs`, and
     /// `workflow::engine::bootstrap` via `GitError::Variant` then
     /// `?`-propagated through this `#[from]`.
     #[error(transparent)]
     Git(#[from] GitError),
 
-    /// Deprecated free-form String shim for the git subsystem. Lands with
-    /// zero callers (the migration commit replaces every original
-    /// `MaestroError::Git(String)` site with a typed `GitError` variant or
-    /// collapses it to direct `?` propagation). Kept only to honour the
-    /// typed-errors architecture spec's A.4 deprecation path — removed by
-    /// the post-phase-8 cleanup PR.
-    #[deprecated(note = "use MaestroError::Git with a typed GitError instead")]
-    #[error("Git error: {0}")]
-    GitStr(String),
-
-    /// Typed AI agent (Cursor / Codex / OpenCode session + step orchestrator)
-    /// error envelope. New code path — produced inside
+    /// Typed AI agent (Cursor / Codex / OpenCode session + step
+    /// orchestrator) error envelope. Produced inside
     /// `crates/maestro-core/src/{cursor,codex,opencode}/session.rs` and
     /// `workflow::engine::step_runner` via `AgentError::Variant` then
     /// `?`-propagated through this `#[from]`.
     #[error(transparent)]
     Agent(#[from] AgentError),
-
-    /// Deprecated free-form String shim for the AI agent subsystem. Lands
-    /// with zero callers (the migration commit replaces every original
-    /// `MaestroError::AiAgent(String)` site with a typed `AgentError`
-    /// variant or collapses it to direct `?` propagation). Kept only to
-    /// honour the typed-errors architecture spec's A.4 deprecation path —
-    /// removed by the post-phase-8 cleanup PR.
-    #[deprecated(note = "use MaestroError::Agent with a typed AgentError instead")]
-    #[error("AI agent error: {0}")]
-    AiAgentStr(String),
 
     #[error("Command failed: {cmd} (exit code {code})\n{stderr}")]
     Command {
@@ -79,84 +59,38 @@ pub enum MaestroError {
     #[error("Workflow cancelled")]
     Cancelled,
 
-    /// Typed db error envelope. New code path — produced inside
-    /// `crates/maestro-core/src/db/` via `DbError::Variant` then
-    /// `?`-propagated through this `#[from]`.
+    /// Typed db error envelope. Produced inside `crates/maestro-core/src/db/`
+    /// and (post-cleanup) the five sites in
+    /// `crates/maestro-web/src/routes/{admin,worktree_commands}.rs` via
+    /// `DbError::Variant` then `?`-propagated through this `#[from]`.
     #[error(transparent)]
     Db(#[from] DbError),
 
-    /// Deprecated free-form String shim for non-db callers. Retained so that
-    /// callers outside `crates/maestro-core/src/db/` (admin / worktree_commands
-    /// routes today) keep compiling while the typed-errors migration progresses.
-    /// Will be removed by the cleanup PR after the AuthError + ConfigError
-    /// phases land.
-    #[deprecated(note = "use MaestroError::Db with a typed DbError instead")]
-    #[error("Database error: {0}")]
-    DatabaseStr(String),
-
-    /// Typed Claude session error envelope. New code path — produced inside
-    /// `crates/maestro-core/src/claude/` via `ClaudeError::Variant` then
-    /// `?`-propagated through this `#[from]`.
+    /// Typed Claude session error envelope. Produced inside
+    /// `crates/maestro-core/src/claude/` via `ClaudeError::Variant`
+    /// then `?`-propagated through this `#[from]`.
     #[error(transparent)]
     Claude(#[from] ClaudeError),
 
-    /// Deprecated free-form String shim for the Claude subsystem. Lands with
-    /// zero callers (the migration commit collapses two of the four original
-    /// `MaestroError::Claude(String)` sites to direct propagation and rewrites
-    /// the other two to `ClaudeError`). Kept only to honour the typed-errors
-    /// architecture spec's A.4 deprecation path — removed by the post-phase-8
-    /// cleanup PR.
-    #[deprecated(note = "use MaestroError::Claude with a typed ClaudeError instead")]
-    #[error("Claude session error: {0}")]
-    ClaudeStr(String),
-
-    /// Typed GitHub App authentication error envelope. New code path —
-    /// produced inside `crates/maestro-core/src/github_app{.rs,/}` via
+    /// Typed GitHub App authentication error envelope. Produced inside
+    /// `crates/maestro-core/src/github_app{.rs,/}` via
     /// `GitHubAppError::Variant` then `?`-propagated through this `#[from]`.
     #[error(transparent)]
     GitHubApp(#[from] GitHubAppError),
 
-    /// Deprecated free-form String shim for the GitHub App subsystem. Lands
-    /// with zero callers (the migration commit collapses every original
-    /// `MaestroError::GitHubApp(String)` site to a typed `GitHubAppError`
-    /// variant). Kept only to honour the typed-errors architecture spec's
-    /// A.4 deprecation path — removed by the post-phase-8 cleanup PR.
-    #[deprecated(note = "use MaestroError::GitHubApp with a typed GitHubAppError instead")]
-    #[error("GitHub App error: {0}")]
-    GitHubAppStr(String),
-
-    /// Typed auth subsystem error envelope. New code path — produced inside
+    /// Typed auth subsystem error envelope. Produced inside
     /// `crates/maestro-core/src/{auth,db/users,db/credentials}.rs` and
     /// `crates/maestro-web/src/{auth.rs, routes/{auth,admin}.rs}` via
     /// `AuthError::Variant` then `?`-propagated through this `#[from]`.
     #[error(transparent)]
     Auth(#[from] AuthError),
 
-    /// Deprecated free-form String shim for the auth subsystem. Lands with
-    /// zero callers (the migration commit replaces every original
-    /// `MaestroError::Auth(String)` site with a typed `AuthError` variant).
-    /// Kept only to honour the typed-errors architecture spec's A.4
-    /// deprecation path — removed by the post-phase-8 cleanup PR.
-    #[deprecated(note = "use MaestroError::Auth with a typed AuthError instead")]
-    #[error("Authentication error: {0}")]
-    AuthStr(String),
-
-    /// Typed config subsystem error envelope. New code path — produced
-    /// inside `crates/maestro-core/src/config/`, `auth/{master_key,seal,bundle}.rs`,
+    /// Typed config subsystem error envelope. Produced inside
+    /// `crates/maestro-core/src/config/`, `auth/{master_key,seal,bundle}.rs`,
     /// `workflow/engine/*`, and assorted operational paths via
     /// `ConfigError::Variant` then `?`-propagated through this `#[from]`.
     #[error(transparent)]
     Config(#[from] ConfigError),
-
-    /// Deprecated free-form String shim for the (catch-all) config bag.
-    /// Lands with zero callers (the migration commit replaces every
-    /// original `MaestroError::Config(String)` site with a typed
-    /// `ConfigError` variant). Kept only to honour the typed-errors
-    /// architecture spec's A.4 deprecation path — removed by the
-    /// post-phase-8 cleanup PR.
-    #[deprecated(note = "use MaestroError::Config with a typed ConfigError instead")]
-    #[error("Config error: {0}")]
-    ConfigStr(String),
 
     #[error("Config file not found: {0}")]
     ConfigNotFound(PathBuf),

@@ -4,8 +4,9 @@
 //! Typed errors for AI agent (Cursor / Codex / OpenCode) session adapters
 //! and the agent-step orchestrator in `workflow::engine::step_runner`.
 //!
-//! Replaces `MaestroError::AiAgent(String)` (now `MaestroError::AiAgentStr(String)`,
-//! `#[deprecated]`). Each variant captures structured operation context — exit
+//! Replaces the historical `MaestroError::AiAgent(String)` (the `*Str(String)`
+//! deprecated shim was removed in the post-§8 #2 cleanup PR).
+//! Each variant captures structured operation context — exit
 //! codes, stderr tails, per-provider auth hints — instead of `format!`-ed
 //! sentences. Spawn-failure and generic session-error wraps that previously
 //! prefixed an inner `MaestroError` with zero-info text collapse to direct

@@ -6,8 +6,9 @@
 //! guards, master-key bootstrap, AEAD seal/open, worker-secrets bundle
 //! construction, and assorted operational misc.
 //!
-//! Replaces `MaestroError::Config(String)` (now `MaestroError::ConfigStr(String)`,
-//! `#[deprecated]`). Each variant captures structured operation context where
+//! Replaces the historical `MaestroError::Config(String)` catch-all
+//! (the `*Str(String)` deprecated shim was removed in the post-§8 #2
+//! cleanup PR). Each variant captures structured operation context where
 //! it's meaningful; a handful of variants accept a `detail: String` payload
 //! for genuinely free-form text (validation messages from third-party crates,
 //! AEAD operator errors, parser diagnostics) — documented deviation from the

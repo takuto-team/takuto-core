@@ -5,8 +5,9 @@
 //! code hashing + verification, session-cookie validation, and the registration
 //! / login / change-password / recovery flows on the web side.
 //!
-//! Replaces `MaestroError::Auth(String)` (now `MaestroError::AuthStr(String)`,
-//! `#[deprecated]`). Each variant captures structured operation context —
+//! Replaces the historical `MaestroError::Auth(String)` (the `*Str(String)`
+//! deprecated shim was removed in the post-§8 #2 cleanup PR).
+//! Each variant captures structured operation context —
 //! usernames, user ids, the typed argon2 / serde / utf8 source error — instead
 //! of `format!`-ed sentences. No site collapses to direct propagation here
 //! (none of the original 33 sites wrapped an inner `MaestroError`; all are
