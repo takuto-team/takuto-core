@@ -29,6 +29,7 @@ use crate::config::{
 use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
 use crate::db::Database;
+use crate::actions::AgentError;
 use crate::error::{MaestroError, Result};
 use crate::jira::client::JiraTicket;
 use crate::opencode::OpenCodeSession;
@@ -485,8 +486,7 @@ pub(super) async fn run_agent_step_sequence(
                             step = %step_label,
                             "Command step failed — aborting workflow"
                         );
-                        #[allow(deprecated)]
-                        return Err(MaestroError::AiAgentStr("Command step failed".to_string()));
+                        return Err(AgentError::CommandStepFailed.into());
                     }
 
                     add_step_log(workflows, ticket_key, step_log).await;
@@ -668,14 +668,13 @@ pub(super) async fn run_agent_step_sequence(
                         if !is_last_run_of_outer_cycle {
                             add_step_log(workflows, ticket_key, step_log).await;
                             error!(ticket = %ticket_key, "Agent step AI session failed — aborting workflow");
-                            let msg = match ai_stream_provider {
-                                AiAgentProvider::Claude => "Agent step failed — check that Claude Code is authenticated in the container".to_string(),
-                                AiAgentProvider::Cursor => "Agent step failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli".to_string(),
-                                AiAgentProvider::Codex => "Agent step failed — check Codex (`codex login --with-api-key` or OPENAI_API_KEY) and agent.providers.codex.model".to_string(),
-                                AiAgentProvider::OpenCode => "Agent step failed — check OpenCode (`opencode auth login` or a project opencode.json) and agent.providers.opencode.model".to_string(),
+                            let hint: &'static str = match ai_stream_provider {
+                                AiAgentProvider::Claude => "check that Claude Code is authenticated in the container",
+                                AiAgentProvider::Cursor => "check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli",
+                                AiAgentProvider::Codex => "check Codex (`codex login --with-api-key` or OPENAI_API_KEY) and agent.providers.codex.model",
+                                AiAgentProvider::OpenCode => "check OpenCode (`opencode auth login` or a project opencode.json) and agent.providers.opencode.model",
                             };
-                            #[allow(deprecated)]
-                            return Err(MaestroError::AiAgentStr(msg));
+                            return Err(AgentError::AgentStepAborted { hint }.into());
                         }
                     }
                 }
