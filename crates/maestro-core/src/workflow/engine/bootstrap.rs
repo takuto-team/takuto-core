@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 //! Workflow bootstrap: ticket-add-time worktree pre-creation and the
 //! full `bootstrap_new_workflow` flow (assign + retrieve + create
 //! worktree + mise install + worktree init commands) called at the
@@ -22,10 +20,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::actions::traits::ExternalActions;
-use crate::config::Config;
+use crate::config::{Config, ConfigError};
 use crate::container::ContainerRunner;
 use crate::db::Database;
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 use crate::git::{self, GitError};
 use crate::jira::client::{JiraClient, JiraTicket};
 use crate::workflow::helpers::check_cancelled;
@@ -448,11 +446,7 @@ pub(super) async fn bootstrap_new_workflow(
 
         Some(runner)
     } else {
-        return Err(MaestroError::ConfigStr(
-            "Docker daemon is not available. DinD is required for workflow isolation. \
-             Ensure DOCKER_HOST is set and the DinD sidecar is running."
-                .into(),
-        ));
+        return Err(ConfigError::DockerUnavailable.into());
     };
 
     let shell_stream_provider = {

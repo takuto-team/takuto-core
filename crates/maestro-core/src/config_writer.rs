@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 //! Atomic, validated config persistence.
 //!
 //! [`ConfigWriter`] provides the single write path for `config.toml`. All
@@ -37,8 +35,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use fs2::FileExt;
 
-use crate::config::Config;
-use crate::error::{MaestroError, Result};
+use crate::config::{Config, ConfigError};
+use crate::error::Result;
 
 /// Linux `EBUSY` raw OS error number. Used in [`ConfigWriter::write_config`]
 /// to detect bind-mounted single-file targets and trigger the in-place
@@ -133,7 +131,10 @@ impl ConfigWriter {
         let parent = self
             .config_path
             .parent()
-            .ok_or_else(|| MaestroError::ConfigStr("config path has no parent directory".into()))?;
+            .ok_or_else(|| ConfigError::Operational {
+                op: "config write",
+                detail: "config path has no parent directory".to_string(),
+            })?;
         fs::create_dir_all(parent)?;
 
         let lock_path = self.config_path.with_extension("toml.lock");
@@ -142,8 +143,9 @@ impl ConfigWriter {
             .write(true)
             .truncate(true)
             .open(&lock_path)?;
-        lock_file.lock_exclusive().map_err(|e| {
-            MaestroError::ConfigStr(format!("Failed to acquire config file lock: {e}"))
+        lock_file.lock_exclusive().map_err(|e| ConfigError::Operational {
+            op: "config file lock",
+            detail: e.to_string(),
         })?;
 
         // 4. Write to temp file.

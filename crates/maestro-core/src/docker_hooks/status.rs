@@ -1,11 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 //! Boot-time `SystemStatus` collector + the deprecated `preflight()` shim.
 
-use crate::config::{AiAgentProvider, Config, TicketingSystem};
-use crate::error::{MaestroError, Result};
+use crate::config::{AiAgentProvider, Config, ConfigError, TicketingSystem};
+use crate::error::Result;
 
 use super::cursor_auth::cursor_agent_auth_likely_on_disk;
 use super::gh_auth::gh_auth_recover_expired_token;
@@ -335,7 +333,11 @@ pub fn preflight(config: &Config) -> Result<PreflightResult> {
             .map(|w| format!("{}: {}", w.code, w.message))
             .collect::<Vec<_>>()
             .join("\n");
-        return Err(MaestroError::ConfigStr(msg));
+        return Err(ConfigError::Operational {
+            op: "preflight",
+            detail: msg,
+        }
+        .into());
     }
 
     eprintln!("[maestro preflight] OK.");

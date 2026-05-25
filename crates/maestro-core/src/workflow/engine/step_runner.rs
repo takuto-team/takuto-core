@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 //! Workflow-definition step runner: builds the agent-step container, walks
 //! the `[steps]` list, fans out command steps + agent sessions, and emits
 //! the per-step `step_started` / `step_completed` events.
@@ -24,8 +22,8 @@ use crate::agent_prompt::{headless_instructions_suffix, report_injection_suffix}
 use crate::claude::session::ClaudeSession;
 use crate::codex::CodexSession;
 use crate::config::{
-    AgentStepConfig, AiAgentProvider, Config, cursor_model_for_cli, interpolate_agent_prompt,
-    interpolate_command_template,
+    AgentStepConfig, AiAgentProvider, Config, ConfigError, cursor_model_for_cli,
+    interpolate_agent_prompt, interpolate_command_template,
 };
 use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
@@ -146,11 +144,7 @@ pub(super) async fn run_workflow_def_steps(
         }
         Some(runner)
     } else {
-        return Err(MaestroError::ConfigStr(
-            "Docker daemon is not available. DinD is required for workflow isolation. \
-             Ensure DOCKER_HOST is set and the DinD sidecar is running."
-                .into(),
-        ));
+        return Err(ConfigError::DockerUnavailable.into());
     };
 
     let cfg = config.read().await;
@@ -697,7 +691,10 @@ pub(super) async fn acquire_agent_slot(
     tokio::select! {
         _ = cancel_token.cancelled() => Err(MaestroError::Cancelled),
         permit = sem.clone().acquire_owned() => permit
-            .map_err(|_| MaestroError::ConfigStr("Agent concurrency semaphore closed".to_string())),
+            .map_err(|_| ConfigError::Operational {
+                op: "agent concurrency semaphore",
+                detail: "closed".to_string(),
+            }.into()),
     }
 }
 
@@ -852,14 +849,16 @@ pub(super) async fn close_github_issue(
     actions: &dyn crate::actions::traits::ExternalActions,
 ) -> Result<()> {
     let issue_number = parse_gh_issue_number(ticket_key).ok_or_else(|| {
-        MaestroError::ConfigStr(format!(
-            "Cannot close GitHub issue: '{ticket_key}' is not a GH-{{number}} key"
-        ))
+        ConfigError::Operational {
+            op: "close GitHub issue",
+            detail: format!("'{ticket_key}' is not a GH-{{number}} key"),
+        }
     })?;
     let owner_repo = crate::github::parse_github_repo(repo_url).ok_or_else(|| {
-        MaestroError::ConfigStr(format!(
-            "Cannot close GitHub issue: failed to parse owner/repo from '{repo_url}'"
-        ))
+        ConfigError::Operational {
+            op: "close GitHub issue",
+            detail: format!("failed to parse owner/repo from '{repo_url}'"),
+        }
     })?;
 
     let gh_token = actions.get_gh_installation_token(cwd).await;
@@ -883,13 +882,17 @@ pub(super) async fn close_github_issue(
         &env,
     )
     .await
-    .map_err(|e| MaestroError::ConfigStr(format!("gh api PATCH issue failed: {e}")))?;
+    .map_err(|e| ConfigError::Operational {
+        op: "gh api PATCH issue",
+        detail: e.to_string(),
+    })?;
 
     if !output.success() {
-        return Err(MaestroError::ConfigStr(crate::github::gh_api_error_message(
-            output.stderr.trim(),
-            "Issues: Write",
-        )));
+        return Err(ConfigError::Operational {
+            op: "gh api PATCH issue",
+            detail: crate::github::gh_api_error_message(output.stderr.trim(), "Issues: Write"),
+        }
+        .into());
     }
 
     info!(ticket = %ticket_key, issue = %issue_number, owner_repo = %owner_repo, "GitHub issue closed");

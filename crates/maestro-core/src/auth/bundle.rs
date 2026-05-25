@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 //! Phase 2b.3 (04_architecture.md §6) — per-workflow worker secrets bundle.
 //!
 //! Builds an opaque container of tmpfs-mounted secret files + non-secret
@@ -22,10 +20,10 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use crate::auth::{open, MasterKey, SealedBlob};
-use crate::config::{AiAgentProvider, Config};
+use crate::config::{AiAgentProvider, Config, ConfigError};
 use crate::db::github_credentials;
 use crate::db::provider_credentials;
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 use crate::github::auth_resolver::{GitAction, GitAuthResolver, TokenSource};
 use crate::workflow::snapshot::AuthPin;
 
@@ -162,28 +160,20 @@ pub const SECRETS_DIR_REL: &str = "runtime/secrets";
 fn secrets_dir_for_db(db: &crate::db::Database) -> Result<TempDir> {
     if let Some(data_dir) = db.data_dir() {
         let root = data_dir.join(SECRETS_DIR_REL);
-        std::fs::create_dir_all(&root).map_err(|e| {
-            MaestroError::ConfigStr(format!(
-                "failed to create secrets root {}: {e}",
-                root.display()
-            ))
+        std::fs::create_dir_all(&root).map_err(|e| ConfigError::BundleSecretFile {
+            op: "create-root",
+            path: root.clone(),
+            detail: e.to_string(),
         })?;
         tempfile::Builder::new()
             .prefix("bundle-")
             .tempdir_in(&root)
-            .map_err(|e| {
-                MaestroError::ConfigStr(format!(
-                    "failed to create bundle tempdir in {}: {e}",
-                    root.display()
-                ))
-            })
+            .map_err(|source| ConfigError::BundleTempdir { source }.into())
     } else {
         // No data_dir → in-memory DB → unit test path. Fall back to
         // process tempdir (`/tmp/...`). Tests never reach the bind-mount
         // resolver so this is safe.
-        TempDir::new().map_err(|e| {
-            MaestroError::ConfigStr(format!("failed to create bundle tempdir: {e}"))
-        })
+        TempDir::new().map_err(|source| ConfigError::BundleTempdir { source }.into())
     }
 }
 
@@ -234,12 +224,17 @@ pub async fn build(
     auth_pin: &AuthPin,
     workflow_user_id: &str,
 ) -> Result<WorkerSecretsBundle> {
-    let provider = AiAgentProvider::parse(&auth_pin.provider)
-        .map_err(|e| MaestroError::ConfigStr(format!("auth_pin.provider invalid: {e}")))?;
+    let provider = AiAgentProvider::parse(&auth_pin.provider).map_err(|e| {
+        ConfigError::BundleProviderInvalid {
+            detail: e.to_string(),
+        }
+    })?;
 
-    let master_key = db.master_key().ok_or_else(|| {
-        MaestroError::ConfigStr("master_key_unavailable: cannot unseal worker secrets".into())
-    })?.key.clone();
+    let master_key = db
+        .master_key()
+        .ok_or(ConfigError::MasterKeyUnavailable)?
+        .key
+        .clone();
 
     // Task #43: create the host-side secrets dir under
     // `${data_dir}/runtime/secrets/` (per arch doc §3.3) rather than the
@@ -316,9 +311,11 @@ pub async fn build(
             (None, None, None)
         }
         Err(e) => {
-            return Err(MaestroError::ConfigStr(format!(
-                "resolver token_for(Push) failed: {e}"
-            )));
+            return Err(ConfigError::Operational {
+                op: "resolver token_for(Push)",
+                detail: e.to_string(),
+            }
+            .into());
         }
     };
 
@@ -379,7 +376,10 @@ async fn unseal_claude_session(
             AiAgentProvider::Claude.as_str(),
             provider_credentials::ProviderCredentialKind::CliState,
         )
-        .map_err(|e| MaestroError::ConfigStr(format!("find_active_with_kind failed: {e}")))?
+        .map_err(|e| ConfigError::BundleDbLookup {
+            op: "find_active_with_kind(cli_state)",
+            detail: e.to_string(),
+        })?
     };
     let Some(r) = row else {
         return Ok(None);
@@ -390,15 +390,19 @@ async fn unseal_claude_session(
         wrapped_dek: r.wrapped_dek,
         wnonce: r.wnonce,
     };
-    let plaintext = open(master_key, &sealed)
-        .map_err(|e| MaestroError::ConfigStr(format!("open(cli_state) failed: {e}")))?;
+    let plaintext = open(master_key, &sealed).map_err(|e| ConfigError::BundleClaudeState {
+        op: "open seal",
+        detail: e.to_string(),
+    })?;
     // Defense in depth: the validator already requires the four
     // `oauthAccount` keys at save time, but we re-validate parseable JSON
     // here so a corrupted seal doesn't deliver garbage to the worker.
     if serde_json::from_slice::<serde_json::Value>(&plaintext).is_err() {
-        return Err(MaestroError::ConfigStr(
-            "cli_state blob is not valid JSON (corrupt seal or schema drift)".into(),
-        ));
+        return Err(ConfigError::BundleClaudeState {
+            op: "json validate",
+            detail: "cli_state blob is not valid JSON (corrupt seal or schema drift)".to_string(),
+        }
+        .into());
     }
     let path = dir.join(SECRET_FILE_CLAUDE_SESSION);
     write_secret_file(&path, &plaintext)?;
@@ -422,8 +426,11 @@ async fn unseal_provider_credential(
     workflow_user_id: &str,
     dir: &Path,
 ) -> Result<Option<PathBuf>> {
-    let provider = AiAgentProvider::parse(&auth_pin.provider)
-        .map_err(|e| MaestroError::ConfigStr(e.to_string()))?;
+    let provider = AiAgentProvider::parse(&auth_pin.provider).map_err(|e| {
+        ConfigError::BundleProviderInvalid {
+            detail: e.to_string(),
+        }
+    })?;
 
     // Find the row by the pinned id when set; otherwise by (user, provider).
     // Pre-Phase-2b.3 we don't yet have an `id`-keyed lookup helper, so the
@@ -439,7 +446,10 @@ async fn unseal_provider_credential(
             &auth_pin.provider,
             provider_credentials::ProviderCredentialKind::ApiKey,
         )
-        .map_err(|e| MaestroError::ConfigStr(format!("find_active_with_kind failed: {e}")))?
+        .map_err(|e| ConfigError::BundleDbLookup {
+            op: "find_active_with_kind(provider_credential)",
+            detail: e.to_string(),
+        })?
     };
 
     let plaintext = match row {
@@ -450,8 +460,9 @@ async fn unseal_provider_credential(
                 wrapped_dek: r.wrapped_dek,
                 wnonce: r.wnonce,
             };
-            open(master_key, &sealed).map_err(|e| {
-                MaestroError::ConfigStr(format!("open(provider_credential) failed: {e}"))
+            open(master_key, &sealed).map_err(|e| ConfigError::Operational {
+                op: "open(provider_credential)",
+                detail: e.to_string(),
             })?
         }
         None => {
@@ -473,11 +484,14 @@ async fn unseal_provider_credential(
                 );
                 return Ok(None);
             } else {
-                return Err(MaestroError::ConfigStr(format!(
-                    "provider_credential_missing: user {workflow_user_id} has no {} credential and \
-                     allow_shared_default = false",
-                    provider.as_str()
-                )));
+                return Err(ConfigError::Operational {
+                    op: "provider_credential_missing",
+                    detail: format!(
+                        "user {workflow_user_id} has no {} credential and allow_shared_default = false",
+                        provider.as_str()
+                    ),
+                }
+                .into());
             }
         }
     };
@@ -505,11 +519,15 @@ fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .create_new(true)
         .mode(0o400)
         .open(path)
-        .map_err(|e| {
-            MaestroError::ConfigStr(format!("failed to create secret file {}: {e}", path.display()))
+        .map_err(|e| ConfigError::BundleSecretFile {
+            op: "create",
+            path: path.to_path_buf(),
+            detail: e.to_string(),
         })?;
-    f.write_all(bytes).map_err(|e| {
-        MaestroError::ConfigStr(format!("failed to write secret file {}: {e}", path.display()))
+    f.write_all(bytes).map_err(|e| ConfigError::BundleSecretFile {
+        op: "write",
+        path: path.to_path_buf(),
+        detail: e.to_string(),
     })?;
     f.sync_all().ok();
     Ok(())
@@ -522,11 +540,15 @@ fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|e| {
-            MaestroError::ConfigStr(format!("failed to create secret file {}: {e}", path.display()))
+        .map_err(|e| ConfigError::BundleSecretFile {
+            op: "create",
+            path: path.to_path_buf(),
+            detail: e.to_string(),
         })?;
-    f.write_all(bytes).map_err(|e| {
-        MaestroError::ConfigStr(format!("failed to write secret file {}: {e}", path.display()))
+    f.write_all(bytes).map_err(|e| ConfigError::BundleSecretFile {
+        op: "write",
+        path: path.to_path_buf(),
+        detail: e.to_string(),
     })?;
     f.sync_all().ok();
     Ok(())
@@ -577,10 +599,18 @@ pub async fn pin_for_workflow(
 
     let (provider_credential_row_id, github_credential_row_id, github_mode) = {
         let conn = db.conn().lock().await;
-        let p = provider_credentials::find_active(&conn, workflow_user_id, &provider)
-            .map_err(|e| MaestroError::ConfigStr(format!("find_active failed: {e}")))?;
-        let g = github_credentials::find(&conn, workflow_user_id)
-            .map_err(|e| MaestroError::ConfigStr(format!("github_credentials::find failed: {e}")))?;
+        let p = provider_credentials::find_active(&conn, workflow_user_id, &provider).map_err(
+            |e| ConfigError::BundleDbLookup {
+                op: "provider_credentials::find_active",
+                detail: e.to_string(),
+            },
+        )?;
+        let g = github_credentials::find(&conn, workflow_user_id).map_err(|e| {
+            ConfigError::BundleDbLookup {
+                op: "github_credentials::find",
+                detail: e.to_string(),
+            }
+        })?;
         let github_mode = if g.is_some() {
             TokenSource::UserPat.as_str().to_string()
         } else {

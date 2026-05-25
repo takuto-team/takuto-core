@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 //! Master-key bootstrap (04_architecture.md §3.2).
 //!
 //! Three resolution sources, tried in order:
@@ -24,7 +22,8 @@ use std::os::unix::fs::PermissionsExt;
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::error::{MaestroError, Result};
+use crate::config::ConfigError;
+use crate::error::Result;
 
 /// 32-byte deployment master key. Wraps the raw bytes in a `Zeroize`-on-drop
 /// container so the key is wiped from memory when the manager is destroyed.
@@ -50,17 +49,19 @@ impl MasterKey {
             .or_else(|| trimmed.strip_prefix("0X"))
             .unwrap_or(trimmed);
         if cleaned.len() != 64 {
-            return Err(MaestroError::ConfigStr(format!(
-                "MAESTRO_SECRET_KEY must be exactly 64 hex characters (32 bytes); got {} chars",
-                cleaned.len()
-            )));
+            return Err(ConfigError::Operational {
+                op: "MAESTRO_SECRET_KEY length check",
+                detail: format!(
+                    "must be exactly 64 hex characters (32 bytes); got {} chars",
+                    cleaned.len()
+                ),
+            }
+            .into());
         }
-        let raw = hex::decode(cleaned).map_err(|e| {
-            MaestroError::ConfigStr(format!("MAESTRO_SECRET_KEY is not valid hex: {e}"))
-        })?;
+        let raw = hex::decode(cleaned).map_err(|source| ConfigError::MasterKeyHex { source })?;
         let bytes: [u8; 32] = raw
             .try_into()
-            .map_err(|_| MaestroError::ConfigStr("MAESTRO_SECRET_KEY decoded to wrong length".into()))?;
+            .map_err(|_| ConfigError::MasterKeyLength)?;
         Ok(Self(bytes))
     }
 
@@ -72,8 +73,9 @@ impl MasterKey {
     /// Generate a fresh 32-byte key from the OS CSPRNG.
     pub fn generate() -> Result<Self> {
         let mut buf = [0u8; 32];
-        getrandom::fill(&mut buf).map_err(|e| {
-            MaestroError::ConfigStr(format!("CSPRNG failure while generating master key: {e}"))
+        getrandom::fill(&mut buf).map_err(|source| ConfigError::Csprng {
+            op: "generate master key",
+            source,
         })?;
         Ok(Self(buf))
     }
@@ -163,11 +165,14 @@ pub fn load_or_init_master_key(
 
     // ── 3. Auto-generate ──────────────────────────────────────────────────
     if !allow_auto_generate {
-        return Err(MaestroError::ConfigStr(format!(
-            "master key unavailable: MAESTRO_SECRET_KEY is unset and {} does not exist; \
-             auto-generation is disabled ([general] allow_auto_generate_secret_key = false)",
-            keyfile.display()
-        )));
+        return Err(ConfigError::Operational {
+            op: "master key bootstrap",
+            detail: format!(
+                "MAESTRO_SECRET_KEY is unset and {} does not exist; auto-generation is disabled ([general] allow_auto_generate_secret_key = false)",
+                keyfile.display()
+            ),
+        }
+        .into());
     }
 
     let key = MasterKey::generate()?;
@@ -180,17 +185,21 @@ pub fn load_or_init_master_key(
 }
 
 fn load_from_keyfile(path: &Path) -> Result<LoadedMasterKey> {
-    let mut bytes = std::fs::read(path).map_err(|e| {
-        MaestroError::ConfigStr(format!("failed to read master keyfile {}: {e}", path.display()))
+    let mut bytes = std::fs::read(path).map_err(|e| ConfigError::MasterKeyFile {
+        op: "read",
+        path: path.to_path_buf(),
+        detail: e.to_string(),
     })?;
     if bytes.len() != 32 {
         // Zeroise the buffer before bailing.
+        let actual = bytes.len();
         bytes.zeroize();
-        return Err(MaestroError::ConfigStr(format!(
-            "master keyfile {} has wrong size {} (expected 32 bytes)",
-            path.display(),
-            bytes.len()
-        )));
+        return Err(ConfigError::MasterKeyFile {
+            op: "size check",
+            path: path.to_path_buf(),
+            detail: format!("wrong size {actual} (expected 32 bytes)"),
+        }
+        .into());
     }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
@@ -233,17 +242,20 @@ fn write_keyfile(path: &Path, key: &MasterKey) -> Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(path)
-        .map_err(|e| {
-            MaestroError::ConfigStr(format!(
-                "failed to create master keyfile {}: {e}",
-                path.display()
-            ))
+        .map_err(|e| ConfigError::MasterKeyFile {
+            op: "create",
+            path: path.to_path_buf(),
+            detail: e.to_string(),
         })?;
-    f.write_all(key.as_bytes()).map_err(|e| {
-        MaestroError::ConfigStr(format!("failed to write master keyfile {}: {e}", path.display()))
+    f.write_all(key.as_bytes()).map_err(|e| ConfigError::MasterKeyFile {
+        op: "write",
+        path: path.to_path_buf(),
+        detail: e.to_string(),
     })?;
-    f.sync_all().map_err(|e| {
-        MaestroError::ConfigStr(format!("failed to fsync master keyfile {}: {e}", path.display()))
+    f.sync_all().map_err(|e| ConfigError::MasterKeyFile {
+        op: "fsync",
+        path: path.to_path_buf(),
+        detail: e.to_string(),
     })?;
     Ok(())
 }
@@ -254,14 +266,15 @@ fn write_keyfile(path: &Path, key: &MasterKey) -> Result<()> {
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|e| {
-            MaestroError::ConfigStr(format!(
-                "failed to create master keyfile {}: {e}",
-                path.display()
-            ))
+        .map_err(|e| ConfigError::MasterKeyFile {
+            op: "create",
+            path: path.to_path_buf(),
+            detail: e.to_string(),
         })?;
-    f.write_all(key.as_bytes()).map_err(|e| {
-        MaestroError::ConfigStr(format!("failed to write master keyfile {}: {e}", path.display()))
+    f.write_all(key.as_bytes()).map_err(|e| ConfigError::MasterKeyFile {
+        op: "write",
+        path: path.to_path_buf(),
+        detail: e.to_string(),
     })?;
     f.sync_all().ok();
     Ok(())

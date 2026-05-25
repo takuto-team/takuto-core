@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -320,7 +318,10 @@ pub fn write_workflow_snapshot(
         workflows: workflows.to_vec(),
     };
     let json = serde_json::to_string_pretty(&file)
-        .map_err(|e| crate::error::MaestroError::ConfigStr(e.to_string()))?;
+        .map_err(|e| crate::config::ConfigError::Snapshot {
+            op: "serde_json",
+            detail: e.to_string(),
+        })?;
     fs::write(&tmp, json)?;
     fs::rename(&tmp, &path)?;
     Ok(())
@@ -335,7 +336,10 @@ pub fn read_workflow_snapshot(
     if path.exists() {
         let bytes = fs::read(&path)?;
         let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::error::MaestroError::ConfigStr(e.to_string()))?;
+            .map_err(|e| crate::config::ConfigError::Snapshot {
+            op: "serde_json",
+            detail: e.to_string(),
+        })?;
         return Ok(Some(file));
     }
 
@@ -344,7 +348,10 @@ pub fn read_workflow_snapshot(
     if legacy != path && legacy.exists() {
         let bytes = fs::read(&legacy)?;
         let mut file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::error::MaestroError::ConfigStr(e.to_string()))?;
+            .map_err(|e| crate::config::ConfigError::Snapshot {
+            op: "serde_json",
+            detail: e.to_string(),
+        })?;
         let ws_name = workspace_name_from_repo_path(repo_path);
         // Backfill workspace_name for legacy records.
         for rec in &mut file.workflows {
@@ -377,7 +384,10 @@ pub fn read_workflow_snapshot(
     if global != path && global.exists() {
         let bytes = fs::read(&global)?;
         let mut file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::error::MaestroError::ConfigStr(e.to_string()))?;
+            .map_err(|e| crate::config::ConfigError::Snapshot {
+            op: "serde_json",
+            detail: e.to_string(),
+        })?;
         let ws_name = workspace_name_from_repo_path(repo_path);
         for rec in &mut file.workflows {
             if rec.workspace_name.is_empty() {
@@ -456,7 +466,10 @@ pub fn read_all_workspace_snapshots(
     if global.exists() {
         let bytes = fs::read(&global)?;
         let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::error::MaestroError::ConfigStr(e.to_string()))?;
+            .map_err(|e| crate::config::ConfigError::Snapshot {
+            op: "serde_json",
+            detail: e.to_string(),
+        })?;
         if file.version == SNAPSHOT_VERSION && !file.workflows.is_empty() {
             tracing::info!(
                 count = file.workflows.len(),
@@ -509,7 +522,10 @@ pub fn write_all_workspace_snapshots(
             workflows: records.iter().map(|r| (*r).clone()).collect(),
         };
         let json = serde_json::to_string_pretty(&file)
-            .map_err(|e| crate::error::MaestroError::ConfigStr(e.to_string()))?;
+            .map_err(|e| crate::config::ConfigError::Snapshot {
+            op: "serde_json",
+            detail: e.to_string(),
+        })?;
         fs::write(&tmp, json)?;
         fs::rename(&tmp, &path)?;
     }

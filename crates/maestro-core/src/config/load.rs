@@ -1,13 +1,12 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 //! `Config::load` / `Config::load_from_str` / `Config::validate` and the
 //! adjacent path-resolution + legacy-key-detection helpers. Split out of
 //! `mod.rs` to keep the facade ≤ 200 LOC per the PO plan.
 
 use std::path::{Path, PathBuf};
 
+use crate::config::ConfigError;
 use crate::error::{MaestroError, Result};
 
 use super::{AiAgentProvider, Config, validate_cors_origin, validate_extra_args};
@@ -97,42 +96,60 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         if self.general.poll_interval_secs < 10 {
-            return Err(MaestroError::ConfigStr(
-                "poll_interval_secs must be at least 10".to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "general",
+                field: "poll_interval_secs",
+                detail: "must be at least 10".to_string(),
+            }
+            .into());
         }
 
         if self.general.max_concurrent_workflows == 0 {
-            return Err(MaestroError::ConfigStr(
-                "max_concurrent_workflows must be at least 1".to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "general",
+                field: "max_concurrent_workflows",
+                detail: "must be at least 1".to_string(),
+            }
+            .into());
         }
 
         if self.general.effective_max_active_workflows() < 1 {
-            return Err(MaestroError::ConfigStr(
-                "max_active_workflows must be at least 1 when set, or leave 0 to use max_concurrent_workflows"
+            return Err(ConfigError::Validation {
+                section: "general",
+                field: "max_active_workflows",
+                detail: "must be at least 1 when set, or leave 0 to use max_concurrent_workflows"
                     .to_string(),
-            ));
+            }
+            .into());
         }
 
         for key in &self.jira.project_keys {
             if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
-                return Err(MaestroError::ConfigStr(format!(
-                    "Invalid Jira project key: '{key}'. Must be non-empty uppercase alphanumeric."
-                )));
+                return Err(ConfigError::Validation {
+                    section: "jira",
+                    field: "project_keys",
+                    detail: format!("invalid key '{key}': must be non-empty uppercase alphanumeric"),
+                }
+                .into());
             }
         }
 
         if self.jira.item_types.is_empty() {
-            return Err(MaestroError::ConfigStr(
-                "At least one Jira item type must be configured".to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "jira",
+                field: "item_types",
+                detail: "at least one Jira item type must be configured".to_string(),
+            }
+            .into());
         }
 
         if self.web.port == 0 {
-            return Err(MaestroError::ConfigStr(
-                "Web port must be a non-zero value".to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "web",
+                field: "port",
+                detail: "must be a non-zero value".to_string(),
+            }
+            .into());
         }
 
         let du = self.web.dashboard_username.trim();
@@ -140,51 +157,72 @@ impl Config {
         let has_u = !du.is_empty();
         let has_p = !dp.is_empty();
         if has_u != has_p {
-            return Err(MaestroError::ConfigStr(
-                "[web] set both dashboard_username and dashboard_password, or leave both empty (no dashboard auth)"
-                    .to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "web",
+                field: "dashboard_username/dashboard_password",
+                detail: "set both, or leave both empty (no dashboard auth)".to_string(),
+            }
+            .into());
         }
         const MAX_DASHBOARD_USER_LEN: usize = 256;
         const MAX_DASHBOARD_PASSWORD_LEN: usize = 4096;
         if du.len() > MAX_DASHBOARD_USER_LEN {
-            return Err(MaestroError::ConfigStr(format!(
-                "[web] dashboard_username exceeds {MAX_DASHBOARD_USER_LEN} bytes (trimmed)"
-            )));
+            return Err(ConfigError::Validation {
+                section: "web",
+                field: "dashboard_username",
+                detail: format!("exceeds {MAX_DASHBOARD_USER_LEN} bytes (trimmed)"),
+            }
+            .into());
         }
         if dp.len() > MAX_DASHBOARD_PASSWORD_LEN {
-            return Err(MaestroError::ConfigStr(format!(
-                "[web] dashboard_password exceeds {MAX_DASHBOARD_PASSWORD_LEN} bytes"
-            )));
+            return Err(ConfigError::Validation {
+                section: "web",
+                field: "dashboard_password",
+                detail: format!("exceeds {MAX_DASHBOARD_PASSWORD_LEN} bytes"),
+            }
+            .into());
         }
 
         // Validate CORS origins (normalization is done by `normalize_cors_origins` before validate).
         for (i, origin) in self.web.cors_origins.iter().enumerate() {
             if let Err(msg) = validate_cors_origin(origin) {
-                return Err(MaestroError::ConfigStr(format!("{msg} (entry index {i})")));
+                return Err(ConfigError::Validation {
+                    section: "web",
+                    field: "cors_origins",
+                    detail: format!("{msg} (entry index {i})"),
+                }
+                .into());
             }
         }
 
         if self.jira.done_status.trim().is_empty() {
-            return Err(MaestroError::ConfigStr(
-                "[jira] done_status must be non-empty (Jira transition target for Mark as Done)"
-                    .to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "jira",
+                field: "done_status",
+                detail: "must be non-empty (Jira transition target for Mark as Done)".to_string(),
+            }
+            .into());
         }
 
         if self.agent.step_timeout_secs == 0 {
-            return Err(MaestroError::ConfigStr(
-                "step_timeout_secs must be at least 1".to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "agent",
+                field: "step_timeout_secs",
+                detail: "must be at least 1".to_string(),
+            }
+            .into());
         }
 
         if self.agent.provider == AiAgentProvider::Cursor
             && self.agent.effective_cursor_cli().trim().is_empty()
         {
-            return Err(MaestroError::ConfigStr(
-                "agent.providers.cursor.cli (or legacy agent.cursor_cli) must be set when agent.provider is \"cursor\""
+            return Err(ConfigError::Validation {
+                section: "agent",
+                field: "providers.cursor.cli",
+                detail: "must be set (or legacy agent.cursor_cli) when agent.provider is \"cursor\""
                     .to_string(),
-            ));
+            }
+            .into());
         }
 
         // T-CFG-002 (Phase 1, amendment A1): the Cursor CLI does not honour
@@ -192,10 +230,12 @@ impl Config {
         // is silently ignored at runtime and would lull the operator into
         // thinking proxying works. Reject loudly at validate time.
         if !self.agent.providers.cursor.base_url.trim().is_empty() {
-            return Err(MaestroError::ConfigStr(
-                "[agent.providers.cursor] base_url: Cursor CLI custom endpoints not supported (remove this key)"
-                    .to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "agent.providers.cursor",
+                field: "base_url",
+                detail: "Cursor CLI custom endpoints not supported (remove this key)".to_string(),
+            }
+            .into());
         }
 
         // Phase 1 (04_architecture.md §0 D10): deny-list every provider's
@@ -210,14 +250,21 @@ impl Config {
         // available_providers entries must be parseable provider identifiers.
         for p in &self.agent.available_providers {
             AiAgentProvider::parse(p).map_err(|e| {
-                MaestroError::ConfigStr(format!("[agent] available_providers: {e}"))
+                ConfigError::Validation {
+                    section: "agent",
+                    field: "available_providers",
+                    detail: e.to_string(),
+                }
             })?;
         }
 
         if self.git.remote.trim().is_empty() {
-            return Err(MaestroError::ConfigStr(
-                "git.remote must be a non-empty remote name (e.g. origin)".to_string(),
-            ));
+            return Err(ConfigError::Validation {
+                section: "git",
+                field: "remote",
+                detail: "must be a non-empty remote name (e.g. origin)".to_string(),
+            }
+            .into());
         }
 
         // GitHub App: if any field is set, validate consistency (all-or-nothing for required fields).
@@ -229,28 +276,36 @@ impl Config {
         let has_any = has_id || has_inst || has_key_inline || has_key_path;
         if has_any {
             if !has_id {
-                return Err(MaestroError::ConfigStr(
-                    "[github] app_id must be set (non-zero) when GitHub App auth is configured"
-                        .to_string(),
-                ));
+                return Err(ConfigError::Validation {
+                    section: "github",
+                    field: "app_id",
+                    detail: "must be set (non-zero) when GitHub App auth is configured".to_string(),
+                }
+                .into());
             }
             if !has_inst {
-                return Err(MaestroError::ConfigStr(
-                    "[github] app_installation_id must be set (non-zero) when GitHub App auth is configured"
-                        .to_string(),
-                ));
+                return Err(ConfigError::Validation {
+                    section: "github",
+                    field: "app_installation_id",
+                    detail: "must be set (non-zero) when GitHub App auth is configured".to_string(),
+                }
+                .into());
             }
             if !has_key_inline && !has_key_path {
-                return Err(MaestroError::ConfigStr(
-                    "[github] set app_private_key (PEM content) or app_private_key_path (path to PEM file)"
-                        .to_string(),
-                ));
+                return Err(ConfigError::Validation {
+                    section: "github",
+                    field: "app_private_key/app_private_key_path",
+                    detail: "set app_private_key (PEM content) or app_private_key_path (path to PEM file)".to_string(),
+                }
+                .into());
             }
             if has_key_inline && has_key_path {
-                return Err(MaestroError::ConfigStr(
-                    "[github] set either app_private_key or app_private_key_path, not both"
-                        .to_string(),
-                ));
+                return Err(ConfigError::Validation {
+                    section: "github",
+                    field: "app_private_key/app_private_key_path",
+                    detail: "set either app_private_key or app_private_key_path, not both".to_string(),
+                }
+                .into());
             }
         }
 
@@ -259,7 +314,7 @@ impl Config {
 
     pub fn to_toml_string(&self) -> Result<String> {
         toml::to_string_pretty(self)
-            .map_err(|e| MaestroError::ConfigStr(format!("Failed to serialize config: {e}")))
+            .map_err(|source| ConfigError::SerializeToml { source }.into())
     }
 
     /// Copy for JSON API responses: strips secrets (never expose via `GET /api/config`).

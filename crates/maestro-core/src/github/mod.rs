@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 pub mod auth_resolver;
 pub mod poller;
 pub mod pr_merge_poller;
@@ -121,14 +119,19 @@ pub async fn fetch_open_issues(
     .await?;
 
     if !output.success() {
-        return Err(crate::error::MaestroError::ConfigStr(format!(
-            "gh api repos/{owner_repo}/issues failed: {}",
-            gh_api_error_message(output.stderr.trim(), "Issues: Read")
-        )));
+        return Err(crate::config::ConfigError::Operational {
+            op: "gh api repos/<owner_repo>/issues",
+            detail: gh_api_error_message(output.stderr.trim(), "Issues: Read"),
+        }
+        .into());
     }
 
-    let json: serde_json::Value = serde_json::from_str(output.stdout.trim())
-        .map_err(|e| crate::error::MaestroError::ConfigStr(e.to_string()))?;
+    let json: serde_json::Value = serde_json::from_str(output.stdout.trim()).map_err(|e| {
+        crate::config::ConfigError::Operational {
+            op: "github issues json parse",
+            detail: e.to_string(),
+        }
+    })?;
 
     let issues = json
         .as_array()

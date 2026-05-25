@@ -1,10 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 use std::path::Path;
 
-use crate::error::{MaestroError, Result};
+use crate::config::ConfigError;
+use crate::error::Result;
 
 /// Resolve the remote URL from a git repository by running `git remote get-url <remote>`.
 ///
@@ -20,21 +19,29 @@ pub async fn resolve_remote_url(repo_path: &Path, remote: &str) -> Result<String
     .await?;
 
     if !output.success() {
-        return Err(MaestroError::ConfigStr(format!(
-            "Failed to resolve git remote URL for '{}' in {}: {}",
-            remote,
-            repo_path.display(),
-            output.stderr.trim()
-        )));
+        return Err(ConfigError::Operational {
+            op: "git remote get-url",
+            detail: format!(
+                "remote '{}' in {}: {}",
+                remote,
+                repo_path.display(),
+                output.stderr.trim()
+            ),
+        }
+        .into());
     }
 
     let url = output.stdout.trim().to_string();
     if url.is_empty() {
-        return Err(MaestroError::ConfigStr(format!(
-            "Git remote '{}' in {} returned an empty URL",
-            remote,
-            repo_path.display()
-        )));
+        return Err(ConfigError::Operational {
+            op: "git remote get-url",
+            detail: format!(
+                "remote '{}' in {} returned an empty URL",
+                remote,
+                repo_path.display()
+            ),
+        }
+        .into());
     }
 
     Ok(url)

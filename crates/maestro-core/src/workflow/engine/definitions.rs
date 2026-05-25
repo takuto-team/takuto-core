@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -12,9 +10,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::actions::traits::ExternalActions;
-use crate::config::Config;
+use crate::config::{Config, ConfigError};
 use crate::db::Database;
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 
 use super::event_bus::WorkflowEventBus;
 use super::repository::WorkflowRepository;
@@ -80,20 +78,17 @@ impl WorkflowDefinitionManager {
             .workflows
             .iter()
             .find(|w| w.filename == def_name)
-            .ok_or_else(|| {
-                MaestroError::ConfigStr(format!(
-                    "Workflow definition '{}' not found in {}",
-                    def_name,
-                    self.workflows_dir.display()
-                ))
+            .ok_or_else(|| ConfigError::DefinitionNotFound {
+                def_name: def_name.to_string(),
+                dir: self.workflows_dir.clone(),
             })?;
 
         if !def.valid {
-            return Err(MaestroError::ConfigStr(format!(
-                "Workflow definition '{}' is invalid: {}",
-                def_name,
-                def.error.as_deref().unwrap_or("unknown error")
-            )));
+            return Err(ConfigError::DefinitionInvalid {
+                def_name: def_name.to_string(),
+                reason: def.error.as_deref().unwrap_or("unknown error").to_string(),
+            }
+            .into());
         }
 
         // Extract needed data under read lock, then release
@@ -102,7 +97,9 @@ impl WorkflowDefinitionManager {
             let wf_map = wf_arc.read().await;
             let w = wf_map
                 .get(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
 
             // Only skip bootstrap entirely (resume path) when the full bootstrap — including
             // mise install and hooks — has already completed.  A pre-created worktree (created
@@ -118,10 +115,11 @@ impl WorkflowDefinitionManager {
             if let Some(state) = w.workflow_def_runs.get(def_name)
                 && matches!(state, WorkflowDefRunState::Running)
             {
-                return Err(MaestroError::ConfigStr(format!(
-                    "Workflow definition '{}' is already running for {}",
-                    def_name, ticket_key
-                )));
+                return Err(ConfigError::DefinitionAlreadyRunning {
+                    def_name: def_name.to_string(),
+                    ticket_key: ticket_key.to_string(),
+                }
+                .into());
             }
 
             (
@@ -136,10 +134,10 @@ impl WorkflowDefinitionManager {
 
         // Check dependencies
         if !are_dependencies_met(def_name, &discovery.workflows, &run_states) {
-            return Err(MaestroError::ConfigStr(format!(
-                "Dependencies not met for workflow definition '{}'",
-                def_name
-            )));
+            return Err(ConfigError::DefinitionDependenciesNotMet {
+                def_name: def_name.to_string(),
+            }
+            .into());
         }
 
         // Set the run state to Running under write lock and assign a fresh cancel token.
@@ -151,7 +149,9 @@ impl WorkflowDefinitionManager {
             let mut wf_map = wf_arc.write().await;
             let w = wf_map
                 .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
             w.cancel_token = CancellationToken::new();
             w.driver_started = true;
             w.workflow_def_runs
@@ -232,7 +232,9 @@ impl WorkflowDefinitionManager {
             let mut wf_map = wf_arc.write().await;
             let w = wf_map
                 .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
 
             match w.workflow_def_runs.get(def_name) {
                 Some(WorkflowDefRunState::Error { .. }) => {
@@ -240,17 +242,18 @@ impl WorkflowDefinitionManager {
                         .insert(def_name.to_string(), WorkflowDefRunState::Idle);
                 }
                 Some(state) => {
-                    return Err(MaestroError::ConfigStr(format!(
-                        "Cannot retry workflow definition '{}': current state is '{}', expected 'error'",
-                        def_name,
-                        state.display_name()
-                    )));
+                    return Err(ConfigError::DefinitionRetryWrongState {
+                        def_name: def_name.to_string(),
+                        current_state: state.display_name().to_string(),
+                    }
+                    .into());
                 }
                 None => {
-                    return Err(MaestroError::ConfigStr(format!(
-                        "Workflow definition '{}' has no run state for {}",
-                        def_name, ticket_key
-                    )));
+                    return Err(ConfigError::DefinitionNoRunState {
+                        def_name: def_name.to_string(),
+                        ticket_key: ticket_key.to_string(),
+                    }
+                    .into());
                 }
             }
         }

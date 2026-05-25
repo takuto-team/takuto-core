@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,10 +9,10 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::actions::traits::ExternalActions;
-use crate::config::{Config, TicketingSystem};
+use crate::config::{Config, ConfigError, TicketingSystem};
 use crate::container::ContainerRunner;
 use crate::db::Database;
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 
 use crate::workflow::state::WorkflowState;
 
@@ -265,12 +263,16 @@ impl WorkflowLifecycle {
             let map = wf_arc.read().await;
             let w = map
                 .get(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
             if w.state.is_active() && w.driver_started {
-                return Err(MaestroError::ConfigStr(format!(
-                    "Cannot delete workflow while it is running (current: {})",
-                    w.state
-                )));
+                return Err(ConfigError::InvalidWorkflowState {
+                    op: "delete",
+                    current_state: w.state.to_string(),
+                    ticket_key: ticket_key.to_string(),
+                }
+                .into());
             }
             (
                 w.worktree_path.clone(),
@@ -388,12 +390,16 @@ impl WorkflowLifecycle {
             let wf = wf_arc.read().await;
             let w = wf
                 .get(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
             if !matches!(w.state, WorkflowState::Done) {
-                return Err(MaestroError::ConfigStr(format!(
-                    "Mark as Done is only available when the workflow is Done (current: {})",
-                    w.state
-                )));
+                return Err(ConfigError::InvalidWorkflowState {
+                    op: "mark-as-done",
+                    current_state: w.state.to_string(),
+                    ticket_key: ticket_key.to_string(),
+                }
+                .into());
             }
             (
                 w.worktree_path.clone(),

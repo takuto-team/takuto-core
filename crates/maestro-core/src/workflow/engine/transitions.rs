@@ -1,7 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,10 +10,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::actions::traits::ExternalActions;
-use crate::config::Config;
+use crate::config::{Config, ConfigError};
 use crate::container::ContainerRunner;
 use crate::db::Database;
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 
 use crate::workflow::state::WorkflowState;
 use crate::workflow::step::StepStatus;
@@ -87,13 +85,17 @@ impl WorkflowTransitions {
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
                 .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
 
             if !workflow.state.is_active() {
-                return Err(MaestroError::ConfigStr(format!(
-                    "Cannot pause workflow in state: {}",
-                    workflow.state
-                )));
+                return Err(ConfigError::InvalidWorkflowState {
+                    op: "pause",
+                    current_state: workflow.state.to_string(),
+                    ticket_key: ticket_key.to_string(),
+                }
+                .into());
             }
 
             // Cancel the current driver token so the running agent process is killed immediately.
@@ -147,7 +149,9 @@ impl WorkflowTransitions {
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
                 .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
 
             if let WorkflowState::Paused { source_state } = &workflow.state {
                 let restored = *source_state.clone();
@@ -187,10 +191,12 @@ impl WorkflowTransitions {
                 let wt = workflow.worktree_path.clone().filter(|p| p.exists());
                 (running, wt, workflow.cancel_token.clone())
             } else {
-                return Err(MaestroError::ConfigStr(format!(
-                    "Cannot resume workflow in state: {}",
-                    workflow.state
-                )));
+                return Err(ConfigError::InvalidWorkflowState {
+                    op: "resume",
+                    current_state: workflow.state.to_string(),
+                    ticket_key: ticket_key.to_string(),
+                }
+                .into());
             }
         };
 
@@ -308,7 +314,9 @@ impl WorkflowTransitions {
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
                 .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
 
             workflow.cancel_token.cancel();
             workflow.current_step_label = None;
@@ -380,13 +388,17 @@ impl WorkflowTransitions {
             let workflows = wf_arc.read().await;
             let workflow = workflows
                 .get(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
 
             if !workflow.state.is_terminal() {
-                return Err(MaestroError::ConfigStr(format!(
-                    "Cannot retry workflow in state: {} (must be Error, Stopped, or Done)",
-                    workflow.state
-                )));
+                return Err(ConfigError::InvalidWorkflowState {
+                    op: "retry",
+                    current_state: workflow.state.to_string(),
+                    ticket_key: ticket_key.to_string(),
+                }
+                .into());
             }
 
             (
@@ -434,17 +446,21 @@ impl WorkflowTransitions {
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
                 .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| ConfigError::WorkflowNotFound {
+                    ticket_key: ticket_key.to_string(),
+                })?;
 
             // Require Error or Stopped state at the workflow level.
             if !matches!(
                 workflow.state,
                 WorkflowState::Error { .. } | WorkflowState::Stopped
             ) {
-                return Err(MaestroError::ConfigStr(format!(
-                    "Cannot resume workflow in state: {} (must be Error or Stopped)",
-                    workflow.state
-                )));
+                return Err(ConfigError::InvalidWorkflowState {
+                    op: "resume-from-error",
+                    current_state: workflow.state.to_string(),
+                    ticket_key: ticket_key.to_string(),
+                }
+                .into());
             }
 
             // Collect all defs that are in Error state.
@@ -456,10 +472,11 @@ impl WorkflowTransitions {
                 .collect();
 
             if defs.is_empty() {
-                return Err(MaestroError::ConfigStr(
-                    "No failed workflow definitions to retry. Use the individual def retry buttons."
-                        .to_string(),
-                ));
+                return Err(ConfigError::Operational {
+                    op: "retry workflow",
+                    detail: "No failed workflow definitions to retry. Use the individual def retry buttons.".to_string(),
+                }
+                .into());
             }
 
             // Reset Error defs to Idle and clear the workflow-level error state.

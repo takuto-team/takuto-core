@@ -1,13 +1,12 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
-
 //! Config-driven `bash -c` hook executor for Docker image build and container startup.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::error::{MaestroError, Result};
+use crate::config::ConfigError;
+use crate::error::Result;
 
 /// Run each non-empty command with `bash -c` in `cwd`, inheriting stdio (for logs during build/up).
 /// Debian `sh` is often **dash**, which does not support `set -o pipefail` and other bash-isms used in hooks.
@@ -53,11 +52,16 @@ pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result
             .stderr(Stdio::inherit());
         let status = cmd
             .status()
-            .map_err(|e| MaestroError::ConfigStr(format!("failed to spawn {label} hook {n}: {e}")))?;
+            .map_err(|e| ConfigError::Operational {
+                op: "hook spawn",
+                detail: format!("{label} hook {n}: {e}"),
+            })?;
         if !status.success() {
-            return Err(MaestroError::ConfigStr(format!(
-                "{label} hook command {n} failed with status {status}"
-            )));
+            return Err(ConfigError::Operational {
+                op: "hook exit",
+                detail: format!("{label} hook command {n} failed with status {status}"),
+            }
+            .into());
         }
         eprintln!("[maestro docker-hooks:{label}] ({n}/{total}) finished successfully.");
     }
