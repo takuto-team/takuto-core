@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
+use maestro_core::auth::AuthError;
 use maestro_core::config::WebConfig;
 use maestro_core::db::Database;
 use maestro_core::error::MaestroError;
@@ -263,8 +264,6 @@ pub fn now_unix() -> i64 {
 ///   compares against this, so it must not be mutated for the lifetime of the
 ///   session. Sessions older than [`SESSION_ABSOLUTE_TTL_SECS`] are rejected
 ///   and lazily deleted even when actively used (plan-02 AC-5 / G/W/T 5.7).
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 pub fn create_db_session(
     conn: &rusqlite::Connection,
     user_id: &str,
@@ -281,7 +280,7 @@ pub fn create_db_session(
     let data = serde_json::to_vec(&serde_json::json!({
         "user_id": user_id,
     }))
-    .map_err(|e| MaestroError::AuthStr(format!("Failed to serialize session: {e}")))?;
+    .map_err(|source| AuthError::SessionSerialize { source })?;
 
     conn.execute(
         "INSERT INTO sessions (id, user_id, data, expires_at, last_seen_at, created_at_unix) \

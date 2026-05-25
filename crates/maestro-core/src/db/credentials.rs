@@ -23,7 +23,8 @@ use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVe
 use rusqlite::params;
 use uuid::Uuid;
 
-use crate::error::{MaestroError, Result};
+use crate::auth::AuthError;
+use crate::error::Result;
 
 /// Current Argon2id `m_cost` (KiB) for both passwords and recovery codes.
 const CURRENT_M_COST: u32 = 47104;
@@ -43,18 +44,19 @@ const CURRENT_P_COST: u32 = 1;
 /// needing to depend on the `argon2` crate directly. Do not call from
 /// production code paths — new hashes must go through [`hash_password`] so
 /// they pick up the current OWASP-recommended parameters.
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 pub fn legacy_argon2_default_hash_for_tests(password: &str) -> Result<Vec<u8>> {
     let mut salt_bytes = [0u8; 16];
     getrandom::fill(&mut salt_bytes)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to generate salt: {e}")))?;
+        .map_err(|source| AuthError::SaltGeneration { source })?;
     let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to encode salt: {e}")))?;
+        .map_err(|source| AuthError::SaltEncoding { source })?;
     let argon2 = Argon2::default();
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to hash password: {e}")))?;
+        .map_err(|source| AuthError::HashFailed {
+            kind: "password",
+            source,
+        })?;
     Ok(hash.to_string().into_bytes())
 }
 
@@ -87,34 +89,36 @@ fn current_argon2_recovery() -> Argon2<'static> {
 }
 
 /// Hash a password using Argon2id with the current parameters and a random salt.
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 pub fn hash_password(password: &str) -> Result<Vec<u8>> {
     let mut salt_bytes = [0u8; 16];
     getrandom::fill(&mut salt_bytes)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to generate salt: {e}")))?;
+        .map_err(|source| AuthError::SaltGeneration { source })?;
     let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to encode salt: {e}")))?;
+        .map_err(|source| AuthError::SaltEncoding { source })?;
     let argon2 = current_argon2_password();
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to hash password: {e}")))?;
+        .map_err(|source| AuthError::HashFailed {
+            kind: "password",
+            source,
+        })?;
     Ok(hash.to_string().into_bytes())
 }
 
 /// Hash a recovery code using Argon2id with the stronger recovery-code parameters.
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 fn hash_recovery_code(code: &str) -> Result<Vec<u8>> {
     let mut salt_bytes = [0u8; 16];
     getrandom::fill(&mut salt_bytes)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to generate salt: {e}")))?;
+        .map_err(|source| AuthError::SaltGeneration { source })?;
     let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to encode salt: {e}")))?;
+        .map_err(|source| AuthError::SaltEncoding { source })?;
     let argon2 = current_argon2_recovery();
     let hash = argon2
         .hash_password(code.as_bytes(), &salt)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to hash recovery code: {e}")))?;
+        .map_err(|source| AuthError::HashFailed {
+            kind: "recovery code",
+            source,
+        })?;
     Ok(hash.to_string().into_bytes())
 }
 
@@ -122,13 +126,11 @@ fn hash_recovery_code(code: &str) -> Result<Vec<u8>> {
 ///
 /// The verifier reads the PHC string's embedded parameters, so this works
 /// regardless of which (older or current) parameter set produced `stored_hash`.
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 pub fn verify_password(password: &str, stored_hash: &[u8]) -> Result<bool> {
     let hash_str = std::str::from_utf8(stored_hash)
-        .map_err(|e| MaestroError::AuthStr(format!("Invalid stored hash encoding: {e}")))?;
+        .map_err(|source| AuthError::StoredHashEncoding { source })?;
     let parsed_hash = PasswordHash::new(hash_str)
-        .map_err(|e| MaestroError::AuthStr(format!("Invalid password hash format: {e}")))?;
+        .map_err(|source| AuthError::PasswordHashFormat { source })?;
     let argon2 = current_argon2_password();
     Ok(argon2
         .verify_password(password.as_bytes(), &parsed_hash)
@@ -140,17 +142,15 @@ pub fn verify_password(password: &str, stored_hash: &[u8]) -> Result<bool> {
 ///
 /// Any single dimension being below the target counts as weaker. Malformed
 /// hashes return `Err` — callers should log and skip the rehash on error.
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 fn is_password_hash_weaker_than_current(stored_hash: &[u8]) -> Result<bool> {
     let hash_str = std::str::from_utf8(stored_hash)
-        .map_err(|e| MaestroError::AuthStr(format!("Invalid stored hash encoding: {e}")))?;
+        .map_err(|source| AuthError::StoredHashEncoding { source })?;
     let parsed = PasswordHash::new(hash_str)
-        .map_err(|e| MaestroError::AuthStr(format!("Invalid password hash format: {e}")))?;
+        .map_err(|source| AuthError::PasswordHashFormat { source })?;
     // PHC params are typed as `ParamsString`; we read them out via the `Params`
     // conversion which exposes typed accessors.
     let params = Params::try_from(&parsed)
-        .map_err(|e| MaestroError::AuthStr(format!("Failed to read argon2 params: {e}")))?;
+        .map_err(|source| AuthError::ArgonParams { source })?;
     Ok(params.m_cost() < CURRENT_M_COST
         || params.t_cost() < CURRENT_T_COST_PASSWORD
         || params.p_cost() < CURRENT_P_COST)

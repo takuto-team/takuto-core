@@ -10,6 +10,8 @@ use cookie::Cookie;
 use cookie::time::Duration;
 use serde::{Deserialize, Serialize};
 
+use maestro_core::auth::AuthError;
+
 use crate::auth::{
     SESSION_COOKIE_NAME, SESSION_IDLE_TTL_SECS, authenticate_db_user, create_db_session,
     delete_db_session, now_unix, resolve_cookie_secure,
@@ -403,8 +405,6 @@ pub struct ChangePasswordBody {
 
 /// Change the current user's password. Requires valid session and correct current password.
 /// Invalidates all other sessions after the change.
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 pub async fn change_password(
     State(auth): State<AuthState>,
     State(config): State<ConfigState>,
@@ -457,9 +457,7 @@ pub async fn change_password(
 
         // Verify current password.
         if !maestro_core::db::credentials::verify_user_password(&conn, &uid, &current_pw)? {
-            return Err(maestro_core::error::MaestroError::AuthStr(
-                "Current password is incorrect".into(),
-            ));
+            return Err(AuthError::CurrentPasswordIncorrect.into());
         }
 
         // Change password.
@@ -470,7 +468,7 @@ pub async fn change_password(
         let new_token = create_db_session(&conn, &uid)?;
 
         // We need to return both the old cookie (to know what to replace) and the new token.
-        Ok((new_token, current_cookie))
+        Ok::<_, maestro_core::error::MaestroError>((new_token, current_cookie))
     })
     .await;
 
@@ -519,8 +517,6 @@ pub async fn change_password(
 
 /// Regenerate recovery codes for the current user. Replaces all existing codes.
 /// Returns the new plaintext codes (shown once).
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 pub async fn regenerate_recovery_codes(
     State(auth): State<AuthState>,
     headers: axum::http::HeaderMap,
@@ -537,8 +533,9 @@ pub async fn regenerate_recovery_codes(
     let db = db.clone();
     let result = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
-        let user_id = validate_db_session(&conn, &cookie)
-            .ok_or_else(|| maestro_core::error::MaestroError::AuthStr("Invalid session".into()))?;
+        let user_id = validate_db_session(&conn, &cookie).ok_or_else(|| -> maestro_core::error::MaestroError {
+            AuthError::InvalidSession.into()
+        })?;
         let codes =
             maestro_core::db::credentials::generate_recovery_codes(&conn, &user_id, 8)?;
         Ok::<_, maestro_core::error::MaestroError>(codes)
@@ -573,8 +570,6 @@ pub struct RecoverBody {
 /// This is a **public** endpoint (no session required — the user is locked out).
 /// On success, the recovery code is consumed, the password is changed, and all
 /// existing sessions are invalidated.
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 pub async fn recover(
     State(auth): State<AuthState>,
     Json(body): Json<RecoverBody>,
@@ -688,9 +683,7 @@ pub async fn recover(
             // Audit the failure before bubbling the error up so the lockout
             // counter sees it on the next attempt.
             let _ = record_attempt(&conn, &uid, AttemptKind::Recovery, false);
-            return Err(maestro_core::error::MaestroError::AuthStr(
-                "Invalid recovery code".into(),
-            ));
+            return Err(AuthError::InvalidRecoveryCode.into());
         }
 
         // Record success and clear the failed counter so a future locked-out
@@ -702,7 +695,7 @@ pub async fn recover(
         maestro_core::db::credentials::change_password(&conn, &uid, &new_password)?;
         maestro_core::db::credentials::delete_user_sessions(&conn, &uid)?;
 
-        Ok(())
+        Ok::<_, maestro_core::error::MaestroError>(())
     })
     .await;
 
@@ -756,8 +749,6 @@ struct RegisterResponse {
 ///
 /// Returns **201 Created** with recovery codes on success. Only available when
 /// `auth.db` is `Some` and the users table is empty.
-// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
-#[allow(deprecated)]
 pub async fn register(
     State(auth): State<AuthState>,
     Json(body): Json<RegisterBody>,
@@ -780,21 +771,14 @@ pub async fn register(
         // Only allow registration when no users exist (first-user setup).
         let count = maestro_core::db::users::count_users(&conn)?;
         if count > 0 {
-            return Err(maestro_core::error::MaestroError::AuthStr(
-                "Registration is closed: users already exist. Use admin API to create new users."
-                    .into(),
-            ));
+            return Err(AuthError::RegistrationClosed.into());
         }
 
         if username.trim().is_empty() {
-            return Err(maestro_core::error::MaestroError::AuthStr(
-                "Username cannot be empty".into(),
-            ));
+            return Err(AuthError::EmptyUsername.into());
         }
         if password.len() < 12 {
-            return Err(maestro_core::error::MaestroError::AuthStr(
-                "Password must be at least 12 characters".into(),
-            ));
+            return Err(AuthError::PasswordTooShort.into());
         }
 
         // Create admin user.
@@ -810,7 +794,7 @@ pub async fn register(
         // Generate recovery codes.
         let codes = maestro_core::db::credentials::generate_recovery_codes(&conn, &user.id, 8)?;
 
-        Ok(RegisterResponse {
+        Ok::<_, maestro_core::error::MaestroError>(RegisterResponse {
             user_id: user.id,
             username: user.username,
             role: user.role.as_str().to_string(),
