@@ -103,3 +103,271 @@ pub enum JiraError {
         source: serde_json::Error,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    //! Lock-in tests for the typed `JiraError` surface. Two assertions hold the
+    //! migration in place:
+    //!
+    //!   1. The exact `Display` string for every one of the 13 variants —
+    //!      mirrors `MaestroError::Jira(String)`'s original free-form messages
+    //!      closely enough that consumer string-matching (`routes/jira.rs`
+    //!      `msg.contains("not in configured")` → `StatusCode::FORBIDDEN`)
+    //!      keeps working unchanged.
+    //!   2. The `#[from] JiraError` chain into `MaestroError::Jira(..)` — every
+    //!      `?`-propagation across `crates/maestro-core/src/jira/` and the
+    //!      `actions/{real,dry_run}.rs` migration sites relies on this exact
+    //!      path; if a refactor accidentally wraps via the deprecated
+    //!      `JiraStr` shim these tests fail.
+    use super::*;
+    use crate::error::MaestroError;
+
+    /// Produce a deterministic `serde_json::Error` for tests. The exact Display
+    /// is whatever the upstream crate emits for the malformed input — none of
+    /// the parse variants interpolate `{source}` into their `#[error(..)]`
+    /// template, so the message itself is irrelevant to the lock-in
+    /// assertions.
+    fn sample_serde_json_error() -> serde_json::Error {
+        serde_json::from_str::<serde_json::Value>("{ not json").unwrap_err()
+    }
+
+    #[test]
+    fn lock_in_jira_error_display() {
+        // 1. TicketNotInConfiguredProjects — interpolates {key}. Routes match
+        //    "not in configured" → 403 FORBIDDEN; lock that substring in.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::TicketNotInConfiguredProjects {
+                    key: "OTHER-123".to_string()
+                }
+            ),
+            "ticket OTHER-123 is not in configured [jira] project_keys"
+        );
+
+        // 2. ListTodoFailed — interpolates {stderr}.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::ListTodoFailed {
+                    stderr: "acli: auth required".to_string()
+                }
+            ),
+            "acli list To Do tickets failed: acli: auth required"
+        );
+
+        // 3. GetDescriptionPreviewFailed — interpolates {key} + {stderr}.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::GetDescriptionPreviewFailed {
+                    key: "PROJ-1".to_string(),
+                    stderr: "not found".to_string()
+                }
+            ),
+            "acli load ticket PROJ-1 failed: not found"
+        );
+
+        // 4. GetDetailsFailed — interpolates {key} + {stderr}.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::GetDetailsFailed {
+                    key: "PROJ-2".to_string(),
+                    stderr: "forbidden".to_string()
+                }
+            ),
+            "acli get ticket details for PROJ-2 failed: forbidden"
+        );
+
+        // 5. AssignFailed — interpolates {key} + {stderr}.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::AssignFailed {
+                    key: "PROJ-3".to_string(),
+                    stderr: "no permission".to_string()
+                }
+            ),
+            "acli assign ticket PROJ-3 failed: no permission"
+        );
+
+        // 6. UnassignFailed — interpolates {key} + {stderr}.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::UnassignFailed {
+                    key: "PROJ-4".to_string(),
+                    stderr: "not assigned".to_string()
+                }
+            ),
+            "acli unassign ticket PROJ-4 failed: not assigned"
+        );
+
+        // 7. TransitionFailed — interpolates {key} + {status} + {stderr}.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::TransitionFailed {
+                    key: "PROJ-5".to_string(),
+                    status: "In Progress".to_string(),
+                    stderr: "invalid transition".to_string()
+                }
+            ),
+            "acli transition ticket PROJ-5 to In Progress failed: invalid transition"
+        );
+
+        // 8. UpdateDescriptionFailed — interpolates {key} + {stderr}.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::UpdateDescriptionFailed {
+                    key: "PROJ-6".to_string(),
+                    stderr: "edit conflict".to_string()
+                }
+            ),
+            "acli update description for PROJ-6 failed: edit conflict"
+        );
+
+        // 9. GetLinkedItemFailed — interpolates {key} + {stderr}.
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::GetLinkedItemFailed {
+                    key: "PROJ-7".to_string(),
+                    stderr: "not found".to_string()
+                }
+            ),
+            "acli get linked item PROJ-7 failed: not found"
+        );
+
+        // 10. ParseTicketJson — interpolates {key} (not source).
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::ParseTicketJson {
+                    key: "PROJ-8".to_string(),
+                    source: sample_serde_json_error(),
+                }
+            ),
+            "failed to parse acli ticket JSON for PROJ-8"
+        );
+
+        // 11. ParseTicketListJson — static (no interpolation).
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::ParseTicketListJson {
+                    source: sample_serde_json_error(),
+                }
+            ),
+            "failed to parse acli ticket list JSON"
+        );
+
+        // 12. ParseTicketDetailJson — static (no interpolation).
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::ParseTicketDetailJson {
+                    source: sample_serde_json_error(),
+                }
+            ),
+            "failed to parse acli ticket detail JSON"
+        );
+
+        // 13. ParseLinkedItemJson — static (no interpolation).
+        assert_eq!(
+            format!(
+                "{}",
+                JiraError::ParseLinkedItemJson {
+                    source: sample_serde_json_error(),
+                }
+            ),
+            "failed to parse acli linked item JSON"
+        );
+    }
+
+    #[test]
+    fn lock_in_jira_error_into_maestro_error() {
+        // Walk every variant through `MaestroError::from(..)` to guarantee the
+        // `#[from] JiraError` chain — not the deprecated `JiraStr` shim — is
+        // what `?`-propagation hits.
+
+        let cases: Vec<JiraError> = vec![
+            JiraError::TicketNotInConfiguredProjects {
+                key: "OTHER-1".to_string(),
+            },
+            JiraError::ListTodoFailed {
+                stderr: "stderr".to_string(),
+            },
+            JiraError::GetDescriptionPreviewFailed {
+                key: "PROJ-1".to_string(),
+                stderr: "stderr".to_string(),
+            },
+            JiraError::GetDetailsFailed {
+                key: "PROJ-2".to_string(),
+                stderr: "stderr".to_string(),
+            },
+            JiraError::AssignFailed {
+                key: "PROJ-3".to_string(),
+                stderr: "stderr".to_string(),
+            },
+            JiraError::UnassignFailed {
+                key: "PROJ-4".to_string(),
+                stderr: "stderr".to_string(),
+            },
+            JiraError::TransitionFailed {
+                key: "PROJ-5".to_string(),
+                status: "Done".to_string(),
+                stderr: "stderr".to_string(),
+            },
+            JiraError::UpdateDescriptionFailed {
+                key: "PROJ-6".to_string(),
+                stderr: "stderr".to_string(),
+            },
+            JiraError::GetLinkedItemFailed {
+                key: "PROJ-7".to_string(),
+                stderr: "stderr".to_string(),
+            },
+            JiraError::ParseTicketJson {
+                key: "PROJ-8".to_string(),
+                source: sample_serde_json_error(),
+            },
+            JiraError::ParseTicketListJson {
+                source: sample_serde_json_error(),
+            },
+            JiraError::ParseTicketDetailJson {
+                source: sample_serde_json_error(),
+            },
+            JiraError::ParseLinkedItemJson {
+                source: sample_serde_json_error(),
+            },
+        ];
+        assert_eq!(cases.len(), 13, "must cover every JiraError variant");
+
+        for err in cases {
+            let wrapped: MaestroError = err.into();
+            assert!(
+                matches!(
+                    wrapped,
+                    MaestroError::Jira(
+                        JiraError::TicketNotInConfiguredProjects { .. }
+                            | JiraError::ListTodoFailed { .. }
+                            | JiraError::GetDescriptionPreviewFailed { .. }
+                            | JiraError::GetDetailsFailed { .. }
+                            | JiraError::AssignFailed { .. }
+                            | JiraError::UnassignFailed { .. }
+                            | JiraError::TransitionFailed { .. }
+                            | JiraError::UpdateDescriptionFailed { .. }
+                            | JiraError::GetLinkedItemFailed { .. }
+                            | JiraError::ParseTicketJson { .. }
+                            | JiraError::ParseTicketListJson { .. }
+                            | JiraError::ParseTicketDetailJson { .. }
+                            | JiraError::ParseLinkedItemJson { .. }
+                    )
+                ),
+                "expected MaestroError::Jira(JiraError::<variant>), got {wrapped:?}"
+            );
+        }
+    }
+}
