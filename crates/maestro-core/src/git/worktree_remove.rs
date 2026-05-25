@@ -13,7 +13,8 @@ use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
+use crate::git::error::GitError;
 use crate::process;
 
 /// Compute the Claude Code session folder for a given repo path.
@@ -68,15 +69,12 @@ async fn cleanup_claude_code_session(repo_path: &Path) {
     }
 }
 
-// Transitional: GitStr sites rewritten to typed GitError variants in C2.
-#[allow(deprecated)]
 pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Result<()> {
-    let path_str = worktree_path.to_str().ok_or_else(|| {
-        MaestroError::GitStr(format!(
-            "worktree path is not valid UTF-8: {}",
-            worktree_path.display()
-        ))
-    })?;
+    let path_str = worktree_path
+        .to_str()
+        .ok_or_else(|| GitError::WorktreePathInvalidUtf8 {
+            path: worktree_path.to_path_buf(),
+        })?;
 
     info!(path = %worktree_path.display(), "Removing git worktree");
 
@@ -102,10 +100,10 @@ pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Resu
                 cleanup_claude_code_session(repo_path).await;
                 return Ok(());
             }
-            return Err(MaestroError::GitStr(format!(
-                "Failed to remove worktree: {}",
-                output2.stderr
-            )));
+            return Err(GitError::WorktreeRemoveFailed {
+                stderr: output2.stderr,
+            }
+            .into());
         }
         warn!(
             path = path_str,
@@ -113,18 +111,16 @@ pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Resu
         );
     }
 
-    Err(MaestroError::GitStr(format!(
-        "Failed to remove worktree: {}",
-        output.stderr
-    )))
+    Err(GitError::WorktreeRemoveFailed {
+        stderr: output.stderr,
+    }
+    .into())
 }
 
 /// Remove a leftover worktree directory before `git worktree add` for a **new** workflow.
 ///
 /// If the dashboard row was removed but disk cleanup failed (or the tree was never registered),
 /// reusing the path would keep another ticket’s files while Jira prompts match the new key.
-// Transitional: GitStr sites rewritten to typed GitError variants in C2.
-#[allow(deprecated)]
 pub async fn clear_worktree_path_for_recreate(
     repo_path: &Path,
     worktree_path: &Path,
@@ -145,11 +141,12 @@ pub async fn clear_worktree_path_for_recreate(
                 "git worktree remove failed (unregistered or corrupt tree); removing directory from disk"
             );
             tokio::fs::remove_dir_all(worktree_path).await.map_err(|io_err| {
-                MaestroError::GitStr(format!(
-                    "Could not remove stale worktree directory {}: {} (after git error: {git_err})",
-                    worktree_path.display(),
-                    io_err
-                ))
+                GitError::WorktreeDirRemoveFailed {
+                    path: worktree_path.to_path_buf(),
+                    io: io_err,
+                    git_err: git_err.to_string(),
+                }
+                .into()
             })
         }
     }

@@ -25,7 +25,7 @@ use crate::config::Config;
 use crate::container::ContainerRunner;
 use crate::db::Database;
 use crate::error::{MaestroError, Result};
-use crate::git;
+use crate::git::{self, GitError};
 use crate::jira::client::{JiraClient, JiraTicket};
 use crate::workflow::helpers::check_cancelled;
 use crate::workflow::log_writer::WorkflowLogWriter;
@@ -149,8 +149,6 @@ pub(super) async fn prepare_worktree_for_ticket(
 /// the caller (`drive_workflow_def`) is responsible for transitioning to
 /// `Error` and emitting the dashboard event.
 #[allow(clippy::too_many_arguments)]
-// Transitional: GitStr sites rewritten to typed GitError variants in C2.
-#[allow(deprecated)]
 pub(super) async fn bootstrap_new_workflow(
     ticket_key: &str,
     config: &Arc<RwLock<Config>>,
@@ -534,19 +532,18 @@ pub(super) async fn bootstrap_new_workflow(
                     .rev()
                     .collect::<Vec<_>>()
                     .join("\n");
-                let msg = format!(
-                    "mise install failed (exit code {}):\n{}",
-                    output.exit_code, stderr_tail
-                );
-                step_log.fail(msg.clone());
+                let err = GitError::MiseInstallFailed {
+                    exit_code: output.exit_code,
+                    stderr_tail,
+                };
+                step_log.fail(err.to_string());
                 add_step_log(workflows, ticket_key, step_log).await;
-                return Err(MaestroError::GitStr(msg));
+                return Err(err.into());
             }
             Err(e) => {
-                let msg = format!("mise install error: {e}");
-                step_log.fail(msg.clone());
+                step_log.fail(format!("mise install error: {e}"));
                 add_step_log(workflows, ticket_key, step_log).await;
-                return Err(MaestroError::GitStr(msg));
+                return Err(e);
             }
         }
     }
@@ -639,19 +636,20 @@ pub(super) async fn bootstrap_new_workflow(
                         .rev()
                         .collect::<Vec<_>>()
                         .join("\n");
-                    let msg = format!(
-                        "{step_name} failed (exit code {}):\nSTDERR:\n{}\nSTDOUT:\n{}",
-                        output.exit_code, stderr_tail, stdout_tail
-                    );
-                    step_log.fail(msg.clone());
+                    let err = GitError::WorktreeInitCommandFailed {
+                        step_name: step_name.clone(),
+                        exit_code: output.exit_code,
+                        stderr_tail,
+                        stdout_tail,
+                    };
+                    step_log.fail(err.to_string());
                     add_step_log(workflows, ticket_key, step_log).await;
-                    return Err(MaestroError::GitStr(msg));
+                    return Err(err.into());
                 }
                 Err(e) => {
-                    let msg = format!("{step_name} error: {e}");
-                    step_log.fail(msg.clone());
+                    step_log.fail(format!("{step_name} error: {e}"));
                     add_step_log(workflows, ticket_key, step_log).await;
-                    return Err(MaestroError::GitStr(msg));
+                    return Err(e);
                 }
             }
         }

@@ -13,7 +13,7 @@ use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
 use crate::config::Config;
 use crate::error::{MaestroError, Result};
-use crate::git::worktree_remove;
+use crate::git::{GitError, worktree_remove};
 use crate::jira::JiraError;
 
 use crate::github_app::GitHubAppTokenManager;
@@ -184,8 +184,6 @@ impl ExternalActions for RealActions {
         Ok(output.stdout)
     }
 
-    // Transitional: GitStr sites rewritten to typed GitError variants in C2.
-    #[allow(deprecated)]
     async fn create_worktree(
         &self,
         repo_path: &Path,
@@ -219,10 +217,11 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !fetch_output.success() {
-            return Err(MaestroError::GitStr(format!(
-                "Failed to fetch base branch '{}': {}",
-                base, fetch_output.stderr
-            )));
+            return Err(GitError::FetchBaseBranchFailed {
+                base: base.to_string(),
+                stderr: fetch_output.stderr,
+            }
+            .into());
         }
 
         // Create worktree from <remote>/<base>.
@@ -255,10 +254,10 @@ impl ExternalActions for RealActions {
             )
             .await?;
             if !output2.success() {
-                return Err(MaestroError::GitStr(format!(
-                    "Failed to create worktree: {}",
-                    output2.stderr
-                )));
+                return Err(GitError::WorktreeCreateFailed {
+                    stderr: output2.stderr,
+                }
+                .into());
             }
         }
 
@@ -269,8 +268,6 @@ impl ExternalActions for RealActions {
         worktree_remove::remove_git_worktree(repo_path, worktree_path).await
     }
 
-    // Transitional: GitStr sites rewritten to typed GitError variants in C2.
-    #[allow(deprecated)]
     async fn delete_local_branch(&self, repo_path: &Path, branch: &str) -> Result<()> {
         let branch = branch.trim();
         if branch.is_empty() {
@@ -294,10 +291,11 @@ impl ExternalActions for RealActions {
         {
             return Ok(());
         }
-        Err(MaestroError::GitStr(format!(
-            "Failed to delete branch {branch}: {}",
-            output.stderr
-        )))
+        Err(GitError::DeleteBranchFailed {
+            branch: branch.to_string(),
+            stderr: output.stderr,
+        }
+        .into())
     }
 
     async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()> {
