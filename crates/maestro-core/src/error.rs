@@ -6,11 +6,25 @@ use std::path::PathBuf;
 use crate::claude::ClaudeError;
 use crate::db::DbError;
 use crate::github_app::GitHubAppError;
+use crate::jira::JiraError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MaestroError {
+    /// Typed Jira subsystem error envelope. New code path — produced inside
+    /// `crates/maestro-core/src/jira/` (and the five `actions/{real,dry_run}.rs`
+    /// near-duplicate `acli` invocations) via `JiraError::Variant` then
+    /// `?`-propagated through this `#[from]`.
+    #[error(transparent)]
+    Jira(#[from] JiraError),
+
+    /// Deprecated free-form String shim for the Jira subsystem. Lands with
+    /// zero callers (the migration commit collapses every original
+    /// `MaestroError::Jira(String)` site to a typed `JiraError` variant).
+    /// Kept only to honour the typed-errors architecture spec's A.4
+    /// deprecation path — removed by the post-phase-8 cleanup PR.
+    #[deprecated(note = "use MaestroError::Jira with a typed JiraError instead")]
     #[error("Jira error: {0}")]
-    Jira(String),
+    JiraStr(String),
 
     #[error("Git error: {0}")]
     Git(String),

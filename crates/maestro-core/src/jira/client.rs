@@ -169,7 +169,8 @@ impl JiraClient {
         let output = self.acli(&refs).await?;
 
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to list To Do tickets: {}",
                 output.stderr
             )));
@@ -189,7 +190,8 @@ impl JiraClient {
     ) -> Result<TicketDescriptionPreview> {
         let project = key.split('-').next().unwrap_or("").trim();
         if project.is_empty() || !project_keys.iter().any(|p| p.trim() == project) {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Ticket {key} is not in configured project_keys"
             )));
         }
@@ -207,14 +209,16 @@ impl JiraClient {
             .await?;
 
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to load ticket {key}: {}",
                 output.stderr
             )));
         }
 
         let value: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|e| {
-            MaestroError::Jira(format!("Failed to parse ticket JSON for {key}: {e}"))
+            #[allow(deprecated)]
+            MaestroError::JiraStr(format!("Failed to parse ticket JSON for {key}: {e}"))
         })?;
 
         let fields = value.get("fields").unwrap_or(&value);
@@ -260,7 +264,8 @@ impl JiraClient {
             .await?;
 
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to get ticket details for {key}: {}",
                 output.stderr
             )));
@@ -304,7 +309,8 @@ impl JiraClient {
             .await?;
 
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to assign ticket {key}: {}",
                 output.stderr
             )));
@@ -327,7 +333,8 @@ impl JiraClient {
             .await?;
 
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to unassign ticket {key}: {}",
                 output.stderr
             )));
@@ -351,7 +358,8 @@ impl JiraClient {
             .await?;
 
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to transition ticket {key} to {status}: {}",
                 output.stderr
             )));
@@ -375,7 +383,8 @@ impl JiraClient {
             .await?;
 
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to update description for {key}: {}",
                 output.stderr
             )));
@@ -397,7 +406,8 @@ impl JiraClient {
             .await?;
 
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to get linked item {key}: {}",
                 output.stderr
             )));
@@ -411,8 +421,10 @@ impl JiraClient {
 
 fn parse_ticket_list(json_str: &str, default_type: &str) -> Result<Vec<JiraTicket>> {
     // acli returns a JSON array of work items directly
-    let issues: Vec<serde_json::Value> = serde_json::from_str(json_str)
-        .map_err(|e| MaestroError::Jira(format!("Failed to parse ticket list JSON: {e}")))?;
+    let issues: Vec<serde_json::Value> = serde_json::from_str(json_str).map_err(|e| {
+        #[allow(deprecated)]
+        MaestroError::JiraStr(format!("Failed to parse ticket list JSON: {e}"))
+    })?;
 
     let mut tickets = Vec::new();
     for issue in &issues {
@@ -457,8 +469,10 @@ fn dedupe_tickets_preserve_order(tickets: &mut Vec<JiraTicket>) {
 }
 
 fn parse_ticket_detail(json_str: &str) -> Result<JiraTicket> {
-    let value: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| MaestroError::Jira(format!("Failed to parse ticket detail JSON: {e}")))?;
+    let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+        #[allow(deprecated)]
+        MaestroError::JiraStr(format!("Failed to parse ticket detail JSON: {e}"))
+    })?;
 
     let fields = value.get("fields").unwrap_or(&value);
 
@@ -579,8 +593,10 @@ fn extract_linked_keys(json_str: &str) -> Vec<(String, String)> {
 }
 
 fn parse_linked_item(json_str: &str) -> Result<LinkedItem> {
-    let value: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| MaestroError::Jira(format!("Failed to parse linked item JSON: {e}")))?;
+    let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+        #[allow(deprecated)]
+        MaestroError::JiraStr(format!("Failed to parse linked item JSON: {e}"))
+    })?;
 
     let fields = value.get("fields").unwrap_or(&value);
 

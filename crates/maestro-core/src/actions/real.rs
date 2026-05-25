@@ -91,7 +91,8 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to assign ticket {key}: {}",
                 output.stderr
             )));
@@ -118,7 +119,8 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to transition ticket {key} to {status}: {}",
                 output.stderr
             )));
@@ -144,7 +146,8 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to unassign ticket {key}: {}",
                 output.stderr
             )));
@@ -170,7 +173,8 @@ impl ExternalActions for RealActions {
         )
         .await?;
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to get ticket details for {key}: {}",
                 output.stderr
             )));

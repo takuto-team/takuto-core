@@ -74,7 +74,8 @@ impl ExternalActions for DryRunActions {
         )
         .await?;
         if !output.success() {
-            return Err(MaestroError::Jira(format!(
+            #[allow(deprecated)]
+            return Err(MaestroError::JiraStr(format!(
                 "Failed to get ticket details for {key}: {}",
                 output.stderr
             )));
