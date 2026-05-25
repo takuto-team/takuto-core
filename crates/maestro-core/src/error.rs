@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::actions::AgentError;
 use crate::auth::AuthError;
 use crate::claude::ClaudeError;
+use crate::config::ConfigError;
 use crate::db::DbError;
 use crate::git::GitError;
 use crate::github_app::GitHubAppError;
@@ -140,8 +141,22 @@ pub enum MaestroError {
     #[error("Authentication error: {0}")]
     AuthStr(String),
 
+    /// Typed config subsystem error envelope. New code path — produced
+    /// inside `crates/maestro-core/src/config/`, `auth/{master_key,seal,bundle}.rs`,
+    /// `workflow/engine/*`, and assorted operational paths via
+    /// `ConfigError::Variant` then `?`-propagated through this `#[from]`.
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+
+    /// Deprecated free-form String shim for the (catch-all) config bag.
+    /// Lands with zero callers (the migration commit replaces every
+    /// original `MaestroError::Config(String)` site with a typed
+    /// `ConfigError` variant). Kept only to honour the typed-errors
+    /// architecture spec's A.4 deprecation path — removed by the
+    /// post-phase-8 cleanup PR.
+    #[deprecated(note = "use MaestroError::Config with a typed ConfigError instead")]
     #[error("Config error: {0}")]
-    Config(String),
+    ConfigStr(String),
 
     #[error("Config file not found: {0}")]
     ConfigNotFound(PathBuf),

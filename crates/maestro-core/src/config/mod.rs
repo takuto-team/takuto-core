@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod agent;
 mod agent_legacy;
+pub mod error;
 mod general;
 mod git;
 mod jira;
@@ -19,6 +20,8 @@ mod patches;
 mod runtime;
 mod template;
 mod web;
+
+pub use error::ConfigError;
 
 pub use agent::{
     AgentConfig, AgentProviderConfig, AgentProvidersConfig, AgentStepConfig, AiAgentProvider,

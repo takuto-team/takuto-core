@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Atomic, validated config persistence.
 //!
@@ -132,7 +133,7 @@ impl ConfigWriter {
         let parent = self
             .config_path
             .parent()
-            .ok_or_else(|| MaestroError::Config("config path has no parent directory".into()))?;
+            .ok_or_else(|| MaestroError::ConfigStr("config path has no parent directory".into()))?;
         fs::create_dir_all(parent)?;
 
         let lock_path = self.config_path.with_extension("toml.lock");
@@ -142,7 +143,7 @@ impl ConfigWriter {
             .truncate(true)
             .open(&lock_path)?;
         lock_file.lock_exclusive().map_err(|e| {
-            MaestroError::Config(format!("Failed to acquire config file lock: {e}"))
+            MaestroError::ConfigStr(format!("Failed to acquire config file lock: {e}"))
         })?;
 
         // 4. Write to temp file.

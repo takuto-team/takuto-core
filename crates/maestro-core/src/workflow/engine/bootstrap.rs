@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Workflow bootstrap: ticket-add-time worktree pre-creation and the
 //! full `bootstrap_new_workflow` flow (assign + retrieve + create
@@ -447,7 +448,7 @@ pub(super) async fn bootstrap_new_workflow(
 
         Some(runner)
     } else {
-        return Err(MaestroError::Config(
+        return Err(MaestroError::ConfigStr(
             "Docker daemon is not available. DinD is required for workflow isolation. \
              Ensure DOCKER_HOST is set and the DinD sidecar is running."
                 .into(),

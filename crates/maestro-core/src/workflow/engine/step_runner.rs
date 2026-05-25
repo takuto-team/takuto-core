@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Workflow-definition step runner: builds the agent-step container, walks
 //! the `[steps]` list, fans out command steps + agent sessions, and emits
@@ -145,7 +146,7 @@ pub(super) async fn run_workflow_def_steps(
         }
         Some(runner)
     } else {
-        return Err(MaestroError::Config(
+        return Err(MaestroError::ConfigStr(
             "Docker daemon is not available. DinD is required for workflow isolation. \
              Ensure DOCKER_HOST is set and the DinD sidecar is running."
                 .into(),
@@ -696,7 +697,7 @@ pub(super) async fn acquire_agent_slot(
     tokio::select! {
         _ = cancel_token.cancelled() => Err(MaestroError::Cancelled),
         permit = sem.clone().acquire_owned() => permit
-            .map_err(|_| MaestroError::Config("Agent concurrency semaphore closed".to_string())),
+            .map_err(|_| MaestroError::ConfigStr("Agent concurrency semaphore closed".to_string())),
     }
 }
 
@@ -851,12 +852,12 @@ pub(super) async fn close_github_issue(
     actions: &dyn crate::actions::traits::ExternalActions,
 ) -> Result<()> {
     let issue_number = parse_gh_issue_number(ticket_key).ok_or_else(|| {
-        MaestroError::Config(format!(
+        MaestroError::ConfigStr(format!(
             "Cannot close GitHub issue: '{ticket_key}' is not a GH-{{number}} key"
         ))
     })?;
     let owner_repo = crate::github::parse_github_repo(repo_url).ok_or_else(|| {
-        MaestroError::Config(format!(
+        MaestroError::ConfigStr(format!(
             "Cannot close GitHub issue: failed to parse owner/repo from '{repo_url}'"
         ))
     })?;
@@ -882,10 +883,10 @@ pub(super) async fn close_github_issue(
         &env,
     )
     .await
-    .map_err(|e| MaestroError::Config(format!("gh api PATCH issue failed: {e}")))?;
+    .map_err(|e| MaestroError::ConfigStr(format!("gh api PATCH issue failed: {e}")))?;
 
     if !output.success() {
-        return Err(MaestroError::Config(crate::github::gh_api_error_message(
+        return Err(MaestroError::ConfigStr(crate::github::gh_api_error_message(
             output.stderr.trim(),
             "Issues: Write",
         )));

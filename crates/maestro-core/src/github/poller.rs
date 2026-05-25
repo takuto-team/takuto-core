@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -97,7 +98,7 @@ impl GitHubPoller {
         };
 
         let owner_repo = parse_github_repo(&remote_url).ok_or_else(|| {
-            crate::error::MaestroError::Config(format!(
+            crate::error::MaestroError::ConfigStr(format!(
                 "Cannot parse GitHub owner/repo from git remote URL: {remote_url:?}. \
                  Expected format: https://github.com/owner/repo or owner/repo"
             ))

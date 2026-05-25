@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Envelope encryption with XChaCha20-Poly1305. See module docs on `auth::mod`
 //! for the high-level scheme.
@@ -38,7 +39,7 @@ pub fn seal(master: &MasterKey, plaintext: &[u8]) -> Result<SealedBlob> {
     let dek: Zeroizing<[u8; 32]> = Zeroizing::new({
         let mut buf = [0u8; 32];
         getrandom::fill(&mut buf).map_err(|e| {
-            MaestroError::Config(format!("CSPRNG failure while generating DEK: {e}"))
+            MaestroError::ConfigStr(format!("CSPRNG failure while generating DEK: {e}"))
         })?;
         buf
     });
@@ -49,7 +50,7 @@ pub fn seal(master: &MasterKey, plaintext: &[u8]) -> Result<SealedBlob> {
     let nonce: [u8; 24] = nonce_arr.into();
     let ciphertext = dek_cipher
         .encrypt(&nonce_arr, plaintext)
-        .map_err(|e| MaestroError::Config(format!("AEAD encrypt(plaintext) failed: {e}")))?;
+        .map_err(|e| MaestroError::ConfigStr(format!("AEAD encrypt(plaintext) failed: {e}")))?;
 
     // Wrap the DEK with the master key + a separate fresh nonce.
     let mk_cipher = XChaCha20Poly1305::new((master.as_bytes()).into());
@@ -57,7 +58,7 @@ pub fn seal(master: &MasterKey, plaintext: &[u8]) -> Result<SealedBlob> {
     let wnonce: [u8; 24] = wnonce_arr.into();
     let wrapped_dek = mk_cipher
         .encrypt(&wnonce_arr, &dek[..])
-        .map_err(|e| MaestroError::Config(format!("AEAD encrypt(DEK) failed: {e}")))?;
+        .map_err(|e| MaestroError::ConfigStr(format!("AEAD encrypt(DEK) failed: {e}")))?;
 
     // `dek` zeroizes on drop.
     Ok(SealedBlob {
@@ -77,13 +78,13 @@ pub fn open(master: &MasterKey, sealed: &SealedBlob) -> Result<Vec<u8>> {
     let dek_raw = mk_cipher
         .decrypt(&wnonce, sealed.wrapped_dek.as_slice())
         .map_err(|_| {
-            MaestroError::Config(
+            MaestroError::ConfigStr(
                 "envelope decrypt failed: wrapped DEK rejected (tampered ciphertext or wrong master key)"
                     .to_string(),
             )
         })?;
     if dek_raw.len() != 32 {
-        return Err(MaestroError::Config(format!(
+        return Err(MaestroError::ConfigStr(format!(
             "wrapped DEK decrypted to wrong length: {} (expected 32)",
             dek_raw.len()
         )));
@@ -101,7 +102,7 @@ pub fn open(master: &MasterKey, sealed: &SealedBlob) -> Result<Vec<u8>> {
     let plaintext = dek_cipher
         .decrypt(&nonce, sealed.ciphertext.as_slice())
         .map_err(|_| {
-            MaestroError::Config(
+            MaestroError::ConfigStr(
                 "envelope decrypt failed: payload rejected (tampered ciphertext or wrong DEK)"
                     .to_string(),
             )

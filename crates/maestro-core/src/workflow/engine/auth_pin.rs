@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Phase 2b.3 workflow auth pinning + per-step `WorkerSecretsBundle`
 //! construction. Split off `driver.rs` so the bootstrap and step-runner
@@ -40,7 +41,7 @@ pub(super) async fn ensure_workflow_auth_pin(
     let cfg_snapshot = config.read().await.clone();
     let pin = crate::auth::bundle::pin_for_workflow(&cfg_snapshot, db, user_id)
         .await
-        .map_err(|e| MaestroError::Config(format!("pin_for_workflow failed: {e}")))?;
+        .map_err(|e| MaestroError::ConfigStr(format!("pin_for_workflow failed: {e}")))?;
 
     // Write back; concurrent calls collapse — we only write if still None.
     let mut wf = workflows.write().await;

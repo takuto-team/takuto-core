@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -264,9 +265,9 @@ impl WorkflowLifecycle {
             let map = wf_arc.read().await;
             let w = map
                 .get(ticket_key)
-                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
             if w.state.is_active() && w.driver_started {
-                return Err(MaestroError::Config(format!(
+                return Err(MaestroError::ConfigStr(format!(
                     "Cannot delete workflow while it is running (current: {})",
                     w.state
                 )));
@@ -387,9 +388,9 @@ impl WorkflowLifecycle {
             let wf = wf_arc.read().await;
             let w = wf
                 .get(ticket_key)
-                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
             if !matches!(w.state, WorkflowState::Done) {
-                return Err(MaestroError::Config(format!(
+                return Err(MaestroError::ConfigStr(format!(
                     "Mark as Done is only available when the workflow is Done (current: {})",
                     w.state
                 )));

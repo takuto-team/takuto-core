@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -80,7 +81,7 @@ impl WorkflowDefinitionManager {
             .iter()
             .find(|w| w.filename == def_name)
             .ok_or_else(|| {
-                MaestroError::Config(format!(
+                MaestroError::ConfigStr(format!(
                     "Workflow definition '{}' not found in {}",
                     def_name,
                     self.workflows_dir.display()
@@ -88,7 +89,7 @@ impl WorkflowDefinitionManager {
             })?;
 
         if !def.valid {
-            return Err(MaestroError::Config(format!(
+            return Err(MaestroError::ConfigStr(format!(
                 "Workflow definition '{}' is invalid: {}",
                 def_name,
                 def.error.as_deref().unwrap_or("unknown error")
@@ -101,7 +102,7 @@ impl WorkflowDefinitionManager {
             let wf_map = wf_arc.read().await;
             let w = wf_map
                 .get(ticket_key)
-                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
 
             // Only skip bootstrap entirely (resume path) when the full bootstrap — including
             // mise install and hooks — has already completed.  A pre-created worktree (created
@@ -117,7 +118,7 @@ impl WorkflowDefinitionManager {
             if let Some(state) = w.workflow_def_runs.get(def_name)
                 && matches!(state, WorkflowDefRunState::Running)
             {
-                return Err(MaestroError::Config(format!(
+                return Err(MaestroError::ConfigStr(format!(
                     "Workflow definition '{}' is already running for {}",
                     def_name, ticket_key
                 )));
@@ -135,7 +136,7 @@ impl WorkflowDefinitionManager {
 
         // Check dependencies
         if !are_dependencies_met(def_name, &discovery.workflows, &run_states) {
-            return Err(MaestroError::Config(format!(
+            return Err(MaestroError::ConfigStr(format!(
                 "Dependencies not met for workflow definition '{}'",
                 def_name
             )));
@@ -150,7 +151,7 @@ impl WorkflowDefinitionManager {
             let mut wf_map = wf_arc.write().await;
             let w = wf_map
                 .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
             w.cancel_token = CancellationToken::new();
             w.driver_started = true;
             w.workflow_def_runs
@@ -231,7 +232,7 @@ impl WorkflowDefinitionManager {
             let mut wf_map = wf_arc.write().await;
             let w = wf_map
                 .get_mut(ticket_key)
-                .ok_or_else(|| MaestroError::Config(format!("Workflow not found: {ticket_key}")))?;
+                .ok_or_else(|| MaestroError::ConfigStr(format!("Workflow not found: {ticket_key}")))?;
 
             match w.workflow_def_runs.get(def_name) {
                 Some(WorkflowDefRunState::Error { .. }) => {
@@ -239,14 +240,14 @@ impl WorkflowDefinitionManager {
                         .insert(def_name.to_string(), WorkflowDefRunState::Idle);
                 }
                 Some(state) => {
-                    return Err(MaestroError::Config(format!(
+                    return Err(MaestroError::ConfigStr(format!(
                         "Cannot retry workflow definition '{}': current state is '{}', expected 'error'",
                         def_name,
                         state.display_name()
                     )));
                 }
                 None => {
-                    return Err(MaestroError::Config(format!(
+                    return Err(MaestroError::ConfigStr(format!(
                         "Workflow definition '{}' has no run state for {}",
                         def_name, ticket_key
                     )));

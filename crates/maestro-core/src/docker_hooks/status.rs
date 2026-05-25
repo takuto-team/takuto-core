@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Boot-time `SystemStatus` collector + the deprecated `preflight()` shim.
 
@@ -334,7 +335,7 @@ pub fn preflight(config: &Config) -> Result<PreflightResult> {
             .map(|w| format!("{}: {}", w.code, w.message))
             .collect::<Vec<_>>()
             .join("\n");
-        return Err(MaestroError::Config(msg));
+        return Err(MaestroError::ConfigStr(msg));
     }
 
     eprintln!("[maestro preflight] OK.");

@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Agent (AI provider) configuration: provider selection, per-provider sub-tables,
 //! per-step config, model resolution, and `extra_args` validation.
@@ -43,7 +44,7 @@ impl AiAgentProvider {
             "cursor" => Ok(AiAgentProvider::Cursor),
             "codex" => Ok(AiAgentProvider::Codex),
             "opencode" => Ok(AiAgentProvider::OpenCode),
-            other => Err(MaestroError::Config(format!(
+            other => Err(MaestroError::ConfigStr(format!(
                 "unknown agent provider \"{other}\" (expected one of: claude, cursor, codex, opencode)"
             ))),
         }
@@ -220,7 +221,7 @@ pub fn validate_extra_args(args: &[String]) -> Result<()> {
     for a in args {
         let tok = a.trim();
         if DENIED_EXTRA_ARG_FLAGS.contains(&tok) {
-            return Err(MaestroError::Config(format!(
+            return Err(MaestroError::ConfigStr(format!(
                 "extra_args_denied: flag \"{tok}\" is reserved by Maestro and cannot be set via [agent.providers.*].extra_args"
             )));
         }

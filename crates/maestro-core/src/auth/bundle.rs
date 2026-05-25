@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Phase 2b.3 (04_architecture.md §6) — per-workflow worker secrets bundle.
 //!
@@ -162,7 +163,7 @@ fn secrets_dir_for_db(db: &crate::db::Database) -> Result<TempDir> {
     if let Some(data_dir) = db.data_dir() {
         let root = data_dir.join(SECRETS_DIR_REL);
         std::fs::create_dir_all(&root).map_err(|e| {
-            MaestroError::Config(format!(
+            MaestroError::ConfigStr(format!(
                 "failed to create secrets root {}: {e}",
                 root.display()
             ))
@@ -171,7 +172,7 @@ fn secrets_dir_for_db(db: &crate::db::Database) -> Result<TempDir> {
             .prefix("bundle-")
             .tempdir_in(&root)
             .map_err(|e| {
-                MaestroError::Config(format!(
+                MaestroError::ConfigStr(format!(
                     "failed to create bundle tempdir in {}: {e}",
                     root.display()
                 ))
@@ -181,7 +182,7 @@ fn secrets_dir_for_db(db: &crate::db::Database) -> Result<TempDir> {
         // process tempdir (`/tmp/...`). Tests never reach the bind-mount
         // resolver so this is safe.
         TempDir::new().map_err(|e| {
-            MaestroError::Config(format!("failed to create bundle tempdir: {e}"))
+            MaestroError::ConfigStr(format!("failed to create bundle tempdir: {e}"))
         })
     }
 }
@@ -234,10 +235,10 @@ pub async fn build(
     workflow_user_id: &str,
 ) -> Result<WorkerSecretsBundle> {
     let provider = AiAgentProvider::parse(&auth_pin.provider)
-        .map_err(|e| MaestroError::Config(format!("auth_pin.provider invalid: {e}")))?;
+        .map_err(|e| MaestroError::ConfigStr(format!("auth_pin.provider invalid: {e}")))?;
 
     let master_key = db.master_key().ok_or_else(|| {
-        MaestroError::Config("master_key_unavailable: cannot unseal worker secrets".into())
+        MaestroError::ConfigStr("master_key_unavailable: cannot unseal worker secrets".into())
     })?.key.clone();
 
     // Task #43: create the host-side secrets dir under
@@ -315,7 +316,7 @@ pub async fn build(
             (None, None, None)
         }
         Err(e) => {
-            return Err(MaestroError::Config(format!(
+            return Err(MaestroError::ConfigStr(format!(
                 "resolver token_for(Push) failed: {e}"
             )));
         }
@@ -378,7 +379,7 @@ async fn unseal_claude_session(
             AiAgentProvider::Claude.as_str(),
             provider_credentials::ProviderCredentialKind::CliState,
         )
-        .map_err(|e| MaestroError::Config(format!("find_active_with_kind failed: {e}")))?
+        .map_err(|e| MaestroError::ConfigStr(format!("find_active_with_kind failed: {e}")))?
     };
     let Some(r) = row else {
         return Ok(None);
@@ -390,12 +391,12 @@ async fn unseal_claude_session(
         wnonce: r.wnonce,
     };
     let plaintext = open(master_key, &sealed)
-        .map_err(|e| MaestroError::Config(format!("open(cli_state) failed: {e}")))?;
+        .map_err(|e| MaestroError::ConfigStr(format!("open(cli_state) failed: {e}")))?;
     // Defense in depth: the validator already requires the four
     // `oauthAccount` keys at save time, but we re-validate parseable JSON
     // here so a corrupted seal doesn't deliver garbage to the worker.
     if serde_json::from_slice::<serde_json::Value>(&plaintext).is_err() {
-        return Err(MaestroError::Config(
+        return Err(MaestroError::ConfigStr(
             "cli_state blob is not valid JSON (corrupt seal or schema drift)".into(),
         ));
     }
@@ -422,7 +423,7 @@ async fn unseal_provider_credential(
     dir: &Path,
 ) -> Result<Option<PathBuf>> {
     let provider = AiAgentProvider::parse(&auth_pin.provider)
-        .map_err(|e| MaestroError::Config(e.to_string()))?;
+        .map_err(|e| MaestroError::ConfigStr(e.to_string()))?;
 
     // Find the row by the pinned id when set; otherwise by (user, provider).
     // Pre-Phase-2b.3 we don't yet have an `id`-keyed lookup helper, so the
@@ -438,7 +439,7 @@ async fn unseal_provider_credential(
             &auth_pin.provider,
             provider_credentials::ProviderCredentialKind::ApiKey,
         )
-        .map_err(|e| MaestroError::Config(format!("find_active_with_kind failed: {e}")))?
+        .map_err(|e| MaestroError::ConfigStr(format!("find_active_with_kind failed: {e}")))?
     };
 
     let plaintext = match row {
@@ -450,7 +451,7 @@ async fn unseal_provider_credential(
                 wnonce: r.wnonce,
             };
             open(master_key, &sealed).map_err(|e| {
-                MaestroError::Config(format!("open(provider_credential) failed: {e}"))
+                MaestroError::ConfigStr(format!("open(provider_credential) failed: {e}"))
             })?
         }
         None => {
@@ -472,7 +473,7 @@ async fn unseal_provider_credential(
                 );
                 return Ok(None);
             } else {
-                return Err(MaestroError::Config(format!(
+                return Err(MaestroError::ConfigStr(format!(
                     "provider_credential_missing: user {workflow_user_id} has no {} credential and \
                      allow_shared_default = false",
                     provider.as_str()
@@ -505,10 +506,10 @@ fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .mode(0o400)
         .open(path)
         .map_err(|e| {
-            MaestroError::Config(format!("failed to create secret file {}: {e}", path.display()))
+            MaestroError::ConfigStr(format!("failed to create secret file {}: {e}", path.display()))
         })?;
     f.write_all(bytes).map_err(|e| {
-        MaestroError::Config(format!("failed to write secret file {}: {e}", path.display()))
+        MaestroError::ConfigStr(format!("failed to write secret file {}: {e}", path.display()))
     })?;
     f.sync_all().ok();
     Ok(())
@@ -522,10 +523,10 @@ fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .create_new(true)
         .open(path)
         .map_err(|e| {
-            MaestroError::Config(format!("failed to create secret file {}: {e}", path.display()))
+            MaestroError::ConfigStr(format!("failed to create secret file {}: {e}", path.display()))
         })?;
     f.write_all(bytes).map_err(|e| {
-        MaestroError::Config(format!("failed to write secret file {}: {e}", path.display()))
+        MaestroError::ConfigStr(format!("failed to write secret file {}: {e}", path.display()))
     })?;
     f.sync_all().ok();
     Ok(())
@@ -577,9 +578,9 @@ pub async fn pin_for_workflow(
     let (provider_credential_row_id, github_credential_row_id, github_mode) = {
         let conn = db.conn().lock().await;
         let p = provider_credentials::find_active(&conn, workflow_user_id, &provider)
-            .map_err(|e| MaestroError::Config(format!("find_active failed: {e}")))?;
+            .map_err(|e| MaestroError::ConfigStr(format!("find_active failed: {e}")))?;
         let g = github_credentials::find(&conn, workflow_user_id)
-            .map_err(|e| MaestroError::Config(format!("github_credentials::find failed: {e}")))?;
+            .map_err(|e| MaestroError::ConfigStr(format!("github_credentials::find failed: {e}")))?;
         let github_mode = if g.is_some() {
             TokenSource::UserPat.as_str().to_string()
         } else {

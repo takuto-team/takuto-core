@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! Config-driven `bash -c` hook executor for Docker image build and container startup.
 
@@ -52,9 +53,9 @@ pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result
             .stderr(Stdio::inherit());
         let status = cmd
             .status()
-            .map_err(|e| MaestroError::Config(format!("failed to spawn {label} hook {n}: {e}")))?;
+            .map_err(|e| MaestroError::ConfigStr(format!("failed to spawn {label} hook {n}: {e}")))?;
         if !status.success() {
-            return Err(MaestroError::Config(format!(
+            return Err(MaestroError::ConfigStr(format!(
                 "{label} hook command {n} failed with status {status}"
             )));
         }

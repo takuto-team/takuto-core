@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 use std::path::Path;
 
@@ -19,7 +20,7 @@ pub async fn resolve_remote_url(repo_path: &Path, remote: &str) -> Result<String
     .await?;
 
     if !output.success() {
-        return Err(MaestroError::Config(format!(
+        return Err(MaestroError::ConfigStr(format!(
             "Failed to resolve git remote URL for '{}' in {}: {}",
             remote,
             repo_path.display(),
@@ -29,7 +30,7 @@ pub async fn resolve_remote_url(repo_path: &Path, remote: &str) -> Result<String
 
     let url = output.stdout.trim().to_string();
     if url.is_empty() {
-        return Err(MaestroError::Config(format!(
+        return Err(MaestroError::ConfigStr(format!(
             "Git remote '{}' in {} returned an empty URL",
             remote,
             repo_path.display()

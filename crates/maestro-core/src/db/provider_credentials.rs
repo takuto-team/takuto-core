@@ -1,5 +1,6 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+#![allow(deprecated)] // Transitional: ConfigStr sites rewritten to ConfigError variants in C2.
 
 //! `user_provider_credentials` table — row shape + CRUD.
 //!
@@ -340,7 +341,7 @@ pub fn touch_last_used(conn: &Connection, id: i64, when_iso8601_utc: &str) -> Re
 
 /// Convenience: typed error for the "no master key, can't seal" path.
 pub fn err_master_key_unavailable() -> MaestroError {
-    MaestroError::Config("master_key_unavailable".into())
+    MaestroError::ConfigStr("master_key_unavailable".into())
 }
 
 #[cfg(test)]
