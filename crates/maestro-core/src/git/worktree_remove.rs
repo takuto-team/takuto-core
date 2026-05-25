@@ -68,9 +68,11 @@ async fn cleanup_claude_code_session(repo_path: &Path) {
     }
 }
 
+// Transitional: GitStr sites rewritten to typed GitError variants in C2.
+#[allow(deprecated)]
 pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Result<()> {
     let path_str = worktree_path.to_str().ok_or_else(|| {
-        MaestroError::Git(format!(
+        MaestroError::GitStr(format!(
             "worktree path is not valid UTF-8: {}",
             worktree_path.display()
         ))
@@ -100,7 +102,7 @@ pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Resu
                 cleanup_claude_code_session(repo_path).await;
                 return Ok(());
             }
-            return Err(MaestroError::Git(format!(
+            return Err(MaestroError::GitStr(format!(
                 "Failed to remove worktree: {}",
                 output2.stderr
             )));
@@ -111,7 +113,7 @@ pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Resu
         );
     }
 
-    Err(MaestroError::Git(format!(
+    Err(MaestroError::GitStr(format!(
         "Failed to remove worktree: {}",
         output.stderr
     )))
@@ -121,6 +123,8 @@ pub async fn remove_git_worktree(repo_path: &Path, worktree_path: &Path) -> Resu
 ///
 /// If the dashboard row was removed but disk cleanup failed (or the tree was never registered),
 /// reusing the path would keep another ticket’s files while Jira prompts match the new key.
+// Transitional: GitStr sites rewritten to typed GitError variants in C2.
+#[allow(deprecated)]
 pub async fn clear_worktree_path_for_recreate(
     repo_path: &Path,
     worktree_path: &Path,
@@ -141,7 +145,7 @@ pub async fn clear_worktree_path_for_recreate(
                 "git worktree remove failed (unregistered or corrupt tree); removing directory from disk"
             );
             tokio::fs::remove_dir_all(worktree_path).await.map_err(|io_err| {
-                MaestroError::Git(format!(
+                MaestroError::GitStr(format!(
                     "Could not remove stale worktree directory {}: {} (after git error: {git_err})",
                     worktree_path.display(),
                     io_err

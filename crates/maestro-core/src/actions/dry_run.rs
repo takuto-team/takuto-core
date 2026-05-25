@@ -84,6 +84,8 @@ impl ExternalActions for DryRunActions {
         Ok(output.stdout)
     }
 
+    // Transitional: GitStr sites rewritten to typed GitError variants in C2.
+    #[allow(deprecated)]
     async fn create_worktree(
         &self,
         repo_path: &Path,
@@ -113,7 +115,7 @@ impl ExternalActions for DryRunActions {
         )
         .await?;
         if !fetch_output.success() {
-            return Err(MaestroError::Git(format!(
+            return Err(MaestroError::GitStr(format!(
                 "Failed to fetch base branch '{}': {}",
                 base, fetch_output.stderr
             )));
@@ -137,7 +139,7 @@ impl ExternalActions for DryRunActions {
             )
             .await?;
             if !output2.success() {
-                return Err(MaestroError::Git(format!(
+                return Err(MaestroError::GitStr(format!(
                     "Failed to create worktree: {}",
                     output2.stderr
                 )));
@@ -155,6 +157,8 @@ impl ExternalActions for DryRunActions {
         worktree_remove::remove_git_worktree(repo_path, worktree_path).await
     }
 
+    // Transitional: GitStr sites rewritten to typed GitError variants in C2.
+    #[allow(deprecated)]
     async fn delete_local_branch(&self, repo_path: &Path, branch: &str) -> Result<()> {
         let branch = branch.trim();
         if branch.is_empty() {
@@ -181,7 +185,7 @@ impl ExternalActions for DryRunActions {
         {
             return Ok(());
         }
-        Err(MaestroError::Git(format!(
+        Err(MaestroError::GitStr(format!(
             "Failed to delete branch {branch}: {}",
             output.stderr
         )))

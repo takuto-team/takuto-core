@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::actions::AgentError;
 use crate::claude::ClaudeError;
 use crate::db::DbError;
+use crate::git::GitError;
 use crate::github_app::GitHubAppError;
 use crate::jira::JiraError;
 
@@ -27,8 +28,23 @@ pub enum MaestroError {
     #[error("Jira error: {0}")]
     JiraStr(String),
 
+    /// Typed git / `gh`-CLI / bootstrap-step error envelope. New code path —
+    /// produced inside `crates/maestro-core/src/git/`,
+    /// `crates/maestro-core/src/actions/{real,dry_run,gh_github}.rs`, and
+    /// `workflow::engine::bootstrap` via `GitError::Variant` then
+    /// `?`-propagated through this `#[from]`.
+    #[error(transparent)]
+    Git(#[from] GitError),
+
+    /// Deprecated free-form String shim for the git subsystem. Lands with
+    /// zero callers (the migration commit replaces every original
+    /// `MaestroError::Git(String)` site with a typed `GitError` variant or
+    /// collapses it to direct `?` propagation). Kept only to honour the
+    /// typed-errors architecture spec's A.4 deprecation path — removed by
+    /// the post-phase-8 cleanup PR.
+    #[deprecated(note = "use MaestroError::Git with a typed GitError instead")]
     #[error("Git error: {0}")]
-    Git(String),
+    GitStr(String),
 
     /// Typed AI agent (Cursor / Codex / OpenCode session + step orchestrator)
     /// error envelope. New code path — produced inside

@@ -149,6 +149,8 @@ pub(super) async fn prepare_worktree_for_ticket(
 /// the caller (`drive_workflow_def`) is responsible for transitioning to
 /// `Error` and emitting the dashboard event.
 #[allow(clippy::too_many_arguments)]
+// Transitional: GitStr sites rewritten to typed GitError variants in C2.
+#[allow(deprecated)]
 pub(super) async fn bootstrap_new_workflow(
     ticket_key: &str,
     config: &Arc<RwLock<Config>>,
@@ -538,13 +540,13 @@ pub(super) async fn bootstrap_new_workflow(
                 );
                 step_log.fail(msg.clone());
                 add_step_log(workflows, ticket_key, step_log).await;
-                return Err(MaestroError::Git(msg));
+                return Err(MaestroError::GitStr(msg));
             }
             Err(e) => {
                 let msg = format!("mise install error: {e}");
                 step_log.fail(msg.clone());
                 add_step_log(workflows, ticket_key, step_log).await;
-                return Err(MaestroError::Git(msg));
+                return Err(MaestroError::GitStr(msg));
             }
         }
     }
@@ -643,13 +645,13 @@ pub(super) async fn bootstrap_new_workflow(
                     );
                     step_log.fail(msg.clone());
                     add_step_log(workflows, ticket_key, step_log).await;
-                    return Err(MaestroError::Git(msg));
+                    return Err(MaestroError::GitStr(msg));
                 }
                 Err(e) => {
                     let msg = format!("{step_name} error: {e}");
                     step_log.fail(msg.clone());
                     add_step_log(workflows, ticket_key, step_log).await;
-                    return Err(MaestroError::Git(msg));
+                    return Err(MaestroError::GitStr(msg));
                 }
             }
         }

@@ -36,18 +36,20 @@ pub async fn github_commit_identity(
     Ok((display_name, email))
 }
 
+// Transitional: GitStr sites rewritten to typed GitError variants in C2.
+#[allow(deprecated)]
 async fn fetch_gh_user(cwd: &Path, cancel: CancellationToken) -> Result<GhUser> {
     let out = process::run_command("gh", &["api", "user"], cwd, cancel).await?;
     if !out.success() {
-        return Err(MaestroError::Git(format!(
+        return Err(MaestroError::GitStr(format!(
             "gh api user failed: {}",
             out.stderr.trim()
         )));
     }
     let u: GhUser = serde_json::from_str(out.stdout.trim())
-        .map_err(|e| MaestroError::Git(format!("failed to parse gh api user JSON: {e}")))?;
+        .map_err(|e| MaestroError::GitStr(format!("failed to parse gh api user JSON: {e}")))?;
     if u.login.is_empty() {
-        return Err(MaestroError::Git(
+        return Err(MaestroError::GitStr(
             "gh api user returned an empty login".into(),
         ));
     }
@@ -55,6 +57,8 @@ async fn fetch_gh_user(cwd: &Path, cancel: CancellationToken) -> Result<GhUser> 
 }
 
 /// Sets `user.name` and `user.email` locally in `cwd` so commits match the `gh` account.
+// Transitional: GitStr sites rewritten to typed GitError variants in C2.
+#[allow(deprecated)]
 pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -> Result<()> {
     let (name, email) = github_commit_identity(cwd, cancel.child_token()).await?;
 
@@ -66,7 +70,7 @@ pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -
     )
     .await?;
     if !name_out.success() {
-        return Err(MaestroError::Git(format!(
+        return Err(MaestroError::GitStr(format!(
             "git config user.name failed: {}",
             name_out.stderr.trim()
         )));
@@ -80,7 +84,7 @@ pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -
     )
     .await?;
     if !email_out.success() {
-        return Err(MaestroError::Git(format!(
+        return Err(MaestroError::GitStr(format!(
             "git config user.email failed: {}",
             email_out.stderr.trim()
         )));
@@ -103,6 +107,8 @@ pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -
 // `parse_pr_url` (mentioned in the task spec) is in `github/mod.rs` and already
 // has comprehensive tests there. The GhUser deserialization is validated by the
 // gh API contract. Integration testing requires a real `gh` CLI and GitHub auth.
+// Transitional: GitStr sites rewritten to typed GitError variants in C2.
+#[allow(deprecated)]
 pub async fn gh_request_self_pr_reviewer(
     cwd: &Path,
     pr_url: &str,
@@ -110,7 +116,7 @@ pub async fn gh_request_self_pr_reviewer(
 ) -> Result<()> {
     let pr_url = pr_url.trim();
     if pr_url.is_empty() {
-        return Err(MaestroError::Git("empty PR URL".into()));
+        return Err(MaestroError::GitStr("empty PR URL".into()));
     }
 
     let u = fetch_gh_user(cwd, cancel.child_token()).await?;
@@ -124,7 +130,7 @@ pub async fn gh_request_self_pr_reviewer(
     .await?;
 
     if !out.success() {
-        return Err(MaestroError::Git(format!(
+        return Err(MaestroError::GitStr(format!(
             "gh pr edit --add-reviewer failed: {}",
             out.stderr.trim()
         )));
