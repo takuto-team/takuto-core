@@ -75,6 +75,10 @@ impl CursorSession {
 
 // Agent session parameters are inherently numerous.
 #[allow(clippy::too_many_arguments)]
+// Transitional: every `MaestroError::AiAgentStr(...)` below gets rewritten to a
+// typed `AgentError` variant (or collapsed to direct `?` propagation) in C2.
+// The function-level `#[allow(deprecated)]` keeps the C1 commit warning-clean.
+#[allow(deprecated)]
 async fn run_cursor_agent_session(
     cursor_cli: &str,
     worktree: &Path,
@@ -88,7 +92,7 @@ async fn run_cursor_agent_session(
 ) -> Result<(String, String)> {
     let workspace = worktree
         .to_str()
-        .ok_or_else(|| MaestroError::AiAgent("Worktree path is not valid UTF-8".to_string()))?;
+        .ok_or_else(|| MaestroError::AiAgentStr("Worktree path is not valid UTF-8".to_string()))?;
 
     let mut owned: Vec<String> = vec![
         "-p".to_string(),
@@ -135,7 +139,7 @@ async fn run_cursor_agent_session(
     } else {
         ProcessHandle::spawn(cursor_cli, &arg_refs, worktree, cancel_token).await
     }
-    .map_err(|e| MaestroError::AiAgent(format!("Failed to spawn Cursor Agent: {e}")))?;
+    .map_err(|e| MaestroError::AiAgentStr(format!("Failed to spawn Cursor Agent: {e}")))?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await
@@ -146,7 +150,7 @@ async fn run_cursor_agent_session(
     match result {
         Ok(output) => {
             if !output.success() {
-                return Err(MaestroError::AiAgent(format!(
+                return Err(MaestroError::AiAgentStr(format!(
                     "Cursor Agent exited with code {}: {}",
                     output.exit_code,
                     output.stderr.lines().take(8).collect::<Vec<_>>().join("\n")
@@ -154,7 +158,7 @@ async fn run_cursor_agent_session(
             }
 
             if output.stdout.trim().is_empty() {
-                return Err(MaestroError::AiAgent(
+                return Err(MaestroError::AiAgentStr(
                     "Cursor Agent produced no output — check `agent login` / CURSOR_API_KEY in the environment"
                         .to_string(),
                 ));
@@ -174,7 +178,7 @@ async fn run_cursor_agent_session(
             warn!(timeout_secs = secs, "Cursor Agent session timed out");
             Err(MaestroError::Timeout(secs))
         }
-        Err(e) => Err(MaestroError::AiAgent(format!("Cursor Agent error: {e}"))),
+        Err(e) => Err(MaestroError::AiAgentStr(format!("Cursor Agent error: {e}"))),
     }
 }
 

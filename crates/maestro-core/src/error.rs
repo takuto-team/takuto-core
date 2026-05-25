@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use crate::actions::AgentError;
 use crate::claude::ClaudeError;
 use crate::db::DbError;
 use crate::github_app::GitHubAppError;
@@ -29,8 +30,23 @@ pub enum MaestroError {
     #[error("Git error: {0}")]
     Git(String),
 
+    /// Typed AI agent (Cursor / Codex / OpenCode session + step orchestrator)
+    /// error envelope. New code path — produced inside
+    /// `crates/maestro-core/src/{cursor,codex,opencode}/session.rs` and
+    /// `workflow::engine::step_runner` via `AgentError::Variant` then
+    /// `?`-propagated through this `#[from]`.
+    #[error(transparent)]
+    Agent(#[from] AgentError),
+
+    /// Deprecated free-form String shim for the AI agent subsystem. Lands
+    /// with zero callers (the migration commit replaces every original
+    /// `MaestroError::AiAgent(String)` site with a typed `AgentError`
+    /// variant or collapses it to direct `?` propagation). Kept only to
+    /// honour the typed-errors architecture spec's A.4 deprecation path —
+    /// removed by the post-phase-8 cleanup PR.
+    #[deprecated(note = "use MaestroError::Agent with a typed AgentError instead")]
     #[error("AI agent error: {0}")]
-    AiAgent(String),
+    AiAgentStr(String),
 
     #[error("Command failed: {cmd} (exit code {code})\n{stderr}")]
     Command {

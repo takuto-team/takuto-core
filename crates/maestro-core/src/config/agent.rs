@@ -4,6 +4,8 @@
 //! Agent (AI provider) configuration: provider selection, per-provider sub-tables,
 //! per-step config, model resolution, and `extra_args` validation.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::{MaestroError, Result};
@@ -58,6 +60,24 @@ impl AiAgentProvider {
                 | AiAgentProvider::Codex
                 | AiAgentProvider::OpenCode
         )
+    }
+
+    /// Human-readable label used in error messages and logs.
+    /// Matches the legacy `MaestroError::AiAgent(String)` Display prefixes
+    /// (e.g. "Cursor Agent exited with code …").
+    pub fn display_name(self) -> &'static str {
+        match self {
+            AiAgentProvider::Claude => "Claude Code",
+            AiAgentProvider::Cursor => "Cursor Agent",
+            AiAgentProvider::Codex => "Codex CLI",
+            AiAgentProvider::OpenCode => "OpenCode",
+        }
+    }
+}
+
+impl fmt::Display for AiAgentProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.display_name())
     }
 }
 

@@ -86,6 +86,10 @@ impl CodexSession {
 
 // Agent session parameters are inherently numerous.
 #[allow(clippy::too_many_arguments)]
+// Transitional: every `MaestroError::AiAgentStr(...)` below gets rewritten to a
+// typed `AgentError` variant (or collapsed to direct `?` propagation) in C2.
+// The function-level `#[allow(deprecated)]` keeps the C1 commit warning-clean.
+#[allow(deprecated)]
 async fn run_codex_session(
     worktree: &Path,
     prompt: &str,
@@ -98,7 +102,7 @@ async fn run_codex_session(
 ) -> Result<(String, String)> {
     let workspace = worktree
         .to_str()
-        .ok_or_else(|| MaestroError::AiAgent("Worktree path is not valid UTF-8".to_string()))?;
+        .ok_or_else(|| MaestroError::AiAgentStr("Worktree path is not valid UTF-8".to_string()))?;
 
     let owned = build_codex_args(workspace, prompt, model, resume_session_id);
     let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
@@ -119,7 +123,7 @@ async fn run_codex_session(
     } else {
         ProcessHandle::spawn(CODEX_BIN, &arg_refs, worktree, cancel_token).await
     }
-    .map_err(|e| MaestroError::AiAgent(format!("Failed to spawn Codex CLI: {e}")))?;
+    .map_err(|e| MaestroError::AiAgentStr(format!("Failed to spawn Codex CLI: {e}")))?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await
@@ -130,7 +134,7 @@ async fn run_codex_session(
     match result {
         Ok(output) => {
             if !output.success() {
-                return Err(MaestroError::AiAgent(format!(
+                return Err(MaestroError::AiAgentStr(format!(
                     "Codex CLI exited with code {}: {}",
                     output.exit_code,
                     output.stderr.lines().take(8).collect::<Vec<_>>().join("\n")
@@ -138,7 +142,7 @@ async fn run_codex_session(
             }
 
             if output.stdout.trim().is_empty() {
-                return Err(MaestroError::AiAgent(
+                return Err(MaestroError::AiAgentStr(
                     "Codex CLI produced no output — check OPENAI_API_KEY in the environment"
                         .to_string(),
                 ));
@@ -146,7 +150,7 @@ async fn run_codex_session(
 
             // turn.failed inside the stream is a logical failure even with exit 0.
             if let Some(msg) = find_codex_turn_failure(&output.stdout) {
-                return Err(MaestroError::AiAgent(format!(
+                return Err(MaestroError::AiAgentStr(format!(
                     "Codex CLI reported turn.failed: {msg}"
                 )));
             }
@@ -165,7 +169,7 @@ async fn run_codex_session(
             warn!(timeout_secs = secs, "Codex CLI session timed out");
             Err(MaestroError::Timeout(secs))
         }
-        Err(e) => Err(MaestroError::AiAgent(format!("Codex CLI error: {e}"))),
+        Err(e) => Err(MaestroError::AiAgentStr(format!("Codex CLI error: {e}"))),
     }
 }
 

@@ -485,7 +485,8 @@ pub(super) async fn run_agent_step_sequence(
                             step = %step_label,
                             "Command step failed — aborting workflow"
                         );
-                        return Err(MaestroError::AiAgent("Command step failed".to_string()));
+                        #[allow(deprecated)]
+                        return Err(MaestroError::AiAgentStr("Command step failed".to_string()));
                     }
 
                     add_step_log(workflows, ticket_key, step_log).await;
@@ -673,7 +674,8 @@ pub(super) async fn run_agent_step_sequence(
                                 AiAgentProvider::Codex => "Agent step failed — check Codex (`codex login --with-api-key` or OPENAI_API_KEY) and agent.providers.codex.model".to_string(),
                                 AiAgentProvider::OpenCode => "Agent step failed — check OpenCode (`opencode auth login` or a project opencode.json) and agent.providers.opencode.model".to_string(),
                             };
-                            return Err(MaestroError::AiAgent(msg));
+                            #[allow(deprecated)]
+                            return Err(MaestroError::AiAgentStr(msg));
                         }
                     }
                 }
