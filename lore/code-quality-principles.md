@@ -148,6 +148,14 @@ The `MaestroError` envelope target is **transparent `#[from]` per sub-enum** (`M
 
 ---
 
+## 10 · React component splits
+
+When a frontend god component crosses ~300 LOC (the audit's "worst offenders" threshold) we split it the same way as Rust god modules: a thin presentational shell that composes per-concern hooks + sub-components, each with a single, focused responsibility. The shell owns layout + the page-level state machine; hooks own data fetching, form state, and the pure transforms that feed them; sub-components own JSX that takes only the props they consume (no whole-state pass-through). Generic patterns (`useDiffForm<T>`, the `EditorTerminalMenu` `kind` discriminator) live next to where they were extracted from — promote to a shared design-system primitive only when a third call site needs them.
+
+- **2026-05-26** — three React god components from audit §8 #4. `IssueCard.tsx` 485 → 376 LOC: extracted `<EditorTerminalMenu>` (unifies the editor + terminal dropdowns via a `kind` discriminator), `<PortMappingsMenu>`, and `useIssueCardActions(ticketKey)` hook. `Onboarding.tsx` 475 → 158 LOC: moved 5 sub-steps + Stepper into `pages/Onboarding/`; extracted `useOnboardingFlow` (wizard state machine with `onBeforeNext` pre-flight hook for step-gating) and `useProviderForm` (step-2's local state + `/api/config` fetch + save, plus the cached `ticketingSystem` / `githubAppConfigured` reads that steps 1 and 3 need). `WorktreeSettingsTab.tsx` 367 → 241 LOC: extracted generic `useDiffForm<T>` (tracks `value` + `original` under pluggable equality — the 13-useState pile collapses to 2 `useDiffForm` calls + 6 small local `useState`), `useWorktreeWorkspaces`, `<WorkspaceSidebar>`, and a pure `validateCommands` mirroring the server-side checks. Spec: [`lore/audits/2026-05-26-react-components-spec.md`](audits/2026-05-26-react-components-spec.md). **§8 #4 is closed**; the original audit's four §8 priorities (#1 WorkflowEngine + AppState, #2 typed errors, #3 god modules, #4 React god components) are all complete.
+
+---
+
 ## When to update this file
 
 Update this file when a **project-level decision** changes — for example:
