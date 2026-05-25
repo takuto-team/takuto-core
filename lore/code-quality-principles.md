@@ -123,6 +123,8 @@ When we demote a god-struct's `pub` fields to `pub(crate)` and add typed accesso
 
 ## 9 · Typed errors
 
+**Status (2026-05-25): §8 #2 closed.** `MaestroError` is now a pure `#[from]`-only envelope over 8 typed sub-enums (JiraError, GitError, AgentError, DbError, ClaudeError, GitHubAppError, AuthError, ConfigError); all 8 transitional `*Str(String)` deprecated shims have been removed in the final cleanup PR. Future contributions go directly to a sub-enum.
+
 When we carve one of `MaestroError`'s String-payload variants into a typed sub-enum, the cut plan lives in a dated spec under `lore/audits/`. The architecture-binding spec pins (a) the 8 target sub-enums and their module paths, (b) the final `MaestroError` envelope shape, (c) the structural rules sub-enum variants must follow, (d) the per-subsystem deprecation path. Each subsequent per-subsystem spec executes a single migration against those pins — the architecture is not re-debated PR-by-PR. The standing rules from §3 (typed `#[from]` payloads, no `e.to_string()` flattening, log at the handling site with `error = ?e` to walk the chain) are the operating contract; this section's specs are how we get there one subsystem at a time.
 
 The pinned conventions for new sub-enum variants:
