@@ -263,6 +263,8 @@ pub fn now_unix() -> i64 {
 ///   compares against this, so it must not be mutated for the lifetime of the
 ///   session. Sessions older than [`SESSION_ABSOLUTE_TTL_SECS`] are rejected
 ///   and lazily deleted even when actively used (plan-02 AC-5 / G/W/T 5.7).
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub fn create_db_session(
     conn: &rusqlite::Connection,
     user_id: &str,
@@ -279,7 +281,7 @@ pub fn create_db_session(
     let data = serde_json::to_vec(&serde_json::json!({
         "user_id": user_id,
     }))
-    .map_err(|e| MaestroError::Auth(format!("Failed to serialize session: {e}")))?;
+    .map_err(|e| MaestroError::AuthStr(format!("Failed to serialize session: {e}")))?;
 
     conn.execute(
         "INSERT INTO sessions (id, user_id, data, expires_at, last_seen_at, created_at_unix) \

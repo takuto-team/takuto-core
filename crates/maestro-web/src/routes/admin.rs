@@ -126,6 +126,8 @@ struct CreateUserResponse {
 }
 
 /// `POST /api/users` -- Create a new user (admin only).
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub async fn create_user(
     State(auth): State<AuthState>,
     headers: HeaderMap,
@@ -150,7 +152,7 @@ pub async fn create_user(
             && !password.is_empty()
         {
             if password.len() < 12 {
-                return Err(maestro_core::error::MaestroError::Auth(
+                return Err(maestro_core::error::MaestroError::AuthStr(
                     "Password must be at least 12 characters".into(),
                 ));
             }
@@ -381,6 +383,8 @@ pub async fn unsuspend_user(
 ///
 /// Deletes both `kind = 'password'` and `kind = 'recovery'` rows so the user's
 /// next login starts from a clean slate. Returns **204 No Content**.
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub async fn unlock_user(
     State(auth): State<AuthState>,
     headers: HeaderMap,
@@ -404,7 +408,7 @@ pub async fn unlock_user(
             .flatten()
             .is_some();
         if !exists {
-            return Err(maestro_core::error::MaestroError::Auth(format!(
+            return Err(maestro_core::error::MaestroError::AuthStr(format!(
                 "User not found: {target_id}"
             )));
         }

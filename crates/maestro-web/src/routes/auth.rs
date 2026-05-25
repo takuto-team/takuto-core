@@ -403,6 +403,8 @@ pub struct ChangePasswordBody {
 
 /// Change the current user's password. Requires valid session and correct current password.
 /// Invalidates all other sessions after the change.
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub async fn change_password(
     State(auth): State<AuthState>,
     State(config): State<ConfigState>,
@@ -455,7 +457,7 @@ pub async fn change_password(
 
         // Verify current password.
         if !maestro_core::db::credentials::verify_user_password(&conn, &uid, &current_pw)? {
-            return Err(maestro_core::error::MaestroError::Auth(
+            return Err(maestro_core::error::MaestroError::AuthStr(
                 "Current password is incorrect".into(),
             ));
         }
@@ -517,6 +519,8 @@ pub async fn change_password(
 
 /// Regenerate recovery codes for the current user. Replaces all existing codes.
 /// Returns the new plaintext codes (shown once).
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub async fn regenerate_recovery_codes(
     State(auth): State<AuthState>,
     headers: axum::http::HeaderMap,
@@ -534,7 +538,7 @@ pub async fn regenerate_recovery_codes(
     let result = tokio::task::spawn_blocking(move || {
         let conn = db.conn().blocking_lock();
         let user_id = validate_db_session(&conn, &cookie)
-            .ok_or_else(|| maestro_core::error::MaestroError::Auth("Invalid session".into()))?;
+            .ok_or_else(|| maestro_core::error::MaestroError::AuthStr("Invalid session".into()))?;
         let codes =
             maestro_core::db::credentials::generate_recovery_codes(&conn, &user_id, 8)?;
         Ok::<_, maestro_core::error::MaestroError>(codes)
@@ -569,6 +573,8 @@ pub struct RecoverBody {
 /// This is a **public** endpoint (no session required — the user is locked out).
 /// On success, the recovery code is consumed, the password is changed, and all
 /// existing sessions are invalidated.
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub async fn recover(
     State(auth): State<AuthState>,
     Json(body): Json<RecoverBody>,
@@ -682,7 +688,7 @@ pub async fn recover(
             // Audit the failure before bubbling the error up so the lockout
             // counter sees it on the next attempt.
             let _ = record_attempt(&conn, &uid, AttemptKind::Recovery, false);
-            return Err(maestro_core::error::MaestroError::Auth(
+            return Err(maestro_core::error::MaestroError::AuthStr(
                 "Invalid recovery code".into(),
             ));
         }
@@ -750,6 +756,8 @@ struct RegisterResponse {
 ///
 /// Returns **201 Created** with recovery codes on success. Only available when
 /// `auth.db` is `Some` and the users table is empty.
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub async fn register(
     State(auth): State<AuthState>,
     Json(body): Json<RegisterBody>,
@@ -772,19 +780,19 @@ pub async fn register(
         // Only allow registration when no users exist (first-user setup).
         let count = maestro_core::db::users::count_users(&conn)?;
         if count > 0 {
-            return Err(maestro_core::error::MaestroError::Auth(
+            return Err(maestro_core::error::MaestroError::AuthStr(
                 "Registration is closed: users already exist. Use admin API to create new users."
                     .into(),
             ));
         }
 
         if username.trim().is_empty() {
-            return Err(maestro_core::error::MaestroError::Auth(
+            return Err(maestro_core::error::MaestroError::AuthStr(
                 "Username cannot be empty".into(),
             ));
         }
         if password.len() < 12 {
-            return Err(maestro_core::error::MaestroError::Auth(
+            return Err(maestro_core::error::MaestroError::AuthStr(
                 "Password must be at least 12 characters".into(),
             ));
         }

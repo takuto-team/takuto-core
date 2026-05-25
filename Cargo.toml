@@ -57,7 +57,7 @@ fs2 = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Password hashing
-argon2 = "0.5"
+argon2 = { version = "0.5", features = ["std"] }
 
 # Hashing (used by `Config::provisioning_sha` to detect install_commands churn)
 sha2 = "0.10"

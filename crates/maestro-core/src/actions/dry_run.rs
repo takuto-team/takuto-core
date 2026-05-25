@@ -10,7 +10,7 @@ use tracing::info;
 
 use super::gh_github::apply_git_identity_from_gh;
 use super::traits::ExternalActions;
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 use crate::git::{GitError, worktree_remove};
 use crate::github_app::GitHubAppTokenManager;
 use crate::jira::JiraError;

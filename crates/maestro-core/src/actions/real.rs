@@ -12,7 +12,7 @@ use tracing::info;
 use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
 use super::traits::ExternalActions;
 use crate::config::Config;
-use crate::error::{MaestroError, Result};
+use crate::error::Result;
 use crate::git::{GitError, worktree_remove};
 use crate::jira::JiraError;
 

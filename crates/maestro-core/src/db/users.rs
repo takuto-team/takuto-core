@@ -14,10 +14,12 @@ use super::models::{User, UserRole};
 ///
 /// If no users exist in the database, the first user is automatically assigned the `admin` role
 /// regardless of the `role` parameter (first-user-becomes-admin).
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub fn create_user(conn: &rusqlite::Connection, username: &str, role: UserRole) -> Result<User> {
     let username = username.trim();
     if username.is_empty() {
-        return Err(MaestroError::Auth("Username cannot be empty".into()));
+        return Err(MaestroError::AuthStr("Username cannot be empty".into()));
     }
 
     // First-user-becomes-admin: if no users exist, force admin role.
@@ -39,7 +41,7 @@ pub fn create_user(conn: &rusqlite::Connection, username: &str, role: UserRole) 
         if let rusqlite::Error::SqliteFailure(ref err, _) = e
             && err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
         {
-            return MaestroError::Auth(format!("Username '{username}' already exists"));
+            return MaestroError::AuthStr(format!("Username '{username}' already exists"));
         }
         MaestroError::from(super::DbError::Sqlite(e))
     })?;
@@ -114,6 +116,8 @@ pub fn list_admins(conn: &rusqlite::Connection) -> Result<Vec<User>> {
 }
 
 /// Update a user's username and/or role. Returns the updated user.
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub fn update_user(
     conn: &rusqlite::Connection,
     id: &str,
@@ -121,7 +125,7 @@ pub fn update_user(
     new_role: Option<UserRole>,
 ) -> Result<User> {
     let existing = get_user_by_id(conn, id)?
-        .ok_or_else(|| MaestroError::Auth(format!("User not found: {id}")))?;
+        .ok_or_else(|| MaestroError::AuthStr(format!("User not found: {id}")))?;
 
     // If demoting the last non-suspended admin, reject.
     if let Some(new_role) = new_role
@@ -134,7 +138,7 @@ pub fn update_user(
             |r| r.get(0),
         )?;
         if admin_count == 0 {
-            return Err(MaestroError::Auth(
+            return Err(MaestroError::AuthStr(
                 "Cannot demote: this is the last non-suspended admin".into(),
             ));
         }
@@ -150,13 +154,15 @@ pub fn update_user(
     )?;
 
     get_user_by_id(conn, id)?
-        .ok_or_else(|| MaestroError::Auth("User disappeared after update".into()))
+        .ok_or_else(|| MaestroError::AuthStr("User disappeared after update".into()))
 }
 
 /// Suspend a user. Fails if this would leave zero non-suspended admins.
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub fn suspend_user(conn: &rusqlite::Connection, id: &str) -> Result<()> {
     let user = get_user_by_id(conn, id)?
-        .ok_or_else(|| MaestroError::Auth(format!("User not found: {id}")))?;
+        .ok_or_else(|| MaestroError::AuthStr(format!("User not found: {id}")))?;
 
     if user.role == UserRole::Admin {
         let admin_count: i64 = conn.query_row(
@@ -165,7 +171,7 @@ pub fn suspend_user(conn: &rusqlite::Connection, id: &str) -> Result<()> {
             |r| r.get(0),
         )?;
         if admin_count == 0 {
-            return Err(MaestroError::Auth(
+            return Err(MaestroError::AuthStr(
                 "Cannot suspend: this is the last non-suspended admin".into(),
             ));
         }
@@ -180,6 +186,8 @@ pub fn suspend_user(conn: &rusqlite::Connection, id: &str) -> Result<()> {
 }
 
 /// Unsuspend a user.
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub fn unsuspend_user(conn: &rusqlite::Connection, id: &str) -> Result<()> {
     let exists: bool = conn.query_row(
         "SELECT COUNT(*) > 0 FROM users WHERE id = ?1",
@@ -187,7 +195,7 @@ pub fn unsuspend_user(conn: &rusqlite::Connection, id: &str) -> Result<()> {
         |r| r.get(0),
     )?;
     if !exists {
-        return Err(MaestroError::Auth(format!("User not found: {id}")));
+        return Err(MaestroError::AuthStr(format!("User not found: {id}")));
     }
 
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -199,9 +207,11 @@ pub fn unsuspend_user(conn: &rusqlite::Connection, id: &str) -> Result<()> {
 }
 
 /// Delete a user and all associated data (cascading FK). Fails if last non-suspended admin.
+// Transitional: AuthStr sites rewritten to typed AuthError variants in C2.
+#[allow(deprecated)]
 pub fn delete_user(conn: &rusqlite::Connection, id: &str) -> Result<()> {
     let user = get_user_by_id(conn, id)?
-        .ok_or_else(|| MaestroError::Auth(format!("User not found: {id}")))?;
+        .ok_or_else(|| MaestroError::AuthStr(format!("User not found: {id}")))?;
 
     if user.role == UserRole::Admin {
         let admin_count: i64 = conn.query_row(
@@ -210,7 +220,7 @@ pub fn delete_user(conn: &rusqlite::Connection, id: &str) -> Result<()> {
             |r| r.get(0),
         )?;
         if admin_count == 0 {
-            return Err(MaestroError::Auth(
+            return Err(MaestroError::AuthStr(
                 "Cannot delete: this is the last non-suspended admin".into(),
             ));
         }

@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use crate::actions::AgentError;
+use crate::auth::AuthError;
 use crate::claude::ClaudeError;
 use crate::db::DbError;
 use crate::git::GitError;
@@ -123,8 +124,21 @@ pub enum MaestroError {
     #[error("GitHub App error: {0}")]
     GitHubAppStr(String),
 
+    /// Typed auth subsystem error envelope. New code path — produced inside
+    /// `crates/maestro-core/src/{auth,db/users,db/credentials}.rs` and
+    /// `crates/maestro-web/src/{auth.rs, routes/{auth,admin}.rs}` via
+    /// `AuthError::Variant` then `?`-propagated through this `#[from]`.
+    #[error(transparent)]
+    Auth(#[from] AuthError),
+
+    /// Deprecated free-form String shim for the auth subsystem. Lands with
+    /// zero callers (the migration commit replaces every original
+    /// `MaestroError::Auth(String)` site with a typed `AuthError` variant).
+    /// Kept only to honour the typed-errors architecture spec's A.4
+    /// deprecation path — removed by the post-phase-8 cleanup PR.
+    #[deprecated(note = "use MaestroError::Auth with a typed AuthError instead")]
     #[error("Authentication error: {0}")]
-    Auth(String),
+    AuthStr(String),
 
     #[error("Config error: {0}")]
     Config(String),

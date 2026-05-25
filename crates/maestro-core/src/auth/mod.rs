@@ -24,10 +24,13 @@
 //! credential CRUD that consumes these primitives.
 
 pub mod bundle;
+pub mod error;
 pub mod gh_client;
 pub mod master_key;
 pub mod pat_validation;
 pub mod seal;
+
+pub use error::AuthError;
 
 pub use bundle::{
     WorkerSecretsBundle, WORKER_SECRETS_MOUNTPOINT,
