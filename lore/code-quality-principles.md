@@ -156,6 +156,21 @@ When a frontend god component crosses ~300 LOC (the audit's "worst offenders" th
 
 ---
 
+## 11 · Push to grade A
+
+**Status (2026-05-26): pushed to A.** The original audit graded the codebase B−; after the §8 four-priority sweep it was A−. The two structural gaps between A− and A — production `.unwrap()` / `.expect()` without justification + four files still over 1000 LOC — closed in a single push.
+
+The pinned conventions:
+
+- **`// SAFETY:` block above every production panic site.** Pattern: lead with why the panic is unreachable (the upstream invariant — `cfg(unix)` gate, type-checked array length, middleware guard, OS contract, match-guard control flow), then a non-opaque panic-message string that names the same invariant. The string itself is the documentation contract. Tests inside `#[cfg(test)]` blocks are exempt — terseness wins there.
+- **Per-file LOC ceiling: ≤ 1000 LOC, hard target ≤ 700.** When a file crosses 1000, split it into a directory with a thin `mod.rs` (re-exports + cross-cutting tests) and 3–6 leaves under it. Keep `pub` boundaries stable via `pub use` so external callers do not change imports.
+- **Tests co-locate with the code they test** unless they cross-cut multiple new submodules — in that case they consolidate in `mod.rs::tests` with cross-module access via `pub(super)` on the items they read. Cross-cutting fixtures (`db_with_master_key`, `seed_user`, etc.) live with the tests, not duplicated per submodule.
+- **An ≥1000-LOC file can stay if splitting would create false seams.** Documented exception, not a default — see the push-to-A spec's §3 "Files NOT split" for the bar (no shared edit hotspot, cohesive single flow, append-only design).
+
+- **2026-05-26** — push-to-A from audit §11. **Unwrap allowlist**: 24 non-test `.unwrap()` / `.expect()` sites across `maestro-cli`, `maestro-core`, `maestro-web` now carry SAFETY blocks; opaque panic strings (`"401 builder is infallible"`, `"row just inserted/upserted"`) rewritten to name the upstream invariant. Single commit, no test or behaviour change. **God-module splits**: four files split into directory trees — `routes/auth.rs` (997 → 5 files, largest 347), `routes/sessions.rs` (1165 → 4 files, largest 568), `auth/bundle.rs` (1244 → 6 files, largest 654 with tests dominating LOC), `container/editor.rs` (1157 → 6 files, largest 641). Every split preserves the external `pub` surface via `mod.rs` re-exports — `server.rs`, integration tests, and cross-crate callers compile unchanged. 1042/0/1 test baseline preserved across all four splits. **Final grade: A.** Spec: [`lore/audits/2026-05-26-push-to-A-spec.md`](audits/2026-05-26-push-to-A-spec.md). Four files remain ≥1000 LOC (`git/operations.rs`, `actions/jira/poller.rs`, `routes/admin.rs`, `db/migrations.rs`); each has a documented reason to stay cohesive — re-cut on the table if any crosses 1500 LOC.
+
+---
+
 ## When to update this file
 
 Update this file when a **project-level decision** changes — for example:
