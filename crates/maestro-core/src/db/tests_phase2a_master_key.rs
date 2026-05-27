@@ -23,8 +23,13 @@ fn clear_env() {
     }
 }
 
-#[test]
-fn database_open_auto_generates_keyfile_when_allowed() {
+// Plan-11 step 3: Database::open now also builds a sqlx pool via
+// `connect_lazy_with` which requires a Tokio runtime context (sqlx panics
+// otherwise — see sqlx-core/src/pool/inner.rs). These tests were
+// `#[test]` but the new dependency forces `#[tokio::test]`. Behaviour is
+// otherwise unchanged.
+#[tokio::test]
+async fn database_open_auto_generates_keyfile_when_allowed() {
     let _g = ENV_LOCK.lock().unwrap();
     clear_env();
     let dir = tempdir().unwrap();
@@ -36,8 +41,8 @@ fn database_open_auto_generates_keyfile_when_allowed() {
     assert!(dir.path().join("secret.key").exists());
 }
 
-#[test]
-fn database_open_returns_no_master_key_when_disabled_and_missing() {
+#[tokio::test]
+async fn database_open_returns_no_master_key_when_disabled_and_missing() {
     let _g = ENV_LOCK.lock().unwrap();
     clear_env();
     let dir = tempdir().unwrap();
@@ -51,8 +56,8 @@ fn database_open_returns_no_master_key_when_disabled_and_missing() {
     assert!(db.data_dir().is_some());
 }
 
-#[test]
-fn database_open_reads_subsequent_keyfile_after_first_auto_generate() {
+#[tokio::test]
+async fn database_open_reads_subsequent_keyfile_after_first_auto_generate() {
     let _g = ENV_LOCK.lock().unwrap();
     clear_env();
     let dir = tempdir().unwrap();

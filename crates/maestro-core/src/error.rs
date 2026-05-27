@@ -108,4 +108,18 @@ impl From<rusqlite::Error> for MaestroError {
     }
 }
 
+/// Plan-11 step 3: `?`-propagate adapter errors from DAOs migrated to
+/// the agnostic [`crate::db::DbAdapter`] API. The chain
+/// `adapter::DbError → DbError::Adapter → MaestroError::Db` needs an
+/// explicit `From` because Rust's `?` operator follows at most one
+/// `From` conversion. This bridge keeps DAOs terse (`adapter.execute(...).await?`)
+/// while preserving the existing `MaestroError::Db` envelope so logging
+/// / HTTP-mapping code treats adapter errors identically to legacy
+/// rusqlite errors.
+impl From<crate::db::adapter::DbError> for MaestroError {
+    fn from(e: crate::db::adapter::DbError) -> Self {
+        MaestroError::Db(DbError::Adapter(e))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, MaestroError>;

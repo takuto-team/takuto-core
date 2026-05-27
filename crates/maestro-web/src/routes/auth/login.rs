@@ -92,28 +92,27 @@ pub async fn login(
     }
 
     // Step 2: lockout check.
-    let db_clone = db.clone();
-    let uid = user.id.clone();
-    let lockout = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        let count = failed_count_in_window(&conn, &uid, AttemptKind::Password, LOCKOUT_WINDOW_SECS)
-            .unwrap_or(0);
-        if count >= LOCKOUT_THRESHOLD {
-            let oldest = oldest_failure_ts_in_window(
-                &conn,
-                &uid,
-                AttemptKind::Password,
-                LOCKOUT_WINDOW_SECS,
-            )
-            .unwrap_or(None);
-            Some((count, oldest))
-        } else {
-            None
-        }
-    })
-    .await
-    .ok()
-    .flatten();
+    //
+    // Plan-11 step 3: login_attempts moved to the agnostic DbAdapter API.
+    // The DAO is async so no `spawn_blocking` wrapping is needed — calling
+    // directly from this async handler is correct.
+    let adapter = db.adapter();
+    let count = failed_count_in_window(adapter, &user.id, AttemptKind::Password, LOCKOUT_WINDOW_SECS)
+        .await
+        .unwrap_or(0);
+    let lockout = if count >= LOCKOUT_THRESHOLD {
+        let oldest = oldest_failure_ts_in_window(
+            adapter,
+            &user.id,
+            AttemptKind::Password,
+            LOCKOUT_WINDOW_SECS,
+        )
+        .await
+        .unwrap_or(None);
+        Some((count, oldest))
+    } else {
+        None
+    };
     if let Some((count, oldest)) = lockout {
         let now = now_unix();
         let retry_secs = oldest
@@ -141,18 +140,18 @@ pub async fn login(
     let verified = authenticate_db_user(db, &body.username, &body.password).await;
 
     // Step 4: record the outcome.
-    let db_clone = db.clone();
-    let uid = user.id.clone();
+    //
+    // Plan-11 step 3: agnostic DbAdapter — direct async calls, no
+    // spawn_blocking wrapper. `_ = ` keeps the original "best-effort
+    // audit" semantics (a failure to record an attempt must not bubble
+    // up as a 5xx; the legitimate login path stays clean).
+    let adapter = db.adapter();
     let success = verified.is_some();
-    let _ = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        let _ = record_attempt(&conn, &uid, AttemptKind::Password, success);
-        if success {
-            // Clear the failed counter so the next miss restarts at 1.
-            let _ = clear_failed_attempts(&conn, &uid, AttemptKind::Password);
-        }
-    })
-    .await;
+    let _ = record_attempt(adapter, &user.id, AttemptKind::Password, success).await;
+    if success {
+        // Clear the failed counter so the next miss restarts at 1.
+        let _ = clear_failed_attempts(adapter, &user.id, AttemptKind::Password).await;
+    }
 
     if !success {
         return StatusCode::UNAUTHORIZED.into_response();

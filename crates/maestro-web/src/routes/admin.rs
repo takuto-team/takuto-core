@@ -394,24 +394,37 @@ pub async fn unlock_user(
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
+    // Plan-11 step 3: split the existence check (users DAO — still
+    // rusqlite) from the lockout clear (login_attempts — now async via
+    // DbAdapter). The two operations are independent; a stale "exists"
+    // read between them would simply manifest as a successful clear of
+    // an absent user_id (zero rows affected), which the cascading
+    // ON DELETE on the users → login_attempts FK already covers.
     let target_id = id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        // Verify the user exists first so we can distinguish 404 from 204.
-        let exists = maestro_core::db::users::get_user_by_id(&conn, &target_id)
+    let db_clone = db.clone();
+    let exists_result = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        maestro_core::db::users::get_user_by_id(&conn, &target_id)
             .ok()
             .flatten()
-            .is_some();
-        if !exists {
-            return Err(AuthError::UserNotFound {
-                id: target_id.clone(),
-            }
-            .into());
-        }
-        maestro_core::db::login_attempts::clear_attempts(&conn, &target_id)?;
-        Ok::<_, maestro_core::error::MaestroError>(())
+            .is_some()
     })
     .await;
+
+    let result: std::result::Result<
+        std::result::Result<(), maestro_core::error::MaestroError>,
+        tokio::task::JoinError,
+    > = match exists_result {
+        Ok(true) => {
+            // Async adapter call — clear both password + recovery rows.
+            match maestro_core::db::login_attempts::clear_attempts(db.adapter(), &id).await {
+                Ok(()) => Ok(Ok(())),
+                Err(e) => Ok(Err(e)),
+            }
+        }
+        Ok(false) => Ok(Err(AuthError::UserNotFound { id: id.clone() }.into())),
+        Err(e) => Err(e),
+    };
 
     match result {
         Ok(Ok(())) => {

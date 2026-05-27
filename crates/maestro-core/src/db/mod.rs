@@ -47,8 +47,10 @@ pub use pool::{DbBackend, DbPool, PoolError, PoolTuning};
 mod tests_phase2a_master_key;
 
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -77,11 +79,34 @@ impl std::fmt::Debug for MasterKeyState {
     }
 }
 
-/// Thread-safe database handle. Wraps a `rusqlite::Connection` in an `Arc<Mutex<>>`
-/// so it can be shared across async tasks via `spawn_blocking`.
+/// Thread-safe database handle.
+///
+/// Holds two parallel views of the same SQLite file during the plan-11
+/// step-3 cutover:
+///
+/// 1. Legacy: `Arc<Mutex<rusqlite::Connection>>` for the 296 not-yet-
+///    migrated call sites. Accessor: [`Database::conn`].
+/// 2. New: [`DbAdapter`] (wrapping a sqlx `SqlitePool`) for DAOs that have
+///    been moved to the agnostic adapter API. Accessor:
+///    [`Database::adapter`].
+///
+/// Both views point at the same `maestro.db` file (or in-memory database
+/// for tests — see `open_in_memory`). The sqlx pool is opened **lazily**:
+/// `connect_lazy_with` returns the pool without testing the connection,
+/// and the first async query opens a real connection. This keeps
+/// [`Database::open`] synchronous (no tokio runtime requirement) which is
+/// what the existing main.rs + test fixtures expect.
+///
+/// When `provider` graduates to per-backend in plan-11 step 5, the
+/// `pool` field becomes the full `DbPool` enum (sqlite + postgres +
+/// mysql). For step 3 the pool is hard-coded to SQLite.
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Mutex<rusqlite::Connection>>,
+    /// Plan-11 step 3: agnostic adapter wrapping a sqlx SQLite pool that
+    /// opens lazily against the same `maestro.db` file as `conn`. DAOs
+    /// migrated to the new API take `&DbAdapter` from here.
+    adapter: DbAdapter,
     /// Phase 2a: deployment master key state. `None` when:
     /// - `MAESTRO_SECRET_KEY` is unset AND
     /// - `${data_dir}/secret.key` does not exist AND
@@ -94,6 +119,45 @@ pub struct Database {
     /// The data dir the master key file lives under. `None` for in-memory
     /// fixtures. Stored so `maestro keys reset` can rewrite the file in place.
     data_dir: Option<PathBuf>,
+}
+
+/// Build the sqlx pool used by [`Database::adapter`]. Opens lazily — no
+/// async runtime required at construction. Mirrors the WAL + foreign-keys
+/// pragmas applied by the rusqlite open so both views see the same on-disk
+/// behaviour.
+fn build_sqlite_adapter(db_path: &Path) -> DbAdapter {
+    // sqlx's SqliteConnectOptions accepts both `sqlite://path` and a
+    // bare path. We prefix `sqlite://` for clarity and to remove any
+    // ambiguity with the parser.
+    let url = format!("sqlite://{}", db_path.display());
+    // SAFETY: sqlx's SQLite parser only fails on malformed URI syntax,
+    // and we construct the URL ourselves from `{db_path.display()}`. The
+    // panic message names the exact path so a future code change that
+    // breaks this invariant (e.g. injecting `?mode=` query params with
+    // bad encoding) is surfaced loudly.
+    let opts = SqliteConnectOptions::from_str(&url)
+        .expect("constructed sqlite:// URL must parse — invariant from build_sqlite_adapter")
+        .journal_mode(SqliteJournalMode::Wal)
+        .foreign_keys(true)
+        .create_if_missing(true);
+    let pool = SqlitePoolOptions::new().connect_lazy_with(opts);
+    DbAdapter::new(DbPool::Sqlite(pool))
+}
+
+/// Build an in-memory sqlx adapter for test fixtures. Each invocation
+/// gets its own private in-memory database (sqlx `:memory:` URLs are
+/// per-connection unless you use a shared cache, which we deliberately
+/// don't here so test parallelism doesn't cross-contaminate).
+#[cfg(test)]
+fn build_in_memory_adapter() -> DbAdapter {
+    use sqlx::sqlite::SqlitePool;
+    // SAFETY: the literal `sqlite::memory:` URL is the canonical in-memory
+    // form documented by sqlx; the parser cannot fail on it.
+    let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+        .expect("in-memory sqlite URL is a sqlx-documented literal")
+        .foreign_keys(true);
+    let pool: SqlitePool = SqlitePoolOptions::new().connect_lazy_with(opts);
+    DbAdapter::new(DbPool::Sqlite(pool))
 }
 
 impl Database {
@@ -144,8 +208,13 @@ impl Database {
             }
         };
 
+        // Plan-11 step 3: build the lazy sqlx adapter against the same
+        // file. No connection is opened yet; first async query opens it.
+        let adapter = build_sqlite_adapter(&db_path);
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            adapter,
             master_key,
             data_dir: Some(data_dir.to_path_buf()),
         })
@@ -158,8 +227,17 @@ impl Database {
         let conn = rusqlite::Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         schema::run_migrations(&conn)?;
+        // Plan-11 step 3: the adapter here points at a SEPARATE in-memory
+        // database, NOT the rusqlite one. SQLite `:memory:` is
+        // per-connection by default. Tests that exercise both views
+        // simultaneously must set up the adapter's tables independently
+        // (see crates/maestro-core/src/db/login_attempts.rs tests for the
+        // canonical pattern). This is a known wart of the hybrid
+        // transition; it goes away in step 8 when rusqlite is dropped.
+        let adapter = build_in_memory_adapter();
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            adapter,
             master_key: None,
             data_dir: None,
         })
@@ -178,9 +256,18 @@ impl Database {
         self
     }
 
-    /// Get a reference to the inner connection (for use with `spawn_blocking`).
+    /// Get a reference to the inner rusqlite connection (legacy path,
+    /// used by every DAO not yet migrated to the agnostic adapter).
     pub fn conn(&self) -> &Arc<Mutex<rusqlite::Connection>> {
         &self.conn
+    }
+
+    /// Plan-11 step 3: return the backend-agnostic adapter for DAOs that
+    /// have been migrated to the new API. During the hybrid transition
+    /// both `conn()` and `adapter()` are valid entry points — pick the
+    /// one that matches the DAO's signature.
+    pub fn adapter(&self) -> &DbAdapter {
+        &self.adapter
     }
 
     /// Reference to the resolved master key state, when available. `None` in

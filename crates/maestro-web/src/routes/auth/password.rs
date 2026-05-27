@@ -245,28 +245,26 @@ pub async fn recover(
     }
 
     // Lockout check for the recovery counter.
-    let db_clone = db.clone();
-    let uid = user.id.clone();
-    let lockout = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        let count = failed_count_in_window(&conn, &uid, AttemptKind::Recovery, LOCKOUT_WINDOW_SECS)
-            .unwrap_or(0);
-        if count >= LOCKOUT_THRESHOLD {
-            let oldest = oldest_failure_ts_in_window(
-                &conn,
-                &uid,
-                AttemptKind::Recovery,
-                LOCKOUT_WINDOW_SECS,
-            )
-            .unwrap_or(None);
-            Some((count, oldest))
-        } else {
-            None
-        }
-    })
-    .await
-    .ok()
-    .flatten();
+    //
+    // Plan-11 step 3: login_attempts moved to the agnostic DbAdapter API.
+    // Async DAO; no spawn_blocking wrapper needed.
+    let adapter = db.adapter();
+    let count = failed_count_in_window(adapter, &user.id, AttemptKind::Recovery, LOCKOUT_WINDOW_SECS)
+        .await
+        .unwrap_or(0);
+    let lockout = if count >= LOCKOUT_THRESHOLD {
+        let oldest = oldest_failure_ts_in_window(
+            adapter,
+            &user.id,
+            AttemptKind::Recovery,
+            LOCKOUT_WINDOW_SECS,
+        )
+        .await
+        .unwrap_or(None);
+        Some((count, oldest))
+    } else {
+        None
+    };
     if let Some((count, oldest)) = lockout {
         let now = now_unix();
         let retry_secs = oldest
@@ -290,6 +288,13 @@ pub async fn recover(
             .into_response();
     }
 
+    // Plan-11 step 3: split the inner work so login_attempts audits run
+    // via the async adapter while the credentials DAO stays on the
+    // legacy rusqlite path (it will migrate in a later step). The
+    // recovery-code verification + password change happens inside a
+    // single `spawn_blocking` block so the credentials calls share one
+    // MutexGuard (avoids re-acquiring across the verify → change boundary);
+    // the audit + clear are then issued from the async outer scope.
     let db_clone = db.clone();
     let uid = user.id.clone();
     let code = body.recovery_code;
@@ -303,27 +308,38 @@ pub async fn recover(
             &conn, &uid, &code,
         )?;
         if !valid {
-            // Audit the failure before bubbling the error up so the lockout
-            // counter sees it on the next attempt.
-            let _ = record_attempt(&conn, &uid, AttemptKind::Recovery, false);
-            return Err(AuthError::InvalidRecoveryCode.into());
+            // Outer scope handles the failure audit + 401.
+            return Ok::<_, maestro_core::error::MaestroError>(false);
         }
-
-        // Record success and clear the failed counter so a future locked-out
-        // user comes back to a fresh slate after a successful recovery.
-        let _ = record_attempt(&conn, &uid, AttemptKind::Recovery, true);
-        let _ = clear_failed_attempts(&conn, &uid, AttemptKind::Recovery);
 
         // Change password and invalidate sessions.
         maestro_core::db::credentials::change_password(&conn, &uid, &new_password)?;
         maestro_core::db::credentials::delete_user_sessions(&conn, &uid)?;
 
-        Ok::<_, maestro_core::error::MaestroError>(())
+        Ok(true)
     })
     .await;
 
+    let adapter = db.adapter();
     match result {
-        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(true)) => {
+            // Success: record audit + clear the failed counter so a
+            // previously-locked-out user comes back to a fresh slate.
+            let _ = record_attempt(adapter, &user.id, AttemptKind::Recovery, true).await;
+            let _ = clear_failed_attempts(adapter, &user.id, AttemptKind::Recovery).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(Ok(false)) => {
+            // Invalid recovery code: record the failure so the lockout
+            // counter sees it on the next attempt, then return 401.
+            let _ = record_attempt(adapter, &user.id, AttemptKind::Recovery, false).await;
+            let msg = AuthError::InvalidRecoveryCode.to_string();
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": msg})),
+            )
+                .into_response()
+        }
         Ok(Err(e)) => {
             let msg = e.to_string();
             (

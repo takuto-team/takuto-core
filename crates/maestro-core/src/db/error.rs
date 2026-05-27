@@ -66,6 +66,15 @@ pub enum DbError {
     /// `AuthError::UserDisappearedAfterUpdate`.
     #[error("row was just upserted but vanished")]
     RowDisappearedAfterUpsert,
+
+    /// Plan-11 step 3 cutover: `?`-propagated [`crate::db::AdapterError`]
+    /// from a DAO that has been moved to the backend-agnostic
+    /// [`crate::db::DbAdapter`] API. Wraps every adapter-layer failure
+    /// (sqlx connection/query/decode + row-column-out-of-range diagnostics)
+    /// under one variant so the existing `MaestroError::Db` envelope keeps
+    /// working unchanged at every call site.
+    #[error(transparent)]
+    Adapter(#[from] crate::db::adapter::DbError),
 }
 
 #[cfg(test)]
