@@ -21,6 +21,9 @@ fs2 = { workspace = true }
 # CSPRNG for session path tokens (≥128 bits of entropy from OS entropy source).
 getrandom = "0.3"
 rusqlite = { workspace = true }
+# Plan-11 step 1: pluggable backends. Lives alongside rusqlite during the
+# cutover (steps 2–6); rusqlite is dropped in plan-11 §10 step 8.
+sqlx = { workspace = true }
 argon2 = { workspace = true }
 # Task #47: SHA-256 of [provisioning].install_commands so the entrypoint
 # can decide whether to skip the install pass on subsequent boots.

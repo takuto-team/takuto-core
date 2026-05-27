@@ -53,8 +53,25 @@ jsonwebtoken = "9"
 # File system utilities
 fs2 = "0.4"
 
-# Database
+# Database — legacy embedded SQLite. Kept during the plan-11 cutover so the
+# importer can read the old maestro.db; dropped once sqlx's SQLite driver
+# takes over (plan-11 §10 step 8).
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Plan-11: pluggable backends via sqlx. Tokio + rustls runtime; SQLite,
+# Postgres, MySQL/MariaDB drivers; migrate framework; macros for compile-time
+# checked queries (optional). `chrono` + `uuid` feature flags map our
+# Rust types onto the wire format.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "sqlite",
+    "postgres",
+    "mysql",
+    "macros",
+    "migrate",
+    "chrono",
+    "uuid",
+] }
 
 # Password hashing
 argon2 = { version = "0.5", features = ["std"] }

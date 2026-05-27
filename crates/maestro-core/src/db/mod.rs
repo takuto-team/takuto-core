@@ -11,9 +11,20 @@ pub mod credentials;
 pub mod error;
 pub mod github_credentials;
 pub mod login_attempts;
+// Legacy rusqlite migration runner (versioned schema_migrations table).
 pub mod migration;
+// Plan-11 step 2 (tmp/plan-11-pluggable-database-backends.md §7): sqlx-based
+// migration source with per-backend dialect transforms. Lives alongside
+// `migration.rs`; nothing reads it yet (call-site cutover is plan §10 step 3).
+pub mod migrate;
 pub mod models;
 pub mod onboarding;
+// Plan-11 step 1 (tmp/plan-11-pluggable-database-backends.md §4): pluggable
+// database backends via sqlx. The module is scaffolding only at this step —
+// no existing call site reads it. Subsequent plan-11 steps cut the
+// `Database` builder, schema migrations, the importer, and every DAO over
+// to `DbPool` + `.await`.
+pub mod pool;
 pub mod provider_credentials;
 pub mod repositories;
 pub mod schema;
@@ -21,6 +32,7 @@ pub mod users;
 pub mod user_worktree_commands;
 
 pub use error::DbError;
+pub use pool::{DbBackend, DbPool, PoolError, PoolTuning};
 
 #[cfg(test)]
 mod tests_phase2a_master_key;
