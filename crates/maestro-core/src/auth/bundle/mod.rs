@@ -25,6 +25,7 @@
 //! - `assembler.rs`     — [`build`], [`build_for_endpoint`], [`pin_for_workflow`]
 
 mod assembler;
+mod opencode_config;
 mod tempdir;
 mod types;
 mod unseal;
@@ -52,6 +53,15 @@ mod tests {
     fn fixed_config(provider: AiAgentProvider) -> Config {
         let mut cfg = Config::default();
         cfg.agent.provider = provider;
+        cfg
+    }
+
+    /// OpenCode requires non-empty base_url + model (validator enforces);
+    /// helper centralises the minimum-viable fixture for bundle tests.
+    fn fixed_opencode_config(base_url: &str, model: &str) -> Config {
+        let mut cfg = fixed_config(AiAgentProvider::OpenCode);
+        cfg.agent.providers.opencode.base_url = base_url.into();
+        cfg.agent.providers.opencode.model = model.into();
         cfg
     }
 
@@ -341,6 +351,7 @@ mod tests {
                 ("ANTHROPIC_BASE_URL".into(), "https://proxy.example".into()),
                 ("GIT_AUTHOR_NAME".into(), "alice".into()),
             ],
+            opencode_config_dir: None,
             _temp_dir: dir,
         };
 
@@ -403,6 +414,7 @@ mod tests {
             base_url: Some("https://proxy".into()),
             extra_args: vec![],
             extra_env: vec![("MAESTRO_AUTH_BUNDLE".into(), "1".into())],
+            opencode_config_dir: None,
             _temp_dir: dir,
         };
         let s = format!("{bundle:?}");
@@ -601,6 +613,134 @@ mod tests {
         assert!(!root.join("orphan-a").exists());
         assert!(!root.join("orphan-b").exists());
         assert!(root.join("stray-file").exists(), "files outside dir entries survive");
+    }
+
+    // ─── OpenCode self-hosted spec (2026-05-27) ──────────────────────────
+
+    /// Spec §2.3 happy path: provider=opencode + base_url + model + a
+    /// user bearer → bundle holds `opencode_config_dir`, the file at
+    /// `<dir>/opencode.json` parses, baseURL/apiKey/models match.
+    #[tokio::test]
+    async fn build_opencode_emits_config_dir_with_bearer_baseurl_model() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "opencode", b"user-bearer").await;
+        let resolver = make_resolver(db.clone());
+        let cfg = fixed_opencode_config(
+            "http://lm-studio:1234/v1",
+            "lmstudio/qwen3-coder",
+        );
+        let pin = fixed_pin(AiAgentProvider::OpenCode);
+
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect("build bundle");
+        let cfg_dir = bundle
+            .opencode_config_dir
+            .as_ref()
+            .expect("opencode_config_dir must be Some for OpenCode");
+        let cfg_file = cfg_dir.join("opencode.json");
+        assert!(cfg_file.exists(), "opencode.json must exist in cfg dir");
+
+        let v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cfg_file).unwrap()).unwrap();
+        let p = &v["provider"]["self_hosted"];
+        assert_eq!(p["options"]["baseURL"], "http://lm-studio:1234/v1");
+        assert_eq!(p["options"]["apiKey"], "user-bearer");
+        assert!(p["models"]["lmstudio/qwen3-coder"].is_object());
+
+        // Spec §2.1: OpenCode workflows do NOT receive `/run/maestro-secrets/opencode`.
+        assert!(
+            bundle.provider_secret_file.is_none(),
+            "OpenCode bundles must not write /run/maestro-secrets/opencode \
+             (spec 2026-05-27 §2.1 — bearer lives in opencode.json instead)"
+        );
+        // Spec §2.2: `OPENCODE_PROVIDER_BASE_URL` env is dropped.
+        assert!(
+            !bundle
+                .extra_env
+                .iter()
+                .any(|(k, _)| k == "OPENCODE_PROVIDER_BASE_URL"),
+            "OpenCode bundles must not emit OPENCODE_PROVIDER_BASE_URL env \
+             (spec 2026-05-27 §2.2 — replaced by opencode.json)"
+        );
+    }
+
+    /// Spec §2.3: no bearer saved → apiKey defaults to "lm-studio" (LM
+    /// Studio dummy). Validates the most common deployment shape (single
+    /// admin + LM Studio without auth).
+    #[tokio::test]
+    async fn build_opencode_uses_dummy_apikey_when_user_has_no_bearer() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        let resolver = make_resolver(db.clone());
+        let mut cfg = fixed_opencode_config(
+            "http://lm-studio:1234/v1",
+            "lmstudio/qwen3-coder",
+        );
+        // Allow the shared-default fallback — the user has no credential
+        // and LM Studio doesn't care about the key value.
+        cfg.agent.providers.opencode.allow_shared_default = true;
+        let pin = fixed_pin(AiAgentProvider::OpenCode);
+
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect("build bundle");
+        let cfg_file = bundle
+            .opencode_config_dir
+            .as_ref()
+            .expect("opencode_config_dir")
+            .join("opencode.json");
+        let v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cfg_file).unwrap()).unwrap();
+        assert_eq!(v["provider"]["self_hosted"]["options"]["apiKey"], "lm-studio");
+    }
+
+    /// Defence in depth: an OpenCode bundle built with a hand-crafted
+    /// Config that bypasses the validator (empty base_url) MUST surface
+    /// a typed error rather than silently writing a broken
+    /// opencode.json. The validator catches this on Config::load and on
+    /// PUT /api/config/agent, but unit-test paths can construct Configs
+    /// directly.
+    #[tokio::test]
+    async fn build_opencode_errors_when_base_url_empty() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "opencode", b"key").await;
+        let resolver = make_resolver(db.clone());
+        let mut cfg = fixed_opencode_config("", "lmstudio/qwen3-coder");
+        // Bypass validator — direct field write.
+        cfg.agent.providers.opencode.base_url.clear();
+        let pin = fixed_pin(AiAgentProvider::OpenCode);
+
+        let err = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect_err("empty base_url must surface a typed shim error");
+        assert!(
+            err.to_string().contains("base_url is empty"),
+            "error must explain the violation; got: {err}"
+        );
+    }
+
+    /// Non-OpenCode providers MUST NOT get an `opencode_config_dir`. The
+    /// assembler should leave it None for Claude / Cursor / Codex — the
+    /// shim is OpenCode-only.
+    #[tokio::test]
+    async fn build_claude_does_not_emit_opencode_config_dir() {
+        let db = db_with_master_key();
+        seed_user(&db, "u-alice").await;
+        seed_provider_credential(&db, "u-alice", "claude", b"sk-ant").await;
+        let resolver = make_resolver(db.clone());
+        let cfg = fixed_config(AiAgentProvider::Claude);
+        let pin = fixed_pin(AiAgentProvider::Claude);
+
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
+            .await
+            .expect("build bundle");
+        assert!(
+            bundle.opencode_config_dir.is_none(),
+            "non-OpenCode bundles must not carry opencode_config_dir"
+        );
     }
 
     /// Task #42: Arc-storage strategy proof. The route handlers stash an

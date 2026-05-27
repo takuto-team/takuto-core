@@ -300,6 +300,23 @@ impl AgentConfig {
         }
         None
     }
+
+    /// Return the effective OpenCode model name from `[agent.providers.opencode].model`.
+    ///
+    /// OpenCode has no legacy flat field; resolution is single-source. The
+    /// init-shim that materialises `opencode.json` inside the worker uses
+    /// this as the `models.<id>` key. Empty / whitespace-only → `None`,
+    /// which the validator rejects when `provider = "opencode"` (the model
+    /// name is non-optional for self-hosted endpoints — OpenCode needs to
+    /// know which model id to call on the OpenAI-compat server).
+    pub fn effective_opencode_model(&self) -> Option<&str> {
+        let sub = self.providers.opencode.model.trim();
+        if sub.is_empty() {
+            None
+        } else {
+            Some(&self.providers.opencode.model)
+        }
+    }
 }
 
 fn default_agent_step_repeat() -> u8 {
@@ -538,5 +555,27 @@ mod tests {
             None,
             "all-whitespace must resolve to None"
         );
+    }
+
+    /// effective_opencode_model: set → Some.
+    #[test]
+    fn effective_opencode_model_returns_set_value() {
+        let mut cfg = AgentConfig::default();
+        cfg.providers.opencode.model = "lmstudio/qwen3-coder".into();
+        assert_eq!(
+            cfg.effective_opencode_model(),
+            Some("lmstudio/qwen3-coder")
+        );
+    }
+
+    /// effective_opencode_model: empty / whitespace → None. Validator
+    /// catches this when `provider = "opencode"` so the shim never sees
+    /// the None case — but defence in depth.
+    #[test]
+    fn effective_opencode_model_returns_none_when_empty_or_whitespace() {
+        let mut cfg = AgentConfig::default();
+        assert_eq!(cfg.effective_opencode_model(), None);
+        cfg.providers.opencode.model = "   ".into();
+        assert_eq!(cfg.effective_opencode_model(), None);
     }
 }

@@ -84,6 +84,83 @@ pub(super) fn non_empty(s: &str) -> Option<String> {
     }
 }
 
+/// OpenCode self-hosted spec (2026-05-27 §2.3): unseal the user's
+/// `kind = api_key` row for the active provider and return the raw
+/// plaintext bytes — no on-disk secret file. The caller embeds the
+/// bytes inside the OpenCode init-shim's `opencode.json` instead of
+/// sourcing a `/run/maestro-secrets/<provider>` env file (which the
+/// OpenCode CLI does not consume).
+///
+/// Returns `Ok(None)` when the user has no credential AND the active
+/// provider allows the deployment-default fallback; `Err` when the user
+/// has no credential AND the fallback is forbidden. Identical
+/// semantics to [`unseal_provider_credential`] except the byte path.
+pub(super) async fn unseal_provider_plaintext_bytes(
+    config: &Config,
+    db: &crate::db::Database,
+    master_key: &Arc<MasterKey>,
+    auth_pin: &AuthPin,
+    workflow_user_id: &str,
+) -> Result<Option<Vec<u8>>> {
+    let provider = AiAgentProvider::parse(&auth_pin.provider).map_err(|e| {
+        ConfigError::BundleProviderInvalid {
+            detail: e.to_string(),
+        }
+    })?;
+    let row = {
+        let conn = db.conn().lock().await;
+        provider_credentials::find_active_with_kind(
+            &conn,
+            workflow_user_id,
+            &auth_pin.provider,
+            provider_credentials::ProviderCredentialKind::ApiKey,
+        )
+        .map_err(|e| ConfigError::BundleDbLookup {
+            op: "find_active_with_kind(provider_credential)",
+            detail: e.to_string(),
+        })?
+    };
+    match row {
+        Some(r) => {
+            let sealed = SealedBlob {
+                ciphertext: r.ciphertext,
+                nonce: r.nonce,
+                wrapped_dek: r.wrapped_dek,
+                wnonce: r.wnonce,
+            };
+            let plaintext = open(master_key, &sealed).map_err(|e| ConfigError::Operational {
+                op: "open(provider_credential)",
+                detail: e.to_string(),
+            })?;
+            Ok(Some(plaintext))
+        }
+        None => {
+            let allow_default = match provider {
+                AiAgentProvider::Claude => config.agent.providers.claude.allow_shared_default,
+                AiAgentProvider::Cursor => config.agent.providers.cursor.allow_shared_default,
+                AiAgentProvider::Codex => config.agent.providers.codex.allow_shared_default,
+                AiAgentProvider::OpenCode => config.agent.providers.opencode.allow_shared_default,
+            };
+            if allow_default {
+                tracing::debug!(
+                    provider = %provider.as_str(),
+                    "no per-user credential, falling back to deployment default"
+                );
+                Ok(None)
+            } else {
+                Err(ConfigError::Operational {
+                    op: "provider_credential_missing",
+                    detail: format!(
+                        "user {workflow_user_id} has no {} credential and allow_shared_default = false",
+                        provider.as_str()
+                    ),
+                }
+                .into())
+            }
+        }
+    }
+}
+
 pub(super) async fn unseal_provider_credential(
     config: &Config,
     db: &crate::db::Database,

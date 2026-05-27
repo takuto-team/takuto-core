@@ -49,16 +49,14 @@ if [ "${MAESTRO_AUTH_BUNDLE:-0}" = "1" ] && [ -d /run/maestro-secrets ]; then
         export OPENAI_API_KEY
         rm -f /run/maestro-secrets/codex || true
     fi
-    if [ -f /run/maestro-secrets/opencode ]; then
-        # OpenCode picks up an anthropic / openai / openrouter / etc. key
-        # via the same env vars the underlying provider uses. We default
-        # to ANTHROPIC_API_KEY; admins can override via the OpenCode
-        # provider sub-table's base_url, exported by the bundle as
-        # OPENCODE_PROVIDER_BASE_URL.
-        ANTHROPIC_API_KEY="$(cat /run/maestro-secrets/opencode)"
-        export ANTHROPIC_API_KEY
-        rm -f /run/maestro-secrets/opencode || true
-    fi
+    # OpenCode self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md):
+    # the bundle does NOT write a per-provider secret file for OpenCode.
+    # OpenCode's CLI ignores env-var tokens; it reads provider config from
+    # ~/.config/opencode/opencode.json, which the bundle materialises and
+    # bind-mounts read-only at /home/maestro/.config/opencode. The
+    # user's bearer is baked into options.apiKey there. The legacy
+    # ANTHROPIC_API_KEY mapping was a wrong-tool footgun (use the Claude
+    # provider for Anthropic) and is intentionally absent.
     # Task #41 (was #39): Claude session-state (`~/.claude.json`). When the
     # user is on a team / Pro plan, the API key alone isn't enough — Claude
     # Code requires a populated `oauthAccount` block in $HOME/.claude.json

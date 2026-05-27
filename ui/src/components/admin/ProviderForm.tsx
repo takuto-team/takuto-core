@@ -70,6 +70,17 @@ export function ProviderForm({
 }: ProviderFormProps) {
   const cursorBaseUrlDisabled = selectedProvider === "cursor";
 
+  // OpenCode self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md
+  // §2.4): OpenCode requires non-empty base_url + model. The validator
+  // returns 400 with code `opencode_base_url_required` / `opencode_model_required`
+  // on submit; this client-side guard short-circuits before the bounce so
+  // the operator sees the requirement up front.
+  const opencodeMissingBaseUrl =
+    selectedProvider === "opencode" && draft.base_url.trim() === "";
+  const opencodeMissingModel =
+    selectedProvider === "opencode" && draft.model.trim() === "";
+  const saveDisabled = saving || opencodeMissingBaseUrl || opencodeMissingModel;
+
   // Tiny helper to avoid spreading the same `onDraftChange({ ...draft, k })`
   // boilerplate at every <input>.
   const update = (patch: Partial<ProviderDraft>) =>
@@ -100,15 +111,29 @@ export function ProviderForm({
       <section className="flex flex-col gap-2">
         <label htmlFor="model-input" className="text-xs text-gray-400">
           Model
+          {selectedProvider === "opencode" && (
+            <span className="text-red-400 ml-1">*</span>
+          )}
         </label>
         <input
           id="model-input"
           type="text"
           value={draft.model}
           onChange={(e) => update({ model: e.target.value })}
-          placeholder="Leave empty for the vendor default"
+          placeholder={
+            selectedProvider === "opencode"
+              ? "lmstudio/qwen3-coder"
+              : "Leave empty for the vendor default"
+          }
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
+        {selectedProvider === "opencode" && (
+          <p className="text-xs text-gray-500">
+            Required. The model id served by your self-hosted endpoint (e.g.{" "}
+            <code className="text-gray-400">lmstudio/qwen3-coder</code> or{" "}
+            <code className="text-gray-400">ollama/llama3</code>).
+          </p>
+        )}
       </section>
 
       {/* Cursor CLI binary */}
@@ -149,13 +174,20 @@ export function ProviderForm({
       <section className="flex flex-col gap-2">
         <label htmlFor="base-url-input" className="text-xs text-gray-400">
           Base URL
+          {selectedProvider === "opencode" && (
+            <span className="text-red-400 ml-1">*</span>
+          )}
         </label>
         <input
           id="base-url-input"
           type="text"
           value={cursorBaseUrlDisabled ? "" : draft.base_url}
           onChange={(e) => update({ base_url: e.target.value })}
-          placeholder="Leave empty to use the vendor public API"
+          placeholder={
+            selectedProvider === "opencode"
+              ? "http://lm-studio:1234/v1"
+              : "Leave empty to use the vendor public API"
+          }
           disabled={cursorBaseUrlDisabled}
           title={
             cursorBaseUrlDisabled
@@ -175,9 +207,13 @@ export function ProviderForm({
         )}
         {selectedProvider === "opencode" && (
           <p className="text-xs text-gray-500">
-            LM Studio recipe: set base URL to{" "}
+            Required. OpenCode is the self-hosted adapter — point this at
+            your OpenAI-compatible model server. Examples:{" "}
             <code className="text-gray-400">http://lm-studio:1234/v1</code>{" "}
-            and model to <code className="text-gray-400">lmstudio/&lt;model-id&gt;</code>.
+            (LM Studio),{" "}
+            <code className="text-gray-400">http://ollama:11434/v1</code>{" "}
+            (Ollama). To use Anthropic / OpenAI directly, pick the Claude
+            or Codex provider instead.
           </p>
         )}
       </section>
@@ -249,10 +285,15 @@ export function ProviderForm({
       </section>
 
       {/* Save */}
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-2">
+        {(opencodeMissingBaseUrl || opencodeMissingModel) && (
+          <p className="text-xs text-red-400">
+            OpenCode requires both a Base URL and a Model to save.
+          </p>
+        )}
         <button
           type="button"
-          disabled={saving}
+          disabled={saveDisabled}
           onClick={onSave}
           className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >

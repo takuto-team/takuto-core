@@ -84,11 +84,12 @@ pub(crate) const BUNDLE_SOURCING_SH: &str = concat!(
     r#" export OPENAI_API_KEY;"#,
     r#" rm -f /run/maestro-secrets/codex 2>/dev/null || true;"#,
     r#" fi;"#,
-    r#" if [ -f /run/maestro-secrets/opencode ]; then"#,
-    r#" ANTHROPIC_API_KEY="$(cat /run/maestro-secrets/opencode)";"#,
-    r#" export ANTHROPIC_API_KEY;"#,
-    r#" rm -f /run/maestro-secrets/opencode 2>/dev/null || true;"#,
-    r#" fi;"#,
+    // OpenCode self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md):
+    // No /run/maestro-secrets/opencode handling — OpenCode reads its
+    // provider config from /home/maestro/.config/opencode/opencode.json,
+    // mounted by the bundle's opencode_config_dir. The previous
+    // ANTHROPIC_API_KEY mapping was the wrong-tool footgun (use the
+    // Claude provider for Anthropic) and is intentionally absent.
     // Task #41 (was #39): Claude session-state (`~/.claude.json`). The
     // bundle ships ONLY the keys the user pasted (typically just
     // `oauthAccount` for team-plan users on a custom proxy). A naive `cp`
@@ -163,11 +164,12 @@ mod tests {
             "snippet must self-gate on MAESTRO_AUTH_BUNDLE=1"
         );
         // Every file → env-var mapping from worker-entrypoint.sh.
+        // OpenCode is intentionally absent — it consumes opencode.json,
+        // not env vars (spec lore/audits/2026-05-27-opencode-self-hosted-spec.md).
         for (file, env_var) in [
             ("/run/maestro-secrets/claude", "CLAUDE_CODE_OAUTH_TOKEN"),
             ("/run/maestro-secrets/cursor", "CURSOR_API_KEY"),
             ("/run/maestro-secrets/codex", "OPENAI_API_KEY"),
-            ("/run/maestro-secrets/opencode", "ANTHROPIC_API_KEY"),
             ("/run/maestro-secrets/gh", "GH_TOKEN"),
         ] {
             assert!(
@@ -183,6 +185,18 @@ mod tests {
                 "snippet must rm -f {file} after sourcing"
             );
         }
+        // OpenCode spec invariant: NO opencode file/env mapping.
+        assert!(
+            !BUNDLE_SOURCING_SH.contains("/run/maestro-secrets/opencode"),
+            "snippet must NOT source /run/maestro-secrets/opencode — \
+             OpenCode reads opencode.json via the bundle's \
+             opencode_config_dir mount (spec 2026-05-27)"
+        );
+        assert!(
+            !BUNDLE_SOURCING_SH.contains("ANTHROPIC_API_KEY="),
+            "OpenCode → ANTHROPIC_API_KEY mapping is intentionally dropped \
+             (spec 2026-05-27 §2.1)"
+        );
 
         // Task #39: Claude session-state file uses `cp` (not source/export)
         // because it carries JSON, not shell variables. Assert the
@@ -255,11 +269,13 @@ mod tests {
             }
         };
         // Each mapping the snippet must keep in sync with the script.
+        // OpenCode intentionally omitted — its bearer lives in
+        // opencode.json mounted via the bundle's opencode_config_dir
+        // (spec lore/audits/2026-05-27-opencode-self-hosted-spec.md).
         for (file, env_var) in [
             ("/run/maestro-secrets/claude", "CLAUDE_CODE_OAUTH_TOKEN"),
             ("/run/maestro-secrets/cursor", "CURSOR_API_KEY"),
             ("/run/maestro-secrets/codex", "OPENAI_API_KEY"),
-            ("/run/maestro-secrets/opencode", "ANTHROPIC_API_KEY"),
             ("/run/maestro-secrets/gh", "GH_TOKEN"),
         ] {
             assert!(
@@ -283,6 +299,20 @@ mod tests {
                  (present in shell script)"
             );
         }
+        // OpenCode spec invariant: drift detector for the
+        // "no /run/maestro-secrets/opencode env-var sourcing" rule.
+        assert!(
+            !script.contains("/run/maestro-secrets/opencode"),
+            "drift: worker-entrypoint.sh re-introduced opencode mapping — \
+             spec 2026-05-27 §2.1 deletes it (opencode reads opencode.json \
+             via the bundle's opencode_config_dir mount, not env vars)"
+        );
+        assert!(
+            !script.contains("ANTHROPIC_API_KEY="),
+            "drift: worker-entrypoint.sh re-introduced ANTHROPIC_API_KEY \
+             mapping — spec 2026-05-27 §2.1 deletes it (use the Claude \
+             provider, not OpenCode, to talk to Anthropic)"
+        );
 
         // Task #39 / #41: the cli_state mapping doesn't use the standard
         // source + export pattern. It writes the session blob onto
@@ -370,13 +400,13 @@ mod tests {
             bundle_pos < exec_pos,
             "bundle sourcing must precede exec; bundle@{bundle_pos} exec@{exec_pos} in: {cmd}"
         );
-        // And all five provider mappings must be present (defence in depth
-        // against accidentally narrowing the splice).
+        // And all four provider mappings must be present (defence in depth
+        // against accidentally narrowing the splice). OpenCode intentionally
+        // absent per spec 2026-05-27 §2.1 — uses opencode.json instead.
         for file in [
             "/run/maestro-secrets/claude",
             "/run/maestro-secrets/cursor",
             "/run/maestro-secrets/codex",
-            "/run/maestro-secrets/opencode",
             "/run/maestro-secrets/gh",
         ] {
             assert!(

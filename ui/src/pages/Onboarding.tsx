@@ -43,6 +43,8 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
     setProvider,
     baseUrl,
     setBaseUrl,
+    model,
+    setModel,
     extraArgsText,
     setExtraArgsText,
     ticketingSystem,
@@ -103,6 +105,8 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
                   onChangeProvider={setProvider}
                   baseUrl={baseUrl}
                   onChangeBaseUrl={setBaseUrl}
+                  model={model}
+                  onChangeModel={setModel}
                   extraArgsText={extraArgsText}
                   onChangeExtraArgs={setExtraArgsText}
                 />
@@ -132,7 +136,19 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
               <button
                 type="button"
                 onClick={goNext}
-                disabled={saving || completing}
+                disabled={
+                  saving ||
+                  completing ||
+                  // Self-hosted spec (2026-05-27 §2.5): block Continue on
+                  // step 2 when OpenCode is selected without base_url +
+                  // model. The server returns 400 in that case; the
+                  // client-side guard makes the requirement visible up
+                  // front. The "Skip for now" button stays enabled — the
+                  // operator can come back to AI Settings later.
+                  (step === 2 &&
+                    provider === "opencode" &&
+                    (baseUrl.trim() === "" || model.trim() === ""))
+                }
                 className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 {step === 4

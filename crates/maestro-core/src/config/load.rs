@@ -238,6 +238,40 @@ impl Config {
             .into());
         }
 
+        // OpenCode self-hosted spec (2026-05-27): OpenCode in v1 is the
+        // self-hosted-only adapter (LM Studio / Ollama / vLLM / private
+        // gateways). There is no sensible default endpoint — the whole
+        // point of picking OpenCode is the admin pointing at their own
+        // OpenAI-compatible server. An empty `base_url` produces a
+        // "no provider configured" error at first workflow step; reject
+        // loudly here so the operator sees a typed 400 at config save
+        // time and fixes it before the workflow fails.
+        //
+        // Same reasoning applies to `model`: the OpenCode init-shim writes
+        // `models.<id>` into the worker's `opencode.json` and the CLI's
+        // `-m <provider>/<model>` argv references that id. Empty → broken.
+        if self.agent.provider == AiAgentProvider::OpenCode {
+            if self.agent.providers.opencode.base_url.trim().is_empty() {
+                return Err(ConfigError::Validation {
+                    section: "agent.providers.opencode",
+                    field: "base_url",
+                    detail: "opencode_base_url_required: set the OpenAI-compatible \
+                             endpoint URL for your self-hosted model server \
+                             (e.g. http://lm-studio:1234/v1)".to_string(),
+                }
+                .into());
+            }
+            if self.agent.providers.opencode.model.trim().is_empty() {
+                return Err(ConfigError::Validation {
+                    section: "agent.providers.opencode",
+                    field: "model",
+                    detail: "opencode_model_required: set the model id served by \
+                             your endpoint (e.g. lmstudio/qwen3-coder)".to_string(),
+                }
+                .into());
+            }
+        }
+
         // Phase 1 (04_architecture.md §0 D10): deny-list every provider's
         // `extra_args` against Maestro-owned flags, regardless of which
         // provider is currently active. Operators commonly switch providers

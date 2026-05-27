@@ -179,13 +179,25 @@ export function AiCredentialPanel({
         // The single Replace/Save button covers rotation; revocation lives
         // on the provider side (anthropic.com / cursor.com / github.com).
         // To wipe the local row, the user pastes a different key.
+        //
+        // OpenCode self-hosted spec (2026-05-27 §2.5): the "API key" wording
+        // is misleading for OpenCode (it's an optional bearer for a
+        // self-hosted endpoint). Re-label per provider.
         <CredentialPasteField
-          label={`${label} API key`}
+          label={
+            activeProvider === "opencode"
+              ? "Bearer token (optional)"
+              : `${label} API key`
+          }
           value={apiKey}
           onChange={setApiKey}
           onSubmit={submitApiKey}
           saving={saving}
-          placeholder={`Paste your ${label} API key`}
+          placeholder={
+            activeProvider === "opencode"
+              ? "Leave blank for LM Studio / Ollama"
+              : `Paste your ${label} API key`
+          }
           helper={apiKeyHelper}
           saveLabel={apiKeyActive ? "Replace" : "Save"}
         />

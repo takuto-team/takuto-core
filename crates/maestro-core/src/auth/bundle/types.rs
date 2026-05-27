@@ -70,9 +70,17 @@ pub struct WorkerSecretsBundle {
     /// adapters append these to the agent argv.
     pub extra_args: Vec<String>,
     /// Non-secret env-vars to set on the worker. Used for things like
-    /// `MAESTRO_AUTH_BUNDLE=1` (a discriminator the entrypoint switches on)
-    /// or `OPENCODE_PROVIDER_BASE_URL`. NEVER carries token bytes.
+    /// `MAESTRO_AUTH_BUNDLE=1` (a discriminator the entrypoint switches on).
+    /// NEVER carries token bytes.
     pub extra_env: Vec<(String, String)>,
+    /// OpenCode self-hosted init-shim output directory (spec
+    /// `lore/audits/2026-05-27-opencode-self-hosted-spec.md`). When set,
+    /// the container runner bind-mounts this read-only at
+    /// `/home/maestro/.config/opencode/` so OpenCode reads its
+    /// `opencode.json` config (which embeds the admin `base_url` + `model`
+    /// and the user's optional bearer). `Some` only when
+    /// `provider == OpenCode`; `None` for every other provider.
+    pub opencode_config_dir: Option<PathBuf>,
     /// RAII: dropping the `TempDir` `rm -rf`s the secrets directory.
     pub(super) _temp_dir: TempDir,
 }
@@ -88,6 +96,7 @@ impl std::fmt::Debug for WorkerSecretsBundle {
             .field("git_author_email", &self.git_author_email)
             .field("base_url", &self.base_url)
             .field("extra_args_count", &self.extra_args.len())
+            .field("has_opencode_config", &self.opencode_config_dir.is_some())
             .field("temp_dir", &self._temp_dir.path())
             .finish()
     }
@@ -127,6 +136,7 @@ impl WorkerSecretsBundle {
             base_url: None,
             extra_args: vec![],
             extra_env,
+            opencode_config_dir: None,
             _temp_dir: dir,
         }
     }

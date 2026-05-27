@@ -37,10 +37,22 @@ pub(crate) fn passthrough_is_bundled(key: &str) -> bool {
     SECRET_PASSTHROUGH.contains(&key)
 }
 
+/// In-container mount point for the OpenCode self-hosted init-shim's
+/// config dir (spec `lore/audits/2026-05-27-opencode-self-hosted-spec.md`).
+/// OpenCode reads `opencode.json` from `$XDG_CONFIG_HOME/opencode/` or
+/// `~/.config/opencode/`; the worker container's `maestro` user has
+/// `$HOME=/home/maestro`, so this is the canonical lookup path.
+pub(crate) const OPENCODE_CONFIG_MOUNTPOINT: &str = "/home/maestro/.config/opencode";
+
 /// Phase 2b.3.x helper: append the bundle's mount (`/run/maestro-secrets:ro`)
 /// and non-secret env vars (`MAESTRO_AUTH_BUNDLE`, base URLs,
 /// `GIT_AUTHOR_*`/`GIT_COMMITTER_*`) onto an in-flight `docker run` argv.
 /// Token bytes are NEVER added; they live in the bind-mounted tmpfs files.
+///
+/// When the bundle carries an OpenCode self-hosted config dir (spec
+/// 2026-05-27), a second RO bind mount is appended for that dir at
+/// [`OPENCODE_CONFIG_MOUNTPOINT`]. The config file embeds the user's
+/// bearer + admin's base_url + model, so it MUST be RO and per-workflow.
 pub(crate) fn apply_secrets_bundle_to_args(
     args: &mut Vec<String>,
     bundle: &crate::auth::WorkerSecretsBundle,
@@ -56,6 +68,15 @@ pub(crate) fn apply_secrets_bundle_to_args(
         src.to_string_lossy(),
         crate::auth::WORKER_SECRETS_MOUNTPOINT,
     ));
+    if let Some(ref oc_dir) = bundle.opencode_config_dir {
+        let oc_src = translate_path_for_dind(oc_dir);
+        args.push("-v".into());
+        args.push(format!(
+            "{}:{}:ro",
+            oc_src.to_string_lossy(),
+            OPENCODE_CONFIG_MOUNTPOINT,
+        ));
+    }
     for (k, v) in &bundle.extra_env {
         args.push("-e".into());
         args.push(format!("{k}={v}"));
@@ -84,6 +105,18 @@ mod tests {
         assert!(!passthrough_is_bundled("GIT_AUTHOR_NAME"));
         assert!(!passthrough_is_bundled("GH_TOKEN_FOO")); // prefix match must NOT match
         assert!(!passthrough_is_bundled("")); // empty must not match
+    }
+
+    /// OpenCode self-hosted spec (2026-05-27 §3): the OpenCode mountpoint
+    /// is the maestro user's XDG config dir. If the worker image ever
+    /// runs as a different user, this needs to move; locking it here so
+    /// any drift surfaces in CI.
+    #[test]
+    fn opencode_config_mountpoint_is_in_xdg_config_home() {
+        assert_eq!(
+            OPENCODE_CONFIG_MOUNTPOINT,
+            "/home/maestro/.config/opencode"
+        );
     }
 
     /// `apply_secrets_bundle_to_args` must emit a `-v <translated>:/run/maestro-secrets:ro`

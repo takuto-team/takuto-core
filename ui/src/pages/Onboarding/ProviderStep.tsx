@@ -9,7 +9,7 @@ const PROVIDER_LABEL: Record<AgentProviderId, string> = {
   claude: "Claude",
   cursor: "Cursor",
   codex: "Codex",
-  opencode: "OpenCode",
+  opencode: "OpenCode (self-hosted)",
   gemini: "Gemini (v2)",
   none: "None",
 };
@@ -19,6 +19,8 @@ interface Props {
   onChangeProvider: (p: AgentProviderId) => void;
   baseUrl: string;
   onChangeBaseUrl: (v: string) => void;
+  model: string;
+  onChangeModel: (v: string) => void;
   extraArgsText: string;
   onChangeExtraArgs: (v: string) => void;
 }
@@ -28,6 +30,8 @@ export function ProviderStep({
   onChangeProvider,
   baseUrl,
   onChangeBaseUrl,
+  model,
+  onChangeModel,
   extraArgsText,
   onChangeExtraArgs,
 }: Props) {
@@ -50,18 +54,33 @@ export function ProviderStep({
             </option>
           ))}
         </select>
+        {provider === "opencode" && (
+          <p className="text-xs text-gray-500 mt-1">
+            OpenCode wires Maestro to your self-hosted OpenAI-compatible
+            endpoint (LM Studio, Ollama, vLLM, private gateways). To use
+            Anthropic / OpenAI directly, pick the Claude or Codex
+            provider instead.
+          </p>
+        )}
       </div>
 
       <div>
         <label htmlFor="onb-base-url" className="block text-xs text-gray-400 mb-1">
           Base URL
+          {provider === "opencode" && (
+            <span className="text-red-400 ml-1">*</span>
+          )}
         </label>
         <input
           id="onb-base-url"
           type="text"
           value={cursorBaseUrlDisabled ? "" : baseUrl}
           onChange={(e) => onChangeBaseUrl(e.target.value)}
-          placeholder="Leave empty to use the vendor public API"
+          placeholder={
+            provider === "opencode"
+              ? "http://lm-studio:1234/v1"
+              : "Leave empty to use the vendor public API"
+          }
           disabled={cursorBaseUrlDisabled}
           title={
             cursorBaseUrlDisabled
@@ -75,6 +94,39 @@ export function ProviderStep({
         {cursorBaseUrlDisabled && (
           <p className="text-xs text-gray-500 mt-1">
             Cursor CLI does not support custom upstream endpoints.
+          </p>
+        )}
+        {provider === "opencode" && (
+          <p className="text-xs text-gray-500 mt-1">
+            Required for OpenCode. Point this at your self-hosted
+            OpenAI-compatible server.
+          </p>
+        )}
+      </div>
+
+      <div>
+        <label htmlFor="onb-model" className="block text-xs text-gray-400 mb-1">
+          Model
+          {provider === "opencode" && (
+            <span className="text-red-400 ml-1">*</span>
+          )}
+        </label>
+        <input
+          id="onb-model"
+          type="text"
+          value={model}
+          onChange={(e) => onChangeModel(e.target.value)}
+          placeholder={
+            provider === "opencode"
+              ? "lmstudio/qwen3-coder"
+              : "Leave empty for the vendor default"
+          }
+          className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
+        />
+        {provider === "opencode" && (
+          <p className="text-xs text-gray-500 mt-1">
+            Required for OpenCode. The model id served by your endpoint
+            (e.g. <code className="text-gray-400">lmstudio/qwen3-coder</code>).
           </p>
         )}
       </div>

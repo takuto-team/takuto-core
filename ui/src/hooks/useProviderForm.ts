@@ -28,6 +28,12 @@ export function useProviderForm() {
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState<AgentProviderId>("claude");
   const [baseUrl, setBaseUrl] = useState("");
+  // Self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md
+  // §2.4): OpenCode validator requires both base_url AND model. We carry
+  // `model` in the onboarding form so admins can complete step 2 when
+  // they pick OpenCode (otherwise PUT /api/config/agent returns 400
+  // `opencode_model_required`).
+  const [model, setModel] = useState("");
   const [extraArgsText, setExtraArgsText] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -39,9 +45,10 @@ export function useProviderForm() {
         const p: AgentProviderId = (agent.provider ?? "claude") as AgentProviderId;
         setProvider(p);
         const sub = agent.providers?.[p as keyof typeof agent.providers] as
-          | { base_url?: string; extra_args?: string[] }
+          | { base_url?: string; model?: string; extra_args?: string[] }
           | undefined;
         setBaseUrl(sub?.base_url ?? "");
+        setModel(sub?.model ?? "");
         setExtraArgsText((sub?.extra_args ?? []).join("\n"));
       })
       .catch(() => {
@@ -75,6 +82,12 @@ export function useProviderForm() {
       // `deny_unknown_fields` (04_architecture.md §2.2 amendment A1).
       delete sub.base_url;
     }
+    // Self-hosted spec (2026-05-27 §2.4): OpenCode requires model. We also
+    // send `model` for the other providers when set, so users can override
+    // the vendor default from the onboarding wizard.
+    if (model.trim().length > 0) {
+      sub.model = model;
+    }
     const patch: AgentConfigPatch = {
       provider,
       providers: { [provider]: sub } as AgentConfigPatch["providers"],
@@ -95,7 +108,7 @@ export function useProviderForm() {
     } finally {
       setSaving(false);
     }
-  }, [provider, baseUrl, extraArgsText, showToast]);
+  }, [provider, baseUrl, model, extraArgsText, showToast]);
 
   return {
     loading,
@@ -104,6 +117,8 @@ export function useProviderForm() {
     setProvider,
     baseUrl,
     setBaseUrl,
+    model,
+    setModel,
     extraArgsText,
     setExtraArgsText,
     ticketingSystem,

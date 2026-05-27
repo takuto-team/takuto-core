@@ -34,7 +34,13 @@ export function providerHelper(
     case "codex":
       return "OpenAI API key (sk-…). The Codex CLI reads OPENAI_API_KEY from the worker environment — Maestro bridges this from the value you paste here.";
     case "opencode":
-      return "OpenCode credential (anthropic-style key or any provider key — depends on which provider you've configured in [agent.providers.opencode]). Note: opencode does NOT auto-read env vars; admin must configure a provider in opencode.json.";
+      // Self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md
+      // §2.5): OpenCode is the self-hosted adapter. The key field is an
+      // optional bearer for the endpoint, not an Anthropic / OpenAI key.
+      // Leave blank for LM Studio / Ollama; required for authenticated
+      // private gateways. Maestro materialises `opencode.json` per
+      // workflow with this value as `options.apiKey`.
+      return "Optional bearer token for your self-hosted OpenAI-compatible endpoint. Leave blank for LM Studio / Ollama or any unauthenticated server. For private gateways requiring auth, paste the bearer the server expects.";
     default:
       return "Paste the API key issued by your provider.";
   }

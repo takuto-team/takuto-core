@@ -15,10 +15,20 @@ use crate::error::Result;
 use crate::github::auth_resolver::{GitAction, GitAuthResolver, TokenSource};
 use crate::workflow::snapshot::AuthPin;
 
+use super::opencode_config::write_opencode_config;
 use super::tempdir::secrets_dir_for_db;
 use super::types::{SECRET_FILE_GH, WorkerSecretsBundle};
-use super::unseal::{non_empty, unseal_claude_session, unseal_provider_credential};
+use super::unseal::{
+    non_empty, unseal_claude_session, unseal_provider_credential,
+    unseal_provider_plaintext_bytes,
+};
 use super::write_secret::write_secret_file;
+
+/// OpenCode self-hosted spec (2026-05-27 §2.3): per-workflow subdir of
+/// the bundle's tempdir holding the materialised `opencode.json`. Mounted
+/// read-only into the worker at `/home/maestro/.config/opencode/` so
+/// OpenCode reads its self-hosted provider config from there.
+const OPENCODE_CONFIG_SUBDIR: &str = "opencode-config";
 
 /// Build a [`WorkerSecretsBundle`] for the workflow.
 ///
@@ -53,15 +63,24 @@ pub async fn build(
     let dir = secrets_dir_for_db(db)?;
 
     // ── Provider secret (api_key) ────────────────────────────────────────
-    let provider_secret_file = unseal_provider_credential(
-        config,
-        db,
-        &master_key,
-        auth_pin,
-        workflow_user_id,
-        dir.path(),
-    )
-    .await?;
+    //
+    // OpenCode self-hosted spec (2026-05-27 §2.3): OpenCode does not consume
+    // env-var tokens. The bearer goes inside the per-workflow `opencode.json`
+    // file instead of `/run/maestro-secrets/opencode`, so the bundle skips
+    // the secret-file write for OpenCode entirely.
+    let provider_secret_file = if matches!(provider, AiAgentProvider::OpenCode) {
+        None
+    } else {
+        unseal_provider_credential(
+            config,
+            db,
+            &master_key,
+            auth_pin,
+            workflow_user_id,
+            dir.path(),
+        )
+        .await?
+    };
 
     // ── Task #39: Claude `cli_state` row (optional, claude-only) ─────────
     // Independent of `provider_secret_file`. When present, the worker
@@ -74,6 +93,11 @@ pub async fn build(
     };
 
     // ── Provider sub-table: base_url + extra_args (non-secret) ───────────
+    //
+    // OpenCode self-hosted spec (2026-05-27 §2.2): OpenCode's `base_url`
+    // does NOT become an env var. It is written into `opencode.json` by
+    // the init-shim below. We still surface it on the bundle for
+    // observability (Debug, logging), but `extra_env` will not carry it.
     let base_url = match provider {
         AiAgentProvider::Claude => {
             non_empty(&config.agent.providers.claude.base_url)
@@ -87,6 +111,58 @@ pub async fn build(
         AiAgentProvider::Cursor => config.agent.providers.cursor.extra_args.clone(),
         AiAgentProvider::Codex => config.agent.providers.codex.extra_args.clone(),
         AiAgentProvider::OpenCode => config.agent.providers.opencode.extra_args.clone(),
+    };
+
+    // ── OpenCode self-hosted init-shim (spec 2026-05-27 §2.3) ────────────
+    //
+    // Materialises `opencode.json` with the admin's base_url + model and
+    // the user's optional bearer embedded as `options.apiKey`. The worker
+    // bind-mounts the parent dir at /home/maestro/.config/opencode:ro so
+    // OpenCode reads its provider config from there.
+    let opencode_config_dir = if matches!(provider, AiAgentProvider::OpenCode) {
+        // The validator catches empty base_url / model when
+        // `provider == OpenCode` (see config/load.rs); but defend in depth
+        // since the validator only fires on Config::load / PUT
+        // /api/config/agent — a hand-crafted Config in tests could slip
+        // through. The shim itself surfaces a typed error if so.
+        let url = config.agent.providers.opencode.base_url.clone();
+        let model = config.agent.providers.opencode.model.clone();
+
+        // Unseal the user's bearer to plaintext bytes (no on-disk secret
+        // file — the bearer is embedded in opencode.json directly).
+        let bearer = unseal_provider_plaintext_bytes(
+            config,
+            db,
+            &master_key,
+            auth_pin,
+            workflow_user_id,
+        )
+        .await?;
+
+        let cfg_dir = dir.path().join(OPENCODE_CONFIG_SUBDIR);
+        std::fs::create_dir(&cfg_dir).map_err(|e| ConfigError::BundleSecretFile {
+            op: "create",
+            path: cfg_dir.clone(),
+            detail: e.to_string(),
+        })?;
+        // Mode-0700 the subdir on Unix so the opencode.json's 0400 isn't
+        // worked around by a permissive parent. The bundle's tempdir
+        // root is already 0700, but the subdir inherits 0755 by default.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cfg_dir, std::fs::Permissions::from_mode(0o700)).map_err(
+                |e| ConfigError::BundleSecretFile {
+                    op: "chmod",
+                    path: cfg_dir.clone(),
+                    detail: e.to_string(),
+                },
+            )?;
+        }
+        write_opencode_config(&cfg_dir, &url, &model, bearer.as_deref())?;
+        Some(cfg_dir)
+    } else {
+        None
     };
 
     // ── GitHub token ─────────────────────────────────────────────────────
@@ -127,19 +203,27 @@ pub async fn build(
     };
 
     // ── Non-secret env vars the worker entrypoint switches on ────────────
+    //
+    // OpenCode self-hosted spec (2026-05-27 §2.2): OpenCode's `base_url`
+    // is NOT emitted as an env var — the OpenCode CLI ignores env-var
+    // overrides and reads `opencode.json` instead. The init-shim above
+    // writes that file with `options.baseURL` set; this match arm covers
+    // only the CLIs that do consume env vars (Claude → ANTHROPIC_BASE_URL,
+    // Codex → OPENAI_BASE_URL).
     let mut extra_env: Vec<(String, String)> =
         vec![("MAESTRO_AUTH_BUNDLE".to_string(), "1".to_string())];
     if let Some(ref url) = base_url {
-        // Per-provider env-var name for the custom base URL. We use the
-        // documented names so the provider CLIs pick them up directly.
         let env_name = match provider {
-            AiAgentProvider::Claude => "ANTHROPIC_BASE_URL",
-            AiAgentProvider::Codex => "OPENAI_BASE_URL",
-            AiAgentProvider::OpenCode => "OPENCODE_PROVIDER_BASE_URL",
-            // Cursor has no base_url (A1); the match above already filters it.
-            AiAgentProvider::Cursor => "ANTHROPIC_BASE_URL",
+            AiAgentProvider::Claude => Some("ANTHROPIC_BASE_URL"),
+            AiAgentProvider::Codex => Some("OPENAI_BASE_URL"),
+            // OpenCode: base_url is plumbed via opencode.json, not env.
+            AiAgentProvider::OpenCode => None,
+            // Cursor has no base_url (A1); the outer Option is None anyway.
+            AiAgentProvider::Cursor => None,
         };
-        extra_env.push((env_name.to_string(), url.clone()));
+        if let Some(env_name) = env_name {
+            extra_env.push((env_name.to_string(), url.clone()));
+        }
     }
     if let Some(ref name) = git_author_name {
         extra_env.push(("GIT_AUTHOR_NAME".to_string(), name.clone()));
@@ -160,6 +244,7 @@ pub async fn build(
         base_url,
         extra_args,
         extra_env,
+        opencode_config_dir,
         _temp_dir: dir,
     })
 }
