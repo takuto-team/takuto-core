@@ -6,6 +6,12 @@
 //! The database file lives at `{data_dir}/maestro.db`. Schema migrations run
 //! automatically on first open via [`Database::open`].
 
+// Plan-11 step 3 (tmp/plan-11-pluggable-database-backends.md §4 +
+// 2026-05-27 user mandate): backend-agnostic DB adapter. Every DAO and
+// call site takes `&DbAdapter`; the adapter dispatches to the right
+// sqlx driver internally. This is the cutover from the legacy
+// `&rusqlite::Connection` API.
+pub mod adapter;
 pub mod credential_audit;
 pub mod credentials;
 pub mod error;
@@ -31,6 +37,9 @@ pub mod schema;
 pub mod users;
 pub mod user_worktree_commands;
 
+pub use adapter::{
+    DbAdapter, DbError as AdapterError, DbResult, DbRow, DbTransaction, DbValue,
+};
 pub use error::DbError;
 pub use pool::{DbBackend, DbPool, PoolError, PoolTuning};
 
