@@ -122,18 +122,19 @@ pub async fn onboarding_status(
         if cookie.is_empty() {
             (None, None)
         } else {
-            let db = db.clone();
+            // Plan-11 step 3: onboarding::get migrated to the agnostic
+            // adapter; the other two DAO calls (provider_credentials,
+            // github_credentials) plus validate_db_session are still
+            // rusqlite. Split the work: spawn_blocking returns the
+            // user_id + the two credential flags; onboarding::get runs
+            // async in the outer scope.
+            let db_clone = db.clone();
             let active_provider_for_lookup = active_provider.clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = db.conn().blocking_lock();
-                let Some(user_id) =
-                    crate::auth::validate_db_session(&conn, &cookie)
-                else {
-                    return (None, None);
-                };
-                let row = maestro_core::db::onboarding::get(&conn, &user_id)
-                    .ok()
-                    .flatten();
+            let cookie_for_blocking = cookie.clone();
+            let pre = tokio::task::spawn_blocking(move || {
+                let conn = db_clone.conn().blocking_lock();
+                let user_id =
+                    crate::auth::validate_db_session(&conn, &cookie_for_blocking)?;
                 let creds_present = matches!(
                     maestro_core::db::provider_credentials::find_active(
                         &conn,
@@ -146,6 +147,17 @@ pub async fn onboarding_status(
                     maestro_core::db::github_credentials::find(&conn, &user_id),
                     Ok(Some(_))
                 );
+                Some((user_id, creds_present, github_pat_present))
+            })
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((user_id, creds_present, github_pat_present)) = pre {
+                let row = maestro_core::db::onboarding::get(db.adapter(), &user_id)
+                    .await
+                    .ok()
+                    .flatten();
                 let mut summary = match row {
                     Some(r) => UserOnboardingSummary {
                         step_1_ticketing: r.step_1_ticketing.map(|s| s.as_str().to_string()),
@@ -168,9 +180,9 @@ pub async fn onboarding_status(
                         github_pat_present,
                     }),
                 )
-            })
-            .await
-            .unwrap_or((None, None))
+            } else {
+                (None, None)
+            }
         }
     } else {
         (None, None)
