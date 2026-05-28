@@ -19,12 +19,35 @@
 //!
 //! `user_id` references `users(id) ON DELETE CASCADE` — removing a user wipes
 //! every row they configured (plan-09 AC-7).
+//!
+//! ### Plan-11 step 3 (commit dc422de → 543606b → this commit)
+//!
+//! Third DAO migrated to the backend-agnostic [`DbAdapter`] API. Template
+//! is in `login_attempts.rs`; new patterns specific to this DAO:
+//!
+//! 1. **JSON columns**: encode/decode via `serde_json` at the DAO
+//!    boundary. The on-disk format is unchanged — TEXT column with
+//!    `[…]` JSON. Migrated form binds the encoded string via
+//!    `DbValue::Text` and re-parses on read.
+//!
+//! 2. **Dynamic-arity bind**: `get_run_commands_for_pairs` accepts
+//!    `&[(&str, &str)]` and builds N `?` placeholders. The bind loop
+//!    walks the pairs vector — matches rusqlite's `params_from_iter`
+//!    pattern in shape; the adapter takes a `Vec<DbValue>` so we
+//!    convert each `&str` to `DbValue::Text` and `extend` into the
+//!    bind list.
+//!
+//! 3. **Hard vs soft JSON-decode failure**: `get` propagates a corrupt
+//!    JSON as `DbError::CommandsJsonDecode` (envelope error); the batched
+//!    `get_run_commands_for_pairs` logs at warn and omits the row so a
+//!    single corrupt entry doesn't poison the whole dashboard. Both
+//!    semantics preserved verbatim.
 
 use std::collections::HashMap;
 
-use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
+use crate::db::{DbAdapter, DbValue};
 use crate::error::Result;
 
 use super::DbError;
@@ -57,46 +80,42 @@ pub struct UserWorktreeCommandsRow {
 /// `MaestroError::Db`) — a corrupted row is treated as a hard error here
 /// (unlike the batched lookup, which logs and omits so a single bad row
 /// doesn't poison the whole dashboard).
-pub fn get(
-    conn: &Connection,
+pub async fn get(
+    adapter: &DbAdapter,
     user_id: &str,
     workspace_name: &str,
 ) -> Result<Option<UserWorktreeCommandsRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT user_id, workspace_name, init_commands_json, run_commands_json, updated_at \
-         FROM user_worktree_commands WHERE user_id = ?1 AND workspace_name = ?2",
-    )?;
-
-    // `row_to_user_worktree_commands` returns
-    // `rusqlite::Result<Result<Row, MaestroError>>`. Mirror the layered-error
-    // pattern from plan-08's `workspace_commands.rs`: `.optional()?` flips
-    // `Result<T, rusqlite::Error>` into `Option<T>` over the same SQLite
-    // error, then `Option::transpose` flips `Option<Result<_>>` into
-    // `Result<Option<_>>` over JSON-parse errors.
-    let row: Option<Result<UserWorktreeCommandsRow>> = stmt
-        .query_row(
-            params![user_id, workspace_name],
-            row_to_user_worktree_commands,
+    let row = adapter
+        .query_optional(
+            "SELECT user_id, workspace_name, init_commands_json, run_commands_json, updated_at \
+             FROM user_worktree_commands WHERE user_id = ? AND workspace_name = ?",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(workspace_name.to_string()),
+            ],
         )
-        .optional()?;
-
-    row.transpose()
+        .await?;
+    let Some(r) = row else {
+        return Ok(None);
+    };
+    Ok(Some(decode_full_row(&r)?))
 }
 
 /// List every row owned by `user_id`, ordered by most-recently-updated first.
-pub fn list_for_user(conn: &Connection, user_id: &str) -> Result<Vec<UserWorktreeCommandsRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT user_id, workspace_name, init_commands_json, run_commands_json, updated_at \
-         FROM user_worktree_commands WHERE user_id = ?1 ORDER BY updated_at DESC",
-    )?;
-
-    let rows = stmt.query_map(params![user_id], row_to_user_worktree_commands)?;
-
-    let mut out = Vec::new();
-    for r in rows {
-        // Each row is a Result<Result<Row, MaestroError>, rusqlite::Error>.
-        // Flatten so we surface either rusqlite or JSON errors.
-        out.push(r??);
+pub async fn list_for_user(
+    adapter: &DbAdapter,
+    user_id: &str,
+) -> Result<Vec<UserWorktreeCommandsRow>> {
+    let rows = adapter
+        .query_all(
+            "SELECT user_id, workspace_name, init_commands_json, run_commands_json, updated_at \
+             FROM user_worktree_commands WHERE user_id = ? ORDER BY updated_at DESC",
+            vec![DbValue::Text(user_id.to_string())],
+        )
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        out.push(decode_full_row(r)?);
     }
     Ok(out)
 }
@@ -110,8 +129,14 @@ pub fn list_for_user(conn: &Connection, user_id: &str) -> Result<Vec<UserWorktre
 /// physically corrupt data.
 ///
 /// `updated_at` is set to `Utc::now().timestamp()`.
-pub fn upsert(
-    conn: &Connection,
+///
+/// Backend support for the upsert clause: SQLite (≥ 3.24) and Postgres
+/// (≥ 9.5) use the same `INSERT ... ON CONFLICT(...) DO UPDATE SET col =
+/// excluded.col` form. MySQL uses `ON DUPLICATE KEY UPDATE` — when MySQL
+/// lands as a supported backend (plan §10 step 4), this fn will need a
+/// `match adapter.backend()` branch.
+pub async fn upsert(
+    adapter: &DbAdapter,
     user_id: &str,
     workspace_name: &str,
     init_commands: &[String],
@@ -151,26 +176,43 @@ pub fn upsert(
     })?;
     let now = chrono::Utc::now().timestamp();
 
-    conn.execute(
-        "INSERT INTO user_worktree_commands \
-            (user_id, workspace_name, init_commands_json, run_commands_json, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(user_id, workspace_name) DO UPDATE SET \
-           init_commands_json = excluded.init_commands_json, \
-           run_commands_json  = excluded.run_commands_json, \
-           updated_at         = excluded.updated_at",
-        params![user_id, workspace_name, init_json, run_json, now],
-    )?;
+    adapter
+        .execute(
+            "INSERT INTO user_worktree_commands \
+                (user_id, workspace_name, init_commands_json, run_commands_json, updated_at) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(user_id, workspace_name) DO UPDATE SET \
+               init_commands_json = excluded.init_commands_json, \
+               run_commands_json  = excluded.run_commands_json, \
+               updated_at         = excluded.updated_at",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(workspace_name.to_string()),
+                DbValue::Text(init_json),
+                DbValue::Text(run_json),
+                DbValue::I64(now),
+            ],
+        )
+        .await?;
     Ok(())
 }
 
 /// Remove the row for `(user_id, workspace_name)`. Returns `true` if a row
 /// was deleted, `false` if none existed.
-pub fn delete(conn: &Connection, user_id: &str, workspace_name: &str) -> Result<bool> {
-    let affected = conn.execute(
-        "DELETE FROM user_worktree_commands WHERE user_id = ?1 AND workspace_name = ?2",
-        params![user_id, workspace_name],
-    )?;
+pub async fn delete(
+    adapter: &DbAdapter,
+    user_id: &str,
+    workspace_name: &str,
+) -> Result<bool> {
+    let affected = adapter
+        .execute(
+            "DELETE FROM user_worktree_commands WHERE user_id = ? AND workspace_name = ?",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(workspace_name.to_string()),
+            ],
+        )
+        .await?;
     Ok(affected > 0)
 }
 
@@ -186,8 +228,8 @@ pub fn delete(conn: &Connection, user_id: &str, workspace_name: &str) -> Result<
 /// - Pairs with no row → not in the map (caller treats as "no run commands").
 /// - JSON parse failures → logged at warn and omitted (a corrupt row doesn't
 ///   break the rest of the dashboard).
-pub fn get_run_commands_for_pairs(
-    conn: &Connection,
+pub async fn get_run_commands_for_pairs(
+    adapter: &DbAdapter,
     pairs: &[(&str, &str)],
 ) -> Result<HashMap<(String, String), Vec<RunCommand>>> {
     if pairs.is_empty() {
@@ -208,24 +250,19 @@ pub fn get_run_commands_for_pairs(
         clauses.join(" OR ")
     );
 
-    let mut bind: Vec<&str> = Vec::with_capacity(pairs.len() * 2);
+    let mut binds: Vec<DbValue> = Vec::with_capacity(pairs.len() * 2);
     for (uid, ws) in pairs {
-        bind.push(uid);
-        bind.push(ws);
+        binds.push(DbValue::Text((*uid).to_string()));
+        binds.push(DbValue::Text((*ws).to_string()));
     }
 
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(bind.iter()), |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    })?;
+    let rows = adapter.query_all(&sql, binds).await?;
 
     let mut out: HashMap<(String, String), Vec<RunCommand>> = HashMap::new();
-    for r in rows {
-        let (uid, ws, run_json) = r?;
+    for r in &rows {
+        let uid = r.get_text(0)?;
+        let ws = r.get_text(1)?;
+        let run_json = r.get_text(2)?;
         match serde_json::from_str::<Vec<RunCommand>>(&run_json) {
             Ok(v) => {
                 out.insert((uid, ws), v);
@@ -244,97 +281,97 @@ pub fn get_run_commands_for_pairs(
     Ok(out)
 }
 
-/// Convert a row into a `UserWorktreeCommandsRow`, deserializing both JSON
-/// columns.
-///
-/// Returns `rusqlite::Result<Result<UserWorktreeCommandsRow, MaestroError>>`
-/// — outer = SQLite errors, inner = JSON errors (`DbError::CommandsJsonDecode`
-/// wrapped in `MaestroError::Db`). Callers flatten with `??`.
-fn row_to_user_worktree_commands(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<Result<UserWorktreeCommandsRow>> {
-    let user_id: String = row.get(0)?;
-    let workspace_name: String = row.get(1)?;
-    let init_json: String = row.get(2)?;
-    let run_json: String = row.get(3)?;
-    let updated_at: i64 = row.get(4)?;
+/// Decode the canonical 5-column row shape into a `UserWorktreeCommandsRow`.
+/// JSON parse failures bubble as `DbError::CommandsJsonDecode` — caller
+/// decides whether to propagate or omit.
+fn decode_full_row(row: &crate::db::DbRow) -> Result<UserWorktreeCommandsRow> {
+    let user_id = row.get_text(0)?;
+    let workspace_name = row.get_text(1)?;
+    let init_json = row.get_text(2)?;
+    let run_json = row.get_text(3)?;
+    let updated_at = row.get_i64(4)?;
 
-    let parsed: Result<(Vec<String>, Vec<RunCommand>)> = (|| {
-        let init = serde_json::from_str::<Vec<String>>(&init_json).map_err(|e| {
-            DbError::CommandsJsonDecode {
-                column: "init_commands_json",
-                user_id: user_id.clone(),
-                workspace_name: workspace_name.clone(),
-                source: e,
-            }
-        })?;
-        let run = serde_json::from_str::<Vec<RunCommand>>(&run_json).map_err(|e| {
-            DbError::CommandsJsonDecode {
-                column: "run_commands_json",
-                user_id: user_id.clone(),
-                workspace_name: workspace_name.clone(),
-                source: e,
-            }
-        })?;
-        Ok((init, run))
-    })();
+    let init_commands = serde_json::from_str::<Vec<String>>(&init_json).map_err(|e| {
+        DbError::CommandsJsonDecode {
+            column: "init_commands_json",
+            user_id: user_id.clone(),
+            workspace_name: workspace_name.clone(),
+            source: e,
+        }
+    })?;
+    let run_commands = serde_json::from_str::<Vec<RunCommand>>(&run_json).map_err(|e| {
+        DbError::CommandsJsonDecode {
+            column: "run_commands_json",
+            user_id: user_id.clone(),
+            workspace_name: workspace_name.clone(),
+            source: e,
+        }
+    })?;
 
-    Ok(parsed.map(|(init_commands, run_commands)| UserWorktreeCommandsRow {
+    Ok(UserWorktreeCommandsRow {
         user_id,
         workspace_name,
         init_commands,
         run_commands,
         updated_at,
-    }))
-}
-
-/// Extension trait for optional query results. Mirrors the local helper in
-/// `db/users.rs` and plan-08's `workspace_commands.rs` — keeping the shape
-/// localized avoids a cross-module dependency on a tiny adapter.
-trait OptionalExt<T> {
-    fn optional(self) -> rusqlite::Result<Option<T>>;
-}
-
-impl<T> OptionalExt<T> for rusqlite::Result<T> {
-    fn optional(self) -> rusqlite::Result<Option<T>> {
-        match self {
-            Ok(val) => Ok(Some(val)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::UserRole;
-    use crate::db::schema;
-    use crate::db::users::create_user;
+    use crate::db::adapter::DbAdapter;
+    use crate::db::migrate::DialectAwareMigrationSource;
+    use crate::db::pool::{DbBackend, DbPool};
+    use sqlx::sqlite::SqlitePool;
 
-    fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        schema::run_migrations(&conn).unwrap();
-        conn
+    /// Build a fresh in-memory SQLite adapter with the portable migration
+    /// set applied. Returns the adapter only — callers seed users as
+    /// needed via `seed_user` so they control which test users exist.
+    async fn fresh_adapter() -> DbAdapter {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        let source = DialectAwareMigrationSource::for_backend(DbBackend::Sqlite);
+        sqlx::migrate::Migrator::new(source)
+            .await
+            .expect("build migrator")
+            .run(&pool)
+            .await
+            .expect("run migrations");
+        DbAdapter::new(DbPool::Sqlite(pool))
     }
 
-    /// Helper: create a user and return their id.
-    fn make_user(conn: &Connection, name: &str) -> String {
-        create_user(conn, name, UserRole::User).unwrap().id
+    /// Seed a user row directly via the adapter (the `users` DAO is still
+    /// on the legacy rusqlite path; this lets us bypass it in tests).
+    /// Returns the user_id.
+    async fn seed_user(adapter: &DbAdapter, username: &str, role: &str) -> String {
+        let id = format!("u-{username}");
+        adapter
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, ?)",
+                vec![
+                    DbValue::Text(id.clone()),
+                    DbValue::Text(username.to_string()),
+                    DbValue::Text(role.to_string()),
+                ],
+            )
+            .await
+            .expect("seed user");
+        id
     }
 
-    #[test]
-    fn get_returns_none_on_missing() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        assert!(get(&conn, &alice, "frontend").unwrap().is_none());
+    #[tokio::test]
+    async fn get_returns_none_on_missing() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        assert!(get(&a, &alice, "frontend").await.unwrap().is_none());
     }
 
-    #[test]
-    fn upsert_then_get_roundtrips_both_kinds_in_order() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
+    #[tokio::test]
+    async fn upsert_then_get_roundtrips_both_kinds_in_order() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
 
         let init = vec![
             "cd ui && npm install --legacy-peer-deps".to_string(),
@@ -351,9 +388,9 @@ mod tests {
             },
         ];
 
-        upsert(&conn, &alice, "frontend", &init, &run).unwrap();
+        upsert(&a, &alice, "frontend", &init, &run).await.unwrap();
 
-        let row = get(&conn, &alice, "frontend").unwrap().unwrap();
+        let row = get(&a, &alice, "frontend").await.unwrap().unwrap();
         assert_eq!(row.user_id, alice);
         assert_eq!(row.workspace_name, "frontend");
         assert_eq!(row.init_commands, init, "init order must be preserved");
@@ -361,26 +398,32 @@ mod tests {
         assert!(row.updated_at > 0);
     }
 
-    #[test]
-    fn upsert_updates_updated_at_on_overwrite() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
+    #[tokio::test]
+    async fn upsert_updates_updated_at_on_overwrite() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
 
-        upsert(&conn, &alice, "frontend", &["echo first".to_string()], &[]).unwrap();
-        let first = get(&conn, &alice, "frontend").unwrap().unwrap();
+        upsert(&a, &alice, "frontend", &["echo first".to_string()], &[])
+            .await
+            .unwrap();
+        let first = get(&a, &alice, "frontend").await.unwrap().unwrap();
 
         // Force the recorded timestamp backward so the next upsert is
         // guaranteed strictly greater than the prior value, even on fast
         // machines where the timestamp would otherwise tick once per second.
-        conn.execute(
-            "UPDATE user_worktree_commands SET updated_at = ?1 \
-             WHERE user_id = ?2 AND workspace_name = 'frontend'",
-            params![first.updated_at - 100, alice],
+        a.execute(
+            "UPDATE user_worktree_commands SET updated_at = ? \
+             WHERE user_id = ? AND workspace_name = 'frontend'",
+            vec![
+                DbValue::I64(first.updated_at - 100),
+                DbValue::Text(alice.clone()),
+            ],
         )
+        .await
         .unwrap();
 
         upsert(
-            &conn,
+            &a,
             &alice,
             "frontend",
             &["echo second".to_string()],
@@ -389,8 +432,9 @@ mod tests {
                 command: "npm run dev".to_string(),
             }],
         )
+        .await
         .unwrap();
-        let second = get(&conn, &alice, "frontend").unwrap().unwrap();
+        let second = get(&a, &alice, "frontend").await.unwrap().unwrap();
 
         assert!(
             second.updated_at > first.updated_at - 100,
@@ -403,78 +447,87 @@ mod tests {
         assert_eq!(second.run_commands[0].name, "Dev");
     }
 
-    #[test]
-    fn delete_returns_true_then_false() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        upsert(&conn, &alice, "frontend", &["echo hi".to_string()], &[]).unwrap();
+    #[tokio::test]
+    async fn delete_returns_true_then_false() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        upsert(&a, &alice, "frontend", &["echo hi".to_string()], &[])
+            .await
+            .unwrap();
 
-        assert!(delete(&conn, &alice, "frontend").unwrap());
-        assert!(!delete(&conn, &alice, "frontend").unwrap());
-        assert!(get(&conn, &alice, "frontend").unwrap().is_none());
+        assert!(delete(&a, &alice, "frontend").await.unwrap());
+        assert!(!delete(&a, &alice, "frontend").await.unwrap());
+        assert!(get(&a, &alice, "frontend").await.unwrap().is_none());
     }
 
-    #[test]
-    fn list_for_user_returns_only_their_rows() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        let bob = make_user(&conn, "bob");
+    #[tokio::test]
+    async fn list_for_user_returns_only_their_rows() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        let bob = seed_user(&a, "bob", "user").await;
 
-        upsert(&conn, &alice, "frontend", &["a".to_string()], &[]).unwrap();
-        upsert(&conn, &alice, "backend", &["b".to_string()], &[]).unwrap();
-        upsert(&conn, &bob, "frontend", &["b-frontend".to_string()], &[]).unwrap();
+        upsert(&a, &alice, "frontend", &["a".to_string()], &[])
+            .await
+            .unwrap();
+        upsert(&a, &alice, "backend", &["b".to_string()], &[])
+            .await
+            .unwrap();
+        upsert(&a, &bob, "frontend", &["b-frontend".to_string()], &[])
+            .await
+            .unwrap();
 
-        let alice_rows = list_for_user(&conn, &alice).unwrap();
+        let alice_rows = list_for_user(&a, &alice).await.unwrap();
         assert_eq!(alice_rows.len(), 2);
         for r in &alice_rows {
             assert_eq!(r.user_id, alice, "isolation: alice sees only her rows");
         }
 
-        let bob_rows = list_for_user(&conn, &bob).unwrap();
+        let bob_rows = list_for_user(&a, &bob).await.unwrap();
         assert_eq!(bob_rows.len(), 1);
         assert_eq!(bob_rows[0].workspace_name, "frontend");
         assert_eq!(bob_rows[0].init_commands, vec!["b-frontend".to_string()]);
     }
 
-    #[test]
-    fn list_for_user_orders_by_updated_at_desc() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
+    #[tokio::test]
+    async fn list_for_user_orders_by_updated_at_desc() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
 
-        upsert(&conn, &alice, "first", &["a".to_string()], &[]).unwrap();
-        upsert(&conn, &alice, "second", &["b".to_string()], &[]).unwrap();
-        upsert(&conn, &alice, "third", &["c".to_string()], &[]).unwrap();
+        upsert(&a, &alice, "first", &["a".to_string()], &[])
+            .await
+            .unwrap();
+        upsert(&a, &alice, "second", &["b".to_string()], &[])
+            .await
+            .unwrap();
+        upsert(&a, &alice, "third", &["c".to_string()], &[])
+            .await
+            .unwrap();
 
         // Force a deterministic ordering: third > second > first.
-        conn.execute(
-            "UPDATE user_worktree_commands SET updated_at = 300 \
-             WHERE user_id = ?1 AND workspace_name = 'third'",
-            params![alice],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE user_worktree_commands SET updated_at = 200 \
-             WHERE user_id = ?1 AND workspace_name = 'second'",
-            params![alice],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE user_worktree_commands SET updated_at = 100 \
-             WHERE user_id = ?1 AND workspace_name = 'first'",
-            params![alice],
-        )
-        .unwrap();
+        for (workspace, ts) in [("third", 300), ("second", 200), ("first", 100)] {
+            a.execute(
+                "UPDATE user_worktree_commands SET updated_at = ? \
+                 WHERE user_id = ? AND workspace_name = ?",
+                vec![
+                    DbValue::I64(ts),
+                    DbValue::Text(alice.clone()),
+                    DbValue::Text(workspace.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        }
 
-        let rows = list_for_user(&conn, &alice).unwrap();
+        let rows = list_for_user(&a, &alice).await.unwrap();
         let names: Vec<&str> = rows.iter().map(|r| r.workspace_name.as_str()).collect();
         assert_eq!(names, vec!["third", "second", "first"]);
     }
 
-    #[test]
-    fn get_run_commands_for_pairs_batches_correctly() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        let bob = make_user(&conn, "bob");
+    #[tokio::test]
+    async fn get_run_commands_for_pairs_batches_correctly() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        let bob = seed_user(&a, "bob", "user").await;
 
         let run_a_frontend = vec![RunCommand {
             name: "Dashboard".to_string(),
@@ -485,69 +538,67 @@ mod tests {
             command: "npm run sb".to_string(),
         }];
 
-        upsert(&conn, &alice, "frontend", &[], &run_a_frontend).unwrap();
-        upsert(&conn, &alice, "backend", &[], &[]).unwrap(); // empty run -> hit, empty vec
-        upsert(&conn, &bob, "frontend", &[], &run_b_frontend).unwrap();
+        upsert(&a, &alice, "frontend", &[], &run_a_frontend)
+            .await
+            .unwrap();
+        upsert(&a, &alice, "backend", &[], &[]).await.unwrap();
+        upsert(&a, &bob, "frontend", &[], &run_b_frontend)
+            .await
+            .unwrap();
 
         // Mix of hits and misses.
-        let alice_owned = alice.clone();
-        let bob_owned = bob.clone();
+        let alice_ref: &str = &alice;
+        let bob_ref: &str = &bob;
         let pairs: Vec<(&str, &str)> = vec![
-            (&alice_owned, "frontend"),       // hit, non-empty run
-            (&alice_owned, "backend"),        // hit, empty run
-            (&alice_owned, "does-not-exist"), // miss
-            (&bob_owned, "frontend"),         // hit, non-empty run
-            (&bob_owned, "backend"),          // miss (bob has no backend row)
+            (alice_ref, "frontend"),       // hit, non-empty run
+            (alice_ref, "backend"),        // hit, empty run
+            (alice_ref, "does-not-exist"), // miss
+            (bob_ref, "frontend"),         // hit, non-empty run
+            (bob_ref, "backend"),          // miss (bob has no backend row)
         ];
 
-        let map = get_run_commands_for_pairs(&conn, &pairs).unwrap();
+        let map = get_run_commands_for_pairs(&a, &pairs).await.unwrap();
         assert_eq!(map.len(), 3, "three hits expected, got: {map:?}");
 
         assert_eq!(
-            map.get(&(alice_owned.clone(), "frontend".to_string())),
+            map.get(&(alice.clone(), "frontend".to_string())),
             Some(&run_a_frontend)
         );
         assert_eq!(
-            map.get(&(alice_owned.clone(), "backend".to_string())),
+            map.get(&(alice.clone(), "backend".to_string())),
             Some(&vec![])
         );
         assert_eq!(
-            map.get(&(bob_owned.clone(), "frontend".to_string())),
+            map.get(&(bob.clone(), "frontend".to_string())),
             Some(&run_b_frontend)
         );
         // Misses are absent from the map (not present as empty vecs).
         assert!(
-            !map.contains_key(&(alice_owned, "does-not-exist".to_string())),
+            !map.contains_key(&(alice.clone(), "does-not-exist".to_string())),
             "miss should be absent, not empty"
         );
-        assert!(!map.contains_key(&(bob_owned, "backend".to_string())));
+        assert!(!map.contains_key(&(bob.clone(), "backend".to_string())));
     }
 
-    #[test]
-    fn get_run_commands_for_pairs_empty_input_returns_empty_map() {
-        let conn = test_conn();
-        let map = get_run_commands_for_pairs(&conn, &[]).unwrap();
+    #[tokio::test]
+    async fn get_run_commands_for_pairs_empty_input_returns_empty_map() {
+        let a = fresh_adapter().await;
+        let map = get_run_commands_for_pairs(&a, &[]).await.unwrap();
         assert!(map.is_empty());
     }
 
-    #[test]
-    fn nul_byte_in_command_is_rejected() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
+    #[tokio::test]
+    async fn nul_byte_in_command_is_rejected() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
 
         // NUL in an init command.
-        let err = upsert(
-            &conn,
-            &alice,
-            "frontend",
-            &["foo\0bar".to_string()],
-            &[],
-        );
+        let err = upsert(&a, &alice, "frontend", &["foo\0bar".to_string()], &[]).await;
         assert!(err.is_err(), "NUL in init command must be rejected");
 
         // NUL in a run-command name.
         let err = upsert(
-            &conn,
+            &a,
             &alice,
             "frontend",
             &[],
@@ -555,12 +606,13 @@ mod tests {
                 name: "bad\0name".to_string(),
                 command: "echo".to_string(),
             }],
-        );
+        )
+        .await;
         assert!(err.is_err(), "NUL in run-command name must be rejected");
 
         // NUL in a run-command command.
         let err = upsert(
-            &conn,
+            &a,
             &alice,
             "frontend",
             &[],
@@ -568,28 +620,31 @@ mod tests {
                 name: "ok".to_string(),
                 command: "echo \0".to_string(),
             }],
-        );
+        )
+        .await;
         assert!(err.is_err(), "NUL in run-command command must be rejected");
 
         // NUL in workspace_name.
-        let err = upsert(&conn, &alice, "fro\0nt", &[], &[]);
+        let err = upsert(&a, &alice, "fro\0nt", &[], &[]).await;
         assert!(err.is_err(), "NUL in workspace_name must be rejected");
 
         // No row should have been written by any of the failures above.
-        assert!(get(&conn, &alice, "frontend").unwrap().is_none());
+        assert!(get(&a, &alice, "frontend").await.unwrap().is_none());
     }
 
     /// AC-7: deleting a user cascades to their `user_worktree_commands` rows.
-    #[test]
-    fn fk_cascade_deletes_rows_on_user_delete() {
-        let conn = test_conn();
-        // Need at least two admins so the "last admin" guard in `delete_user`
-        // doesn't kick in if our user happens to be admin.
-        let alice = create_user(&conn, "alice", UserRole::Admin).unwrap().id;
-        let _bob = create_user(&conn, "bob", UserRole::Admin).unwrap().id;
+    /// We use a plain SQL DELETE here since the `users` DAO hasn't yet been
+    /// migrated; the FK cascade is what we're really testing.
+    #[tokio::test]
+    async fn fk_cascade_deletes_rows_on_user_delete() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "admin").await;
+        // Second admin so the "last admin" guard wouldn't block a delete via
+        // users::delete_user (not used here, but documents intent).
+        let _bob = seed_user(&a, "bob", "admin").await;
 
         upsert(
-            &conn,
+            &a,
             &alice,
             "frontend",
             &["echo hi".to_string()],
@@ -598,38 +653,47 @@ mod tests {
                 command: "npm run dev".to_string(),
             }],
         )
+        .await
         .unwrap();
-        upsert(&conn, &alice, "backend", &["echo b".to_string()], &[]).unwrap();
+        upsert(&a, &alice, "backend", &["echo b".to_string()], &[])
+            .await
+            .unwrap();
 
         // Sanity: alice has 2 rows.
-        assert_eq!(list_for_user(&conn, &alice).unwrap().len(), 2);
+        assert_eq!(list_for_user(&a, &alice).await.unwrap().len(), 2);
 
-        crate::db::users::delete_user(&conn, &alice).unwrap();
+        // Direct DELETE — bypasses users DAO (still rusqlite). The
+        // ON DELETE CASCADE on user_worktree_commands.user_id is what we
+        // exercise.
+        a.execute(
+            "DELETE FROM users WHERE id = ?",
+            vec![DbValue::Text(alice.clone())],
+        )
+        .await
+        .unwrap();
 
         // After cascade, alice has 0 rows.
-        assert_eq!(list_for_user(&conn, &alice).unwrap().len(), 0);
+        assert_eq!(list_for_user(&a, &alice).await.unwrap().len(), 0);
         // Direct count, too — guards against accidentally hiding via WHERE
         // user_id filter.
-        let total: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM user_worktree_commands",
-                [],
-                |r| r.get(0),
-            )
+        let row = a
+            .query_one("SELECT COUNT(*) FROM user_worktree_commands", vec![])
+            .await
             .unwrap();
+        let total = row.get_i64(0).unwrap();
         assert_eq!(total, 0, "FK cascade must drop every row alice owned");
     }
 
     /// JSON shape sanity check: init = list of strings, run = list of objects
     /// with `name` + `command`. Asserted by reading the raw JSON columns and
     /// re-parsing them with a strict typed schema.
-    #[test]
-    fn json_shapes_round_trip_correctly() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
+    #[tokio::test]
+    async fn json_shapes_round_trip_correctly() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
 
         upsert(
-            &conn,
+            &a,
             &alice,
             "frontend",
             &["echo a".to_string(), "echo b".to_string()],
@@ -638,24 +702,19 @@ mod tests {
                 command: "npm run dev".to_string(),
             }],
         )
+        .await
         .unwrap();
 
-        let init_raw: String = conn
-            .query_row(
-                "SELECT init_commands_json FROM user_worktree_commands \
-                 WHERE user_id = ?1 AND workspace_name = 'frontend'",
-                params![alice],
-                |r| r.get(0),
+        let row = a
+            .query_one(
+                "SELECT init_commands_json, run_commands_json FROM user_worktree_commands \
+                 WHERE user_id = ? AND workspace_name = 'frontend'",
+                vec![DbValue::Text(alice)],
             )
+            .await
             .unwrap();
-        let run_raw: String = conn
-            .query_row(
-                "SELECT run_commands_json FROM user_worktree_commands \
-                 WHERE user_id = ?1 AND workspace_name = 'frontend'",
-                params![alice],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let init_raw = row.get_text(0).unwrap();
+        let run_raw = row.get_text(1).unwrap();
 
         // init: pure list of strings.
         let init_parsed: Vec<String> = serde_json::from_str(&init_raw).unwrap();
@@ -671,28 +730,22 @@ mod tests {
 
     /// Inserting a row referencing a non-existent user is rejected by the FK.
     /// Belt-and-suspenders for the cascade test above.
-    #[test]
-    fn fk_rejects_unknown_user_id() {
-        let conn = test_conn();
+    #[tokio::test]
+    async fn fk_rejects_unknown_user_id() {
+        let a = fresh_adapter().await;
         // No user created — direct upsert should fail at the FK.
-        let res = upsert(
-            &conn,
-            "no-such-user-id",
-            "frontend",
-            &[],
-            &[],
-        );
+        let res = upsert(&a, "no-such-user-id", "frontend", &[], &[]).await;
         assert!(res.is_err(), "FK should reject unknown user_id");
     }
 
     /// Empty init/run arrays round-trip as `[]` and parse back to empty Vecs.
-    #[test]
-    fn upsert_accepts_both_empty_arrays() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        upsert(&conn, &alice, "frontend", &[], &[]).unwrap();
+    #[tokio::test]
+    async fn upsert_accepts_both_empty_arrays() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        upsert(&a, &alice, "frontend", &[], &[]).await.unwrap();
 
-        let row = get(&conn, &alice, "frontend").unwrap().unwrap();
+        let row = get(&a, &alice, "frontend").await.unwrap().unwrap();
         assert!(row.init_commands.is_empty());
         assert!(row.run_commands.is_empty());
     }

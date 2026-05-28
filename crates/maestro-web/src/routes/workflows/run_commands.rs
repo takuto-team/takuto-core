@@ -58,12 +58,18 @@ pub async fn list_run_commands(
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
         match (owner_user_id.as_deref(), auth_state.db.as_ref()) {
             (Some(uid), Some(database)) => {
-                let conn = database.conn().lock().await;
-                maestro_core::db::user_worktree_commands::get(&conn, uid, &workspace_name)
-                    .ok()
-                    .flatten()
-                    .map(|r| r.run_commands)
-                    .unwrap_or_default()
+                // Plan-11 step 3: user_worktree_commands::get migrated to
+                // the agnostic adapter. Direct async call from this handler.
+                maestro_core::db::user_worktree_commands::get(
+                    database.adapter(),
+                    uid,
+                    &workspace_name,
+                )
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.run_commands)
+                .unwrap_or_default()
             }
             _ => Vec::new(),
         };
@@ -102,12 +108,18 @@ pub async fn start_run_command(
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
         match (owner_user_id.as_deref(), auth_state.db.as_ref()) {
             (Some(uid), Some(database)) => {
-                let conn = database.conn().lock().await;
-                maestro_core::db::user_worktree_commands::get(&conn, uid, &workspace_name)
-                    .ok()
-                    .flatten()
-                    .map(|r| r.run_commands)
-                    .unwrap_or_default()
+                // Plan-11 step 3: user_worktree_commands::get migrated to
+                // the agnostic adapter. Direct async call from this handler.
+                maestro_core::db::user_worktree_commands::get(
+                    database.adapter(),
+                    uid,
+                    &workspace_name,
+                )
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.run_commands)
+                .unwrap_or_default()
             }
             _ => Vec::new(),
         };

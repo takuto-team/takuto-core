@@ -361,13 +361,12 @@ pub async fn list_my_rows(
         .clone();
     let user_id = auth.user_id.clone();
 
-    let rows = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        user_worktree_commands::list_for_user(&conn, &user_id)
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
+    // Plan-11 step 3: user_worktree_commands DAO migrated to the
+    // agnostic adapter. No spawn_blocking needed; the async fn is called
+    // directly from this handler's async context.
+    let rows = user_worktree_commands::list_for_user(db.adapter(), &user_id)
+        .await
+        .map_err(db_error)?;
 
     let mut entries: Vec<UserCommandsEntry> =
         rows.into_iter().map(UserCommandsEntry::from).collect();
@@ -392,13 +391,9 @@ pub async fn get_my_row(
     let user_id = auth.user_id.clone();
     let lookup_name = workspace.clone();
 
-    let row = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        user_worktree_commands::get(&conn, &user_id, &lookup_name)
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
+    let row = user_worktree_commands::get(db.adapter(), &user_id, &lookup_name)
+        .await
+        .map_err(db_error)?;
 
     match row {
         Some(r) => Ok(Json(r.into())),
@@ -431,21 +426,27 @@ pub async fn put_my_row(
     let init_commands = body.init_commands.clone();
     let run_commands = body.run_commands.clone();
 
-    let row = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        user_worktree_commands::upsert(
-            &conn,
-            &user_id,
-            &lookup_name,
-            &init_commands,
-            &run_commands,
-        )?;
-        user_worktree_commands::get(&conn, &user_id, &lookup_name)?
-            .ok_or(maestro_core::db::DbError::RowDisappearedAfterUpsert.into())
-    })
+    // Plan-11 step 3: upsert + read-back are two sequential adapter
+    // calls. Concurrent writes from the same user can interleave between
+    // them, but the read-back returns whatever's current — same race
+    // window the rusqlite path had (sequential calls under one MutexGuard
+    // are not stronger than two adapter calls; SQLite single-writer
+    // serializes them at the db level).
+    user_worktree_commands::upsert(
+        db.adapter(),
+        &user_id,
+        &lookup_name,
+        &init_commands,
+        &run_commands,
+    )
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
     .map_err(db_error)?;
+    let row = user_worktree_commands::get(db.adapter(), &user_id, &lookup_name)
+        .await
+        .map_err(db_error)?
+        .ok_or_else(|| {
+            db_error(maestro_core::db::DbError::RowDisappearedAfterUpsert.into())
+        })?;
 
     // Audit log — scrubbed init snippets + hashes of both kinds.
     let scrubbed_init = scrub_secrets_for_log(&row.init_commands);
@@ -498,15 +499,14 @@ pub async fn delete_my_row(
     let user_id = auth.user_id.clone();
     let lookup_name = workspace.clone();
 
-    let (prev, deleted) = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        let prev = user_worktree_commands::get(&conn, &user_id, &lookup_name)?;
-        let removed = user_worktree_commands::delete(&conn, &user_id, &lookup_name)?;
-        Ok::<_, maestro_core::error::MaestroError>((prev, removed))
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
+    // Plan-11 step 3: read-then-delete is two adapter calls. Same
+    // race-window properties as the upsert path above.
+    let prev = user_worktree_commands::get(db.adapter(), &user_id, &lookup_name)
+        .await
+        .map_err(db_error)?;
+    let deleted = user_worktree_commands::delete(db.adapter(), &user_id, &lookup_name)
+        .await
+        .map_err(db_error)?;
 
     if !deleted {
         return Err((StatusCode::NOT_FOUND, "No commands to delete".to_string()));
@@ -556,15 +556,23 @@ pub async fn list_workspaces_with_has_commands(
         .clone();
     let user_id = auth.user_id.clone();
 
-    let (repos, command_rows) = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        let repos = repositories::list_for_user(&conn, &user_id)?;
-        let cmds = user_worktree_commands::list_for_user(&conn, &user_id)?;
-        Ok::<_, maestro_core::error::MaestroError>((repos, cmds))
+    // Plan-11 step 3 hybrid window: `repositories` DAO is still on the
+    // legacy rusqlite path; `user_worktree_commands` is on the adapter.
+    // Run them sequentially — rusqlite in spawn_blocking, the adapter
+    // call in the outer async scope. Same pattern as the onboarding
+    // route (commit 543606b).
+    let db_clone = db.clone();
+    let user_id_for_repos = user_id.clone();
+    let repos = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        repositories::list_for_user(&conn, &user_id_for_repos)
     })
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
     .map_err(db_error)?;
+    let command_rows = user_worktree_commands::list_for_user(db.adapter(), &user_id)
+        .await
+        .map_err(db_error)?;
 
     let my_workspaces: BTreeSet<String> =
         command_rows.into_iter().map(|r| r.workspace_name).collect();

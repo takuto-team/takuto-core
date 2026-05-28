@@ -59,20 +59,26 @@ async fn resolver_returns_init_commands_from_owner_row() {
     let db = temp_db();
     let alice = make_user(&db, "alice").await;
 
-    {
-        let conn = db.conn().lock().await;
-        user_worktree_commands::upsert(
-            &conn,
-            &alice,
-            "frontend",
-            &[
-                "echo from-row-1".to_string(),
-                "echo from-row-2".to_string(),
-            ],
-            &[],
-        )
-        .expect("upsert owner row");
-    }
+    // Plan-11 step 3: user_worktree_commands DAO migrated to the
+    // agnostic adapter (commit dc422de + this commit). The legacy
+    // `&conn` / spawn_blocking pattern is replaced with a direct
+    // `db.adapter()` async call. Both views point at the same
+    // on-disk maestro.db (Database::open is disk-backed via
+    // temp_db()), so the FK from user_worktree_commands.user_id →
+    // users.id is honored across the rusqlite write + the adapter
+    // read.
+    user_worktree_commands::upsert(
+        db.adapter(),
+        &alice,
+        "frontend",
+        &[
+            "echo from-row-1".to_string(),
+            "echo from-row-2".to_string(),
+        ],
+        &[],
+    )
+    .await
+    .expect("upsert owner row");
 
     let resolved = resolve_worktree_init_commands(Some(&alice), "frontend", Some(&db)).await;
 
@@ -93,17 +99,15 @@ async fn resolver_returns_empty_when_workflow_has_no_user() {
     let db = temp_db();
     let alice = make_user(&db, "alice").await;
 
-    {
-        let conn = db.conn().lock().await;
-        user_worktree_commands::upsert(
-            &conn,
-            &alice,
-            "frontend",
-            &["echo not-for-orphan".to_string()],
-            &[],
-        )
-        .expect("upsert alice's row");
-    }
+    user_worktree_commands::upsert(
+        db.adapter(),
+        &alice,
+        "frontend",
+        &["echo not-for-orphan".to_string()],
+        &[],
+    )
+    .await
+    .expect("upsert alice's row");
 
     let resolved = resolve_worktree_init_commands(None, "frontend", Some(&db)).await;
 
@@ -134,25 +138,24 @@ async fn resolver_isolates_owners() {
     let alice = make_user(&db, "alice").await;
     let bob = make_user(&db, "bob").await;
 
-    {
-        let conn = db.conn().lock().await;
-        user_worktree_commands::upsert(
-            &conn,
-            &alice,
-            "frontend",
-            &["echo alice".to_string()],
-            &[],
-        )
-        .expect("upsert alice");
-        user_worktree_commands::upsert(
-            &conn,
-            &bob,
-            "frontend",
-            &["echo bob".to_string()],
-            &[],
-        )
-        .expect("upsert bob");
-    }
+    user_worktree_commands::upsert(
+        db.adapter(),
+        &alice,
+        "frontend",
+        &["echo alice".to_string()],
+        &[],
+    )
+    .await
+    .expect("upsert alice");
+    user_worktree_commands::upsert(
+        db.adapter(),
+        &bob,
+        "frontend",
+        &["echo bob".to_string()],
+        &[],
+    )
+    .await
+    .expect("upsert bob");
 
     let for_alice =
         resolve_worktree_init_commands(Some(&alice), "frontend", Some(&db)).await;
@@ -176,32 +179,27 @@ async fn run_commands_surface_from_owner_row() {
         command: "npm run dev".to_string(),
     };
 
-    {
-        let conn = db.conn().lock().await;
-        user_worktree_commands::upsert(
-            &conn,
-            &alice,
-            "frontend",
-            &["echo init".to_string()],
-            std::slice::from_ref(&rc),
-        )
-        .expect("upsert with run command");
-    }
+    user_worktree_commands::upsert(
+        db.adapter(),
+        &alice,
+        "frontend",
+        &["echo init".to_string()],
+        std::slice::from_ref(&rc),
+    )
+    .await
+    .expect("upsert with run command");
 
     // What the workflows handler does: read the row, take `.run_commands`.
-    let row = {
-        let conn = db.conn().lock().await;
-        user_worktree_commands::get(&conn, &alice, "frontend")
-            .expect("query owner row")
-            .expect("row must exist")
-    };
+    let row = user_worktree_commands::get(db.adapter(), &alice, "frontend")
+        .await
+        .expect("query owner row")
+        .expect("row must exist");
     assert_eq!(row.run_commands, vec![rc.clone()]);
 
     // No row → empty run-commands list (the buttons disappear).
-    let missing = {
-        let conn = db.conn().lock().await;
-        user_worktree_commands::get(&conn, &bob, "frontend").expect("query bob")
-    };
+    let missing = user_worktree_commands::get(db.adapter(), &bob, "frontend")
+        .await
+        .expect("query bob");
     assert!(missing.is_none(), "bob has no row → no run commands");
 }
 
@@ -225,26 +223,25 @@ async fn run_commands_batched_lookup_returns_per_owner_data() {
         command: "npm run dev".into(),
     };
 
-    {
-        let conn = db.conn().lock().await;
-        user_worktree_commands::upsert(
-            &conn,
-            &alice,
-            "frontend",
-            &[],
-            std::slice::from_ref(&alice_rc),
-        )
-        .unwrap();
-        user_worktree_commands::upsert(
-            &conn,
-            &bob,
-            "frontend",
-            &[],
-            std::slice::from_ref(&bob_rc),
-        )
-        .unwrap();
-        // carol has no row, on purpose.
-    }
+    user_worktree_commands::upsert(
+        db.adapter(),
+        &alice,
+        "frontend",
+        &[],
+        std::slice::from_ref(&alice_rc),
+    )
+    .await
+    .unwrap();
+    user_worktree_commands::upsert(
+        db.adapter(),
+        &bob,
+        "frontend",
+        &[],
+        std::slice::from_ref(&bob_rc),
+    )
+    .await
+    .unwrap();
+    // carol has no row, on purpose.
 
     let pairs: Vec<(&str, &str)> = vec![
         (alice.as_str(), "frontend"),
@@ -252,11 +249,9 @@ async fn run_commands_batched_lookup_returns_per_owner_data() {
         (carol.as_str(), "frontend"), // miss — no row
     ];
 
-    let by_pair = {
-        let conn = db.conn().lock().await;
-        user_worktree_commands::get_run_commands_for_pairs(&conn, &pairs)
-            .expect("batched lookup")
-    };
+    let by_pair = user_worktree_commands::get_run_commands_for_pairs(db.adapter(), &pairs)
+        .await
+        .expect("batched lookup");
 
     assert_eq!(
         by_pair.get(&(alice.clone(), "frontend".to_string())),

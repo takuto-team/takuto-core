@@ -148,8 +148,10 @@ pub async fn resolve_worktree_init_commands(
     let (Some(user_id), Some(db)) = (workflow_user_id, db) else {
         return Vec::new();
     };
-    let conn = db.conn().lock().await;
-    match crate::db::user_worktree_commands::get(&conn, user_id, workspace_name) {
+    // Plan-11 step 3: user_worktree_commands migrated to the agnostic
+    // adapter; no rusqlite MutexGuard needed here anymore. The DAO is
+    // async — direct call from this already-async fn.
+    match crate::db::user_worktree_commands::get(db.adapter(), user_id, workspace_name).await {
         Ok(Some(row)) => row.init_commands,
         Ok(None) => Vec::new(),
         Err(e) => {

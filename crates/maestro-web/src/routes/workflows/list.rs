@@ -148,18 +148,24 @@ pub async fn list_workflows(
         }
         out
     };
+    // Plan-11 step 3: user_worktree_commands::get_run_commands_for_pairs
+    // migrated to the agnostic adapter. Direct async call from this
+    // handler.
     let run_commands_by_pair: HashMap<
         (String, String),
         Vec<maestro_core::db::user_worktree_commands::RunCommand>,
     > = match (pairs.is_empty(), auth_state.db.as_ref()) {
         (false, Some(database)) => {
-            let conn = database.conn().lock().await;
             let pair_refs: Vec<(&str, &str)> = pairs
                 .iter()
                 .map(|(u, w)| (u.as_str(), w.as_str()))
                 .collect();
-            maestro_core::db::user_worktree_commands::get_run_commands_for_pairs(&conn, &pair_refs)
-                .unwrap_or_default()
+            maestro_core::db::user_worktree_commands::get_run_commands_for_pairs(
+                database.adapter(),
+                &pair_refs,
+            )
+            .await
+            .unwrap_or_default()
         }
         _ => HashMap::new(),
     };
@@ -379,15 +385,17 @@ pub async fn get_workflow(
             // Per-user-per-workspace lookup of configured run commands (plan-09).
             // Owner-less workflows, or workflows whose owner has no row, get an
             // empty list (no buttons rendered on the card).
+            // Plan-11 step 3: user_worktree_commands::get migrated to
+            // the agnostic adapter. Direct async call.
             let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
                 match (w.user_id.as_deref(), auth_state.db.as_ref()) {
                     (Some(uid), Some(database)) => {
-                        let conn = database.conn().lock().await;
                         maestro_core::db::user_worktree_commands::get(
-                            &conn,
+                            database.adapter(),
                             uid,
                             &w.workspace_name,
                         )
+                        .await
                         .ok()
                         .flatten()
                         .map(|r| r.run_commands)
