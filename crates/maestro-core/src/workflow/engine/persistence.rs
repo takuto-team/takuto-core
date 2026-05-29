@@ -118,12 +118,11 @@ impl WorkflowPersistence {
         for rec in &mut records {
             if rec.workspace_name.is_empty() {
                 if let (Some(repo_id), Some(database)) = (rec.repository_id.as_deref(), db.as_ref())
+                    && let Ok(Some(row)) =
+                        crate::db::repositories::get(database.adapter(), repo_id).await
                 {
-                    let conn = database.conn().lock().await;
-                    if let Ok(Some(row)) = crate::db::repositories::get(&conn, repo_id) {
-                        rec.workspace_name = row.name;
-                        continue;
-                    }
+                    rec.workspace_name = row.name;
+                    continue;
                 }
                 rec.workspace_name = legacy_default_ws_name.clone();
             }

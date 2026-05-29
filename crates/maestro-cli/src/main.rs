@@ -792,15 +792,18 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             .general
             .migrate_orphan_repo_associations;
 
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
+        // Plan-11 step 3: repositories DAO migrated to the agnostic
+        // adapter. No rusqlite MutexGuard needed for the reconciliation
+        // path — both helpers are async and take &DbAdapter directly.
+        let adapter = db.adapter();
 
         // 3.1 Filesystem → `repositories` reconciliation.
         match repo_reconcile::reconcile_repositories(
-            conn,
+            adapter,
             maestro_core::workflow::snapshot::WORKSPACES_DIR,
-        ) {
+        )
+        .await
+        {
             Ok(n) if n > 0 => info!(
                 count = n,
                 workspaces_dir = maestro_core::workflow::snapshot::WORKSPACES_DIR,
@@ -813,7 +816,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         // 3.2 Backfill `user_repositories` from restored snapshot workflows
         // (gated; default on).
         if migrate_associations {
-            match repo_reconcile::backfill_user_repositories_from_snapshots(conn, data_dir) {
+            match repo_reconcile::backfill_user_repositories_from_snapshots(adapter, data_dir)
+                .await
+            {
                 Ok(n) if n > 0 => info!(
                     count = n,
                     "Backfilled user_repositories from restored workflow snapshots (plan-10)"
@@ -848,10 +853,12 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         // matching any registered repository.
         let cfg_repo_path = config.read().await.git.repo_path.clone();
         if !cfg_repo_path.is_empty() && cfg_repo_path != "/workspace" {
-            let matches_any = maestro_core::db::repositories::get_by_path(conn, &cfg_repo_path)
-                .ok()
-                .flatten()
-                .is_some();
+            let matches_any =
+                maestro_core::db::repositories::get_by_path(adapter, &cfg_repo_path)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some();
             if !matches_any {
                 tracing::warn!(
                     repo_path = %cfg_repo_path,

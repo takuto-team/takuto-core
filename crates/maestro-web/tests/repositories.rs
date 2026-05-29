@@ -185,24 +185,18 @@ async fn seed_repository(
     repo_url: Option<&str>,
     local_path: &str,
 ) -> String {
-    let db = state.auth().db.as_ref().expect("db").clone();
-    let name = name.to_string();
-    let repo_url = repo_url.map(|s| s.to_string());
-    let local_path = local_path.to_string();
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::repositories::upsert(
-            &conn,
-            &name,
-            repo_url.as_deref(),
-            &local_path,
-            "main",
-            None,
-        )
-        .expect("seed repository")
-    })
+    // Plan-11 step 3: repositories DAO on the adapter.
+    let db = state.auth().db.as_ref().expect("db");
+    maestro_core::db::repositories::upsert(
+        db.adapter(),
+        name,
+        repo_url,
+        local_path,
+        "main",
+        None,
+    )
     .await
-    .expect("join")
+    .expect("seed repository")
 }
 
 async fn list_mine(state: &AppState, cookie: &str) -> (StatusCode, Value) {
@@ -498,14 +492,9 @@ async fn ac7_last_user_remove_purges_disk() {
     assert!(!local_path.exists(), "on-disk clone must be purged");
 
     // The DB row is gone.
-    let db = state.auth().db.as_ref().unwrap().clone();
-    let r1_clone = r1.clone();
-    let row = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::repositories::get(&conn, &r1_clone).unwrap()
-    })
-    .await
-    .unwrap();
+    // Plan-11 step 3: repositories DAO on the adapter.
+    let db = state.auth().db.as_ref().unwrap();
+    let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
     assert!(row.is_none(), "DB row must be deleted");
 }
 
@@ -532,14 +521,9 @@ async fn ac9_non_last_user_remove_keeps_disk_and_row() {
 
     // On-disk + DB row preserved.
     assert!(local_path.exists(), "shared clone must NOT be purged");
-    let db = state.auth().db.as_ref().unwrap().clone();
-    let r1_clone = r1.clone();
-    let row = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::repositories::get(&conn, &r1_clone).unwrap()
-    })
-    .await
-    .unwrap();
+    // Plan-11 step 3: repositories DAO on the adapter.
+    let db = state.auth().db.as_ref().unwrap();
+    let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
     assert!(row.is_some(), "DB row must be preserved");
 
     // Admin's list is now empty; bob still has it.
@@ -583,14 +567,9 @@ async fn ac8_admin_force_purge_drops_row_for_everyone() {
 
     // Filesystem + DB row + every association is gone.
     assert!(!local_path.exists());
-    let db = state.auth().db.as_ref().unwrap().clone();
-    let r1_clone = r1.clone();
-    let row = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::repositories::get(&conn, &r1_clone).unwrap()
-    })
-    .await
-    .unwrap();
+    // Plan-11 step 3: repositories DAO on the adapter.
+    let db = state.auth().db.as_ref().unwrap();
+    let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
     assert!(row.is_none());
     let (_, bob_mine) = list_mine(&state, &bob_cookie).await;
     assert!(bob_mine.as_array().unwrap().is_empty());

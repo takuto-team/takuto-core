@@ -156,9 +156,11 @@ pub async fn start_manual_workflow(
     // one, validate the caller has it associated; otherwise, default to the
     // most-recently-added repo. Reject when the caller has zero repos.
     let repository_id = if let Some(database) = auth_state.db.as_ref() {
-        let conn = database.conn().lock().await;
-        let user_repos = maestro_core::db::repositories::list_for_user(&conn, &auth.user_id)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // Plan-11 step 3: repositories DAO on the adapter.
+        let user_repos =
+            maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if user_repos.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,

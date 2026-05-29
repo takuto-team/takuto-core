@@ -556,21 +556,13 @@ pub async fn list_workspaces_with_has_commands(
         .clone();
     let user_id = auth.user_id.clone();
 
-    // Plan-11 step 3 hybrid window: `repositories` DAO is still on the
-    // legacy rusqlite path; `user_worktree_commands` is on the adapter.
-    // Run them sequentially — rusqlite in spawn_blocking, the adapter
-    // call in the outer async scope. Same pattern as the onboarding
-    // route (commit 543606b).
-    let db_clone = db.clone();
-    let user_id_for_repos = user_id.clone();
-    let repos = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        repositories::list_for_user(&conn, &user_id_for_repos)
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
-    let command_rows = user_worktree_commands::list_for_user(db.adapter(), &user_id)
+    // Plan-11 step 3: both DAOs now on the agnostic adapter — the hybrid
+    // spawn_blocking from the onboarding template is no longer needed.
+    let adapter = db.adapter();
+    let repos = repositories::list_for_user(adapter, &user_id)
+        .await
+        .map_err(db_error)?;
+    let command_rows = user_worktree_commands::list_for_user(adapter, &user_id)
         .await
         .map_err(db_error)?;
 

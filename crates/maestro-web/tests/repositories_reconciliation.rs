@@ -146,117 +146,99 @@ async fn reconcile_then_backfill_e2e() {
 
     let workspaces_dir_str = workspaces_dir.to_str().expect("utf-8");
 
+    // Plan-11 step 3: repositories DAO + repo_reconcile helpers migrated
+    // to the agnostic adapter. The legacy `conn().lock()` pattern is
+    // replaced by `db.adapter()` async calls throughout. `create_user`
+    // (users DAO — still rusqlite) keeps its short conn-lock block.
+    let adapter = db.adapter();
+
     // ── First pass: reconcile_repositories registers both clones. ──
-    {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
+    let inserted = reconcile_repositories(adapter, workspaces_dir_str)
+        .await
+        .expect("reconcile_repositories must succeed");
+    assert_eq!(
+        inserted, 2,
+        "expected 2 fresh inserts (alpha, beta); got {inserted}"
+    );
 
-        let inserted = reconcile_repositories(conn, workspaces_dir_str)
-            .expect("reconcile_repositories must succeed");
-        assert_eq!(
-            inserted, 2,
-            "expected 2 fresh inserts (alpha, beta); got {inserted}"
-        );
+    let all = repositories::list_all(adapter).await.expect("list_all");
+    assert_eq!(all.len(), 2, "expected 2 repository rows; got {}", all.len());
+    let names: Vec<&str> = all.iter().map(|r| r.name.as_str()).collect();
+    assert!(names.contains(&"alpha"));
+    assert!(names.contains(&"beta"));
 
-        let all = repositories::list_all(conn).expect("list_all");
-        assert_eq!(all.len(), 2, "expected 2 repository rows; got {}", all.len());
-        let names: Vec<&str> = all.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"alpha"));
-        assert!(names.contains(&"beta"));
+    // URL discovery worked for both: SSH form was normalised to HTTPS.
+    let alpha = all.iter().find(|r| r.name == "alpha").expect("alpha row exists");
+    assert_eq!(
+        alpha.repo_url.as_deref(),
+        Some("https://github.com/owner-a/alpha"),
+        "SSH origin URL must be normalised"
+    );
+    let beta = all.iter().find(|r| r.name == "beta").expect("beta row exists");
+    assert_eq!(
+        beta.repo_url.as_deref(),
+        Some("https://github.com/owner-b/beta"),
+        "HTTPS origin URL stripped of .git suffix"
+    );
 
-        // URL discovery worked for both: SSH form was normalised to HTTPS.
-        let alpha = all
-            .iter()
-            .find(|r| r.name == "alpha")
-            .expect("alpha row exists");
-        assert_eq!(
-            alpha.repo_url.as_deref(),
-            Some("https://github.com/owner-a/alpha"),
-            "SSH origin URL must be normalised"
-        );
-        let beta = all
-            .iter()
-            .find(|r| r.name == "beta")
-            .expect("beta row exists");
-        assert_eq!(
-            beta.repo_url.as_deref(),
-            Some("https://github.com/owner-b/beta"),
-            "HTTPS origin URL stripped of .git suffix"
-        );
-
-        // No user_repositories rows yet (orphan registrations).
-        let ur_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM user_repositories", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(ur_count, 0);
-    }
+    // No user_repositories rows yet (orphan registrations).
+    let ur_count_row = adapter
+        .query_one("SELECT COUNT(*) FROM user_repositories", vec![])
+        .await
+        .unwrap();
+    let ur_count = ur_count_row.get_i64(0).unwrap();
+    assert_eq!(ur_count, 0);
 
     // ── Second pass: idempotency. ──
-    {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
-
-        let inserted_again = reconcile_repositories(conn, workspaces_dir_str)
-            .expect("second reconcile_repositories must succeed");
-        assert_eq!(
-            inserted_again, 0,
-            "second pass must insert 0 (idempotent); got {inserted_again}"
-        );
-
-        let all = repositories::list_all(conn).expect("list_all");
-        assert_eq!(all.len(), 2, "still 2 rows after second pass");
-    }
+    let inserted_again = reconcile_repositories(adapter, workspaces_dir_str)
+        .await
+        .expect("second reconcile_repositories must succeed");
+    assert_eq!(
+        inserted_again, 0,
+        "second pass must insert 0 (idempotent); got {inserted_again}"
+    );
+    let all = repositories::list_all(adapter).await.expect("list_all");
+    assert_eq!(all.len(), 2, "still 2 rows after second pass");
 
     // ── Snapshot backfill: a workflow file points at the "alpha" workspace
     // and has a user_id. backfill must create a `(uid, alpha.id)` row.
-    let (alice_id, alpha_id) = {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
-        let alice_id = create_user(conn, "alice", UserRole::User).expect("create alice").id;
-        let alpha_id = repositories::get_by_name(conn, "alpha")
-            .expect("get_by_name")
-            .expect("alpha row exists")
-            .id;
-        (alice_id, alpha_id)
+    let alice_id = {
+        let conn = db.conn().lock().await;
+        create_user(&conn, "alice", UserRole::User).expect("create alice").id
     };
+    let alpha_id = repositories::get_by_name(adapter, "alpha")
+        .await
+        .expect("get_by_name")
+        .expect("alpha row exists")
+        .id;
 
     // Write a snapshot referencing the "alpha" workspace + alice.
     seed_snapshot_workflow(&data_dir, "alpha", &alice_id, "ALPHA-1");
 
     // backfill picks up the snapshot.
-    {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
+    let n = backfill_user_repositories_from_snapshots(adapter, &data_dir)
+        .await
+        .expect("backfill must succeed");
+    assert_eq!(n, 1, "expected 1 backfilled association; got {n}");
 
-        let n = backfill_user_repositories_from_snapshots(conn, &data_dir)
-            .expect("backfill must succeed");
-        assert_eq!(n, 1, "expected 1 backfilled association; got {n}");
-
-        let mine = repositories::list_for_user(conn, &alice_id).expect("list_for_user");
-        assert_eq!(mine.len(), 1, "alice now has 1 added repo");
-        assert_eq!(mine[0].id, alpha_id);
-    }
+    let mine = repositories::list_for_user(adapter, &alice_id)
+        .await
+        .expect("list_for_user");
+    assert_eq!(mine.len(), 1, "alice now has 1 added repo");
+    assert_eq!(mine[0].id, alpha_id);
 
     // ── Backfill is idempotent. ──
-    {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
-
-        let n_again = backfill_user_repositories_from_snapshots(conn, &data_dir)
-            .expect("second backfill must succeed");
-        assert_eq!(
-            n_again, 0,
-            "second pass must insert 0 (idempotent); got {n_again}"
-        );
-
-        let mine = repositories::list_for_user(conn, &alice_id).expect("list_for_user");
-        assert_eq!(mine.len(), 1, "still 1 association after second backfill");
-    }
+    let n_again = backfill_user_repositories_from_snapshots(adapter, &data_dir)
+        .await
+        .expect("second backfill must succeed");
+    assert_eq!(
+        n_again, 0,
+        "second pass must insert 0 (idempotent); got {n_again}"
+    );
+    let mine = repositories::list_for_user(adapter, &alice_id)
+        .await
+        .expect("list_for_user");
+    assert_eq!(mine.len(), 1, "still 1 association after second backfill");
 
     // Cleanup.
     let _ = std::fs::remove_dir_all(&data_dir);
@@ -272,43 +254,30 @@ async fn backfill_skips_unmatched_workspaces() {
 
     // Register "alpha" only.
     let alice_id = {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
-        let alice_id = create_user(conn, "alice", UserRole::User).expect("alice").id;
-        repositories::upsert(
-            conn,
-            "alpha",
-            None,
-            "/workspaces/alpha",
-            "main",
-            None,
-        )
-        .expect("upsert alpha");
-        alice_id
+        let conn = db.conn().lock().await;
+        create_user(&conn, "alice", UserRole::User).expect("alice").id
     };
+    let adapter = db.adapter();
+    repositories::upsert(adapter, "alpha", None, "/workspaces/alpha", "main", None)
+        .await
+        .expect("upsert alpha");
 
     // Seed a snapshot for an UNREGISTERED workspace ("gamma").
     seed_snapshot_workflow(&data_dir, "gamma", &alice_id, "GAMMA-1");
 
     // Run backfill. The workflow's workspace_name doesn't match any
     // registered repo → backfill returns 0 and no association row is added.
-    {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
-        let n = backfill_user_repositories_from_snapshots(conn, &data_dir)
-            .expect("backfill must succeed");
-        assert_eq!(
-            n, 0,
-            "snapshot pointing at unregistered workspace must not insert; got {n}"
-        );
-        let mine = repositories::list_for_user(conn, &alice_id).expect("list_for_user");
-        assert!(
-            mine.is_empty(),
-            "alice has no associations (unmatched snapshot)"
-        );
-    }
+    let n = backfill_user_repositories_from_snapshots(adapter, &data_dir)
+        .await
+        .expect("backfill must succeed");
+    assert_eq!(
+        n, 0,
+        "snapshot pointing at unregistered workspace must not insert; got {n}"
+    );
+    let mine = repositories::list_for_user(adapter, &alice_id)
+        .await
+        .expect("list_for_user");
+    assert!(mine.is_empty(), "alice has no associations (unmatched snapshot)");
 
     let _ = std::fs::remove_dir_all(&data_dir);
 }
@@ -318,14 +287,11 @@ async fn backfill_skips_unmatched_workspaces() {
 async fn backfill_skips_orphan_workflows() {
     let data_dir = fresh_data_dir("orphan");
     let db = Database::open(&data_dir, true).expect("open DB");
+    let adapter = db.adapter();
 
-    {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
-        repositories::upsert(conn, "alpha", None, "/workspaces/alpha", "main", None)
-            .expect("upsert");
-    }
+    repositories::upsert(adapter, "alpha", None, "/workspaces/alpha", "main", None)
+        .await
+        .expect("upsert");
 
     // Snapshot with no user_id (legacy orphan workflow).
     let ws_dir = data_dir.join("workspaces").join("alpha");
@@ -369,19 +335,16 @@ async fn backfill_skips_orphan_workflows() {
     )
     .unwrap();
 
-    {
-        let conn_arc = db.conn().clone();
-        let conn_guard = conn_arc.lock().await;
-        let conn = &*conn_guard;
-        let n = backfill_user_repositories_from_snapshots(conn, &data_dir)
-            .expect("backfill must succeed");
-        assert_eq!(n, 0, "orphan snapshot must be skipped; got {n}");
+    let n = backfill_user_repositories_from_snapshots(adapter, &data_dir)
+        .await
+        .expect("backfill must succeed");
+    assert_eq!(n, 0, "orphan snapshot must be skipped; got {n}");
 
-        let ur_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM user_repositories", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(ur_count, 0);
-    }
+    let ur_count_row = adapter
+        .query_one("SELECT COUNT(*) FROM user_repositories", vec![])
+        .await
+        .unwrap();
+    assert_eq!(ur_count_row.get_i64(0).unwrap(), 0);
 
     let _ = std::fs::remove_dir_all(&data_dir);
 }

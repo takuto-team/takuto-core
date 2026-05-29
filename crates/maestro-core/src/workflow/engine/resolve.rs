@@ -29,11 +29,11 @@ pub(crate) async fn resolve_workspace_name(
     db: Option<&Database>,
     config: &Arc<RwLock<Config>>,
 ) -> String {
-    if let (Some(repo_id), Some(database)) = (repository_id, db) {
-        let conn = database.conn().lock().await;
-        if let Ok(Some(row)) = crate::db::repositories::get(&conn, repo_id) {
-            return row.name;
-        }
+    // Plan-11 step 3: repositories DAO migrated to the agnostic adapter.
+    if let (Some(repo_id), Some(database)) = (repository_id, db)
+        && let Ok(Some(row)) = crate::db::repositories::get(database.adapter(), repo_id).await
+    {
+        return row.name;
     }
     let cfg = config.read().await;
     crate::workflow::snapshot::workspace_name_from_repo_path(std::path::Path::new(
@@ -66,8 +66,7 @@ pub(crate) async fn resolve_repo_for_ticket(
     };
 
     if let (Some(repo_id), Some(database)) = (repository_id.as_deref(), db) {
-        let conn = database.conn().lock().await;
-        match crate::db::repositories::get(&conn, repo_id) {
+        match crate::db::repositories::get(database.adapter(), repo_id).await {
             Ok(Some(row)) => return (PathBuf::from(&row.local_path), row.default_branch),
             Ok(None) => {
                 warn!(
@@ -84,11 +83,10 @@ pub(crate) async fn resolve_repo_for_ticket(
 
     if let Some(database) = db
         && !workspace_name.is_empty()
+        && let Ok(Some(row)) =
+            crate::db::repositories::get_by_name(database.adapter(), &workspace_name).await
     {
-        let conn = database.conn().lock().await;
-        if let Ok(Some(row)) = crate::db::repositories::get_by_name(&conn, &workspace_name) {
-            return (PathBuf::from(&row.local_path), row.default_branch);
-        }
+        return (PathBuf::from(&row.local_path), row.default_branch);
     }
 
     let cfg = config.read().await;

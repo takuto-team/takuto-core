@@ -94,21 +94,18 @@ async fn seed_repository(
     local_path: &str,
     associate_with: &[&str],
 ) -> String {
-    let db = state.auth().db.clone().expect("test state must have a DB");
-    let name_owned = name.to_string();
-    let local_path_owned = local_path.to_string();
-    let user_ids: Vec<String> = associate_with.iter().map(|s| s.to_string()).collect();
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        let id = repositories::upsert(&conn, &name_owned, None, &local_path_owned, "main", None)
-            .expect("repository upsert");
-        for uid in &user_ids {
-            repositories::add_for_user(&conn, uid, &id).expect("add_for_user");
-        }
-        id
-    })
-    .await
-    .unwrap()
+    // Plan-11 step 3: repositories DAO on the adapter.
+    let db = state.auth().db.as_ref().expect("test state must have a DB");
+    let adapter = db.adapter();
+    let id = repositories::upsert(adapter, name, None, local_path, "main", None)
+        .await
+        .expect("repository upsert");
+    for uid in associate_with {
+        repositories::add_for_user(adapter, uid, &id)
+            .await
+            .expect("add_for_user");
+    }
+    id
 }
 
 async fn seed_workflow(

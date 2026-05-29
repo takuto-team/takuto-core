@@ -100,31 +100,27 @@ async fn seed_workflow(state: &AppState, key: &str, user_id: &str) {
         workspace.clone(),
     );
     wf.user_id = Some(user_id.to_string());
+    // Plan-11 step 3: repositories DAO on the adapter — no spawn_blocking.
     let repository_id = {
-        let db = state.auth().db.as_ref().expect("test state must have a DB").clone();
-        let user_id_owned = user_id.to_string();
-        let workspace_owned = workspace.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = db.conn().blocking_lock();
-            let id = maestro_core::db::repositories::upsert(
-                &conn,
-                &workspace_owned,
-                None,
-                &format!("/workspaces/{workspace_owned}"),
-                "main",
-                None,
-            )
-            .expect("seed repositories row");
-            // Only attempt the user_repositories association when the user_id
-            // is real (FK to users.id). Tests that pass a synthetic user_id
-            // (e.g. "fake-user-id" for the 401 path) skip the association —
-            // the workflow exists in the engine map but `require_workflow_access`
-            // is never reached because auth rejects the request first.
-            let _ = maestro_core::db::repositories::add_for_user(&conn, &user_id_owned, &id);
-            id
-        })
+        let db = state.auth().db.as_ref().expect("test state must have a DB");
+        let adapter = db.adapter();
+        let id = maestro_core::db::repositories::upsert(
+            adapter,
+            &workspace,
+            None,
+            &format!("/workspaces/{workspace}"),
+            "main",
+            None,
+        )
         .await
-        .expect("join")
+        .expect("seed repositories row");
+        // Only attempt the user_repositories association when the user_id
+        // is real (FK to users.id). Tests that pass a synthetic user_id
+        // (e.g. "fake-user-id" for the 401 path) skip the association —
+        // the workflow exists in the engine map but `require_workflow_access`
+        // is never reached because auth rejects the request first.
+        let _ = maestro_core::db::repositories::add_for_user(adapter, user_id, &id).await;
+        id
     };
     wf.repository_id = Some(repository_id);
     state

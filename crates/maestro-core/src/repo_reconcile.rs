@@ -23,10 +23,16 @@
 //! `workflow::snapshot::read_all_workspace_snapshots` which doesn't mutate
 //! state.
 
+//! ### Plan-11 step 3 (this commit)
+//!
+//! Migrated to the agnostic [`crate::db::DbAdapter`] alongside
+//! `db/repositories.rs`. Both helpers are now `async fn` taking
+//! `&DbAdapter`; callers (`maestro-cli/src/main.rs` startup) await them
+//! directly without the legacy `db.conn().lock().await` ceremony.
+
 use std::path::Path;
 
-use rusqlite::Connection;
-
+use crate::db::DbAdapter;
 use crate::error::Result;
 
 /// Scan `workspaces_dir` for `<dir>/.git` directories and register each as a
@@ -45,7 +51,7 @@ use crate::error::Result;
 /// The caller owns the SQLite lock and passes a borrowed `Connection` so the
 /// reconciliation runs in a single transaction-equivalent window with no
 /// async cross-task locking concerns.
-pub fn reconcile_repositories(conn: &Connection, workspaces_dir: &str) -> Result<usize> {
+pub async fn reconcile_repositories(adapter: &DbAdapter, workspaces_dir: &str) -> Result<usize> {
     let path = Path::new(workspaces_dir);
     if !path.exists() {
         return Ok(0);
@@ -78,15 +84,17 @@ pub fn reconcile_repositories(conn: &Connection, workspaces_dir: &str) -> Result
         let default_branch = read_default_branch(&repo_path).unwrap_or_else(|| "main".to_string());
 
         // Was this repo already registered? Compare before/after upsert.
-        let pre = crate::db::repositories::get_by_path(conn, &local_path)?;
+        let pre = crate::db::repositories::get_by_path(adapter, &local_path).await?;
         match crate::db::repositories::upsert(
-            conn,
+            adapter,
             &name,
             repo_url.as_deref(),
             &local_path,
             &default_branch,
             None,
-        ) {
+        )
+        .await
+        {
             Ok(_id) => {
                 if pre.is_none() {
                     inserted += 1;
@@ -120,8 +128,8 @@ pub fn reconcile_repositories(conn: &Connection, workspaces_dir: &str) -> Result
 ///
 /// Reads snapshots without consuming them — the engine restore path runs
 /// separately afterwards.
-pub fn backfill_user_repositories_from_snapshots(
-    conn: &Connection,
+pub async fn backfill_user_repositories_from_snapshots(
+    adapter: &DbAdapter,
     data_dir: &Path,
 ) -> Result<usize> {
     let records = match crate::workflow::snapshot::read_all_workspace_snapshots(data_dir) {
@@ -140,14 +148,15 @@ pub fn backfill_user_repositories_from_snapshots(
         if rec.workspace_name.is_empty() {
             continue;
         }
-        let Some(repo) = crate::db::repositories::get_by_name(conn, &rec.workspace_name)?
+        let Some(repo) = crate::db::repositories::get_by_name(adapter, &rec.workspace_name)
+            .await?
         else {
             // The workflow points at a workspace_name we couldn't reconcile to
             // a registered repository — skip silently. The workflow will be
             // invisible until an admin re-adds the repo (matches AC-17).
             continue;
         };
-        if crate::db::repositories::add_for_user(conn, uid, &repo.id)? {
+        if crate::db::repositories::add_for_user(adapter, uid, &repo.id).await? {
             backfilled += 1;
         }
     }

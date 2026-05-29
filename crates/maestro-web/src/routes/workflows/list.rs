@@ -47,8 +47,10 @@ pub async fn list_workflows(
         std::collections::HashSet<String>,
         std::collections::HashSet<String>,
     ) = if let Some(database) = auth_state.db.as_ref() {
-        let conn = database.conn().lock().await;
-        match maestro_core::db::repositories::list_for_user(&conn, &auth.user_id) {
+        // Plan-11 step 3: repositories DAO on the adapter.
+        match maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id)
+            .await
+        {
             Ok(repos) => {
                 let mut ids = std::collections::HashSet::new();
                 let mut names = std::collections::HashSet::new();

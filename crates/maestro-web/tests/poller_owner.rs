@@ -218,26 +218,23 @@ async fn orphan_migration_e2e() {
         // admin so the post-migration assertion still observes the workflow.
         // (Dev A's startup reconciliation does this for real boots; this test
         // bypasses startup, so we do it inline.)
+        // Plan-11 step 3: repositories DAO on the adapter.
         {
-            let db = state.auth().db.as_ref().unwrap().clone();
-            let admin_id_clone = admin_id.clone();
-            let ws_name_owned = ws_name.to_string();
-            tokio::task::spawn_blocking(move || {
-                let conn = db.conn().blocking_lock();
-                let repo_id = maestro_core::db::repositories::upsert(
-                    &conn,
-                    &ws_name_owned,
-                    None,
-                    &format!("/workspaces/{ws_name_owned}"),
-                    "main",
-                    None,
-                )
-                .expect("upsert repository");
-                maestro_core::db::repositories::add_for_user(&conn, &admin_id_clone, &repo_id)
-                    .expect("add_for_user");
-            })
+            let db = state.auth().db.as_ref().unwrap();
+            let adapter = db.adapter();
+            let repo_id = maestro_core::db::repositories::upsert(
+                adapter,
+                ws_name,
+                None,
+                &format!("/workspaces/{ws_name}"),
+                "main",
+                None,
+            )
             .await
-            .unwrap();
+            .expect("upsert repository");
+            maestro_core::db::repositories::add_for_user(adapter, &admin_id, &repo_id)
+                .await
+                .expect("add_for_user");
         }
 
         // Run the migration helper using the admin's user_id as owner.

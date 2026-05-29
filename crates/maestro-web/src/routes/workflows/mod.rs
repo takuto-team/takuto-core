@@ -67,11 +67,14 @@ pub(crate) async fn require_workflow_access(
     let workflow_workspace = w.workspace_name.clone();
     drop(workflows);
 
-    let conn = database.conn().lock().await;
-    let repos = match maestro_core::db::repositories::list_for_user(&conn, &auth.user_id) {
-        Ok(r) => r,
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
+    // Plan-11 step 3: repositories DAO on the adapter.
+    let repos =
+        match maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id)
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
     let has_access = if let Some(ref repo_id) = workflow_repo_id {
         repos.iter().any(|r| &r.id == repo_id)
     } else {

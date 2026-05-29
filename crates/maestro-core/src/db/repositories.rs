@@ -16,10 +16,18 @@
 //! The dashboard's "my repositories" tab and the workflow-list filter both
 //! drive off this table. See `tmp/plan-10-per-user-repositories.md` for the
 //! product model.
+//!
+//! ### Plan-11 step 3 (commit dc422de → 543606b → cd55778 → this commit)
+//!
+//! Fourth DAO migrated to the backend-agnostic [`DbAdapter`] API. The
+//! `INSERT ... ON CONFLICT(col) DO NOTHING` form used by `upsert` and
+//! `add_for_user` is SQLite + Postgres-compatible; MySQL would need
+//! `ON DUPLICATE KEY UPDATE` (documented inline, deferred to plan §10
+//! step 4 when MySQL CI lands).
 
-use rusqlite::{Connection, params};
 use uuid::Uuid;
 
+use crate::db::{DbAdapter, DbValue};
 use crate::error::Result;
 
 /// One row in `repositories`. Identity is `id` (UUID); `local_path` is the
@@ -46,56 +54,62 @@ pub struct UserRepositoryRow {
 // ── repositories CRUD ───────────────────────────────────────────────────────
 
 /// Fetch a repository by id.
-pub fn get(conn: &Connection, id: &str) -> Result<Option<RepositoryRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
-         FROM repositories WHERE id = ?1",
-    )?;
-    let row = stmt
-        .query_row(params![id], row_to_repository)
-        .optional()?;
-    Ok(row)
+pub async fn get(adapter: &DbAdapter, id: &str) -> Result<Option<RepositoryRow>> {
+    let row = adapter
+        .query_optional(
+            "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
+             FROM repositories WHERE id = ?",
+            vec![DbValue::Text(id.to_string())],
+        )
+        .await?;
+    row.map(|r| decode_repository(&r)).transpose()
 }
 
 /// Fetch a repository by `name`. Returns the first match — `name` is NOT
 /// unique by design, so callers expecting ambiguity should use `list_all`.
 /// Used by the workflow filter to map a snapshot's `workspace_name` →
 /// `repository_id`.
-pub fn get_by_name(conn: &Connection, name: &str) -> Result<Option<RepositoryRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
-         FROM repositories WHERE name = ?1 ORDER BY created_at ASC LIMIT 1",
-    )?;
-    let row = stmt
-        .query_row(params![name], row_to_repository)
-        .optional()?;
-    Ok(row)
+pub async fn get_by_name(adapter: &DbAdapter, name: &str) -> Result<Option<RepositoryRow>> {
+    let row = adapter
+        .query_optional(
+            "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
+             FROM repositories WHERE name = ? ORDER BY created_at ASC LIMIT 1",
+            vec![DbValue::Text(name.to_string())],
+        )
+        .await?;
+    row.map(|r| decode_repository(&r)).transpose()
 }
 
 /// Fetch a repository by `local_path` (which is UNIQUE).
-pub fn get_by_path(conn: &Connection, local_path: &str) -> Result<Option<RepositoryRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
-         FROM repositories WHERE local_path = ?1",
-    )?;
-    let row = stmt
-        .query_row(params![local_path], row_to_repository)
-        .optional()?;
-    Ok(row)
+pub async fn get_by_path(
+    adapter: &DbAdapter,
+    local_path: &str,
+) -> Result<Option<RepositoryRow>> {
+    let row = adapter
+        .query_optional(
+            "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
+             FROM repositories WHERE local_path = ?",
+            vec![DbValue::Text(local_path.to_string())],
+        )
+        .await?;
+    row.map(|r| decode_repository(&r)).transpose()
 }
 
 /// List every registered repository, ordered by `created_at ASC, name ASC` for
 /// determinism.
-pub fn list_all(conn: &Connection) -> Result<Vec<RepositoryRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
-         FROM repositories ORDER BY created_at ASC, name ASC",
-    )?;
-    let rows = stmt
-        .query_map([], row_to_repository)?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+pub async fn list_all(adapter: &DbAdapter) -> Result<Vec<RepositoryRow>> {
+    let rows = adapter
+        .query_all(
+            "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
+             FROM repositories ORDER BY created_at ASC, name ASC",
+            vec![],
+        )
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        out.push(decode_repository(r)?);
+    }
+    Ok(out)
 }
 
 /// Insert a repository if one doesn't already exist at `local_path` (the
@@ -110,8 +124,12 @@ pub fn list_all(conn: &Connection) -> Result<Vec<RepositoryRow>> {
 /// `local_path`, the existing `name` / `repo_url` / `default_branch` /
 /// `created_by` are preserved. Use a separate update path if those need to
 /// change (none exists in plan-10).
-pub fn upsert(
-    conn: &Connection,
+///
+/// Backend support: SQLite (≥ 3.24) and Postgres use `ON CONFLICT(...) DO
+/// NOTHING` verbatim. MySQL would use `INSERT IGNORE` — when MySQL lands
+/// (plan §10 step 4), this fn needs a `match adapter.backend()` branch.
+pub async fn upsert(
+    adapter: &DbAdapter,
     name: &str,
     repo_url: Option<&str>,
     local_path: &str,
@@ -121,23 +139,34 @@ pub fn upsert(
     let new_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
 
-    conn.execute(
-        "INSERT INTO repositories \
-            (id, name, repo_url, local_path, default_branch, created_at, created_by) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-         ON CONFLICT(local_path) DO NOTHING",
-        params![new_id, name, repo_url, local_path, default_branch, now, created_by],
-    )?;
+    adapter
+        .execute(
+            "INSERT INTO repositories \
+                (id, name, repo_url, local_path, default_branch, created_at, created_by) \
+             VALUES (?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(local_path) DO NOTHING",
+            vec![
+                DbValue::Text(new_id),
+                DbValue::Text(name.to_string()),
+                DbValue::TextOpt(repo_url.map(|s| s.to_string())),
+                DbValue::Text(local_path.to_string()),
+                DbValue::Text(default_branch.to_string()),
+                DbValue::I64(now),
+                DbValue::TextOpt(created_by.map(|s| s.to_string())),
+            ],
+        )
+        .await?;
 
     // Read back the row's id — either the one we just inserted or the one
     // a racing peer inserted. `local_path` is UNIQUE so this query is
     // single-row.
-    let id: String = conn.query_row(
-        "SELECT id FROM repositories WHERE local_path = ?1",
-        params![local_path],
-        |r| r.get(0),
-    )?;
-    Ok(id)
+    let row = adapter
+        .query_one(
+            "SELECT id FROM repositories WHERE local_path = ?",
+            vec![DbValue::Text(local_path.to_string())],
+        )
+        .await?;
+    Ok(row.get_text(0)?)
 }
 
 /// Delete a `repositories` row by id. Returns `true` if a row was deleted,
@@ -145,8 +174,13 @@ pub fn upsert(
 ///
 /// This is a DB-only delete; the on-disk clone is removed by the calling
 /// REST handler when appropriate (see plan-10 Step 5 always-purge).
-pub fn delete(conn: &Connection, id: &str) -> Result<bool> {
-    let affected = conn.execute("DELETE FROM repositories WHERE id = ?1", params![id])?;
+pub async fn delete(adapter: &DbAdapter, id: &str) -> Result<bool> {
+    let affected = adapter
+        .execute(
+            "DELETE FROM repositories WHERE id = ?",
+            vec![DbValue::Text(id.to_string())],
+        )
+        .await?;
     Ok(affected > 0)
 }
 
@@ -159,57 +193,80 @@ pub fn delete(conn: &Connection, id: &str) -> Result<bool> {
 /// within the same second produce ties. Sub-second insertion order is
 /// preserved via SQLite's monotonically-increasing `ROWID` as a secondary
 /// sort key — the most recently inserted association still wins on ties.
-pub fn list_for_user(conn: &Connection, user_id: &str) -> Result<Vec<RepositoryRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT r.id, r.name, r.repo_url, r.local_path, r.default_branch, r.created_at, r.created_by \
-         FROM repositories r \
-         INNER JOIN user_repositories ur ON ur.repository_id = r.id \
-         WHERE ur.user_id = ?1 \
-         ORDER BY ur.added_at DESC, ur.rowid DESC",
-    )?;
-    let rows = stmt
-        .query_map(params![user_id], row_to_repository)?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+///
+/// **Backend caveat**: the `ROWID` tie-break is SQLite-only. Postgres and
+/// MySQL don't expose a stable per-row insertion order. For sub-second
+/// determinism on those backends we'd need an explicit per-row sequence
+/// column. Plan §10 step 4 follow-up.
+pub async fn list_for_user(
+    adapter: &DbAdapter,
+    user_id: &str,
+) -> Result<Vec<RepositoryRow>> {
+    let rows = adapter
+        .query_all(
+            "SELECT r.id, r.name, r.repo_url, r.local_path, r.default_branch, r.created_at, r.created_by \
+             FROM repositories r \
+             INNER JOIN user_repositories ur ON ur.repository_id = r.id \
+             WHERE ur.user_id = ? \
+             ORDER BY ur.added_at DESC, ur.rowid DESC",
+            vec![DbValue::Text(user_id.to_string())],
+        )
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        out.push(decode_repository(r)?);
+    }
+    Ok(out)
 }
 
 /// List every registered repository the user has NOT yet added. Used by the
 /// "Available repositories" picker in the My Repositories tab.
-pub fn list_available_for_user(conn: &Connection, user_id: &str) -> Result<Vec<RepositoryRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT r.id, r.name, r.repo_url, r.local_path, r.default_branch, r.created_at, r.created_by \
-         FROM repositories r \
-         WHERE NOT EXISTS ( \
-             SELECT 1 FROM user_repositories ur \
-             WHERE ur.repository_id = r.id AND ur.user_id = ?1 \
-         ) \
-         ORDER BY r.created_at ASC, r.name ASC",
-    )?;
-    let rows = stmt
-        .query_map(params![user_id], row_to_repository)?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+pub async fn list_available_for_user(
+    adapter: &DbAdapter,
+    user_id: &str,
+) -> Result<Vec<RepositoryRow>> {
+    let rows = adapter
+        .query_all(
+            "SELECT r.id, r.name, r.repo_url, r.local_path, r.default_branch, r.created_at, r.created_by \
+             FROM repositories r \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM user_repositories ur \
+                 WHERE ur.repository_id = r.id AND ur.user_id = ? \
+             ) \
+             ORDER BY r.created_at ASC, r.name ASC",
+            vec![DbValue::Text(user_id.to_string())],
+        )
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        out.push(decode_repository(r)?);
+    }
+    Ok(out)
 }
 
 /// Associate `repository_id` with `user_id`. Returns `true` when a new row was
 /// inserted, `false` when the association already existed (idempotent).
 ///
 /// Uses `INSERT ... ON CONFLICT(user_id, repository_id) DO NOTHING`, so racing
-/// concurrent adds collapse to a single row.
-pub fn add_for_user(
-    conn: &Connection,
+/// concurrent adds collapse to a single row. (MySQL caveat per `upsert`.)
+pub async fn add_for_user(
+    adapter: &DbAdapter,
     user_id: &str,
     repository_id: &str,
 ) -> Result<bool> {
     let now = chrono::Utc::now().timestamp();
-    let affected = conn.execute(
-        "INSERT INTO user_repositories (user_id, repository_id, added_at) \
-         VALUES (?1, ?2, ?3) \
-         ON CONFLICT(user_id, repository_id) DO NOTHING",
-        params![user_id, repository_id, now],
-    )?;
+    let affected = adapter
+        .execute(
+            "INSERT INTO user_repositories (user_id, repository_id, added_at) \
+             VALUES (?, ?, ?) \
+             ON CONFLICT(user_id, repository_id) DO NOTHING",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(repository_id.to_string()),
+                DbValue::I64(now),
+            ],
+        )
+        .await?;
     Ok(affected > 0)
 }
 
@@ -219,15 +276,20 @@ pub fn add_for_user(
 /// This is a single-link delete only — it doesn't cascade to the
 /// `repositories` row or the on-disk clone. The REST layer decides whether to
 /// purge based on "last user remove" semantics (see plan-10 Step 5).
-pub fn remove_for_user(
-    conn: &Connection,
+pub async fn remove_for_user(
+    adapter: &DbAdapter,
     user_id: &str,
     repository_id: &str,
 ) -> Result<bool> {
-    let affected = conn.execute(
-        "DELETE FROM user_repositories WHERE user_id = ?1 AND repository_id = ?2",
-        params![user_id, repository_id],
-    )?;
+    let affected = adapter
+        .execute(
+            "DELETE FROM user_repositories WHERE user_id = ? AND repository_id = ?",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(repository_id.to_string()),
+            ],
+        )
+        .await?;
     Ok(affected > 0)
 }
 
@@ -237,19 +299,23 @@ pub fn remove_for_user(
 /// (a string) rather than `repository_id` for legacy rows. The Step 6 filter
 /// uses this when the workflow's `repository_id` is absent. Returns `true` if
 /// at least one repository with that `name` is in the user's added set.
-pub fn user_has(
-    conn: &Connection,
+pub async fn user_has(
+    adapter: &DbAdapter,
     user_id: &str,
     repository_name: &str,
 ) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM repositories r \
-         INNER JOIN user_repositories ur ON ur.repository_id = r.id \
-         WHERE ur.user_id = ?1 AND r.name = ?2",
-        params![user_id, repository_name],
-        |r| r.get(0),
-    )?;
-    Ok(count > 0)
+    let row = adapter
+        .query_one(
+            "SELECT COUNT(*) FROM repositories r \
+             INNER JOIN user_repositories ur ON ur.repository_id = r.id \
+             WHERE ur.user_id = ? AND r.name = ?",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(repository_name.to_string()),
+            ],
+        )
+        .await?;
+    Ok(row.get_i64(0)? > 0)
 }
 
 /// Return every active (non-terminal) workflow on `repository_id`, as
@@ -267,12 +333,12 @@ pub fn user_has(
 /// post-plan-10 snapshots alike. If `repository_id` is later added to the
 /// snapshot model, this helper should be updated to match on `repository_id`
 /// first and fall back to `workspace_name`.
-pub fn repository_has_active_workflow(
-    conn: &Connection,
+pub async fn repository_has_active_workflow(
+    adapter: &DbAdapter,
     repository_id: &str,
 ) -> Result<Vec<(String, String)>> {
     // 1. Resolve `repository_id` → `name` + `local_path`.
-    let row = match get(conn, repository_id)? {
+    let row = match get(adapter, repository_id).await? {
         Some(r) => r,
         None => return Ok(Vec::new()),
     };
@@ -307,79 +373,89 @@ pub fn repository_has_active_workflow(
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn row_to_repository(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepositoryRow> {
+fn decode_repository(row: &crate::db::DbRow) -> Result<RepositoryRow> {
     Ok(RepositoryRow {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        repo_url: row.get(2)?,
-        local_path: row.get(3)?,
-        default_branch: row.get(4)?,
-        created_at: row.get(5)?,
-        created_by: row.get(6)?,
+        id: row.get_text(0)?,
+        name: row.get_text(1)?,
+        repo_url: row.get_text_opt(2)?,
+        local_path: row.get_text(3)?,
+        default_branch: row.get_text(4)?,
+        created_at: row.get_i64(5)?,
+        created_by: row.get_text_opt(6)?,
     })
-}
-
-/// Local optional-result adapter, mirroring the one in `db/users.rs` to keep
-/// this module self-contained.
-trait OptionalExt<T> {
-    fn optional(self) -> rusqlite::Result<Option<T>>;
-}
-
-impl<T> OptionalExt<T> for rusqlite::Result<T> {
-    fn optional(self) -> rusqlite::Result<Option<T>> {
-        match self {
-            Ok(val) => Ok(Some(val)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::UserRole;
-    use crate::db::schema;
-    use crate::db::users::create_user;
+    use crate::db::adapter::DbAdapter;
+    use crate::db::migrate::DialectAwareMigrationSource;
+    use crate::db::pool::{DbBackend, DbPool};
+    use sqlx::sqlite::SqlitePool;
 
-    fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        schema::run_migrations(&conn).unwrap();
-        conn
+    /// Build a fresh in-memory SQLite adapter with the portable migration
+    /// set applied. Mirrors the helper in db/onboarding.rs and
+    /// db/user_worktree_commands.rs tests.
+    async fn fresh_adapter() -> DbAdapter {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        let source = DialectAwareMigrationSource::for_backend(DbBackend::Sqlite);
+        sqlx::migrate::Migrator::new(source)
+            .await
+            .expect("build migrator")
+            .run(&pool)
+            .await
+            .expect("run migrations");
+        DbAdapter::new(DbPool::Sqlite(pool))
     }
 
-    /// Helper: create a user and return their id.
-    fn make_user(conn: &Connection, name: &str) -> String {
-        create_user(conn, name, UserRole::User).unwrap().id
+    /// Seed a user row directly via the adapter — the users DAO is still on
+    /// the legacy rusqlite path; this lets us bypass it in tests.
+    async fn seed_user(adapter: &DbAdapter, username: &str, role: &str) -> String {
+        let id = format!("u-{username}");
+        adapter
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, ?)",
+                vec![
+                    DbValue::Text(id.clone()),
+                    DbValue::Text(username.to_string()),
+                    DbValue::Text(role.to_string()),
+                ],
+            )
+            .await
+            .expect("seed user");
+        id
     }
 
-    #[test]
-    fn upsert_creates_then_returns_same_id_for_existing_path() {
-        let conn = test_conn();
+    #[tokio::test]
+    async fn upsert_creates_then_returns_same_id_for_existing_path() {
+        let a = fresh_adapter().await;
         let id1 = upsert(
-            &conn,
+            &a,
             "maestro-core",
             Some("https://github.com/owner/maestro-core"),
             "/workspaces/maestro-core",
             "main",
             None,
         )
+        .await
         .unwrap();
         // Second call with same local_path returns the same id; "name" /
         // "repo_url" updates are not applied (upsert is insert-if-missing).
         let id2 = upsert(
-            &conn,
+            &a,
             "different-name",
             Some("https://github.com/other/repo"),
             "/workspaces/maestro-core",
             "trunk",
             None,
         )
+        .await
         .unwrap();
         assert_eq!(id1, id2, "upsert must be idempotent on local_path");
 
-        let row = get(&conn, &id1).unwrap().unwrap();
+        let row = get(&a, &id1).await.unwrap().unwrap();
         assert_eq!(row.name, "maestro-core", "original name preserved");
         assert_eq!(
             row.repo_url,
@@ -390,185 +466,175 @@ mod tests {
         assert!(row.created_at > 0);
     }
 
-    #[test]
-    fn upsert_allows_duplicate_names_on_different_paths() {
-        let conn = test_conn();
+    #[tokio::test]
+    async fn upsert_allows_duplicate_names_on_different_paths() {
+        let a = fresh_adapter().await;
         let id_a = upsert(
-            &conn,
+            &a,
             "foo",
             Some("https://github.com/owner-a/foo"),
             "/workspaces/foo",
             "main",
             None,
         )
+        .await
         .unwrap();
         // Same `name` but different `local_path` — must coexist (no UNIQUE on name).
         let id_b = upsert(
-            &conn,
+            &a,
             "foo",
             Some("https://github.com/owner-b/foo"),
             "/workspaces/foo-2",
             "main",
             None,
         )
+        .await
         .unwrap();
         assert_ne!(id_a, id_b);
 
-        let all = list_all(&conn).unwrap();
+        let all = list_all(&a).await.unwrap();
         assert_eq!(all.len(), 2);
         // Both have `name = "foo"`.
         assert!(all.iter().all(|r| r.name == "foo"));
     }
 
-    #[test]
-    fn get_by_name_and_path_lookups_work() {
-        let conn = test_conn();
-        let id = upsert(
-            &conn,
-            "maestro-core",
-            None,
-            "/workspaces/maestro-core",
-            "main",
-            None,
-        )
-        .unwrap();
+    #[tokio::test]
+    async fn get_by_name_and_path_lookups_work() {
+        let a = fresh_adapter().await;
+        let id = upsert(&a, "maestro-core", None, "/workspaces/maestro-core", "main", None)
+            .await
+            .unwrap();
 
-        let by_name = get_by_name(&conn, "maestro-core").unwrap().unwrap();
+        let by_name = get_by_name(&a, "maestro-core").await.unwrap().unwrap();
         assert_eq!(by_name.id, id);
 
-        let by_path = get_by_path(&conn, "/workspaces/maestro-core")
-            .unwrap()
-            .unwrap();
+        let by_path = get_by_path(&a, "/workspaces/maestro-core").await.unwrap().unwrap();
         assert_eq!(by_path.id, id);
 
-        assert!(get_by_name(&conn, "does-not-exist").unwrap().is_none());
-        assert!(get_by_path(&conn, "/nope").unwrap().is_none());
+        assert!(get_by_name(&a, "does-not-exist").await.unwrap().is_none());
+        assert!(get_by_path(&a, "/nope").await.unwrap().is_none());
     }
 
-    #[test]
-    fn delete_removes_row_and_cascades_to_user_repositories() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        let bob = make_user(&conn, "bob");
-        let repo = upsert(
-            &conn,
-            "maestro-core",
-            None,
-            "/workspaces/maestro-core",
-            "main",
-            None,
-        )
-        .unwrap();
+    #[tokio::test]
+    async fn delete_removes_row_and_cascades_to_user_repositories() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        let bob = seed_user(&a, "bob", "user").await;
+        let repo = upsert(&a, "maestro-core", None, "/workspaces/maestro-core", "main", None)
+            .await
+            .unwrap();
 
         // Both users add the repo.
-        assert!(add_for_user(&conn, &alice, &repo).unwrap());
-        assert!(add_for_user(&conn, &bob, &repo).unwrap());
+        assert!(add_for_user(&a, &alice, &repo).await.unwrap());
+        assert!(add_for_user(&a, &bob, &repo).await.unwrap());
         // Sanity: 2 association rows.
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM user_repositories", [], |r| r.get(0))
+        let row = a
+            .query_one("SELECT COUNT(*) FROM user_repositories", vec![])
+            .await
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(row.get_i64(0).unwrap(), 2);
 
         // Delete the repo → cascades to both association rows.
-        assert!(delete(&conn, &repo).unwrap());
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM user_repositories", [], |r| r.get(0))
+        assert!(delete(&a, &repo).await.unwrap());
+        let row = a
+            .query_one("SELECT COUNT(*) FROM user_repositories", vec![])
+            .await
             .unwrap();
-        assert_eq!(count, 0, "FK cascade must drop association rows");
+        assert_eq!(row.get_i64(0).unwrap(), 0, "FK cascade must drop association rows");
 
         // Second delete returns false.
-        assert!(!delete(&conn, &repo).unwrap());
+        assert!(!delete(&a, &repo).await.unwrap());
     }
 
-    #[test]
-    fn user_delete_cascades_to_user_repositories() {
-        let conn = test_conn();
-        // Two admins so the "last admin" guard doesn't block delete.
-        let alice = create_user(&conn, "alice", UserRole::Admin).unwrap().id;
-        let _bob = create_user(&conn, "bob", UserRole::Admin).unwrap().id;
-        let repo = upsert(
-            &conn,
-            "maestro-core",
-            None,
-            "/workspaces/maestro-core",
-            "main",
-            None,
-        )
-        .unwrap();
-        add_for_user(&conn, &alice, &repo).unwrap();
-
-        crate::db::users::delete_user(&conn, &alice).unwrap();
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM user_repositories WHERE user_id = ?1",
-                params![alice],
-                |r| r.get(0),
-            )
+    #[tokio::test]
+    async fn user_delete_cascades_to_user_repositories() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "admin").await;
+        let _bob = seed_user(&a, "bob", "admin").await;
+        let repo = upsert(&a, "maestro-core", None, "/workspaces/maestro-core", "main", None)
+            .await
             .unwrap();
-        assert_eq!(count, 0);
+        add_for_user(&a, &alice, &repo).await.unwrap();
+
+        // Direct DELETE on users bypasses the users DAO (still rusqlite) —
+        // we exercise the ON DELETE CASCADE on user_repositories.user_id.
+        a.execute(
+            "DELETE FROM users WHERE id = ?",
+            vec![DbValue::Text(alice.clone())],
+        )
+        .await
+        .unwrap();
+
+        let row = a
+            .query_one(
+                "SELECT COUNT(*) FROM user_repositories WHERE user_id = ?",
+                vec![DbValue::Text(alice.clone())],
+            )
+            .await
+            .unwrap();
+        assert_eq!(row.get_i64(0).unwrap(), 0);
         // The repository row itself is preserved.
-        assert!(get(&conn, &repo).unwrap().is_some());
+        assert!(get(&a, &repo).await.unwrap().is_some());
     }
 
-    #[test]
-    fn add_for_user_returns_true_then_false_on_duplicate() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        let repo = upsert(&conn, "x", None, "/workspaces/x", "main", None).unwrap();
+    #[tokio::test]
+    async fn add_for_user_returns_true_then_false_on_duplicate() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None).await.unwrap();
 
-        assert!(add_for_user(&conn, &alice, &repo).unwrap());
+        assert!(add_for_user(&a, &alice, &repo).await.unwrap());
         // Second add for the same pair is a no-op.
-        assert!(!add_for_user(&conn, &alice, &repo).unwrap());
+        assert!(!add_for_user(&a, &alice, &repo).await.unwrap());
     }
 
-    #[test]
-    fn remove_for_user_returns_true_then_false() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        let repo = upsert(&conn, "x", None, "/workspaces/x", "main", None).unwrap();
-        add_for_user(&conn, &alice, &repo).unwrap();
+    #[tokio::test]
+    async fn remove_for_user_returns_true_then_false() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None).await.unwrap();
+        add_for_user(&a, &alice, &repo).await.unwrap();
 
-        assert!(remove_for_user(&conn, &alice, &repo).unwrap());
-        assert!(!remove_for_user(&conn, &alice, &repo).unwrap());
+        assert!(remove_for_user(&a, &alice, &repo).await.unwrap());
+        assert!(!remove_for_user(&a, &alice, &repo).await.unwrap());
     }
 
-    #[test]
-    fn list_for_user_returns_only_my_rows() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        let bob = make_user(&conn, "bob");
-        let r1 = upsert(&conn, "r1", None, "/workspaces/r1", "main", None).unwrap();
-        let r2 = upsert(&conn, "r2", None, "/workspaces/r2", "main", None).unwrap();
-        let r3 = upsert(&conn, "r3", None, "/workspaces/r3", "main", None).unwrap();
+    #[tokio::test]
+    async fn list_for_user_returns_only_my_rows() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        let bob = seed_user(&a, "bob", "user").await;
+        let r1 = upsert(&a, "r1", None, "/workspaces/r1", "main", None).await.unwrap();
+        let r2 = upsert(&a, "r2", None, "/workspaces/r2", "main", None).await.unwrap();
+        let r3 = upsert(&a, "r3", None, "/workspaces/r3", "main", None).await.unwrap();
 
-        add_for_user(&conn, &alice, &r1).unwrap();
-        add_for_user(&conn, &alice, &r2).unwrap();
-        add_for_user(&conn, &bob, &r3).unwrap();
+        add_for_user(&a, &alice, &r1).await.unwrap();
+        add_for_user(&a, &alice, &r2).await.unwrap();
+        add_for_user(&a, &bob, &r3).await.unwrap();
 
-        let alice_rows = list_for_user(&conn, &alice).unwrap();
+        let alice_rows = list_for_user(&a, &alice).await.unwrap();
         assert_eq!(alice_rows.len(), 2);
         let names: Vec<&str> = alice_rows.iter().map(|r| r.name.as_str()).collect();
-        // Most recently added is first.
+        // Most recently added is first (within the same second, ROWID DESC tie-break).
         assert_eq!(names[0], "r2");
         assert_eq!(names[1], "r1");
 
-        let bob_rows = list_for_user(&conn, &bob).unwrap();
+        let bob_rows = list_for_user(&a, &bob).await.unwrap();
         assert_eq!(bob_rows.len(), 1);
         assert_eq!(bob_rows[0].name, "r3");
     }
 
-    #[test]
-    fn list_available_for_user_is_complement_of_list_for_user() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        let r1 = upsert(&conn, "r1", None, "/workspaces/r1", "main", None).unwrap();
-        let r2 = upsert(&conn, "r2", None, "/workspaces/r2", "main", None).unwrap();
-        let r3 = upsert(&conn, "r3", None, "/workspaces/r3", "main", None).unwrap();
+    #[tokio::test]
+    async fn list_available_for_user_is_complement_of_list_for_user() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        let r1 = upsert(&a, "r1", None, "/workspaces/r1", "main", None).await.unwrap();
+        let r2 = upsert(&a, "r2", None, "/workspaces/r2", "main", None).await.unwrap();
+        let r3 = upsert(&a, "r3", None, "/workspaces/r3", "main", None).await.unwrap();
 
-        add_for_user(&conn, &alice, &r1).unwrap();
+        add_for_user(&a, &alice, &r1).await.unwrap();
 
-        let avail = list_available_for_user(&conn, &alice).unwrap();
+        let avail = list_available_for_user(&a, &alice).await.unwrap();
         let avail_ids: Vec<&str> = avail.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(avail.len(), 2);
         assert!(avail_ids.contains(&r2.as_str()));
@@ -576,104 +642,98 @@ mod tests {
         assert!(!avail_ids.contains(&r1.as_str()));
     }
 
-    #[test]
-    fn user_has_returns_correct_membership() {
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
-        let bob = make_user(&conn, "bob");
-        let repo = upsert(
-            &conn,
-            "maestro-core",
-            None,
-            "/workspaces/maestro-core",
-            "main",
-            None,
-        )
-        .unwrap();
-        add_for_user(&conn, &alice, &repo).unwrap();
+    #[tokio::test]
+    async fn user_has_returns_correct_membership() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+        let bob = seed_user(&a, "bob", "user").await;
+        let repo = upsert(&a, "maestro-core", None, "/workspaces/maestro-core", "main", None)
+            .await
+            .unwrap();
+        add_for_user(&a, &alice, &repo).await.unwrap();
 
-        assert!(user_has(&conn, &alice, "maestro-core").unwrap());
-        assert!(!user_has(&conn, &bob, "maestro-core").unwrap());
-        assert!(!user_has(&conn, &alice, "does-not-exist").unwrap());
+        assert!(user_has(&a, &alice, "maestro-core").await.unwrap());
+        assert!(!user_has(&a, &bob, "maestro-core").await.unwrap());
+        assert!(!user_has(&a, &alice, "does-not-exist").await.unwrap());
     }
 
-    #[test]
-    fn user_has_works_when_two_repos_share_a_name() {
-        // Two forks both named "foo"; alice has just one of them. `user_has`
-        // returns true because at least one match is in her added set.
-        let conn = test_conn();
-        let alice = make_user(&conn, "alice");
+    #[tokio::test]
+    async fn user_has_works_when_two_repos_share_a_name() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
         let foo_a = upsert(
-            &conn,
+            &a,
             "foo",
             Some("https://github.com/owner-a/foo"),
             "/workspaces/foo",
             "main",
             None,
         )
+        .await
         .unwrap();
         let _foo_b = upsert(
-            &conn,
+            &a,
             "foo",
             Some("https://github.com/owner-b/foo"),
             "/workspaces/foo-2",
             "main",
             None,
         )
+        .await
         .unwrap();
-        add_for_user(&conn, &alice, &foo_a).unwrap();
+        add_for_user(&a, &alice, &foo_a).await.unwrap();
 
-        assert!(user_has(&conn, &alice, "foo").unwrap());
+        assert!(user_has(&a, &alice, "foo").await.unwrap());
     }
 
-    #[test]
-    fn list_all_returns_every_repository() {
-        let conn = test_conn();
-        upsert(&conn, "r1", None, "/workspaces/r1", "main", None).unwrap();
-        upsert(&conn, "r2", None, "/workspaces/r2", "main", None).unwrap();
-        upsert(&conn, "r3", None, "/workspaces/r3", "main", None).unwrap();
+    #[tokio::test]
+    async fn list_all_returns_every_repository() {
+        let a = fresh_adapter().await;
+        upsert(&a, "r1", None, "/workspaces/r1", "main", None).await.unwrap();
+        upsert(&a, "r2", None, "/workspaces/r2", "main", None).await.unwrap();
+        upsert(&a, "r3", None, "/workspaces/r3", "main", None).await.unwrap();
 
-        let all = list_all(&conn).unwrap();
+        let all = list_all(&a).await.unwrap();
         assert_eq!(all.len(), 3);
     }
 
-    #[test]
-    fn created_by_set_null_on_user_delete() {
+    #[tokio::test]
+    async fn created_by_set_null_on_user_delete() {
         // `repositories.created_by → users(id) ON DELETE SET NULL` —
         // deleting the user who registered a repo keeps the repo row but
         // nulls out the `created_by` field.
-        let conn = test_conn();
-        let alice = create_user(&conn, "alice", UserRole::Admin).unwrap().id;
-        let _bob = create_user(&conn, "bob", UserRole::Admin).unwrap().id;
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "admin").await;
+        let _bob = seed_user(&a, "bob", "admin").await;
         let repo = upsert(
-            &conn,
+            &a,
             "maestro-core",
             None,
             "/workspaces/maestro-core",
             "main",
             Some(&alice),
         )
+        .await
         .unwrap();
 
-        crate::db::users::delete_user(&conn, &alice).unwrap();
+        a.execute(
+            "DELETE FROM users WHERE id = ?",
+            vec![DbValue::Text(alice.clone())],
+        )
+        .await
+        .unwrap();
 
-        let row = get(&conn, &repo).unwrap().unwrap();
+        let row = get(&a, &repo).await.unwrap().unwrap();
         assert_eq!(row.created_by, None, "FK SET NULL on user delete");
     }
 
-    #[test]
-    fn upsert_with_no_repo_url_and_no_creator() {
-        let conn = test_conn();
-        let id = upsert(
-            &conn,
-            "orphan",
-            None,
-            "/workspaces/orphan",
-            "main",
-            None,
-        )
-        .unwrap();
-        let row = get(&conn, &id).unwrap().unwrap();
+    #[tokio::test]
+    async fn upsert_with_no_repo_url_and_no_creator() {
+        let a = fresh_adapter().await;
+        let id = upsert(&a, "orphan", None, "/workspaces/orphan", "main", None)
+            .await
+            .unwrap();
+        let row = get(&a, &id).await.unwrap().unwrap();
         assert_eq!(row.repo_url, None);
         assert_eq!(row.created_by, None);
     }
@@ -682,21 +742,20 @@ mod tests {
     /// when there are active workflows referencing the repo's `name`. With no
     /// snapshots on disk (in-memory test, no `MAESTRO_DATA_DIR` pointing at
     /// data), it returns an empty list — that's the contract.
-    #[test]
-    fn repository_has_active_workflow_empty_without_snapshots() {
-        let conn = test_conn();
-        let repo = upsert(&conn, "x", None, "/workspaces/x", "main", None).unwrap();
-        let blockers = repository_has_active_workflow(&conn, &repo).unwrap();
+    #[tokio::test]
+    async fn repository_has_active_workflow_empty_without_snapshots() {
+        let a = fresh_adapter().await;
+        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None).await.unwrap();
+        let blockers = repository_has_active_workflow(&a, &repo).await.unwrap();
         assert!(blockers.is_empty());
     }
 
     /// Even with no data dir resolved at all (no env), the helper must not
     /// panic — it returns an empty list.
-    #[test]
-    fn repository_has_active_workflow_unknown_id_is_empty() {
-        let conn = test_conn();
-        let blockers = repository_has_active_workflow(&conn, "no-such-id").unwrap();
+    #[tokio::test]
+    async fn repository_has_active_workflow_unknown_id_is_empty() {
+        let a = fresh_adapter().await;
+        let blockers = repository_has_active_workflow(&a, "no-such-id").await.unwrap();
         assert!(blockers.is_empty());
     }
-
 }

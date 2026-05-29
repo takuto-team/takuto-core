@@ -78,15 +78,17 @@ async fn resolve_workflow_repo_path(
             .map(|w| (w.repository_id.clone(), w.workspace_name.clone()))
             .unwrap_or_default()
     };
+    // Plan-11 step 3: repositories DAO on the adapter.
     if let Some(database) = auth_state.db.as_ref() {
-        let conn = database.conn().lock().await;
+        let adapter = database.adapter();
         if let Some(id) = repo_id.as_deref()
-            && let Ok(Some(row)) = maestro_core::db::repositories::get(&conn, id)
+            && let Ok(Some(row)) = maestro_core::db::repositories::get(adapter, id).await
         {
             return PathBuf::from(&row.local_path);
         }
         if !ws_name.is_empty()
-            && let Ok(Some(row)) = maestro_core::db::repositories::get_by_name(&conn, &ws_name)
+            && let Ok(Some(row)) =
+                maestro_core::db::repositories::get_by_name(adapter, &ws_name).await
         {
             return PathBuf::from(&row.local_path);
         }

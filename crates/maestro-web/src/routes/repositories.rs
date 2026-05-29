@@ -211,37 +211,41 @@ pub async fn list_mine(
     State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<RepositoryDto>>, (StatusCode, String)> {
+    // Plan-11 step 3: repositories DAO migrated to the agnostic adapter.
+    // Raw added_at + co-user-count queries also use the adapter so we
+    // drop the spawn_blocking ceremony altogether.
     let db = require_db(&auth_state)?;
+    let adapter = db.adapter();
     let user_id = auth.user_id.clone();
-    let dtos = tokio::task::spawn_blocking(move || -> maestro_core::error::Result<_> {
-        let conn = db.conn().blocking_lock();
-        let rows = maestro_core::db::repositories::list_for_user(&conn, &user_id)?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            // added_at lookup — one query per row (small N).
-            let added_at: i64 = conn
-                .query_row(
-                    "SELECT added_at FROM user_repositories WHERE user_id = ?1 AND repository_id = ?2",
-                    rusqlite::params![&user_id, &row.id],
-                    |r| r.get(0),
-                )
-                .unwrap_or(0);
-            // co_users_count = total associated users − 1 (the caller).
-            let total: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM user_repositories WHERE repository_id = ?1",
-                    rusqlite::params![&row.id],
-                    |r| r.get(0),
-                )
-                .unwrap_or(1);
-            let co = (total - 1).max(0);
-            out.push(row_to_dto(row, Some(added_at), Some(co)));
-        }
-        Ok(out)
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
+    let rows = maestro_core::db::repositories::list_for_user(adapter, &user_id)
+        .await
+        .map_err(db_error)?;
+    let mut dtos = Vec::with_capacity(rows.len());
+    for row in rows {
+        let added_at = adapter
+            .query_optional(
+                "SELECT added_at FROM user_repositories WHERE user_id = ? AND repository_id = ?",
+                vec![
+                    maestro_core::db::DbValue::Text(user_id.clone()),
+                    maestro_core::db::DbValue::Text(row.id.clone()),
+                ],
+            )
+            .await
+            .map_err(|e| db_error(e.into()))?
+            .map(|r| r.get_i64(0).unwrap_or(0))
+            .unwrap_or(0);
+        let total = adapter
+            .query_one(
+                "SELECT COUNT(*) FROM user_repositories WHERE repository_id = ?",
+                vec![maestro_core::db::DbValue::Text(row.id.clone())],
+            )
+            .await
+            .map_err(|e| db_error(e.into()))?
+            .get_i64(0)
+            .unwrap_or(1);
+        let co = (total - 1).max(0);
+        dtos.push(row_to_dto(row, Some(added_at), Some(co)));
+    }
 
     Ok(Json(dtos))
 }
@@ -254,13 +258,9 @@ pub async fn list_available(
 ) -> Result<Json<Vec<RepositoryDto>>, (StatusCode, String)> {
     let db = require_db(&auth_state)?;
     let user_id = auth.user_id.clone();
-    let rows = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::repositories::list_available_for_user(&conn, &user_id)
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
+    let rows = maestro_core::db::repositories::list_available_for_user(db.adapter(), &user_id)
+        .await
+        .map_err(db_error)?;
 
     let dtos = rows.into_iter().map(|r| row_to_dto(r, None, None)).collect();
     Ok(Json(dtos))
@@ -296,27 +296,19 @@ async fn add_existing(
     auth: &AuthenticatedUser,
     repo_id: &str,
 ) -> Result<(StatusCode, Json<RepositoryDto>), (StatusCode, String)> {
-    let db_cl = db.clone();
-    let user_id = auth.user_id.clone();
-    let repo_id_owned = repo_id.to_string();
-    let result = tokio::task::spawn_blocking(move || -> maestro_core::error::Result<Option<(maestro_core::db::repositories::RepositoryRow, bool)>> {
-        let conn = db_cl.conn().blocking_lock();
-        match maestro_core::db::repositories::get(&conn, &repo_id_owned)? {
-            None => Ok(None),
-            Some(row) => {
-                let inserted = maestro_core::db::repositories::add_for_user(&conn, &user_id, &row.id)?;
-                Ok(Some((row, inserted)))
-            }
+    let adapter = db.adapter();
+    let row = match maestro_core::db::repositories::get(adapter, repo_id)
+        .await
+        .map_err(db_error)?
+    {
+        None => {
+            return Err((StatusCode::NOT_FOUND, "repository not found".to_string()));
         }
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
-
-    let (row, inserted) = result.ok_or((
-        StatusCode::NOT_FOUND,
-        "repository not found".to_string(),
-    ))?;
+        Some(r) => r,
+    };
+    let inserted = maestro_core::db::repositories::add_for_user(adapter, &auth.user_id, &row.id)
+        .await
+        .map_err(db_error)?;
 
     info!(
         actor_user_id = %auth.user_id,
@@ -360,44 +352,32 @@ async fn add_via_clone(
     // 3. Look up an existing `repositories` row by repo_url. If found,
     //    just associate (idempotent) and return 200.
     {
-        let db_cl = db.clone();
-        let url = normalized_url.clone();
-        let existing = tokio::task::spawn_blocking(move || -> maestro_core::error::Result<Option<maestro_core::db::repositories::RepositoryRow>> {
-            let conn = db_cl.conn().blocking_lock();
-            let mut stmt = conn.prepare(
+        let adapter = db.adapter();
+        let row = adapter
+            .query_optional(
                 "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
-                 FROM repositories WHERE repo_url = ?1 LIMIT 1",
-            )?;
-            let row: Option<maestro_core::db::repositories::RepositoryRow> = stmt
-                .query_row(rusqlite::params![url], |row| {
-                    Ok(maestro_core::db::repositories::RepositoryRow {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        repo_url: row.get(2)?,
-                        local_path: row.get(3)?,
-                        default_branch: row.get(4)?,
-                        created_at: row.get(5)?,
-                        created_by: row.get(6)?,
-                    })
-                })
-                .ok();
-            Ok(row)
-        })
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-        .map_err(db_error)?;
+                 FROM repositories WHERE repo_url = ? LIMIT 1",
+                vec![maestro_core::db::DbValue::Text(normalized_url.clone())],
+            )
+            .await
+            .map_err(|e| db_error(e.into()))?;
+        let existing: Option<maestro_core::db::repositories::RepositoryRow> = match row {
+            None => None,
+            Some(r) => Some(maestro_core::db::repositories::RepositoryRow {
+                id: r.get_text(0).map_err(|e| db_error(e.into()))?,
+                name: r.get_text(1).map_err(|e| db_error(e.into()))?,
+                repo_url: r.get_text_opt(2).map_err(|e| db_error(e.into()))?,
+                local_path: r.get_text(3).map_err(|e| db_error(e.into()))?,
+                default_branch: r.get_text(4).map_err(|e| db_error(e.into()))?,
+                created_at: r.get_i64(5).map_err(|e| db_error(e.into()))?,
+                created_by: r.get_text_opt(6).map_err(|e| db_error(e.into()))?,
+            }),
+        };
 
         if let Some(row) = existing {
-            let db_cl = db.clone();
-            let uid = auth.user_id.clone();
-            let repo_id = row.id.clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = db_cl.conn().blocking_lock();
-                maestro_core::db::repositories::add_for_user(&conn, &uid, &repo_id)
-            })
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-            .map_err(db_error)?;
+            maestro_core::db::repositories::add_for_user(adapter, &auth.user_id, &row.id)
+                .await
+                .map_err(db_error)?;
 
             info!(
                 actor_user_id = %auth.user_id,
@@ -457,30 +437,28 @@ async fn add_via_clone(
     let default_branch_owned = default_branch.clone();
     let actual_url_owned = actual_url.clone();
 
-    let db_cl = db.clone();
-    let (row, _was_inserted) = tokio::task::spawn_blocking(move || -> maestro_core::error::Result<(maestro_core::db::repositories::RepositoryRow, bool)> {
-        let conn = db_cl.conn().blocking_lock();
-        let repo_id = maestro_core::db::repositories::upsert(
-            &conn,
-            &name_owned,
-            Some(&actual_url_owned),
-            &local_path_owned,
-            &default_branch_owned,
-            Some(&actor_id),
-        )?;
-        let inserted = maestro_core::db::repositories::add_for_user(&conn, &actor_id, &repo_id)?;
-        // Re-read to get the canonical row (in case of a racing peer).
-        // SAFETY: The two lines above upserted into `repositories` then
-        // joined into `user_repositories` inside the same connection (and
-        // therefore the same SQLite transaction-implicit serialised view).
-        // The row is guaranteed to exist.
-        let row = maestro_core::db::repositories::get(&conn, &repo_id)?
-            .expect("row was just upserted in the same connection");
-        Ok((row, inserted))
-    })
+    let adapter = db.adapter();
+    let repo_id = maestro_core::db::repositories::upsert(
+        adapter,
+        &name_owned,
+        Some(&actual_url_owned),
+        &local_path_owned,
+        &default_branch_owned,
+        Some(&actor_id),
+    )
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
     .map_err(db_error)?;
+    let _inserted = maestro_core::db::repositories::add_for_user(adapter, &actor_id, &repo_id)
+        .await
+        .map_err(db_error)?;
+    // Re-read to get the canonical row (in case of a racing peer).
+    // The three calls above ran sequentially on the adapter; the upsert
+    // either committed our new row or observed the racing peer's, and the
+    // follow-up get() returns whichever the DB now has.
+    let row = maestro_core::db::repositories::get(adapter, &repo_id)
+        .await
+        .map_err(db_error)?
+        .expect("row was just upserted via the adapter");
 
     info!(
         actor_user_id = %auth.user_id,
@@ -526,15 +504,11 @@ pub async fn delete(
     //      on the repo. Other users' workflows are irrelevant — the caller is
     //      just dropping their own association. Other users keep theirs and
     //      their worktrees stay valid.
-    let db_cl = db.clone();
-    let repo_id = repository_id.clone();
-    let all_blockers = tokio::task::spawn_blocking(move || {
-        let conn = db_cl.conn().blocking_lock();
-        maestro_core::db::repositories::repository_has_active_workflow(&conn, &repo_id)
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
+    let adapter = db.adapter();
+    let all_blockers =
+        maestro_core::db::repositories::repository_has_active_workflow(adapter, &repository_id)
+            .await
+            .map_err(db_error)?;
 
     let relevant_blockers: Vec<(String, String)> = if force_purge {
         all_blockers
@@ -565,15 +539,12 @@ pub async fn delete(
 
     // 2. Try to remove the caller's association. 404 if no row.
     if !force_purge {
-        let db_cl = db.clone();
-        let uid = auth.user_id.clone();
-        let rid = repository_id.clone();
-        let removed = tokio::task::spawn_blocking(move || {
-            let conn = db_cl.conn().blocking_lock();
-            maestro_core::db::repositories::remove_for_user(&conn, &uid, &rid)
-        })
+        let removed = maestro_core::db::repositories::remove_for_user(
+            adapter,
+            &auth.user_id,
+            &repository_id,
+        )
         .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
         .map_err(db_error)?;
 
         if !removed {
@@ -582,26 +553,27 @@ pub async fn delete(
     }
 
     // 3. Decide whether to purge (last user OR force_purge).
-    let db_cl = db.clone();
-    let rid = repository_id.clone();
-    let purge_info = tokio::task::spawn_blocking(move || -> maestro_core::error::Result<Option<(maestro_core::db::repositories::RepositoryRow, Vec<String>)>> {
-        let conn = db_cl.conn().blocking_lock();
-        let row = match maestro_core::db::repositories::get(&conn, &rid)? {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-        let mut affected_users: Vec<String> = conn
-            .prepare("SELECT user_id FROM user_repositories WHERE repository_id = ?1")?
-            .query_map(rusqlite::params![&rid], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        // Sort for deterministic audit-log output.
-        affected_users.sort();
-        Ok(Some((row, affected_users)))
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
+    let row = maestro_core::db::repositories::get(adapter, &repository_id)
+        .await
+        .map_err(db_error)?;
+    let purge_info = match row {
+        Some(r) => {
+            let rows = adapter
+                .query_all(
+                    "SELECT user_id FROM user_repositories WHERE repository_id = ?",
+                    vec![maestro_core::db::DbValue::Text(repository_id.clone())],
+                )
+                .await
+                .map_err(|e| db_error(e.into()))?;
+            let mut affected_users: Vec<String> = rows
+                .iter()
+                .filter_map(|row| row.get_text(0).ok())
+                .collect();
+            affected_users.sort();
+            Some((r, affected_users))
+        }
+        None => None,
+    };
 
     let Some((row, remaining_users)) = purge_info else {
         // No row left; caller already had it removed via cascade. 204.
@@ -637,15 +609,9 @@ pub async fn delete(
         }
     }
 
-    let db_cl = db.clone();
-    let rid = row.id.clone();
-    let deleted = tokio::task::spawn_blocking(move || {
-        let conn = db_cl.conn().blocking_lock();
-        maestro_core::db::repositories::delete(&conn, &rid)
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(db_error)?;
+    let deleted = maestro_core::db::repositories::delete(adapter, &row.id)
+        .await
+        .map_err(db_error)?;
 
     if deleted {
         // Remove on-disk clone. Best-effort — log on failure.

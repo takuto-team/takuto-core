@@ -59,20 +59,18 @@ pub async fn list_github_issues(
         ));
     };
 
-    let user_id = auth.user_id.clone();
-    let repo_name = repository.clone();
-    let row_opt = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        let has =
-            maestro_core::db::repositories::user_has(&conn, &user_id, &repo_name).unwrap_or(false);
-        if !has {
-            return Ok::<_, maestro_core::error::MaestroError>(None);
-        }
-        maestro_core::db::repositories::get_by_name(&conn, &repo_name)
-    })
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Plan-11 step 3: repositories DAO on the adapter.
+    let adapter = db.adapter();
+    let has = maestro_core::db::repositories::user_has(adapter, &auth.user_id, &repository)
+        .await
+        .unwrap_or(false);
+    let row_opt = if !has {
+        None
+    } else {
+        maestro_core::db::repositories::get_by_name(adapter, &repository)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    };
 
     let Some(row) = row_opt else {
         return Err((
