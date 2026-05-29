@@ -258,68 +258,64 @@ pub async fn get_my_credentials(
         let cfg = cfg_state.config.read().await;
         cfg.agent.provider.as_str().to_string()
     };
-    let user_id = auth.user_id.clone();
-    let active_provider_clone = active_provider.clone();
-    let status = tokio::task::spawn_blocking(move || -> rusqlite::Result<UserCredentialsStatus> {
-        let conn = db.conn().blocking_lock();
-        // Task #39: fetch the two kinds independently. We return a bundle
-        // (api_key + cli_state slots) so the UI can render the two-pill
-        // state per-kind. Bundle is `None` only when BOTH are absent.
-        let fetch = |kind: ProviderCredentialKind| -> rusqlite::Result<Option<ProviderCredentialStatus>> {
-            let r = provider_credentials::find_active_with_kind(
-                &conn,
-                &user_id,
-                &active_provider_clone,
-                kind,
-            )
-            .map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Null,
-                    format!("find_active_with_kind({kind:?}) failed: {e}").into(),
-                )
-            })?;
-            Ok(r.map(|row| ProviderCredentialStatus {
-                provider: row.provider,
-                kind: row.kind.as_str().to_string(),
-                active: !row.inactive,
-                last_validated_at: row.last_validated_at,
-                last_used_at: row.last_used_at,
-            }))
-        };
-        let api_key = fetch(ProviderCredentialKind::ApiKey)?;
-        let cli_state = fetch(ProviderCredentialKind::CliState)?;
-        let provider = if api_key.is_none() && cli_state.is_none() {
-            None
-        } else {
-            Some(ProviderCredentialBundle {
-                provider: active_provider_clone.clone(),
-                api_key,
-                cli_state,
-            })
-        };
-        let github = github_credentials::find(&conn, &user_id)
-            .map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Null,
-                    format!("github_credentials::find failed: {e}").into(),
-                )
-            })?
-            .map(|row| GithubCredentialStatus {
-                login: row.github_login,
-                scopes: serde_json::from_str(&row.scopes_json).unwrap_or_default(),
-                sign_commits: row.sign_commits,
-                last_validated_at: row.last_validated_at,
-            });
-        Ok(UserCredentialsStatus { provider, github })
-    })
+    // Plan-11 step 3 cluster B: provider_credentials + github_credentials
+    // migrated to the agnostic adapter. Read paths drop spawn_blocking
+    // entirely; the route is pure async.
+    let adapter = db.adapter();
+    let user_id = &auth.user_id;
+    let to_status = |row: provider_credentials::ProviderCredentialRow| ProviderCredentialStatus {
+        provider: row.provider,
+        kind: row.kind.as_str().to_string(),
+        active: !row.inactive,
+        last_validated_at: row.last_validated_at,
+        last_used_at: row.last_used_at,
+    };
+    let api_key = provider_credentials::find_active_with_kind(
+        adapter,
+        user_id,
+        &active_provider,
+        ProviderCredentialKind::ApiKey,
+    )
     .await
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "join_failed"))?
     .map_err(|e| {
-        tracing::warn!(error = %e, "credential read failed");
+        tracing::warn!(error = %e, "find_active_with_kind(api_key) failed");
         err(StatusCode::INTERNAL_SERVER_ERROR, "read_failed")
-    })?;
+    })?
+    .map(to_status);
+    let cli_state = provider_credentials::find_active_with_kind(
+        adapter,
+        user_id,
+        &active_provider,
+        ProviderCredentialKind::CliState,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "find_active_with_kind(cli_state) failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "read_failed")
+    })?
+    .map(to_status);
+    let provider = if api_key.is_none() && cli_state.is_none() {
+        None
+    } else {
+        Some(ProviderCredentialBundle {
+            provider: active_provider.clone(),
+            api_key,
+            cli_state,
+        })
+    };
+    let github = github_credentials::find(adapter, user_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "github_credentials::find failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "read_failed")
+        })?
+        .map(|row| GithubCredentialStatus {
+            login: row.github_login,
+            scopes: serde_json::from_str(&row.scopes_json).unwrap_or_default(),
+            sign_commits: row.sign_commits,
+            last_validated_at: row.last_validated_at,
+        });
+    let status = UserCredentialsStatus { provider, github };
 
     Ok(Json(status))
 }
@@ -399,49 +395,54 @@ pub async fn post_provider_credential(
     })?;
     drop(master);
 
-    let user_id = auth.user_id.clone();
-    let provider_for_blocking = provider.clone();
-    // Per-kind metadata so audit-log reviewers can distinguish api_key
-    // rotations from cli_state rotations. Non-secret JSON only.
+    // Plan-11 step 3 cluster B: provider_credentials + credential_audit
+    // on the adapter. The atomicity invariant ("credential write + audit
+    // row commit together") is preserved by opening a single DbTransaction,
+    // doing both writes via the _in_tx variants, then commit.
     let metadata = serde_json::json!({ "kind": kind.as_str() }).to_string();
-    let outcome = tokio::task::spawn_blocking(move || -> Result<UpsertOutcome, String> {
-        let conn = db.conn().blocking_lock();
-        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let adapter = db.adapter();
+    let outcome = {
+        let mut tx = adapter.begin().await.map_err(|e| {
+            tracing::warn!(error = %e, "begin transaction failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
         let outcome = provider_credentials::upsert(
-            &tx,
-            &user_id,
-            &provider_for_blocking,
+            &mut tx,
+            &auth.user_id,
+            &provider,
             kind,
             &sealed,
             &metadata,
         )
-        .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "provider_credentials::upsert failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
         // Task #39: the kind ("api_key" / "cli_state") is recorded in the
         // user_provider_credentials.metadata_json column above, NOT in
-        // credential_audit (which has no metadata slot). Admins reviewing
-        // audit can join by (user_id, provider) to confirm which kind
-        // rotated. The `error_code` column stays for actual error codes
-        // only.
-        credential_audit::log(
-            &tx,
-            &user_id,
-            Some(&user_id),
+        // credential_audit (which has no metadata slot).
+        credential_audit::log_in_tx(
+            &mut tx,
+            &auth.user_id,
+            Some(&auth.user_id),
             CredentialAuditKind::AiProvider,
-            Some(&provider_for_blocking),
+            Some(&provider),
             outcome.audit_event(),
             "ok",
             None,
         )
-        .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(outcome)
-    })
-    .await
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "join_failed"))?
-    .map_err(|e| {
-        tracing::warn!(error = %e, "provider credential upsert failed");
-        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
-    })?;
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "credential_audit::log_in_tx failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+        tx.commit().await.map_err(|e| {
+            tracing::warn!(error = %e, "commit transaction failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+        outcome
+    };
 
     let status = match outcome {
         UpsertOutcome::Created => StatusCode::CREATED,
@@ -533,44 +534,48 @@ pub async fn delete_provider_credential(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
         .clone();
 
-    let user_id = auth.user_id.clone();
-    let provider_for_blocking = provider.clone();
-    let deleted = tokio::task::spawn_blocking(move || -> Result<bool, String> {
-        let conn = db.conn().blocking_lock();
-        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        let was_present = match kind {
-            Some(k) => provider_credentials::delete_with_kind(
-                &tx,
-                &user_id,
-                &provider_for_blocking,
-                k,
-            )
-            .map_err(|e| e.to_string())?,
-            None => provider_credentials::delete(&tx, &user_id, &provider_for_blocking)
-                .map_err(|e| e.to_string())?,
-        };
-        if was_present {
-            credential_audit::log(
-                &tx,
-                &user_id,
-                Some(&user_id),
-                CredentialAuditKind::AiProvider,
-                Some(&provider_for_blocking),
-                "deleted",
-                "ok",
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(was_present)
-    })
-    .await
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "join_failed"))?
-    .map_err(|e| {
-        tracing::warn!(error = %e, "provider credential delete failed");
+    // Plan-11 step 3 cluster B: atomic delete + audit via DbTransaction.
+    let adapter = db.adapter();
+    let mut tx = adapter.begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "begin tx failed");
         err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
     })?;
+    let was_present = match kind {
+        Some(k) => provider_credentials::delete_with_kind(&mut tx, &auth.user_id, &provider, k)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "delete_with_kind failed");
+                err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+            })?,
+        None => provider_credentials::delete(&mut tx, &auth.user_id, &provider)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "delete failed");
+                err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+            })?,
+    };
+    if was_present {
+        credential_audit::log_in_tx(
+            &mut tx,
+            &auth.user_id,
+            Some(&auth.user_id),
+            CredentialAuditKind::AiProvider,
+            Some(&provider),
+            "deleted",
+            "ok",
+            None,
+        )
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "credential_audit::log_in_tx failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    }
+    tx.commit().await.map_err(|e| {
+        tracing::warn!(error = %e, "commit failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    let deleted = was_present;
 
     // 204 on hit AND on idempotent miss — the dashboard "delete" button is
     // safe to click twice.
@@ -607,24 +612,19 @@ pub async fn post_github_pat(
         Ok(v) => v,
         Err(e) => {
             let code = e.code();
-            // Audit-log the validation failure (best-effort — the bad PAT
-            // never reaches the seal layer).
-            let user_id = auth.user_id.clone();
-            let db_audit = db.clone();
-            let code_owned = code.to_string();
-            let _ = tokio::task::spawn_blocking(move || {
-                let conn = db_audit.conn().blocking_lock();
-                let _ = credential_audit::log(
-                    &conn,
-                    &user_id,
-                    Some(&user_id),
-                    CredentialAuditKind::GithubPat,
-                    None,
-                    "validation_failed",
-                    "error",
-                    Some(&code_owned),
-                );
-            })
+            // Audit-log the validation failure (best-effort — the bad
+            // PAT never reaches the seal layer). Plan-11 step 3 cluster
+            // B: on the adapter, fire-and-forget single statement.
+            let _ = credential_audit::log(
+                db.adapter(),
+                &auth.user_id,
+                Some(&auth.user_id),
+                CredentialAuditKind::GithubPat,
+                None,
+                "validation_failed",
+                "error",
+                Some(&code.to_string()),
+            )
             .await;
 
             let extra = match &e {
@@ -662,42 +662,60 @@ pub async fn post_github_pat(
     let user_id = auth.user_id.clone();
     let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = db.conn().blocking_lock();
-        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        let already_present = github_credentials::find(&tx, &user_id)
-            .map_err(|e| e.to_string())?
-            .is_some();
-        github_credentials::upsert(
-            &tx,
-            &user_id,
-            &sealed,
-            &login,
-            &scopes_json,
-            sign_commits,
-        )
-        .map_err(|e| e.to_string())?;
-        github_credentials::touch_last_validated(&tx, &user_id, &now)
-            .map_err(|e| e.to_string())?;
-        let event = if already_present { "rotated" } else { "created" };
-        credential_audit::log(
-            &tx,
-            &user_id,
-            Some(&user_id),
-            CredentialAuditKind::GithubPat,
-            None,
-            event,
-            "ok",
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(())
-    })
+    // Plan-11 step 3 cluster B: atomic upsert + touch + audit via DbTransaction.
+    let adapter = db.adapter();
+    // Pre-check (outside the tx) whether a row already exists so we
+    // emit "rotated" vs "created" in the audit. Single read; the tx
+    // window below covers the actual write set.
+    let already_present = github_credentials::find(adapter, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "github_credentials::find failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?
+        .is_some();
+
+    let mut tx = adapter.begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "begin tx failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    github_credentials::upsert(
+        &mut tx,
+        &user_id,
+        &sealed,
+        &login,
+        &scopes_json,
+        sign_commits,
+    )
     .await
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "join_failed"))?
     .map_err(|e| {
-        tracing::warn!(error = %e, "github PAT upsert failed");
+        tracing::warn!(error = %e, "github_credentials::upsert failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    github_credentials::touch_last_validated(&mut tx, &user_id, &now)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "touch_last_validated failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    let event = if already_present { "rotated" } else { "created" };
+    credential_audit::log_in_tx(
+        &mut tx,
+        &user_id,
+        Some(&user_id),
+        CredentialAuditKind::GithubPat,
+        None,
+        event,
+        "ok",
+        None,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "credential_audit::log_in_tx failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    tx.commit().await.map_err(|e| {
+        tracing::warn!(error = %e, "commit failed");
         err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
     })?;
 
@@ -723,31 +741,37 @@ pub async fn delete_github_pat(
         .clone();
     let user_id = auth.user_id.clone();
 
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = db.conn().blocking_lock();
-        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        let was_present =
-            github_credentials::delete(&tx, &user_id).map_err(|e| e.to_string())?;
-        if was_present {
-            credential_audit::log(
-                &tx,
-                &user_id,
-                Some(&user_id),
-                CredentialAuditKind::GithubPat,
-                None,
-                "deleted",
-                "ok",
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "join_failed"))?
-    .map_err(|e| {
-        tracing::warn!(error = %e, "github PAT delete failed");
+    // Plan-11 step 3 cluster B: atomic delete + audit via DbTransaction.
+    let adapter = db.adapter();
+    let mut tx = adapter.begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "begin tx failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    let was_present = github_credentials::delete(&mut tx, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "github_credentials::delete failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    if was_present {
+        credential_audit::log_in_tx(
+            &mut tx,
+            &user_id,
+            Some(&user_id),
+            CredentialAuditKind::GithubPat,
+            None,
+            "deleted",
+            "ok",
+            None,
+        )
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "credential_audit::log_in_tx failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    }
+    tx.commit().await.map_err(|e| {
+        tracing::warn!(error = %e, "commit failed");
         err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
     })?;
 
@@ -768,31 +792,37 @@ pub async fn patch_github_attribution(
     let user_id = auth.user_id.clone();
     let value = body.sign_commits;
 
-    let updated = tokio::task::spawn_blocking(move || -> Result<bool, String> {
-        let conn = db.conn().blocking_lock();
-        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        let hit =
-            github_credentials::set_sign_commits(&tx, &user_id, value).map_err(|e| e.to_string())?;
-        if hit {
-            credential_audit::log(
-                &tx,
-                &user_id,
-                Some(&user_id),
-                CredentialAuditKind::GithubPat,
-                None,
-                "rotated",
-                "ok",
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(hit)
-    })
-    .await
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "join_failed"))?
-    .map_err(|e| {
-        tracing::warn!(error = %e, "github attribution patch failed");
+    // Plan-11 step 3 cluster B: atomic set_sign_commits + audit via DbTransaction.
+    let adapter = db.adapter();
+    let mut tx = adapter.begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "begin tx failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    let updated = github_credentials::set_sign_commits(&mut tx, &user_id, value)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "set_sign_commits failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    if updated {
+        credential_audit::log_in_tx(
+            &mut tx,
+            &user_id,
+            Some(&user_id),
+            CredentialAuditKind::GithubPat,
+            None,
+            "rotated",
+            "ok",
+            None,
+        )
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "credential_audit::log_in_tx failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    }
+    tx.commit().await.map_err(|e| {
+        tracing::warn!(error = %e, "commit failed");
         err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
     })?;
 
@@ -818,12 +848,11 @@ pub async fn get_admin_github_status(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
         .clone();
 
-    let row = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        github_credentials::find(&conn, &target_user_id).ok().flatten()
-    })
-    .await
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "join_failed"))?;
+    // Plan-11 step 3 cluster B: github_credentials on the adapter.
+    let row = github_credentials::find(db.adapter(), &target_user_id)
+        .await
+        .ok()
+        .flatten();
 
     let resp = match row {
         Some(r) => AdminGithubStatusResponse {

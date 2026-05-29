@@ -34,19 +34,19 @@ pub(super) async fn unseal_claude_session(
     workflow_user_id: &str,
     dir: &Path,
 ) -> Result<Option<PathBuf>> {
-    let row = {
-        let conn = db.conn().lock().await;
-        provider_credentials::find_active_with_kind(
-            &conn,
-            workflow_user_id,
-            AiAgentProvider::Claude.as_str(),
-            provider_credentials::ProviderCredentialKind::CliState,
-        )
-        .map_err(|e| ConfigError::BundleDbLookup {
-            op: "find_active_with_kind(cli_state)",
-            detail: e.to_string(),
-        })?
-    };
+    // Plan-11 step 3 cluster B: provider_credentials migrated to the
+    // agnostic adapter; no rusqlite MutexGuard needed.
+    let row = provider_credentials::find_active_with_kind(
+        db.adapter(),
+        workflow_user_id,
+        AiAgentProvider::Claude.as_str(),
+        provider_credentials::ProviderCredentialKind::CliState,
+    )
+    .await
+    .map_err(|e| ConfigError::BundleDbLookup {
+        op: "find_active_with_kind(cli_state)",
+        detail: e.to_string(),
+    })?;
     let Some(r) = row else {
         return Ok(None);
     };
@@ -107,19 +107,17 @@ pub(super) async fn unseal_provider_plaintext_bytes(
             detail: e.to_string(),
         }
     })?;
-    let row = {
-        let conn = db.conn().lock().await;
-        provider_credentials::find_active_with_kind(
-            &conn,
-            workflow_user_id,
-            &auth_pin.provider,
-            provider_credentials::ProviderCredentialKind::ApiKey,
-        )
-        .map_err(|e| ConfigError::BundleDbLookup {
-            op: "find_active_with_kind(provider_credential)",
-            detail: e.to_string(),
-        })?
-    };
+    let row = provider_credentials::find_active_with_kind(
+        db.adapter(),
+        workflow_user_id,
+        &auth_pin.provider,
+        provider_credentials::ProviderCredentialKind::ApiKey,
+    )
+    .await
+    .map_err(|e| ConfigError::BundleDbLookup {
+        op: "find_active_with_kind(provider_credential)",
+        detail: e.to_string(),
+    })?;
     match row {
         Some(r) => {
             let sealed = SealedBlob {
@@ -181,19 +179,17 @@ pub(super) async fn unseal_provider_credential(
     // (user_id, provider, kind=api_key) lookup. Task #39: switched to the
     // kind-explicit query so the lookup is unambiguous when a Claude user
     // also has a `cli_state` row (UNIQUE(user_id, provider, kind)).
-    let row = {
-        let conn = db.conn().lock().await;
-        provider_credentials::find_active_with_kind(
-            &conn,
-            workflow_user_id,
-            &auth_pin.provider,
-            provider_credentials::ProviderCredentialKind::ApiKey,
-        )
-        .map_err(|e| ConfigError::BundleDbLookup {
-            op: "find_active_with_kind(provider_credential)",
-            detail: e.to_string(),
-        })?
-    };
+    let row = provider_credentials::find_active_with_kind(
+        db.adapter(),
+        workflow_user_id,
+        &auth_pin.provider,
+        provider_credentials::ProviderCredentialKind::ApiKey,
+    )
+    .await
+    .map_err(|e| ConfigError::BundleDbLookup {
+        op: "find_active_with_kind(provider_credential)",
+        detail: e.to_string(),
+    })?;
 
     let plaintext = match row {
         Some(r) => {

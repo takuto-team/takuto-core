@@ -6,14 +6,26 @@
 //! mark-inactive helpers consumed by the per-user credential endpoints in
 //! `crates/maestro-web/src/routes/credentials.rs`.
 //!
-//! All helpers take a `&rusqlite::Connection` so callers can wrap multiple
-//! writes in their own transaction (the audit-log row is co-written with the
-//! credential write in the credential handler).
+//! ### Plan-11 step 3 cluster B (this commit)
+//!
+//! Migrated to the agnostic adapter alongside credential_audit +
+//! github_credentials. Two API shapes:
+//!
+//! * **Reads** (`find_active`, `find_active_with_kind`,
+//!   `find_all_for_user`) take `&DbAdapter` — called from many
+//!   non-transactional sites (auth resolver, status route, bundle
+//!   builder).
+//! * **Writes** (`upsert`, `delete`, `delete_with_kind`) take
+//!   `&mut DbTransaction<'_>` — `routes/credentials.rs` co-commits
+//!   them with the audit row in one transaction, preserving the
+//!   atomicity invariant. The three helpers that aren't called from
+//!   routes (`mark_inactive`, `touch_last_validated`, `touch_last_used`)
+//!   take `&DbAdapter` since no transactional caller exists.
 
-use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::SealedBlob;
+use crate::db::{DbAdapter, DbTransaction, DbValue};
 use crate::error::{MaestroError, Result};
 
 /// `kind` discriminator. v1 only writes `ApiKey`; the other two are reserved
@@ -83,118 +95,145 @@ impl UpsertOutcome {
     }
 }
 
+/// Application-computed timestamp matching the legacy
+/// `strftime('%Y-%m-%dT%H:%M:%SZ','now')` shape. Bound explicitly so the
+/// SQL works on every backend (SQLite, Postgres, MySQL).
+fn now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
 /// Insert a fresh credential row OR update the existing
-/// `(user_id, provider, kind)` row with new sealed bytes + metadata. Returns
-/// `Created` for a brand-new row, `Rotated` for an in-place rotation. The
-/// row is always marked `inactive = 0` on write (rotating a credential
-/// implicitly reactivates a previously-inactivated row).
-pub fn upsert(
-    conn: &Connection,
+/// `(user_id, provider, kind)` row with new sealed bytes + metadata.
+///
+/// Returns `Created` for a brand-new row, `Rotated` for an in-place
+/// rotation. The row is always marked `inactive = 0` on write (rotating
+/// a credential implicitly reactivates a previously-inactivated row).
+///
+/// Takes `&mut DbTransaction` because the credential write co-commits
+/// with the audit row in `routes/credentials.rs`. The SELECT-then-
+/// UPDATE-or-INSERT race window the legacy implementation tolerated is
+/// preserved because both ops run inside the same transaction.
+pub async fn upsert(
+    tx: &mut DbTransaction<'_>,
     user_id: &str,
     provider: &str,
     kind: ProviderCredentialKind,
     sealed: &SealedBlob,
     metadata_json: &str,
 ) -> Result<UpsertOutcome> {
-    let existing: Option<i64> = conn
-        .query_row(
+    let existing = tx
+        .query_optional(
             "SELECT id FROM user_provider_credentials \
-             WHERE user_id = ?1 AND provider = ?2 AND kind = ?3",
-            params![user_id, provider, kind.as_str()],
-            |r| r.get(0),
+             WHERE user_id = ? AND provider = ? AND kind = ?",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(provider.to_string()),
+                DbValue::Text(kind.as_str().to_string()),
+            ],
         )
-        .optional()?;
+        .await?;
 
     match existing {
-        Some(id) => {
-            conn.execute(
+        Some(row) => {
+            let id = row.get_i64(0)?;
+            tx.execute(
                 "UPDATE user_provider_credentials \
-                 SET ciphertext = ?1, nonce = ?2, wrapped_dek = ?3, wnonce = ?4, \
-                     metadata_json = ?5, inactive = 0, \
-                     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') \
-                 WHERE id = ?6",
-                params![
-                    sealed.ciphertext.as_slice(),
-                    sealed.nonce.as_slice(),
-                    sealed.wrapped_dek.as_slice(),
-                    sealed.wnonce.as_slice(),
-                    metadata_json,
-                    id,
+                 SET ciphertext = ?, nonce = ?, wrapped_dek = ?, wnonce = ?, \
+                     metadata_json = ?, inactive = 0, updated_at = ? \
+                 WHERE id = ?",
+                vec![
+                    DbValue::Bytes(sealed.ciphertext.clone()),
+                    DbValue::Bytes(sealed.nonce.to_vec()),
+                    DbValue::Bytes(sealed.wrapped_dek.clone()),
+                    DbValue::Bytes(sealed.wnonce.to_vec()),
+                    DbValue::Text(metadata_json.to_string()),
+                    DbValue::Text(now_iso()),
+                    DbValue::I64(id),
                 ],
-            )?;
+            )
+            .await?;
             Ok(UpsertOutcome::Rotated)
         }
         None => {
-            conn.execute(
+            let now = now_iso();
+            tx.execute(
                 "INSERT INTO user_provider_credentials \
-                 (user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce, metadata_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    user_id,
-                    provider,
-                    kind.as_str(),
-                    sealed.ciphertext.as_slice(),
-                    sealed.nonce.as_slice(),
-                    sealed.wrapped_dek.as_slice(),
-                    sealed.wnonce.as_slice(),
-                    metadata_json,
+                 (user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce, \
+                  metadata_json, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                vec![
+                    DbValue::Text(user_id.to_string()),
+                    DbValue::Text(provider.to_string()),
+                    DbValue::Text(kind.as_str().to_string()),
+                    DbValue::Bytes(sealed.ciphertext.clone()),
+                    DbValue::Bytes(sealed.nonce.to_vec()),
+                    DbValue::Bytes(sealed.wrapped_dek.clone()),
+                    DbValue::Bytes(sealed.wnonce.to_vec()),
+                    DbValue::Text(metadata_json.to_string()),
+                    DbValue::Text(now.clone()),
+                    DbValue::Text(now),
                 ],
-            )?;
+            )
+            .await?;
             Ok(UpsertOutcome::Created)
         }
     }
 }
 
-fn row_from_query(row: &rusqlite::Row) -> rusqlite::Result<ProviderCredentialRow> {
-    let nonce_blob: Vec<u8> = row.get("nonce")?;
-    let wnonce_blob: Vec<u8> = row.get("wnonce")?;
+/// Project a SELECT row into a `ProviderCredentialRow`. Used by every
+/// read helper. Column order matches `SELECT_COLS` (defined inline in
+/// each query for clarity).
+fn decode_row(r: &crate::db::DbRow) -> Result<ProviderCredentialRow> {
+    let nonce_blob = r.get_bytes(5)?;
+    let wnonce_blob = r.get_bytes(7)?;
     let mut nonce = [0u8; 24];
     let mut wnonce = [0u8; 24];
     if nonce_blob.len() != 24 || wnonce_blob.len() != 24 {
-        return Err(rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Blob,
-            format!(
-                "nonce/wnonce wrong length: {}/{} (expected 24/24)",
-                nonce_blob.len(),
-                wnonce_blob.len()
-            )
-            .into(),
-        ));
+        // Schema invariant: nonce / wnonce are always 24 bytes. A short
+        // value is corruption. Propagate as a typed DbError.
+        return Err(crate::db::DbError::NulByte {
+            field: "provider_credentials.nonce_or_wnonce_wrong_length",
+        }
+        .into());
     }
     nonce.copy_from_slice(&nonce_blob);
     wnonce.copy_from_slice(&wnonce_blob);
-    let kind_str: String = row.get("kind")?;
+
+    let kind_str = r.get_text(3)?;
     let kind = match kind_str.as_str() {
         "api_key" => ProviderCredentialKind::ApiKey,
         "oauth_token" => ProviderCredentialKind::OauthToken,
         "cli_state" => ProviderCredentialKind::CliState,
-        other => {
-            return Err(rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                format!("unknown provider credential kind {other}").into(),
-            ));
+        _ => {
+            return Err(crate::db::DbError::NulByte {
+                field: "provider_credentials.kind_unknown",
+            }
+            .into());
         }
     };
     Ok(ProviderCredentialRow {
-        id: row.get("id")?,
-        user_id: row.get("user_id")?,
-        provider: row.get("provider")?,
+        id: r.get_i64(0)?,
+        user_id: r.get_text(1)?,
+        provider: r.get_text(2)?,
         kind,
-        ciphertext: row.get("ciphertext")?,
+        ciphertext: r.get_bytes(4)?,
         nonce,
-        wrapped_dek: row.get("wrapped_dek")?,
+        wrapped_dek: r.get_bytes(6)?,
         wnonce,
-        metadata_json: row.get("metadata_json")?,
-        inactive: row.get::<_, i64>("inactive")? != 0,
-        last_validated_at: row.get("last_validated_at")?,
-        last_used_at: row.get("last_used_at")?,
-        created_at: row.get("created_at")?,
-        updated_at: row.get("updated_at")?,
-        expires_at: row.get("expires_at")?,
+        metadata_json: r.get_text(8)?,
+        inactive: r.get_i64(9)? != 0,
+        last_validated_at: r.get_text_opt(10)?,
+        last_used_at: r.get_text_opt(11)?,
+        created_at: r.get_text(12)?,
+        updated_at: r.get_text(13)?,
+        expires_at: r.get_text_opt(14)?,
     })
 }
+
+/// Common column projection — must match `decode_row`'s positional layout.
+const SELECT_COLS: &str = "id, user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce, \
+     metadata_json, inactive, last_validated_at, last_used_at, \
+     created_at, updated_at, expires_at";
 
 /// Return ONE active (`inactive = 0`) row for `(user_id, provider)`. With
 /// task #39 Claude users can have both `api_key` and `cli_state` rows
@@ -203,29 +242,33 @@ fn row_from_query(row: &rusqlite::Row) -> rusqlite::Result<ProviderCredentialRow
 /// presence probe ("does this user have ANY credential for this provider?")
 /// keep the same behaviour. Callers that need a specific kind use
 /// [`find_active_with_kind`].
-pub fn find_active(
-    conn: &Connection,
+pub async fn find_active(
+    adapter: &DbAdapter,
     user_id: &str,
     provider: &str,
 ) -> Result<Option<ProviderCredentialRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce, \
-                metadata_json, inactive, last_validated_at, last_used_at, \
-                created_at, updated_at, expires_at \
+    let sql = format!(
+        "SELECT {SELECT_COLS} \
          FROM user_provider_credentials \
-         WHERE user_id = ?1 AND provider = ?2 AND inactive = 0 \
+         WHERE user_id = ? AND provider = ? AND inactive = 0 \
          ORDER BY CASE kind \
                     WHEN 'api_key'     THEN 0 \
                     WHEN 'cli_state'   THEN 1 \
                     WHEN 'oauth_token' THEN 2 \
                     ELSE 3 \
                   END \
-         LIMIT 1",
-    )?;
-    let row = stmt
-        .query_row(params![user_id, provider], row_from_query)
-        .optional()?;
-    Ok(row)
+         LIMIT 1"
+    );
+    let row = adapter
+        .query_optional(
+            &sql,
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(provider.to_string()),
+            ],
+        )
+        .await?;
+    row.map(|r| decode_row(&r)).transpose()
 }
 
 /// Task #39: return the single active row for `(user_id, provider, kind)`
@@ -233,57 +276,72 @@ pub fn find_active(
 /// per-kind tmpfs files separately — one Claude user might have api_key
 /// only, cli_state only, or both, and the bundle builder needs to query
 /// each independently.
-pub fn find_active_with_kind(
-    conn: &Connection,
+pub async fn find_active_with_kind(
+    adapter: &DbAdapter,
     user_id: &str,
     provider: &str,
     kind: ProviderCredentialKind,
 ) -> Result<Option<ProviderCredentialRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce, \
-                metadata_json, inactive, last_validated_at, last_used_at, \
-                created_at, updated_at, expires_at \
+    let sql = format!(
+        "SELECT {SELECT_COLS} \
          FROM user_provider_credentials \
-         WHERE user_id = ?1 AND provider = ?2 AND kind = ?3 AND inactive = 0 \
-         LIMIT 1",
-    )?;
-    let row = stmt
-        .query_row(
-            params![user_id, provider, kind.as_str()],
-            row_from_query,
+         WHERE user_id = ? AND provider = ? AND kind = ? AND inactive = 0 \
+         LIMIT 1"
+    );
+    let row = adapter
+        .query_optional(
+            &sql,
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(provider.to_string()),
+                DbValue::Text(kind.as_str().to_string()),
+            ],
         )
-        .optional()?;
-    Ok(row)
+        .await?;
+    row.map(|r| decode_row(&r)).transpose()
 }
 
 /// Return every row for `user_id` regardless of `inactive` — drives
 /// `GET /api/users/me/credentials`.
-pub fn find_all_for_user(
-    conn: &Connection,
+pub async fn find_all_for_user(
+    adapter: &DbAdapter,
     user_id: &str,
 ) -> Result<Vec<ProviderCredentialRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, user_id, provider, kind, ciphertext, nonce, wrapped_dek, wnonce, \
-                metadata_json, inactive, last_validated_at, last_used_at, \
-                created_at, updated_at, expires_at \
+    let sql = format!(
+        "SELECT {SELECT_COLS} \
          FROM user_provider_credentials \
-         WHERE user_id = ?1 \
-         ORDER BY provider, kind",
-    )?;
-    let rows = stmt
-        .query_map(params![user_id], row_from_query)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
+         WHERE user_id = ? \
+         ORDER BY provider, kind"
+    );
+    let rows = adapter
+        .query_all(&sql, vec![DbValue::Text(user_id.to_string())])
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        out.push(decode_row(r)?);
+    }
+    Ok(out)
 }
 
 /// Hard-delete every row for `(user_id, provider)`. Idempotent; returns
 /// `true` when at least one row was deleted (the audit handler uses this to
 /// skip the audit emit on a no-op delete).
-pub fn delete(conn: &Connection, user_id: &str, provider: &str) -> Result<bool> {
-    let n = conn.execute(
-        "DELETE FROM user_provider_credentials WHERE user_id = ?1 AND provider = ?2",
-        params![user_id, provider],
-    )?;
+///
+/// Inside a `DbTransaction` so the audit row co-commits.
+pub async fn delete(
+    tx: &mut DbTransaction<'_>,
+    user_id: &str,
+    provider: &str,
+) -> Result<bool> {
+    let n = tx
+        .execute(
+            "DELETE FROM user_provider_credentials WHERE user_id = ? AND provider = ?",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(provider.to_string()),
+            ],
+        )
+        .await?;
     Ok(n > 0)
 }
 
@@ -292,48 +350,73 @@ pub fn delete(conn: &Connection, user_id: &str, provider: &str) -> Result<bool> 
 /// Drives the `DELETE /api/users/me/credentials/{provider}?kind=cli_state`
 /// flow so the UI can wipe just the session state without touching the
 /// api_key row (or vice versa).
-pub fn delete_with_kind(
-    conn: &Connection,
+pub async fn delete_with_kind(
+    tx: &mut DbTransaction<'_>,
     user_id: &str,
     provider: &str,
     kind: ProviderCredentialKind,
 ) -> Result<bool> {
-    let n = conn.execute(
-        "DELETE FROM user_provider_credentials \
-         WHERE user_id = ?1 AND provider = ?2 AND kind = ?3",
-        params![user_id, provider, kind.as_str()],
-    )?;
+    let n = tx
+        .execute(
+            "DELETE FROM user_provider_credentials \
+             WHERE user_id = ? AND provider = ? AND kind = ?",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(provider.to_string()),
+                DbValue::Text(kind.as_str().to_string()),
+            ],
+        )
+        .await?;
     Ok(n > 0)
 }
 
 /// Mark every row for `(user_id, provider)` as `inactive = 1`. Phase 2b.2
 /// uses this when the deployment-wide provider switches (the old creds stay
 /// for audit / restore — see 04_architecture.md §2.4).
-pub fn mark_inactive(conn: &Connection, user_id: &str, provider: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE user_provider_credentials SET inactive = 1, \
-         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') \
-         WHERE user_id = ?1 AND provider = ?2",
-        params![user_id, provider],
-    )?;
+pub async fn mark_inactive(adapter: &DbAdapter, user_id: &str, provider: &str) -> Result<()> {
+    adapter
+        .execute(
+            "UPDATE user_provider_credentials SET inactive = 1, updated_at = ? \
+             WHERE user_id = ? AND provider = ?",
+            vec![
+                DbValue::Text(now_iso()),
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(provider.to_string()),
+            ],
+        )
+        .await?;
     Ok(())
 }
 
 /// Bump `last_validated_at` to the supplied ISO-8601 UTC timestamp.
-pub fn touch_last_validated(conn: &Connection, id: i64, when_iso8601_utc: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE user_provider_credentials SET last_validated_at = ?1 WHERE id = ?2",
-        params![when_iso8601_utc, id],
-    )?;
+pub async fn touch_last_validated(
+    adapter: &DbAdapter,
+    id: i64,
+    when_iso8601_utc: &str,
+) -> Result<()> {
+    adapter
+        .execute(
+            "UPDATE user_provider_credentials SET last_validated_at = ? WHERE id = ?",
+            vec![
+                DbValue::Text(when_iso8601_utc.to_string()),
+                DbValue::I64(id),
+            ],
+        )
+        .await?;
     Ok(())
 }
 
 /// Bump `last_used_at` to the supplied ISO-8601 UTC timestamp.
-pub fn touch_last_used(conn: &Connection, id: i64, when_iso8601_utc: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE user_provider_credentials SET last_used_at = ?1 WHERE id = ?2",
-        params![when_iso8601_utc, id],
-    )?;
+pub async fn touch_last_used(adapter: &DbAdapter, id: i64, when_iso8601_utc: &str) -> Result<()> {
+    adapter
+        .execute(
+            "UPDATE user_provider_credentials SET last_used_at = ? WHERE id = ?",
+            vec![
+                DbValue::Text(when_iso8601_utc.to_string()),
+                DbValue::I64(id),
+            ],
+        )
+        .await?;
     Ok(())
 }
 
@@ -347,77 +430,107 @@ mod tests {
     use super::*;
     use crate::auth::seal;
     use crate::auth::MasterKey;
-    use crate::db::schema;
+    use crate::db::adapter::DbAdapter;
+    use crate::db::migrate::DialectAwareMigrationSource;
+    use crate::db::pool::{DbBackend, DbPool};
+    use sqlx::sqlite::SqlitePool;
 
-    fn fresh_db() -> rusqlite::Connection {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        schema::run_migrations(&conn).unwrap();
-        // Seed a user so FKs are happy.
-        conn.execute(
-            "INSERT INTO users (id, username, role) VALUES ('u-alice', 'alice', 'user')",
-            [],
-        )
-        .unwrap();
-        conn
+    async fn fresh_adapter() -> DbAdapter {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        let source = DialectAwareMigrationSource::for_backend(DbBackend::Sqlite);
+        sqlx::migrate::Migrator::new(source)
+            .await
+            .unwrap()
+            .run(&pool)
+            .await
+            .unwrap();
+        let adapter = DbAdapter::new(DbPool::Sqlite(pool));
+        adapter
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-alice', 'alice', 'user')",
+                vec![],
+            )
+            .await
+            .unwrap();
+        adapter
     }
 
-    #[test]
-    fn upsert_creates_then_rotates() {
-        let conn = fresh_db();
+    /// Helper: run upsert + commit in one closed scope so the call sites
+    /// stay readable. The route does this inline alongside an audit::log_in_tx.
+    async fn upsert_committed(
+        adapter: &DbAdapter,
+        user_id: &str,
+        provider: &str,
+        kind: ProviderCredentialKind,
+        sealed: &SealedBlob,
+        metadata_json: &str,
+    ) -> UpsertOutcome {
+        let mut tx = adapter.begin().await.unwrap();
+        let outcome = upsert(&mut tx, user_id, provider, kind, sealed, metadata_json)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        outcome
+    }
+
+    #[tokio::test]
+    async fn upsert_creates_then_rotates() {
+        let a = fresh_adapter().await;
         let mk = MasterKey::from_bytes([0xAA; 32]);
         let sealed_a = seal(&mk, b"pat-A").unwrap();
         let sealed_b = seal(&mk, b"pat-B").unwrap();
 
-        let r1 = upsert(
-            &conn,
+        let r1 = upsert_committed(
+            &a,
             "u-alice",
             "claude",
             ProviderCredentialKind::ApiKey,
             &sealed_a,
             "{}",
         )
-        .unwrap();
+        .await;
         assert_eq!(r1, UpsertOutcome::Created);
 
-        let r2 = upsert(
-            &conn,
+        let r2 = upsert_committed(
+            &a,
             "u-alice",
             "claude",
             ProviderCredentialKind::ApiKey,
             &sealed_b,
             "{}",
         )
-        .unwrap();
+        .await;
         assert_eq!(r2, UpsertOutcome::Rotated);
 
         // Only one row exists for the (user, provider, kind) tuple.
-        let n: i64 = conn
-            .query_row(
+        let row = a
+            .query_one(
                 "SELECT COUNT(*) FROM user_provider_credentials WHERE user_id = 'u-alice'",
-                [],
-                |r| r.get(0),
+                vec![],
             )
+            .await
             .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(row.get_i64(0).unwrap(), 1);
     }
 
-    #[test]
-    fn find_active_round_trips_through_seal_open() {
-        let conn = fresh_db();
+    #[tokio::test]
+    async fn find_active_round_trips_through_seal_open() {
+        let a = fresh_adapter().await;
         let mk = MasterKey::from_bytes([0xCC; 32]);
         let sealed = seal(&mk, b"super-secret-token").unwrap();
-        upsert(
-            &conn,
+        upsert_committed(
+            &a,
             "u-alice",
             "cursor",
             ProviderCredentialKind::ApiKey,
             &sealed,
             "{}",
         )
-        .unwrap();
+        .await;
 
-        let row = find_active(&conn, "u-alice", "cursor").unwrap().unwrap();
+        let row = find_active(&a, "u-alice", "cursor").await.unwrap().unwrap();
         let opened = seal::open(
             &mk,
             &SealedBlob {
@@ -431,68 +544,78 @@ mod tests {
         assert_eq!(opened, b"super-secret-token");
     }
 
-    #[test]
-    fn find_active_skips_inactive_rows() {
-        let conn = fresh_db();
+    #[tokio::test]
+    async fn find_active_skips_inactive_rows() {
+        let a = fresh_adapter().await;
         let mk = MasterKey::from_bytes([0x55; 32]);
         let sealed = seal(&mk, b"x").unwrap();
-        upsert(
-            &conn,
+        upsert_committed(
+            &a,
             "u-alice",
             "claude",
             ProviderCredentialKind::ApiKey,
             &sealed,
             "{}",
         )
-        .unwrap();
-        mark_inactive(&conn, "u-alice", "claude").unwrap();
+        .await;
+        mark_inactive(&a, "u-alice", "claude").await.unwrap();
 
-        assert!(find_active(&conn, "u-alice", "claude").unwrap().is_none());
+        assert!(find_active(&a, "u-alice", "claude").await.unwrap().is_none());
         // But find_all still sees it.
-        assert_eq!(find_all_for_user(&conn, "u-alice").unwrap().len(), 1);
+        assert_eq!(find_all_for_user(&a, "u-alice").await.unwrap().len(), 1);
     }
 
-    #[test]
-    fn delete_removes_row_and_returns_true_only_on_hit() {
-        let conn = fresh_db();
+    #[tokio::test]
+    async fn delete_removes_row_and_returns_true_only_on_hit() {
+        let a = fresh_adapter().await;
         let mk = MasterKey::from_bytes([0x77; 32]);
         let sealed = seal(&mk, b"x").unwrap();
-        upsert(
-            &conn,
+        upsert_committed(
+            &a,
             "u-alice",
             "claude",
             ProviderCredentialKind::ApiKey,
             &sealed,
             "{}",
         )
-        .unwrap();
+        .await;
 
-        assert!(delete(&conn, "u-alice", "claude").unwrap());
-        assert!(!delete(&conn, "u-alice", "claude").unwrap()); // idempotent no-op
-        assert!(find_active(&conn, "u-alice", "claude").unwrap().is_none());
+        let mut tx = a.begin().await.unwrap();
+        assert!(delete(&mut tx, "u-alice", "claude").await.unwrap());
+        tx.commit().await.unwrap();
+
+        let mut tx = a.begin().await.unwrap();
+        assert!(!delete(&mut tx, "u-alice", "claude").await.unwrap());
+        tx.commit().await.unwrap();
+
+        assert!(find_active(&a, "u-alice", "claude").await.unwrap().is_none());
     }
 
-    #[test]
-    fn touch_helpers_set_timestamps_on_id() {
-        let conn = fresh_db();
+    #[tokio::test]
+    async fn touch_helpers_set_timestamps_on_id() {
+        let a = fresh_adapter().await;
         let mk = MasterKey::from_bytes([0x11; 32]);
         let sealed = seal(&mk, b"x").unwrap();
-        upsert(
-            &conn,
+        upsert_committed(
+            &a,
             "u-alice",
             "claude",
             ProviderCredentialKind::ApiKey,
             &sealed,
             "{}",
         )
-        .unwrap();
+        .await;
 
-        let row = find_active(&conn, "u-alice", "claude").unwrap().unwrap();
+        let row = find_active(&a, "u-alice", "claude").await.unwrap().unwrap();
         assert!(row.last_validated_at.is_none());
-        touch_last_validated(&conn, row.id, "2026-05-18T01:00:00Z").unwrap();
-        touch_last_used(&conn, row.id, "2026-05-18T02:00:00Z").unwrap();
+        touch_last_validated(&a, row.id, "2026-05-18T01:00:00Z")
+            .await
+            .unwrap();
+        touch_last_used(&a, row.id, "2026-05-18T02:00:00Z")
+            .await
+            .unwrap();
 
-        let row2 = find_active(&conn, "u-alice", "claude").unwrap().unwrap();
+        let row2 = find_active(&a, "u-alice", "claude").await.unwrap().unwrap();
         assert_eq!(row2.last_validated_at.as_deref(), Some("2026-05-18T01:00:00Z"));
         assert_eq!(row2.last_used_at.as_deref(), Some("2026-05-18T02:00:00Z"));
     }

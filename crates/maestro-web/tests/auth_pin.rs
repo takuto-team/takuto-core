@@ -148,17 +148,22 @@ async fn pin_for_workflow_captures_active_provider_from_config() {
     // Seed user + claude credential.
     seed_user(&db, "u-pin").await;
     let sealed = seal(&mk, b"sk-ant-test").unwrap();
+    // Plan-11 step 3 cluster B: provider_credentials::upsert on the adapter
+    // inside a short transaction.
     {
-        let conn = db.conn().lock().await;
+        let adapter = db.adapter();
+        let mut tx = adapter.begin().await.unwrap();
         maestro_core::db::provider_credentials::upsert(
-            &conn,
+            &mut tx,
             "u-pin",
             "claude",
             maestro_core::db::provider_credentials::ProviderCredentialKind::ApiKey,
             &sealed,
             "{}",
         )
+        .await
         .unwrap();
+        tx.commit().await.unwrap();
     }
 
     let cfg = {

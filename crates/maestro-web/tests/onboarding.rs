@@ -408,50 +408,43 @@ async fn register_admin_and_get_id(state: &AppState) -> (String, String) {
 /// key so the `seal()` envelope matches what production would produce.
 async fn seed_provider_credential(state: &AppState, user_id: &str, provider: &str) {
     let db = state.auth().db.clone().expect("test DB");
-    let user_id = user_id.to_string();
-    let provider = provider.to_string();
-    tokio::task::spawn_blocking(move || {
-        let mk = db
-            .master_key()
-            .expect("test DB must have master key")
-            .key
-            .clone();
-        let sealed = maestro_core::auth::seal(&mk, b"sk-test-token").unwrap();
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::provider_credentials::upsert(
-            &conn,
-            &user_id,
-            &provider,
-            maestro_core::db::provider_credentials::ProviderCredentialKind::ApiKey,
-            &sealed,
-            "{}",
-        )
-        .expect("seed provider credential");
-    })
+    // Plan-11 step 3 cluster B: provider_credentials on the adapter.
+    let mk = db.master_key().expect("test DB must have master key").key.clone();
+    let sealed = maestro_core::auth::seal(&mk, b"sk-test-token").unwrap();
+    let adapter = db.adapter();
+    let mut tx = adapter.begin().await.unwrap();
+    maestro_core::db::provider_credentials::upsert(
+        &mut tx,
+        user_id,
+        provider,
+        maestro_core::db::provider_credentials::ProviderCredentialKind::ApiKey,
+        &sealed,
+        "{}",
+    )
     .await
-    .expect("join");
+    .expect("seed provider credential");
+    tx.commit().await.unwrap();
 }
 
 /// Insert a GitHub PAT row directly via the DB helper.
 async fn seed_github_credential(state: &AppState, user_id: &str) {
-    let db = state.auth().db.clone().expect("test DB");
-    let user_id = user_id.to_string();
-    tokio::task::spawn_blocking(move || {
-        let mk = db.master_key().expect("test DB master key").key.clone();
-        let sealed = maestro_core::auth::seal(&mk, b"ghp_test_pat").unwrap();
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::github_credentials::upsert(
-            &conn,
-            &user_id,
-            &sealed,
-            "alice",
-            "[\"repo\"]",
-            true,
-        )
-        .expect("seed github credential");
-    })
+    // Plan-11 step 3 cluster B: github_credentials on the adapter.
+    let db = state.auth().db.as_ref().expect("test DB");
+    let mk = db.master_key().expect("test DB master key").key.clone();
+    let sealed = maestro_core::auth::seal(&mk, b"ghp_test_pat").unwrap();
+    let adapter = db.adapter();
+    let mut tx = adapter.begin().await.unwrap();
+    maestro_core::db::github_credentials::upsert(
+        &mut tx,
+        user_id,
+        &sealed,
+        "alice",
+        "[\"repo\"]",
+        true,
+    )
     .await
-    .expect("join");
+    .expect("seed github credential");
+    tx.commit().await.unwrap();
 }
 
 /// Push the standard fixture into `system_status.warnings`: the active

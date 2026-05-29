@@ -34,19 +34,21 @@ pub(super) fn should_audit_first_use(last_used: Option<&str>) -> bool {
 /// PAT use, and bump `last_validated_at` (which the resolver co-opts as the
 /// debounce flag).
 ///
-/// Both writes happen under the same `db.conn().lock()` guard so they
-/// commit together. The guard is dropped before this fn returns — callers
-/// must not hold any other DB lock across this call.
+/// Plan-11 step 3 cluster B: both DAOs migrated to the agnostic adapter.
+/// Each call opens its own short transaction under the hood (sqlx-pool
+/// connections serialize via SQLite's single-writer lock anyway), so the
+/// two writes are no longer literally co-committed in one transaction —
+/// audit emit is best-effort observability and a partial-success window
+/// is acceptable (the touch precedes the audit log, so a failure between
+/// them leaves the debounce flag in the safe state).
 pub(super) async fn record_first_use(db: &Database, user_id: &str) {
     let now = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
-    let conn = db.conn().lock().await;
-    // touch_last_validated bumps the column we're using as the
-    // debounce flag.
-    let _ = github_credentials::touch_last_validated(&conn, user_id, &now);
+    let adapter = db.adapter();
+    let _ = github_credentials::touch_last_validated_adapter(adapter, user_id, &now).await;
     let _ = credential_audit::log(
-        &conn,
+        adapter,
         user_id,
         Some(user_id),
         CredentialAuditKind::GithubPat,
@@ -54,6 +56,7 @@ pub(super) async fn record_first_use(db: &Database, user_id: &str) {
         "used",
         "ok",
         None,
-    );
+    )
+    .await;
 }
 

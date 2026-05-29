@@ -131,18 +131,21 @@ impl GitAuthResolver {
     }
 
     pub(super) async fn user_has_pat(&self, user_id: &str) -> GitAuthResult<bool> {
-        let conn = self.db.conn().lock().await;
-        let row = github_credentials::find(&conn, user_id).map_err(|e| GitAuthError::Internal {
-            message: format!("github_credentials::find failed: {e}"),
-        })?;
+        // Plan-11 step 3 cluster B: github_credentials on the adapter.
+        let row = github_credentials::find(self.db.adapter(), user_id)
+            .await
+            .map_err(|e| GitAuthError::Internal {
+                message: format!("github_credentials::find failed: {e}"),
+            })?;
         Ok(row.is_some())
     }
 
     async fn attribute_commits(&self, user_id: &str) -> GitAuthResult<bool> {
-        let conn = self.db.conn().lock().await;
-        let row = github_credentials::find(&conn, user_id).map_err(|e| GitAuthError::Internal {
-            message: format!("github_credentials::find failed: {e}"),
-        })?;
+        let row = github_credentials::find(self.db.adapter(), user_id)
+            .await
+            .map_err(|e| GitAuthError::Internal {
+                message: format!("github_credentials::find failed: {e}"),
+            })?;
         // Default true when no row — the matrix treats missing-PAT users as
         // "we'd attribute commits if they had one", which folds cleanly when
         // the chooser falls back to App regardless.
@@ -158,8 +161,8 @@ impl GitAuthResolver {
             })?
             .key
             .clone();
-        let conn = self.db.conn().lock().await;
-        let row = github_credentials::find(&conn, user_id)
+        let row = github_credentials::find(self.db.adapter(), user_id)
+            .await
             .map_err(|e| GitAuthError::Internal {
                 message: format!("github_credentials::find failed: {e}"),
             })?
@@ -167,8 +170,6 @@ impl GitAuthResolver {
                 user_id: user_id.to_string(),
                 action: "unseal_user_pat",
             })?;
-        // Drop the lock before doing CPU-bound AEAD work.
-        drop(conn);
         let sealed = SealedBlob {
             ciphertext: row.ciphertext,
             nonce: row.nonce,
@@ -208,25 +209,22 @@ impl GitAuthResolver {
 
     async fn materialise_user_pat(&self, user_id: &str) -> GitAuthResult<GitToken> {
         let pat = self.unseal_user_pat(user_id).await?;
-        // Read the login + row id under the same lock; bump last_used_at for
-        // the audit debounce.
-        let (login, row_id, last_used) = {
-            let conn = self.db.conn().lock().await;
-            let row = github_credentials::find(&conn, user_id)
-                .map_err(|e| GitAuthError::Internal {
-                    message: format!("github_credentials::find failed: {e}"),
-                })?
-                .ok_or_else(|| GitAuthError::UnauthenticatedGit {
-                    user_id: user_id.to_string(),
-                    action: "materialise_user_pat",
-                })?;
-            // user_github_credentials uses user_id as the PK; the
-            // `credential_row_id` we expose for Phase 2b.3's auth_pin is a
-            // stable derivation. None for now — there's no integer id col
-            // (the table is keyed by user_id). Phase 2b.3 redefines this
-            // field; for now we leave it None.
-            (row.github_login, None::<i64>, row.last_validated_at)
-        };
+        // Plan-11 step 3 cluster B: github_credentials::find on the adapter.
+        let row = github_credentials::find(self.db.adapter(), user_id)
+            .await
+            .map_err(|e| GitAuthError::Internal {
+                message: format!("github_credentials::find failed: {e}"),
+            })?
+            .ok_or_else(|| GitAuthError::UnauthenticatedGit {
+                user_id: user_id.to_string(),
+                action: "materialise_user_pat",
+            })?;
+        // user_github_credentials uses user_id as the PK; the
+        // `credential_row_id` we expose for Phase 2b.3's auth_pin is a
+        // stable derivation. None for now — there's no integer id col
+        // (the table is keyed by user_id). Phase 2b.3 redefines this
+        // field; for now we leave it None.
+        let (login, row_id, last_used) = (row.github_login, None::<i64>, row.last_validated_at);
 
         // Audit "used" if this is the first use within ~60s. We co-opt
         // `last_validated_at` as a debounce signal (Phase 2b.3 may switch
@@ -279,16 +277,19 @@ mod tests {
     async fn seed_pat(db: &Database, user_id: &str, sign_commits: bool) {
         let mk = db.master_key().expect("test mk").key.clone();
         let sealed = seal(&mk, b"ghp_test_pat").unwrap();
-        let conn = db.conn().lock().await;
+        let adapter = db.adapter();
+        let mut tx = adapter.begin().await.unwrap();
         github_credentials::upsert(
-            &conn,
+            &mut tx,
             user_id,
             &sealed,
             &format!("{user_id}-gh"),
             "[\"repo\"]",
             sign_commits,
         )
+        .await
         .unwrap();
+        tx.commit().await.unwrap();
     }
 
     #[tokio::test]

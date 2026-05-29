@@ -144,18 +144,24 @@ fn build_sqlite_adapter(db_path: &Path) -> DbAdapter {
     DbAdapter::new(DbPool::Sqlite(pool))
 }
 
-/// Build an in-memory sqlx adapter for test fixtures. Each invocation
-/// gets its own private in-memory database (sqlx `:memory:` URLs are
-/// per-connection unless you use a shared cache, which we deliberately
-/// don't here so test parallelism doesn't cross-contaminate).
+/// Build an in-memory sqlx adapter pointing at the same shared-cache
+/// in-memory SQLite database identified by `mem_id`. This is the
+/// counterpart to opening rusqlite via the same URI; both views see
+/// the same data so DAOs that have migrated to the adapter can be
+/// tested alongside still-rusqlite DAOs in the same `Database`
+/// instance.
 #[cfg(test)]
-fn build_in_memory_adapter() -> DbAdapter {
+fn build_shared_in_memory_adapter(mem_id: &str) -> DbAdapter {
     use sqlx::sqlite::SqlitePool;
-    // SAFETY: the literal `sqlite::memory:` URL is the canonical in-memory
-    // form documented by sqlx; the parser cannot fail on it.
-    let opts = SqliteConnectOptions::from_str("sqlite::memory:")
-        .expect("in-memory sqlite URL is a sqlx-documented literal")
-        .foreign_keys(true);
+    // SQLite shared-cache URI: every connection that opens the same
+    // `file:<name>?mode=memory&cache=shared` URL within this process
+    // attaches to the same in-memory database. We pin a per-Database
+    // unique `mem_id` so parallel tests don't cross-contaminate.
+    let url = format!("file:{mem_id}?mode=memory&cache=shared");
+    let opts = SqliteConnectOptions::from_str(&url)
+        .expect("shared-cache URI parses")
+        .foreign_keys(true)
+        .create_if_missing(true);
     let pool: SqlitePool = SqlitePoolOptions::new().connect_lazy_with(opts);
     DbAdapter::new(DbPool::Sqlite(pool))
 }
@@ -222,19 +228,24 @@ impl Database {
 
     /// Open an in-memory database for testing. No master key resolution —
     /// callers that need the key can call `with_test_master_key`.
+    ///
+    /// Plan-11 step 3 cluster B: rusqlite and the sqlx adapter both
+    /// attach to the SAME in-memory SQLite via a shared-cache URI
+    /// (`file:<uuid>?mode=memory&cache=shared`). Both views see the
+    /// same data — DAOs that have migrated to the adapter can be
+    /// tested alongside still-rusqlite ones in one `Database`
+    /// instance. The per-Database UUID isolates parallel tests.
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
-        let conn = rusqlite::Connection::open_in_memory()?;
+        let mem_id = uuid::Uuid::new_v4().to_string();
+        let url = format!("file:{mem_id}?mode=memory&cache=shared");
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI;
+        let conn = rusqlite::Connection::open_with_flags(&url, flags)?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         schema::run_migrations(&conn)?;
-        // Plan-11 step 3: the adapter here points at a SEPARATE in-memory
-        // database, NOT the rusqlite one. SQLite `:memory:` is
-        // per-connection by default. Tests that exercise both views
-        // simultaneously must set up the adapter's tables independently
-        // (see crates/maestro-core/src/db/login_attempts.rs tests for the
-        // canonical pattern). This is a known wart of the hybrid
-        // transition; it goes away in step 8 when rusqlite is dropped.
-        let adapter = build_in_memory_adapter();
+        let adapter = build_shared_in_memory_adapter(&mem_id);
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             adapter,

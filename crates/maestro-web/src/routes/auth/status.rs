@@ -62,24 +62,32 @@ pub async fn auth_status(
         if cookie.is_empty() {
             false
         } else {
+            // Plan-11 step 3 cluster B: provider_credentials on the
+            // adapter. The session validation is still rusqlite (users
+            // DAO + sessions table not yet migrated) — keep it in
+            // spawn_blocking; do the provider_credentials lookup via the
+            // adapter in the async outer scope.
             let db_clone = db.clone();
-            tokio::task::spawn_blocking(move || {
+            let cookie_for_blocking = cookie.clone();
+            let user_id = tokio::task::spawn_blocking(move || {
                 let conn = db_clone.conn().blocking_lock();
-                let user_id = match crate::auth::validate_db_session(&conn, &cookie) {
-                    Some(uid) => uid,
-                    None => return false,
-                };
-                matches!(
-                    maestro_core::db::provider_credentials::find_active(
-                        &conn,
-                        &user_id,
-                        &active_provider,
-                    ),
-                    Ok(Some(_))
-                )
+                crate::auth::validate_db_session(&conn, &cookie_for_blocking)
             })
             .await
-            .unwrap_or(false)
+            .ok()
+            .flatten();
+            match user_id {
+                Some(uid) => matches!(
+                    maestro_core::db::provider_credentials::find_active(
+                        db.adapter(),
+                        &uid,
+                        &active_provider,
+                    )
+                    .await,
+                    Ok(Some(_))
+                ),
+                None => false,
+            }
         }
     } else {
         false

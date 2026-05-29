@@ -98,16 +98,19 @@ mod tests {
     ) {
         let mk = db.master_key().unwrap().key.clone();
         let sealed = seal(&mk, plaintext).unwrap();
-        let conn = db.conn().lock().await;
+        let adapter = db.adapter();
+        let mut tx = adapter.begin().await.unwrap();
         provider_credentials::upsert(
-            &conn,
+            &mut tx,
             user_id,
             provider,
             provider_credentials::ProviderCredentialKind::ApiKey,
             &sealed,
             "{}",
         )
+        .await
         .unwrap();
+        tx.commit().await.unwrap();
     }
 
     fn make_resolver(db: Database) -> Arc<GitAuthResolver> {
@@ -120,16 +123,19 @@ mod tests {
     async fn seed_claude_cli_state(db: &Database, user_id: &str, json: &[u8]) {
         let mk = db.master_key().unwrap().key.clone();
         let sealed = seal(&mk, json).unwrap();
-        let conn = db.conn().lock().await;
+        let adapter = db.adapter();
+        let mut tx = adapter.begin().await.unwrap();
         provider_credentials::upsert(
-            &conn,
+            &mut tx,
             user_id,
             "claude",
             provider_credentials::ProviderCredentialKind::CliState,
             &sealed,
             r#"{"kind":"cli_state"}"#,
         )
+        .await
         .unwrap();
+        tx.commit().await.unwrap();
     }
 
     #[tokio::test]

@@ -288,15 +288,17 @@ pub async fn pin_for_workflow(
 ) -> Result<AuthPin> {
     let provider = config.agent.provider.as_str().to_string();
 
+    // Plan-11 step 3 cluster B: provider_credentials + github_credentials
+    // migrated to the agnostic adapter; no rusqlite MutexGuard.
+    let adapter = db.adapter();
     let (provider_credential_row_id, github_credential_row_id, github_mode) = {
-        let conn = db.conn().lock().await;
-        let p = provider_credentials::find_active(&conn, workflow_user_id, &provider).map_err(
-            |e| ConfigError::BundleDbLookup {
+        let p = provider_credentials::find_active(adapter, workflow_user_id, &provider)
+            .await
+            .map_err(|e| ConfigError::BundleDbLookup {
                 op: "provider_credentials::find_active",
                 detail: e.to_string(),
-            },
-        )?;
-        let g = github_credentials::find(&conn, workflow_user_id).map_err(|e| {
+            })?;
+        let g = github_credentials::find(adapter, workflow_user_id).await.map_err(|e| {
             ConfigError::BundleDbLookup {
                 op: "github_credentials::find",
                 detail: e.to_string(),

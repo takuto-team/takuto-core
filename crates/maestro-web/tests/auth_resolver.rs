@@ -228,17 +228,22 @@ async fn seed_pat(
     sign_commits: bool,
     github_login: &str,
 ) {
+    // Plan-11 step 3 cluster B: github_credentials::upsert on the adapter,
+    // wrapped in a short transaction (matches the route's atomicity contract).
     let mk = db.master_key().expect("test mk").key.clone();
     let _ = MasterKey::from_bytes([0u8; 32]); // keep import used
     let sealed = seal(&mk, b"ghp_alice_pat").unwrap();
-    let conn = db.conn().lock().await;
+    let adapter = db.adapter();
+    let mut tx = adapter.begin().await.unwrap();
     maestro_core::db::github_credentials::upsert(
-        &conn,
+        &mut tx,
         user_id,
         &sealed,
         github_login,
         "[\"repo\"]",
         sign_commits,
     )
+    .await
     .unwrap();
+    tx.commit().await.unwrap();
 }

@@ -49,9 +49,9 @@ pub async fn revalidate_pat_for_workflow(
             PatValidationError::SsoAuthorizationRequired { .. } => "sso_authorization_required",
             PatValidationError::Transport(_) => "gh_transport_error",
         };
-        let conn = resolver.db().conn().lock().await;
+        // Plan-11 step 3 cluster B: credential_audit on the adapter.
         let _ = credential_audit::log(
-            &conn,
+            resolver.db().adapter(),
             user_id,
             None,
             CredentialAuditKind::GithubPat,
@@ -59,7 +59,8 @@ pub async fn revalidate_pat_for_workflow(
             "validation_failed",
             "error",
             Some(code),
-        );
+        )
+        .await;
     }
     match result {
         Ok(_) => Ok(()),

@@ -122,36 +122,40 @@ pub async fn onboarding_status(
         if cookie.is_empty() {
             (None, None)
         } else {
-            // Plan-11 step 3: onboarding::get migrated to the agnostic
-            // adapter; the other two DAO calls (provider_credentials,
-            // github_credentials) plus validate_db_session are still
-            // rusqlite. Split the work: spawn_blocking returns the
-            // user_id + the two credential flags; onboarding::get runs
-            // async in the outer scope.
+            // Plan-11 step 3: onboarding + provider_credentials +
+            // github_credentials all on the adapter now. Only the session
+            // lookup (validate_db_session — still rusqlite) needs
+            // spawn_blocking. Everything else runs async in the outer
+            // scope.
             let db_clone = db.clone();
-            let active_provider_for_lookup = active_provider.clone();
             let cookie_for_blocking = cookie.clone();
-            let pre = tokio::task::spawn_blocking(move || {
+            let user_id = tokio::task::spawn_blocking(move || {
                 let conn = db_clone.conn().blocking_lock();
-                let user_id =
-                    crate::auth::validate_db_session(&conn, &cookie_for_blocking)?;
-                let creds_present = matches!(
-                    maestro_core::db::provider_credentials::find_active(
-                        &conn,
-                        &user_id,
-                        &active_provider_for_lookup,
-                    ),
-                    Ok(Some(_))
-                );
-                let github_pat_present = matches!(
-                    maestro_core::db::github_credentials::find(&conn, &user_id),
-                    Ok(Some(_))
-                );
-                Some((user_id, creds_present, github_pat_present))
+                crate::auth::validate_db_session(&conn, &cookie_for_blocking)
             })
             .await
             .ok()
             .flatten();
+
+            let pre = if let Some(uid) = user_id {
+                let adapter = db.adapter();
+                let creds_present = matches!(
+                    maestro_core::db::provider_credentials::find_active(
+                        adapter,
+                        &uid,
+                        &active_provider,
+                    )
+                    .await,
+                    Ok(Some(_))
+                );
+                let github_pat_present = matches!(
+                    maestro_core::db::github_credentials::find(adapter, &uid).await,
+                    Ok(Some(_))
+                );
+                Some((uid, creds_present, github_pat_present))
+            } else {
+                None
+            };
 
             if let Some((user_id, creds_present, github_pat_present)) = pre {
                 let row = maestro_core::db::onboarding::get(db.adapter(), &user_id)
