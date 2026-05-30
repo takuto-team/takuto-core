@@ -50,7 +50,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use tokio::sync::Mutex;
 use tracing::warn;
 
 use crate::auth::{MasterKey, MasterKeySource, load_or_init_master_key};
@@ -80,32 +79,31 @@ impl std::fmt::Debug for MasterKeyState {
 
 /// Thread-safe database handle.
 ///
-/// Holds two parallel views of the same SQLite file during the plan-11
-/// step-3 cutover:
+/// Wraps a backend-agnostic [`DbAdapter`] (over sqlx) plus the deployment's
+/// resolved master-key state. Every DAO and call site takes
+/// `&DbAdapter` from [`Database::adapter`]; production code does NOT touch
+/// the underlying driver type. When plan-11 step 5 lands, `adapter`'s
+/// inner pool may be SQLite, Postgres, or MySQL, transparently — all DAOs
+/// keep working.
 ///
-/// 1. Legacy: `Arc<Mutex<rusqlite::Connection>>` for the 296 not-yet-
-///    migrated call sites. Accessor: [`Database::conn`].
-/// 2. New: [`DbAdapter`] (wrapping a sqlx `SqlitePool`) for DAOs that have
-///    been moved to the agnostic adapter API. Accessor:
-///    [`Database::adapter`].
-///
-/// Both views point at the same `maestro.db` file (or in-memory database
-/// for tests — see `open_in_memory`). The sqlx pool is opened **lazily**:
-/// `connect_lazy_with` returns the pool without testing the connection,
-/// and the first async query opens a real connection. This keeps
-/// [`Database::open`] synchronous (no tokio runtime requirement) which is
-/// what the existing main.rs + test fixtures expect.
-///
-/// When `provider` graduates to per-backend in plan-11 step 5, the
-/// `pool` field becomes the full `DbPool` enum (sqlite + postgres +
-/// mysql). For step 3 the pool is hard-coded to SQLite.
+/// Plan-11 step 3 cluster RusqliteDrop: the legacy `Arc<Mutex<rusqlite::Connection>>`
+/// field is gone. SQLite-side pragmas (WAL, foreign keys) are now applied
+/// by sqlx's `SqliteConnectOptions` on every connection it opens; the
+/// rusqlite handle no longer serves any purpose.
 #[derive(Clone)]
 pub struct Database {
-    conn: Arc<Mutex<rusqlite::Connection>>,
-    /// Plan-11 step 3: agnostic adapter wrapping a sqlx SQLite pool that
-    /// opens lazily against the same `maestro.db` file as `conn`. DAOs
-    /// migrated to the new API take `&DbAdapter` from here.
+    /// Plan-11: agnostic adapter wrapping a sqlx pool. DAOs take
+    /// `&DbAdapter` from here.
     adapter: DbAdapter,
+    /// Test-only: a long-lived rusqlite connection to the shared-cache
+    /// in-memory SQLite. SQLite tears the in-memory DB down once the
+    /// LAST open connection closes — sqlx's pool drains its connections
+    /// between queries (and the migrator's runtime disposes its
+    /// connection on shutdown), so without this anchor the database
+    /// would disappear between operations. File-backed `Database::open`
+    /// doesn't need this; the file persists on disk.
+    #[cfg(test)]
+    _mem_anchor: Option<Arc<std::sync::Mutex<rusqlite::Connection>>>,
     /// Phase 2a: deployment master key state. `None` when:
     /// - `MAESTRO_SECRET_KEY` is unset AND
     /// - `${data_dir}/secret.key` does not exist AND
@@ -156,12 +154,19 @@ fn build_shared_in_memory_adapter(mem_id: &str) -> DbAdapter {
     // `file:<name>?mode=memory&cache=shared` URL within this process
     // attaches to the same in-memory database. We pin a per-Database
     // unique `mem_id` so parallel tests don't cross-contaminate.
+    //
+    // Plan-11 step 3 cluster RusqliteDrop: `min_connections = 1` keeps
+    // one connection permanently in the pool so the shared-cache
+    // memory DB stays alive for the lifetime of this `Database`.
+    // Without this, the DB would vanish whenever the pool drained.
     let url = format!("file:{mem_id}?mode=memory&cache=shared");
     let opts = SqliteConnectOptions::from_str(&url)
         .expect("shared-cache URI parses")
         .foreign_keys(true)
         .create_if_missing(true);
-    let pool: SqlitePool = SqlitePoolOptions::new().connect_lazy_with(opts);
+    let pool: SqlitePool = SqlitePoolOptions::new()
+        .min_connections(1)
+        .connect_lazy_with(opts);
     DbAdapter::new(DbPool::Sqlite(pool))
 }
 
@@ -179,15 +184,6 @@ impl Database {
         })?;
 
         let db_path = data_dir.join("maestro.db");
-        let conn = rusqlite::Connection::open(&db_path)?;
-
-        // Enable WAL mode for better concurrent read performance. The
-        // legacy rusqlite handle no longer drives schema migrations
-        // (plan-11 step 3 cluster Schema moved that to sqlx via
-        // `migrate::apply_migrations_blocking`), but it still owns the
-        // file-level pragmas so the sqlx-pool sees WAL + FK ON.
-        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
 
         // Resolve master key. Errors are logged and converted to `None` so
         // the server can still boot in degraded mode (04_architecture.md §3.2:
@@ -227,10 +223,11 @@ impl Database {
         ))?;
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
             adapter,
             master_key,
             data_dir: Some(data_dir.to_path_buf()),
+            #[cfg(test)]
+            _mem_anchor: None,
         })
     }
 
@@ -246,28 +243,29 @@ impl Database {
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let mem_id = uuid::Uuid::new_v4().to_string();
+        // Anchor connection — keeps the shared-cache in-memory DB alive
+        // for the lifetime of this `Database`. SQLite drops the in-memory
+        // DB the moment the LAST open connection closes; sqlx's pool
+        // releases connections back and the migrator thread's runtime
+        // disposes its own on shutdown, so without this anchor the data
+        // would vanish between operations.
         let url = format!("file:{mem_id}?mode=memory&cache=shared");
         let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
             | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
             | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-        let conn = rusqlite::Connection::open_with_flags(&url, flags)?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        let anchor = rusqlite::Connection::open_with_flags(&url, flags)?;
+
         let adapter = build_shared_in_memory_adapter(&mem_id);
-        // Plan-11 step 3 cluster Schema: sqlx drives migrations against
-        // the shared-cache in-memory DB. The rusqlite handle just keeps
-        // its connection open so the DB persists for the lifetime of
-        // the `Database` (in-memory shared-cache DBs disappear once the
-        // last connection closes).
         migrate::apply_migrations_blocking(&adapter).map_err(|e| DbError::Adapter(
             adapter::DbError::Sqlx {
                 source: sqlx::Error::Migrate(Box::new(e)),
             },
         ))?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
             adapter,
             master_key: None,
             data_dir: None,
+            _mem_anchor: Some(Arc::new(std::sync::Mutex::new(anchor))),
         })
     }
 
@@ -284,16 +282,8 @@ impl Database {
         self
     }
 
-    /// Get a reference to the inner rusqlite connection (legacy path,
-    /// used by every DAO not yet migrated to the agnostic adapter).
-    pub fn conn(&self) -> &Arc<Mutex<rusqlite::Connection>> {
-        &self.conn
-    }
-
-    /// Plan-11 step 3: return the backend-agnostic adapter for DAOs that
-    /// have been migrated to the new API. During the hybrid transition
-    /// both `conn()` and `adapter()` are valid entry points — pick the
-    /// one that matches the DAO's signature.
+    /// Plan-11: return the backend-agnostic adapter. Every DAO and call
+    /// site takes `&DbAdapter` from here.
     pub fn adapter(&self) -> &DbAdapter {
         &self.adapter
     }
