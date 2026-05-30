@@ -12,10 +12,11 @@
 --       SQLite → unchanged
 --       Postgres → `id BIGSERIAL PRIMARY KEY`
 --       MySQL → `id BIGINT AUTO_INCREMENT PRIMARY KEY`
---   • Timestamps switch from `TEXT DEFAULT (strftime(...))` to
---     `BIGINT` columns with no default. Application code (after
---     plan-11 step 3) sets the unix-seconds value explicitly.
---     `last_validated_at` / `last_used_at` / `expires_at` are nullable.
+--   • Timestamp columns stay TEXT (RFC3339 strings) to match the
+--     application's DAO bindings. The original schema.rs default
+--     `strftime('...','now')` is dropped — the app always binds an
+--     explicit value. `last_validated_at` / `last_used_at` /
+--     `expires_at` remain nullable.
 
 CREATE TABLE user_provider_credentials (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,11 +29,11 @@ CREATE TABLE user_provider_credentials (
     wnonce BLOB NOT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     inactive INTEGER NOT NULL DEFAULT 0,
-    last_validated_at BIGINT,
-    last_used_at BIGINT,
-    created_at BIGINT NOT NULL DEFAULT 0,
-    updated_at BIGINT NOT NULL DEFAULT 0,
-    expires_at BIGINT,
+    last_validated_at TEXT,
+    last_used_at TEXT,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    expires_at TEXT,
     UNIQUE(user_id, provider, kind)
 );
 CREATE INDEX idx_user_provider_credentials_lookup
@@ -47,9 +48,9 @@ CREATE TABLE user_github_credentials (
     github_login VARCHAR(255) NOT NULL,
     scopes_json TEXT NOT NULL,
     sign_commits INTEGER NOT NULL DEFAULT 1,
-    last_validated_at BIGINT,
-    created_at BIGINT NOT NULL DEFAULT 0,
-    updated_at BIGINT NOT NULL DEFAULT 0
+    last_validated_at TEXT,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE credential_audit (
@@ -61,7 +62,7 @@ CREATE TABLE credential_audit (
     event VARCHAR(64) NOT NULL,
     outcome VARCHAR(32) NOT NULL,
     error_code VARCHAR(64),
-    at BIGINT NOT NULL DEFAULT 0
+    at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_credential_audit_user ON credential_audit(user_id, at);
 
@@ -71,6 +72,6 @@ CREATE TABLE onboarding_state (
     step_2_provider VARCHAR(32),
     step_3_github VARCHAR(32),
     step_4_credentials VARCHAR(32),
-    completed_at BIGINT,
-    updated_at BIGINT NOT NULL DEFAULT 0
+    completed_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT ''
 );

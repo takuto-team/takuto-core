@@ -411,7 +411,7 @@ mod tests {
             .token_for(GitAction::Clone, "u-alice")
             .await
             .expect_err("must be MasterKeyUnavailable");
-        assert!(matches!(err, GitAuthError::MasterKeyUnavailable { .. }));
+        assert!(matches!(err, GitAuthError::MasterKeyUnavailable { .. }), "got {err:?}");
         assert_eq!(err.code(), "master_key_unavailable");
     }
 

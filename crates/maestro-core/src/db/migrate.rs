@@ -30,9 +30,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use sqlx::error::BoxDynError;
-use sqlx::migrate::{Migration, MigrationSource, MigrationType};
+use sqlx::migrate::{Migration, MigrationSource, MigrationType, Migrator};
 
-use super::pool::DbBackend;
+use super::adapter::DbAdapter;
+use super::pool::{DbBackend, DbPool};
 
 /// One embedded migration. Listed in version order at the bottom of this
 /// file. The `version` is the YYYYMMDDHHMMSS prefix from the file name; the
@@ -224,6 +225,49 @@ fn replace_whole_token(haystack: &str, needle: &str, replacement: &str) -> Strin
 #[inline]
 fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Apply all embedded migrations against the adapter's pool.
+///
+/// Async entrypoint — use [`apply_migrations_blocking`] from synchronous
+/// callers (e.g. `Database::open` which stays sync to keep its API stable
+/// across the migration cluster).
+pub async fn apply_migrations(adapter: &DbAdapter) -> Result<(), sqlx::migrate::MigrateError> {
+    let backend = adapter.backend();
+    let source = DialectAwareMigrationSource::for_backend(backend);
+    let migrator = Migrator::new(source)
+        .await
+        .map_err(|e| match e {
+            sqlx::migrate::MigrateError::Source(s) => sqlx::migrate::MigrateError::Source(s),
+            other => other,
+        })?;
+    match adapter.pool() {
+        DbPool::Sqlite(pool) => migrator.run(pool).await,
+        DbPool::Postgres(pool) => migrator.run(pool).await,
+        DbPool::MySql(pool) => migrator.run(pool).await,
+    }
+}
+
+/// Run [`apply_migrations`] to completion from a synchronous context.
+///
+/// Spawns a dedicated OS thread that owns a fresh current-thread tokio
+/// runtime. The thread approach (rather than `Handle::block_on` or a
+/// reused runtime) makes this safe to call from inside an existing tokio
+/// runtime — the migrator runs on the new thread's runtime, the caller's
+/// runtime stays untouched.
+pub fn apply_migrations_blocking(adapter: &DbAdapter) -> Result<(), sqlx::migrate::MigrateError> {
+    let adapter = adapter.clone();
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| sqlx::migrate::MigrateError::Execute(sqlx::Error::Io(e)))?;
+            rt.block_on(apply_migrations(&adapter))
+        })
+        .join()
+        .expect("migration thread panicked")
+    })
 }
 
 #[cfg(test)]

@@ -33,7 +33,6 @@ pub mod onboarding;
 pub mod pool;
 pub mod provider_credentials;
 pub mod repositories;
-pub mod schema;
 pub mod users;
 pub mod user_worktree_commands;
 
@@ -182,11 +181,13 @@ impl Database {
         let db_path = data_dir.join("maestro.db");
         let conn = rusqlite::Connection::open(&db_path)?;
 
-        // Enable WAL mode for better concurrent read performance.
+        // Enable WAL mode for better concurrent read performance. The
+        // legacy rusqlite handle no longer drives schema migrations
+        // (plan-11 step 3 cluster Schema moved that to sqlx via
+        // `migrate::apply_migrations_blocking`), but it still owns the
+        // file-level pragmas so the sqlx-pool sees WAL + FK ON.
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-
-        schema::run_migrations(&conn)?;
 
         // Resolve master key. Errors are logged and converted to `None` so
         // the server can still boot in degraded mode (04_architecture.md §3.2:
@@ -214,9 +215,16 @@ impl Database {
             }
         };
 
-        // Plan-11 step 3: build the lazy sqlx adapter against the same
-        // file. No connection is opened yet; first async query opens it.
+        // Plan-11 step 3 cluster Schema: build the sqlx adapter and run
+        // all migrations through it. This makes `migrations/*.sql` the
+        // single source of truth for schema; the rusqlite handle no
+        // longer drives DDL.
         let adapter = build_sqlite_adapter(&db_path);
+        migrate::apply_migrations_blocking(&adapter).map_err(|e| DbError::Adapter(
+            adapter::DbError::Sqlx {
+                source: sqlx::Error::Migrate(Box::new(e)),
+            },
+        ))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -244,8 +252,17 @@ impl Database {
             | rusqlite::OpenFlags::SQLITE_OPEN_URI;
         let conn = rusqlite::Connection::open_with_flags(&url, flags)?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        schema::run_migrations(&conn)?;
         let adapter = build_shared_in_memory_adapter(&mem_id);
+        // Plan-11 step 3 cluster Schema: sqlx drives migrations against
+        // the shared-cache in-memory DB. The rusqlite handle just keeps
+        // its connection open so the DB persists for the lifetime of
+        // the `Database` (in-memory shared-cache DBs disappear once the
+        // last connection closes).
+        migrate::apply_migrations_blocking(&adapter).map_err(|e| DbError::Adapter(
+            adapter::DbError::Sqlx {
+                source: sqlx::Error::Migrate(Box::new(e)),
+            },
+        ))?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             adapter,
