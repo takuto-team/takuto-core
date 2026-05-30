@@ -62,20 +62,13 @@ pub(crate) async fn require_admin(
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let raw_cookie = session_cookie_from_headers(headers).ok_or(StatusCode::UNAUTHORIZED)?;
-    let cookie = raw_cookie.to_string();
-    // Plan-11 step 3 cluster A: users on the adapter; session validation
-    // (still rusqlite — sessions table not yet migrated) stays in
-    // spawn_blocking.
-    let db_clone = db.clone();
-    let user_id = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        validate_db_session(&conn, &cookie)
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::UNAUTHORIZED)?;
+    // Plan-11 step 3 cluster Sessions: sessions + users on the adapter.
+    let adapter = db.adapter();
+    let user_id = validate_db_session(adapter, raw_cookie)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let user = maestro_core::db::users::get_user_by_id(db.adapter(), &user_id)
+    let user = maestro_core::db::users::get_user_by_id(adapter, &user_id)
         .await
         .ok()
         .flatten()

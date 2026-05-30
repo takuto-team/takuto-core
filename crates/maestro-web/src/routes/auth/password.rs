@@ -50,17 +50,9 @@ pub async fn change_password(
     };
 
     // Resolve the current user from the session cookie.
-    let cookie = session_cookie_from_headers(&headers)
-        .unwrap_or_default()
-        .to_string();
-    let db_clone = db.clone();
-    let user_id = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        validate_db_session(&conn, &cookie)
-    })
-    .await
-    .ok()
-    .flatten();
+    // Plan-11 step 3 cluster Sessions: sessions on the adapter.
+    let cookie = session_cookie_from_headers(&headers).unwrap_or_default();
+    let user_id = validate_db_session(db.adapter(), cookie).await;
 
     let Some(user_id) = user_id else {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -74,7 +66,6 @@ pub async fn change_password(
             .into_response();
     }
 
-    let db_clone = db.clone();
     let current_pw = body.current_password;
     let new_pw = body.new_password;
     let uid = user_id.clone();
@@ -83,9 +74,9 @@ pub async fn change_password(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    // Plan-11 step 3 cluster A: credentials on the adapter. Sessions
-    // table (create_db_session) is still rusqlite — handled in a
-    // spawn_blocking pair after the adapter-side writes commit.
+    // Plan-11 step 3 cluster Sessions: credentials + sessions on the
+    // adapter. The transaction covers the credential rotation; the
+    // follow-up create_db_session is a separate adapter call.
     let adapter = db.adapter();
     let result: maestro_core::error::Result<(String, String)> = async {
         if !maestro_core::db::credentials::verify_user_password(adapter, &uid, &current_pw)
@@ -97,18 +88,7 @@ pub async fn change_password(
         maestro_core::db::credentials::change_password(&mut tx, &uid, &new_pw).await?;
         maestro_core::db::credentials::delete_user_sessions(&mut tx, &uid).await?;
         tx.commit().await?;
-        // Sessions table still rusqlite — re-create the current session
-        // so the user stays logged in.
-        let db_blocking = db_clone.clone();
-        let uid_blocking = uid.clone();
-        let new_token = tokio::task::spawn_blocking(move || {
-            let conn = db_blocking.conn().blocking_lock();
-            create_db_session(&conn, &uid_blocking)
-        })
-        .await
-        .map_err(|_| -> maestro_core::error::MaestroError {
-            AuthError::InvalidSession.into()
-        })??;
+        let new_token = create_db_session(adapter, &uid).await?;
         Ok((new_token, current_cookie.clone()))
     }
     .await;
@@ -159,19 +139,9 @@ pub async fn regenerate_recovery_codes(
         return StatusCode::BAD_REQUEST.into_response();
     };
 
-    // Plan-11 step 3 cluster A: session lookup (rusqlite) in
-    // spawn_blocking, generate_recovery_codes via the adapter.
-    let cookie = session_cookie_from_headers(&headers)
-        .unwrap_or_default()
-        .to_string();
-    let db_clone = db.clone();
-    let user_id = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        validate_db_session(&conn, &cookie)
-    })
-    .await
-    .ok()
-    .flatten();
+    // Plan-11 step 3 cluster Sessions: sessions + credentials on the adapter.
+    let cookie = session_cookie_from_headers(&headers).unwrap_or_default();
+    let user_id = validate_db_session(db.adapter(), cookie).await;
     let Some(user_id) = user_id else {
         return (
             StatusCode::UNAUTHORIZED,

@@ -134,14 +134,8 @@ async fn authenticate_request(
     };
     match session_cookie_from_headers(headers) {
         Some(raw) if raw.starts_with("db-") => {
-            let db = db.clone();
-            let cookie = raw.to_string();
-            let uid = tokio::task::spawn_blocking(move || {
-                let conn = db.conn().blocking_lock();
-                validate_db_session(&conn, &cookie)
-            })
-            .await
-            .unwrap_or(None);
+            // Plan-11 step 3 cluster Sessions: sessions on the adapter.
+            let uid = validate_db_session(db.adapter(), raw).await;
             uid.map(Some).ok_or(())
         }
         _ => Err(()),

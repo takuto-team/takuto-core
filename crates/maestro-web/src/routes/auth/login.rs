@@ -152,9 +152,7 @@ pub async fn login(
 
     // Step 5: session rotation + create session.
     //
-    // Plan-11 step 3 cluster A: credentials::delete_user_sessions on the
-    // adapter. create_db_session (sessions table — still rusqlite) stays
-    // in spawn_blocking.
+    // Plan-11 step 3 cluster Sessions: sessions + credentials on the adapter.
     let kick = config.config.read().await.web.kick_other_sessions_on_login;
     if kick {
         let mut tx = match db.adapter().begin().await {
@@ -164,17 +162,9 @@ pub async fn login(
         let _ = maestro_core::db::credentials::delete_user_sessions(&mut tx, &user.id).await;
         let _ = tx.commit().await;
     }
-    let db_clone = db.clone();
-    let user_id = user.id.clone();
-    let token = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        create_db_session(&conn, &user_id)
-    })
-    .await;
-
-    let token = match token {
-        Ok(Ok(t)) => t,
-        _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let token = match create_db_session(db.adapter(), &user.id).await {
+        Ok(t) => t,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
     let secure = {
@@ -200,17 +190,11 @@ pub async fn logout(
     jar: CookieJar,
 ) -> impl IntoResponse {
     // If this is a DB session, delete the server-side session record.
-    if let Some(ref db) = auth.db {
-        // Extract the cookie value from the jar.
-        if let Some(cookie) = jar.get(SESSION_COOKIE_NAME) {
-            let cookie_val = cookie.value().to_string();
-            let db = db.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                let conn = db.conn().blocking_lock();
-                delete_db_session(&conn, &cookie_val);
-            })
-            .await;
-        }
+    // Plan-11 step 3 cluster Sessions: sessions on the adapter.
+    if let Some(ref db) = auth.db
+        && let Some(cookie) = jar.get(SESSION_COOKIE_NAME)
+    {
+        let _ = delete_db_session(db.adapter(), cookie.value()).await;
     }
 
     // The removal cookie must carry the same `Secure` resolution as the

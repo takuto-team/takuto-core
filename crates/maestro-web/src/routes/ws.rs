@@ -24,17 +24,10 @@ pub async fn ws_handler(
     if let Some(raw_cookie) = session_cookie_from_headers(&headers)
         && raw_cookie.starts_with("db-")
     {
-        let db = db.clone();
-        let cookie = raw_cookie.to_string();
+        // Plan-11 step 3 cluster Sessions: sessions on the adapter.
         // Validate the session AND capture the owning user_id so the WS event
         // loop can filter per-user (AC-1: cross-user event isolation).
-        let viewer_user_id = tokio::task::spawn_blocking(move || {
-            let conn = db.conn().blocking_lock();
-            validate_db_session(&conn, &cookie)
-        })
-        .await
-        .ok()
-        .flatten();
+        let viewer_user_id = validate_db_session(db.adapter(), raw_cookie).await;
 
         let Some(viewer_user_id) = viewer_user_id else {
             return StatusCode::UNAUTHORIZED.into_response();

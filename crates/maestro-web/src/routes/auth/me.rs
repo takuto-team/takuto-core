@@ -30,19 +30,12 @@ pub async fn me(
         .into_response();
     };
 
-    // Plan-11 step 3 cluster A: users on the adapter; session lookup
-    // (rusqlite — sessions not yet migrated) stays in spawn_blocking.
-    let cookie = session_cookie_from_headers(&headers).unwrap_or_default().to_string();
-    let db_clone = db.clone();
-    let user_id = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        validate_db_session(&conn, &cookie)
-    })
-    .await
-    .ok()
-    .flatten();
+    // Plan-11 step 3 cluster Sessions: sessions + users on the adapter.
+    let adapter = db.adapter();
+    let cookie = session_cookie_from_headers(&headers).unwrap_or_default();
+    let user_id = validate_db_session(adapter, cookie).await;
     let user = if let Some(uid) = user_id {
-        maestro_core::db::users::get_user_by_id(db.adapter(), &uid)
+        maestro_core::db::users::get_user_by_id(adapter, &uid)
             .await
             .ok()
             .flatten()

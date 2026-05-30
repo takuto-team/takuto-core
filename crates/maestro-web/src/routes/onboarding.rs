@@ -122,20 +122,9 @@ pub async fn onboarding_status(
         if cookie.is_empty() {
             (None, None)
         } else {
-            // Plan-11 step 3: onboarding + provider_credentials +
-            // github_credentials all on the adapter now. Only the session
-            // lookup (validate_db_session — still rusqlite) needs
-            // spawn_blocking. Everything else runs async in the outer
-            // scope.
-            let db_clone = db.clone();
-            let cookie_for_blocking = cookie.clone();
-            let user_id = tokio::task::spawn_blocking(move || {
-                let conn = db_clone.conn().blocking_lock();
-                crate::auth::validate_db_session(&conn, &cookie_for_blocking)
-            })
-            .await
-            .ok()
-            .flatten();
+            // Plan-11 step 3 cluster Sessions: sessions + onboarding +
+            // provider_credentials + github_credentials all on the adapter.
+            let user_id = crate::auth::validate_db_session(db.adapter(), &cookie).await;
 
             let pre = if let Some(uid) = user_id {
                 let adapter = db.adapter();

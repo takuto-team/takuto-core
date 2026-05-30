@@ -268,10 +268,18 @@ pub fn now_unix() -> i64 {
 ///   compares against this, so it must not be mutated for the lifetime of the
 ///   session. Sessions older than [`SESSION_ABSOLUTE_TTL_SECS`] are rejected
 ///   and lazily deleted even when actively used (plan-02 AC-5 / G/W/T 5.7).
-pub fn create_db_session(
-    conn: &rusqlite::Connection,
+///
+/// Plan-11 step 3 cluster Sessions: sessions table on the backend-agnostic
+/// adapter. `expires_at` stays as a TEXT/RFC3339 string to match the legacy
+/// schema (TEXT NOT NULL in `schema.rs`). The lexicographic ordering of
+/// RFC3339 strings matches chronological order, so comparisons in SQL and
+/// in Rust both work.
+pub async fn create_db_session(
+    adapter: &maestro_core::db::DbAdapter,
     user_id: &str,
 ) -> std::result::Result<String, MaestroError> {
+    use maestro_core::db::DbValue;
+
     let session_id = uuid::Uuid::new_v4().to_string();
     let now_secs = now_unix();
     let expires_at_str = chrono::DateTime::<chrono::Utc>::from_timestamp(
@@ -286,11 +294,20 @@ pub fn create_db_session(
     }))
     .map_err(|source| AuthError::SessionSerialize { source })?;
 
-    conn.execute(
-        "INSERT INTO sessions (id, user_id, data, expires_at, last_seen_at, created_at_unix) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![session_id, user_id, data, expires_at_str, now_secs, now_secs],
-    )?;
+    adapter
+        .execute(
+            "INSERT INTO sessions (id, user_id, data, expires_at, last_seen_at, created_at_unix) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+            vec![
+                DbValue::Text(session_id.clone()),
+                DbValue::Text(user_id.to_string()),
+                DbValue::Bytes(data),
+                DbValue::Text(expires_at_str),
+                DbValue::I64(now_secs),
+                DbValue::I64(now_secs),
+            ],
+        )
+        .await?;
 
     Ok(format!("{DB_SESSION_PREFIX}{session_id}"))
 }
@@ -307,7 +324,12 @@ pub fn create_db_session(
 /// 3. Else, if `now - last_seen_at > SESSION_EXTEND_THRESHOLD_SECS`, update
 ///    `last_seen_at = now` and `expires_at = now + SESSION_IDLE_TTL_SECS`.
 ///    Returns the resolved `user_id`.
-pub fn validate_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> Option<String> {
+pub async fn validate_db_session(
+    adapter: &maestro_core::db::DbAdapter,
+    cookie_value: &str,
+) -> Option<String> {
+    use maestro_core::db::DbValue;
+
     let session_id = cookie_value.strip_prefix(DB_SESSION_PREFIX)?;
     let now_secs = now_unix();
     let now_rfc3339 = chrono::DateTime::<chrono::Utc>::from_timestamp(now_secs, 0)
@@ -317,36 +339,36 @@ pub fn validate_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> O
 
     // Fetch the user_id along with the lifecycle columns so all the gates
     // run against a single, consistent snapshot.
-    let row: Option<(String, i64, i64, String)> = conn
-        .query_row(
+    let row = adapter
+        .query_optional(
             "SELECT user_id, created_at_unix, last_seen_at, expires_at \
-             FROM sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            },
+             FROM sessions WHERE id = ?",
+            vec![DbValue::Text(session_id.to_string())],
         )
-        .ok();
-    let (user_id, created_at_unix, last_seen_at, expires_at) = row?;
+        .await
+        .ok()
+        .flatten()?;
+    let user_id = row.get_text(0).ok()?;
+    let created_at_unix = row.get_i64(1).ok()?;
+    let last_seen_at = row.get_i64(2).ok()?;
+    let expires_at = row.get_text(3).ok()?;
 
     // Absolute TTL — reject and lazily delete sessions older than 30 days,
     // even if they were recently used (G/W/T 5.7).
     if created_at_unix > 0
         && now_secs.saturating_sub(created_at_unix) > SESSION_ABSOLUTE_TTL_SECS as i64
     {
-        let _ = conn.execute(
-            "DELETE FROM sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-        );
+        let _ = adapter
+            .execute(
+                "DELETE FROM sessions WHERE id = ?",
+                vec![DbValue::Text(session_id.to_string())],
+            )
+            .await;
         return None;
     }
 
-    // Idle TTL — the existing `expires_at` check rejects long-idle sessions.
+    // Idle TTL — `expires_at` is an RFC3339 string; lexicographic comparison
+    // matches chronological order for that format.
     if expires_at <= now_rfc3339 {
         return None;
     }
@@ -361,10 +383,16 @@ pub fn validate_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> O
         .unwrap_or_else(chrono::Utc::now)
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
-        let _ = conn.execute(
-            "UPDATE sessions SET last_seen_at = ?1, expires_at = ?2 WHERE id = ?3",
-            rusqlite::params![now_secs, new_expires_at, session_id],
-        );
+        let _ = adapter
+            .execute(
+                "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?",
+                vec![
+                    DbValue::I64(now_secs),
+                    DbValue::Text(new_expires_at),
+                    DbValue::Text(session_id.to_string()),
+                ],
+            )
+            .await;
     }
 
     Some(user_id)
@@ -373,10 +401,12 @@ pub fn validate_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> O
 /// Read-only variant of [`validate_db_session`] — used by handlers that need
 /// to check session validity but must not perform the sliding-extend `UPDATE`
 /// (e.g. when the session is being deleted as part of the request anyway).
-pub fn validate_db_session_no_extend(
-    conn: &rusqlite::Connection,
+pub async fn validate_db_session_no_extend(
+    adapter: &maestro_core::db::DbAdapter,
     cookie_value: &str,
 ) -> Option<String> {
+    use maestro_core::db::DbValue;
+
     let session_id = cookie_value.strip_prefix(DB_SESSION_PREFIX)?;
     let now_secs = now_unix();
     let now_rfc3339 = chrono::DateTime::<chrono::Utc>::from_timestamp(now_secs, 0)
@@ -384,20 +414,17 @@ pub fn validate_db_session_no_extend(
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 
-    let row: Option<(String, i64, String)> = conn
-        .query_row(
-            "SELECT user_id, created_at_unix, expires_at FROM sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
+    let row = adapter
+        .query_optional(
+            "SELECT user_id, created_at_unix, expires_at FROM sessions WHERE id = ?",
+            vec![DbValue::Text(session_id.to_string())],
         )
-        .ok();
-    let (user_id, created_at_unix, expires_at) = row?;
+        .await
+        .ok()
+        .flatten()?;
+    let user_id = row.get_text(0).ok()?;
+    let created_at_unix = row.get_i64(1).ok()?;
+    let expires_at = row.get_text(2).ok()?;
 
     if created_at_unix > 0
         && now_secs.saturating_sub(created_at_unix) > SESSION_ABSOLUTE_TTL_SECS as i64
@@ -411,16 +438,23 @@ pub fn validate_db_session_no_extend(
 }
 
 /// Delete a specific database session. Returns `true` if a session was deleted.
-pub fn delete_db_session(conn: &rusqlite::Connection, cookie_value: &str) -> bool {
+pub async fn delete_db_session(
+    adapter: &maestro_core::db::DbAdapter,
+    cookie_value: &str,
+) -> bool {
+    use maestro_core::db::DbValue;
+
     let Some(session_id) = cookie_value.strip_prefix(DB_SESSION_PREFIX) else {
         return false;
     };
-    conn.execute(
-        "DELETE FROM sessions WHERE id = ?1",
-        rusqlite::params![session_id],
-    )
-    .map(|n| n > 0)
-    .unwrap_or(false)
+    adapter
+        .execute(
+            "DELETE FROM sessions WHERE id = ?",
+            vec![DbValue::Text(session_id.to_string())],
+        )
+        .await
+        .map(|n| n > 0)
+        .unwrap_or(false)
 }
 
 /// Authenticate a user against the SQLite database.
@@ -475,20 +509,12 @@ pub async fn dashboard_auth_middleware(
     if let Some(raw_cookie) = session_cookie_from_headers(request.headers())
         && raw_cookie.starts_with(DB_SESSION_PREFIX)
     {
-        // Plan-11 step 3 cluster A: users::get_user_by_id on the adapter.
-        // Session lookup (validate_db_session — still rusqlite, sessions
-        // table not yet migrated) stays in spawn_blocking.
-        let db_clone = db.clone();
-        let cookie = raw_cookie.to_string();
-        let user_id = tokio::task::spawn_blocking(move || {
-            let conn = db_clone.conn().blocking_lock();
-            validate_db_session(&conn, &cookie)
-        })
-        .await
-        .ok()
-        .flatten();
+        // Plan-11 step 3 cluster Sessions: sessions table now on the
+        // agnostic adapter — no spawn_blocking hop needed.
+        let adapter = db.adapter();
+        let user_id = validate_db_session(adapter, raw_cookie).await;
         let auth_user = if let Some(uid) = user_id {
-            maestro_core::db::users::get_user_by_id(db.adapter(), &uid)
+            maestro_core::db::users::get_user_by_id(adapter, &uid)
                 .await
                 .ok()
                 .flatten()
