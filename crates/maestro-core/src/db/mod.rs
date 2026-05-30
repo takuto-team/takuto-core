@@ -272,15 +272,58 @@ impl Database {
                 .map(std::time::Duration::from_secs),
         };
         let url = db_config.connection_url();
-        let backend_pool = pool::connect(url, &tuning).await.map_err(|e| {
-            DbError::Adapter(adapter::DbError::Sqlx {
-                source: match e {
-                    pool::PoolError::Sqlx { source, .. } => source,
-                    other => sqlx::Error::Configuration(other.to_string().into()),
-                },
-            })
-        })?;
+
+        // Build the pool. If construction itself fails (bad URL, can't
+        // open a connection at the configured host), honour `fail_fast`:
+        // propagate on `true`, fall back to SQLite on `false`.
+        let backend_pool = match pool::connect(url, &tuning).await {
+            Ok(p) => p,
+            Err(e) => {
+                let redacted = crate::config::redact_connection_password(url);
+                if db_config.fail_fast {
+                    tracing::error!(
+                        url = %redacted,
+                        error = %e,
+                        "Database backend unreachable and fail_fast = true; aborting startup"
+                    );
+                    return Err(DbError::Adapter(adapter::DbError::Sqlx {
+                        source: match e {
+                            pool::PoolError::Sqlx { source, .. } => source,
+                            other => sqlx::Error::Configuration(other.to_string().into()),
+                        },
+                    })
+                    .into());
+                }
+                tracing::warn!(
+                    url = %redacted,
+                    error = %e,
+                    "Database backend unreachable; fail_fast = false → falling back to local SQLite"
+                );
+                return Self::open(data_dir, allow_auto_generate_secret_key);
+            }
+        };
         let adapter = DbAdapter::new(backend_pool);
+
+        // Connectivity probe: `pool::connect` may have only opened a
+        // single connection; verify the round-trip works before we run
+        // migrations (the probe times out at 5 s inside `ping`).
+        if let Err(e) = adapter.pool().ping().await {
+            let redacted = crate::config::redact_connection_password(url);
+            if db_config.fail_fast {
+                tracing::error!(
+                    url = %redacted,
+                    error = %e,
+                    "Database connectivity probe failed and fail_fast = true; aborting startup"
+                );
+                return Err(DbError::Adapter(adapter::DbError::Sqlx { source: e }).into());
+            }
+            tracing::warn!(
+                url = %redacted,
+                error = %e,
+                "Database connectivity probe failed; fail_fast = false → falling back to local SQLite"
+            );
+            return Self::open(data_dir, allow_auto_generate_secret_key);
+        }
 
         // Migrate.
         migrate::apply_migrations(&adapter).await.map_err(|e| {
@@ -389,5 +432,74 @@ impl Database {
     /// in-memory fixtures.
     pub fn data_dir(&self) -> Option<&Path> {
         self.data_dir.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod connect_tests {
+    use super::*;
+    use crate::config::DatabaseConfig;
+
+    /// `connect()` with an empty connection URL must use the default
+    /// SQLite-at-data_dir path — same behaviour as the legacy `open()`.
+    #[tokio::test]
+    async fn empty_connection_uses_default_sqlite() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cfg = DatabaseConfig::default();
+        let db = Database::connect(tmp.path(), &cfg, true)
+            .await
+            .expect("default sqlite connect must succeed");
+        assert_eq!(db.adapter().backend(), pool::DbBackend::Sqlite);
+        assert!(
+            tmp.path().join("maestro.db").exists(),
+            "default path must materialise the maestro.db file"
+        );
+    }
+
+    /// Unreachable backend with `fail_fast = true` propagates an error
+    /// instead of silently swapping in the SQLite fallback.
+    #[tokio::test]
+    async fn unreachable_backend_with_fail_fast_propagates() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Port 1 is reserved (tcpmux) and almost always closed; sqlx
+        // will fail to connect, surfacing the path we want to test.
+        let cfg = DatabaseConfig {
+            connection: "postgres://maestro:nope@127.0.0.1:1/nope".to_string(),
+            fail_fast: true,
+            ..DatabaseConfig::default()
+        };
+        let err = Database::connect(tmp.path(), &cfg, true)
+            .await
+            .err()
+            .expect("fail_fast = true must surface the error");
+        let msg = err.to_string();
+        assert!(
+            !msg.is_empty(),
+            "error must carry a non-empty message; got '{msg}'"
+        );
+    }
+
+    /// Unreachable backend with `fail_fast = false` logs a warning and
+    /// returns a working SQLite Database pointed at `{data_dir}/maestro.db`.
+    #[tokio::test]
+    async fn unreachable_backend_with_fail_fast_false_falls_back_to_sqlite() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cfg = DatabaseConfig {
+            connection: "postgres://maestro:nope@127.0.0.1:1/nope".to_string(),
+            fail_fast: false,
+            ..DatabaseConfig::default()
+        };
+        let db = Database::connect(tmp.path(), &cfg, true)
+            .await
+            .expect("fail_fast = false must fall back instead of erroring");
+        assert_eq!(
+            db.adapter().backend(),
+            pool::DbBackend::Sqlite,
+            "fallback must materialise as a SQLite Database"
+        );
+        assert!(
+            tmp.path().join("maestro.db").exists(),
+            "fallback must create the default SQLite file"
+        );
     }
 }
