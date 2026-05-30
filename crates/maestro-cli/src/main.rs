@@ -778,11 +778,31 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             "WorkerSecretsBundle orphan sweep failed (continuing); old dirs may persist"
         );
     }
-    let allow_auto_generate_secret_key = config.read().await.general.allow_auto_generate_secret_key;
+    let (allow_auto_generate_secret_key, db_config) = {
+        let cfg = config.read().await;
+        (
+            cfg.general.allow_auto_generate_secret_key,
+            cfg.database.clone(),
+        )
+    };
     let db = match resolved_data_dir.as_deref() {
-        Some(data_dir) => match maestro_core::db::Database::open(data_dir, allow_auto_generate_secret_key) {
+        Some(data_dir) => match maestro_core::db::Database::connect(
+            data_dir,
+            &db_config,
+            allow_auto_generate_secret_key,
+        )
+        .await
+        {
             Ok(db) => {
-                info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized");
+                if db_config.is_default_sqlite() {
+                    info!(path = %data_dir.join("maestro.db").display(), "Multi-user database initialized (sqlite)");
+                } else {
+                    info!(
+                        backend = %db.adapter().backend(),
+                        url = %maestro_core::config::redact_connection_password(db_config.connection_url()),
+                        "Multi-user database initialized (external backend)"
+                    );
+                }
                 Some(db)
             }
             Err(e) => {

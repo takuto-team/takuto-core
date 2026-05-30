@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod agent;
 mod agent_legacy;
+pub mod database;
 pub mod error;
 mod general;
 mod git;
@@ -21,6 +22,7 @@ mod runtime;
 mod template;
 mod web;
 
+pub use database::{DatabaseConfig, redact_connection_password};
 pub use error::ConfigError;
 
 pub use agent::{
@@ -72,6 +74,11 @@ pub struct Config {
     /// [`ProvisioningConfig`].
     #[serde(default)]
     pub provisioning: ProvisioningConfig,
+    /// Plan-11: pluggable database backend. Empty/omitted → default
+    /// SQLite at `{data_dir}/maestro.db`; `postgres://…` / `mysql://…`
+    /// switches the deployment to that backend.
+    #[serde(default)]
+    pub database: DatabaseConfig,
 }
 
 impl Config {

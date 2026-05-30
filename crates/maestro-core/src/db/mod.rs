@@ -231,6 +231,97 @@ impl Database {
         })
     }
 
+    /// Plan-11 step 5: open the deployment's configured backend.
+    ///
+    /// Resolution:
+    ///   - empty / omitted `connection` → SQLite at `{data_dir}/maestro.db`
+    ///     (identical to [`Database::open`]).
+    ///   - `sqlite://path`  → SQLite at the supplied path.
+    ///   - `postgres://…` / `postgresql://…` → PostgreSQL pool.
+    ///   - `mysql://…` → MySQL/MariaDB pool.
+    ///
+    /// The connectivity probe + `fail_fast` semantics from plan §6 are
+    /// deferred to a follow-up cluster — this constructor just builds the
+    /// pool and runs migrations.
+    pub async fn connect(
+        data_dir: &Path,
+        db_config: &crate::config::DatabaseConfig,
+        allow_auto_generate_secret_key: bool,
+    ) -> Result<Self> {
+        // Empty / whitespace-only `connection` keeps the legacy default
+        // behaviour. Hand off to the sync `open` so the build path stays
+        // identical to today's single-file SQLite deployments.
+        if db_config.is_default_sqlite() {
+            return Self::open(data_dir, allow_auto_generate_secret_key);
+        }
+
+        std::fs::create_dir_all(data_dir).map_err(|e| DbError::DataDir {
+            path: data_dir.to_path_buf(),
+            source: e,
+        })?;
+
+        // Build the backend-specific pool via pool::connect (already async,
+        // already applies WAL + foreign_keys for SQLite).
+        let tuning = pool::PoolTuning {
+            max_connections: db_config.max_connections,
+            acquire_timeout: db_config
+                .acquire_timeout_secs
+                .map(std::time::Duration::from_secs),
+            idle_timeout: db_config
+                .idle_timeout_secs
+                .map(std::time::Duration::from_secs),
+        };
+        let url = db_config.connection_url();
+        let backend_pool = pool::connect(url, &tuning).await.map_err(|e| {
+            DbError::Adapter(adapter::DbError::Sqlx {
+                source: match e {
+                    pool::PoolError::Sqlx { source, .. } => source,
+                    other => sqlx::Error::Configuration(other.to_string().into()),
+                },
+            })
+        })?;
+        let adapter = DbAdapter::new(backend_pool);
+
+        // Migrate.
+        migrate::apply_migrations(&adapter).await.map_err(|e| {
+            DbError::Adapter(adapter::DbError::Sqlx {
+                source: sqlx::Error::Migrate(Box::new(e)),
+            })
+        })?;
+
+        // Master key resolution — same logic as `open`.
+        let master_key = match load_or_init_master_key(data_dir, allow_auto_generate_secret_key) {
+            Ok(loaded) => {
+                tracing::info!(
+                    source = ?loaded.source,
+                    keyfile_world_readable = loaded.keyfile_world_readable,
+                    backend = %adapter.backend(),
+                    "Master key resolved"
+                );
+                Some(MasterKeyState {
+                    key: Arc::new(loaded.key),
+                    source: loaded.source,
+                    keyfile_world_readable: loaded.keyfile_world_readable,
+                })
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Master key unavailable — per-user credential CRUD will be disabled (degraded mode)"
+                );
+                None
+            }
+        };
+
+        Ok(Self {
+            adapter,
+            master_key,
+            data_dir: Some(data_dir.to_path_buf()),
+            #[cfg(test)]
+            _mem_anchor: None,
+        })
+    }
+
     /// Open an in-memory database for testing. No master key resolution —
     /// callers that need the key can call `with_test_master_key`.
     ///
