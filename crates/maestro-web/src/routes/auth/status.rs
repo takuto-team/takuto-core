@@ -94,13 +94,10 @@ pub async fn auth_status(
     };
 
     if let Some(ref db) = auth.db {
-        let db = db.clone();
-        let count = tokio::task::spawn_blocking(move || {
-            let conn = db.conn().blocking_lock();
-            maestro_core::db::users::count_users(&conn).unwrap_or(0)
-        })
-        .await
-        .unwrap_or(0);
+        // Plan-11 step 3 cluster A: users on the adapter.
+        let count = maestro_core::db::users::count_users(db.adapter())
+            .await
+            .unwrap_or(0);
         return Json(AuthStatus {
             dashboard_auth_enabled: true,
             multi_user: count > 0,

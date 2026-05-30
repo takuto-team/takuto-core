@@ -17,13 +17,21 @@
 //! with [`current_argon2_password`] when it does. This lets us upgrade params
 //! over time without forced resets. Rehash failures are logged but never break
 //! the login (a successful verify always returns `Ok(true)`).
+//!
+//! ### Plan-11 step 3 cluster A (this commit)
+//!
+//! Migrated alongside `users.rs` + `migration.rs`. Reads take `&DbAdapter`;
+//! writes take `&mut DbTransaction<'_>` so the recover-flow (verify +
+//! consume + change_password + delete_user_sessions) commits atomically.
+//! Pure-crypto helpers (`hash_password`, `verify_password`, etc.) stay
+//! unchanged — they don't touch the DB.
 
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
-use rusqlite::params;
 use uuid::Uuid;
 
 use crate::auth::AuthError;
+use crate::db::{DbAdapter, DbTransaction, DbValue};
 use crate::error::Result;
 
 /// Current Argon2id `m_cost` (KiB) for both passwords and recovery codes.
@@ -36,14 +44,9 @@ const CURRENT_T_COST_RECOVERY: u32 = 3;
 /// Current Argon2id `p_cost` (parallelism) for both passwords and recovery codes.
 const CURRENT_P_COST: u32 = 1;
 
-/// Produce a password hash using `Argon2::default()` parameters
-/// (`m=19456`, `t=2`, `p=1` at the time of writing).
-///
-/// **Test helper only.** Exposed publicly so integration tests in sibling
-/// crates can seed a credentials row that mimics a pre-upgrade hash, without
-/// needing to depend on the `argon2` crate directly. Do not call from
-/// production code paths — new hashes must go through [`hash_password`] so
-/// they pick up the current OWASP-recommended parameters.
+/// Produce a password hash using `Argon2::default()` parameters. **Test
+/// helper only** — public so sibling-crate tests can seed pre-upgrade
+/// rows.
 pub fn legacy_argon2_default_hash_for_tests(password: &str) -> Result<Vec<u8>> {
     let mut salt_bytes = [0u8; 16];
     getrandom::fill(&mut salt_bytes)
@@ -60,16 +63,9 @@ pub fn legacy_argon2_default_hash_for_tests(password: &str) -> Result<Vec<u8>> {
     Ok(hash.to_string().into_bytes())
 }
 
-/// Argon2id instance with current password-hashing parameters.
-///
-/// Used by [`hash_password`] for new password hashes. Verification reads the
-/// PHC string's embedded params; the instance returned here is only used to
-/// drive the verifier (it does **not** override the stored params).
 fn current_argon2_password() -> Argon2<'static> {
     // SAFETY: `Params::new` rejects values outside Argon2's published
-    // ranges (m_cost ≥ 8 × p_cost, t_cost ≥ 1, p_cost ∈ 1..2²⁴-1, etc.).
-    // The CURRENT_* constants are checked at the top of this file and
-    // covered by `params_within_argon2_bounds` in tests.
+    // ranges; CURRENT_* constants are covered by `params_within_argon2_bounds`.
     let params = Params::new(
         CURRENT_M_COST,
         CURRENT_T_COST_PASSWORD,
@@ -80,11 +76,8 @@ fn current_argon2_password() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
-/// Argon2id instance with current recovery-code-hashing parameters (stronger `t_cost`).
 fn current_argon2_recovery() -> Argon2<'static> {
-    // SAFETY: same Argon2 bounds argument as `current_argon2_password`;
-    // CURRENT_T_COST_RECOVERY (≥ 1) and the shared constants are covered
-    // by `params_within_argon2_bounds`.
+    // SAFETY: same Argon2 bounds argument as `current_argon2_password`.
     let params = Params::new(
         CURRENT_M_COST,
         CURRENT_T_COST_RECOVERY,
@@ -112,7 +105,6 @@ pub fn hash_password(password: &str) -> Result<Vec<u8>> {
     Ok(hash.to_string().into_bytes())
 }
 
-/// Hash a recovery code using Argon2id with the stronger recovery-code parameters.
 fn hash_recovery_code(code: &str) -> Result<Vec<u8>> {
     let mut salt_bytes = [0u8; 16];
     getrandom::fill(&mut salt_bytes)
@@ -129,10 +121,9 @@ fn hash_recovery_code(code: &str) -> Result<Vec<u8>> {
     Ok(hash.to_string().into_bytes())
 }
 
-/// Verify a password against a stored Argon2 hash.
-///
-/// The verifier reads the PHC string's embedded parameters, so this works
-/// regardless of which (older or current) parameter set produced `stored_hash`.
+/// Verify a password against a stored Argon2 hash. The verifier reads
+/// the PHC string's embedded parameters, so this works for any param
+/// set that produced `stored_hash`.
 pub fn verify_password(password: &str, stored_hash: &[u8]) -> Result<bool> {
     let hash_str = std::str::from_utf8(stored_hash)
         .map_err(|source| AuthError::StoredHashEncoding { source })?;
@@ -144,18 +135,11 @@ pub fn verify_password(password: &str, stored_hash: &[u8]) -> Result<bool> {
         .is_ok())
 }
 
-/// Returns `true` when the stored Argon2 hash's parameters are weaker than the
-/// current password-hashing target (`m_cost=47104`, `t_cost=1`, `p_cost=1`).
-///
-/// Any single dimension being below the target counts as weaker. Malformed
-/// hashes return `Err` — callers should log and skip the rehash on error.
 fn is_password_hash_weaker_than_current(stored_hash: &[u8]) -> Result<bool> {
     let hash_str = std::str::from_utf8(stored_hash)
         .map_err(|source| AuthError::StoredHashEncoding { source })?;
     let parsed = PasswordHash::new(hash_str)
         .map_err(|source| AuthError::PasswordHashFormat { source })?;
-    // PHC params are typed as `ParamsString`; we read them out via the `Params`
-    // conversion which exposes typed accessors.
     let params = Params::try_from(&parsed)
         .map_err(|source| AuthError::ArgonParams { source })?;
     Ok(params.m_cost() < CURRENT_M_COST
@@ -163,61 +147,73 @@ fn is_password_hash_weaker_than_current(stored_hash: &[u8]) -> Result<bool> {
         || params.p_cost() < CURRENT_P_COST)
 }
 
-/// Store a password credential for a user. Hashes the password before storing.
-pub fn store_password(
-    conn: &rusqlite::Connection,
+/// Store a password credential for a user. Hashes the password before
+/// storing. Inside a `DbTransaction` because `routes/auth/register.rs`
+/// co-commits this with `users::create_user` (well, that's done by the
+/// outer route's atomic flow).
+pub async fn store_password(
+    tx: &mut DbTransaction<'_>,
     user_id: &str,
     password: &str,
 ) -> Result<String> {
     let hash = hash_password(password)?;
     let cred_id = Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO credentials (id, user_id, kind, data, label) VALUES (?1, ?2, 'password', ?3, NULL)",
-        params![cred_id, user_id, hash],
-    )?;
+    tx.execute(
+        "INSERT INTO credentials (id, user_id, kind, data, label) VALUES (?, ?, 'password', ?, NULL)",
+        vec![
+            DbValue::Text(cred_id.clone()),
+            DbValue::Text(user_id.to_string()),
+            DbValue::Bytes(hash),
+        ],
+    )
+    .await?;
     Ok(cred_id)
 }
 
-/// Verify a password for a user. Returns `true` if any stored password credential matches.
+/// Verify a password for a user. Returns `true` if any stored password
+/// credential matches. Side effects on success: bumps `last_used_at`,
+/// opportunistically rehashes weak hashes.
 ///
-/// Side effects on successful verification:
-/// - Updates `last_used_at` for the matching credential row.
-/// - If the stored hash uses parameters weaker than the current Argon2 target
-///   (see [`is_password_hash_weaker_than_current`]), re-hashes the password
-///   with [`current_argon2_password`] and writes the new PHC string back to
-///   `credentials.data`. Rehash failures are logged but never break the login.
-pub fn verify_user_password(
-    conn: &rusqlite::Connection,
+/// Takes `&DbAdapter` — the side-effect writes are best-effort and
+/// don't need to co-commit with anything; rehash failures are logged
+/// but never break the login.
+pub async fn verify_user_password(
+    adapter: &DbAdapter,
     user_id: &str,
     password: &str,
 ) -> Result<bool> {
-    let mut stmt =
-        conn.prepare("SELECT id, data FROM credentials WHERE user_id = ?1 AND kind = 'password'")?;
-    let creds: Vec<(String, Vec<u8>)> = stmt
-        .query_map(params![user_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+    let rows = adapter
+        .query_all(
+            "SELECT id, data FROM credentials WHERE user_id = ? AND kind = 'password'",
+            vec![DbValue::Text(user_id.to_string())],
+        )
+        .await?;
 
-    for (cred_id, hash) in creds {
+    for r in &rows {
+        let cred_id = r.get_text(0)?;
+        let hash = r.get_bytes(1)?;
         if verify_password(password, &hash)? {
-            // Update last_used_at.
+            // Update last_used_at — fire-and-forget but propagate errors.
             let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            conn.execute(
-                "UPDATE credentials SET last_used_at = ?1 WHERE id = ?2",
-                params![now, cred_id],
-            )?;
+            adapter
+                .execute(
+                    "UPDATE credentials SET last_used_at = ? WHERE id = ?",
+                    vec![DbValue::Text(now), DbValue::Text(cred_id.clone())],
+                )
+                .await?;
 
-            // Opportunistically upgrade the hash to current Argon2 params.
-            // A failure here must never break login — log a warning and continue.
+            // Opportunistic rehash. Failures here MUST never break login.
             match is_password_hash_weaker_than_current(&hash) {
                 Ok(true) => match hash_password(password) {
                     Ok(new_hash) => {
-                        if let Err(e) = conn.execute(
-                            "UPDATE credentials SET data = ?1 WHERE id = ?2",
-                            params![new_hash, cred_id],
-                        ) {
+                        let cred_id_clone = cred_id.clone();
+                        if let Err(e) = adapter
+                            .execute(
+                                "UPDATE credentials SET data = ? WHERE id = ?",
+                                vec![DbValue::Bytes(new_hash), DbValue::Text(cred_id_clone)],
+                            )
+                            .await
+                        {
                             tracing::warn!(
                                 event = "argon2_rehash_failed",
                                 user_id = %user_id,
@@ -257,69 +253,82 @@ pub fn verify_user_password(
     Ok(false)
 }
 
-/// Replace a user's password. Deletes all existing password credentials and stores the new one.
-pub fn change_password(
-    conn: &rusqlite::Connection,
+/// Replace a user's password. Deletes all existing password credentials
+/// and stores the new one. Inside a `DbTransaction` so the
+/// recover-flow's verify+consume+change+delete sequence commits
+/// atomically.
+pub async fn change_password(
+    tx: &mut DbTransaction<'_>,
     user_id: &str,
     new_password: &str,
 ) -> Result<()> {
-    conn.execute(
-        "DELETE FROM credentials WHERE user_id = ?1 AND kind = 'password'",
-        params![user_id],
-    )?;
-    store_password(conn, user_id, new_password)?;
+    tx.execute(
+        "DELETE FROM credentials WHERE user_id = ? AND kind = 'password'",
+        vec![DbValue::Text(user_id.to_string())],
+    )
+    .await?;
+    store_password(tx, user_id, new_password).await?;
     Ok(())
 }
 
-/// Generate a set of recovery codes and store their hashes. Returns the plaintext codes
-/// (to be displayed to the user once).
-pub fn generate_recovery_codes(
-    conn: &rusqlite::Connection,
+/// Generate a set of recovery codes and store their hashes. Returns the
+/// plaintext codes (to be displayed to the user once). Inside a
+/// `DbTransaction` so register/recover routes can co-commit with their
+/// other writes.
+pub async fn generate_recovery_codes(
+    tx: &mut DbTransaction<'_>,
     user_id: &str,
     count: usize,
 ) -> Result<Vec<String>> {
-    // Delete any existing recovery codes for this user.
-    conn.execute(
-        "DELETE FROM recovery_codes WHERE user_id = ?1",
-        params![user_id],
-    )?;
+    tx.execute(
+        "DELETE FROM recovery_codes WHERE user_id = ?",
+        vec![DbValue::Text(user_id.to_string())],
+    )
+    .await?;
 
     let mut codes = Vec::with_capacity(count);
     for _ in 0..count {
         let code = generate_code();
-        // Recovery codes are high-value and single-use — hash with stronger params.
         let hash = hash_recovery_code(&code)?;
         let id = Uuid::new_v4().to_string();
-        conn.execute(
-            "INSERT INTO recovery_codes (id, user_id, code_hash, used) VALUES (?1, ?2, ?3, 0)",
-            params![id, user_id, hash],
-        )?;
+        tx.execute(
+            "INSERT INTO recovery_codes (id, user_id, code_hash, used) VALUES (?, ?, ?, 0)",
+            vec![
+                DbValue::Text(id),
+                DbValue::Text(user_id.to_string()),
+                DbValue::Bytes(hash),
+            ],
+        )
+        .await?;
         codes.push(code);
     }
     Ok(codes)
 }
 
-/// Verify a recovery code and mark it as used (single-use). Returns `true` if valid and unused.
-pub fn verify_and_consume_recovery_code(
-    conn: &rusqlite::Connection,
+/// Verify a recovery code and mark it as used (single-use). Returns
+/// `true` if valid and unused. Inside a `DbTransaction` so the
+/// recover-flow can commit the consume + the follow-on password change
+/// atomically.
+pub async fn verify_and_consume_recovery_code(
+    tx: &mut DbTransaction<'_>,
     user_id: &str,
     code: &str,
 ) -> Result<bool> {
-    let mut stmt =
-        conn.prepare("SELECT id, code_hash FROM recovery_codes WHERE user_id = ?1 AND used = 0")?;
-    let codes: Vec<(String, Vec<u8>)> = stmt
-        .query_map(params![user_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    for (code_id, hash) in codes {
+    let rows = tx
+        .query_all(
+            "SELECT id, code_hash FROM recovery_codes WHERE user_id = ? AND used = 0",
+            vec![DbValue::Text(user_id.to_string())],
+        )
+        .await?;
+    for r in &rows {
+        let code_id = r.get_text(0)?;
+        let hash = r.get_bytes(1)?;
         if verify_password(code, &hash)? {
-            conn.execute(
-                "UPDATE recovery_codes SET used = 1 WHERE id = ?1",
-                params![code_id],
-            )?;
+            tx.execute(
+                "UPDATE recovery_codes SET used = 1 WHERE id = ?",
+                vec![DbValue::Text(code_id)],
+            )
+            .await?;
             return Ok(true);
         }
     }
@@ -327,8 +336,17 @@ pub fn verify_and_consume_recovery_code(
 }
 
 /// Delete all sessions for a user (for use on suspend/password change).
-pub fn delete_user_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<()> {
-    conn.execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])?;
+/// Inside a `DbTransaction` so the password-change flow commits the
+/// session wipe atomically.
+pub async fn delete_user_sessions(
+    tx: &mut DbTransaction<'_>,
+    user_id: &str,
+) -> Result<()> {
+    tx.execute(
+        "DELETE FROM sessions WHERE user_id = ?",
+        vec![DbValue::Text(user_id.to_string())],
+    )
+    .await?;
     Ok(())
 }
 
@@ -348,110 +366,156 @@ fn generate_code() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema;
+    use crate::db::adapter::DbAdapter;
+    use crate::db::migrate::DialectAwareMigrationSource;
+    use crate::db::pool::{DbBackend, DbPool};
+    use sqlx::sqlite::SqlitePool;
 
-    fn test_conn_with_user() -> (rusqlite::Connection, String) {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        schema::run_migrations(&conn).unwrap();
-        let user = crate::db::users::create_user(&conn, "alice", crate::db::models::UserRole::User)
+    async fn fresh_adapter_with_user() -> (DbAdapter, String) {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        let source = DialectAwareMigrationSource::for_backend(DbBackend::Sqlite);
+        sqlx::migrate::Migrator::new(source)
+            .await
+            .unwrap()
+            .run(&pool)
+            .await
             .unwrap();
-        (conn, user.id)
+        let adapter = DbAdapter::new(DbPool::Sqlite(pool));
+        let user_id = crate::db::users::create_user(
+            &adapter,
+            "alice",
+            crate::db::models::UserRole::User,
+        )
+        .await
+        .unwrap()
+        .id;
+        (adapter, user_id)
     }
 
-    #[test]
-    fn password_hash_and_verify() {
+    /// Helper: wrap a single write in a short transaction.
+    async fn store_password_committed(adapter: &DbAdapter, user_id: &str, password: &str) -> String {
+        let mut tx = adapter.begin().await.unwrap();
+        let id = store_password(&mut tx, user_id, password).await.unwrap();
+        tx.commit().await.unwrap();
+        id
+    }
+
+    async fn generate_recovery_codes_committed(
+        adapter: &DbAdapter,
+        user_id: &str,
+        count: usize,
+    ) -> Vec<String> {
+        let mut tx = adapter.begin().await.unwrap();
+        let codes = generate_recovery_codes(&mut tx, user_id, count)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        codes
+    }
+
+    async fn verify_and_consume_recovery_code_committed(
+        adapter: &DbAdapter,
+        user_id: &str,
+        code: &str,
+    ) -> bool {
+        let mut tx = adapter.begin().await.unwrap();
+        let ok = verify_and_consume_recovery_code(&mut tx, user_id, code)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        ok
+    }
+
+    #[tokio::test]
+    async fn password_hash_and_verify() {
         let hash = hash_password("secret123").unwrap();
         assert!(verify_password("secret123", &hash).unwrap());
         assert!(!verify_password("wrong", &hash).unwrap());
     }
 
-    #[test]
-    fn store_and_verify_password() {
-        let (conn, user_id) = test_conn_with_user();
-        store_password(&conn, &user_id, "mypassword").unwrap();
-        assert!(verify_user_password(&conn, &user_id, "mypassword").unwrap());
-        assert!(!verify_user_password(&conn, &user_id, "wrong").unwrap());
+    #[tokio::test]
+    async fn store_and_verify_password() {
+        let (a, user_id) = fresh_adapter_with_user().await;
+        store_password_committed(&a, &user_id, "mypassword").await;
+        assert!(verify_user_password(&a, &user_id, "mypassword")
+            .await
+            .unwrap());
+        assert!(!verify_user_password(&a, &user_id, "wrong").await.unwrap());
     }
 
-    #[test]
-    fn recovery_codes_generated_and_verified() {
-        let (conn, user_id) = test_conn_with_user();
-        let codes = generate_recovery_codes(&conn, &user_id, 8).unwrap();
+    #[tokio::test]
+    async fn recovery_codes_generated_and_verified() {
+        let (a, user_id) = fresh_adapter_with_user().await;
+        let codes = generate_recovery_codes_committed(&a, &user_id, 8).await;
         assert_eq!(codes.len(), 8);
 
-        // Each code should be verifiable once.
         let first = &codes[0];
-        assert!(verify_and_consume_recovery_code(&conn, &user_id, first).unwrap());
+        assert!(verify_and_consume_recovery_code_committed(&a, &user_id, first).await);
         // Second use should fail (already consumed).
-        assert!(!verify_and_consume_recovery_code(&conn, &user_id, first).unwrap());
+        assert!(!verify_and_consume_recovery_code_committed(&a, &user_id, first).await);
     }
 
-    #[test]
-    fn recovery_code_wrong_code_rejected() {
-        let (conn, user_id) = test_conn_with_user();
-        let _ = generate_recovery_codes(&conn, &user_id, 4).unwrap();
-        assert!(!verify_and_consume_recovery_code(&conn, &user_id, "XXXX-YYYY").unwrap());
+    #[tokio::test]
+    async fn recovery_code_wrong_code_rejected() {
+        let (a, user_id) = fresh_adapter_with_user().await;
+        let _ = generate_recovery_codes_committed(&a, &user_id, 4).await;
+        assert!(!verify_and_consume_recovery_code_committed(&a, &user_id, "XXXX-YYYY").await);
     }
 
-    #[test]
-    fn regenerate_recovery_codes_replaces_old() {
-        let (conn, user_id) = test_conn_with_user();
-        let codes1 = generate_recovery_codes(&conn, &user_id, 4).unwrap();
-        let codes2 = generate_recovery_codes(&conn, &user_id, 4).unwrap();
+    #[tokio::test]
+    async fn regenerate_recovery_codes_replaces_old() {
+        let (a, user_id) = fresh_adapter_with_user().await;
+        let codes1 = generate_recovery_codes_committed(&a, &user_id, 4).await;
+        let codes2 = generate_recovery_codes_committed(&a, &user_id, 4).await;
 
-        // Old codes should no longer work.
-        assert!(!verify_and_consume_recovery_code(&conn, &user_id, &codes1[0]).unwrap());
-        // New codes should work.
-        assert!(verify_and_consume_recovery_code(&conn, &user_id, &codes2[0]).unwrap());
+        assert!(!verify_and_consume_recovery_code_committed(&a, &user_id, &codes1[0]).await);
+        assert!(verify_and_consume_recovery_code_committed(&a, &user_id, &codes2[0]).await);
     }
 
-    #[test]
-    fn delete_user_sessions_works() {
-        let (conn, user_id) = test_conn_with_user();
+    #[tokio::test]
+    async fn delete_user_sessions_works() {
+        let (a, user_id) = fresh_adapter_with_user().await;
         // Insert a fake session.
-        conn.execute(
-            "INSERT INTO sessions (id, user_id, data, expires_at) VALUES ('s1', ?1, X'00', '2099-01-01T00:00:00Z')",
-            params![user_id],
+        a.execute(
+            "INSERT INTO sessions (id, user_id, data, expires_at) VALUES ('s1', ?, X'00', '2099-01-01T00:00:00Z')",
+            vec![DbValue::Text(user_id.clone())],
         )
+        .await
         .unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sessions WHERE user_id = ?1",
-                params![user_id],
-                |r| r.get(0),
+        let row = a
+            .query_one(
+                "SELECT COUNT(*) FROM sessions WHERE user_id = ?",
+                vec![DbValue::Text(user_id.clone())],
             )
+            .await
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(row.get_i64(0).unwrap(), 1);
 
-        delete_user_sessions(&conn, &user_id).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sessions WHERE user_id = ?1",
-                params![user_id],
-                |r| r.get(0),
+        let mut tx = a.begin().await.unwrap();
+        delete_user_sessions(&mut tx, &user_id).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let row = a
+            .query_one(
+                "SELECT COUNT(*) FROM sessions WHERE user_id = ?",
+                vec![DbValue::Text(user_id.clone())],
             )
+            .await
             .unwrap();
-        assert_eq!(count, 0);
+        assert_eq!(row.get_i64(0).unwrap(), 0);
     }
 
-    #[test]
-    fn generated_code_format() {
+    #[tokio::test]
+    async fn generated_code_format() {
         let code = generate_code();
-        assert_eq!(code.len(), 9); // XXXX-XXXX
+        assert_eq!(code.len(), 9);
         assert_eq!(code.chars().nth(4), Some('-'));
     }
 
-    // -- Argon2 params + rehash --------------------------------------------------
-
-    /// Local shim: the inline tests share the public test helper so a single
-    /// authoritative implementation defines what "legacy default params" means.
-    fn legacy_default_hash(password: &str) -> Vec<u8> {
-        legacy_argon2_default_hash_for_tests(password).expect("legacy hash helper")
-    }
-
-    #[test]
-    fn current_argon2_password_uses_t1() {
+    #[tokio::test]
+    async fn current_argon2_password_uses_t1() {
         let a = current_argon2_password();
         let params = a.params();
         assert_eq!(params.m_cost(), CURRENT_M_COST);
@@ -459,22 +523,18 @@ mod tests {
         assert_eq!(params.p_cost(), CURRENT_P_COST);
     }
 
-    #[test]
-    fn current_argon2_recovery_uses_stronger_t3() {
+    #[tokio::test]
+    async fn current_argon2_recovery_uses_stronger_t3() {
         let a = current_argon2_recovery();
         let params = a.params();
         assert_eq!(params.m_cost(), CURRENT_M_COST);
         assert_eq!(params.t_cost(), CURRENT_T_COST_RECOVERY);
-        assert!(
-            params.t_cost() >= 3,
-            "recovery code params must have t_cost >= 3, got {}",
-            params.t_cost()
-        );
+        assert!(params.t_cost() >= 3);
         assert_eq!(params.p_cost(), CURRENT_P_COST);
     }
 
-    #[test]
-    fn fresh_hash_password_embeds_current_params() {
+    #[tokio::test]
+    async fn fresh_hash_password_embeds_current_params() {
         let hash = hash_password("hunter22hunter").unwrap();
         let hash_str = std::str::from_utf8(&hash).unwrap();
         let parsed = PasswordHash::new(hash_str).unwrap();
@@ -484,126 +544,121 @@ mod tests {
         assert_eq!(params.p_cost(), CURRENT_P_COST);
     }
 
-    #[test]
-    fn argon2_default_hash_is_weaker_than_current() {
+    fn legacy_default_hash(password: &str) -> Vec<u8> {
+        legacy_argon2_default_hash_for_tests(password).expect("legacy hash helper")
+    }
+
+    #[tokio::test]
+    async fn argon2_default_hash_is_weaker_than_current() {
         let legacy = legacy_default_hash("hunter22hunter");
         assert!(is_password_hash_weaker_than_current(&legacy).unwrap());
     }
 
-    #[test]
-    fn current_hash_is_not_weaker() {
+    #[tokio::test]
+    async fn current_hash_is_not_weaker() {
         let fresh = hash_password("hunter22hunter").unwrap();
         assert!(!is_password_hash_weaker_than_current(&fresh).unwrap());
     }
 
-    #[test]
-    fn verify_password_passes_old_params_hash() {
-        // Sanity: verify_password reads stored params from the PHC string and
-        // works regardless of which Argon2 instance hashed the input.
+    #[tokio::test]
+    async fn verify_password_passes_old_params_hash() {
         let legacy = legacy_default_hash("hunter22hunter");
         assert!(verify_password("hunter22hunter", &legacy).unwrap());
         assert!(!verify_password("wrong-password", &legacy).unwrap());
     }
 
-    #[test]
-    fn verify_user_password_rehashes_weak_hash() {
-        let (conn, user_id) = test_conn_with_user();
+    #[tokio::test]
+    async fn verify_user_password_rehashes_weak_hash() {
+        let (a, user_id) = fresh_adapter_with_user().await;
         let cred_id = Uuid::new_v4().to_string();
         let legacy = legacy_default_hash("hunter22hunter");
-        conn.execute(
-            "INSERT INTO credentials (id, user_id, kind, data, label) VALUES (?1, ?2, 'password', ?3, NULL)",
-            params![cred_id, user_id, legacy.clone()],
+        a.execute(
+            "INSERT INTO credentials (id, user_id, kind, data, label) VALUES (?, ?, 'password', ?, NULL)",
+            vec![
+                DbValue::Text(cred_id.clone()),
+                DbValue::Text(user_id.clone()),
+                DbValue::Bytes(legacy.clone()),
+            ],
         )
+        .await
         .unwrap();
 
-        // Verify succeeds and triggers rehash.
-        assert!(verify_user_password(&conn, &user_id, "hunter22hunter").unwrap());
+        assert!(verify_user_password(&a, &user_id, "hunter22hunter")
+            .await
+            .unwrap());
 
-        // Row was rewritten with current params.
-        let new_hash: Vec<u8> = conn
-            .query_row(
-                "SELECT data FROM credentials WHERE id = ?1",
-                params![cred_id],
-                |r| r.get(0),
+        let row = a
+            .query_one(
+                "SELECT data FROM credentials WHERE id = ?",
+                vec![DbValue::Text(cred_id.clone())],
             )
+            .await
             .unwrap();
-        assert_ne!(legacy, new_hash, "credentials.data should have been rewritten");
+        let new_hash = row.get_bytes(0).unwrap();
+        assert_ne!(legacy, new_hash);
         assert!(!is_password_hash_weaker_than_current(&new_hash).unwrap());
-
-        // The new hash still verifies the same password.
         assert!(verify_password("hunter22hunter", &new_hash).unwrap());
     }
 
-    #[test]
-    fn verify_user_password_does_not_rewrite_current_param_hash() {
-        let (conn, user_id) = test_conn_with_user();
-        // store_password uses current params.
-        let cred_id = store_password(&conn, &user_id, "hunter22hunter").unwrap();
-        let before: Vec<u8> = conn
-            .query_row(
-                "SELECT data FROM credentials WHERE id = ?1",
-                params![cred_id],
-                |r| r.get(0),
+    #[tokio::test]
+    async fn verify_user_password_does_not_rewrite_current_param_hash() {
+        let (a, user_id) = fresh_adapter_with_user().await;
+        let cred_id = store_password_committed(&a, &user_id, "hunter22hunter").await;
+        let row = a
+            .query_one(
+                "SELECT data FROM credentials WHERE id = ?",
+                vec![DbValue::Text(cred_id.clone())],
             )
+            .await
             .unwrap();
+        let before = row.get_bytes(0).unwrap();
 
-        assert!(verify_user_password(&conn, &user_id, "hunter22hunter").unwrap());
+        assert!(verify_user_password(&a, &user_id, "hunter22hunter")
+            .await
+            .unwrap());
 
-        let after: Vec<u8> = conn
-            .query_row(
-                "SELECT data FROM credentials WHERE id = ?1",
-                params![cred_id],
-                |r| r.get(0),
+        let row = a
+            .query_one(
+                "SELECT data FROM credentials WHERE id = ?",
+                vec![DbValue::Text(cred_id)],
             )
+            .await
             .unwrap();
-        assert_eq!(before, after, "current-param hash must not be rewritten");
+        let after = row.get_bytes(0).unwrap();
+        assert_eq!(before, after);
     }
 
-    #[test]
-    fn recovery_code_hash_uses_stronger_params() {
-        let (conn, user_id) = test_conn_with_user();
-        let codes = generate_recovery_codes(&conn, &user_id, 2).unwrap();
+    #[tokio::test]
+    async fn recovery_code_hash_uses_stronger_params() {
+        let (a, user_id) = fresh_adapter_with_user().await;
+        let codes = generate_recovery_codes_committed(&a, &user_id, 2).await;
         assert_eq!(codes.len(), 2);
 
-        let hashes: Vec<Vec<u8>> = conn
-            .prepare("SELECT code_hash FROM recovery_codes WHERE user_id = ?1")
-            .unwrap()
-            .query_map(params![user_id], |r| r.get::<_, Vec<u8>>(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
-        assert!(!hashes.is_empty());
-        for hash in &hashes {
-            let hash_str = std::str::from_utf8(hash).unwrap();
+        let rows = a
+            .query_all(
+                "SELECT code_hash FROM recovery_codes WHERE user_id = ?",
+                vec![DbValue::Text(user_id)],
+            )
+            .await
+            .unwrap();
+        assert!(!rows.is_empty());
+        for r in &rows {
+            let hash = r.get_bytes(0).unwrap();
+            let hash_str = std::str::from_utf8(&hash).unwrap();
             let parsed = PasswordHash::new(hash_str).unwrap();
             let params = Params::try_from(&parsed).unwrap();
-            assert!(
-                params.t_cost() >= CURRENT_T_COST_RECOVERY,
-                "recovery code hash must have t_cost >= {} (got {})",
-                CURRENT_T_COST_RECOVERY,
-                params.t_cost()
-            );
-            assert!(
-                params.m_cost() >= CURRENT_M_COST,
-                "recovery code hash must have m_cost >= {} (got {})",
-                CURRENT_M_COST,
-                params.m_cost()
-            );
+            assert!(params.t_cost() >= CURRENT_T_COST_RECOVERY);
+            assert!(params.m_cost() >= CURRENT_M_COST);
         }
     }
 
-    /// Latency check: keep the new params under the 500 ms budget on developer
-    /// machines. Marked `#[ignore]` so CI can run it explicitly when calibrating;
-    /// `cargo test -- --ignored` exercises it locally.
-    #[test]
+    /// Latency check. Marked `#[ignore]` so CI can run it explicitly.
+    #[tokio::test]
     #[ignore = "latency benchmark; run with --ignored"]
-    fn hash_latency_under_500ms() {
+    async fn hash_latency_under_500ms() {
         let start = std::time::Instant::now();
         let _ = hash_password("hunter22hunter").unwrap();
         let elapsed = start.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_millis(500),
-            "argon2 hash too slow: {elapsed:?}",
-        );
+        assert!(elapsed < std::time::Duration::from_millis(500));
     }
 }

@@ -488,8 +488,8 @@ mod tests {
         // Look up the admin user's ID so the route ownership check passes.
         let admin_user_id = {
             let db = state.auth.db.as_ref().unwrap();
-            let conn = db.conn().lock().await;
-            maestro_core::db::users::get_user_by_username(&conn, "admin")
+            maestro_core::db::users::get_user_by_username(db.adapter(), "admin")
+                .await
                 .unwrap()
                 .unwrap()
                 .id

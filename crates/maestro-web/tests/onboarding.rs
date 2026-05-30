@@ -392,15 +392,11 @@ async fn auth_status_includes_phase0_mirrored_fields_on_clean_boot() {
 async fn register_admin_and_get_id(state: &AppState) -> (String, String) {
     let cookie = maestro_web::test_helpers::register_and_login(state).await;
     let db = state.auth().db.clone().expect("test state must have a DB");
-    let user_id = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::users::get_user_by_username(&conn, "admin")
-            .expect("db query")
-            .expect("admin must exist")
-            .id
-    })
-    .await
-    .expect("join");
+    let user_id = maestro_core::db::users::get_user_by_username(db.adapter(), "admin")
+        .await
+        .expect("db query")
+        .expect("admin must exist")
+        .id;
     (cookie, user_id)
 }
 

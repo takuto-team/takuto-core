@@ -31,8 +31,8 @@ use maestro_web::test_helpers::temp_db;
 
 /// Create a user with the given username and return the generated id.
 async fn make_user(db: &Database, username: &str) -> String {
-    let conn = db.conn().lock().await;
-    users::create_user(&conn, username, UserRole::User)
+    users::create_user(db.adapter(), username, UserRole::User)
+        .await
         .expect("create_user")
         .id
 }

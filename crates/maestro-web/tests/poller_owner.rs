@@ -182,15 +182,11 @@ async fn orphan_migration_e2e() {
         // assign to the orphan workflow so the admin sees it in their list.
         let admin_id = {
             let db = state.auth().db.as_ref().unwrap().clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = db.conn().blocking_lock();
-                maestro_core::db::users::get_user_by_username(&conn, "admin")
-                    .unwrap()
-                    .unwrap()
-                    .id
-            })
-            .await
-            .unwrap()
+            maestro_core::db::users::get_user_by_username(db.adapter(), "admin")
+                .await
+                .unwrap()
+                .unwrap()
+                .id
         };
 
         let restored = state

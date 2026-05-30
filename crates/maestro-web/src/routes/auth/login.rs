@@ -58,13 +58,11 @@ pub async fn login(
         return (StatusCode::SERVICE_UNAVAILABLE, "Database not available").into_response();
     };
 
-    let db_clone = db.clone();
-    let has_users = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        maestro_core::db::users::count_users(&conn).unwrap_or(0) > 0
-    })
-    .await
-    .unwrap_or(false);
+    // Plan-11 step 3 cluster A: users DAO on the adapter.
+    let has_users = maestro_core::db::users::count_users(db.adapter())
+        .await
+        .unwrap_or(0)
+        > 0;
 
     if !has_users {
         return (
@@ -75,15 +73,10 @@ pub async fn login(
     }
 
     // Step 1: look up the user. Unknown username → 401 with NO attempt row.
-    let db_clone = db.clone();
-    let username = body.username.clone();
-    let user_lookup = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        maestro_core::db::users::get_user_by_username(&conn, &username).ok().flatten()
-    })
-    .await
-    .ok()
-    .flatten();
+    let user_lookup = maestro_core::db::users::get_user_by_username(db.adapter(), &body.username)
+        .await
+        .ok()
+        .flatten();
     let Some(user) = user_lookup else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -158,16 +151,23 @@ pub async fn login(
     }
 
     // Step 5: session rotation + create session.
+    //
+    // Plan-11 step 3 cluster A: credentials::delete_user_sessions on the
+    // adapter. create_db_session (sessions table — still rusqlite) stays
+    // in spawn_blocking.
     let kick = config.config.read().await.web.kick_other_sessions_on_login;
+    if kick {
+        let mut tx = match db.adapter().begin().await {
+            Ok(t) => t,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let _ = maestro_core::db::credentials::delete_user_sessions(&mut tx, &user.id).await;
+        let _ = tx.commit().await;
+    }
     let db_clone = db.clone();
     let user_id = user.id.clone();
     let token = tokio::task::spawn_blocking(move || {
         let conn = db_clone.conn().blocking_lock();
-        if kick {
-            // Plan-02 AC-5 G/W/T 5.1: delete prior sessions so the new login
-            // is the only authenticated client for this user.
-            let _ = maestro_core::db::credentials::delete_user_sessions(&conn, &user_id);
-        }
         create_db_session(&conn, &user_id)
     })
     .await;

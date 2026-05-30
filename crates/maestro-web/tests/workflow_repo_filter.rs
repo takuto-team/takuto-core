@@ -75,16 +75,11 @@ async fn create_and_login_user(
 
 async fn user_id_for(state: &AppState, username: &str) -> String {
     let db = state.auth().db.clone().expect("test state must have a DB");
-    let username = username.to_string();
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        let user = maestro_core::db::users::get_user_by_username(&conn, &username)
-            .expect("db query")
-            .expect("user must exist");
-        user.id
-    })
-    .await
-    .unwrap()
+    let user = maestro_core::db::users::get_user_by_username(db.adapter(), username)
+        .await
+        .expect("db query")
+        .expect("user must exist");
+    user.id
 }
 
 /// Register a repository row and (optionally) associate it with a user.

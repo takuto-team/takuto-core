@@ -94,17 +94,12 @@ async fn me_status(state: &AppState, cookie: &str) -> StatusCode {
 
 async fn user_id_for(state: &AppState, username: &str) -> String {
     let db = state.auth().db.as_ref().unwrap().clone();
-    let username = username.to_string();
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::users::get_user_by_username(&conn, &username)
-            .ok()
-            .flatten()
-            .unwrap()
-            .id
-    })
-    .await
-    .unwrap()
+    maestro_core::db::users::get_user_by_username(db.adapter(), username)
+        .await
+        .ok()
+        .flatten()
+        .unwrap()
+        .id
 }
 
 /// G/W/T 5.1: a second login for the same user invalidates the first session

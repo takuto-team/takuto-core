@@ -63,18 +63,23 @@ pub(crate) async fn require_admin(
 
     let raw_cookie = session_cookie_from_headers(headers).ok_or(StatusCode::UNAUTHORIZED)?;
     let cookie = raw_cookie.to_string();
+    // Plan-11 step 3 cluster A: users on the adapter; session validation
+    // (still rusqlite — sessions table not yet migrated) stays in
+    // spawn_blocking.
     let db_clone = db.clone();
-
-    let user = tokio::task::spawn_blocking(move || {
+    let user_id = tokio::task::spawn_blocking(move || {
         let conn = db_clone.conn().blocking_lock();
-        let user_id = validate_db_session(&conn, &cookie)?;
-        maestro_core::db::users::get_user_by_id(&conn, &user_id)
-            .ok()
-            .flatten()
+        validate_db_session(&conn, &cookie)
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let user = maestro_core::db::users::get_user_by_id(db.adapter(), &user_id)
+        .await
+        .ok()
+        .flatten()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
 
     if user.role != UserRole::Admin {
         return Err(StatusCode::FORBIDDEN);
@@ -97,24 +102,18 @@ pub async fn list_users(State(auth): State<AuthState>, headers: HeaderMap) -> im
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::users::list_users(&conn)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(users)) => Json(users).into_response(),
-        Ok(Err(e)) => (
+    // Plan-11 step 3 cluster A: users DAO on the adapter.
+    match maestro_core::db::users::list_users(db.adapter()).await {
+        Ok(users) => Json(users).into_response(),
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         )
             .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -137,15 +136,18 @@ pub async fn create_user(
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let adapter = db.adapter();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        let role = body.role.unwrap_or(UserRole::User);
-        let user = maestro_core::db::users::create_user(&conn, &body.username, role)?;
-
+    // Plan-11 step 3 cluster A: users + credentials on the agnostic
+    // adapter. create_user opens its own internal tx; password +
+    // recovery codes go through a single explicit tx so they
+    // co-commit.
+    let role = body.role.unwrap_or(UserRole::User);
+    let result: maestro_core::error::Result<CreateUserResponse> = async {
+        let user = maestro_core::db::users::create_user(adapter, &body.username, role).await?;
         let mut codes = None;
         if let Some(ref password) = body.password
             && !password.is_empty()
@@ -153,22 +155,23 @@ pub async fn create_user(
             if password.len() < 12 {
                 return Err(AuthError::PasswordTooShort.into());
             }
-            maestro_core::db::credentials::store_password(&conn, &user.id, password)?;
+            let mut tx = adapter.begin().await?;
+            maestro_core::db::credentials::store_password(&mut tx, &user.id, password).await?;
             let recovery =
-                maestro_core::db::credentials::generate_recovery_codes(&conn, &user.id, 8)?;
+                maestro_core::db::credentials::generate_recovery_codes(&mut tx, &user.id, 8).await?;
+            tx.commit().await?;
             codes = Some(recovery);
         }
-
-        Ok::<_, maestro_core::error::MaestroError>(CreateUserResponse {
+        Ok(CreateUserResponse {
             user,
             recovery_codes: codes,
         })
-    })
+    }
     .await;
 
     match result {
-        Ok(Ok(resp)) => (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response(),
-        Ok(Err(e)) => {
+        Ok(resp) => (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response(),
+        Err(e) => {
             let msg = e.to_string();
             let status = if msg.contains("already exists") {
                 StatusCode::CONFLICT
@@ -177,7 +180,6 @@ pub async fn create_user(
             };
             (status, Json(serde_json::json!({"error": msg}))).into_response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -192,25 +194,18 @@ pub async fn get_user(
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::users::get_user_by_id(&conn, &id)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(Some(user))) => Json(user).into_response(),
-        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
-        Ok(Err(e)) => (
+    match maestro_core::db::users::get_user_by_id(db.adapter(), &id).await {
+        Ok(Some(user)) => Json(user).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         )
             .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -239,45 +234,45 @@ pub async fn update_user(
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let adapter = db.adapter();
 
-    let target_id = id.clone();
     let new_role = body.role;
     let new_username = body.username.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        // Capture the previous role inside the same lock so the "role changed?"
-        // decision sees a consistent snapshot.
-        let previous_role = maestro_core::db::users::get_user_by_id(&conn, &target_id)
+    // Plan-11 step 3 cluster A: capture previous role + update + session
+    // invalidate via the adapter. update_user opens its own internal tx
+    // for the last-admin guard; the role-change session purge runs
+    // afterward inside a short tx (so a delete failure doesn't leave a
+    // user with the wrong role + stale sessions).
+    let result: maestro_core::error::Result<maestro_core::db::models::User> = async {
+        let previous_role = maestro_core::db::users::get_user_by_id(adapter, &id)
+            .await
             .ok()
             .flatten()
             .map(|u| u.role);
-        let updated = maestro_core::db::users::update_user(
-            &conn,
-            &target_id,
-            new_username.as_deref(),
-            new_role,
-        )?;
-        // Plan-02 AC-5 G/W/T 5.3: if role changed, delete all sessions so the
-        // target user must re-authenticate with the new role.
+        let updated =
+            maestro_core::db::users::update_user(adapter, &id, new_username.as_deref(), new_role)
+                .await?;
         let role_changed = matches!((previous_role, new_role), (Some(prev), Some(new)) if prev != new);
         if role_changed {
-            let _ = maestro_core::db::credentials::delete_user_sessions(&conn, &target_id);
+            let mut tx = adapter.begin().await?;
+            let _ = maestro_core::db::credentials::delete_user_sessions(&mut tx, &id).await;
+            tx.commit().await?;
             tracing::info!(
                 event = "role_change_session_invalidate",
-                user_id = %target_id,
+                user_id = %id,
                 "deleted all sessions after role change"
             );
         }
-        Ok::<_, maestro_core::error::MaestroError>(updated)
-    })
+        Ok(updated)
+    }
     .await;
 
     match result {
-        Ok(Ok(user)) => Json(user).into_response(),
-        Ok(Err(e)) => {
+        Ok(user) => Json(user).into_response(),
+        Err(e) => {
             let msg = e.to_string();
             let status = if msg.contains("not found") || msg.contains("Not found") {
                 StatusCode::NOT_FOUND
@@ -286,7 +281,6 @@ pub async fn update_user(
             };
             (status, Json(serde_json::json!({"error": msg}))).into_response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -311,22 +305,23 @@ pub async fn suspend_user(
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let adapter = db.adapter();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::users::suspend_user(&conn, &id)?;
-        // Also delete all sessions for the suspended user.
-        maestro_core::db::credentials::delete_user_sessions(&conn, &id)?;
-        Ok::<_, maestro_core::error::MaestroError>(())
-    })
+    let result: maestro_core::error::Result<()> = async {
+        maestro_core::db::users::suspend_user(adapter, &id).await?;
+        let mut tx = adapter.begin().await?;
+        maestro_core::db::credentials::delete_user_sessions(&mut tx, &id).await?;
+        tx.commit().await?;
+        Ok(())
+    }
     .await;
 
     match result {
-        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(e)) => {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
             let msg = e.to_string();
             let status = if msg.contains("not found") || msg.contains("Not found") {
                 StatusCode::NOT_FOUND
@@ -335,7 +330,6 @@ pub async fn suspend_user(
             };
             (status, Json(serde_json::json!({"error": msg}))).into_response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -350,19 +344,13 @@ pub async fn unsuspend_user(
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::users::unsuspend_user(&conn, &id)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(e)) => {
+    match maestro_core::db::users::unsuspend_user(db.adapter(), &id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
             let msg = e.to_string();
             let status = if msg.contains("not found") || msg.contains("Not found") {
                 StatusCode::NOT_FOUND
@@ -371,7 +359,6 @@ pub async fn unsuspend_user(
             };
             (status, Json(serde_json::json!({"error": msg}))).into_response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -390,44 +377,26 @@ pub async fn unlock_user(
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let adapter = db.adapter();
 
-    // Plan-11 step 3: split the existence check (users DAO — still
-    // rusqlite) from the lockout clear (login_attempts — now async via
-    // DbAdapter). The two operations are independent; a stale "exists"
-    // read between them would simply manifest as a successful clear of
-    // an absent user_id (zero rows affected), which the cascading
-    // ON DELETE on the users → login_attempts FK already covers.
-    let target_id = id.clone();
-    let db_clone = db.clone();
-    let exists_result = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        maestro_core::db::users::get_user_by_id(&conn, &target_id)
-            .ok()
-            .flatten()
-            .is_some()
-    })
-    .await;
+    // Plan-11 step 3 cluster A: users + login_attempts both on the adapter.
+    let exists = maestro_core::db::users::get_user_by_id(adapter, &id)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
 
-    let result: std::result::Result<
-        std::result::Result<(), maestro_core::error::MaestroError>,
-        tokio::task::JoinError,
-    > = match exists_result {
-        Ok(true) => {
-            // Async adapter call — clear both password + recovery rows.
-            match maestro_core::db::login_attempts::clear_attempts(db.adapter(), &id).await {
-                Ok(()) => Ok(Ok(())),
-                Err(e) => Ok(Err(e)),
-            }
-        }
-        Ok(false) => Ok(Err(AuthError::UserNotFound { id: id.clone() }.into())),
-        Err(e) => Err(e),
+    let result: maestro_core::error::Result<()> = if exists {
+        maestro_core::db::login_attempts::clear_attempts(adapter, &id).await
+    } else {
+        Err(AuthError::UserNotFound { id: id.clone() }.into())
     };
 
     match result {
-        Ok(Ok(())) => {
+        Ok(()) => {
             tracing::info!(
                 event = "admin_unlock_user",
                 user_id = %id,
@@ -435,7 +404,7 @@ pub async fn unlock_user(
             );
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             let msg = e.to_string();
             let status = if msg.contains("not found") || msg.contains("Not found") {
                 StatusCode::NOT_FOUND
@@ -444,7 +413,6 @@ pub async fn unlock_user(
             };
             (status, Json(serde_json::json!({"error": msg}))).into_response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -469,19 +437,13 @@ pub async fn delete_user(
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::users::delete_user(&conn, &id)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(e)) => {
+    match maestro_core::db::users::delete_user(db.adapter(), &id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
             let msg = e.to_string();
             let status = if msg.contains("not found") || msg.contains("Not found") {
                 StatusCode::NOT_FOUND
@@ -490,7 +452,6 @@ pub async fn delete_user(
             };
             (status, Json(serde_json::json!({"error": msg}))).into_response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -501,34 +462,28 @@ pub async fn export_users(State(auth): State<AuthState>, headers: HeaderMap) -> 
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        let users = maestro_core::db::users::list_users(&conn)?;
-        let exports: Vec<UserExport> = users
-            .into_iter()
-            .map(|u| UserExport {
-                username: u.username,
-                role: u.role,
-                suspended: u.suspended,
-                created_at: u.created_at,
-            })
-            .collect();
-        Ok::<_, maestro_core::error::MaestroError>(exports)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(exports)) => Json(exports).into_response(),
-        Ok(Err(e)) => (
+    match maestro_core::db::users::list_users(db.adapter()).await {
+        Ok(users) => {
+            let exports: Vec<UserExport> = users
+                .into_iter()
+                .map(|u| UserExport {
+                    username: u.username,
+                    role: u.role,
+                    suspended: u.suspended,
+                    created_at: u.created_at,
+                })
+                .collect();
+            Json(exports).into_response()
+        }
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         )
             .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -546,17 +501,18 @@ pub async fn import_users(
     }
 
     let db = match auth.db.as_ref() {
-        Some(db) => db.clone(),
+        Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let adapter = db.adapter();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-
-        // Validate all users first before writing anything.
+    // Plan-11 step 3 cluster A: users on the adapter. Validation pass
+    // (existence checks) uses the adapter directly; the insert pass
+    // runs in one explicit DbTransaction so all-or-nothing atomicity is
+    // preserved.
+    let result: maestro_core::error::Result<ImportSummary> = async {
         let mut to_create = Vec::new();
         let mut skipped = Vec::new();
-
         for export in &body {
             let username = export.username.trim();
             if username.is_empty() {
@@ -566,59 +522,51 @@ pub async fn import_users(
                 });
                 continue;
             }
-            // Check for existing username.
-            match maestro_core::db::users::get_user_by_username(&conn, username) {
+            match maestro_core::db::users::get_user_by_username(adapter, username).await {
                 Ok(Some(_)) => {
                     skipped.push(SkippedUser {
                         username: export.username.clone(),
                         reason: format!("Username '{}' already exists", username),
                     });
                 }
-                Ok(None) => {
-                    to_create.push(export);
-                }
-                Err(e) => {
-                    return Err::<ImportSummary, maestro_core::error::MaestroError>(e.into());
-                }
+                Ok(None) => to_create.push(export),
+                Err(e) => return Err(e),
             }
         }
 
-        // Wrap all inserts in a single transaction for atomicity.
-        let tx = conn.unchecked_transaction()?;
-
+        let mut tx = adapter.begin().await?;
         let mut created = Vec::new();
         for export in to_create {
             let id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
             tx.execute(
                 "INSERT INTO users (id, username, role, suspended, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    id,
-                    export.username.trim(),
-                    export.role.as_str(),
-                    export.suspended as i32,
-                    now,
-                    now,
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                vec![
+                    maestro_core::db::DbValue::Text(id),
+                    maestro_core::db::DbValue::Text(export.username.trim().to_string()),
+                    maestro_core::db::DbValue::Text(export.role.as_str().to_string()),
+                    maestro_core::db::DbValue::I64(export.suspended as i64),
+                    maestro_core::db::DbValue::Text(now.clone()),
+                    maestro_core::db::DbValue::Text(now),
                 ],
-            )?;
+            )
+            .await?;
             created.push(export.username.clone());
         }
-
-        tx.commit()?;
+        tx.commit().await?;
 
         Ok(ImportSummary { created, skipped })
-    })
+    }
     .await;
 
     match result {
-        Ok(Ok(summary)) => (StatusCode::CREATED, Json(serde_json::json!(summary))).into_response(),
-        Ok(Err(e)) => (
+        Ok(summary) => (StatusCode::CREATED, Json(serde_json::json!(summary))).into_response(),
+        Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
         )
             .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -748,16 +696,11 @@ mod tests {
 
     /// Get the admin user's ID from the database.
     async fn get_admin_id(db: &Database) -> String {
-        let db = db.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = db.conn().blocking_lock();
-            maestro_core::db::users::get_user_by_username(&conn, "admin")
-                .unwrap()
-                .unwrap()
-                .id
-        })
-        .await
-        .unwrap()
+        maestro_core::db::users::get_user_by_username(db.adapter(), "admin")
+            .await
+            .unwrap()
+            .unwrap()
+            .id
     }
 
     #[tokio::test]

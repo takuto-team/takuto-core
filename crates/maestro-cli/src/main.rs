@@ -40,9 +40,10 @@ use maestro_web::state::{
 /// Warnings are logged when (1) is provided but the user is missing or suspended,
 /// and when neither path resolves (the caller may log an additional summary).
 async fn resolve_poller_owner(db: &Database, cfg_username: Option<&str>) -> Option<String> {
-    let conn = db.conn().lock().await;
+    // Plan-11 step 3 cluster A: users DAO on the adapter.
+    let adapter = db.adapter();
     if let Some(username) = cfg_username {
-        match maestro_core::db::users::get_user_by_username(&conn, username) {
+        match maestro_core::db::users::get_user_by_username(adapter, username).await {
             Ok(Some(user)) if !user.suspended => {
                 info!(
                     username = %user.username,
@@ -74,7 +75,7 @@ async fn resolve_poller_owner(db: &Database, cfg_username: Option<&str>) -> Opti
         }
     }
 
-    match maestro_core::db::users::list_admins(&conn) {
+    match maestro_core::db::users::list_admins(adapter).await {
         Ok(admins) => admins.into_iter().next().map(|u| {
             info!(
                 username = %u.username,

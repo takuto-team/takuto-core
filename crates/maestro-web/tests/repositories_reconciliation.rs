@@ -202,10 +202,10 @@ async fn reconcile_then_backfill_e2e() {
 
     // ── Snapshot backfill: a workflow file points at the "alpha" workspace
     // and has a user_id. backfill must create a `(uid, alpha.id)` row.
-    let alice_id = {
-        let conn = db.conn().lock().await;
-        create_user(&conn, "alice", UserRole::User).expect("create alice").id
-    };
+    let alice_id = create_user(adapter, "alice", UserRole::User)
+        .await
+        .expect("create alice")
+        .id;
     let alpha_id = repositories::get_by_name(adapter, "alpha")
         .await
         .expect("get_by_name")
@@ -253,11 +253,11 @@ async fn backfill_skips_unmatched_workspaces() {
     let db = Database::open(&data_dir, true).expect("open DB");
 
     // Register "alpha" only.
-    let alice_id = {
-        let conn = db.conn().lock().await;
-        create_user(&conn, "alice", UserRole::User).expect("alice").id
-    };
     let adapter = db.adapter();
+    let alice_id = create_user(adapter, "alice", UserRole::User)
+        .await
+        .expect("alice")
+        .id;
     repositories::upsert(adapter, "alpha", None, "/workspaces/alpha", "main", None)
         .await
         .expect("upsert alpha");

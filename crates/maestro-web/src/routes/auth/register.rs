@@ -53,52 +53,49 @@ pub async fn register(
             .into_response();
     };
 
-    let db = db.clone();
+    // Plan-11 step 3 cluster A: users + credentials on the agnostic
+    // adapter. The credential writes (store_password + generate_recovery_codes)
+    // co-commit via one transaction; create_user opens its own
+    // internal tx with the first-user-becomes-admin race guard.
+    let adapter = db.adapter();
     let username = body.username;
     let password = body.password;
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-
-        // Only allow registration when no users exist (first-user setup).
-        let count = maestro_core::db::users::count_users(&conn)?;
+    let result: maestro_core::error::Result<RegisterResponse> = async {
+        let count = maestro_core::db::users::count_users(adapter).await?;
         if count > 0 {
             return Err(AuthError::RegistrationClosed.into());
         }
-
         if username.trim().is_empty() {
             return Err(AuthError::EmptyUsername.into());
         }
         if password.len() < 12 {
             return Err(AuthError::PasswordTooShort.into());
         }
-
-        // Create admin user.
         let user = maestro_core::db::users::create_user(
-            &conn,
+            adapter,
             &username,
             maestro_core::db::models::UserRole::Admin,
-        )?;
-
-        // Store password.
-        maestro_core::db::credentials::store_password(&conn, &user.id, &password)?;
-
-        // Generate recovery codes.
-        let codes = maestro_core::db::credentials::generate_recovery_codes(&conn, &user.id, 8)?;
-
-        Ok::<_, maestro_core::error::MaestroError>(RegisterResponse {
+        )
+        .await?;
+        let mut tx = adapter.begin().await?;
+        maestro_core::db::credentials::store_password(&mut tx, &user.id, &password).await?;
+        let codes = maestro_core::db::credentials::generate_recovery_codes(&mut tx, &user.id, 8)
+            .await?;
+        tx.commit().await?;
+        Ok(RegisterResponse {
             user_id: user.id,
             username: user.username,
             role: user.role.as_str().to_string(),
             recovery_codes: codes,
             redirect_to: "/onboarding",
         })
-    })
+    }
     .await;
 
     match result {
-        Ok(Ok(resp)) => (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response(),
-        Ok(Err(e)) => {
+        Ok(resp) => (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response(),
+        Err(e) => {
             let msg = e.to_string();
             if msg.contains("already exist") || msg.contains("Registration is closed") {
                 (
@@ -114,10 +111,5 @@ pub async fn register(
                     .into_response()
             }
         }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Internal server error"})),
-        )
-            .into_response(),
     }
 }

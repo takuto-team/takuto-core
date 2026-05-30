@@ -104,17 +104,12 @@ async fn recover_with(state: &AppState, body_json: &str) -> (StatusCode, String)
 /// Look up a user's `id` from the database. Used by the unlock route tests.
 async fn user_id_for(state: &AppState, username: &str) -> String {
     let db = state.auth().db.as_ref().expect("test state has a db").clone();
-    let username = username.to_string();
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        maestro_core::db::users::get_user_by_username(&conn, &username)
-            .ok()
-            .flatten()
-            .map(|u| u.id)
-            .expect("user must exist")
-    })
-    .await
-    .unwrap()
+    maestro_core::db::users::get_user_by_username(db.adapter(), username)
+        .await
+        .ok()
+        .flatten()
+        .map(|u| u.id)
+        .expect("user must exist")
 }
 
 #[tokio::test]

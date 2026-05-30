@@ -83,28 +83,38 @@ pub async fn change_password(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-
-        // Verify current password.
-        if !maestro_core::db::credentials::verify_user_password(&conn, &uid, &current_pw)? {
+    // Plan-11 step 3 cluster A: credentials on the adapter. Sessions
+    // table (create_db_session) is still rusqlite — handled in a
+    // spawn_blocking pair after the adapter-side writes commit.
+    let adapter = db.adapter();
+    let result: maestro_core::error::Result<(String, String)> = async {
+        if !maestro_core::db::credentials::verify_user_password(adapter, &uid, &current_pw)
+            .await?
+        {
             return Err(AuthError::CurrentPasswordIncorrect.into());
         }
-
-        // Change password.
-        maestro_core::db::credentials::change_password(&conn, &uid, &new_pw)?;
-
-        // Invalidate all sessions, then re-create the current one so the user stays logged in.
-        maestro_core::db::credentials::delete_user_sessions(&conn, &uid)?;
-        let new_token = create_db_session(&conn, &uid)?;
-
-        // We need to return both the old cookie (to know what to replace) and the new token.
-        Ok::<_, maestro_core::error::MaestroError>((new_token, current_cookie))
-    })
+        let mut tx = adapter.begin().await?;
+        maestro_core::db::credentials::change_password(&mut tx, &uid, &new_pw).await?;
+        maestro_core::db::credentials::delete_user_sessions(&mut tx, &uid).await?;
+        tx.commit().await?;
+        // Sessions table still rusqlite — re-create the current session
+        // so the user stays logged in.
+        let db_blocking = db_clone.clone();
+        let uid_blocking = uid.clone();
+        let new_token = tokio::task::spawn_blocking(move || {
+            let conn = db_blocking.conn().blocking_lock();
+            create_db_session(&conn, &uid_blocking)
+        })
+        .await
+        .map_err(|_| -> maestro_core::error::MaestroError {
+            AuthError::InvalidSession.into()
+        })??;
+        Ok((new_token, current_cookie.clone()))
+    }
     .await;
 
     match result {
-        Ok(Ok((new_token, _))) => {
+        Ok((new_token, _)) => {
             let secure = {
                 let cfg = config.config.read().await;
                 resolve_cookie_secure(&cfg.web, &headers)
@@ -118,7 +128,7 @@ pub async fn change_password(
                 .build();
             (jar.add(cookie), StatusCode::NO_CONTENT).into_response()
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             let msg = e.to_string();
             if msg.contains("incorrect") {
                 (
@@ -134,11 +144,6 @@ pub async fn change_password(
                     .into_response()
             }
         }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Internal server error"})),
-        )
-            .into_response(),
     }
 }
 
@@ -154,29 +159,43 @@ pub async fn regenerate_recovery_codes(
         return StatusCode::BAD_REQUEST.into_response();
     };
 
+    // Plan-11 step 3 cluster A: session lookup (rusqlite) in
+    // spawn_blocking, generate_recovery_codes via the adapter.
     let cookie = session_cookie_from_headers(&headers)
         .unwrap_or_default()
         .to_string();
-    let db = db.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        let user_id = validate_db_session(&conn, &cookie).ok_or_else(|| -> maestro_core::error::MaestroError {
-            AuthError::InvalidSession.into()
-        })?;
-        let codes =
-            maestro_core::db::credentials::generate_recovery_codes(&conn, &user_id, 8)?;
-        Ok::<_, maestro_core::error::MaestroError>(codes)
+    let db_clone = db.clone();
+    let user_id = tokio::task::spawn_blocking(move || {
+        let conn = db_clone.conn().blocking_lock();
+        validate_db_session(&conn, &cookie)
     })
+    .await
+    .ok()
+    .flatten();
+    let Some(user_id) = user_id else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Invalid session"})),
+        )
+            .into_response();
+    };
+    let adapter = db.adapter();
+    let result: maestro_core::error::Result<Vec<String>> = async {
+        let mut tx = adapter.begin().await?;
+        let codes =
+            maestro_core::db::credentials::generate_recovery_codes(&mut tx, &user_id, 8).await?;
+        tx.commit().await?;
+        Ok(codes)
+    }
     .await;
 
     match result {
-        Ok(Ok(codes)) => Json(serde_json::json!({ "recovery_codes": codes })).into_response(),
-        Ok(Err(e)) => (
+        Ok(codes) => Json(serde_json::json!({ "recovery_codes": codes })).into_response(),
+        Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
         )
             .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -217,15 +236,12 @@ pub async fn recover(
     // The lockout threshold and window match the password path, but the counter
     // is keyed by `AttemptKind::Recovery` so a brute-force on recovery codes
     // doesn't slip past the password counter and vice versa.
-    let db_clone = db.clone();
-    let username = body.username.clone();
-    let user_lookup = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-        maestro_core::db::users::get_user_by_username(&conn, &username).ok().flatten()
-    })
-    .await
-    .ok()
-    .flatten();
+    // Plan-11 step 3 cluster A: users DAO on the adapter.
+    let user_lookup =
+        maestro_core::db::users::get_user_by_username(db.adapter(), &body.username)
+            .await
+            .ok()
+            .flatten();
     // G/W/T 3.9 equivalent for recovery: unknown user → generic 401 without
     // recording an attempt (lockout DoS would otherwise be free for any attacker
     // who can guess a username pattern).
@@ -288,50 +304,41 @@ pub async fn recover(
             .into_response();
     }
 
-    // Plan-11 step 3: split the inner work so login_attempts audits run
-    // via the async adapter while the credentials DAO stays on the
-    // legacy rusqlite path (it will migrate in a later step). The
-    // recovery-code verification + password change happens inside a
-    // single `spawn_blocking` block so the credentials calls share one
-    // MutexGuard (avoids re-acquiring across the verify → change boundary);
-    // the audit + clear are then issued from the async outer scope.
-    let db_clone = db.clone();
+    // Plan-11 step 3 cluster A: credentials on the adapter. The
+    // recover-flow's verify_and_consume + change_password +
+    // delete_user_sessions all run in one DbTransaction so they commit
+    // atomically.
+    let adapter = db.adapter();
     let uid = user.id.clone();
     let code = body.recovery_code;
     let new_password = body.new_password;
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db_clone.conn().blocking_lock();
-
-        // Verify and consume the recovery code.
-        let valid = maestro_core::db::credentials::verify_and_consume_recovery_code(
-            &conn, &uid, &code,
-        )?;
+    let result: maestro_core::error::Result<bool> = async {
+        let mut tx = adapter.begin().await?;
+        let valid =
+            maestro_core::db::credentials::verify_and_consume_recovery_code(&mut tx, &uid, &code)
+                .await?;
         if !valid {
-            // Outer scope handles the failure audit + 401.
-            return Ok::<_, maestro_core::error::MaestroError>(false);
+            // Outer scope handles the failure audit + 401. Roll back the
+            // transaction — even though no rows changed (the consume
+            // only runs on match), being explicit keeps semantics clean.
+            tx.rollback().await?;
+            return Ok(false);
         }
-
-        // Change password and invalidate sessions.
-        maestro_core::db::credentials::change_password(&conn, &uid, &new_password)?;
-        maestro_core::db::credentials::delete_user_sessions(&conn, &uid)?;
-
+        maestro_core::db::credentials::change_password(&mut tx, &uid, &new_password).await?;
+        maestro_core::db::credentials::delete_user_sessions(&mut tx, &uid).await?;
+        tx.commit().await?;
         Ok(true)
-    })
+    }
     .await;
 
-    let adapter = db.adapter();
     match result {
-        Ok(Ok(true)) => {
-            // Success: record audit + clear the failed counter so a
-            // previously-locked-out user comes back to a fresh slate.
+        Ok(true) => {
             let _ = record_attempt(adapter, &user.id, AttemptKind::Recovery, true).await;
             let _ = clear_failed_attempts(adapter, &user.id, AttemptKind::Recovery).await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(Ok(false)) => {
-            // Invalid recovery code: record the failure so the lockout
-            // counter sees it on the next attempt, then return 401.
+        Ok(false) => {
             let _ = record_attempt(adapter, &user.id, AttemptKind::Recovery, false).await;
             let msg = AuthError::InvalidRecoveryCode.to_string();
             (
@@ -340,7 +347,7 @@ pub async fn recover(
             )
                 .into_response()
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             let msg = e.to_string();
             (
                 StatusCode::UNAUTHORIZED,
@@ -348,10 +355,5 @@ pub async fn recover(
             )
                 .into_response()
         }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Internal server error"})),
-        )
-            .into_response(),
     }
 }

@@ -609,16 +609,13 @@ async fn ac11_user_delete_cascades_to_associations() {
 
     // Delete bob via the admin endpoint.
     let db = state.auth().db.as_ref().unwrap().clone();
-    let db_for_delete = db.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = db_for_delete.conn().blocking_lock();
-        let bob = maestro_core::db::users::get_user_by_username(&conn, "bob")
-            .unwrap()
-            .unwrap();
-        maestro_core::db::users::delete_user(&conn, &bob.id).unwrap();
-    })
-    .await
-    .unwrap();
+    let bob = maestro_core::db::users::get_user_by_username(db.adapter(), "bob")
+        .await
+        .unwrap()
+        .unwrap();
+    maestro_core::db::users::delete_user(db.adapter(), &bob.id)
+        .await
+        .unwrap();
 
     // The repo row survives but its association is gone.
     let r1_clone = r1.clone();

@@ -432,33 +432,20 @@ pub async fn authenticate_db_user(
     username: &str,
     password: &str,
 ) -> Option<maestro_core::db::models::User> {
-    let db = db.clone();
-    let username = username.to_string();
-    let password = password.to_string();
-
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-
-        // Look up user by username.
-        let user = match maestro_core::db::users::get_user_by_username(&conn, &username) {
-            Ok(Some(u)) => u,
-            _ => return None,
-        };
-
-        // Reject suspended users.
-        if user.suspended {
-            return None;
-        }
-
-        // Verify password.
-        match maestro_core::db::credentials::verify_user_password(&conn, &user.id, &password) {
-            Ok(true) => Some(user),
-            _ => None,
-        }
-    })
-    .await
-    .ok()
-    .flatten()
+    // Plan-11 step 3 cluster A: users + credentials on the agnostic
+    // adapter. No spawn_blocking needed — direct async lookup + verify.
+    let adapter = db.adapter();
+    let user = match maestro_core::db::users::get_user_by_username(adapter, username).await {
+        Ok(Some(u)) => u,
+        _ => return None,
+    };
+    if user.suspended {
+        return None;
+    }
+    match maestro_core::db::credentials::verify_user_password(adapter, &user.id, password).await {
+        Ok(true) => Some(user),
+        _ => None,
+    }
 }
 
 /// Authenticated user identity inserted into request extensions by the auth middleware.
@@ -488,21 +475,30 @@ pub async fn dashboard_auth_middleware(
     if let Some(raw_cookie) = session_cookie_from_headers(request.headers())
         && raw_cookie.starts_with(DB_SESSION_PREFIX)
     {
-        let db = db.clone();
+        // Plan-11 step 3 cluster A: users::get_user_by_id on the adapter.
+        // Session lookup (validate_db_session — still rusqlite, sessions
+        // table not yet migrated) stays in spawn_blocking.
+        let db_clone = db.clone();
         let cookie = raw_cookie.to_string();
-        let auth_user = tokio::task::spawn_blocking(move || {
-            let conn = db.conn().blocking_lock();
-            let user_id = validate_db_session(&conn, &cookie)?;
-            let user =
-                maestro_core::db::users::get_user_by_id(&conn, &user_id).ok()??;
-            Some(AuthenticatedUser {
-                user_id: user.id,
-                role: user.role,
-            })
+        let user_id = tokio::task::spawn_blocking(move || {
+            let conn = db_clone.conn().blocking_lock();
+            validate_db_session(&conn, &cookie)
         })
         .await
         .ok()
         .flatten();
+        let auth_user = if let Some(uid) = user_id {
+            maestro_core::db::users::get_user_by_id(db.adapter(), &uid)
+                .await
+                .ok()
+                .flatten()
+                .map(|user| AuthenticatedUser {
+                    user_id: user.id,
+                    role: user.role,
+                })
+        } else {
+            None
+        };
 
         if let Some(auth) = auth_user {
             request.extensions_mut().insert(auth);
