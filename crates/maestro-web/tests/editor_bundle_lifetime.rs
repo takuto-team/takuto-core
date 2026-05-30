@@ -81,20 +81,19 @@ async fn t_editor_bundle_temp_dir_outlives_route_handler_scope() {
     // panic on a missing user row.
     let db = state.auth().db.clone().expect("test DB");
     let user_id = "u-task-42";
-    tokio::task::spawn_blocking({
-        let db = db.clone();
-        let uid = user_id.to_string();
-        move || {
-            let conn = db.conn().blocking_lock();
-            conn.execute(
-                "INSERT INTO users (id, username, role) VALUES (?1, ?2, 'user')",
-                rusqlite::params![uid, uid],
+    {
+        use maestro_core::db::DbValue;
+        let _ = db
+            .adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+                vec![
+                    DbValue::Text(user_id.to_string()),
+                    DbValue::Text(user_id.to_string()),
+                ],
             )
-            .ok();
-        }
-    })
-    .await
-    .unwrap();
+            .await;
+    }
 
     // Mirror what `build_editor_or_run_command_bundle` does for an
     // editor-open path with no pin (no auth_pin in test).
@@ -160,20 +159,19 @@ async fn t_run_command_bundle_map_is_keyed_by_ticket_and_index() {
     }
     let db = state.auth().db.clone().expect("test DB");
     let user_id = "u-task-42b";
-    tokio::task::spawn_blocking({
-        let db = db.clone();
-        let uid = user_id.to_string();
-        move || {
-            let conn = db.conn().blocking_lock();
-            conn.execute(
-                "INSERT INTO users (id, username, role) VALUES (?1, ?2, 'user')",
-                rusqlite::params![uid, uid],
+    {
+        use maestro_core::db::DbValue;
+        let _ = db
+            .adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+                vec![
+                    DbValue::Text(user_id.to_string()),
+                    DbValue::Text(user_id.to_string()),
+                ],
             )
-            .ok();
-        }
-    })
-    .await
-    .unwrap();
+            .await;
+    }
 
     // Build two distinct bundles (one for cmd_index 0, one for cmd_index 1).
     let cfg_snapshot = state.config().config.read().await.clone();

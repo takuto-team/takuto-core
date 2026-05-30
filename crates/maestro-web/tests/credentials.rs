@@ -107,13 +107,11 @@ fn break_master_key(state: &mut AppState) {
 /// Count `credential_audit` rows in the DB.
 async fn audit_row_count(state: &AppState) -> i64 {
     let db = state.auth().db.as_ref().unwrap().clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        conn.query_row("SELECT COUNT(*) FROM credential_audit", [], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
-    })
-    .await
-    .unwrap()
+    db.adapter()
+        .query_one("SELECT COUNT(*) FROM credential_audit", vec![])
+        .await
+        .map(|r| r.get_i64(0).unwrap_or(0))
+        .unwrap_or(0)
 }
 
 /// Build a POST request that goes through the CSRF guard.
@@ -468,17 +466,13 @@ async fn patch_attribute_commits_flips_sign_commits_column() {
 
     // Verify the SQLite column is now 0.
     let db = state.auth().db.as_ref().unwrap().clone();
-    let value: i64 = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        conn.query_row(
-            "SELECT sign_commits FROM user_github_credentials",
-            [],
-            |r| r.get(0),
-        )
+    let value: i64 = db
+        .adapter()
+        .query_one("SELECT sign_commits FROM user_github_credentials", vec![])
+        .await
         .unwrap()
-    })
-    .await
-    .unwrap();
+        .get_i64(0)
+        .unwrap();
     assert_eq!(
         value, 0,
         "wire `attribute_commits=false` must clear the `sign_commits` column"

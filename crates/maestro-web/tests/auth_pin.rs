@@ -184,12 +184,17 @@ async fn pin_for_workflow_captures_active_provider_from_config() {
 // ---------------------------------------------------------------------------
 
 async fn seed_user(db: &maestro_core::db::Database, user_id: &str) {
-    let conn = db.conn().lock().await;
-    conn.execute(
-        "INSERT INTO users (id, username, role) VALUES (?1, ?2, 'user')",
-        rusqlite::params![user_id, user_id],
-    )
-    .unwrap();
+    use maestro_core::db::DbValue;
+    db.adapter()
+        .execute(
+            "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(user_id.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
 }
 
 fn sample_persisted_record_with_pin(pin: Option<AuthPin>) -> PersistedWorkflowRecord {

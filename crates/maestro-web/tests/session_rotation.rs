@@ -207,42 +207,32 @@ async fn sliding_extend_only_when_threshold_crossed() {
 
     // Snapshot baseline last_seen_at right after login.
     let db = state.auth().db.as_ref().unwrap().clone();
-    let alice_uid = alice_id.clone();
-    let initial_last_seen: i64 = tokio::task::spawn_blocking({
-        let db = db.clone();
-        move || {
-            let conn = db.conn().blocking_lock();
-            conn.query_row(
-                "SELECT last_seen_at FROM sessions WHERE user_id = ?1",
-                rusqlite::params![alice_uid],
-                |r| r.get(0),
-            )
-            .unwrap()
-        }
-    })
-    .await
-    .unwrap();
+    let initial_last_seen: i64 = db
+        .adapter()
+        .query_one(
+            "SELECT last_seen_at FROM sessions WHERE user_id = ?",
+            vec![maestro_core::db::DbValue::Text(alice_id.clone())],
+        )
+        .await
+        .unwrap()
+        .get_i64(0)
+        .unwrap();
     assert_eq!(initial_last_seen, t0);
 
     // Bump the clock by 2 minutes — below the 5-minute threshold.
     set_test_now_unix(t0 + 120);
     assert_eq!(me_status(&state, &alice_cookie).await, StatusCode::OK);
 
-    let alice_uid = alice_id.clone();
-    let after_short: i64 = tokio::task::spawn_blocking({
-        let db = db.clone();
-        move || {
-            let conn = db.conn().blocking_lock();
-            conn.query_row(
-                "SELECT last_seen_at FROM sessions WHERE user_id = ?1",
-                rusqlite::params![alice_uid],
-                |r| r.get(0),
-            )
-            .unwrap()
-        }
-    })
-    .await
-    .unwrap();
+    let after_short: i64 = db
+        .adapter()
+        .query_one(
+            "SELECT last_seen_at FROM sessions WHERE user_id = ?",
+            vec![maestro_core::db::DbValue::Text(alice_id.clone())],
+        )
+        .await
+        .unwrap()
+        .get_i64(0)
+        .unwrap();
     assert_eq!(
         after_short, initial_last_seen,
         "no UPDATE should happen inside the 5-minute threshold"
@@ -252,21 +242,17 @@ async fn sliding_extend_only_when_threshold_crossed() {
     set_test_now_unix(t0 + (SESSION_EXTEND_THRESHOLD_SECS as i64) + 60);
     assert_eq!(me_status(&state, &alice_cookie).await, StatusCode::OK);
 
-    let alice_uid = alice_id.clone();
-    let after_long: (i64, String) = tokio::task::spawn_blocking({
-        let db = db.clone();
-        move || {
-            let conn = db.conn().blocking_lock();
-            conn.query_row(
-                "SELECT last_seen_at, expires_at FROM sessions WHERE user_id = ?1",
-                rusqlite::params![alice_uid],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+    let after_long: (i64, String) = {
+        let row = db
+            .adapter()
+            .query_one(
+                "SELECT last_seen_at, expires_at FROM sessions WHERE user_id = ?",
+                vec![maestro_core::db::DbValue::Text(alice_id.clone())],
             )
-            .unwrap()
-        }
-    })
-    .await
-    .unwrap();
+            .await
+            .unwrap();
+        (row.get_i64(0).unwrap(), row.get_text(1).unwrap())
+    };
     assert!(
         after_long.0 > initial_last_seen,
         "last_seen_at should be bumped past the threshold (was {initial_last_seen}, now {})",
@@ -302,19 +288,13 @@ async fn absolute_ttl_rejects_and_deletes_old_session() {
     // Force the row to look "ancient": created 31 days ago, last_seen now.
     let db = state.auth().db.as_ref().unwrap().clone();
     let ancient = t0 - (SESSION_ABSOLUTE_TTL_SECS as i64) - 60;
-    tokio::task::spawn_blocking({
-        let db = db.clone();
-        move || {
-            let conn = db.conn().blocking_lock();
-            conn.execute(
-                "UPDATE sessions SET created_at_unix = ?1 WHERE user_id = (SELECT id FROM users WHERE username='alice')",
-                rusqlite::params![ancient],
-            )
-            .unwrap();
-        }
-    })
-    .await
-    .unwrap();
+    db.adapter()
+        .execute(
+            "UPDATE sessions SET created_at_unix = ? WHERE user_id = (SELECT id FROM users WHERE username='alice')",
+            vec![maestro_core::db::DbValue::I64(ancient)],
+        )
+        .await
+        .unwrap();
 
     // The middleware should reject and delete the row.
     assert_eq!(
@@ -322,20 +302,16 @@ async fn absolute_ttl_rejects_and_deletes_old_session() {
         StatusCode::UNAUTHORIZED,
         "absolute-TTL gate should reject the old session"
     );
-    let remaining: i64 = tokio::task::spawn_blocking({
-        let db = db.clone();
-        move || {
-            let conn = db.conn().blocking_lock();
-            conn.query_row(
-                "SELECT COUNT(*) FROM sessions WHERE user_id = (SELECT id FROM users WHERE username='alice')",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap()
-        }
-    })
-    .await
-    .unwrap();
+    let remaining: i64 = db
+        .adapter()
+        .query_one(
+            "SELECT COUNT(*) FROM sessions WHERE user_id = (SELECT id FROM users WHERE username='alice')",
+            vec![],
+        )
+        .await
+        .unwrap()
+        .get_i64(0)
+        .unwrap();
     assert_eq!(remaining, 0, "stale session row should be lazily deleted");
 
     clear_test_now_unix();
@@ -366,17 +342,16 @@ async fn logout_deletes_session_row() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     let db = state.auth().db.as_ref().unwrap().clone();
-    let alice_rows: i64 = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        conn.query_row(
+    let alice_rows: i64 = db
+        .adapter()
+        .query_one(
             "SELECT COUNT(*) FROM sessions WHERE user_id = (SELECT id FROM users WHERE username='alice')",
-            [],
-            |r| r.get(0),
+            vec![],
         )
+        .await
         .unwrap()
-    })
-    .await
-    .unwrap();
+        .get_i64(0)
+        .unwrap();
     assert_eq!(alice_rows, 0);
 }
 

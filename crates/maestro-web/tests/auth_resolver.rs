@@ -32,14 +32,13 @@ async fn appstate_resolver_mode_a_clone_picks_app() {
     let resolver = GitAuthResolver::new(db.clone(), app);
 
     // Seed a user but no PAT.
-    {
-        let conn = db.conn().lock().await;
-        conn.execute(
+    db.adapter()
+        .execute(
             "INSERT INTO users (id, username, role) VALUES ('u-mode-a', 'mode-a', 'user')",
-            [],
+            vec![],
         )
+        .await
         .unwrap();
-    }
 
     assert_eq!(
         resolver.mode_for_user("u-mode-a").await.unwrap(),
@@ -214,12 +213,17 @@ async fn appstate_git_auth_resolver_is_wired_when_db_present() {
 // ---------------------------------------------------------------------------
 
 async fn seed_user(db: &maestro_core::db::Database, user_id: &str) {
-    let conn = db.conn().lock().await;
-    conn.execute(
-        "INSERT INTO users (id, username, role) VALUES (?1, ?2, 'user')",
-        rusqlite::params![user_id, user_id],
-    )
-    .unwrap();
+    use maestro_core::db::DbValue;
+    db.adapter()
+        .execute(
+            "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+            vec![
+                DbValue::Text(user_id.to_string()),
+                DbValue::Text(user_id.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
 }
 
 async fn seed_pat(

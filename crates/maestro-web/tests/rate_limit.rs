@@ -228,16 +228,13 @@ async fn unknown_username_never_locks() {
     // admin success row, which is expected. We assert the count does NOT
     // grow when subsequent attempts are made against a non-existent user.
     let db_handle = state.auth().db.as_ref().unwrap().clone();
-    let baseline: i64 = {
-        let db = db_handle.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = db.conn().blocking_lock();
-            conn.query_row("SELECT COUNT(*) FROM login_attempts", [], |r| r.get(0))
-                .unwrap()
-        })
+    let baseline: i64 = db_handle
+        .adapter()
+        .query_one("SELECT COUNT(*) FROM login_attempts", vec![])
         .await
         .unwrap()
-    };
+        .get_i64(0)
+        .unwrap();
 
     // 6+ login attempts for a username that doesn't exist — every one must be
     // 401, NEVER 429. Otherwise the throttle leaks account existence info.
@@ -250,13 +247,13 @@ async fn unknown_username_never_locks() {
         assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
 
-    let after: i64 = tokio::task::spawn_blocking(move || {
-        let conn = db_handle.conn().blocking_lock();
-        conn.query_row("SELECT COUNT(*) FROM login_attempts", [], |r| r.get(0))
-            .unwrap()
-    })
-    .await
-    .unwrap();
+    let after: i64 = db_handle
+        .adapter()
+        .query_one("SELECT COUNT(*) FROM login_attempts", vec![])
+        .await
+        .unwrap()
+        .get_i64(0)
+        .unwrap();
     assert_eq!(
         after, baseline,
         "no login_attempts rows expected for unknown user"

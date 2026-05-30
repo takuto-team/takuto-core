@@ -15,12 +15,40 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use rusqlite::params;
 use tower::ServiceExt;
 
+use maestro_core::db::DbValue;
 use maestro_core::db::credentials::legacy_argon2_default_hash_for_tests;
 use maestro_web::server::build_router;
 use maestro_web::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+/// Look up the admin's password credential row id and user id.
+async fn admin_password_credential(db: &maestro_core::db::Database) -> (String, String) {
+    let row = db
+        .adapter()
+        .query_one(
+            "SELECT c.id, c.user_id FROM credentials c \
+             JOIN users u ON u.id = c.user_id \
+             WHERE u.username = 'admin' AND c.kind = 'password' LIMIT 1",
+            vec![],
+        )
+        .await
+        .unwrap();
+    (row.get_text(0).unwrap(), row.get_text(1).unwrap())
+}
+
+/// Fetch the raw `data` BLOB for a credential row.
+async fn credential_data(db: &maestro_core::db::Database, cred_id: &str) -> Vec<u8> {
+    let row = db
+        .adapter()
+        .query_one(
+            "SELECT data FROM credentials WHERE id = ?",
+            vec![DbValue::Text(cred_id.to_string())],
+        )
+        .await
+        .unwrap();
+    row.get_bytes(0).unwrap()
+}
 
 #[tokio::test]
 async fn successful_login_rehashes_legacy_argon2_default_hash() {
@@ -32,45 +60,21 @@ async fn successful_login_rehashes_legacy_argon2_default_hash() {
     let db = state.auth().db.clone().expect("test state has a db");
     let legacy = legacy_argon2_default_hash_for_tests("testpassword1234")
         .expect("legacy argon2 hash helper");
-    let legacy_clone = legacy.clone();
-    let (cred_id, user_id) = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        // Replace the existing admin's password credential with the legacy hash.
-        let (cred_id, user_id): (String, String) = conn
-            .query_row(
-                "SELECT c.id, c.user_id FROM credentials c \
-                 JOIN users u ON u.id = c.user_id \
-                 WHERE u.username = 'admin' AND c.kind = 'password' LIMIT 1",
-                [],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .unwrap();
-        conn.execute(
-            "UPDATE credentials SET data = ?1 WHERE id = ?2",
-            params![legacy_clone, cred_id],
+
+    let (cred_id, user_id) = admin_password_credential(&db).await;
+    db.adapter()
+        .execute(
+            "UPDATE credentials SET data = ? WHERE id = ?",
+            vec![
+                DbValue::Bytes(legacy.clone()),
+                DbValue::Text(cred_id.clone()),
+            ],
         )
+        .await
         .unwrap();
-        (cred_id, user_id)
-    })
-    .await
-    .unwrap();
 
     // Confirm the row now uses legacy params.
-    let stored: Vec<u8> = {
-        let db = state.auth().db.clone().expect("db");
-        let cred_id = cred_id.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = db.conn().blocking_lock();
-            conn.query_row(
-                "SELECT data FROM credentials WHERE id = ?1",
-                params![cred_id],
-                |r| r.get(0),
-            )
-            .unwrap()
-        })
-        .await
-        .unwrap()
-    };
+    let stored = credential_data(&db, &cred_id).await;
     assert_eq!(stored, legacy, "pre-condition: row should hold legacy hash");
 
     // Drive a real login through the router. The verify path must succeed and
@@ -91,21 +95,7 @@ async fn successful_login_rehashes_legacy_argon2_default_hash() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT, "login must succeed");
 
     // The row should now hold a fresh, current-params hash.
-    let after: Vec<u8> = {
-        let db = state.auth().db.clone().expect("db");
-        let cred_id = cred_id.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = db.conn().blocking_lock();
-            conn.query_row(
-                "SELECT data FROM credentials WHERE id = ?1",
-                params![cred_id],
-                |r| r.get(0),
-            )
-            .unwrap()
-        })
-        .await
-        .unwrap()
-    };
+    let after = credential_data(&db, &cred_id).await;
     assert_ne!(legacy, after, "credentials.data should have been rewritten after login");
 
     // The PHC string format embeds the params textually as
@@ -152,34 +142,10 @@ async fn current_param_hash_is_not_rewritten_on_login() {
     let _ = register_and_login(&state).await;
 
     let db = state.auth().db.clone().expect("db");
-    let cred_id: String = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        conn.query_row(
-            "SELECT c.id FROM credentials c \
-             JOIN users u ON u.id = c.user_id \
-             WHERE u.username = 'admin' AND c.kind = 'password' LIMIT 1",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .unwrap()
-    })
-    .await
-    .unwrap();
+    let (cred_id, _user_id) = admin_password_credential(&db).await;
 
     // Snapshot the current-params hash before login.
-    let db = state.auth().db.clone().expect("db");
-    let cred_id_for_before = cred_id.clone();
-    let before: Vec<u8> = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        conn.query_row(
-            "SELECT data FROM credentials WHERE id = ?1",
-            params![cred_id_for_before],
-            |r| r.get(0),
-        )
-        .unwrap()
-    })
-    .await
-    .unwrap();
+    let before = credential_data(&db, &cred_id).await;
 
     let app = build_router(state.clone());
     let resp = app
@@ -196,20 +162,7 @@ async fn current_param_hash_is_not_rewritten_on_login() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let db = state.auth().db.clone().expect("db");
-    let cred_id_for_after = cred_id.clone();
-    let after: Vec<u8> = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        conn.query_row(
-            "SELECT data FROM credentials WHERE id = ?1",
-            params![cred_id_for_after],
-            |r| r.get(0),
-        )
-        .unwrap()
-    })
-    .await
-    .unwrap();
-
+    let after = credential_data(&db, &cred_id).await;
     assert_eq!(
         before, after,
         "current-param hash must not be rewritten on login"

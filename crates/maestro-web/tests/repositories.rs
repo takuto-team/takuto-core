@@ -618,18 +618,16 @@ async fn ac11_user_delete_cascades_to_associations() {
         .unwrap();
 
     // The repo row survives but its association is gone.
-    let r1_clone = r1.clone();
-    let assoc_count: i64 = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        conn.query_row(
-            "SELECT COUNT(*) FROM user_repositories WHERE repository_id = ?1",
-            rusqlite::params![&r1_clone],
-            |r| r.get(0),
+    let assoc_count: i64 = db
+        .adapter()
+        .query_one(
+            "SELECT COUNT(*) FROM user_repositories WHERE repository_id = ?",
+            vec![maestro_core::db::DbValue::Text(r1.clone())],
         )
+        .await
         .unwrap()
-    })
-    .await
-    .unwrap();
+        .get_i64(0)
+        .unwrap();
     assert_eq!(assoc_count, 0);
 }
 
@@ -641,18 +639,15 @@ async fn ac11_user_delete_cascades_to_associations() {
 /// the AC-16 tests to seed workflow snapshots with realistic user_ids.
 async fn user_id_for(state: &AppState, username: &str) -> String {
     let db = state.auth().db.as_ref().expect("db required").clone();
-    let username = username.to_string();
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().blocking_lock();
-        conn.query_row(
-            "SELECT id FROM users WHERE username = ?1",
-            rusqlite::params![username],
-            |r| r.get::<_, String>(0),
+    db.adapter()
+        .query_one(
+            "SELECT id FROM users WHERE username = ?",
+            vec![maestro_core::db::DbValue::Text(username.to_string())],
         )
+        .await
         .expect("user must exist")
-    })
-    .await
-    .expect("join error")
+        .get_text(0)
+        .expect("id text")
 }
 
 /// AC-16a: the caller's OWN active workflow on a repo blocks the caller's
