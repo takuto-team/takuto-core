@@ -476,7 +476,21 @@ fn run_keys_reset(config_path: &std::path::Path, yes_i_am_sure: bool) -> ExitCod
         }
     };
 
-    if let Err(e) = clear_credential_tables(&db) {
+    // Spin up a one-shot runtime to drive the async adapter call. The CLI
+    // dispatcher is sync, so we need a local runtime for this single
+    // transaction — keep it scoped tight so the runtime drops with the
+    // transaction.
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("maestro keys reset: failed to start async runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = rt.block_on(clear_credential_tables(&db)) {
         eprintln!("maestro keys reset: failed to clear credential tables: {e}");
         return ExitCode::FAILURE;
     }
@@ -521,20 +535,23 @@ fn run_keys_reset(config_path: &std::path::Path, yes_i_am_sure: bool) -> ExitCod
 
 /// Wipe every Phase 2a credential / audit / onboarding row. Caller has already
 /// opened the database and verified no workflows are in flight.
-fn clear_credential_tables(db: &maestro_core::db::Database) -> Result<(), Box<dyn std::error::Error>> {
-    // The CLI is sync; use `blocking_lock` on the tokio mutex (not inside an
-    // async runtime — fine per tokio's docs).
-    let conn = db.conn().blocking_lock();
-    let tx = conn.unchecked_transaction()?;
+///
+/// Plan-11 step 3 cluster CLI: now goes through the agnostic adapter. The CLI
+/// is sync at the dispatch layer, so the call site spins up a one-shot
+/// current-thread runtime to drive the async transaction.
+async fn clear_credential_tables(
+    db: &maestro_core::db::Database,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut tx = db.adapter().begin().await?;
     for table in [
         "user_provider_credentials",
         "user_github_credentials",
         "credential_audit",
         "onboarding_state",
     ] {
-        tx.execute(&format!("DELETE FROM {table}"), [])?;
+        tx.execute(&format!("DELETE FROM {table}"), vec![]).await?;
     }
-    tx.commit()?;
+    tx.commit().await?;
     Ok(())
 }
 

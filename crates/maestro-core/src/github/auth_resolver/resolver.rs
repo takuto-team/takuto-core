@@ -266,12 +266,17 @@ mod tests {
     }
 
     async fn seed_user(db: &Database, user_id: &str) {
-        let conn = db.conn().lock().await;
-        conn.execute(
-            "INSERT INTO users (id, username, role) VALUES (?1, ?2, 'user')",
-            rusqlite::params![user_id, user_id],
-        )
-        .unwrap();
+        use crate::db::DbValue;
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+                vec![
+                    DbValue::Text(user_id.to_string()),
+                    DbValue::Text(user_id.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
     }
 
     async fn seed_pat(db: &Database, user_id: &str, sign_commits: bool) {
@@ -384,14 +389,21 @@ mod tests {
         // even reading the row — but we still need a PAT row so the
         // resolver thinks the user is in PatOnly mode.
         {
-            let conn = db.conn().lock().await;
-            conn.execute(
-                "INSERT INTO user_github_credentials \
-                 (user_id, ciphertext, nonce, wrapped_dek, wnonce, github_login, scopes_json, sign_commits) \
-                 VALUES ('u-alice', X'00', randomblob(24), X'00', randomblob(24), 'alice', '[\"repo\"]', 1)",
-                [],
-            )
-            .unwrap();
+            use crate::db::DbValue;
+            db.adapter()
+                .execute(
+                    "INSERT INTO user_github_credentials \
+                     (user_id, ciphertext, nonce, wrapped_dek, wnonce, github_login, scopes_json, sign_commits) \
+                     VALUES ('u-alice', ?, ?, ?, ?, 'alice', '[\"repo\"]', 1)",
+                    vec![
+                        DbValue::Bytes(vec![0u8]),
+                        DbValue::Bytes(vec![0u8; 24]),
+                        DbValue::Bytes(vec![0u8]),
+                        DbValue::Bytes(vec![0u8; 24]),
+                    ],
+                )
+                .await
+                .unwrap();
         }
 
         let resolver = GitAuthResolver::new(db, None);
@@ -410,29 +422,21 @@ mod tests {
         seed_pat(&db, "u-alice", true).await;
         let resolver = GitAuthResolver::new(db.clone(), None);
 
+        async fn used_count(db: &Database) -> i64 {
+            db.adapter()
+                .query_one("SELECT COUNT(*) FROM credential_audit WHERE event='used'", vec![])
+                .await
+                .unwrap()
+                .get_i64(0)
+                .unwrap()
+        }
         // First use → audit row.
-        let pre: i64 = {
-            let conn = db.conn().lock().await;
-            conn.query_row(
-                "SELECT COUNT(*) FROM credential_audit WHERE event='used'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap()
-        };
+        let pre = used_count(&db).await;
         let _ = resolver
             .token_for(GitAction::Clone, "u-alice")
             .await
             .unwrap();
-        let post: i64 = {
-            let conn = db.conn().lock().await;
-            conn.query_row(
-                "SELECT COUNT(*) FROM credential_audit WHERE event='used'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap()
-        };
+        let post = used_count(&db).await;
         assert_eq!(post, pre + 1, "first use must write an audit row");
 
         // Second use within 60s → debounced.
@@ -440,15 +444,7 @@ mod tests {
             .token_for(GitAction::Clone, "u-alice")
             .await
             .unwrap();
-        let post2: i64 = {
-            let conn = db.conn().lock().await;
-            conn.query_row(
-                "SELECT COUNT(*) FROM credential_audit WHERE event='used'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap()
-        };
+        let post2 = used_count(&db).await;
         assert_eq!(
             post2, post,
             "second use within debounce window must NOT write another row"
@@ -611,15 +607,16 @@ mod tests {
             .await
             .expect("must skip silently when user has no PAT");
         // And must NOT write any audit row.
-        let audit_count: i64 = {
-            let conn = db.conn().lock().await;
-            conn.query_row(
+        let audit_count: i64 = db
+            .adapter()
+            .query_one(
                 "SELECT COUNT(*) FROM credential_audit WHERE user_id = 'u-noah'",
-                [],
-                |r| r.get(0),
+                vec![],
             )
+            .await
             .unwrap()
-        };
+            .get_i64(0)
+            .unwrap();
         assert_eq!(audit_count, 0, "no-PAT path must not write audit rows");
     }
 
@@ -635,16 +632,17 @@ mod tests {
             .await
             .expect("PAT with full scopes must pass revalidation");
         // Success path must NOT log a validation_failed row.
-        let failed_count: i64 = {
-            let conn = db.conn().lock().await;
-            conn.query_row(
+        let failed_count: i64 = db
+            .adapter()
+            .query_one(
                 "SELECT COUNT(*) FROM credential_audit \
                  WHERE user_id = 'u-alice' AND event = 'validation_failed'",
-                [],
-                |r| r.get(0),
+                vec![],
             )
+            .await
             .unwrap()
-        };
+            .get_i64(0)
+            .unwrap();
         assert_eq!(failed_count, 0);
     }
 
@@ -670,15 +668,17 @@ mod tests {
         // And the failure must be recorded in credential_audit with the
         // mapped error code.
         let row: (String, Option<String>) = {
-            let conn = db.conn().lock().await;
-            conn.query_row(
-                "SELECT event, error_code FROM credential_audit \
-                 WHERE user_id = 'u-eve' AND event = 'validation_failed' \
-                 ORDER BY at DESC LIMIT 1",
-                [],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
-            )
-            .expect("must write a validation_failed audit row")
+            let r = db
+                .adapter()
+                .query_one(
+                    "SELECT event, error_code FROM credential_audit \
+                     WHERE user_id = 'u-eve' AND event = 'validation_failed' \
+                     ORDER BY at DESC LIMIT 1",
+                    vec![],
+                )
+                .await
+                .expect("must write a validation_failed audit row");
+            (r.get_text(0).unwrap(), r.get_text_opt(1).unwrap())
         };
         assert_eq!(row.0, "validation_failed");
         assert_eq!(row.1.as_deref(), Some("sso_authorization_required"));

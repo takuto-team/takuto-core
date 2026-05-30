@@ -82,12 +82,17 @@ mod tests {
     }
 
     async fn seed_user(db: &Database, user_id: &str) {
-        let conn = db.conn().lock().await;
-        conn.execute(
-            "INSERT INTO users (id, username, role) VALUES (?1, ?2, 'user')",
-            rusqlite::params![user_id, user_id],
-        )
-        .unwrap();
+        use crate::db::DbValue;
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+                vec![
+                    DbValue::Text(user_id.to_string()),
+                    DbValue::Text(user_id.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
     }
 
     async fn seed_provider_credential(
