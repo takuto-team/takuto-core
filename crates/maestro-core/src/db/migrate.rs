@@ -85,6 +85,13 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "user_credentials_and_audit",
         sql: include_str!("../../migrations/20260106000001_user_credentials_and_audit.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_116_000_001,
+        description: "pluggable_db_system_metadata",
+        sql: include_str!(
+            "../../migrations/20260116000001_pluggable_db_system_metadata.sql"
+        ),
+    },
 ];
 
 /// A `sqlx::migrate::MigrationSource` impl that resolves the embedded
@@ -358,11 +365,11 @@ mod tests {
     }
 
     #[test]
-    fn embedded_migration_count_matches_schema_v6() {
-        // schema.rs lives at SCHEMA_VERSION = 6; the new file set must
-        // hold exactly 6 entries. When a future migration lands, BOTH
-        // this constant AND schema.rs's `SCHEMA_VERSION` bump in lockstep.
-        assert_eq!(MIGRATIONS.len(), 6);
+    fn embedded_migration_count() {
+        // V1..V6 from the legacy schema.rs port (cluster Schema) plus the
+        // plan-11 importer's system_metadata migration. Bump when adding
+        // new migrations.
+        assert_eq!(MIGRATIONS.len(), 7);
     }
 
     #[test]
@@ -432,6 +439,7 @@ mod tests {
             "user_github_credentials",
             "credential_audit",
             "onboarding_state",
+            "system_metadata",
         ] {
             assert!(
                 tables.iter().any(|t| t == expected),
@@ -466,8 +474,8 @@ mod tests {
                 .await
                 .expect("count rows");
         assert_eq!(
-            count.0, 6,
-            "expected 6 applied migrations recorded by sqlx, got {}",
+            count.0, 7,
+            "expected 7 applied migrations recorded by sqlx, got {}",
             count.0
         );
     }

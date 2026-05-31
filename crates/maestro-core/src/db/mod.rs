@@ -12,6 +12,7 @@
 // sqlx driver internally. This is the cutover from the legacy
 // `&rusqlite::Connection` API.
 pub mod adapter;
+pub mod importer;
 pub mod credential_audit;
 pub mod credentials;
 pub mod error;
@@ -331,6 +332,39 @@ impl Database {
                 source: sqlx::Error::Migrate(Box::new(e)),
             })
         })?;
+
+        // Plan-11 §8: one-shot SQLite → remote import. Gated on the
+        // `import_from_sqlite` config flag, the presence of a legacy
+        // `{data_dir}/maestro.db`, and the target not already carrying
+        // the `import_complete` marker.
+        if db_config.import_from_sqlite && importer::legacy_sqlite_exists(data_dir) {
+            let already = importer::import_already_complete(&adapter)
+                .await
+                .map_err(|source| DbError::Adapter(adapter::DbError::Sqlx { source }))?;
+            if !already {
+                let copied = importer::import_from_sqlite(data_dir, &adapter)
+                    .await
+                    .map_err(|e| {
+                        // Surface importer failures through the existing
+                        // DbError tree. Connectivity-side failures wrap as
+                        // Sqlx; per-row schema/constraint failures get
+                        // a Configuration string (no row-level variant
+                        // in the DAO error tree, and we keep importer-
+                        // specific shape via `e.to_string()`).
+                        DbError::Adapter(adapter::DbError::Sqlx {
+                            source: sqlx::Error::Configuration(e.to_string().into()),
+                        })
+                    })?;
+                tracing::info!(
+                    backend = %adapter.backend(),
+                    source = %data_dir.join("maestro.db").display(),
+                    rows = copied,
+                    "imported rows from local SQLite; future restarts will skip the import \
+                     (system_metadata.import_complete is set); imported sessions were marked \
+                     expired — users will be prompted to re-authenticate"
+                );
+            }
+        }
 
         // Master key resolution — same logic as `open`.
         let master_key = match load_or_init_master_key(data_dir, allow_auto_generate_secret_key) {
