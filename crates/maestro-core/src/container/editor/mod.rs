@@ -6,15 +6,15 @@
 //!
 //! Split into five files under §7 push-to-A audit (previously a single
 //! 1157-LOC `container/editor.rs`):
-//! - `mod.rs`               — re-exports + full unit-test suite
-//! - `port_alloc.rs`        — 9100–9200 range, in-memory allocator,
-//!                            docker-side discovery, restart recovery
-//! - `token_gen.rs`         — connection token (UUIDv4) + path token (CSPRNG)
-//! - `urls.rs`              — direct + shared-port-proxy URL builders
-//! - `labels.rs`            — deterministic container name + label parsing
+//! - `mod.rs` — re-exports + full unit-test suite
+//! - `port_alloc.rs` — 9100–9200 range, in-memory allocator, docker-side
+//!   discovery, restart recovery
+//! - `token_gen.rs` — connection token (UUIDv4) + path token (CSPRNG)
+//! - `urls.rs` — direct + shared-port-proxy URL builders
+//! - `labels.rs` — deterministic container name + label parsing
 //! - `container_builder.rs` — `EditorInfo` + `start_editor` / `stop_editor` /
-//!                            `get_editor_info` (1 of 3 docker-run-style
-//!                            orchestrators in the codebase)
+//!   `get_editor_info` (1 of 3 docker-run-style orchestrators in the
+//!   codebase)
 
 mod container_builder;
 mod labels;

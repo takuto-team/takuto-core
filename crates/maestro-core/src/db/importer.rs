@@ -404,8 +404,7 @@ mod tests {
         let missing = tmp.path().join("nope.db");
         let err = open_source_read_only(&missing)
             .await
-            .err()
-            .expect("must error on missing");
+            .expect_err("must error on missing");
         assert!(matches!(err, ImporterError::OpenSource { .. }));
     }
 

@@ -30,13 +30,13 @@
 //!
 //! Split into four files under §7 push-to-A audit (previously a single
 //! 1165-LOC `routes/sessions.rs`):
-//! - `mod.rs`           — top-level [`proxy_session`] + [`proxy_or_static_fallback`]
-//!                        and the auth/ownership gate
-//! - `token_validator.rs` — path parser, token-hash logger, 404/308 builders,
-//!                        WebSocket-upgrade detection
-//! - `proxy_forward.rs`  — plain HTTP forwarding, upstream URI builder,
-//!                        header sanitisation, hyper client
-//! - `websocket.rs`     — `forward_websocket` (101 + bidirectional tunnel)
+//! - `mod.rs` — top-level [`proxy_session`] + [`proxy_or_static_fallback`]
+//!   and the auth/ownership gate
+//! - `token_validator.rs` — path parser, token-hash logger, 404/308
+//!   builders, WebSocket-upgrade detection
+//! - `proxy_forward.rs` — plain HTTP forwarding, upstream URI builder,
+//!   header sanitisation, hyper client
+//! - `websocket.rs` — `forward_websocket` (101 + bidirectional tunnel)
 
 mod proxy_forward;
 mod token_validator;

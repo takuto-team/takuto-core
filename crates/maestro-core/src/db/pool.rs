@@ -121,13 +121,13 @@ pub enum PoolError {
 /// Parse the backend identifier from a `[database].connection` URL.
 ///
 /// Accepts:
-///   - `sqlite://path`         → `Sqlite` (path can be a filesystem path,
-///                                `:memory:`, or any sqlx-recognised form)
-///   - `sqlite:path`           → `Sqlite` (sqlx tolerates the single-colon
-///                                shorthand; we mirror that)
-///   - `postgres://…`          → `Postgres`
-///   - `postgresql://…`        → `Postgres`
-///   - `mysql://…`             → `MySql` (covers MariaDB — same wire protocol)
+///   - `sqlite://path` → `Sqlite` (path can be a filesystem path,
+///     `:memory:`, or any sqlx-recognised form)
+///   - `sqlite:path` → `Sqlite` (sqlx tolerates the single-colon
+///     shorthand; we mirror that)
+///   - `postgres://…` → `Postgres`
+///   - `postgresql://…` → `Postgres`
+///   - `mysql://…` → `MySql` (covers MariaDB — same wire protocol)
 ///
 /// Returns `EmptyUrl` for `""`, `NoScheme` for `foo/bar`, and
 /// `UnsupportedScheme` for anything else.

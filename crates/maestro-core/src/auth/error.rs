@@ -143,7 +143,11 @@ mod tests {
     }
 
     fn utf8_err() -> std::str::Utf8Error {
-        std::str::from_utf8(&[0xff, 0xfe, 0xfd]).unwrap_err()
+        // Use a heap-allocated Vec so clippy's `invalid_from_utf8` lint
+        // can't const-eval the literal; the bytes are deliberately
+        // invalid UTF-8 and we want the `Err` arm.
+        let bytes: Vec<u8> = vec![0xff, 0xfe, 0xfd];
+        std::str::from_utf8(&bytes).unwrap_err()
     }
 
     fn getrandom_err() -> getrandom::Error {

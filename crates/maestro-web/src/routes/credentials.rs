@@ -623,7 +623,7 @@ pub async fn post_github_pat(
                 None,
                 "validation_failed",
                 "error",
-                Some(&code.to_string()),
+                Some(code),
             )
             .await;
 

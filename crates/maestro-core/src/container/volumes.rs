@@ -147,6 +147,7 @@ mod tests {
     ///      replaced by the worktree + `.git` + `.maestro:ro` trio,
     ///      remaining mounts preserved in order, and the
     ///      `maestro-tools:/opt/maestro-tools/bin:ro` mount appended last.
+    ///
     /// Any drift in mount strings, ordering, or the isolation splice
     /// fails this test.
     #[test]
