@@ -60,6 +60,56 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace --locked
 
+  db-postgres:
+    # Plan-11 §10 step 4: prove the dialect-aware migration source and the
+    # DbAdapter-backed DAOs work end-to-end against a real PostgreSQL.
+    # Runs the `#[ignore]`-gated tests under `crates/maestro-core/src/db/`
+    # with `DATABASE_URL` pointed at a service-container PG instance.
+    name: DB backend (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: maestro
+          POSTGRES_PASSWORD: maestro
+          POSTGRES_DB: maestro_ci
+        ports:
+          - 5432:5432
+        # GHA waits on the service's health check before running steps,
+        # so we don't need a manual `pg_isready` loop in the step body.
+        options: >-
+          --health-cmd "pg_isready -U maestro -d maestro_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://maestro:maestro@localhost:5432/maestro_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo test --ignored (db migrations + CRUD against Postgres)
+        # Substring filter `postgres` matches the two Postgres-specific
+        # ignored tests; the MySQL ignored test stays skipped (it expects
+        # a `mysql://` URL we don't provide here). `--test-threads=1`
+        # serialises the migrator + CRUD tests against the shared DB.
+        run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 postgres
+
   ui:
     name: UI (npm build)
     runs-on: ubuntu-latest

@@ -530,4 +530,55 @@ mod tests {
             .await
             .expect("run migrations against MySQL");
     }
+
+    /// End-to-end smoke against an external backend: drives the entire
+    /// production stack — `pool::connect` → `DbAdapter` →
+    /// `apply_migrations` → DAOs (`users::create_user` /
+    /// `get_user_by_id` / `delete_user`). Catches issues the
+    /// migration-only tests above can't see: dialect-aware SQL bound
+    /// at the call sites, ON CONFLICT / RETURNING upserts, transaction
+    /// scopes, decode paths for every column type.
+    ///
+    /// Postgres only — MySQL has its own follow-up cluster.
+    ///
+    /// Idempotent across reruns: usernames carry a UUID suffix so
+    /// repeated `cargo test` invocations against the same Postgres
+    /// instance don't collide on the UNIQUE constraint.
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL=postgres://..."]
+    async fn postgres_crud_smoke_via_adapter() {
+        use crate::db::adapter::DbAdapter;
+        use crate::db::models::UserRole;
+        use crate::db::{pool, users};
+
+        let url = std::env::var("DATABASE_URL")
+            .expect("set DATABASE_URL=postgres://... to run this test");
+
+        let backend_pool = pool::connect(&url, &pool::PoolTuning::default())
+            .await
+            .expect("connect via pool::connect");
+        let adapter = DbAdapter::new(backend_pool);
+
+        super::apply_migrations(&adapter)
+            .await
+            .expect("apply migrations against Postgres");
+
+        let username = format!("ci_smoke_{}", uuid::Uuid::new_v4());
+        let created = users::create_user(&adapter, &username, UserRole::User)
+            .await
+            .expect("users::create_user against Postgres");
+
+        let fetched = users::get_user_by_id(&adapter, &created.id)
+            .await
+            .expect("users::get_user_by_id round-trip")
+            .expect("user must exist immediately after create_user");
+
+        assert_eq!(fetched.username, username);
+        assert_eq!(fetched.id, created.id);
+
+        // Best-effort cleanup so the DB stays tidy across reruns. A
+        // failure here is non-fatal — we want the assertions above to
+        // be the test's verdict, not the housekeeping.
+        let _ = users::delete_user(&adapter, &created.id).await;
+    }
 }
