@@ -17,13 +17,16 @@
 //!
 //! ## Algorithm
 //!
-//! 1. Open the legacy SQLite file with rusqlite in **read-only** mode so
-//!    the source is observably unchanged by the import.
+//! 1. Open the legacy SQLite file with a sqlx SQLite pool in
+//!    **read-only** mode (`?mode=ro`) so the source is observably
+//!    unchanged by the import.
 //! 2. Begin a single transaction on the target pool.
-//! 3. Copy every user-data table in FK-dependency order. Each row is
-//!    read as `rusqlite::types::Value` and bound through `DbValue`, so
-//!    BLOB / TEXT / INTEGER / NULL all round-trip without per-table
-//!    boilerplate.
+//! 3. Copy every user-data table in FK-dependency order. Each row's
+//!    cells are dispatched on their runtime storage class
+//!    (`SqliteTypeInfo::name()` returns one of `"INTEGER"` / `"REAL"` /
+//!    `"TEXT"` / `"BLOB"` / `"NULL"`) into the matching `DbValue`
+//!    variant — BLOB / TEXT / INTEGER / NULL all round-trip without
+//!    per-table boilerplate.
 //! 4. Mark `system_metadata.import_complete = <unix_now>` and commit.
 //!
 //! A mid-import crash leaves the target untouched (everything is one
@@ -37,10 +40,11 @@
 //! cutover. The next login bumps to the normal TTL.
 
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::OpenFlags;
-use rusqlite::types::Value as SqliteValue;
+use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 use super::adapter::DbAdapter;
 use super::{DbBackend, DbTransaction, DbValue};
@@ -54,13 +58,13 @@ pub enum ImporterError {
     OpenSource {
         path: PathBuf,
         #[source]
-        source: rusqlite::Error,
+        source: sqlx::Error,
     },
     #[error("read from source table '{table}' failed: {source}")]
     Read {
         table: &'static str,
         #[source]
-        source: rusqlite::Error,
+        source: sqlx::Error,
     },
     #[error("write to target table '{table}' failed (row {row}): {source}")]
     Write {
@@ -221,7 +225,7 @@ pub async fn import_from_sqlite(
     adapter: &DbAdapter,
 ) -> Result<usize, ImporterError> {
     let source_path = data_dir.join("maestro.db");
-    let source = open_source_read_only(&source_path)?;
+    let source = open_source_read_only(&source_path).await?;
 
     let mut tx = adapter.begin().await.map_err(|e| match e {
         super::adapter::DbError::Sqlx { source } => ImporterError::Begin { source },
@@ -267,27 +271,39 @@ pub async fn import_from_sqlite(
     Ok(total)
 }
 
-fn open_source_read_only(path: &Path) -> Result<rusqlite::Connection, ImporterError> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
-    let url = format!("file:{}?mode=ro", path.display());
-    rusqlite::Connection::open_with_flags(&url, flags).map_err(|source| ImporterError::OpenSource {
+async fn open_source_read_only(path: &Path) -> Result<SqlitePool, ImporterError> {
+    let url = format!("sqlite://{}?mode=ro", path.display());
+    let opts = SqliteConnectOptions::from_str(&url).map_err(|source| ImporterError::OpenSource {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    // Single-connection pool — the importer is single-threaded against
+    // the source. `connect_with` is eager so any open-time failure
+    // surfaces here rather than mid-import.
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .min_connections(1)
+        .connect_with(opts)
+        .await
+        .map_err(|source| ImporterError::OpenSource {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 /// Read every row from `source.{table}` (selecting `columns`) and
 /// INSERT into `target.{table}` using the same column list. Returns
 /// the row count copied.
 async fn copy_table(
-    source: &rusqlite::Connection,
+    source: &SqlitePool,
     tx: &mut DbTransaction<'_>,
     table: &'static str,
     columns: &[&str],
 ) -> Result<usize, ImporterError> {
     let select_sql = format!("SELECT {} FROM {}", columns.join(", "), table);
-    let mut stmt = source
-        .prepare(&select_sql)
+    let rows = sqlx::query(&select_sql)
+        .fetch_all(source)
+        .await
         .map_err(|source| ImporterError::Read { table, source })?;
 
     let placeholders = vec!["?"; columns.len()].join(", ");
@@ -304,20 +320,13 @@ async fn copy_table(
     };
 
     let column_count = columns.len();
-    let rows_iter = stmt
-        .query_map([], move |row| {
-            let mut values: Vec<DbValue> = Vec::with_capacity(column_count);
-            for i in 0..column_count {
-                values.push(sqlite_to_db_value(row.get::<_, SqliteValue>(i)?));
-            }
-            Ok(values)
-        })
-        .map_err(|source| ImporterError::Read { table, source })?;
-
     let mut count = 0usize;
-    for row in rows_iter {
-        let bound = row.map_err(|source| ImporterError::Read { table, source })?;
-        tx.execute(&insert_sql, bound).await.map_err(|e| {
+    for row in rows {
+        let mut values: Vec<DbValue> = Vec::with_capacity(column_count);
+        for i in 0..column_count {
+            values.push(sqlite_row_to_db_value(&row, i, table)?);
+        }
+        tx.execute(&insert_sql, values).await.map_err(|e| {
             ImporterError::Write {
                 table,
                 row: count,
@@ -329,14 +338,33 @@ async fn copy_table(
     Ok(count)
 }
 
-fn sqlite_to_db_value(v: SqliteValue) -> DbValue {
-    match v {
-        SqliteValue::Null => DbValue::Null,
-        SqliteValue::Integer(i) => DbValue::I64(i),
-        SqliteValue::Real(f) => DbValue::F64(f),
-        SqliteValue::Text(s) => DbValue::Text(s),
-        SqliteValue::Blob(b) => DbValue::Bytes(b),
-    }
+/// Extract column `idx` from `row` as a [`DbValue`], dispatching on
+/// SQLite's runtime storage class so BLOB / TEXT / INTEGER / REAL /
+/// NULL all map cleanly. The dispatch matters because the declared
+/// column type can lie under SQLite's dynamic typing — e.g. a
+/// `BIGINT` column may carry a TEXT-typed value if the writer bound
+/// one.
+fn sqlite_row_to_db_value(
+    row: &sqlx::sqlite::SqliteRow,
+    idx: usize,
+    table: &'static str,
+) -> Result<DbValue, ImporterError> {
+    use sqlx::TypeInfo;
+    let value_ref = row
+        .try_get_raw(idx)
+        .map_err(|source| ImporterError::Read { table, source })?;
+    let ti = sqlx::ValueRef::type_info(&value_ref);
+    let class = ti.name();
+    let map_err = |source: sqlx::Error| ImporterError::Read { table, source };
+    Ok(match class {
+        "NULL" => DbValue::Null,
+        "INTEGER" => DbValue::I64(row.try_get::<i64, _>(idx).map_err(map_err)?),
+        "REAL" => DbValue::F64(row.try_get::<f64, _>(idx).map_err(map_err)?),
+        "BLOB" => DbValue::Bytes(row.try_get::<Vec<u8>, _>(idx).map_err(map_err)?),
+        // Anything else (TEXT, declared-only types like NUMERIC, BOOLEAN,
+        // DATETIME — SQLite stores them dynamically) reads as TEXT.
+        _ => DbValue::Text(row.try_get::<String, _>(idx).map_err(map_err)?),
+    })
 }
 
 /// Skip the importer entirely on a SQLite target — the backend IS the
@@ -354,25 +382,6 @@ mod tests {
     use crate::db::migrate;
     use crate::db::pool::{DbBackend, DbPool};
     use crate::db::DbAdapter;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-    use std::str::FromStr;
-
-    #[test]
-    fn sqlite_value_round_trip_into_db_value() {
-        assert!(matches!(sqlite_to_db_value(SqliteValue::Null), DbValue::Null));
-        assert!(matches!(
-            sqlite_to_db_value(SqliteValue::Integer(42)),
-            DbValue::I64(42)
-        ));
-        match sqlite_to_db_value(SqliteValue::Text("hi".into())) {
-            DbValue::Text(s) => assert_eq!(s, "hi"),
-            other => panic!("expected Text, got {other:?}"),
-        }
-        match sqlite_to_db_value(SqliteValue::Blob(vec![1, 2, 3])) {
-            DbValue::Bytes(b) => assert_eq!(b, vec![1, 2, 3]),
-            other => panic!("expected Bytes, got {other:?}"),
-        }
-    }
 
     #[test]
     fn skippable_backend_only_for_sqlite() {
@@ -389,11 +398,14 @@ mod tests {
         assert!(legacy_sqlite_exists(tmp.path()));
     }
 
-    #[test]
-    fn open_source_read_only_rejects_missing_file() {
+    #[tokio::test]
+    async fn open_source_read_only_rejects_missing_file() {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("nope.db");
-        let err = open_source_read_only(&missing).expect_err("must error on missing");
+        let err = open_source_read_only(&missing)
+            .await
+            .err()
+            .expect("must error on missing");
         assert!(matches!(err, ImporterError::OpenSource { .. }));
     }
 
