@@ -20,9 +20,9 @@ dirs = { workspace = true }
 fs2 = { workspace = true }
 # CSPRNG for session path tokens (≥128 bits of entropy from OS entropy source).
 getrandom = "0.3"
-rusqlite = { workspace = true }
-# Plan-11 step 1: pluggable backends. Lives alongside rusqlite during the
-# cutover (steps 2–6); rusqlite is dropped in plan-11 §10 step 8.
+# Plan-11: pluggable backends. The only DB driver in production —
+# rusqlite is now a #[cfg(test)] dep used by the in-memory shared-cache
+# anchor (Database::open_in_memory). See [dev-dependencies] below.
 sqlx = { workspace = true }
 argon2 = { workspace = true }
 # Task #47: SHA-256 of [provisioning].install_commands so the entrypoint
@@ -44,3 +44,4 @@ tempfile = "3"
 libc = { workspace = true }
 
 [dev-dependencies]
+rusqlite = { workspace = true }

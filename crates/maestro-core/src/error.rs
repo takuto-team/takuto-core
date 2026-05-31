@@ -102,6 +102,12 @@ pub enum MaestroError {
     TomlParse(#[from] toml::de::Error),
 }
 
+/// Test-only bridge so `Database::open_in_memory`'s rusqlite anchor can
+/// `?`-propagate failures into `MaestroError`. Plan-11 production code
+/// paths never produce `rusqlite::Error` — they go through the sqlx
+/// adapter — so this impl stays behind `#[cfg(test)]` and the crate
+/// ships without rusqlite as a runtime dependency.
+#[cfg(test)]
 impl From<rusqlite::Error> for MaestroError {
     fn from(e: rusqlite::Error) -> Self {
         MaestroError::Db(DbError::Sqlite(e))

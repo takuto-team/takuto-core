@@ -18,8 +18,11 @@ use std::path::PathBuf;
 /// callers should generally just `?`-propagate into a `MaestroError`.
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
-    /// Every `?`-propagated `rusqlite::Error` plus the `db/users.rs:50`
-    /// fallthrough arm of the username-UNIQUE branch.
+    /// Test-only carrier for the rusqlite errors produced by the
+    /// in-memory `_mem_anchor` connection in `Database::open_in_memory`
+    /// (plan-11 cluster RusqliteDrop). Production paths never produce
+    /// `rusqlite::Error` — they go through [`Self::Adapter`].
+    #[cfg(test)]
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
