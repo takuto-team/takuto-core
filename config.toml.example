@@ -290,6 +290,50 @@ install_commands = [
   #   '[ -f "$MAESTRO_TOOLS_BIN/aws" ] || (curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/aws.zip && unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install --bin-dir "$MAESTRO_TOOLS_BIN" --install-dir "$MAESTRO_TOOLS_BIN/aws-cli" --update && rm -rf /tmp/aws*)',
 ]
 
+# --- External database backend (plan-11) ---
+#
+# By default, Maestro stores users, sessions, credentials, and audit data in a
+# local SQLite file at {data_dir}/maestro.db. For multi-instance deployments
+# (or operators who want to centralise auth state in their existing DB), the
+# [database] block points Maestro at PostgreSQL, MySQL, or MariaDB.
+#
+# Leaving the section out (or `connection = ""`) keeps the current SQLite
+# behaviour — zero-config default.
+#
+# Restart-only: `PUT /api/config` will not patch this section. Backend changes
+# require a process restart, same policy as `web.host` / `web.port`.
+#
+# [database]
+# # Connection URL. Empty / omitted → SQLite at {data_dir}/maestro.db.
+# # Supported schemes:
+# #   sqlite://path/to/file.db
+# #   postgres://user:pw@host:5432/db
+# #   postgresql://user:pw@host:5432/db   (alias)
+# #   mysql://user:pw@host:3306/db        (covers MariaDB)
+# # `GET /api/config` redacts the password component before returning.
+# connection = "postgres://maestro:s3cret@db.example:5432/maestro"
+#
+# # Pool tuning (all optional). Defaults: 10 conns, 30 s acquire timeout,
+# # 10 min idle timeout.
+# # max_connections = 10
+# # acquire_timeout_secs = 30
+# # idle_timeout_secs = 600
+#
+# # When true (default), startup runs a 5 s `SELECT 1` probe against the
+# # configured backend and aborts if the database is unreachable. When false,
+# # an unreachable backend logs a warning and falls back to local SQLite for
+# # the current process (recovery path).
+# # fail_fast = true
+#
+# # When true (default) and a legacy {data_dir}/maestro.db exists AND the
+# # remote target has no `system_metadata.import_complete` row, perform a
+# # one-shot copy of every user-data table inside a single transaction at
+# # startup. Sessions are marked expired post-import so users re-authenticate.
+# # Subsequent restarts skip the import (the marker row is the gate). Operators
+# # who want to redo the import can `DELETE FROM system_metadata WHERE key =
+# # 'import_complete'` against the target — there is no CLI for it on purpose.
+# # import_from_sqlite = true
+
 # --- Dev-only knobs (leave commented in production) ---
 # When `mock_agent = true`, ClaudeSession::run_prompt and CursorSession::run_prompt
 # short-circuit into a scripted mock session — no real `claude` or `agent` process

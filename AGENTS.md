@@ -26,7 +26,7 @@ The dashboard hides polling controls when `ticketing_system = none`. In Jira and
 
 | Path | Role |
 |------|------|
-| `crates/maestro-core` | Domain logic: config, **config persistence** (`config_writer.rs`) and **live reload** (`config_watcher.rs`), workflow engine and state machine, Jira (`acli`), git worktrees, `gh` PR/commits, Claude/Cursor agent sessions, process management, dry/real actions, **multi-user database** (`db/` — SQLite schema, user CRUD, argon2 credentials, recovery codes, session management, legacy migration) |
+| `crates/maestro-core` | Domain logic: config, **config persistence** (`config_writer.rs`) and **live reload** (`config_watcher.rs`), workflow engine and state machine, Jira (`acli`), git worktrees, `gh` PR/commits, Claude/Cursor agent sessions, process management, dry/real actions, **multi-user database** (`db/` — backend-agnostic `DbAdapter` over sqlx pools for SQLite / PostgreSQL / MySQL, hand-translated migrations under `migrations/*.sql`, user CRUD, argon2 credentials, recovery codes, session management, SQLite→remote one-shot importer) |
 | `crates/maestro-web` | Axum app: `/api/*`, WebSocket `/ws`, shared-port reverse proxy `/s/*` (`routes/sessions.rs`), `PathTokenRegistry` (`session_registry.rs`), embedded static UI under `src/assets/` |
 | `crates/maestro-cli` | Binary entrypoint: load config, init tracing, construct engine + poller + router, `tokio::select!` for poller, HTTP server, and graceful shutdown |
 | `docker/` | Container entrypoint, egress scripts, diagnostics |
@@ -49,7 +49,7 @@ Workspace manifest: root `Cargo.toml` (Rust **2024** edition). Internal crates d
 5. Probes acli authentication (`docker_hooks::check_acli_auth()`) → `jira_available: Arc<AtomicBool>`. When `false`: logs a warning, workflows skip Jira steps, poller is idle.
 6. Constructs `WorkflowEngine` with **`[general] max_concurrent_workflows`** (drives an internal semaphore for concurrent **mise** / **install** / **agent** sessions) **and** `jira_available`. Calls **`restore_persisted_workflows`** so workflows saved on the last graceful shutdown are loaded before the poller’s first poll. **All workspaces** are restored at once — workflows from every workspace coexist in the single in-memory `HashMap<String, Workflow>`, tagged by `Workflow.workspace_name`. Snapshots are **per-workspace** at **`{data_dir}/workspaces/{workspace_name}/workflow_snapshot.json`**, where the **persistent data directory** (`data_dir`) is resolved as: **`$MAESTRO_DATA_DIR`** → **`$MAESTRO_HOME/.maestro`** → **`$HOME/.maestro`** → **`{git.repo_path}/.maestro`** (legacy fallback). In Docker, the **`maestro-data`** named volume is mounted at **`/home/maestro/.maestro`** and **`MAESTRO_DATA_DIR`** points there. On startup, `read_all_workspace_snapshots(data_dir)` scans `{data_dir}/workspaces/*/workflow_snapshot.json` and merges all records. A 3-tier migration handles legacy layouts: workspace-specific → in-repo legacy (`{git.repo_path}/.maestro/`) → old global (`{data_dir}/workflow_snapshot.json`). The Jira poller separately enforces **`[general] max_active_workflows`** (see **Jira poller**).
 7. Constructs `JiraPoller` with a shared `CancellationToken` and **`Arc<AtomicBool>`** polling pause flag (shared with `AppState`). The flag is **`false`** by default (polling enabled); set **`[general] auto_polling = false`** in **`config.toml`** to start in the same paused state as the dashboard **Pause polling** action, then `build_router`. When `!jira_available`, the poller future is replaced with `std::future::pending()` (never runs).
-8. **Initializes the SQLite database** (`Database::open(data_dir)`) in the persistent data directory. On first run, this creates `{data_dir}/maestro.db`, enables WAL mode and foreign keys, and runs schema migrations. The resulting `Database` is passed to `AppState.db` as `Some(db)`. When the database has **zero users**, `GET /api/auth/status` returns `setup_required: true` and the dashboard shows a **first-user setup page** where the admin creates their account via `POST /api/auth/register`. If `data_dir` cannot be resolved, `db` is set to `None` and multi-user auth is unavailable (legacy config-based auth still works).
+8. **Initialises the multi-user database** via `Database::connect(data_dir, &[database], allow_auto_generate_secret_key)` (plan-11). When `[database].connection` is empty (default), Maestro builds a SQLite pool against `{data_dir}/maestro.db` — WAL journal mode and foreign keys are applied per-connection by sqlx. When `connection` is `postgres://…` / `postgresql://…` / `mysql://…`, the equivalent sqlx pool is built; a 5 s `SELECT 1` probe gates `fail_fast` (abort vs. fall back to local SQLite). All seven sqlx migrations run on the resolved backend. If a legacy `{data_dir}/maestro.db` exists and the target lacks `system_metadata.import_complete`, the one-shot SQLite → remote importer runs inside a single transaction (plan-11 §8). The resulting `Database` is passed to `AppState.db` as `Some(db)`. When the database has **zero users**, `GET /api/auth/status` returns `setup_required: true` and the dashboard shows a **first-user setup page** where the admin creates their account via `POST /api/auth/register`. If `data_dir` cannot be resolved or the backend is unreachable with `fail_fast = true`, `db` is set to `None` and multi-user auth is unavailable.
 9. Creates a `ConfigWriter` from the config file path and a `ConfigWatcher` that polls for external edits (5 s interval). Both share a `last_write_epoch_ms` atomic to prevent reload loops from API writes.
 10. Runs poller, Axum server, config watcher, snapshot syncer, PR merge poller with graceful shutdown on cancel, and signal handler (`SIGINT` / `SIGTERM` on Unix). On **graceful** shutdown the process cancels the token, **`persist_interrupt_for_restart`** (calls **`write_all_workspace_snapshots`** — groups all in-memory workflows by `workspace_name`, writes each group to `{data_dir}/workspaces/{name}/workflow_snapshot.json` — and cancels their driver tokens **without** Jira unassign / **`Stopped`**), then waits briefly for cleanup. On restore, **terminal** workflows (**Done**, **Stopped**, **Error**) are loaded with **no driver** (idle on the dashboard); **Paused** and in-progress workflows get a driver spawned. The last Claude/Cursor **session ID** (`Workflow.last_session_id`) is persisted in the snapshot; on resume the first re-executed agent step uses **`--resume`** with the prompt **"Resume what you were doing before the session was closed."** so the agent continues its prior conversation. **`POST …/stop`** and **`stop_all_workflows`** still unassign and move tickets back to **To Do** (explicit stop, not container resume) — **only when `jira_available` is true**.
 
@@ -284,7 +284,41 @@ Helpers: **`actions/gh_github.rs`** (`gh api user`, **`gh pr edit --add-reviewer
 | `container_users` | Container isolation tracking (schema only — enforcement in future PR) |
 | `schema_migrations` | Migration version tracking |
 
-Schema migrations run automatically on `Database::open()` via a versioned migration runner. **Current `SCHEMA_VERSION = 2`.** `MIGRATION_V2` (plan-02 auth hardening, applied to `current_version < 2`): creates the `login_attempts` table + index, and adds `sessions.last_seen_at` / `sessions.created_at_unix` columns (both `NOT NULL DEFAULT 0`). Sessions inserted under v1 have `created_at_unix = 0`, which trips the absolute-TTL check on next use and forces re-login after the v2 rollout.
+Schema migrations run automatically at startup via **sqlx**'s migration runner driven by `DialectAwareMigrationSource` (plan-11). Source files live at `crates/maestro-core/migrations/*.sql`; each one is hand-translated to portable SQL (single source per migration; the source rewrites `BLOB` → `BYTEA` and `INTEGER PRIMARY KEY AUTOINCREMENT` per backend at apply time). Applied versions are tracked in the sqlx-managed `_sqlx_migrations` table — re-running is a no-op and checksum drift is caught at startup. **Current set: 7 migrations** (V1 users/credentials/sessions/recovery_codes/user_repositories/container_users → V2 login_attempts + session columns → V3 workspace_commands → V4 user_worktree_commands → V5 repositories/user_repositories → V6 user_provider_credentials/user_github_credentials/credential_audit/onboarding_state → V7 `system_metadata`).
+
+**External database backend** (`[database]` block — plan-11):
+
+By default Maestro stores auth state in SQLite at `{data_dir}/maestro.db`. Operators can point at PostgreSQL, MySQL, or MariaDB by setting `[database].connection`:
+
+```toml
+[database]
+connection = "postgres://maestro:s3cret@db.example:5432/maestro"
+# max_connections = 10
+# acquire_timeout_secs = 30
+# idle_timeout_secs = 600
+# fail_fast = true
+# import_from_sqlite = true
+```
+
+Supported schemes: `sqlite://`, `postgres://` / `postgresql://`, `mysql://` (covers MariaDB). Empty / omitted `connection` keeps the current SQLite default — zero-config behaviour for single-instance deployments. `GET /api/config` redacts the password component of the URL; `PUT /api/config` cannot patch the section (backend change is restart-only, same policy as `web.host` / `web.port`).
+
+`Database::connect(data_dir, &DatabaseConfig, allow_auto_generate_secret_key)` is the entry point. Flow:
+
+1. Build the backend-specific sqlx pool with the configured pool tuning.
+2. Run `SELECT 1` with a 5 s timeout. On failure:
+   - `fail_fast = true` (default) → error propagates; CLI startup aborts with a "Database backend unreachable" log line (URL redacted).
+   - `fail_fast = false` → log a warning and **fall back to local SQLite** at `{data_dir}/maestro.db` for the current process.
+3. Apply all sqlx migrations through `DialectAwareMigrationSource`.
+4. If backend ≠ SQLite **and** `import_from_sqlite = true` (default) **and** `{data_dir}/maestro.db` exists **and** the target has no `system_metadata.import_complete` row, run the **one-shot SQLite → remote importer**:
+   - Open the source SQLite file read-only.
+   - Inside a single sqlx transaction, copy every user-data table in FK-dependency order (`users` → `repositories` → all children → `user_repositories`). Explicit column lists per table; autoincrement IDs are regenerated by the target on INSERT.
+   - Overwrite imported `sessions.expires_at = '0'` so users are forced to re-authenticate post-cutover (plan-11 §8.6).
+   - Upsert `system_metadata.{import_complete, import_source_path}` and COMMIT.
+   - A mid-import crash leaves the target untouched (single BEGIN/COMMIT). On next start the marker check sees `import_complete` is still NULL and reruns from scratch.
+
+Operators who want to **re-import** after a target wipe delete the `import_complete` row manually (one SQL statement against the target); there is no CLI to redo the import on purpose (footgun avoidance).
+
+Every DAO and call site goes through the backend-agnostic `&DbAdapter` (wrapping sqlx pools); no production code path mentions `rusqlite::Connection` or per-backend pool types. The dialect-aware transform plus typed `DbValue` / `DbRow` accessors keep SQL portable across SQLite / PostgreSQL / MySQL.
 
 **CORS:** The Axum router applies an **explicit origin allowlist** (not `CorsLayer::permissive()`). Allowed origins come from **`[web] cors_origins`**; when that list is empty (default), the origin is auto-computed from `host`/`port` (e.g. `http://localhost:8080`). Methods are restricted to **GET, POST, PUT, DELETE, PATCH**; allowed headers to **Content-Type**; **`Access-Control-Allow-Credentials: true`** is set so session cookies work cross-origin. Requests from unlisted origins receive no `Access-Control-Allow-Origin` header. For deployments behind a reverse proxy or TLS terminator, set `cors_origins` to the external-facing origin (e.g. `["https://maestro.example.com"]`). This setting is **startup-only** — not patchable via `PUT /api/config`.
 
