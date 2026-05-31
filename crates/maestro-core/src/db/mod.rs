@@ -13,6 +13,7 @@
 // `&rusqlite::Connection` API.
 pub mod adapter;
 pub mod importer;
+pub mod upsert;
 pub mod credential_audit;
 pub mod credentials;
 pub mod error;

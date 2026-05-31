@@ -110,6 +110,53 @@ jobs:
         # serialises the migrator + CRUD tests against the shared DB.
         run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 postgres
 
+  db-mysql:
+    # Plan-11 step 4 (MySQL leg): same idea as `db-postgres`, but spins
+    # up a MySQL service container. Validates the dialect-aware
+    # transforms (`INTEGER PRIMARY KEY AUTOINCREMENT` → `BIGINT
+    # AUTO_INCREMENT PRIMARY KEY`, `DEFAULT '<lit>'` → `DEFAULT
+    # ('<lit>')`) and the per-backend upsert tail (`ON DUPLICATE KEY
+    # UPDATE` instead of `ON CONFLICT(...) DO UPDATE`).
+    name: DB backend (MySQL)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_USER: maestro
+          MYSQL_PASSWORD: maestro
+          MYSQL_DATABASE: maestro_ci
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -umaestro -pmaestro"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: mysql://maestro:maestro@localhost:3306/maestro_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo test --ignored (db migrations + CRUD against MySQL)
+        run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 mysql
+
   ui:
     name: UI (npm build)
     runs-on: ubuntu-latest

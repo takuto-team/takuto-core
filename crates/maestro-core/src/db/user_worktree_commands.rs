@@ -176,15 +176,19 @@ pub async fn upsert(
     })?;
     let now = chrono::Utc::now().timestamp();
 
+    let tail = super::upsert::build_update_tail(
+        adapter.backend(),
+        &["user_id", "workspace_name"],
+        &["init_commands_json", "run_commands_json", "updated_at"],
+    );
+    let sql = format!(
+        "INSERT INTO user_worktree_commands \
+            (user_id, workspace_name, init_commands_json, run_commands_json, updated_at) \
+         VALUES (?, ?, ?, ?, ?) {tail}"
+    );
     adapter
         .execute(
-            "INSERT INTO user_worktree_commands \
-                (user_id, workspace_name, init_commands_json, run_commands_json, updated_at) \
-             VALUES (?, ?, ?, ?, ?) \
-             ON CONFLICT(user_id, workspace_name) DO UPDATE SET \
-               init_commands_json = excluded.init_commands_json, \
-               run_commands_json  = excluded.run_commands_json, \
-               updated_at         = excluded.updated_at",
+            &sql,
             vec![
                 DbValue::Text(user_id.to_string()),
                 DbValue::Text(workspace_name.to_string()),

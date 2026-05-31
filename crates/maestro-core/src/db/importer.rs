@@ -124,23 +124,30 @@ async fn mark_import_complete(
     };
     // Two rows: import_complete (with the timestamp as `value`) and
     // import_source_path (with the path as `value`). Both share the
-    // `updated_at` column.
-    tx.execute(
+    // `updated_at` column. Dialect-aware upsert tail keeps the call
+    // sites identical across SQLite / Postgres / MySQL.
+    let tail = super::upsert::build_update_tail(
+        tx.backend(),
+        &["key"],
+        &["value", "updated_at"],
+    );
+    let sql_complete = format!(
         "INSERT INTO system_metadata (key, value, updated_at) \
-         VALUES ('import_complete', ?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+         VALUES ('import_complete', ?, ?) {tail}"
+    );
+    tx.execute(
+        &sql_complete,
         vec![DbValue::Text(now.to_string()), DbValue::I64(now)],
     )
     .await
     .map_err(to_sqlx_err)?;
-    tx.execute(
+    let sql_path = format!(
         "INSERT INTO system_metadata (key, value, updated_at) \
-         VALUES ('import_source_path', ?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        vec![DbValue::Text(path_str), DbValue::I64(now)],
-    )
-    .await
-    .map_err(to_sqlx_err)?;
+         VALUES ('import_source_path', ?, ?) {tail}"
+    );
+    tx.execute(&sql_path, vec![DbValue::Text(path_str), DbValue::I64(now)])
+        .await
+        .map_err(to_sqlx_err)?;
     Ok(())
 }
 

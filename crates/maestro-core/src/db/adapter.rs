@@ -587,6 +587,16 @@ enum DbTxInner<'a> {
 }
 
 impl<'a> DbTransaction<'a> {
+    /// Which backend this transaction runs against. Use it to branch
+    /// per-backend SQL (e.g. `upsert::build_update_tail`).
+    pub fn backend(&self) -> DbBackend {
+        match &self.inner {
+            DbTxInner::Sqlite(_) => DbBackend::Sqlite,
+            DbTxInner::Postgres(_) => DbBackend::Postgres,
+            DbTxInner::MySql(_) => DbBackend::MySql,
+        }
+    }
+
     /// Execute a statement that doesn't return rows. Identical contract
     /// to [`DbAdapter::execute`] but bound to this transaction.
     pub async fn execute(&mut self, sql: &str, params: Vec<DbValue>) -> DbResult<u64> {

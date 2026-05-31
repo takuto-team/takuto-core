@@ -153,12 +153,14 @@ pub async fn mark_step(
 ) -> Result<()> {
     let column = step.column();
     // SAFETY: `column` comes from a closed enum, never user input.
+    let tail = super::upsert::build_update_tail(
+        adapter.backend(),
+        &["user_id"],
+        &[column, "updated_at"],
+    );
     let sql = format!(
         "INSERT INTO onboarding_state (user_id, {column}, updated_at) \
-         VALUES (?, ?, ?) \
-         ON CONFLICT(user_id) DO UPDATE SET \
-            {column} = excluded.{column}, \
-            updated_at = excluded.updated_at"
+         VALUES (?, ?, ?) {tail}"
     );
     adapter
         .execute(
@@ -178,13 +180,25 @@ pub async fn mark_step(
 /// [`clear_completed`]). Idempotent.
 pub async fn mark_completed(adapter: &DbAdapter, user_id: &str) -> Result<()> {
     let now = now_iso();
-    adapter
-        .execute(
-            "INSERT INTO onboarding_state (user_id, completed_at, updated_at) \
-             VALUES (?, ?, ?) \
-             ON CONFLICT(user_id) DO UPDATE SET \
+    // The COALESCE references BOTH the existing row column and the
+    // proposed new value, so this can't go through `upsert::build_*`.
+    // Spell each backend's form inline; the shape is identical, only
+    // the existing-row alias and the proposed-value form differ.
+    let tail = match adapter.backend() {
+        super::DbBackend::MySql => "ON DUPLICATE KEY UPDATE \
+                completed_at = COALESCE(completed_at, VALUES(completed_at)), \
+                updated_at = VALUES(updated_at)",
+        _ => "ON CONFLICT(user_id) DO UPDATE SET \
                 completed_at = COALESCE(onboarding_state.completed_at, excluded.completed_at), \
                 updated_at = excluded.updated_at",
+    };
+    let sql = format!(
+        "INSERT INTO onboarding_state (user_id, completed_at, updated_at) \
+         VALUES (?, ?, ?) {tail}"
+    );
+    adapter
+        .execute(
+            &sql,
             vec![
                 DbValue::Text(user_id.to_string()),
                 DbValue::Text(now.clone()),

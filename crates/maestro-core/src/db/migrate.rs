@@ -183,11 +183,17 @@ pub(crate) fn translate_for_backend(sql: &str, backend: DbBackend) -> String {
             // column declaration — `BIGINT AUTO_INCREMENT PRIMARY KEY`
             // covers it. The portable-source form keeps the
             // SQLite-style placement; we swap the whole token at once.
-            replace_whole_token(
+            let s = replace_whole_token(
                 sql,
                 "INTEGER PRIMARY KEY AUTOINCREMENT",
                 "BIGINT AUTO_INCREMENT PRIMARY KEY",
-            )
+            );
+            // MySQL 8.0.13+ accepts `DEFAULT` on `TEXT` / `BLOB` / `JSON`
+            // columns ONLY when the literal is wrapped in parentheses
+            // (`DEFAULT ('...')`). The source files use the simpler
+            // `DEFAULT '...'` form which is valid SQLite + Postgres.
+            // Rewrite per-MySQL: `DEFAULT '<x>'` → `DEFAULT ('<x>')`.
+            wrap_text_defaults_for_mysql(&s)
         }
     }
 }
@@ -232,6 +238,54 @@ fn replace_whole_token(haystack: &str, needle: &str, replacement: &str) -> Strin
 #[inline]
 fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// MySQL-specific: wrap `DEFAULT '<literal>'` as `DEFAULT ('<literal>')`.
+///
+/// MySQL 8.0.13+ only accepts column defaults on TEXT/BLOB/JSON when the
+/// expression sits inside parentheses. Wrapping every literal default is
+/// harmless on VARCHAR / INTEGER columns (MySQL accepts both forms there
+/// too), so we apply it uniformly rather than trying to inspect each
+/// column's declared type.
+///
+/// Conservative: only single-quoted literals, no escaped quotes. Our
+/// migration files use only simple literals like `''`, `'{}'`, `'[]'` —
+/// no inner-quote complications. If a future migration needs escapes,
+/// extend this with proper quote-aware scanning.
+fn wrap_text_defaults_for_mysql(sql: &str) -> String {
+    let needle = "DEFAULT '";
+    let mut out = String::with_capacity(sql.len() + 16);
+    let mut cursor = 0;
+    while let Some(rel) = sql[cursor..].find(needle) {
+        let kw_start = cursor + rel;
+        let lit_start = kw_start + needle.len();
+        // Skip if already wrapped: previous non-space byte is `(`.
+        let already_wrapped = sql[..kw_start]
+            .bytes()
+            .rev()
+            .find(|b| !b.is_ascii_whitespace())
+            .map(|b| b == b'(')
+            .unwrap_or(false);
+        // Find the closing quote. Bail on broken syntax rather than
+        // silently corrupting.
+        let Some(end_rel) = sql[lit_start..].find('\'') else {
+            out.push_str(&sql[cursor..]);
+            return out;
+        };
+        let lit_end = lit_start + end_rel; // index of closing quote
+        out.push_str(&sql[cursor..kw_start]);
+        if already_wrapped {
+            // Pass the original `DEFAULT '...'` through unchanged.
+            out.push_str(&sql[kw_start..=lit_end]);
+        } else {
+            out.push_str("DEFAULT ('");
+            out.push_str(&sql[lit_start..lit_end]);
+            out.push_str("')");
+        }
+        cursor = lit_end + 1;
+    }
+    out.push_str(&sql[cursor..]);
+    out
 }
 
 /// Apply all embedded migrations against the adapter's pool.
@@ -322,6 +376,57 @@ mod tests {
             got.contains("data BLOB NOT NULL"),
             "MySQL must keep BLOB, got: {got}"
         );
+    }
+
+    #[test]
+    fn translate_mysql_wraps_text_default_literals() {
+        // MySQL 8.0.13+ requires `DEFAULT ('...')` for TEXT/BLOB/JSON
+        // columns; bare `DEFAULT '...'` is rejected.
+        let input = "CREATE TABLE t (\
+            metadata TEXT NOT NULL DEFAULT '{}', \
+            note TEXT NOT NULL DEFAULT ''\
+        );";
+        let got = translate_for_backend(input, DbBackend::MySql);
+        assert!(
+            got.contains("DEFAULT ('{}')"),
+            "MySQL must wrap '{{}}' default, got: {got}"
+        );
+        assert!(
+            got.contains("DEFAULT ('')"),
+            "MySQL must wrap empty default, got: {got}"
+        );
+        // The original bare forms must be gone.
+        assert!(!got.contains("DEFAULT '{}'"), "{got}");
+        assert!(!got.contains("DEFAULT ''"), "{got}");
+    }
+
+    #[test]
+    fn translate_mysql_passes_already_wrapped_defaults_through() {
+        // If a future migration source uses the parenthesised form, the
+        // transformer must not double-wrap it.
+        let input = "CREATE TABLE t (s TEXT NOT NULL DEFAULT ('hi'));";
+        let got = translate_for_backend(input, DbBackend::MySql);
+        assert!(
+            got.contains("DEFAULT ('hi')"),
+            "must pass parenthesised default through, got: {got}"
+        );
+        assert!(
+            !got.contains("DEFAULT (('hi'))"),
+            "must not double-wrap, got: {got}"
+        );
+    }
+
+    #[test]
+    fn translate_sqlite_leaves_text_defaults_alone() {
+        // Postgres/SQLite accept bare literal defaults on TEXT — the
+        // MySQL-specific wrap must NOT fire for them.
+        let input = "CREATE TABLE t (s TEXT NOT NULL DEFAULT '');";
+        let sqlite = translate_for_backend(input, DbBackend::Sqlite);
+        let postgres = translate_for_backend(input, DbBackend::Postgres);
+        assert!(sqlite.contains("DEFAULT ''"), "SQLite: {sqlite}");
+        assert!(postgres.contains("DEFAULT ''"), "Postgres: {postgres}");
+        assert!(!sqlite.contains("DEFAULT ('')"), "SQLite over-wrapped: {sqlite}");
+        assert!(!postgres.contains("DEFAULT ('')"), "PG over-wrapped: {postgres}");
     }
 
     #[test]
@@ -579,6 +684,46 @@ mod tests {
         // Best-effort cleanup so the DB stays tidy across reruns. A
         // failure here is non-fatal — we want the assertions above to
         // be the test's verdict, not the housekeeping.
+        let _ = users::delete_user(&adapter, &created.id).await;
+    }
+
+    /// End-to-end smoke against a real MySQL/MariaDB service container.
+    /// Mirrors [`postgres_crud_smoke_via_adapter`] — runs the full
+    /// production stack against the MySQL dialect to catch upsert,
+    /// migration-translation, and DAO issues the SQLite tests can't see.
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL=mysql://..."]
+    async fn mysql_crud_smoke_via_adapter() {
+        use crate::db::adapter::DbAdapter;
+        use crate::db::models::UserRole;
+        use crate::db::{pool, users};
+
+        let url = std::env::var("DATABASE_URL")
+            .expect("set DATABASE_URL=mysql://... to run this test");
+
+        let backend_pool = pool::connect(&url, &pool::PoolTuning::default())
+            .await
+            .expect("connect via pool::connect");
+        let adapter = DbAdapter::new(backend_pool);
+
+        super::apply_migrations(&adapter)
+            .await
+            .expect("apply migrations against MySQL");
+
+        let username = format!("ci_smoke_{}", uuid::Uuid::new_v4());
+        let created = users::create_user(&adapter, &username, UserRole::User)
+            .await
+            .expect("users::create_user against MySQL");
+
+        let fetched = users::get_user_by_id(&adapter, &created.id)
+            .await
+            .expect("users::get_user_by_id round-trip")
+            .expect("user must exist immediately after create_user");
+
+        assert_eq!(fetched.username, username);
+        assert_eq!(fetched.id, created.id);
+
+        // Best-effort cleanup.
         let _ = users::delete_user(&adapter, &created.id).await;
     }
 }

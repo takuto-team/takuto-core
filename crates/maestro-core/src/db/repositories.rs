@@ -139,12 +139,15 @@ pub async fn upsert(
     let new_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
 
+    let tail = super::upsert::build_ignore_tail(adapter.backend(), &["local_path"]);
+    let sql = format!(
+        "INSERT INTO repositories \
+            (id, name, repo_url, local_path, default_branch, created_at, created_by) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) {tail}"
+    );
     adapter
         .execute(
-            "INSERT INTO repositories \
-                (id, name, repo_url, local_path, default_branch, created_at, created_by) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(local_path) DO NOTHING",
+            &sql,
             vec![
                 DbValue::Text(new_id),
                 DbValue::Text(name.to_string()),
@@ -255,11 +258,17 @@ pub async fn add_for_user(
     repository_id: &str,
 ) -> Result<bool> {
     let now = chrono::Utc::now().timestamp();
+    let tail = super::upsert::build_ignore_tail(
+        adapter.backend(),
+        &["user_id", "repository_id"],
+    );
+    let sql = format!(
+        "INSERT INTO user_repositories (user_id, repository_id, added_at) \
+         VALUES (?, ?, ?) {tail}"
+    );
     let affected = adapter
         .execute(
-            "INSERT INTO user_repositories (user_id, repository_id, added_at) \
-             VALUES (?, ?, ?) \
-             ON CONFLICT(user_id, repository_id) DO NOTHING",
+            &sql,
             vec![
                 DbValue::Text(user_id.to_string()),
                 DbValue::Text(repository_id.to_string()),

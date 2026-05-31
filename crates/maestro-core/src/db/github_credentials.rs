@@ -100,20 +100,28 @@ pub async fn upsert(
     sign_commits: bool,
 ) -> Result<()> {
     let now = now_iso();
-    tx.execute(
+    let tail = super::upsert::build_update_tail(
+        tx.backend(),
+        &["user_id"],
+        &[
+            "ciphertext",
+            "nonce",
+            "wrapped_dek",
+            "wnonce",
+            "github_login",
+            "scopes_json",
+            "sign_commits",
+            "updated_at",
+        ],
+    );
+    let sql = format!(
         "INSERT INTO user_github_credentials \
          (user_id, ciphertext, nonce, wrapped_dek, wnonce, github_login, scopes_json, \
           sign_commits, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(user_id) DO UPDATE SET \
-            ciphertext = excluded.ciphertext, \
-            nonce = excluded.nonce, \
-            wrapped_dek = excluded.wrapped_dek, \
-            wnonce = excluded.wnonce, \
-            github_login = excluded.github_login, \
-            scopes_json = excluded.scopes_json, \
-            sign_commits = excluded.sign_commits, \
-            updated_at = excluded.updated_at",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) {tail}"
+    );
+    tx.execute(
+        &sql,
         vec![
             DbValue::Text(user_id.to_string()),
             DbValue::Bytes(sealed.ciphertext.clone()),
