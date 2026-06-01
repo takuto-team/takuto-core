@@ -150,6 +150,49 @@ pub async fn list_workflows(
         }
         out
     };
+    // Plan-07 slice 16: pre-fetch every work_items row for this
+    // user so the per-summary projection below can override pr_url,
+    // pr_merged, and branch_name with the DB-authoritative values
+    // (symmetric with slice 14's single-item `get_workflow`). One
+    // query for the whole list keeps this O(1) per workflow rather
+    // than O(N) DB round-trips.
+    let db_pr_state: HashMap<String, (Option<String>, bool, Option<String>)> =
+        if let Some(database) = auth_state.db.as_ref() {
+            match maestro_core::db::work_items::list_work_items(
+                database.adapter(),
+                &maestro_core::db::work_items::WorkItemListQuery {
+                    caller_user_id: Some(auth.user_id.clone()),
+                    caller_is_admin: false,
+                    workspace_name: None,
+                    state_filter: None,
+                    include_team_visible: false,
+                    limit: 10_000,
+                    offset: 0,
+                },
+            )
+            .await
+            {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|r| {
+                        (
+                            r.ticket_key,
+                            (r.pr_url, r.pr_merged, r.branch_name),
+                        )
+                    })
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Plan-07 slice 16: failed to batch-load work_items rows for PR-field cutover; falling back to HashMap values"
+                    );
+                    HashMap::new()
+                }
+            }
+        } else {
+            HashMap::new()
+        };
+
     // Plan-11 step 3: user_worktree_commands::get_run_commands_for_pairs
     // migrated to the agnostic adapter. Direct async call from this
     // handler.
@@ -193,6 +236,24 @@ pub async fn list_workflows(
                 };
             let run_commands =
                 build_run_commands_status(configured_run_cmds, run_cmds_state.get(&w.ticket_key));
+            // Plan-07 slice 16: prefer DB values for these three
+            // scalars when a work_items row exists; fall back to
+            // the in-memory Workflow otherwise. Matches slice 14's
+            // single-item cutover semantics.
+            let db_override = db_pr_state.get(&w.ticket_key);
+            let (db_branch, db_pr_url, db_pr_merged) = match db_override {
+                Some((u, m, b)) => (
+                    match b {
+                        Some(s) => Some(s.clone()),
+                        // DB row present but branch is NULL → DB is
+                        // authoritative: report empty.
+                        None => Some(String::new()),
+                    },
+                    Some(u.clone()),
+                    Some(*m),
+                ),
+                None => (None, None, None),
+            };
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -202,9 +263,12 @@ pub async fn list_workflows(
                 state: w.status_display(),
                 started_at: w.started_at.to_rfc3339(),
                 updated_at: w.updated_at.to_rfc3339(),
-                branch_name: w.branch_name.clone(),
-                pr_url: w.pr_url.clone(),
-                pr_merged: w.pr_merged,
+                branch_name: db_branch.unwrap_or_else(|| w.branch_name.clone()),
+                pr_url: match db_override {
+                    Some(_) => db_pr_url.unwrap_or(None),
+                    None => w.pr_url.clone(),
+                },
+                pr_merged: db_pr_merged.unwrap_or(w.pr_merged),
                 steps_log: w.steps_log.clone(),
                 error: extract_error(&w.state),
                 terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
