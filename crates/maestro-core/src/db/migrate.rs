@@ -92,6 +92,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
             "../../migrations/20260116000001_pluggable_db_system_metadata.sql"
         ),
     },
+    EmbeddedMigration {
+        version: 20_260_117_000_001,
+        description: "work_items_and_logs",
+        sql: include_str!("../../migrations/20260117000001_work_items_and_logs.sql"),
+    },
 ];
 
 /// A `sqlx::migrate::MigrationSource` impl that resolves the embedded
@@ -471,10 +476,10 @@ mod tests {
 
     #[test]
     fn embedded_migration_count() {
-        // V1..V6 from the legacy schema.rs port (cluster Schema) plus the
-        // plan-11 importer's system_metadata migration. Bump when adding
-        // new migrations.
-        assert_eq!(MIGRATIONS.len(), 7);
+        // V1..V6 from the legacy schema.rs port (cluster Schema), V7
+        // = plan-11 importer's system_metadata, V8 = plan-07 work_items.
+        // Bump when adding new migrations.
+        assert_eq!(MIGRATIONS.len(), 8);
     }
 
     #[test]
@@ -545,6 +550,13 @@ mod tests {
             "credential_audit",
             "onboarding_state",
             "system_metadata",
+            // Plan-07 step 2: work-item state tables.
+            "work_items",
+            "work_item_steps",
+            "work_item_definition_runs",
+            "work_item_log_lines",
+            "work_item_port_mappings",
+            "work_item_run_commands",
         ] {
             assert!(
                 tables.iter().any(|t| t == expected),
@@ -579,8 +591,8 @@ mod tests {
                 .await
                 .expect("count rows");
         assert_eq!(
-            count.0, 7,
-            "expected 7 applied migrations recorded by sqlx, got {}",
+            count.0, 8,
+            "expected 8 applied migrations recorded by sqlx, got {}",
             count.0
         );
     }
