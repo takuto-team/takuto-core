@@ -35,15 +35,27 @@ use crate::error::Result;
 // ── Enums ────────────────────────────────────────────────────────────────
 
 /// State-machine variants stored in `work_items.state_kind`.
-/// Variants that carry data (e.g. `Paused { prior }`, `Error { message,
-/// step }`) keep that data as JSON in `state_payload`; the kind alone
-/// drives indexed queries.
+/// Variants that carry data (e.g. `Paused { source_state }`,
+/// `Error { source_state, message }`, `AddressingTicket { pass }`)
+/// keep that data as JSON in `state_payload`; the kind alone drives
+/// indexed queries.
+///
+/// Plan-07 step 4: covers every variant the engine's `WorkflowState`
+/// enum has, so the engine's persist-to-DB pass can map 1:1 without
+/// information loss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkItemStateKind {
     Pending,
     Assigning,
+    RetrievingDetails,
     CreatingWorktree,
     AddressingTicket,
+    /// Legacy variant — kept for snapshot round-trip.
+    AddressingPrComments,
+    /// Legacy variant — kept for snapshot round-trip.
+    MergingBaseBranch,
+    Reviewing,
+    CreatingPr,
     Done,
     Stopped,
     Error,
@@ -55,8 +67,13 @@ impl WorkItemStateKind {
         match self {
             Self::Pending => "pending",
             Self::Assigning => "assigning",
+            Self::RetrievingDetails => "retrieving_details",
             Self::CreatingWorktree => "creating_worktree",
             Self::AddressingTicket => "addressing_ticket",
+            Self::AddressingPrComments => "addressing_pr_comments",
+            Self::MergingBaseBranch => "merging_base_branch",
+            Self::Reviewing => "reviewing",
+            Self::CreatingPr => "creating_pr",
             Self::Done => "done",
             Self::Stopped => "stopped",
             Self::Error => "error",
@@ -71,8 +88,13 @@ impl FromStr for WorkItemStateKind {
         Ok(match s {
             "pending" => Self::Pending,
             "assigning" => Self::Assigning,
+            "retrieving_details" => Self::RetrievingDetails,
             "creating_worktree" => Self::CreatingWorktree,
             "addressing_ticket" => Self::AddressingTicket,
+            "addressing_pr_comments" => Self::AddressingPrComments,
+            "merging_base_branch" => Self::MergingBaseBranch,
+            "reviewing" => Self::Reviewing,
+            "creating_pr" => Self::CreatingPr,
             "done" => Self::Done,
             "stopped" => Self::Stopped,
             "error" => Self::Error,
@@ -380,12 +402,15 @@ pub struct WorkItemListQuery {
 }
 
 /// Aggregated counts by `state_kind` for the dashboard summary tiles.
+/// The mid-pipeline states (`retrieving_details` / `reviewing` /
+/// `creating_pr`) and legacy snapshot states (`addressing_pr_comments`
+/// / `merging_base_branch`) fold into `in_progress` because the
+/// dashboard renders them all as "running" — operators care about
+/// terminal vs paused vs in-progress, not which mid-step you're at.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StateCounts {
     pub pending: u64,
-    pub assigning: u64,
-    pub creating_worktree: u64,
-    pub addressing_ticket: u64,
+    pub in_progress: u64,
     pub done: u64,
     pub stopped: u64,
     pub error: u64,
@@ -396,13 +421,19 @@ impl StateCounts {
     fn add(&mut self, kind: WorkItemStateKind, n: u64) {
         match kind {
             WorkItemStateKind::Pending => self.pending += n,
-            WorkItemStateKind::Assigning => self.assigning += n,
-            WorkItemStateKind::CreatingWorktree => self.creating_worktree += n,
-            WorkItemStateKind::AddressingTicket => self.addressing_ticket += n,
             WorkItemStateKind::Done => self.done += n,
             WorkItemStateKind::Stopped => self.stopped += n,
             WorkItemStateKind::Error => self.error += n,
             WorkItemStateKind::Paused => self.paused += n,
+            // Every mid-pipeline state rolls up to "in progress".
+            WorkItemStateKind::Assigning
+            | WorkItemStateKind::RetrievingDetails
+            | WorkItemStateKind::CreatingWorktree
+            | WorkItemStateKind::AddressingTicket
+            | WorkItemStateKind::AddressingPrComments
+            | WorkItemStateKind::MergingBaseBranch
+            | WorkItemStateKind::Reviewing
+            | WorkItemStateKind::CreatingPr => self.in_progress += n,
         }
     }
 }
@@ -1271,8 +1302,13 @@ mod tests {
         for k in [
             WorkItemStateKind::Pending,
             WorkItemStateKind::Assigning,
+            WorkItemStateKind::RetrievingDetails,
             WorkItemStateKind::CreatingWorktree,
             WorkItemStateKind::AddressingTicket,
+            WorkItemStateKind::AddressingPrComments,
+            WorkItemStateKind::MergingBaseBranch,
+            WorkItemStateKind::Reviewing,
+            WorkItemStateKind::CreatingPr,
             WorkItemStateKind::Done,
             WorkItemStateKind::Stopped,
             WorkItemStateKind::Error,

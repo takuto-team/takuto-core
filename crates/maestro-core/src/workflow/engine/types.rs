@@ -235,6 +235,59 @@ impl Workflow {
         }
     }
 
+    /// Plan-07 step 4 first slice — convert this in-memory Workflow into
+    /// the row shape the work_items table stores. The map is still the
+    /// truth-of-record; this conversion is used by the shadow-write
+    /// pass in `start_workflow` / `add_to_dashboard` so the DB has a
+    /// faithful row alongside every in-memory entry.
+    ///
+    /// Lossy by design for fields that don't have a column yet
+    /// (`steps_log`, `terminal_lines`, `workflow_def_runs`,
+    /// `worktree_bootstrapped`, `description_session_id`, `auth_pin`,
+    /// `repository_id`, `ticketing_system`, `ticketing_available`,
+    /// `cancel_token`). Those will land in follow-up slices when the
+    /// child tables get wired in.
+    pub fn to_work_item_row(&self) -> crate::db::work_items::WorkItemRow {
+        use crate::db::work_items::WorkItemRow;
+        let (state_kind, state_payload) = state_to_kind_and_payload(&self.state);
+        WorkItemRow {
+            id: self.id.clone(),
+            ticket_key: self.ticket_key.clone(),
+            workspace_name: self.workspace_name.clone(),
+            user_id: self.user_id.clone(),
+            // `private` lives in plan-03's visibility model; default to
+            // public on every fresh insert until that flag lands on
+            // Workflow.
+            private: false,
+            started_manually: self.started_manually,
+            // Manual cap accounting is engine-internal today; pin to
+            // started_manually as a placeholder until the engine
+            // surfaces the actual bit.
+            counts_toward_manual_cap: self.started_manually,
+            driver_started: self.driver_started,
+            jira_available: self.jira_available,
+            ticket_summary: Some(self.ticket_summary.clone()).filter(|s| !s.is_empty()),
+            ticket_description: Some(self.ticket_description.clone()).filter(|s| !s.is_empty()),
+            ticket_type: Some(self.ticket_type.clone()).filter(|s| !s.is_empty()),
+            ticket_url: self.ticket_url.clone(),
+            // Not surfaced on `Workflow` today.
+            acceptance_criteria: None,
+            // Not surfaced on `Workflow` today.
+            base_branch: None,
+            branch_name: Some(self.branch_name.clone()).filter(|s| !s.is_empty()),
+            worktree_path: self.worktree_path.as_ref().map(|p| p.display().to_string()),
+            pr_url: self.pr_url.clone(),
+            pr_merged: self.pr_merged,
+            last_session_id: self.last_session_id.clone(),
+            state_kind,
+            state_payload,
+            current_step_label: self.current_step_label.clone(),
+            created_at: self.started_at.timestamp(),
+            started_at: self.started_at.timestamp(),
+            updated_at: self.updated_at.timestamp(),
+        }
+    }
+
     /// String shown on the dashboard and in WebSocket `workflow_updated` events.
     pub fn status_display(&self) -> String {
         match &self.state {
@@ -353,4 +406,51 @@ pub(super) fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRec
         user_id: w.user_id.clone(),
         auth_pin: w.auth_pin.clone(),
     }
+}
+
+/// Plan-07 step 4 first slice — split a `WorkflowState` into the
+/// `(state_kind, state_payload)` pair stored on `work_items`.
+///
+/// The payload is a JSON object carrying any variant data (e.g.
+/// `{"pass": 2}` for `AddressingTicket { pass: 2 }`, or
+/// `{"source_state": {...}, "message": "..."}` for `Error`). When the
+/// variant carries no data, payload is `None`. The full state can be
+/// reconstructed by combining the kind discriminator with the payload
+/// — the engine's existing `serde_json::to_string(&self.state)` round-
+/// trips losslessly.
+pub(crate) fn state_to_kind_and_payload(
+    state: &crate::workflow::state::WorkflowState,
+) -> (crate::db::work_items::WorkItemStateKind, Option<String>) {
+    use crate::db::work_items::WorkItemStateKind;
+    use crate::workflow::state::WorkflowState;
+    let kind = match state {
+        WorkflowState::Pending => WorkItemStateKind::Pending,
+        WorkflowState::Assigning => WorkItemStateKind::Assigning,
+        WorkflowState::RetrievingDetails => WorkItemStateKind::RetrievingDetails,
+        WorkflowState::CreatingWorktree => WorkItemStateKind::CreatingWorktree,
+        WorkflowState::AddressingTicket { .. } => WorkItemStateKind::AddressingTicket,
+        WorkflowState::AddressingPrComments { .. } => WorkItemStateKind::AddressingPrComments,
+        WorkflowState::MergingBaseBranch { .. } => WorkItemStateKind::MergingBaseBranch,
+        WorkflowState::Reviewing => WorkItemStateKind::Reviewing,
+        WorkflowState::CreatingPR => WorkItemStateKind::CreatingPr,
+        WorkflowState::Done => WorkItemStateKind::Done,
+        WorkflowState::Stopped => WorkItemStateKind::Stopped,
+        WorkflowState::Error { .. } => WorkItemStateKind::Error,
+        WorkflowState::Paused { .. } => WorkItemStateKind::Paused,
+    };
+    // Only serialise the payload for variants that carry data —
+    // skipping unit-like variants keeps the column NULL on the common
+    // path and avoids storing `"\"Pending\""` for every fresh row.
+    let payload = match state {
+        WorkflowState::Pending
+        | WorkflowState::Assigning
+        | WorkflowState::RetrievingDetails
+        | WorkflowState::CreatingWorktree
+        | WorkflowState::Reviewing
+        | WorkflowState::CreatingPR
+        | WorkflowState::Done
+        | WorkflowState::Stopped => None,
+        _ => serde_json::to_string(state).ok(),
+    };
+    (kind, payload)
 }

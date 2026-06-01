@@ -101,6 +101,13 @@ impl WorkflowLifecycle {
         // driver_started stays false until a def is started
         let id = workflow.id.clone();
 
+        // Plan-07 step 4 first slice: shadow-write the work_items row
+        // BEFORE we hand the Workflow off to the in-memory map (so the
+        // borrow stays valid). The map remains the truth-of-record;
+        // the DB row is dead weight today and gets refreshed by later
+        // slices when state transitions also persist.
+        shadow_persist_work_item(self.db.as_ref(), &workflow).await;
+
         self.repository
             .inner_arc()
             .write()
@@ -167,6 +174,11 @@ impl WorkflowLifecycle {
         // driver_started stays false (set by Workflow::new)
         let id = workflow.id.clone();
         let user_id_for_emit = workflow.user_id.clone();
+
+        // Plan-07 step 4 first slice: shadow-write the work_items row
+        // BEFORE we hand the Workflow off to the in-memory map. See
+        // `start_workflow` for the same pattern + caveats.
+        shadow_persist_work_item(self.db.as_ref(), &workflow).await;
 
         self.repository
             .inner_arc()
@@ -539,5 +551,29 @@ impl WorkflowLifecycle {
                 warn!(ticket = %key, error = %e, "Failed to stop workflow during shutdown");
             }
         }
+    }
+}
+
+/// Plan-07 step 4 first slice — best-effort shadow-write of a fresh
+/// Workflow into the `work_items` table.
+///
+/// Truth-of-record is still the in-memory `HashMap<String, Workflow>`;
+/// this call exists so the DB row matches the map entry at insertion
+/// time. State transitions, log appends, and other updates do NOT yet
+/// touch the DB row — that's the next slice.
+///
+/// Failures are logged at WARN and swallowed: a flaky DB must not
+/// block the dashboard or the poller. The work item is still in the
+/// map; operators will see it as usual.
+async fn shadow_persist_work_item(db: Option<&Database>, workflow: &Workflow) {
+    let Some(db) = db else { return };
+    let row = workflow.to_work_item_row();
+    if let Err(e) = crate::db::work_items::insert_work_item(db.adapter(), &row).await {
+        warn!(
+            work_item_id = %workflow.id,
+            ticket_key = %workflow.ticket_key,
+            error = %e,
+            "Plan-07 shadow-write of work_items row failed (in-memory state is unaffected)"
+        );
     }
 }

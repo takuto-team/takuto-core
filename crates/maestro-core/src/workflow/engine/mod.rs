@@ -1365,4 +1365,83 @@ mod tests {
         let wf = map.get("POLLED-2").expect("workflow should exist");
         assert!(wf.user_id.is_none(), "None should leave the workflow unowned");
     }
+
+    /// Plan-07 step 4 first slice — every call to `start_workflow`
+    /// must shadow-write the matching `work_items` row alongside the
+    /// in-memory map insert. The map remains the truth-of-record; the
+    /// row in `work_items` is dead weight until later slices wire the
+    /// rest of the engine to it.
+    #[tokio::test]
+    async fn start_workflow_shadow_writes_work_items_row() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn ExternalActions> =
+            Arc::new(crate::actions::dry_run::DryRunActions::new(
+                "origin".into(),
+                None,
+            ));
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let workflows_dir = std::env::temp_dir().join(format!(
+            "maestro-engine-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+
+        let db = Database::open_in_memory().expect("open in-memory db");
+        // Seed the owning user — work_items.user_id has an FK to users.
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-poller', 'poller', 'admin')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+
+        let engine = WorkflowEngine::new_with_db(
+            config,
+            actions,
+            1,
+            jira_available,
+            TicketingSystem::None,
+            workflows_dir,
+            Some(db.clone()),
+        );
+
+        let id = engine
+            .start_workflow(
+                "POLLED-3".into(),
+                "Shadow-write test".into(),
+                false,
+                Some("a description".into()),
+                None,
+                Some("u-poller".to_string()),
+                None,
+            )
+            .await
+            .expect("start_workflow");
+
+        // The map still holds the canonical record.
+        {
+            let wf_arc = engine.workflows_arc();
+            let map = wf_arc.read().await;
+            let wf = map.get("POLLED-3").expect("must be in the map");
+            assert_eq!(wf.id, id);
+        }
+
+        // The DB shadow-write landed a matching row.
+        let row = crate::db::work_items::get_work_item(db.adapter(), &id, None, true)
+            .await
+            .expect("query work_items")
+            .expect("shadow-write must produce a row");
+        assert_eq!(row.id, id);
+        assert_eq!(row.ticket_key, "POLLED-3");
+        assert_eq!(row.user_id.as_deref(), Some("u-poller"));
+        assert_eq!(
+            row.state_kind,
+            crate::db::work_items::WorkItemStateKind::Pending
+        );
+        // `Pending` carries no variant data, so payload stays NULL.
+        assert_eq!(row.state_payload, None);
+        assert_eq!(row.ticket_description.as_deref(), Some("a description"));
+        assert!(!row.driver_started);
+    }
 }
