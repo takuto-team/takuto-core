@@ -102,6 +102,13 @@ pub async fn track_port_forwards(
 
 /// Track port events for a single run command. Registers the reserved proxy
 /// token when a port is detected and cleans up on stop/unforward events.
+///
+/// `work_item_id` + `db` are Plan-07 step 4 slice 8 shadow-write
+/// inputs. Same contract as [`track_port_forwards`]: every
+/// `run_command_port_forwarded` event upserts a `RunCommand` row
+/// (with `run_command_index = cmd_index`) into
+/// `work_item_port_mappings`; cleanup is bulk via `close_editor`,
+/// so unforward / stopped paths stay unchanged.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_command_port_tracker(
     ticket_key: String,
@@ -113,6 +120,8 @@ pub(super) async fn run_command_port_tracker(
     registry: PathTokenRegistry,
     mut rx: broadcast::Receiver<WorkflowEvent>,
     cancel: CancellationToken,
+    work_item_id: Option<String>,
+    db: Option<Database>,
 ) {
     loop {
         tokio::select! {
@@ -142,6 +151,25 @@ pub(super) async fn run_command_port_tracker(
                                             user_id: user_id.clone(),
                                         },
                                     ).await;
+                                    // Plan-07 step 4 slice 8: shadow-write the
+                                    // scanner-detected run-command port row.
+                                    // run_command_index distinguishes this row
+                                    // from editor / dynamic-app rows under
+                                    // the same work_item.
+                                    if let Some(ref wi) = work_item_id {
+                                        maestro_core::db::work_items::shadow_upsert_port_mapping(
+                                            db.as_ref(),
+                                            wi,
+                                            cp as i32,
+                                            hp as i32,
+                                            &proxy_base,
+                                            &reserved_token,
+                                            maestro_core::db::work_items::PortMappingKind::RunCommand,
+                                            Some(cmd_index as i32),
+                                            chrono::Utc::now().timestamp(),
+                                        )
+                                        .await;
+                                    }
                                     let mut map = run_cmds_map.write().await;
                                     if let Some(cmd) = map.get_mut(&ticket_key)
                                         .and_then(|cmds| cmds.iter_mut().find(|c| c.cmd_index == cmd_index))
@@ -527,6 +555,126 @@ mod tests {
         assert_eq!(
             rows.len(),
             2,
+            "unforward keeps the row; close_editor bulk-deletes"
+        );
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    /// Plan-07 step 4 slice 8 — when `run_command_port_tracker` is
+    /// wired with `Some(work_item_id)` + `Some(db)`, every
+    /// `run_command_port_forwarded` event lands as a `RunCommand`
+    /// row with `run_command_index` set to this tracker's cmd_index.
+    /// Unforward / stopped events DO NOT delete the row — cleanup
+    /// is bulk via `close_editor` (slice 6).
+    #[tokio::test]
+    async fn run_command_port_tracker_shadow_writes_runcommand_row() {
+        use maestro_core::db::adapter::DbValue;
+        use maestro_core::db::work_items;
+
+        let db = crate::test_helpers::temp_db();
+        let _ = db
+            .adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-1', 'a', 'admin')",
+                Vec::<DbValue>::new(),
+            )
+            .await
+            .expect("seed user");
+        let _ = db
+            .adapter()
+            .execute(
+                "INSERT INTO work_items (\
+                    id, ticket_key, workspace_name, user_id, private, \
+                    started_manually, counts_toward_manual_cap, driver_started, \
+                    jira_available, state_kind, started_at, created_at, updated_at\
+                 ) VALUES (\
+                    'wf-rc', 'T-rc', 'ws', 'u-1', 0, \
+                    0, 0, 0, \
+                    0, 'pending', 100, 100, 100\
+                 )",
+                Vec::<DbValue>::new(),
+            )
+            .await
+            .expect("seed work_items");
+
+        let registry = PathTokenRegistry::new();
+        let run_cmds_map: crate::state::RunCommandsMap =
+            Arc::new(RwLock::new(HashMap::new()));
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        // The tracker filters events by parsing `step_name` as the
+        // cmd_index. Seed the run-commands map with a matching entry
+        // so the `forwarded_port` update inside the tracker lands.
+        {
+            let mut m = run_cmds_map.write().await;
+            m.insert(
+                "T-rc".into(),
+                vec![crate::state::ActiveRunCommand {
+                    cmd_index: 2,
+                    name: "dev".into(),
+                    scanner_cancel: CancellationToken::new(),
+                    forwarded_port: None,
+                }],
+            );
+        }
+
+        let handle = tokio::spawn(run_command_port_tracker(
+            "T-rc".into(),
+            2,
+            "test-user".into(),
+            "tok-rc-2".into(),
+            "/s/tok-rc-2/".into(),
+            run_cmds_map.clone(),
+            registry.clone(),
+            rx,
+            cancel.clone(),
+            Some("wf-rc".into()),
+            Some(db.clone()),
+        ));
+
+        // Helper to build the event with the right shape — note the
+        // tracker reads cmd_index from `step_name`, not from the
+        // forwarded_port tuple.
+        let mk_event = |kind: &str, cp: u16, hp: u16| WorkflowEvent {
+            event_type: kind.to_string(),
+            ticket_key: "T-rc".into(),
+            step_name: Some("2".into()),
+            forwarded_port: Some((cp, hp)),
+            ..Default::default()
+        };
+
+        tx.send(mk_event("run_command_port_forwarded", 5173, 19200))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        let rows = work_items::list_port_mappings(db.adapter(), "wf-rc")
+            .await
+            .expect("list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].container_port, 5173);
+        assert_eq!(rows[0].host_port, 19200);
+        assert_eq!(rows[0].kind, work_items::PortMappingKind::RunCommand);
+        assert_eq!(
+            rows[0].run_command_index,
+            Some(2),
+            "run_command_index distinguishes this row from editor / Dynamic rows"
+        );
+        assert_eq!(rows[0].path_token, "tok-rc-2");
+
+        // Unforward MUST NOT delete the row.
+        tx.send(mk_event("run_command_port_unforwarded", 5173, 19200))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let rows = work_items::list_port_mappings(db.adapter(), "wf-rc")
+            .await
+            .expect("list");
+        assert_eq!(
+            rows.len(),
+            1,
             "unforward keeps the row; close_editor bulk-deletes"
         );
 

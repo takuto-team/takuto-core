@@ -279,6 +279,11 @@ pub async fn start_run_command(
         }
     });
 
+    // Plan-07 step 4 slice 8: clone the work_item_id + db so the
+    // spawned tracker can shadow-upsert RunCommand port rows
+    // alongside the in-memory registry mutation.
+    let tracker_wi = id.clone();
+    let tracker_db = engine.engine.db().cloned();
     tokio::spawn(run_command_port_tracker(
         ticket_for_tracker,
         index,
@@ -289,6 +294,8 @@ pub async fn start_run_command(
         editor.path_token_registry.clone(),
         engine.engine.subscribe(),
         tracker_cancel,
+        Some(tracker_wi),
+        tracker_db,
     ));
 
     // Plan-07 step 4 slice 5: shadow-write the run-command lifecycle.
