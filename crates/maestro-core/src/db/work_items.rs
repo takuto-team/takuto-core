@@ -499,6 +499,36 @@ fn decode_work_item(r: &crate::db::DbRow) -> Result<WorkItemRow> {
 /// applied. Returns `Ok(None)` both when the row doesn't exist and when
 /// it exists but the caller can't see it — callers that need to
 /// distinguish "missing" from "forbidden" should fetch admin-side first.
+/// Plan-07 slice 11: focused getter for the three fields
+/// `require_workflow_access` consults, keyed by `ticket_key`. The
+/// route's path id is the ticket_key (matches the in-memory map
+/// key), not the row's `id` column (a UUID). We pick the
+/// most-recently started row when more than one matches — only one
+/// workflow is active per ticket_key at a time but historical rows
+/// from prior runs can accumulate.
+///
+/// Returns `None` when no row matches; caller falls back to the
+/// in-memory HashMap during the plan-07 transition window.
+pub async fn get_access_fields_by_ticket_key(
+    adapter: &DbAdapter,
+    ticket_key: &str,
+) -> Result<Option<(Option<String>, Option<String>, String)>> {
+    let row = adapter
+        .query_optional(
+            "SELECT user_id, repository_id, workspace_name \
+             FROM work_items WHERE ticket_key = ? \
+             ORDER BY started_at DESC LIMIT 1",
+            vec![DbValue::Text(ticket_key.to_string())],
+        )
+        .await?;
+    let Some(r) = row else { return Ok(None) };
+    Ok(Some((
+        r.get_text_opt(0)?,
+        r.get_text_opt(1)?,
+        r.get_text(2)?,
+    )))
+}
+
 pub async fn get_work_item(
     adapter: &DbAdapter,
     id: &str,
