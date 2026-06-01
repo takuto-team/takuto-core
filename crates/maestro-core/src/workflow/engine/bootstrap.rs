@@ -190,6 +190,7 @@ pub(super) async fn bootstrap_new_workflow(
             ticket_key,
             WorkflowState::Assigning,
             config,
+            db,
         )
         .await;
         let mut step_log = StepLog::new("Assign Ticket".to_string());
@@ -229,6 +230,7 @@ pub(super) async fn bootstrap_new_workflow(
             ticket_key,
             WorkflowState::RetrievingDetails,
             config,
+            db,
         )
         .await;
         let mut step_log = StepLog::new("Retrieve Details".to_string());
@@ -314,6 +316,7 @@ pub(super) async fn bootstrap_new_workflow(
         ticket_key,
         WorkflowState::CreatingWorktree,
         config,
+        db,
     )
     .await;
     check_cancelled(cancel_token)?;

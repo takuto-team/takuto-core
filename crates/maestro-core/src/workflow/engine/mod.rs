@@ -1444,4 +1444,104 @@ mod tests {
         assert_eq!(row.ticket_description.as_deref(), Some("a description"));
         assert!(!row.driver_started);
     }
+
+    /// Plan-07 step 4 slice 2 — `pause_workflow` must shadow-write the
+    /// new `Paused` state to the DB row. We exercise the engine's
+    /// `WorkflowTransitions` (where the inline shadow-write lives)
+    /// rather than the free `driver::transition` helper to cover the
+    /// path the dashboard pause button actually uses.
+    #[tokio::test]
+    async fn pause_workflow_shadow_writes_state_change() {
+        use crate::workflow::engine::transitions::WorkflowTransitions;
+        use crate::workflow::state::WorkflowState;
+
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn ExternalActions> =
+            Arc::new(crate::actions::dry_run::DryRunActions::new(
+                "origin".into(),
+                None,
+            ));
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let workflows_dir = std::env::temp_dir().join(format!(
+            "maestro-engine-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+        let db = Database::open_in_memory().expect("open in-memory db");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-1', 'a', 'admin')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+
+        let engine = WorkflowEngine::new_with_db(
+            config.clone(),
+            actions.clone(),
+            1,
+            jira_available.clone(),
+            TicketingSystem::None,
+            workflows_dir.clone(),
+            Some(db.clone()),
+        );
+
+        // Insert a workflow + put it in an active state so pause is legal.
+        let id = engine
+            .start_workflow(
+                "PAUSE-1".into(),
+                "Pause test".into(),
+                false,
+                None,
+                None,
+                Some("u-1".into()),
+                None,
+            )
+            .await
+            .expect("start_workflow");
+        {
+            let wf_arc = engine.workflows_arc();
+            let mut map = wf_arc.write().await;
+            let wf = map.get_mut("PAUSE-1").expect("present");
+            wf.state = WorkflowState::AddressingTicket { pass: 1 };
+        }
+
+        // Drive a pause through the dashboard-facing API.
+        let transitions = WorkflowTransitions::new(
+            engine.repository.clone(),
+            engine.event_bus.clone(),
+            actions,
+            config,
+            engine.agent_run_semaphore.clone(),
+            engine.suppress_cancelled_as_error.clone(),
+            jira_available,
+            workflows_dir,
+            Some(db.clone()),
+        );
+        transitions
+            .pause_workflow("PAUSE-1")
+            .await
+            .expect("pause_workflow");
+
+        // The DB row tracks the Paused state, and the JSON payload
+        // carries the `source_state` so the engine could restore on
+        // resume even from a cold-start DB read.
+        let row = crate::db::work_items::get_work_item(db.adapter(), &id, None, true)
+            .await
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(
+            row.state_kind,
+            crate::db::work_items::WorkItemStateKind::Paused
+        );
+        let payload = row.state_payload.expect("Paused carries source_state");
+        assert!(
+            payload.contains("\"Paused\""),
+            "payload must serialise the full WorkflowState; got: {payload}"
+        );
+        assert!(
+            payload.contains("\"AddressingTicket\""),
+            "payload must include the source state we paused from; got: {payload}"
+        );
+    }
 }

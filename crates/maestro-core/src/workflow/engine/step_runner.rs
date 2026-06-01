@@ -223,6 +223,7 @@ pub(super) async fn run_workflow_def_steps(
         None,  // no initial session id
         false, // not a snapshot resume
         false, // no report injection
+        db,
     )
     .await?;
 
@@ -237,7 +238,7 @@ pub(super) async fn run_workflow_def_steps(
             w.pr_url = Some(url.clone());
         }
     }
-    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config).await;
+    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config, db).await;
 
     Ok(())
 }
@@ -284,6 +285,8 @@ pub(super) async fn run_agent_step_sequence(
     // When true, each agent step prompt gets the report-generation injection suffix.
     // Pass `false` for the consolidation step (which already has its own dedicated prompt).
     inject_report: bool,
+    // Plan-07 step 4 slice 2: shadow-write state transitions into work_items.
+    db: Option<&Database>,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = initial_session_id;
@@ -327,6 +330,7 @@ pub(super) async fn run_agent_step_sequence(
                     outer,
                     &step_label,
                     config,
+                    db,
                 )
                 .await;
 

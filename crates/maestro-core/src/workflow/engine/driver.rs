@@ -303,6 +303,7 @@ pub(super) async fn transition_to_agent_step(
     pass: u8,
     step_label: &str,
     config: &Arc<RwLock<Config>>,
+    db: Option<&Database>,
 ) {
     info!(
         ticket = %ticket_key,
@@ -311,6 +312,10 @@ pub(super) async fn transition_to_agent_step(
         "Agent step (state + dashboard label)"
     );
 
+    // Snapshot the post-mutation Workflow shape for the shadow-persist
+    // pass — done inside the same lock-guard so we don't observe a
+    // mid-flight torn state between the in-memory write and the DB
+    // write.
     let updated = {
         let mut wf = workflows.write().await;
         if let Some(workflow) = wf.get_mut(ticket_key) {
@@ -321,12 +326,18 @@ pub(super) async fn transition_to_agent_step(
                 workflow.id.clone(),
                 workflow.status_display(),
                 workflow.user_id.clone(),
+                // Plan-07 step 4 slice 2: shadow-write inputs.
+                workflow.state.clone(),
+                workflow.current_step_label.clone(),
+                workflow.updated_at.timestamp(),
             ))
         } else {
             None
         }
     };
-    if let Some((id, display, owner_user_id)) = updated {
+    if let Some((id, display, owner_user_id, state, label, updated_at)) = updated {
+        shadow_persist_state_change(db, &id, &state, label.as_deref(), updated_at).await;
+        // `display` and `owner_user_id` flow into the WS event below.
         let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "work_item_updated".to_string(),
@@ -354,6 +365,7 @@ pub(super) async fn transition(
     ticket_key: &str,
     new_state: WorkflowState,
     config: &Arc<RwLock<Config>>,
+    db: Option<&Database>,
 ) {
     let state_name = new_state.display_name();
     info!(ticket = ticket_key, state = %state_name, "Transitioning workflow");
@@ -368,12 +380,17 @@ pub(super) async fn transition(
                 workflow.id.clone(),
                 workflow.status_display(),
                 workflow.user_id.clone(),
+                // Plan-07 step 4 slice 2: shadow-write inputs.
+                workflow.state.clone(),
+                workflow.updated_at.timestamp(),
             ))
         } else {
             None
         }
     };
-    if let Some((id, display, owner_user_id)) = updated {
+    if let Some((id, display, owner_user_id, state, updated_at)) = updated {
+        // `transition()` clears the step label, so pass None.
+        shadow_persist_state_change(db, &id, &state, None, updated_at).await;
         let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
             event_type: "work_item_updated".to_string(),
@@ -392,6 +409,46 @@ pub(super) async fn transition(
             user_id: owner_user_id,
             ..Default::default()
         });
+    }
+}
+
+/// Plan-07 step 4 slice 2 — best-effort shadow-write of a state
+/// transition into the `work_items` row.
+///
+/// Truth-of-record is the in-memory `HashMap<String, Workflow>` (the
+/// caller has already mutated it). This call exists so the DB row's
+/// `state_kind`, `state_payload`, `current_step_label`, and
+/// `updated_at` track the in-memory state.
+///
+/// Failures log at WARN and are swallowed — a flaky DB must not stall
+/// engine progress. The map mutation already happened; the row will
+/// catch up on the next transition.
+pub(crate) async fn shadow_persist_state_change(
+    db: Option<&Database>,
+    work_item_id: &str,
+    new_state: &WorkflowState,
+    current_step_label: Option<&str>,
+    updated_at_unix: i64,
+) {
+    let Some(db) = db else { return };
+    let (state_kind, state_payload) =
+        crate::workflow::engine::types::state_to_kind_and_payload(new_state);
+    if let Err(e) = crate::db::work_items::update_work_item_state(
+        db.adapter(),
+        work_item_id,
+        state_kind,
+        state_payload.as_deref(),
+        current_step_label,
+        updated_at_unix,
+    )
+    .await
+    {
+        tracing::warn!(
+            work_item_id,
+            state_kind = %state_kind.as_str(),
+            error = %e,
+            "Plan-07 shadow-write of work_items state failed (in-memory state is unaffected)"
+        );
     }
 }
 

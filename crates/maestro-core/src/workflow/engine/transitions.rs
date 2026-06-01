@@ -80,7 +80,14 @@ impl WorkflowTransitions {
     }
 
     pub async fn pause_workflow(&self, ticket_key: &str) -> Result<()> {
-        let (ticket_key_owned, workflow_id, owner_user_id) = {
+        let (
+            ticket_key_owned,
+            workflow_id,
+            owner_user_id,
+            updated_state,
+            updated_label,
+            updated_at,
+        ) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
@@ -114,8 +121,21 @@ impl WorkflowTransitions {
                 ticket_key.to_string(),
                 workflow.id.clone(),
                 workflow.user_id.clone(),
+                // Plan-07 step 4 slice 2: shadow-write inputs.
+                workflow.state.clone(),
+                workflow.current_step_label.clone(),
+                workflow.updated_at.timestamp(),
             )
         };
+        // Plan-07 step 4 slice 2: shadow-persist the new state.
+        super::driver::shadow_persist_state_change(
+            self.db.as_ref(),
+            &workflow_id,
+            &updated_state,
+            updated_label.as_deref(),
+            updated_at,
+        )
+        .await;
 
         // Force-remove any worker containers for this ticket.
         ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
@@ -144,7 +164,7 @@ impl WorkflowTransitions {
     pub async fn resume_workflow(&self, ticket_key: &str) -> Result<()> {
         use crate::workflow::definitions::{WorkflowDefRunState, discover_workflows};
 
-        let (running_defs, worktree_path, cancel_token) = {
+        let (running_defs, worktree_path, cancel_token, shadow_state) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
@@ -189,7 +209,15 @@ impl WorkflowTransitions {
                     .collect();
 
                 let wt = workflow.worktree_path.clone().filter(|p| p.exists());
-                (running, wt, workflow.cancel_token.clone())
+                // Plan-07 step 4 slice 2: capture shadow-write inputs
+                // before the lock drops.
+                let shadow = (
+                    workflow.id.clone(),
+                    workflow.state.clone(),
+                    workflow.current_step_label.clone(),
+                    workflow.updated_at.timestamp(),
+                );
+                (running, wt, workflow.cancel_token.clone(), shadow)
             } else {
                 return Err(ConfigError::InvalidWorkflowState {
                     op: "resume",
@@ -199,6 +227,16 @@ impl WorkflowTransitions {
                 .into());
             }
         };
+        // Plan-07 step 4 slice 2: shadow-persist the restored state.
+        let (sw_id, sw_state, sw_label, sw_ts) = shadow_state;
+        super::driver::shadow_persist_state_change(
+            self.db.as_ref(),
+            &sw_id,
+            &sw_state,
+            sw_label.as_deref(),
+            sw_ts,
+        )
+        .await;
 
         // Re-spawn drive_workflow_def for each def that was running when paused
         if running_defs.is_empty() {
@@ -309,7 +347,7 @@ impl WorkflowTransitions {
     }
 
     pub async fn stop_workflow(&self, ticket_key: &str) -> Result<()> {
-        let (ticket_key_owned, workflow_id, owner_user_id) = {
+        let (ticket_key_owned, workflow_id, owner_user_id, updated_at) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
@@ -327,8 +365,19 @@ impl WorkflowTransitions {
                 ticket_key.to_string(),
                 workflow.id.clone(),
                 workflow.user_id.clone(),
+                workflow.updated_at.timestamp(),
             )
         };
+
+        // Plan-07 step 4 slice 2: shadow-persist the Stopped state.
+        super::driver::shadow_persist_state_change(
+            self.db.as_ref(),
+            &workflow_id,
+            &WorkflowState::Stopped,
+            None,
+            updated_at,
+        )
+        .await;
 
         ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
 
@@ -441,7 +490,7 @@ impl WorkflowTransitions {
         use crate::workflow::definitions::WorkflowDefRunState;
 
         // Collect Error defs and restore the workflow state.
-        let error_defs: Vec<String> = {
+        let (error_defs, shadow) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
@@ -489,8 +538,24 @@ impl WorkflowTransitions {
             workflow.current_step_label = None;
             workflow.updated_at = Utc::now();
 
-            defs
+            // Plan-07 step 4 slice 2: capture shadow-write inputs.
+            let shadow = (
+                workflow.id.clone(),
+                workflow.state.clone(),
+                workflow.updated_at.timestamp(),
+            );
+            (defs, shadow)
         };
+        // Plan-07 step 4 slice 2: shadow-persist the Pending state.
+        let (sw_id, sw_state, sw_ts) = shadow;
+        super::driver::shadow_persist_state_change(
+            self.db.as_ref(),
+            &sw_id,
+            &sw_state,
+            None,
+            sw_ts,
+        )
+        .await;
 
         // Re-start each error def via start_workflow_def (handles bootstrap if needed).
         for def_name in error_defs {
