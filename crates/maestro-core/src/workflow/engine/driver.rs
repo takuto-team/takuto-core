@@ -452,6 +452,75 @@ pub(crate) async fn shadow_persist_state_change(
     }
 }
 
+/// Plan-07 step 4 slice 3: shadow-write a step's start into
+/// `work_item_steps`. Returns the row's auto-increment id so the
+/// matching end-write can target the right row.
+///
+/// Failures (and a `None` `db`) log at WARN and yield `None`. A
+/// missing id later turns the end-write into a no-op — the engine
+/// must never stall on the secondary store.
+pub(crate) async fn shadow_record_step_start(
+    db: Option<&Database>,
+    work_item_id: &str,
+    step_name: &str,
+    definition_filename: Option<&str>,
+    started_at_unix: i64,
+) -> Option<i64> {
+    let db = db?;
+    match crate::db::work_items::record_step_start(
+        db.adapter(),
+        work_item_id,
+        step_name,
+        definition_filename,
+        started_at_unix,
+    )
+    .await
+    {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(
+                work_item_id,
+                step_name,
+                error = %e,
+                "Plan-07 shadow-write of step start failed (engine progress unaffected)"
+            );
+            None
+        }
+    }
+}
+
+/// Plan-07 step 4 slice 3: shadow-write a step's end into
+/// `work_item_steps`. No-op when either `db` is `None` or the
+/// matching start-write didn't return a row id.
+pub(crate) async fn shadow_record_step_end(
+    db: Option<&Database>,
+    step_db_id: Option<i64>,
+    status: crate::db::work_items::StepStatus,
+    exit_code: Option<i32>,
+    error_message: Option<&str>,
+    ended_at_unix: i64,
+) {
+    let (Some(db), Some(step_db_id)) = (db, step_db_id) else {
+        return;
+    };
+    if let Err(e) = crate::db::work_items::record_step_end(
+        db.adapter(),
+        step_db_id,
+        status,
+        exit_code,
+        error_message,
+        ended_at_unix,
+    )
+    .await
+    {
+        tracing::warn!(
+            step_db_id,
+            error = %e,
+            "Plan-07 shadow-write of step end failed (engine progress unaffected)"
+        );
+    }
+}
+
 pub(super) async fn add_step_log(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     ticket_key: &str,

@@ -1544,4 +1544,117 @@ mod tests {
             "payload must include the source state we paused from; got: {payload}"
         );
     }
+
+    /// Plan-07 step 4 slice 3 — round-trip the step shadow helpers.
+    /// `shadow_record_step_start` returns an id which
+    /// `shadow_record_step_end` resolves to the same row; the final
+    /// row reflects the end-write's status, exit code, and timestamps.
+    #[tokio::test]
+    async fn shadow_record_step_start_and_end_round_trip() {
+        let db = Database::open_in_memory().expect("open in-memory db");
+        // Seed prerequisites: a user, then a work_items row owned by them.
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-1', 'a', 'admin')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+        db.adapter()
+            .execute(
+                "INSERT INTO work_items (\
+                    id, ticket_key, workspace_name, user_id, private, \
+                    started_manually, counts_toward_manual_cap, driver_started, \
+                    jira_available, state_kind, started_at, created_at, updated_at\
+                 ) VALUES (\
+                    'wf-step-1', 'TICK-1', 'ws', 'u-1', 0, \
+                    0, 0, 0, \
+                    0, 'pending', 100, 100, 100\
+                 )",
+                vec![],
+            )
+            .await
+            .expect("seed work_items");
+
+        // Start a step row.
+        let step_id = super::driver::shadow_record_step_start(
+            Some(&db),
+            "wf-step-1",
+            "build (run 1/1)",
+            Some("ship.toml"),
+            200,
+        )
+        .await
+        .expect("shadow_record_step_start must return an id");
+
+        let steps =
+            crate::db::work_items::list_steps(db.adapter(), "wf-step-1")
+                .await
+                .expect("list_steps");
+        assert_eq!(steps.len(), 1, "exactly one step row after start");
+        assert_eq!(steps[0].id, step_id);
+        assert_eq!(steps[0].name, "build (run 1/1)");
+        assert_eq!(steps[0].definition_filename.as_deref(), Some("ship.toml"));
+        assert_eq!(
+            steps[0].status,
+            crate::db::work_items::StepStatus::Running
+        );
+        assert_eq!(steps[0].started_at, 200);
+        assert_eq!(steps[0].ended_at, None);
+
+        // End it as Failed with an exit code + error.
+        super::driver::shadow_record_step_end(
+            Some(&db),
+            Some(step_id),
+            crate::db::work_items::StepStatus::Failed,
+            Some(7),
+            Some("cargo build returned 7"),
+            350,
+        )
+        .await;
+
+        let steps =
+            crate::db::work_items::list_steps(db.adapter(), "wf-step-1")
+                .await
+                .expect("list_steps");
+        assert_eq!(steps.len(), 1, "end must update — never insert");
+        assert_eq!(steps[0].id, step_id, "same row");
+        assert_eq!(
+            steps[0].status,
+            crate::db::work_items::StepStatus::Failed
+        );
+        assert_eq!(steps[0].exit_code, Some(7));
+        assert_eq!(
+            steps[0].error_message.as_deref(),
+            Some("cargo build returned 7")
+        );
+        assert_eq!(steps[0].ended_at, Some(350));
+    }
+
+    /// Plan-07 step 4 slice 3 — end-write is a no-op when `db` is
+    /// `None` OR when the start-write couldn't return an id. Confirms
+    /// that flaky DB conditions never throw from the engine path.
+    #[tokio::test]
+    async fn shadow_record_step_end_is_noop_when_id_missing() {
+        let db = Database::open_in_memory().expect("open in-memory db");
+        // Neither call must panic / error.
+        super::driver::shadow_record_step_end(
+            Some(&db),
+            None,
+            crate::db::work_items::StepStatus::Success,
+            None,
+            None,
+            0,
+        )
+        .await;
+        super::driver::shadow_record_step_end(
+            None,
+            Some(42),
+            crate::db::work_items::StepStatus::Success,
+            None,
+            None,
+            0,
+        )
+        .await;
+    }
 }

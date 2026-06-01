@@ -224,6 +224,7 @@ pub(super) async fn run_workflow_def_steps(
         false, // not a snapshot resume
         false, // no report injection
         db,
+        Some(def_name),
     )
     .await?;
 
@@ -287,6 +288,10 @@ pub(super) async fn run_agent_step_sequence(
     inject_report: bool,
     // Plan-07 step 4 slice 2: shadow-write state transitions into work_items.
     db: Option<&Database>,
+    // Plan-07 step 4 slice 3: definition filename recorded on every
+    // step row so the DB can attribute steps back to their workflow
+    // definition file. `None` when steps run outside a definition run.
+    def_filename: Option<&str>,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = initial_session_id;
@@ -345,6 +350,25 @@ pub(super) async fn run_agent_step_sequence(
 
                     let mut step_log = StepLog::new(step_label.clone());
                     broadcast_step_started(event_tx, ticket_key, &step_label, workflows).await;
+                    // Plan-07 step 4 slice 3: shadow-write step start.
+                    let step_db_id = {
+                        let work_item_id = {
+                            let wf = workflows.read().await;
+                            wf.get(ticket_key).map(|w| w.id.clone())
+                        };
+                        if let Some(work_item_id) = work_item_id {
+                            super::driver::shadow_record_step_start(
+                                db,
+                                &work_item_id,
+                                &step_label,
+                                def_filename,
+                                chrono::Utc::now().timestamp(),
+                            )
+                            .await
+                        } else {
+                            None
+                        }
+                    };
                     log_writer
                         .write_step(&step_label, "Starting command step")
                         .await;
@@ -479,6 +503,16 @@ pub(super) async fn run_agent_step_sequence(
                     }
 
                     if cmd_failed && !is_last_run_of_outer_cycle {
+                        // Plan-07 step 4 slice 3: shadow-write step end (failed).
+                        super::driver::shadow_record_step_end(
+                            db,
+                            step_db_id,
+                            crate::db::work_items::StepStatus::Failed,
+                            None,
+                            step_log.error.as_deref(),
+                            chrono::Utc::now().timestamp(),
+                        )
+                        .await;
                         add_step_log(workflows, ticket_key, step_log).await;
                         error!(
                             ticket = %ticket_key,
@@ -488,6 +522,33 @@ pub(super) async fn run_agent_step_sequence(
                         return Err(AgentError::CommandStepFailed.into());
                     }
 
+                    // Plan-07 step 4 slice 3: shadow-write step end. The
+                    // status reflects the in-memory StepLog so a
+                    // last-run-of-outer-cycle failure (which does NOT
+                    // abort the workflow) still records as Failed.
+                    let final_status = match step_log.status {
+                        crate::workflow::step::StepStatus::Success => {
+                            crate::db::work_items::StepStatus::Success
+                        }
+                        crate::workflow::step::StepStatus::Failed => {
+                            crate::db::work_items::StepStatus::Failed
+                        }
+                        crate::workflow::step::StepStatus::Skipped => {
+                            crate::db::work_items::StepStatus::Skipped
+                        }
+                        crate::workflow::step::StepStatus::Running => {
+                            crate::db::work_items::StepStatus::Running
+                        }
+                    };
+                    super::driver::shadow_record_step_end(
+                        db,
+                        step_db_id,
+                        final_status,
+                        None,
+                        step_log.error.as_deref(),
+                        chrono::Utc::now().timestamp(),
+                    )
+                    .await;
                     add_step_log(workflows, ticket_key, step_log).await;
                     broadcast_step_completed(event_tx, ticket_key, &step_label, workflows, config)
                         .await;
@@ -497,6 +558,25 @@ pub(super) async fn run_agent_step_sequence(
                 // ── Agent step execution ────────────────────────────────────
                 let mut step_log = StepLog::new(step_label.clone());
                 broadcast_step_started(event_tx, ticket_key, &step_label, workflows).await;
+                // Plan-07 step 4 slice 3: shadow-write step start.
+                let step_db_id = {
+                    let work_item_id = {
+                        let wf = workflows.read().await;
+                        wf.get(ticket_key).map(|w| w.id.clone())
+                    };
+                    if let Some(work_item_id) = work_item_id {
+                        super::driver::shadow_record_step_start(
+                            db,
+                            &work_item_id,
+                            &step_label,
+                            def_filename,
+                            chrono::Utc::now().timestamp(),
+                        )
+                        .await
+                    } else {
+                        None
+                    }
+                };
                 log_writer.write_step(&step_label, "Starting").await;
 
                 // Build system prompt from step skills (Claude --bare only).
@@ -665,6 +745,16 @@ pub(super) async fn run_agent_step_sequence(
                         );
                         step_log.fail(e.to_string());
                         if !is_last_run_of_outer_cycle {
+                            // Plan-07 step 4 slice 3: shadow-write step end (failed).
+                            super::driver::shadow_record_step_end(
+                                db,
+                                step_db_id,
+                                crate::db::work_items::StepStatus::Failed,
+                                None,
+                                step_log.error.as_deref(),
+                                chrono::Utc::now().timestamp(),
+                            )
+                            .await;
                             add_step_log(workflows, ticket_key, step_log).await;
                             error!(ticket = %ticket_key, "Agent step AI session failed — aborting workflow");
                             let hint: &'static str = match ai_stream_provider {
@@ -678,6 +768,33 @@ pub(super) async fn run_agent_step_sequence(
                     }
                 }
 
+                // Plan-07 step 4 slice 3: shadow-write step end. Map
+                // the in-memory StepLog status to the DB enum so a
+                // last-run-of-outer-cycle agent failure (which does
+                // NOT abort the workflow) still records as Failed.
+                let final_status = match step_log.status {
+                    crate::workflow::step::StepStatus::Success => {
+                        crate::db::work_items::StepStatus::Success
+                    }
+                    crate::workflow::step::StepStatus::Failed => {
+                        crate::db::work_items::StepStatus::Failed
+                    }
+                    crate::workflow::step::StepStatus::Skipped => {
+                        crate::db::work_items::StepStatus::Skipped
+                    }
+                    crate::workflow::step::StepStatus::Running => {
+                        crate::db::work_items::StepStatus::Running
+                    }
+                };
+                super::driver::shadow_record_step_end(
+                    db,
+                    step_db_id,
+                    final_status,
+                    None,
+                    step_log.error.as_deref(),
+                    chrono::Utc::now().timestamp(),
+                )
+                .await;
                 add_step_log(workflows, ticket_key, step_log).await;
                 broadcast_step_completed(event_tx, ticket_key, &step_label, workflows, config)
                     .await;
