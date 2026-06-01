@@ -351,6 +351,25 @@ pub async fn get_workflow(
     // is no longer a single "current workspace" — every workflow knows its
     // own repo.
     require_workflow_access(&engine, &auth_state, &auth, &id).await?;
+    // Plan-07 slice 14: read the scalar PR fields from the DB row
+    // when one exists. Hooks (`update_pr_url`, etc.) write straight
+    // to work_items, so the DB is the freshest source for these
+    // three. Engine-derived fields stay on the HashMap path.
+    let db_pr_state: Option<(Option<String>, bool, Option<String>)> =
+        if let Some(database) = auth_state.db.as_ref() {
+            match maestro_core::db::work_items::get_work_item_by_ticket_key(
+                database.adapter(),
+                &id,
+            )
+            .await
+            {
+                Ok(Some(row)) => Some((row.pr_url, row.pr_merged, row.branch_name)),
+                Ok(None) => None,
+                Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+            }
+        } else {
+            None
+        };
     let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
     let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
@@ -407,9 +426,23 @@ pub async fn get_workflow(
         state: w.status_display(),
         started_at: w.started_at.to_rfc3339(),
         updated_at: w.updated_at.to_rfc3339(),
-        branch_name: w.branch_name.clone(),
-        pr_url: w.pr_url.clone(),
-        pr_merged: w.pr_merged,
+        // Plan-07 slice 14: DB wins for these three when a row exists.
+        branch_name: match &db_pr_state {
+            Some((_, _, Some(b))) => b.clone(),
+            // DB row present but branch_name is NULL → DB is
+            // authoritative; report empty (matches the HashMap's
+            // empty-string default for unset).
+            Some(_) => String::new(),
+            None => w.branch_name.clone(),
+        },
+        pr_url: match &db_pr_state {
+            Some((db_pr, _, _)) => db_pr.clone(),
+            None => w.pr_url.clone(),
+        },
+        pr_merged: match &db_pr_state {
+            Some((_, db_merged, _)) => *db_merged,
+            None => w.pr_merged,
+        },
         steps_log: w.steps_log.clone(),
         error: extract_error(&w.state),
         terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
