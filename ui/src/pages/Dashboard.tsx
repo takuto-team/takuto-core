@@ -96,7 +96,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   const handleAddToDashboard = useCallback(
     async (description: string, summary: string, repositoryId: string) => {
       if (modals.modal.kind !== "detail") return;
-      if (!repositoryId) { showToast("Pick a repository before adding a workflow."); return; }
+      if (!repositoryId) { showToast("Pick a repository before adding a work item."); return; }
       const ticket = modals.modal.ticket;
       try {
         const res = await apiPost("/api/work-items/start-manual", {
@@ -108,13 +108,13 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         modals.close();
         fetchWorkflows();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Failed to add workflow");
+        showToast(e instanceof Error ? e.message : "Failed to add work item");
       }
     }, [modals, fetchWorkflows, showToast]);
 
   const handlePasteSubmit = useCallback(
     async (name: string, description: string, repositoryId: string) => {
-      if (!repositoryId) { showToast("Pick a repository before adding a workflow."); return; }
+      if (!repositoryId) { showToast("Pick a repository before adding a work item."); return; }
       try {
         const res = await apiPost("/api/work-items/start-manual", {
           ticket_key: name, ticket_summary: name || "Manual item",
@@ -124,7 +124,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         modals.close();
         fetchWorkflows();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Failed to add workflow");
+        showToast(e instanceof Error ? e.message : "Failed to add work item");
       }
     }, [modals, fetchWorkflows, showToast]);
 

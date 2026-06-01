@@ -42,7 +42,7 @@ export function PasteDescriptionModal({ onSubmit, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <h3 className="text-lg font-medium text-white">New Workflow</h3>
+          <h3 className="text-lg font-medium text-white">New Work Item</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 cursor-pointer">&times;</button>
         </div>
 
@@ -61,7 +61,7 @@ export function PasteDescriptionModal({ onSubmit, onClose }: Props) {
                 >
                   Add one from the My Repositories tab
                 </Link>{" "}
-                before creating a workflow.
+                before creating a work item.
               </div>
             ) : repos.length === 1 ? (
               <div className="text-sm text-gray-200 bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 font-mono">
@@ -83,7 +83,7 @@ export function PasteDescriptionModal({ onSubmit, onClose }: Props) {
           </div>
 
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Workflow name (optional)</label>
+            <label className="block text-xs text-gray-400 mb-1">Work item name (optional)</label>
             <input
               type="text"
               value={name}

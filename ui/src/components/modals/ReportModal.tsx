@@ -42,7 +42,7 @@ export function ReportModal({ workflow: w, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <h3 className="text-lg font-medium text-white">Workflow Report: {w.ticket_key}</h3>
+          <h3 className="text-lg font-medium text-white">Work Item Report: {w.ticket_key}</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 cursor-pointer text-xl">&times;</button>
         </div>
 

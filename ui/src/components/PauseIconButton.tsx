@@ -6,7 +6,7 @@ interface Props {
   title?: string;
 }
 
-export function PauseIconButton({ onClick, title = "Pause the workflow" }: Props) {
+export function PauseIconButton({ onClick, title = "Pause the work item" }: Props) {
   return (
     <button
       onClick={onClick}

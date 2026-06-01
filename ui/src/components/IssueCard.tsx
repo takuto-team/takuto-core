@@ -145,7 +145,7 @@ export function IssueCard({
   return (
     <>
       <div
-        className={`workflow-card border ${borderClass} transition-colors ${
+        className={`work-item-card border ${borderClass} transition-colors ${
           status.label === "Stopped" ? "opacity-60 hover:opacity-80" : ""
         } relative`}
       >
@@ -235,7 +235,7 @@ export function IssueCard({
                     <button
                       onClick={() => onReport(w.ticket_key)}
                       className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
-                      title="View workflow report"
+                      title="View work item report"
                     >
                       Show Report
                     </button>
@@ -332,7 +332,7 @@ export function IssueCard({
       {confirm && (
         <ConfirmModal
           title={confirm.label}
-          message={`Are you sure you want to ${confirm.action} workflow ${w.ticket_key}?`}
+          message={`Are you sure you want to ${confirm.action} work item ${w.ticket_key}?`}
           onConfirm={() => {
             setConfirm(null);
             withLoading(confirm.fn);

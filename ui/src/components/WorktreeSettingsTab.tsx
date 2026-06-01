@@ -127,7 +127,7 @@ export function WorktreeSettingsTab() {
         <h2 className="text-base font-semibold text-gray-300 mb-1">Worktree Settings</h2>
         <p className="text-sm text-gray-500">
           Per-workspace init commands (run before agent steps when a worktree is bootstrapped) and
-          run commands (buttons shown on your completed workflow cards). These settings are
+          run commands (buttons shown on your completed work item cards). These settings are
           private to your user account — every user manages their own.
         </p>
       </header>
@@ -180,7 +180,7 @@ export function WorktreeSettingsTab() {
                 <div>
                   <h4 className="text-sm font-semibold text-gray-200">Run commands</h4>
                   <p className="text-xs text-gray-500">
-                    Buttons shown on your completed workflow cards.
+                    Buttons shown on your completed work item cards.
                   </p>
                 </div>
                 <WorktreeRunCommandList

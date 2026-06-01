@@ -59,7 +59,7 @@ export function WorktreeRunCommandList({ commands, onChange, disabled }: Props) 
     <div className="space-y-3">
       {commands.length === 0 && (
         <p className="text-sm text-gray-500 italic">
-          No run commands. The workflow card will show no run-command buttons.
+          No run commands. The work item card will show no run-command buttons.
         </p>
       )}
       <ol className="space-y-3 list-none">

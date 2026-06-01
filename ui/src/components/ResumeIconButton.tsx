@@ -6,7 +6,7 @@ interface Props {
   title?: string;
 }
 
-export function ResumeIconButton({ onClick, title = "Resume workflow" }: Props) {
+export function ResumeIconButton({ onClick, title = "Resume work item" }: Props) {
   return (
     <button
       onClick={onClick}

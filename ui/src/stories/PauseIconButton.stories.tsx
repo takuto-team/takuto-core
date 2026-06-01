@@ -26,5 +26,5 @@ export const Default: Story = {
 };
 
 export const WithTitle: Story = {
-  args: { onClick: fn(), title: "Pause workflow" },
+  args: { onClick: fn(), title: "Pause work item" },
 };

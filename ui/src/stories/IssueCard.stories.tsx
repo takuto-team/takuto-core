@@ -170,7 +170,7 @@ export const Paused: Story = {
     terminalState: {
       stepName: "review",
       lines: [
-        { text: "Workflow paused by user.", stream: "stdout" },
+        { text: "Work item paused by user.", stream: "stdout" },
       ],
       completed: false,
     },
@@ -277,7 +277,7 @@ export const Stopped: Story = {
       progress_percent: 40,
       progress_steps_total: 5,
       terminal_lines: [
-        { text: "Workflow stopped by user.", stream: "stdout" },
+        { text: "Work item stopped by user.", stream: "stdout" },
       ],
       run_commands: [
         { index: 0, name: "Dev server", running: false, forwarded_port: null },
@@ -356,7 +356,7 @@ export const WithEditorOpen: Story = {
 };
 
 export const CompletedWithRunCommands: Story = {
-  name: "Completed (run commands + workflow defs)",
+  name: "Completed (run commands + work item defs)",
   args: {
     ...defaultProps,
     workflow: {

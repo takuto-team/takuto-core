@@ -621,10 +621,16 @@ mod tests {
 
         let alice_rows = list_for_user(&a, &alice).await.unwrap();
         assert_eq!(alice_rows.len(), 2);
-        let names: Vec<&str> = alice_rows.iter().map(|r| r.name.as_str()).collect();
-        // Most recently added is first (within the same second, ROWID DESC tie-break).
-        assert_eq!(names[0], "r2");
-        assert_eq!(names[1], "r1");
+        let names: std::collections::BTreeSet<&str> =
+            alice_rows.iter().map(|r| r.name.as_str()).collect();
+        // The primary sort is `added_at DESC`; r1 and r2 were inserted
+        // within the same second, so the order between them is the
+        // secondary sort (`ur.repository_id DESC` — alphanumeric on
+        // random UUIDs, NOT insertion order). Assert membership instead
+        // of position. Sub-second insertion-order determinism is a
+        // documented non-feature across the cross-backend cluster.
+        assert!(names.contains("r1"), "alice must see r1, got: {names:?}");
+        assert!(names.contains("r2"), "alice must see r2, got: {names:?}");
 
         let bob_rows = list_for_user(&a, &bob).await.unwrap();
         assert_eq!(bob_rows.len(), 1);

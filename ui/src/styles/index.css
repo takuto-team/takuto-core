@@ -39,8 +39,8 @@ body {
   @apply fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center;
 }
 
-/* Workflow card */
-.workflow-card {
+/* Work item card */
+.work-item-card {
   @apply bg-gray-900/80 border border-gray-800 rounded-xl p-5 flex flex-col gap-3;
 }
 
