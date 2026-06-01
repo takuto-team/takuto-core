@@ -153,6 +153,21 @@ impl WorkflowPersistence {
                 .await
                 .insert(ticket_key.clone(), wf);
 
+            // Plan-07 slice 15 (step-6 backfill): also shadow-write
+            // the restored workflow into work_items so the DB-first
+            // read paths (slices 11/12/13/14) see it without
+            // needing the HashMap fallback. Idempotent — on a
+            // duplicate (workspace, ticket_key) row the inner
+            // helper logs WARN and continues, so restarts of an
+            // already-backfilled install are safe.
+            {
+                let wf_arc = self.repository.inner_arc();
+                let wf_map = wf_arc.read().await;
+                if let Some(w) = wf_map.get(&ticket_key) {
+                    super::lifecycle::shadow_persist_work_item(db.as_ref(), w).await;
+                }
+            }
+
             // Terminal workflows (Done, Stopped, Error) are restored for dashboard visibility
             // but don't need a driver — they're idle until the user clicks an action (retry, delete, etc.).
             if is_terminal {

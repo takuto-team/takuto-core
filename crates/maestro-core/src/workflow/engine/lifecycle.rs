@@ -565,7 +565,7 @@ impl WorkflowLifecycle {
 /// Failures are logged at WARN and swallowed: a flaky DB must not
 /// block the dashboard or the poller. The work item is still in the
 /// map; operators will see it as usual.
-async fn shadow_persist_work_item(db: Option<&Database>, workflow: &Workflow) {
+pub(super) async fn shadow_persist_work_item(db: Option<&Database>, workflow: &Workflow) {
     let Some(db) = db else { return };
     let row = workflow.to_work_item_row();
     if let Err(e) = crate::db::work_items::insert_work_item(db.adapter(), &row).await {

@@ -1445,6 +1445,68 @@ mod tests {
         assert!(!row.driver_started);
     }
 
+    /// Plan-07 slice 15 (step-6 backfill) — `shadow_persist_work_item`
+    /// must be safe to call twice on the same `Workflow`. This is
+    /// the load-bearing claim of the restore-time backfill:
+    /// restarting an already-backfilled install must not produce a
+    /// hard error and must not create a duplicate row.
+    ///
+    /// The helper logs WARN on the second call (the UNIQUE index
+    /// on `(workspace_name, ticket_key)` rejects the duplicate) but
+    /// never panics or returns.
+    #[tokio::test]
+    async fn shadow_persist_work_item_is_idempotent_on_repeat_calls() {
+        use crate::workflow::engine::lifecycle::shadow_persist_work_item;
+
+        let db = Database::open_in_memory().expect("open in-memory db");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-1', 'a', 'admin')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+
+        // Build a workflow directly — no engine needed for this test.
+        let mut wf = Workflow::new(
+            "BACKFILL-1".into(),
+            "summary".into(),
+            false,
+            false,
+            TicketingSystem::None,
+            None,
+            "ws".into(),
+        );
+        wf.user_id = Some("u-1".into());
+
+        // First call — fresh insert.
+        shadow_persist_work_item(Some(&db), &wf).await;
+
+        let row1 = crate::db::work_items::get_work_item(db.adapter(), &wf.id, None, true)
+            .await
+            .expect("get_work_item")
+            .expect("row exists after first call");
+        assert_eq!(row1.ticket_key, "BACKFILL-1");
+
+        // Second call — must not panic, must not duplicate.
+        shadow_persist_work_item(Some(&db), &wf).await;
+
+        // Still exactly one row for this (workspace, ticket_key).
+        let rows = db
+            .adapter()
+            .query_all(
+                "SELECT id FROM work_items WHERE workspace_name = 'ws' AND ticket_key = 'BACKFILL-1'",
+                vec![],
+            )
+            .await
+            .expect("query rows");
+        assert_eq!(
+            rows.len(),
+            1,
+            "second shadow_persist_work_item call must NOT create a duplicate row"
+        );
+    }
+
     /// Plan-07 step 4 slice 2 — `pause_workflow` must shadow-write the
     /// new `Paused` state to the DB row. We exercise the engine's
     /// `WorkflowTransitions` (where the inline shadow-write lives)
