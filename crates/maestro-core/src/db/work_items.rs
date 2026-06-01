@@ -1169,6 +1169,80 @@ pub async fn delete_port_mapping(
     Ok(())
 }
 
+/// Delete every port mapping for a work item, regardless of kind.
+/// Used at editor close to wipe the editor + static + dynamic
+/// rows in one shot; cheaper than per-(port, kind) deletes and
+/// avoids leaking rows when a route handler forgot one.
+pub async fn delete_port_mappings_for_work_item(
+    adapter: &DbAdapter,
+    work_item_id: &str,
+) -> Result<()> {
+    adapter
+        .execute(
+            "DELETE FROM work_item_port_mappings WHERE work_item_id = ?",
+            vec![DbValue::Text(work_item_id.to_string())],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Plan-07 step 4 slice 6: shadow-write a port-mapping registration.
+/// Wraps [`upsert_port_mapping`] with the standard shadow contract:
+/// `None` `db` short-circuits, errors WARN and never propagate.
+#[allow(clippy::too_many_arguments)]
+pub async fn shadow_upsert_port_mapping(
+    db: Option<&crate::db::Database>,
+    work_item_id: &str,
+    container_port: i32,
+    host_port: i32,
+    proxy_url: &str,
+    path_token: &str,
+    kind: PortMappingKind,
+    run_command_index: Option<i32>,
+    created_at_unix: i64,
+) {
+    let Some(db) = db else { return };
+    if let Err(e) = upsert_port_mapping(
+        db.adapter(),
+        work_item_id,
+        container_port,
+        host_port,
+        proxy_url,
+        path_token,
+        kind,
+        run_command_index,
+        created_at_unix,
+    )
+    .await
+    {
+        tracing::warn!(
+            work_item_id,
+            container_port,
+            host_port,
+            kind = %kind.as_str(),
+            error = %e,
+            "Plan-07 shadow-write of port mapping upsert failed (route handler progress unaffected)"
+        );
+    }
+}
+
+/// Plan-07 step 4 slice 6: shadow-clean every port mapping for a
+/// work item. Used at editor close so the DB row mirrors the
+/// in-memory `path_token_registry` cleanup.
+pub async fn shadow_delete_port_mappings_for_work_item(
+    db: Option<&crate::db::Database>,
+    work_item_id: &str,
+) {
+    let Some(db) = db else { return };
+    if let Err(e) = delete_port_mappings_for_work_item(db.adapter(), work_item_id).await {
+        tracing::warn!(
+            work_item_id,
+            error = %e,
+            "Plan-07 shadow-clean of port mappings failed (route handler progress unaffected)"
+        );
+    }
+}
+
 /// List all port mappings for a work item.
 pub async fn list_port_mappings(
     adapter: &DbAdapter,
@@ -1871,6 +1945,71 @@ mod tests {
         assert!(rows[0].running);
         assert_eq!(rows[0].started_at, Some(900));
         assert_eq!(rows[0].ended_at, None);
+    }
+
+    /// Plan-07 step 4 slice 6 — `delete_port_mappings_for_work_item`
+    /// wipes every port mapping for a work item regardless of kind,
+    /// and is a silent no-op when none exist. Mirrors the contract
+    /// `shadow_delete_port_mappings_for_work_item` relies on at
+    /// `close_editor`.
+    #[tokio::test]
+    async fn delete_port_mappings_for_work_item_wipes_all_kinds() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-1", "alice").await;
+        insert_work_item(&a, &sample_row("wi-pm", "T-1", Some("u-1")))
+            .await
+            .unwrap();
+
+        // Bulk-delete on an empty table is a clean no-op.
+        delete_port_mappings_for_work_item(&a, "wi-pm")
+            .await
+            .unwrap();
+
+        // Seed 3 mappings of different kinds.
+        upsert_port_mapping(
+            &a, "wi-pm", 9100, 9100, "/s/tok-edit/", "tok-edit",
+            PortMappingKind::Editor, None, 100,
+        )
+        .await
+        .unwrap();
+        upsert_port_mapping(
+            &a, "wi-pm", 3000, 19100, "/s/tok-app/", "tok-app",
+            PortMappingKind::Dynamic, None, 110,
+        )
+        .await
+        .unwrap();
+        upsert_port_mapping(
+            &a, "wi-pm", 5173, 19101, "/s/tok-rc/", "tok-rc",
+            PortMappingKind::RunCommand, Some(0), 120,
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_port_mappings(&a, "wi-pm").await.unwrap().len(), 3);
+
+        // A second work-item's row must NOT be touched.
+        insert_work_item(&a, &sample_row("wi-other", "T-2", Some("u-1")))
+            .await
+            .unwrap();
+        upsert_port_mapping(
+            &a, "wi-other", 9100, 9100, "/s/keep/", "keep",
+            PortMappingKind::Editor, None, 130,
+        )
+        .await
+        .unwrap();
+
+        delete_port_mappings_for_work_item(&a, "wi-pm")
+            .await
+            .unwrap();
+
+        assert!(
+            list_port_mappings(&a, "wi-pm").await.unwrap().is_empty(),
+            "every row for wi-pm should be gone"
+        );
+        assert_eq!(
+            list_port_mappings(&a, "wi-other").await.unwrap().len(),
+            1,
+            "rows for other work-items must be preserved"
+        );
     }
 
     /// Plan-07 step 4 slice 5 — `finish_run_command_row` is a silent

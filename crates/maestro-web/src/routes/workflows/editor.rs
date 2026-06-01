@@ -151,6 +151,19 @@ pub async fn open_editor(
                 user_id: auth.user_id.clone(),
             }).await;
             let proxy_url = container::build_session_dynamic_port_url(&path_token);
+            // Plan-07 step 4 slice 6: shadow-write the static port row.
+            maestro_core::db::work_items::shadow_upsert_port_mapping(
+                engine.engine.db(),
+                &id,
+                *cp as i32,
+                *hp as i32,
+                &proxy_url,
+                &path_token,
+                maestro_core::db::work_items::PortMappingKind::Dynamic,
+                None,
+                chrono::Utc::now().timestamp(),
+            )
+            .await;
             entries.push(DynamicPortForward {
                 container_port: *cp,
                 host_port: *hp,
@@ -232,6 +245,27 @@ pub async fn open_editor(
                 },
             )
             .await;
+        // Plan-07 step 4 slice 6: shadow-write the editor port row.
+        // The editor container is a 1:1 Docker forward so
+        // `container_port == host_port == info.vscode_port`. The
+        // proxy URL is the path-prefixed reverse-proxy route the
+        // browser uses, NOT the localhost direct URL.
+        // Store the path-prefix base URL only; the connection-
+        // token and folder query string is regenerated per request
+        // and not part of the routing record.
+        let proxy_url = format!("/s/{path_token}/");
+        maestro_core::db::work_items::shadow_upsert_port_mapping(
+            engine.engine.db(),
+            &id,
+            info.vscode_port as i32,
+            info.vscode_port as i32,
+            &proxy_url,
+            &path_token,
+            maestro_core::db::work_items::PortMappingKind::Editor,
+            None,
+            chrono::Utc::now().timestamp(),
+        )
+        .await;
     }
     // Use the structured `folder` field from `EditorInfo` directly so the
     // path-prefixed proxy URL points at the same worktree path the editor
@@ -287,6 +321,15 @@ pub async fn close_editor(
     // files stay on disk for the container's final teardown read.
     container::stop_editor(&id).await;
     editor.editor_bundles.write().await.remove(&id);
+    // Plan-07 step 4 slice 6: shadow-clean every port mapping for
+    // this work_item. Done after stop_editor (and after the in-
+    // memory path-token registry was cleared above) so the DB
+    // mirrors the post-close state with no stale forward rows.
+    maestro_core::db::work_items::shadow_delete_port_mappings_for_work_item(
+        engine.engine.db(),
+        &id,
+    )
+    .await;
     StatusCode::OK
 }
 
