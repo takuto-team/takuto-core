@@ -917,6 +917,58 @@ pub async fn upsert_definition_run(
     Ok(())
 }
 
+/// Mark a (work-item, definition) pair as Running with `started_at`.
+/// Idempotent — re-running clears any prior `error_message` /
+/// `ended_at` so a fresh run looks fresh in the DB row even when the
+/// caller previously transitioned through Error.
+pub async fn start_definition_run(
+    adapter: &DbAdapter,
+    work_item_id: &str,
+    definition_filename: &str,
+    started_at: i64,
+) -> Result<()> {
+    upsert_definition_run(
+        adapter,
+        work_item_id,
+        definition_filename,
+        DefRunState::Running,
+        None,
+        Some(started_at),
+        None,
+    )
+    .await
+}
+
+/// Transition an existing (work-item, definition) row to its final
+/// state. UPDATE-only so we never overwrite `started_at` set by the
+/// matching [`start_definition_run`]; if no prior row exists, this is
+/// a silent no-op (0 rows affected). The shadow-write contract
+/// requires that a missing start row never break the engine.
+pub async fn finish_definition_run(
+    adapter: &DbAdapter,
+    work_item_id: &str,
+    definition_filename: &str,
+    state: DefRunState,
+    error_message: Option<&str>,
+    ended_at: i64,
+) -> Result<()> {
+    adapter
+        .execute(
+            "UPDATE work_item_definition_runs SET \
+                state = ?, error_message = ?, ended_at = ? \
+             WHERE work_item_id = ? AND definition_filename = ?",
+            vec![
+                DbValue::Text(state.as_str().to_string()),
+                DbValue::TextOpt(error_message.map(str::to_string)),
+                DbValue::I64(ended_at),
+                DbValue::Text(work_item_id.to_string()),
+                DbValue::Text(definition_filename.to_string()),
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
 /// List all definition runs for a work item.
 pub async fn list_definition_runs(
     adapter: &DbAdapter,

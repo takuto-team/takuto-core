@@ -144,6 +144,17 @@ pub(super) async fn drive_workflow_def(
                     w.updated_at = Utc::now();
                 }
             }
+            // Plan-07 step 4 slice 4: shadow-write Completed. UPDATE-only
+            // so we preserve the started_at written by start_workflow_def.
+            shadow_finish_def_run(
+                db.as_ref(),
+                &workflow_id,
+                &def_name,
+                crate::db::work_items::DefRunState::Completed,
+                None,
+                Utc::now().timestamp(),
+            )
+            .await;
 
             info!(ticket = %ticket_key, def = %def_name, "Workflow definition completed");
 
@@ -237,6 +248,16 @@ pub(super) async fn drive_workflow_def(
                     w.updated_at = Utc::now();
                 }
             }
+            // Plan-07 step 4 slice 4: shadow-write Error with the message.
+            shadow_finish_def_run(
+                db.as_ref(),
+                &workflow_id,
+                &def_name,
+                crate::db::work_items::DefRunState::Error,
+                Some(&e.to_string()),
+                Utc::now().timestamp(),
+            )
+            .await;
 
             let _ = event_tx.send(WorkflowEvent {
                 event_type: "work_item_updated".to_string(),
@@ -517,6 +538,68 @@ pub(crate) async fn shadow_record_step_end(
             step_db_id,
             error = %e,
             "Plan-07 shadow-write of step end failed (engine progress unaffected)"
+        );
+    }
+}
+
+/// Plan-07 step 4 slice 4: shadow-write the start of a definition
+/// run. Marks the (work_item, definition) row as Running with
+/// `started_at` set; clears any prior error / ended_at so retries
+/// look fresh. Failures (and `None` `db`) log at WARN and never
+/// propagate — the in-memory map remains the truth-of-record.
+pub(crate) async fn shadow_start_def_run(
+    db: Option<&Database>,
+    work_item_id: &str,
+    def_filename: &str,
+    started_at_unix: i64,
+) {
+    let Some(db) = db else { return };
+    if let Err(e) = crate::db::work_items::start_definition_run(
+        db.adapter(),
+        work_item_id,
+        def_filename,
+        started_at_unix,
+    )
+    .await
+    {
+        tracing::warn!(
+            work_item_id,
+            def_filename,
+            error = %e,
+            "Plan-07 shadow-write of def-run start failed (engine progress unaffected)"
+        );
+    }
+}
+
+/// Plan-07 step 4 slice 4: shadow-write the terminal state of a
+/// definition run. UPDATE-only: a missing row is a silent no-op so
+/// hot-start engines (where the start-write hadn't completed yet)
+/// can't surface this as an error path.
+pub(crate) async fn shadow_finish_def_run(
+    db: Option<&Database>,
+    work_item_id: &str,
+    def_filename: &str,
+    state: crate::db::work_items::DefRunState,
+    error_message: Option<&str>,
+    ended_at_unix: i64,
+) {
+    let Some(db) = db else { return };
+    if let Err(e) = crate::db::work_items::finish_definition_run(
+        db.adapter(),
+        work_item_id,
+        def_filename,
+        state,
+        error_message,
+        ended_at_unix,
+    )
+    .await
+    {
+        tracing::warn!(
+            work_item_id,
+            def_filename,
+            state = %state.as_str(),
+            error = %e,
+            "Plan-07 shadow-write of def-run finish failed (engine progress unaffected)"
         );
     }
 }

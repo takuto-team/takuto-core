@@ -1631,6 +1631,190 @@ mod tests {
         assert_eq!(steps[0].ended_at, Some(350));
     }
 
+    /// Plan-07 step 4 slice 4 — round-trip the def-run shadow
+    /// helpers. The start write places the row at Running with
+    /// `started_at` populated; subsequent finish writes flip the row
+    /// to Completed / Error while preserving the original
+    /// `started_at` (UPDATE-only contract).
+    #[tokio::test]
+    async fn shadow_def_run_start_and_finish_round_trip() {
+        let db = Database::open_in_memory().expect("open in-memory db");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-1', 'a', 'admin')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+        db.adapter()
+            .execute(
+                "INSERT INTO work_items (\
+                    id, ticket_key, workspace_name, user_id, private, \
+                    started_manually, counts_toward_manual_cap, driver_started, \
+                    jira_available, state_kind, started_at, created_at, updated_at\
+                 ) VALUES (\
+                    'wf-def-1', 'TICK-1', 'ws', 'u-1', 0, \
+                    0, 0, 0, \
+                    0, 'pending', 100, 100, 100\
+                 )",
+                vec![],
+            )
+            .await
+            .expect("seed work_items");
+
+        // Start: Running, started_at=200.
+        super::driver::shadow_start_def_run(
+            Some(&db),
+            "wf-def-1",
+            "ship.toml",
+            200,
+        )
+        .await;
+
+        let runs =
+            crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
+                .await
+                .expect("list");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].definition_filename, "ship.toml");
+        assert_eq!(
+            runs[0].state,
+            crate::db::work_items::DefRunState::Running
+        );
+        assert_eq!(runs[0].started_at, Some(200));
+        assert_eq!(runs[0].ended_at, None);
+        assert_eq!(runs[0].error_message, None);
+
+        // Finish: Completed at t=350. started_at must be preserved.
+        super::driver::shadow_finish_def_run(
+            Some(&db),
+            "wf-def-1",
+            "ship.toml",
+            crate::db::work_items::DefRunState::Completed,
+            None,
+            350,
+        )
+        .await;
+
+        let runs =
+            crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
+                .await
+                .expect("list");
+        assert_eq!(runs.len(), 1, "UPDATE-only — never duplicates");
+        assert_eq!(
+            runs[0].state,
+            crate::db::work_items::DefRunState::Completed
+        );
+        assert_eq!(
+            runs[0].started_at,
+            Some(200),
+            "finish must preserve start timestamp"
+        );
+        assert_eq!(runs[0].ended_at, Some(350));
+        assert_eq!(runs[0].error_message, None);
+
+        // Then flip the same row to Error with a message.
+        super::driver::shadow_finish_def_run(
+            Some(&db),
+            "wf-def-1",
+            "ship.toml",
+            crate::db::work_items::DefRunState::Error,
+            Some("agent crashed"),
+            500,
+        )
+        .await;
+
+        let runs =
+            crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
+                .await
+                .expect("list");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].state,
+            crate::db::work_items::DefRunState::Error
+        );
+        assert_eq!(runs[0].started_at, Some(200), "still preserved");
+        assert_eq!(runs[0].ended_at, Some(500));
+        assert_eq!(
+            runs[0].error_message.as_deref(),
+            Some("agent crashed")
+        );
+
+        // A second start_def_run (retry) MUST reset the row to
+        // Running with fresh timing and clear the prior error so
+        // observers see a clean fresh-run state.
+        super::driver::shadow_start_def_run(
+            Some(&db),
+            "wf-def-1",
+            "ship.toml",
+            900,
+        )
+        .await;
+        let runs =
+            crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
+                .await
+                .expect("list");
+        assert_eq!(
+            runs[0].state,
+            crate::db::work_items::DefRunState::Running
+        );
+        assert_eq!(runs[0].started_at, Some(900));
+        assert_eq!(runs[0].ended_at, None);
+        assert_eq!(runs[0].error_message, None);
+    }
+
+    /// Plan-07 step 4 slice 4 — `shadow_finish_def_run` is a silent
+    /// no-op when no prior start row exists. This is critical: the
+    /// engine writes Completed/Error after the in-memory mutation,
+    /// and a slow / failed start-write must not surface as an error
+    /// path at finish time.
+    #[tokio::test]
+    async fn shadow_finish_def_run_is_silent_noop_without_prior_start() {
+        let db = Database::open_in_memory().expect("open in-memory db");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-1', 'a', 'admin')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+        db.adapter()
+            .execute(
+                "INSERT INTO work_items (\
+                    id, ticket_key, workspace_name, user_id, private, \
+                    started_manually, counts_toward_manual_cap, driver_started, \
+                    jira_available, state_kind, started_at, created_at, updated_at\
+                 ) VALUES (\
+                    'wf-orphan', 'T-1', 'ws', 'u-1', 0, \
+                    0, 0, 0, \
+                    0, 'pending', 100, 100, 100\
+                 )",
+                vec![],
+            )
+            .await
+            .expect("seed work_items");
+
+        // Must not panic, must not insert.
+        super::driver::shadow_finish_def_run(
+            Some(&db),
+            "wf-orphan",
+            "ship.toml",
+            crate::db::work_items::DefRunState::Completed,
+            None,
+            42,
+        )
+        .await;
+
+        let runs =
+            crate::db::work_items::list_definition_runs(db.adapter(), "wf-orphan")
+                .await
+                .expect("list");
+        assert!(
+            runs.is_empty(),
+            "finish without start must not synthesise a row"
+        );
+    }
+
     /// Plan-07 step 4 slice 3 — end-write is a no-op when `db` is
     /// `None` OR when the start-write couldn't return an id. Confirms
     /// that flaky DB conditions never throw from the engine path.

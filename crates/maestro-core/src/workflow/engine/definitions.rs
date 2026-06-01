@@ -164,6 +164,17 @@ impl WorkflowDefinitionManager {
             )
         };
 
+        // Plan-07 step 4 slice 4: shadow-write the def-run Running
+        // state. Done before the broadcast so the DB row reflects the
+        // event payload that listeners are about to receive.
+        super::driver::shadow_start_def_run(
+            self.db.as_ref(),
+            &workflow_id,
+            def_name,
+            Utc::now().timestamp(),
+        )
+        .await;
+
         // Broadcast update event
         self.event_bus.send(WorkflowEvent {
             event_type: "work_item_updated".to_string(),
