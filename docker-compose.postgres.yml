@@ -1,0 +1,56 @@
+# PostgreSQL-backed Maestro deployment.
+#
+# Usage:
+#   make start BACKEND=postgres     — start Maestro + Postgres
+#   make stop  BACKEND=postgres
+#
+# Or directly:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# This overlay layers on top of the base docker-compose.yml (SQLite default).
+# It adds a `postgres` service and injects MAESTRO_DATABASE_CONNECTION into
+# the maestro container, which overrides `[database].connection` in
+# config.toml at startup. No other changes are needed in your config — the
+# base SQLite deployment remains untouched.
+#
+# Plan-11 §8 importer: when a legacy `maestro.db` exists in the maestro-data
+# volume AND the Postgres target has no `system_metadata.import_complete`
+# row, Maestro copies every user-data table into Postgres on first boot.
+# Subsequent restarts skip the import.
+
+services:
+  maestro:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Plan-11: MAESTRO_DATABASE_CONNECTION overrides [database].connection.
+      # The hostname `postgres` resolves via Docker DNS to the service below.
+      - MAESTRO_DATABASE_CONNECTION=postgres://${POSTGRES_USER:-maestro}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-maestro}
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-maestro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-maestro}
+    volumes:
+      - maestro-pg:/var/lib/postgresql/data
+    # Port not published by default — only maestro reaches it on the
+    # internal compose network. Uncomment for psql from the host.
+    # ports:
+    #   - "5432:5432"
+    healthcheck:
+      # `pg_isready` checks the server is accepting connections. The
+      # maestro startup probe (`SELECT 1` with a 5 s timeout) is gated
+      # by `[database].fail_fast` — without `condition: service_healthy`
+      # on the depends_on above, maestro can race ahead of pg's first
+      # accept() and abort with "Database backend unreachable".
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-maestro}", "-d", "${POSTGRES_DB:-maestro}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  maestro-pg:

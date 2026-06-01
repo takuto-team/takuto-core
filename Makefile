@@ -32,9 +32,22 @@ PROJECT_NAME := $(shell basename $(CURDIR))
 
 # Set DIND=0 to run without the Docker-in-Docker sidecar.
 DIND ?= 1
+# Set BACKEND=postgres or BACKEND=mariadb to layer the external-DB
+# overlay on top of the SQLite default. `BACKEND=sqlite` (the default)
+# uses the base compose file only — Maestro talks to its local
+# {data_dir}/maestro.db. Plan-11 §8 importer auto-copies that SQLite
+# file into the chosen external DB on first boot.
+BACKEND ?= sqlite
 COMPOSE_FILES := -f docker-compose.yml
 ifeq ($(DIND),1)
 COMPOSE_FILES += -f docker-compose.dind.yml
+endif
+ifeq ($(BACKEND),postgres)
+COMPOSE_FILES += -f docker-compose.postgres.yml
+else ifeq ($(BACKEND),mariadb)
+COMPOSE_FILES += -f docker-compose.mariadb.yml
+else ifneq ($(BACKEND),sqlite)
+$(error BACKEND must be one of: sqlite, postgres, mariadb (got '$(BACKEND)'))
 endif
 
 # Resolve the actual image name for the maestro service (compose may prefix with project name).
@@ -50,7 +63,11 @@ help: ## Show this help
 	@echo ""
 	@echo "  \033[1mMaestro — container management shortcuts\033[0m"
 	@echo ""
-	@echo "  \033[1mEngine\033[0m  defaults to docker — use PODMAN=1 to force podman"
+	@echo "  \033[1mEngine\033[0m   defaults to docker — use PODMAN=1 to force podman"
+	@echo "  \033[1mBackend\033[0m  defaults to sqlite — set BACKEND=postgres or BACKEND=mariadb"
+	@echo "           e.g. \033[36mmake start BACKEND=postgres\033[0m"
+	@echo "                \033[36mmake restart BACKEND=mariadb\033[0m"
+	@echo "                \033[36mmake logs BACKEND=postgres\033[0m"
 	@echo ""
 	@echo "  \033[1mTargets\033[0m"
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-16s\033[0m %s\n", $$1, $$2}'

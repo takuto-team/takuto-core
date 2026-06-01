@@ -778,13 +778,22 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             "WorkerSecretsBundle orphan sweep failed (continuing); old dirs may persist"
         );
     }
-    let (allow_auto_generate_secret_key, db_config) = {
+    let (allow_auto_generate_secret_key, mut db_config) = {
         let cfg = config.read().await;
         (
             cfg.general.allow_auto_generate_secret_key,
             cfg.database.clone(),
         )
     };
+    // Plan-11: `MAESTRO_DATABASE_CONNECTION` env var overrides
+    // `[database].connection` from config.toml. Useful for the
+    // docker-compose.{postgres,mariadb}.yml overlays which set the URL
+    // per-deployment without touching the user's checked-in config.
+    if let Ok(env_url) = std::env::var("MAESTRO_DATABASE_CONNECTION")
+        && !env_url.trim().is_empty()
+    {
+        db_config.connection = env_url;
+    }
     let db = match resolved_data_dir.as_deref() {
         Some(data_dir) => match maestro_core::db::Database::connect(
             data_dir,

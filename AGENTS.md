@@ -318,6 +318,14 @@ Supported schemes: `sqlite://`, `postgres://` / `postgresql://`, `mysql://` (cov
 
 Operators who want to **re-import** after a target wipe delete the `import_complete` row manually (one SQL statement against the target); there is no CLI to redo the import on purpose (footgun avoidance).
 
+**Env-var override:** `MAESTRO_DATABASE_CONNECTION` overrides `[database].connection` from `config.toml` at startup. Used by `docker-compose.postgres.yml` / `docker-compose.mariadb.yml` so the operator's checked-in config stays SQLite-default while the deployment overlay points at the sidecar DB.
+
+**Docker Compose variants:** the base `docker-compose.yml` runs Maestro against SQLite (default, unchanged). Two overlays add an external DB sidecar:
+- `docker-compose.postgres.yml` — adds a `postgres:16` service and sets `MAESTRO_DATABASE_CONNECTION=postgres://...@postgres:5432/...`
+- `docker-compose.mariadb.yml` — adds a `mariadb:11` service and sets `MAESTRO_DATABASE_CONNECTION=mysql://...@mariadb:3306/...`
+
+`make start BACKEND=postgres` (or `mariadb`) layers the right overlay; `BACKEND=sqlite` (default) uses the base file only. Every Make target (`start` / `stop` / `restart` / `logs` / `ps` / `build`) respects the variable.
+
 Every DAO and call site goes through the backend-agnostic `&DbAdapter` (wrapping sqlx pools); no production code path mentions `rusqlite::Connection` or per-backend pool types. The dialect-aware transform plus typed `DbValue` / `DbRow` accessors keep SQL portable across SQLite / PostgreSQL / MySQL.
 
 **CORS:** The Axum router applies an **explicit origin allowlist** (not `CorsLayer::permissive()`). Allowed origins come from **`[web] cors_origins`**; when that list is empty (default), the origin is auto-computed from `host`/`port` (e.g. `http://localhost:8080`). Methods are restricted to **GET, POST, PUT, DELETE, PATCH**; allowed headers to **Content-Type**; **`Access-Control-Allow-Credentials: true`** is set so session cookies work cross-origin. Requests from unlisted origins receive no `Access-Control-Allow-Origin` header. For deployments behind a reverse proxy or TLS terminator, set `cors_origins` to the external-facing origin (e.g. `["https://maestro.example.com"]`). This setting is **startup-only** — not patchable via `PUT /api/config`.
