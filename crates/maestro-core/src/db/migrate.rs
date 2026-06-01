@@ -639,9 +639,10 @@ mod tests {
     /// End-to-end smoke against an external backend: drives the entire
     /// production stack — `pool::connect` → `DbAdapter` →
     /// `apply_migrations` → DAOs (`users::create_user` /
-    /// `get_user_by_id` / `delete_user`). Catches issues the
-    /// migration-only tests above can't see: dialect-aware SQL bound
-    /// at the call sites, ON CONFLICT / RETURNING upserts, transaction
+    /// `get_user_by_id` / `list_admins` / `delete_user`). Catches issues
+    /// the migration-only tests above can't see: the `?` → `$N`
+    /// placeholder rewrite, dialect-aware ON CONFLICT upserts, the
+    /// `i64` ↔ INT4 widening on Postgres (`users.suspended`), transaction
     /// scopes, decode paths for every column type.
     ///
     /// Postgres only — MySQL has its own follow-up cluster.
@@ -668,6 +669,9 @@ mod tests {
             .await
             .expect("apply migrations against Postgres");
 
+        // Regular user round-trip — exercises the `?` → `$N` rewrite on
+        // INSERT and the i64-widening on `suspended` (INTEGER → INT4)
+        // through `get_user_by_id`.
         let username = format!("ci_smoke_{}", uuid::Uuid::new_v4());
         let created = users::create_user(&adapter, &username, UserRole::User)
             .await
@@ -680,11 +684,175 @@ mod tests {
 
         assert_eq!(fetched.username, username);
         assert_eq!(fetched.id, created.id);
+        assert!(!fetched.suspended, "freshly-created user must not be suspended");
+
+        // Admin round-trip plus `list_admins`. `list_admins` is the
+        // SELECT path the poller-owner resolver uses at boot — it was
+        // the first failure post-import before the i64-widening fix,
+        // because it reads `users.suspended` (INT4 on Postgres) via
+        // `get_i64`. Pin it here so any future regression of the
+        // widening fallback is caught.
+        let admin_username = format!("ci_smoke_admin_{}", uuid::Uuid::new_v4());
+        let admin = users::create_user(&adapter, &admin_username, UserRole::Admin)
+            .await
+            .expect("create admin");
+        let admins = users::list_admins(&adapter)
+            .await
+            .expect("list_admins after creating an admin (i64-widening of suspended)");
+        assert!(
+            admins.iter().any(|u| u.id == admin.id),
+            "list_admins must include the just-created admin (got {} admins): {:?}",
+            admins.len(),
+            admins.iter().map(|u| &u.username).collect::<Vec<_>>()
+        );
 
         // Best-effort cleanup so the DB stays tidy across reruns. A
         // failure here is non-fatal — we want the assertions above to
         // be the test's verdict, not the housekeeping.
         let _ = users::delete_user(&adapter, &created.id).await;
+        let _ = users::delete_user(&adapter, &admin.id).await;
+    }
+
+    /// Importer round-trip against a real Postgres target. Catches
+    /// importer-specific bugs the simple CRUD smoke doesn't reach:
+    ///
+    ///   - NULL TEXT cells must arrive as SQL NULL on the target
+    ///     (not as the empty string). Before the
+    ///     `ValueRef::is_null()` check, NULL `created_by` would write
+    ///     `''`, then trip the FK constraint.
+    ///   - Within a single SQL string, mixing NULL and non-NULL bind
+    ///     types would pin sqlx-postgres's prepared-statement parameter
+    ///     types on first call and reject the second. The fix inlines
+    ///     `NULL` literals into per-row SQL; this test exercises both
+    ///     a NULL-FK row and a non-NULL-FK row in the same table so
+    ///     the bug would re-surface immediately if anyone reverts.
+    ///
+    /// The test cleans every importer-touched table on entry so it's
+    /// re-runnable against the same Postgres instance.
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL=postgres://..."]
+    async fn postgres_importer_handles_null_and_non_null_fks() {
+        use crate::db::adapter::DbAdapter;
+        use crate::db::models::UserRole;
+        use crate::db::{importer, pool, repositories, users, DbValue};
+
+        let url = std::env::var("DATABASE_URL")
+            .expect("set DATABASE_URL=postgres://... to run this test");
+
+        let backend_pool = pool::connect(&url, &pool::PoolTuning::default())
+            .await
+            .expect("connect");
+        let target = DbAdapter::new(backend_pool);
+        super::apply_migrations(&target).await.expect("migrate target");
+
+        // Wipe importer-touched tables so the test starts from zero
+        // and is re-runnable. `TRUNCATE ... RESTART IDENTITY CASCADE`
+        // resets the autoincrement counters and cascades through every
+        // FK. `system_metadata` carries the `import_complete` marker
+        // and must go too.
+        target
+            .execute(
+                "TRUNCATE \
+                    users, credentials, recovery_codes, sessions, login_attempts, \
+                    container_users, user_worktree_commands, repositories, \
+                    user_repositories, user_provider_credentials, \
+                    user_github_credentials, credential_audit, onboarding_state, \
+                    system_metadata \
+                 RESTART IDENTITY CASCADE",
+                vec![],
+            )
+            .await
+            .expect("wipe target tables");
+
+        // Build a source SQLite Database with two users and two
+        // repositories — one with `created_by = NULL`, one with a
+        // valid FK to the admin.
+        let src_tmp = tempfile::tempdir().expect("source tempdir");
+        let source = crate::db::Database::open(src_tmp.path(), true)
+            .expect("open source SQLite");
+        let admin = users::create_user(source.adapter(), "ci_imp_admin", UserRole::Admin)
+            .await
+            .expect("seed admin");
+        users::create_user(source.adapter(), "ci_imp_alice", UserRole::User)
+            .await
+            .expect("seed alice");
+        let null_fk_id = repositories::upsert(
+            source.adapter(),
+            "ci-imp-null-fk",
+            None,
+            "/tmp/ci-imp-null-fk",
+            "main",
+            None, // <-- NULL created_by, the bug-3/4 trigger
+        )
+        .await
+        .expect("seed null-FK repo");
+        let valid_fk_id = repositories::upsert(
+            source.adapter(),
+            "ci-imp-valid-fk",
+            None,
+            "/tmp/ci-imp-valid-fk",
+            "main",
+            Some(&admin.id),
+        )
+        .await
+        .expect("seed valid-FK repo");
+
+        // Run the importer.
+        let copied = importer::import_from_sqlite(src_tmp.path(), &target)
+            .await
+            .expect("importer must succeed against Postgres target");
+        assert!(copied >= 4, "expected ≥ 4 rows imported (2 users + 2 repos), got {copied}");
+
+        // Marker was set.
+        assert!(
+            importer::import_already_complete(&target).await.unwrap(),
+            "system_metadata.import_complete must be set after a successful import"
+        );
+
+        // Both users round-trip.
+        let admins_on_target = users::list_admins(&target)
+            .await
+            .expect("list_admins on target after import");
+        assert!(
+            admins_on_target.iter().any(|u| u.username == "ci_imp_admin"),
+            "imported admin must show up in list_admins: {:?}",
+            admins_on_target.iter().map(|u| &u.username).collect::<Vec<_>>()
+        );
+
+        // The NULL-FK repo arrived with NULL (not "") in created_by —
+        // i.e. no junk empty-string FK that would have tripped on the
+        // way in.
+        let null_fk_created_by: Option<String> = {
+            let row = target
+                .query_one(
+                    "SELECT created_by FROM repositories WHERE id = ?",
+                    vec![DbValue::Text(null_fk_id.clone())],
+                )
+                .await
+                .expect("read null-FK repo");
+            row.get_text_opt(0).expect("decode created_by")
+        };
+        assert!(
+            null_fk_created_by.is_none(),
+            "NULL-FK repo's created_by must arrive as NULL, got: {null_fk_created_by:?}"
+        );
+
+        // The valid-FK repo arrived with the right user id.
+        let valid_fk_created_by: Option<String> = {
+            let row = target
+                .query_one(
+                    "SELECT created_by FROM repositories WHERE id = ?",
+                    vec![DbValue::Text(valid_fk_id.clone())],
+                )
+                .await
+                .expect("read valid-FK repo");
+            row.get_text_opt(0).expect("decode created_by")
+        };
+        assert_eq!(
+            valid_fk_created_by.as_deref(),
+            Some(admin.id.as_str()),
+            "valid-FK repo must keep its created_by reference"
+        );
     }
 
     /// End-to-end smoke against a real MySQL/MariaDB service container.
