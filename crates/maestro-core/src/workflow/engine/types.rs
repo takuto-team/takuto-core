@@ -255,6 +255,10 @@ impl Workflow {
             ticket_key: self.ticket_key.clone(),
             workspace_name: self.workspace_name.clone(),
             user_id: self.user_id.clone(),
+            // Plan-07 slice 10: shadow-write the repo association so
+            // the DB row carries everything `require_workflow_access`
+            // consults.
+            repository_id: self.repository_id.clone(),
             // `private` lives in plan-03's visibility model; default to
             // public on every fresh insert until that flag lands on
             // Workflow.

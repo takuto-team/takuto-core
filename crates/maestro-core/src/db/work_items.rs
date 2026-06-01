@@ -248,6 +248,10 @@ pub struct WorkItemRow {
     pub ticket_key: String,
     pub workspace_name: String,
     pub user_id: Option<String>,
+    // Plan-07 slice 10: repo association. Nullable to match
+    // `Workflow::repository_id: Option<String>` — pre-Plan-10
+    // workflows have no repo association.
+    pub repository_id: Option<String>,
     pub private: bool,
     pub started_manually: bool,
     pub counts_toward_manual_cap: bool,
@@ -446,7 +450,7 @@ const SELECT_WORK_ITEM: &str = "SELECT \
     ticket_summary, ticket_description, ticket_type, ticket_url, acceptance_criteria, \
     base_branch, branch_name, worktree_path, pr_url, pr_merged, \
     last_session_id, state_kind, state_payload, current_step_label, \
-    created_at, started_at, updated_at \
+    created_at, started_at, updated_at, repository_id \
     FROM work_items";
 
 fn decode_work_item(r: &crate::db::DbRow) -> Result<WorkItemRow> {
@@ -463,6 +467,9 @@ fn decode_work_item(r: &crate::db::DbRow) -> Result<WorkItemRow> {
         ticket_key: r.get_text(1)?,
         workspace_name: r.get_text(2)?,
         user_id: r.get_text_opt(3)?,
+        // Plan-07 slice 10: appended at column 26 to keep the
+        // pre-existing positional indexes stable.
+        repository_id: r.get_text_opt(26)?,
         private: r.get_i64(4)? != 0,
         started_manually: r.get_i64(5)? != 0,
         counts_toward_manual_cap: r.get_i64(6)? != 0,
@@ -608,8 +615,8 @@ pub async fn insert_work_item(adapter: &DbAdapter, row: &WorkItemRow) -> Result<
                 ticket_summary, ticket_description, ticket_type, ticket_url, acceptance_criteria, \
                 base_branch, branch_name, worktree_path, pr_url, pr_merged, \
                 last_session_id, state_kind, state_payload, current_step_label, \
-                created_at, started_at, updated_at\
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                created_at, started_at, updated_at, repository_id\
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             vec![
                 DbValue::Text(row.id.clone()),
                 DbValue::Text(row.ticket_key.clone()),
@@ -637,6 +644,7 @@ pub async fn insert_work_item(adapter: &DbAdapter, row: &WorkItemRow) -> Result<
                 DbValue::I64(row.created_at),
                 DbValue::I64(row.started_at),
                 DbValue::I64(row.updated_at),
+                DbValue::TextOpt(row.repository_id.clone()),
             ],
         )
         .await?;
@@ -1490,6 +1498,7 @@ mod tests {
             ticket_key: ticket.to_string(),
             workspace_name: "demo".to_string(),
             user_id: owner.map(str::to_string),
+            repository_id: None,
             private: false,
             started_manually: false,
             counts_toward_manual_cap: false,
@@ -1945,6 +1954,37 @@ mod tests {
         assert!(rows[0].running);
         assert_eq!(rows[0].started_at, Some(900));
         assert_eq!(rows[0].ended_at, None);
+    }
+
+    /// Plan-07 slice 10 — `repository_id` round-trips through
+    /// insert + decode. Both Some and None must survive intact;
+    /// the column is the sole input to the upcoming
+    /// `require_workflow_access` cutover, so a silent loss here
+    /// would defeat that whole slice.
+    #[tokio::test]
+    async fn work_item_repository_id_round_trips_insert_and_get() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-1", "alice").await;
+
+        // Row WITH a repo association.
+        let mut with_repo = sample_row("wf-with", "T-1", Some("u-1"));
+        with_repo.repository_id = Some("repo-123".into());
+        insert_work_item(&a, &with_repo).await.unwrap();
+
+        let got = get_work_item(&a, "wf-with", Some("u-1"), false)
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(got.repository_id.as_deref(), Some("repo-123"));
+
+        // Row WITHOUT a repo association (legacy / pre-Plan-10).
+        let without_repo = sample_row("wf-without", "T-2", Some("u-1"));
+        insert_work_item(&a, &without_repo).await.unwrap();
+        let got = get_work_item(&a, "wf-without", Some("u-1"), false)
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(got.repository_id, None);
     }
 
     /// Plan-07 step 4 slice 6 — `delete_port_mappings_for_work_item`

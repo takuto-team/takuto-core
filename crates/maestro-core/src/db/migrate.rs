@@ -97,6 +97,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "work_items_and_logs",
         sql: include_str!("../../migrations/20260117000001_work_items_and_logs.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_118_000_001,
+        description: "work_items_repository_id",
+        sql: include_str!("../../migrations/20260118000001_work_items_repository_id.sql"),
+    },
 ];
 
 /// A `sqlx::migrate::MigrationSource` impl that resolves the embedded
@@ -477,9 +482,10 @@ mod tests {
     #[test]
     fn embedded_migration_count() {
         // V1..V6 from the legacy schema.rs port (cluster Schema), V7
-        // = plan-11 importer's system_metadata, V8 = plan-07 work_items.
+        // = plan-11 importer's system_metadata, V8 = plan-07 work_items,
+        // V9 = plan-07 slice 10 (repository_id on work_items).
         // Bump when adding new migrations.
-        assert_eq!(MIGRATIONS.len(), 8);
+        assert_eq!(MIGRATIONS.len(), 9);
     }
 
     #[test]
@@ -591,8 +597,8 @@ mod tests {
                 .await
                 .expect("count rows");
         assert_eq!(
-            count.0, 8,
-            "expected 8 applied migrations recorded by sqlx, got {}",
+            count.0, 9,
+            "expected 9 applied migrations recorded by sqlx, got {}",
             count.0
         );
     }
