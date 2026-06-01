@@ -247,26 +247,89 @@ pub async fn list_workflows(
 }
 
 /// Per-user workflow counts for the dashboard summary bar.
+/// Plan-07 slice 13 — counts come from a DB GROUP-BY when a row
+/// exists for a given ticket_key, falling back to the HashMap for
+/// pre-plan-07 workflows that have not yet been backfilled. The two
+/// sources are merged by ticket_key (DB wins) so the same workflow
+/// is never double-counted during the transition.
 pub async fn workflow_counts(
     State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Json<WorkflowCountsResponse> {
-    let wf_arc = engine.engine.workflows_arc();
-    let workflows = wf_arc.read().await;
+    use std::collections::HashMap;
+    use maestro_core::db::work_items::WorkItemStateKind;
+
+    let mut counted: HashMap<String, WorkItemStateKind> = HashMap::new();
+
+    // ── DB primary ─────────────────────────────────────────────
+    if let Some(database) = auth_state.db.as_ref()
+        && let Ok(rows) = maestro_core::db::work_items::list_user_state_kinds(
+            database.adapter(),
+            &auth.user_id,
+        )
+        .await
+    {
+        for (ticket_key, kind) in rows {
+            counted.insert(ticket_key, kind);
+        }
+    }
+
+    // ── HashMap fallback: only entries the DB didn't already
+    //    cover. Pre-plan-07 workflows still live only in memory.
+    {
+        let wf_arc = engine.engine.workflows_arc();
+        let workflows = wf_arc.read().await;
+        for w in workflows.values() {
+            if w.user_id.as_deref() != Some(&auth.user_id) {
+                continue;
+            }
+            if counted.contains_key(&w.ticket_key) {
+                continue;
+            }
+            let kind = match &w.state {
+                WorkflowState::Pending => WorkItemStateKind::Pending,
+                WorkflowState::Assigning => WorkItemStateKind::Assigning,
+                WorkflowState::RetrievingDetails => WorkItemStateKind::RetrievingDetails,
+                WorkflowState::CreatingWorktree => WorkItemStateKind::CreatingWorktree,
+                WorkflowState::AddressingTicket { .. } => WorkItemStateKind::AddressingTicket,
+                WorkflowState::AddressingPrComments { .. } => {
+                    WorkItemStateKind::AddressingPrComments
+                }
+                WorkflowState::MergingBaseBranch { .. } => WorkItemStateKind::MergingBaseBranch,
+                WorkflowState::Reviewing => WorkItemStateKind::Reviewing,
+                WorkflowState::CreatingPR => WorkItemStateKind::CreatingPr,
+                WorkflowState::Done => WorkItemStateKind::Done,
+                WorkflowState::Stopped => WorkItemStateKind::Stopped,
+                WorkflowState::Error { .. } => WorkItemStateKind::Error,
+                WorkflowState::Paused { .. } => WorkItemStateKind::Paused,
+            };
+            counted.insert(w.ticket_key.clone(), kind);
+        }
+    }
+
     let mut running = 0u32;
     let mut completed = 0u32;
     let mut errors = 0u32;
     let mut paused = 0u32;
-    for w in workflows.values() {
-        if w.user_id.as_deref() != Some(&auth.user_id) {
-            continue;
-        }
-        match &w.state {
-            WorkflowState::Done => completed += 1,
-            WorkflowState::Error { .. } | WorkflowState::Stopped => errors += 1,
-            WorkflowState::Paused { .. } => paused += 1,
-            WorkflowState::Pending => {} // Not yet running — don't count
-            _ => running += 1,
+    for kind in counted.values() {
+        match kind {
+            WorkItemStateKind::Done => completed += 1,
+            WorkItemStateKind::Error | WorkItemStateKind::Stopped => errors += 1,
+            WorkItemStateKind::Paused => paused += 1,
+            // Pending hasn't started yet — don't count, matching
+            // the legacy HashMap-only behaviour.
+            WorkItemStateKind::Pending => {}
+            // Every active driver state counts as "running" from
+            // the dashboard's perspective.
+            WorkItemStateKind::Assigning
+            | WorkItemStateKind::RetrievingDetails
+            | WorkItemStateKind::CreatingWorktree
+            | WorkItemStateKind::AddressingTicket
+            | WorkItemStateKind::AddressingPrComments
+            | WorkItemStateKind::MergingBaseBranch
+            | WorkItemStateKind::Reviewing
+            | WorkItemStateKind::CreatingPr => running += 1,
         }
     }
     Json(WorkflowCountsResponse { running, completed, errors, paused })

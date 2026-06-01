@@ -529,6 +529,44 @@ pub async fn get_access_fields_by_ticket_key(
     )))
 }
 
+/// Plan-07 slice 13: project (ticket_key, state_kind) for every
+/// work item owned by `user_id`. Used by `workflow_counts` to
+/// aggregate by state without pulling full rows.
+///
+/// Returns one entry per ticket_key — when historical duplicates
+/// exist, the most-recently-started one wins. This matches the
+/// in-memory HashMap's one-row-per-ticket-key invariant so the
+/// HashMap fallback merges cleanly.
+pub async fn list_user_state_kinds(
+    adapter: &DbAdapter,
+    user_id: &str,
+) -> Result<Vec<(String, WorkItemStateKind)>> {
+    let rows = adapter
+        .query_all(
+            "SELECT ticket_key, state_kind FROM work_items wi \
+             WHERE wi.user_id = ? AND wi.started_at = ( \
+                 SELECT MAX(wi2.started_at) FROM work_items wi2 \
+                 WHERE wi2.ticket_key = wi.ticket_key AND wi2.user_id = wi.user_id \
+             )",
+            vec![DbValue::Text(user_id.to_string())],
+        )
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let ticket_key = r.get_text(0)?;
+        let state_s = r.get_text(1)?;
+        let state_kind = WorkItemStateKind::from_str(&state_s).map_err(|e| {
+            crate::error::MaestroError::Db(crate::db::DbError::Adapter(
+                crate::db::adapter::DbError::Sqlx {
+                    source: sqlx::Error::Configuration(e.into()),
+                },
+            ))
+        })?;
+        out.push((ticket_key, state_kind));
+    }
+    Ok(out)
+}
+
 /// Plan-07 slice 12: full-row fetch keyed by ticket_key. No
 /// visibility filter — callers must run their own policy check
 /// (the route layer's `require_workflow_access` already does so as
