@@ -313,14 +313,6 @@ async fn copy_table(
         .await
         .map_err(|source| ImporterError::Read { table, source })?;
 
-    let placeholders = vec!["?"; columns.len()].join(", ");
-    let insert_sql = format!(
-        "INSERT INTO {} ({}) VALUES ({})",
-        table,
-        columns.join(", "),
-        placeholders
-    );
-
     let to_sqlx = |e: super::adapter::DbError| match e {
         super::adapter::DbError::Sqlx { source } => source,
         other => sqlx::Error::Configuration(other.to_string().into()),
@@ -333,7 +325,32 @@ async fn copy_table(
         for i in 0..column_count {
             values.push(sqlite_row_to_db_value(&row, i, table)?);
         }
-        tx.execute(&insert_sql, values).await.map_err(|e| {
+        // Build per-row SQL with NULLs inlined as literal `NULL` and
+        // non-NULL values as `?` placeholders. sqlx-postgres caches the
+        // prepared statement per SQL string and pins parameter types
+        // on first use — binding `Option<i32>::None` to a varchar
+        // column on row 0 would pin `$N` to INT4 and reject the Text
+        // bind on row 1. Inlining `NULL` keeps the cached statement's
+        // bind types consistent across calls (only the columns that
+        // are non-NULL ever get bound, and their types are uniform per
+        // column over the source data).
+        let mut placeholders = Vec::with_capacity(column_count);
+        let mut bind_values: Vec<DbValue> = Vec::with_capacity(column_count);
+        for v in values {
+            if matches!(v, DbValue::Null) {
+                placeholders.push("NULL");
+            } else {
+                placeholders.push("?");
+                bind_values.push(v);
+            }
+        }
+        let insert_sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            table,
+            columns.join(", "),
+            placeholders.join(", ")
+        );
+        tx.execute(&insert_sql, bind_values).await.map_err(|e| {
             ImporterError::Write {
                 table,
                 row: count,
@@ -357,14 +374,23 @@ fn sqlite_row_to_db_value(
     table: &'static str,
 ) -> Result<DbValue, ImporterError> {
     use sqlx::TypeInfo;
+    use sqlx::ValueRef;
     let value_ref = row
         .try_get_raw(idx)
         .map_err(|source| ImporterError::Read { table, source })?;
-    let ti = sqlx::ValueRef::type_info(&value_ref);
+    // Runtime NULL check FIRST — `SqliteTypeInfo::name()` returns the
+    // declared *column* type when the actual value is NULL, so dispatch
+    // on `name()` alone routes NULL values into the TEXT/INTEGER/etc.
+    // arm and `try_get::<String>` silently coerces NULL to `""`. That
+    // landed empty strings in FK columns (e.g. `repositories.created_by`)
+    // which then violated the FK constraint on Postgres.
+    if ValueRef::is_null(&value_ref) {
+        return Ok(DbValue::Null);
+    }
+    let ti = ValueRef::type_info(&value_ref);
     let class = ti.name();
     let map_err = |source: sqlx::Error| ImporterError::Read { table, source };
     Ok(match class {
-        "NULL" => DbValue::Null,
         "INTEGER" => DbValue::I64(row.try_get::<i64, _>(idx).map_err(map_err)?),
         "REAL" => DbValue::F64(row.try_get::<f64, _>(idx).map_err(map_err)?),
         "BLOB" => DbValue::Bytes(row.try_get::<Vec<u8>, _>(idx).map_err(map_err)?),

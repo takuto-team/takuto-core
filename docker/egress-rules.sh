@@ -166,4 +166,38 @@ if [ "$ALLOW_ALL_HTTPS" = "true" ]; then
     iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 fi
 
+# Plan-11: when Maestro is configured to talk to an external database
+# (postgres / mysql / mariadb sidecar), allow that host:port pair.
+# Otherwise the default DROP policy silently times out the sqlx pool
+# at 30 s — surfacing as "Database backend unreachable" at startup.
+#
+# `MAESTRO_DATABASE_CONNECTION` env var wins (matches the compose
+# overlays); fall back to `[database].connection` in config.toml so
+# operators who set the URL there get the same allowance.
+DB_URL="${MAESTRO_DATABASE_CONNECTION:-}"
+if [ -z "$DB_URL" ]; then
+    DB_URL=$(sed -n 's/^[[:space:]]*connection[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$MAESTRO_CONFIG" 2>/dev/null | head -1 || true)
+fi
+case "$DB_URL" in
+    postgres://*|postgresql://*|mysql://*)
+        # Strip scheme + userinfo: leaves `host[:port]/dbname?…`.
+        HOST_PORT=$(echo "$DB_URL" | sed -e 's|^[a-z]*://||' -e 's|^[^@]*@||' -e 's|[/?].*$||')
+        DB_HOST="${HOST_PORT%%:*}"
+        DB_PORT="${HOST_PORT##*:}"
+        # No explicit port → infer from scheme.
+        if [ "$DB_HOST" = "$DB_PORT" ]; then
+            case "$DB_URL" in
+                postgres*) DB_PORT=5432 ;;
+                mysql*)    DB_PORT=3306 ;;
+            esac
+        fi
+        if [ -n "$DB_HOST" ] && [ -n "$DB_PORT" ]; then
+            echo "Allowing database sidecar: ${DB_HOST}:${DB_PORT}"
+            for ip in $(getent ahostsv4 "$DB_HOST" 2>/dev/null | awk '{ print $1 }' | sort -u); do
+                [ -n "$ip" ] && iptables -A OUTPUT -d "$ip" -p tcp --dport "$DB_PORT" -j ACCEPT
+            done
+        fi
+        ;;
+esac
+
 echo "Egress rules applied. Only allowed hosts are reachable."

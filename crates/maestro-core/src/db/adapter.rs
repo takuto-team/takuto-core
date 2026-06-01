@@ -265,19 +265,45 @@ impl DbRow {
     }
 
     /// Get an `i64` from column index.
+    ///
+    /// On Postgres, narrow integer columns (`INTEGER`/`INT4`,
+    /// `SMALLINT`/`INT2`) are widened to i64 transparently — sqlx-postgres
+    /// is strict about its `i64 ↔ INT8` mapping, but our schema uses
+    /// plain `INTEGER` for boolean-ish columns (`suspended`, `used`,
+    /// `inactive`, …) which lands on INT4 in PG. DAOs read them as i64
+    /// across all backends, so we widen here.
     pub fn get_i64(&self, idx: usize) -> DbResult<i64> {
         match &self.inner {
             DbRowInner::Sqlite(r) => r.try_get::<i64, _>(idx).map_err(decode_err(idx)),
-            DbRowInner::Postgres(r) => r.try_get::<i64, _>(idx).map_err(decode_err(idx)),
+            DbRowInner::Postgres(r) => match r.try_get::<i64, _>(idx) {
+                Ok(v) => Ok(v),
+                Err(_) => match r.try_get::<i32, _>(idx) {
+                    Ok(v) => Ok(v as i64),
+                    Err(_) => r
+                        .try_get::<i16, _>(idx)
+                        .map(i64::from)
+                        .map_err(decode_err(idx)),
+                },
+            },
             DbRowInner::MySql(r) => r.try_get::<i64, _>(idx).map_err(decode_err(idx)),
         }
     }
 
-    /// Get an `Option<i64>` from column index.
+    /// Get an `Option<i64>` from column index. Same widening as
+    /// [`Self::get_i64`] applies on Postgres.
     pub fn get_i64_opt(&self, idx: usize) -> DbResult<Option<i64>> {
         match &self.inner {
             DbRowInner::Sqlite(r) => r.try_get::<Option<i64>, _>(idx).map_err(decode_err(idx)),
-            DbRowInner::Postgres(r) => r.try_get::<Option<i64>, _>(idx).map_err(decode_err(idx)),
+            DbRowInner::Postgres(r) => match r.try_get::<Option<i64>, _>(idx) {
+                Ok(v) => Ok(v),
+                Err(_) => match r.try_get::<Option<i32>, _>(idx) {
+                    Ok(v) => Ok(v.map(i64::from)),
+                    Err(_) => r
+                        .try_get::<Option<i16>, _>(idx)
+                        .map(|v| v.map(i64::from))
+                        .map_err(decode_err(idx)),
+                },
+            },
             DbRowInner::MySql(r) => r.try_get::<Option<i64>, _>(idx).map_err(decode_err(idx)),
         }
     }
@@ -386,6 +412,42 @@ fn decode_err(idx: usize) -> impl FnOnce(sqlx::Error) -> DbError {
     }
 }
 
+// ── Placeholder rewrite ──────────────────────────────────────────────────
+
+/// Rewrite `?` placeholders to Postgres `$N` form.
+///
+/// sqlx-postgres does not auto-translate `?` — the wire protocol uses
+/// numbered placeholders. DAO call sites use `?` because SQLite and
+/// MySQL both accept that form; this helper is the per-call-site
+/// translator the adapter applies just before handing SQL to
+/// `sqlx::query` on the Postgres branch.
+///
+/// String literals (single-quoted) are skipped so a literal `?` inside
+/// `'foo?bar'` is left untouched. Doubled single quotes (`''`) inside a
+/// literal are the SQL standard escape and pass through naturally as
+/// "leave the quoted state, immediately re-enter it".
+fn rewrite_questionmarks_to_dollar_n(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len() + 8);
+    let mut in_string = false;
+    let mut next_n: usize = 1;
+    for ch in sql.chars() {
+        if ch == '\'' {
+            // Flip in/out of a string literal. SQL `''` inside a
+            // literal flips out then back in — net no-op, which is
+            // the correct interpretation of the standard escape.
+            in_string = !in_string;
+            out.push(ch);
+        } else if ch == '?' && !in_string {
+            out.push('$');
+            out.push_str(&next_n.to_string());
+            next_n += 1;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 // ── Binding helper ───────────────────────────────────────────────────────
 
 /// Binds a `Vec<DbValue>` onto a sqlx query builder of the right
@@ -455,8 +517,8 @@ impl DbAdapter {
     }
 
     /// Execute a statement that doesn't return rows. Returns rows
-    /// affected. SQL uses `?` placeholders (sqlx rewrites to `$N` for
-    /// Postgres).
+    /// affected. SQL uses `?` placeholders; the adapter rewrites them to
+    /// `$N` for Postgres before handing to sqlx.
     pub async fn execute(&self, sql: &str, params: Vec<DbValue>) -> DbResult<u64> {
         match &self.pool {
             DbPool::Sqlite(p) => {
@@ -466,7 +528,8 @@ impl DbAdapter {
                 Ok(res.rows_affected())
             }
             DbPool::Postgres(p) => {
-                let mut q = sqlx::query(sql);
+                let pg_sql = rewrite_questionmarks_to_dollar_n(sql);
+                let mut q = sqlx::query(&pg_sql);
                 q = bind_params!(q, params);
                 let res = q.execute(p).await?;
                 Ok(res.rows_affected())
@@ -492,7 +555,8 @@ impl DbAdapter {
                 Ok(DbRow::from_sqlite(row))
             }
             DbPool::Postgres(p) => {
-                let mut q = sqlx::query(sql);
+                let pg_sql = rewrite_questionmarks_to_dollar_n(sql);
+                let mut q = sqlx::query(&pg_sql);
                 q = bind_params!(q, params);
                 let row = q.fetch_one(p).await?;
                 Ok(DbRow::from_postgres(row))
@@ -520,7 +584,8 @@ impl DbAdapter {
                 Ok(row.map(DbRow::from_sqlite))
             }
             DbPool::Postgres(p) => {
-                let mut q = sqlx::query(sql);
+                let pg_sql = rewrite_questionmarks_to_dollar_n(sql);
+                let mut q = sqlx::query(&pg_sql);
                 q = bind_params!(q, params);
                 let row = q.fetch_optional(p).await?;
                 Ok(row.map(DbRow::from_postgres))
@@ -545,7 +610,8 @@ impl DbAdapter {
                 Ok(rows.into_iter().map(DbRow::from_sqlite).collect())
             }
             DbPool::Postgres(p) => {
-                let mut q = sqlx::query(sql);
+                let pg_sql = rewrite_questionmarks_to_dollar_n(sql);
+                let mut q = sqlx::query(&pg_sql);
                 q = bind_params!(q, params);
                 let rows = q.fetch_all(p).await?;
                 Ok(rows.into_iter().map(DbRow::from_postgres).collect())
@@ -608,7 +674,8 @@ impl<'a> DbTransaction<'a> {
                 Ok(res.rows_affected())
             }
             DbTxInner::Postgres(tx) => {
-                let mut q = sqlx::query(sql);
+                let pg_sql = rewrite_questionmarks_to_dollar_n(sql);
+                let mut q = sqlx::query(&pg_sql);
                 q = bind_params!(q, params);
                 let res = q.execute(&mut **tx).await?;
                 Ok(res.rows_affected())
@@ -631,7 +698,8 @@ impl<'a> DbTransaction<'a> {
                 Ok(DbRow::from_sqlite(row))
             }
             DbTxInner::Postgres(tx) => {
-                let mut q = sqlx::query(sql);
+                let pg_sql = rewrite_questionmarks_to_dollar_n(sql);
+                let mut q = sqlx::query(&pg_sql);
                 q = bind_params!(q, params);
                 let row = q.fetch_one(&mut **tx).await?;
                 Ok(DbRow::from_postgres(row))
@@ -658,7 +726,8 @@ impl<'a> DbTransaction<'a> {
                 Ok(row.map(DbRow::from_sqlite))
             }
             DbTxInner::Postgres(tx) => {
-                let mut q = sqlx::query(sql);
+                let pg_sql = rewrite_questionmarks_to_dollar_n(sql);
+                let mut q = sqlx::query(&pg_sql);
                 q = bind_params!(q, params);
                 let row = q.fetch_optional(&mut **tx).await?;
                 Ok(row.map(DbRow::from_postgres))
@@ -681,7 +750,8 @@ impl<'a> DbTransaction<'a> {
                 Ok(rows.into_iter().map(DbRow::from_sqlite).collect())
             }
             DbTxInner::Postgres(tx) => {
-                let mut q = sqlx::query(sql);
+                let pg_sql = rewrite_questionmarks_to_dollar_n(sql);
+                let mut q = sqlx::query(&pg_sql);
                 q = bind_params!(q, params);
                 let rows = q.fetch_all(&mut **tx).await?;
                 Ok(rows.into_iter().map(DbRow::from_postgres).collect())
@@ -723,6 +793,54 @@ impl<'a> DbTransaction<'a> {
 mod tests {
     use super::*;
     use crate::db::pool::{connect, PoolTuning};
+
+    // ── Placeholder rewrite ──────────────────────────────────────────────
+
+    #[test]
+    fn rewrite_basic_placeholders() {
+        assert_eq!(
+            rewrite_questionmarks_to_dollar_n("INSERT INTO t (a, b) VALUES (?, ?)"),
+            "INSERT INTO t (a, b) VALUES ($1, $2)"
+        );
+    }
+
+    #[test]
+    fn rewrite_numbers_in_call_order() {
+        // The N counter increments in source-order across the whole query,
+        // including UPDATE-style queries with placeholders in two clauses.
+        assert_eq!(
+            rewrite_questionmarks_to_dollar_n("UPDATE t SET a = ?, b = ? WHERE id = ?"),
+            "UPDATE t SET a = $1, b = $2 WHERE id = $3"
+        );
+    }
+
+    #[test]
+    fn rewrite_skips_question_marks_inside_string_literals() {
+        // A `?` inside a single-quoted literal is part of the value, not a
+        // placeholder. Skipping it preserves SQL semantics.
+        assert_eq!(
+            rewrite_questionmarks_to_dollar_n("INSERT INTO t (a) VALUES ('hi?bye'), (?)"),
+            "INSERT INTO t (a) VALUES ('hi?bye'), ($1)"
+        );
+    }
+
+    #[test]
+    fn rewrite_handles_doubled_single_quote_escape() {
+        // SQL standard: `''` inside a string literal is a literal single
+        // quote. Our simple flip-state scanner treats it as "exit then
+        // immediately re-enter the string", which is the correct net
+        // behaviour for placeholder skipping.
+        assert_eq!(
+            rewrite_questionmarks_to_dollar_n("INSERT INTO t (a) VALUES ('it''s ?'), (?)"),
+            "INSERT INTO t (a) VALUES ('it''s ?'), ($1)"
+        );
+    }
+
+    #[test]
+    fn rewrite_no_placeholders_is_identity() {
+        let sql = "SELECT COUNT(*) FROM users WHERE id = 'abc'";
+        assert_eq!(rewrite_questionmarks_to_dollar_n(sql), sql);
+    }
 
     async fn sqlite_adapter() -> DbAdapter {
         let pool = connect("sqlite::memory:", &PoolTuning::default())
