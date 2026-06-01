@@ -37,6 +37,7 @@ pub mod provider_credentials;
 pub mod repositories;
 pub mod users;
 pub mod user_worktree_commands;
+pub mod work_items;
 
 pub use adapter::{
     DbAdapter, DbError as AdapterError, DbResult, DbRow, DbTransaction, DbValue,
