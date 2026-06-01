@@ -162,6 +162,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/work-items/counts", get(routes::workflows::workflow_counts))
         .route("/workflows/{id}", get(routes::workflows::get_workflow))
         .route("/work-items/{id}", get(routes::workflows::get_workflow))
+        // Plan-07 slice 9: step history from work_item_steps.
+        .route("/workflows/{id}/steps", get(routes::workflows::get_steps))
+        .route("/work-items/{id}/steps", get(routes::workflows::get_steps))
         .route(
             "/workflows/{id}/pause",
             post(routes::workflows::pause_workflow),

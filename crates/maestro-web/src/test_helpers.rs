@@ -52,13 +52,14 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
         DryRunActions::new("origin".to_string(), None),
     );
     let jira_available = Arc::new(AtomicBool::new(false));
-    let engine = Arc::new(WorkflowEngine::new(
+    let engine = Arc::new(WorkflowEngine::new_with_db(
         config.clone(),
         actions,
         1,
         jira_available.clone(),
         TicketingSystem::None,
         std::env::temp_dir(),
+        Some(db.clone()),
     ));
     // Phase 2b.2: build the resolver from the test DB. No App configured
     // here — tests that need a Mode A / B fixture seed PAT rows directly

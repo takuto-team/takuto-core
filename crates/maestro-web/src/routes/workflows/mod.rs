@@ -14,6 +14,7 @@ mod list;
 mod manual;
 mod port_tracking;
 mod run_commands;
+mod steps;
 
 pub use definitions::{list_workflow_definitions, retry_workflow_def, run_workflow_def};
 pub use list::{
@@ -38,6 +39,7 @@ pub use run_commands::{
     RunCommandsStatusResponse, StartRunCommandRequest, StartRunCommandResponse, list_run_commands,
     start_run_command, stop_run_command,
 };
+pub use steps::{StepDto, get_steps};
 
 /// Check whether the authenticated user may act on the workflow with the given ticket key.
 /// Users can only act on workflows they created.
