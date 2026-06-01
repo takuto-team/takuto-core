@@ -165,6 +165,9 @@ pub fn build_router(state: AppState) -> Router {
         // Plan-07 slice 9: step history from work_item_steps.
         .route("/workflows/{id}/steps", get(routes::workflows::get_steps))
         .route("/work-items/{id}/steps", get(routes::workflows::get_steps))
+        // Plan-07 slice 17: paged log lines from work_item_log_lines.
+        .route("/workflows/{id}/log", get(routes::workflows::get_log))
+        .route("/work-items/{id}/log", get(routes::workflows::get_log))
         .route(
             "/workflows/{id}/pause",
             post(routes::workflows::pause_workflow),

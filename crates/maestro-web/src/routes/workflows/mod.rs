@@ -11,6 +11,7 @@ mod dto;
 mod editor;
 mod lifecycle;
 mod list;
+mod log;
 mod manual;
 mod port_tracking;
 mod run_commands;
@@ -39,6 +40,7 @@ pub use run_commands::{
     RunCommandsStatusResponse, StartRunCommandRequest, StartRunCommandResponse, list_run_commands,
     start_run_command, stop_run_command,
 };
+pub use log::{LogLineDto, LogQuery, get_log};
 pub use steps::{StepDto, get_steps};
 
 /// Check whether the authenticated user may act on the workflow with the given ticket key.
