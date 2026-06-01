@@ -36,7 +36,7 @@ export function useWorkflows() {
 
   const fetchWorkflows = useCallback(async () => {
     try {
-      const list = await apiJson<WorkflowSummary[]>("/api/workflows");
+      const list = await apiJson<WorkflowSummary[]>("/api/work-items");
       setWorkflows(() => {
         const next: Record<string, WorkflowSummary> = {};
         for (const w of list) next[w.ticket_key] = w;
@@ -89,7 +89,7 @@ export function useWorkflows() {
 
   const fetchCounts = useCallback(async () => {
     try {
-      const data = await apiJson<WorkflowCounts>("/api/workflows/counts");
+      const data = await apiJson<WorkflowCounts>("/api/work-items/counts");
       setCounts(data);
     } catch {
       // Silently ignore

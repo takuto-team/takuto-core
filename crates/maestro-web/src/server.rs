@@ -12,6 +12,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::auth::dashboard_auth_middleware;
 use crate::middleware::csrf::csrf_middleware;
+use crate::middleware::deprecation::deprecation_header_middleware;
 use crate::middleware::security_headers::security_headers_middleware;
 use crate::routes;
 use crate::state::AppState;
@@ -149,11 +150,24 @@ pub fn build_router(state: AppState) -> Router {
         .route("/users/{id}/suspend", post(routes::admin::suspend_user))
         .route("/users/{id}/unsuspend", post(routes::admin::unsuspend_user))
         .route("/users/{id}/unlock", post(routes::admin::unlock_user))
+        // Plan-07 step 1: REST surface renames "workflow" → "work item"
+        // in user-facing language. Both `/workflows/*` (deprecated) and
+        // `/work-items/*` (canonical) mount the same handlers for one
+        // minor release. External callers get a `X-Maestro-Deprecation`
+        // header on the legacy paths via `deprecation_header_middleware`
+        // below; the in-tree UI already uses the new paths.
         .route("/workflows", get(routes::workflows::list_workflows))
+        .route("/work-items", get(routes::workflows::list_workflows))
         .route("/workflows/counts", get(routes::workflows::workflow_counts))
+        .route("/work-items/counts", get(routes::workflows::workflow_counts))
         .route("/workflows/{id}", get(routes::workflows::get_workflow))
+        .route("/work-items/{id}", get(routes::workflows::get_workflow))
         .route(
             "/workflows/{id}/pause",
+            post(routes::workflows::pause_workflow),
+        )
+        .route(
+            "/work-items/{id}/pause",
             post(routes::workflows::pause_workflow),
         )
         .route(
@@ -161,7 +175,15 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::resume_workflow),
         )
         .route(
+            "/work-items/{id}/resume",
+            post(routes::workflows::resume_workflow),
+        )
+        .route(
             "/workflows/{id}/stop",
+            post(routes::workflows::stop_workflow),
+        )
+        .route(
+            "/work-items/{id}/stop",
             post(routes::workflows::stop_workflow),
         )
         .route(
@@ -169,7 +191,15 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::retry_workflow),
         )
         .route(
+            "/work-items/{id}/retry",
+            post(routes::workflows::retry_workflow),
+        )
+        .route(
             "/workflows/{id}/resume-from-error",
+            post(routes::workflows::resume_from_error),
+        )
+        .route(
+            "/work-items/{id}/resume-from-error",
             post(routes::workflows::resume_from_error),
         )
         .route(
@@ -177,7 +207,15 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::mark_work_done),
         )
         .route(
+            "/work-items/{id}/mark-done",
+            post(routes::workflows::mark_work_done),
+        )
+        .route(
             "/workflows/{id}/delete",
+            post(routes::workflows::delete_workflow),
+        )
+        .route(
+            "/work-items/{id}/delete",
             post(routes::workflows::delete_workflow),
         )
         .route(
@@ -185,7 +223,15 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::open_editor),
         )
         .route(
+            "/work-items/{id}/open-editor",
+            post(routes::workflows::open_editor),
+        )
+        .route(
             "/workflows/{id}/close-editor",
+            post(routes::workflows::close_editor),
+        )
+        .route(
+            "/work-items/{id}/close-editor",
             post(routes::workflows::close_editor),
         )
         .route(
@@ -193,7 +239,15 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::open_terminal),
         )
         .route(
+            "/work-items/{id}/open-terminal",
+            post(routes::workflows::open_terminal),
+        )
+        .route(
             "/workflows/{id}/close-terminal",
+            post(routes::workflows::close_terminal),
+        )
+        .route(
+            "/work-items/{id}/close-terminal",
             post(routes::workflows::close_terminal),
         )
         .route(
@@ -201,7 +255,15 @@ pub fn build_router(state: AppState) -> Router {
             get(routes::workflows::list_run_commands),
         )
         .route(
+            "/work-items/{id}/run-commands",
+            get(routes::workflows::list_run_commands),
+        )
+        .route(
             "/workflows/{id}/run-commands/{index}/start",
+            post(routes::workflows::start_run_command),
+        )
+        .route(
+            "/work-items/{id}/run-commands/{index}/start",
             post(routes::workflows::start_run_command),
         )
         .route(
@@ -209,7 +271,15 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::stop_run_command),
         )
         .route(
+            "/work-items/{id}/run-commands/{index}/stop",
+            post(routes::workflows::stop_run_command),
+        )
+        .route(
             "/workflows/{id}/report",
+            get(routes::workflows::get_workflow_report),
+        )
+        .route(
+            "/work-items/{id}/report",
             get(routes::workflows::get_workflow_report),
         )
         .route(
@@ -221,11 +291,23 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::workflows::run_workflow_def),
         )
         .route(
+            "/work-items/{id}/run-definition/{def}",
+            post(routes::workflows::run_workflow_def),
+        )
+        .route(
             "/workflows/{id}/retry-workflow/{def}",
             post(routes::workflows::retry_workflow_def),
         )
         .route(
+            "/work-items/{id}/retry-definition/{def}",
+            post(routes::workflows::retry_workflow_def),
+        )
+        .route(
             "/workflows/start-manual",
+            post(routes::workflows::start_manual_workflow),
+        )
+        .route(
+            "/work-items/start-manual",
             post(routes::workflows::start_manual_workflow),
         )
         .route(
@@ -353,6 +435,11 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .nest("/api", api)
+        // Plan-07 step 1: tag responses on the legacy `/api/workflows/*`
+        // paths with `X-Maestro-Deprecation` so external callers know
+        // to switch to `/api/work-items/*` before the legacy paths are
+        // removed in the next minor release.
+        .layer(middleware::from_fn(deprecation_header_middleware))
         .route("/ws", get(routes::ws::ws_handler))
         // GH-45: shared-port reverse proxy for editor and terminal sessions.
         // `any` so all HTTP methods AND WebSocket upgrades dispatch to the

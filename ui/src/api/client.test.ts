@@ -70,7 +70,7 @@ describe("api()", () => {
 
   it("redirects to login on 401", async () => {
     mockFetch(401);
-    await api("/api/workflows");
+    await api("/api/work-items");
     expect(window.location.href).toContain("/login.html?return=");
   });
 });
@@ -100,8 +100,8 @@ describe("apiJson()", () => {
 describe("apiPost()", () => {
   it("sends POST with JSON body", async () => {
     mockFetch(200);
-    await apiPost("/api/workflows/start-manual", { ticket_key: "TEST-1" });
-    expect(fetch).toHaveBeenCalledWith("/api/workflows/start-manual", {
+    await apiPost("/api/work-items/start-manual", { ticket_key: "TEST-1" });
+    expect(fetch).toHaveBeenCalledWith("/api/work-items/start-manual", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ticket_key: "TEST-1" }),

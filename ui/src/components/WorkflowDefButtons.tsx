@@ -73,11 +73,13 @@ export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefres
 
   async function handleRun(def: WorkflowDefinition) {
     const state = runStates[def.filename] || "idle";
-    const endpoint = state === "error" ? "retry-workflow" : "run-workflow";
+    // Plan-07 §1: server-side route names use "definition" (canonical)
+    // for the work-item-scoped run endpoints.
+    const endpoint = state === "error" ? "retry-definition" : "run-definition";
     setLoadingDef(def.filename);
     try {
       const res = await apiPost(
-        `/api/workflows/${encodeURIComponent(ticketKey)}/${endpoint}/${encodeURIComponent(def.filename)}`
+        `/api/work-items/${encodeURIComponent(ticketKey)}/${endpoint}/${encodeURIComponent(def.filename)}`
       );
       if (!res.ok) {
         const text = await res.text();

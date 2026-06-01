@@ -15,7 +15,7 @@ export function RunCommands({
   withLoading: (fn: () => Promise<void>, message?: string) => Promise<void>;
 }) {
   const startCmd = (index: number) => async () => {
-    const res = await apiPost(`/api/workflows/${encodeURIComponent(ticketKey)}/run-commands/${index}/start`);
+    const res = await apiPost(`/api/work-items/${encodeURIComponent(ticketKey)}/run-commands/${index}/start`);
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || "Failed to start run command");
@@ -23,7 +23,7 @@ export function RunCommands({
   };
 
   const stopCmd = (index: number) => async () => {
-    const res = await apiPost(`/api/workflows/${encodeURIComponent(ticketKey)}/run-commands/${index}/stop`);
+    const res = await apiPost(`/api/work-items/${encodeURIComponent(ticketKey)}/run-commands/${index}/stop`);
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || "Failed to stop run command");

@@ -8,4 +8,5 @@
 //!   (plan-02 AC-6).
 
 pub mod csrf;
+pub mod deprecation;
 pub mod security_headers;

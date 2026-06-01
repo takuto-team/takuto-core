@@ -20,7 +20,7 @@ export function ReportModal({ workflow: w, onClose }: Props) {
     if (!w.has_report) return;
     setLoading(true);
     setError(null);
-    api(`/api/workflows/${encodeURIComponent(w.ticket_key)}/report`)
+    api(`/api/work-items/${encodeURIComponent(w.ticket_key)}/report`)
       .then(async (res) => {
         if (!res.ok) {
           throw new Error(res.status === 404 ? "Report not found" : `HTTP ${res.status}`);

@@ -99,7 +99,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
       if (!repositoryId) { showToast("Pick a repository before adding a workflow."); return; }
       const ticket = modals.modal.ticket;
       try {
-        const res = await apiPost("/api/workflows/start-manual", {
+        const res = await apiPost("/api/work-items/start-manual", {
           ticket_key: ticket.key, ticket_summary: summary, ticket_description: description,
           repository_id: repositoryId,
           ...(ticket.url ? { issue_url: ticket.url } : {}),
@@ -116,7 +116,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     async (name: string, description: string, repositoryId: string) => {
       if (!repositoryId) { showToast("Pick a repository before adding a workflow."); return; }
       try {
-        const res = await apiPost("/api/workflows/start-manual", {
+        const res = await apiPost("/api/work-items/start-manual", {
           ticket_key: name, ticket_summary: name || "Manual item",
           ticket_description: description, repository_id: repositoryId,
         });

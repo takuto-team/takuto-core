@@ -13,13 +13,13 @@ import { api, apiPost } from "../api/client";
  * card so they can be composed with the action's return value.
  */
 export function useIssueCardActions(ticketKey: string) {
-  /** Returns a thunk that POSTs `/api/workflows/{key}/{endpoint}` and
+  /** Returns a thunk that POSTs `/api/work-items/{key}/{endpoint}` and
    *  throws if the response isn't OK. The thunk is intentionally not
    *  pre-bound to `withLoading` — the card decides when to wrap each
    *  action with the overlay. */
   const doAction = useCallback(
     (endpoint: string) => async () => {
-      const res = await apiPost(`/api/workflows/${encodeURIComponent(ticketKey)}/${endpoint}`);
+      const res = await apiPost(`/api/work-items/${encodeURIComponent(ticketKey)}/${endpoint}`);
       if (!res.ok) {
         const t = await res.text();
         throw new Error(t || `Failed: ${endpoint}`);
@@ -29,7 +29,7 @@ export function useIssueCardActions(ticketKey: string) {
   );
 
   const openEditor = useCallback(async () => {
-    const res = await api(`/api/workflows/${encodeURIComponent(ticketKey)}/open-editor`, {
+    const res = await api(`/api/work-items/${encodeURIComponent(ticketKey)}/open-editor`, {
       method: "POST",
     });
     if (!res.ok) throw new Error((await res.text()) || "Failed to start editor");
@@ -38,15 +38,15 @@ export function useIssueCardActions(ticketKey: string) {
   }, [ticketKey]);
 
   const openTerminal = useCallback(async () => {
-    let res = await api(`/api/workflows/${encodeURIComponent(ticketKey)}/open-terminal`, {
+    let res = await api(`/api/work-items/${encodeURIComponent(ticketKey)}/open-terminal`, {
       method: "POST",
     });
     // Terminal-on-cold-start: if no editor container yet, spin one up first.
     if (res.status === 409) {
-      await api(`/api/workflows/${encodeURIComponent(ticketKey)}/open-editor`, {
+      await api(`/api/work-items/${encodeURIComponent(ticketKey)}/open-editor`, {
         method: "POST",
       });
-      res = await api(`/api/workflows/${encodeURIComponent(ticketKey)}/open-terminal`, {
+      res = await api(`/api/work-items/${encodeURIComponent(ticketKey)}/open-terminal`, {
         method: "POST",
       });
     }
@@ -56,7 +56,7 @@ export function useIssueCardActions(ticketKey: string) {
   }, [ticketKey]);
 
   const closeEditor = useCallback(async () => {
-    const res = await apiPost(`/api/workflows/${encodeURIComponent(ticketKey)}/close-editor`);
+    const res = await apiPost(`/api/work-items/${encodeURIComponent(ticketKey)}/close-editor`);
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || "Failed to close editor");
