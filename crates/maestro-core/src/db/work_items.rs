@@ -1249,6 +1249,113 @@ pub async fn upsert_run_command(
     Ok(())
 }
 
+/// Mark a (work_item, command_index) run-command pair as Running
+/// with `started_at`. Idempotent — re-running clears any prior
+/// `ended_at` so a restarted command looks freshly started in the
+/// DB row even when the caller previously stopped it.
+pub async fn start_run_command_row(
+    adapter: &DbAdapter,
+    work_item_id: &str,
+    command_index: i32,
+    name: &str,
+    container_id: Option<&str>,
+    started_at: i64,
+) -> Result<()> {
+    upsert_run_command(
+        adapter,
+        work_item_id,
+        command_index,
+        name,
+        true,
+        container_id,
+        Some(started_at),
+        None,
+    )
+    .await
+}
+
+/// Transition an existing run-command row to stopped. UPDATE-only
+/// so we never overwrite the `started_at` set by
+/// [`start_run_command_row`]; a missing row is a silent no-op so
+/// race conditions between the route handler and the DB cannot
+/// surface as user-visible errors.
+pub async fn finish_run_command_row(
+    adapter: &DbAdapter,
+    work_item_id: &str,
+    command_index: i32,
+    ended_at: i64,
+) -> Result<()> {
+    adapter
+        .execute(
+            "UPDATE work_item_run_commands SET \
+                running = 0, ended_at = ? \
+             WHERE work_item_id = ? AND command_index = ?",
+            vec![
+                DbValue::I64(ended_at),
+                DbValue::Text(work_item_id.to_string()),
+                DbValue::I32(command_index),
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Plan-07 step 4 slice 5: shadow-write the start of a run-command
+/// container. Marks the (work_item, command_index) row as Running
+/// with `started_at` set and `container_id` populated. Failures (and
+/// `None` `db`) log at WARN and never propagate — the container has
+/// already started; the secondary store catching up is best-effort.
+pub async fn shadow_start_run_command_row(
+    db: Option<&crate::db::Database>,
+    work_item_id: &str,
+    command_index: i32,
+    name: &str,
+    container_id: Option<&str>,
+    started_at_unix: i64,
+) {
+    let Some(db) = db else { return };
+    if let Err(e) = start_run_command_row(
+        db.adapter(),
+        work_item_id,
+        command_index,
+        name,
+        container_id,
+        started_at_unix,
+    )
+    .await
+    {
+        tracing::warn!(
+            work_item_id,
+            command_index,
+            error = %e,
+            "Plan-07 shadow-write of run-command start failed (route handler progress unaffected)"
+        );
+    }
+}
+
+/// Plan-07 step 4 slice 5: shadow-write the stop of a run-command
+/// container. UPDATE-only: an absent row stays absent so an
+/// out-of-order stop (e.g. stop fires before the start row landed)
+/// silently no-ops rather than producing an inconsistent row.
+pub async fn shadow_finish_run_command_row(
+    db: Option<&crate::db::Database>,
+    work_item_id: &str,
+    command_index: i32,
+    ended_at_unix: i64,
+) {
+    let Some(db) = db else { return };
+    if let Err(e) =
+        finish_run_command_row(db.adapter(), work_item_id, command_index, ended_at_unix).await
+    {
+        tracing::warn!(
+            work_item_id,
+            command_index,
+            error = %e,
+            "Plan-07 shadow-write of run-command finish failed (route handler progress unaffected)"
+        );
+    }
+}
+
 /// List run commands for a work item, command-index-ascending.
 pub async fn list_run_commands(
     adapter: &DbAdapter,
@@ -1692,6 +1799,98 @@ mod tests {
         );
         assert!(list_port_mappings(&a, "wi-1").await.unwrap().is_empty());
         assert!(list_run_commands(&a, "wi-1").await.unwrap().is_empty());
+    }
+
+    /// Plan-07 step 4 slice 5 — round-trip the run-command lifecycle
+    /// DAO helpers. `start_run_command_row` populates `running=true`
+    /// + `started_at`; `finish_run_command_row` flips `running=false`
+    /// + `ended_at` while leaving `started_at` intact.
+    #[tokio::test]
+    async fn start_run_command_row_then_finish_preserves_started_at() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-1", "alice").await;
+        insert_work_item(&a, &sample_row("wi-rc", "TICK-1", Some("u-1")))
+            .await
+            .unwrap();
+
+        start_run_command_row(
+            &a,
+            "wi-rc",
+            0,
+            "dev server",
+            Some("maestro-run-TICK-1-0"),
+            200,
+        )
+        .await
+        .unwrap();
+
+        let rows = list_run_commands(&a, "wi-rc").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].command_index, 0);
+        assert_eq!(rows[0].name, "dev server");
+        assert!(rows[0].running, "running flag set");
+        assert_eq!(
+            rows[0].container_id.as_deref(),
+            Some("maestro-run-TICK-1-0")
+        );
+        assert_eq!(rows[0].started_at, Some(200));
+        assert_eq!(rows[0].ended_at, None);
+
+        // Finish.
+        finish_run_command_row(&a, "wi-rc", 0, 350).await.unwrap();
+
+        let rows = list_run_commands(&a, "wi-rc").await.unwrap();
+        assert_eq!(rows.len(), 1, "UPDATE-only — never duplicates");
+        assert!(!rows[0].running, "running flag cleared");
+        assert_eq!(
+            rows[0].started_at,
+            Some(200),
+            "finish must preserve start timestamp"
+        );
+        assert_eq!(rows[0].ended_at, Some(350));
+        // container_id and name preserved.
+        assert_eq!(
+            rows[0].container_id.as_deref(),
+            Some("maestro-run-TICK-1-0")
+        );
+        assert_eq!(rows[0].name, "dev server");
+
+        // Re-starting (e.g. user clicks Run again) must clear
+        // `ended_at` and refresh `started_at`.
+        start_run_command_row(
+            &a,
+            "wi-rc",
+            0,
+            "dev server",
+            Some("maestro-run-TICK-1-0"),
+            900,
+        )
+        .await
+        .unwrap();
+        let rows = list_run_commands(&a, "wi-rc").await.unwrap();
+        assert!(rows[0].running);
+        assert_eq!(rows[0].started_at, Some(900));
+        assert_eq!(rows[0].ended_at, None);
+    }
+
+    /// Plan-07 step 4 slice 5 — `finish_run_command_row` is a silent
+    /// no-op when no prior start row exists. Critical: a stop that
+    /// races ahead of the start shadow-write must not produce an
+    /// inconsistent row.
+    #[tokio::test]
+    async fn finish_run_command_row_is_silent_noop_without_prior_start() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-1", "alice").await;
+        insert_work_item(&a, &sample_row("wi-orphan", "T-1", Some("u-1")))
+            .await
+            .unwrap();
+
+        finish_run_command_row(&a, "wi-orphan", 0, 42).await.unwrap();
+
+        assert!(
+            list_run_commands(&a, "wi-orphan").await.unwrap().is_empty(),
+            "finish without start must not synthesise a row"
+        );
     }
 
     #[tokio::test]

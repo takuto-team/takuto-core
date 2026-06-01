@@ -291,6 +291,22 @@ pub async fn start_run_command(
         tracker_cancel,
     ));
 
+    // Plan-07 step 4 slice 5: shadow-write the run-command lifecycle.
+    // `id` is the work_item id (same as workflow.id); the container
+    // name is deterministic (`run_command_container_name`) so we
+    // record it as the `container_id` for cross-restart visibility.
+    let container_name =
+        maestro_core::container::run_command_container_name(&ticket_key, index);
+    maestro_core::db::work_items::shadow_start_run_command_row(
+        engine.engine.db(),
+        &id,
+        index as i32,
+        &rc_name,
+        Some(&container_name),
+        chrono::Utc::now().timestamp(),
+    )
+    .await;
+
     Ok(Json(StartRunCommandResponse {
         index,
         name: rc_name,
@@ -344,6 +360,18 @@ pub async fn stop_run_command(
         .write()
         .await
         .remove(&(ticket_key.clone(), index));
+
+    // Plan-07 step 4 slice 5: shadow-write the run-command stop.
+    // UPDATE-only — preserves the `started_at` set at start. A row
+    // that never landed (race / shadow-write failure at start) stays
+    // absent and this call no-ops.
+    maestro_core::db::work_items::shadow_finish_run_command_row(
+        engine.engine.db(),
+        &id,
+        index as i32,
+        chrono::Utc::now().timestamp(),
+    )
+    .await;
 
     Ok(StatusCode::OK)
 }
