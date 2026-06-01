@@ -8,6 +8,7 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use maestro_core::container;
+use maestro_core::db::Database;
 use maestro_core::workflow::engine::WorkflowEvent;
 
 use crate::session_registry::{PathTokenRegistry, SessionRoute, SessionRouteKind};
@@ -16,6 +17,14 @@ use crate::state::{DynamicForwardsMap, DynamicPortForward};
 /// Listen on the workflow event broadcast channel and keep the dynamic-forwards
 /// map in sync for the given ticket.  Runs until `cancel` fires or the channel
 /// closes.
+///
+/// `work_item_id` + `db` are Plan-07 step 4 slice 7 shadow-write
+/// inputs. When both are `Some`, every `port_forwarded` event also
+/// upserts a row into `work_item_port_mappings`; cleanup is handled
+/// by the bulk-delete in `close_editor`, so the unforward path
+/// stays unchanged. `None` on either preserves the pre-shadow
+/// behaviour (used by unit tests).
+#[allow(clippy::too_many_arguments)]
 pub async fn track_port_forwards(
     ticket_key: String,
     user_id: String,
@@ -23,6 +32,8 @@ pub async fn track_port_forwards(
     registry: PathTokenRegistry,
     mut rx: broadcast::Receiver<WorkflowEvent>,
     cancel: CancellationToken,
+    work_item_id: Option<String>,
+    db: Option<Database>,
 ) {
     loop {
         tokio::select! {
@@ -43,6 +54,24 @@ pub async fn track_port_forwards(
                                     user_id: user_id.clone(),
                                 }).await;
                                 let proxy_url = container::build_session_dynamic_port_url(&path_token);
+                                // Plan-07 step 4 slice 7: shadow-write the
+                                // scanner-detected Dynamic port row. Cleanup
+                                // is handled in bulk by `close_editor`, so
+                                // the unforward path below stays unchanged.
+                                if let Some(ref wi) = work_item_id {
+                                    maestro_core::db::work_items::shadow_upsert_port_mapping(
+                                        db.as_ref(),
+                                        wi,
+                                        cp as i32,
+                                        hp as i32,
+                                        &proxy_url,
+                                        &path_token,
+                                        maestro_core::db::work_items::PortMappingKind::Dynamic,
+                                        None,
+                                        chrono::Utc::now().timestamp(),
+                                    )
+                                    .await;
+                                }
                                 list.push(DynamicPortForward {
                                     container_port: cp,
                                     host_port: hp,
@@ -218,7 +247,7 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
 
         tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
             .unwrap();
@@ -251,7 +280,7 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
 
         // Forward two ports.
         tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
@@ -292,7 +321,7 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
 
         tx.send(port_event("port_forwarded", "T-2", 3000, 9100))
             .unwrap();
@@ -320,7 +349,7 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
 
         tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
@@ -349,7 +378,7 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
 
         tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
         tx.send(port_event("port_forwarded", "T-1", 5173, 9101)).unwrap();
@@ -379,7 +408,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), map, registry, rx, cancel.clone()));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), map, registry, rx, cancel.clone(), None, None));
 
         cancel.cancel();
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
@@ -397,12 +426,111 @@ mod tests {
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), map, registry, rx, cancel));
+        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), map, registry, rx, cancel, None, None));
 
         drop(tx);
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
             .await
             .expect("task should exit within 1 second")
             .expect("task should not panic");
+    }
+
+    /// Plan-07 step 4 slice 7 — when `track_port_forwards` is wired
+    /// with `Some(work_item_id)` + `Some(db)`, every detected port
+    /// also lands as a `Dynamic` row in `work_item_port_mappings`.
+    /// Unforward events DO NOT delete the row — cleanup is bulk via
+    /// `close_editor` (slice 6) so we deliberately do not test that
+    /// path here.
+    #[tokio::test]
+    async fn track_port_forwards_shadow_writes_dynamic_port_row() {
+        use maestro_core::db::adapter::DbValue;
+        use maestro_core::db::work_items;
+
+        let db = crate::test_helpers::temp_db();
+        // Seed minimum prerequisites: user + a work_items row whose
+        // id is what the tracker will be told to write under.
+        let _ = db
+            .adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-1', 'a', 'admin')",
+                Vec::<DbValue>::new(),
+            )
+            .await
+            .expect("seed user");
+        let _ = db
+            .adapter()
+            .execute(
+                "INSERT INTO work_items (\
+                    id, ticket_key, workspace_name, user_id, private, \
+                    started_manually, counts_toward_manual_cap, driver_started, \
+                    jira_available, state_kind, started_at, created_at, updated_at\
+                 ) VALUES (\
+                    'wf-pt', 'T-1', 'ws', 'u-1', 0, \
+                    0, 0, 0, \
+                    0, 'pending', 100, 100, 100\
+                 )",
+                Vec::<DbValue>::new(),
+            )
+            .await
+            .expect("seed work_items");
+
+        let map: DynamicForwardsMap = Arc::new(RwLock::new(HashMap::new()));
+        let registry = PathTokenRegistry::new();
+        let (tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let rx = tx.subscribe();
+
+        let handle = tokio::spawn(track_port_forwards(
+            "T-1".into(),
+            "test-user".into(),
+            map.clone(),
+            registry.clone(),
+            rx,
+            cancel.clone(),
+            Some("wf-pt".into()),
+            Some(db.clone()),
+        ));
+
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 5173, 9101))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        let rows = work_items::list_port_mappings(db.adapter(), "wf-pt")
+            .await
+            .expect("list");
+        assert_eq!(rows.len(), 2, "one row per detected port");
+
+        // Sort by container_port for stable assertions.
+        let mut by_cp: Vec<_> = rows.into_iter().collect();
+        by_cp.sort_by_key(|r| r.container_port);
+        assert_eq!(by_cp[0].container_port, 3000);
+        assert_eq!(by_cp[0].host_port, 9100);
+        assert_eq!(by_cp[0].kind, work_items::PortMappingKind::Dynamic);
+        assert!(
+            by_cp[0].proxy_url.starts_with("/s/"),
+            "proxy URL preserved in DB"
+        );
+        assert!(!by_cp[0].path_token.is_empty());
+        assert_eq!(by_cp[1].container_port, 5173);
+        assert_eq!(by_cp[1].host_port, 9101);
+        assert_eq!(by_cp[1].kind, work_items::PortMappingKind::Dynamic);
+
+        // Unforward MUST NOT delete the row — cleanup is bulk.
+        tx.send(port_event("port_unforwarded", "T-1", 3000, 9100))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let rows = work_items::list_port_mappings(db.adapter(), "wf-pt")
+            .await
+            .expect("list");
+        assert_eq!(
+            rows.len(),
+            2,
+            "unforward keeps the row; close_editor bulk-deletes"
+        );
+
+        cancel.cancel();
+        let _ = handle.await;
     }
 }

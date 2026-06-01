@@ -220,7 +220,21 @@ pub async fn open_editor(
         if let Some(cancel_tok) = tracker_cancel {
             let registry = editor.path_token_registry.clone();
             let tracker_user_id = auth.user_id.clone();
-            tokio::spawn(track_port_forwards(tracker_ticket, tracker_user_id, dyn_fwd, registry, rx, cancel_tok));
+            // Plan-07 step 4 slice 7: clone the work_item_id + db
+            // into the spawned tracker so it can shadow-upsert
+            // Dynamic port rows as the scanner detects them.
+            let tracker_wi = id.clone();
+            let tracker_db = engine.engine.db().cloned();
+            tokio::spawn(track_port_forwards(
+                tracker_ticket,
+                tracker_user_id,
+                dyn_fwd,
+                registry,
+                rx,
+                cancel_tok,
+                Some(tracker_wi),
+                tracker_db,
+            ));
         }
     }
 
