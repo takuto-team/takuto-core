@@ -148,7 +148,7 @@ pub(super) async fn drive_workflow_def(
             info!(ticket = %ticket_key, def = %def_name, "Workflow definition completed");
 
             let _ = event_tx.send(WorkflowEvent {
-                event_type: "workflow_updated".to_string(),
+                event_type: "work_item_updated".to_string(),
                 workflow_id,
                 ticket_key: ticket_key.clone(),
                 state: {
@@ -239,7 +239,7 @@ pub(super) async fn drive_workflow_def(
             }
 
             let _ = event_tx.send(WorkflowEvent {
-                event_type: "workflow_updated".to_string(),
+                event_type: "work_item_updated".to_string(),
                 workflow_id,
                 ticket_key: ticket_key.clone(),
                 state: {
@@ -329,7 +329,7 @@ pub(super) async fn transition_to_agent_step(
     if let Some((id, display, owner_user_id)) = updated {
         let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
+            event_type: "work_item_updated".to_string(),
             workflow_id: id,
             ticket_key: ticket_key.to_string(),
             state: display,
@@ -376,7 +376,7 @@ pub(super) async fn transition(
     if let Some((id, display, owner_user_id)) = updated {
         let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
         let _ = event_tx.send(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
+            event_type: "work_item_updated".to_string(),
             workflow_id: id,
             ticket_key: ticket_key.to_string(),
             state: display,

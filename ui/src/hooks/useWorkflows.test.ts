@@ -41,7 +41,7 @@ function makeWorkflow(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary
     run_commands: [],
     generate_report: false,
     has_report: false,
-    workflow_def_runs: {},
+    definition_runs: {},
     workspace_name: "test-repo",
     ...overrides,
   };
@@ -89,7 +89,7 @@ describe("useWorkflows", () => {
     });
 
     const event: WorkflowEvent = {
-      event_type: "workflow_updated",
+      event_type: "work_item_updated",
       workflow_id: "uuid-1",
       ticket_key: "TEST-1",
       state: "AddressingTicket",
@@ -115,7 +115,7 @@ describe("useWorkflows", () => {
 
     act(() => {
       result.current.handleEvent({
-        event_type: "workflow_removed",
+        event_type: "work_item_removed",
         workflow_id: "uuid-1",
         ticket_key: "TEST-1",
         state: "",

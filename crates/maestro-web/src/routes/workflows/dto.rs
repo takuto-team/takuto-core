@@ -90,6 +90,11 @@ pub struct WorkflowSummary {
     /// Whether a generated report file exists at `lore/reports/<key>_report.md` in the worktree.
     pub has_report: bool,
     /// Status of each dynamic workflow definition run for this ticket: def_name -> state display name.
+    ///
+    /// Plan-07 step 1: the wire field is `definition_runs` (the Rust
+    /// field keeps the old name until step 4's engine refactor renames
+    /// `Workflow.workflow_def_runs` → `WorkItem.definition_runs`).
+    #[serde(rename = "definition_runs")]
     pub workflow_def_runs: HashMap<String, String>,
     /// Absolute path of the git worktree on disk, if it exists.
     /// `None` while the worktree is still being pre-created in the background.

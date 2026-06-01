@@ -137,7 +137,7 @@ impl PrMergePoller {
                             .unwrap_or_default()
                     };
                     self.engine.broadcast_event(WorkflowEvent {
-                        event_type: "workflow_updated".to_string(),
+                        event_type: "work_item_updated".to_string(),
                         workflow_id: String::new(),
                         ticket_key: ticket_key.clone(),
                         state: state_line,

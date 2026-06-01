@@ -166,7 +166,7 @@ impl WorkflowDefinitionManager {
 
         // Broadcast update event
         self.event_bus.send(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
+            event_type: "work_item_updated".to_string(),
             workflow_id: workflow_id.clone(),
             ticket_key: ticket_key.to_string(),
             state: display,

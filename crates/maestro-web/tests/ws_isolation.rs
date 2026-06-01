@@ -31,7 +31,7 @@ use maestro_web::test_helpers::test_state_with_db;
 /// Build a WorkflowEvent shaped like a typical `workflow_updated` payload.
 fn make_event(ticket: &str, user_id: Option<&str>) -> WorkflowEvent {
     WorkflowEvent {
-        event_type: "workflow_updated".to_string(),
+        event_type: "work_item_updated".to_string(),
         workflow_id: "wf-1".to_string(),
         ticket_key: ticket.to_string(),
         state: "Pending".to_string(),

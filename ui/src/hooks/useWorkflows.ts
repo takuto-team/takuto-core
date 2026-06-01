@@ -104,7 +104,7 @@ export function useWorkflows() {
     (evt: WorkflowEvent) => {
       const { event_type, ticket_key } = evt;
 
-      if (event_type === "workflow_removed") {
+      if (event_type === "work_item_removed") {
         setWorkflows((prev) => {
           const next = { ...prev };
           delete next[ticket_key];

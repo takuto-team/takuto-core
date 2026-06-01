@@ -272,7 +272,7 @@ export function IssueCard({
         {workflowDefs.length > 0 && (
           <WorkflowDefButtons
             definitions={workflowDefs}
-            runStates={w.workflow_def_runs || {}}
+            runStates={w.definition_runs || {}}
             ticketKey={w.ticket_key}
             onRefresh={onRefresh}
             mainRunning={isActive}

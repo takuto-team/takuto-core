@@ -111,7 +111,7 @@ pub(super) async fn prepare_worktree_for_ticket(
             };
 
             let _ = event_tx.send(WorkflowEvent {
-                event_type: "workflow_updated".to_string(),
+                event_type: "work_item_updated".to_string(),
                 workflow_id,
                 ticket_key: ticket_key.to_string(),
                 state: "Pending".to_string(),

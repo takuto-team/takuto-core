@@ -121,7 +121,7 @@ impl WorkflowTransitions {
         ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
 
         self.event_bus.send(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
+            event_type: "work_item_updated".to_string(),
             workflow_id,
             ticket_key: ticket_key_owned,
             state: "Paused".to_string(),
@@ -164,7 +164,7 @@ impl WorkflowTransitions {
 
                 let state_line = workflow.status_display();
                 self.event_bus.send(WorkflowEvent {
-                    event_type: "workflow_updated".to_string(),
+                    event_type: "work_item_updated".to_string(),
                     workflow_id: workflow.id.clone(),
                     ticket_key: ticket_key.to_string(),
                     state: state_line,
@@ -357,7 +357,7 @@ impl WorkflowTransitions {
         }
 
         self.event_bus.send(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
+            event_type: "work_item_updated".to_string(),
             workflow_id,
             ticket_key: ticket_key_owned,
             state: "Stopped".to_string(),

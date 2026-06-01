@@ -72,7 +72,7 @@ describe("useWebSocket", () => {
     const ws = MockWebSocket.instances[0];
 
     const event = {
-      event_type: "workflow_updated",
+      event_type: "work_item_updated",
       workflow_id: "uuid-1",
       ticket_key: "TEST-1",
       state: "Done",

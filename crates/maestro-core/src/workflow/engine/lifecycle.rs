@@ -202,7 +202,7 @@ impl WorkflowLifecycle {
 
         // Broadcast event so the dashboard updates
         self.event_bus.send(WorkflowEvent {
-            event_type: "workflow_updated".to_string(),
+            event_type: "work_item_updated".to_string(),
             workflow_id: id.clone(),
             ticket_key: ticket_key.clone(),
             state: "Pending".to_string(),
@@ -349,7 +349,7 @@ impl WorkflowLifecycle {
         }
 
         self.event_bus.send(WorkflowEvent {
-            event_type: "workflow_removed".to_string(),
+            event_type: "work_item_removed".to_string(),
             workflow_id: String::new(),
             ticket_key: ticket_key.to_string(),
             state: String::new(),
@@ -496,7 +496,7 @@ impl WorkflowLifecycle {
         if workflow_removed {
             self.repository.inner_arc().write().await.remove(ticket_key);
             broadcast_event(WorkflowEvent {
-                event_type: "workflow_removed".to_string(),
+                event_type: "work_item_removed".to_string(),
                 workflow_id: String::new(),
                 ticket_key: ticket_key.to_string(),
                 state: String::new(),

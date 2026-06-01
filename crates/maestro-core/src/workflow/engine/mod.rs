@@ -474,7 +474,7 @@ impl WorkflowEngine {
     }
 
     pub fn broadcast_event(&self, mut event: WorkflowEvent) {
-        if event.event_type != "workflow_updated" {
+        if event.event_type != "work_item_updated" {
             self.event_bus.send(event);
             return;
         }

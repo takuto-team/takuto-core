@@ -44,7 +44,7 @@ const baseWorkflow: WorkflowSummary = {
   ],
   generate_report: false,
   has_report: false,
-  workflow_def_runs: {},
+  definition_runs: {},
   worktree_path: undefined,
   workspace_name: "maestro-core",
 };
@@ -138,7 +138,7 @@ export const Running: Story = {
       can_mark_done: false,
       progress_percent: 45,
       progress_steps_total: 5,
-      workflow_def_runs: {
+      definition_runs: {
         "address_pr_comments.toml": "running",
       },
     },
@@ -163,7 +163,7 @@ export const Paused: Story = {
       can_start: false,
       progress_percent: 60,
       progress_steps_total: 5,
-      workflow_def_runs: {
+      definition_runs: {
         "address_pr_comments.toml": "completed",
       },
     },
@@ -198,7 +198,7 @@ export const Completed: Story = {
         { index: 0, name: "Dev server", running: true, forwarded_port: [3000, "/s/dev123/"] },
         { index: 1, name: "Storybook", running: false, forwarded_port: null },
       ],
-      workflow_def_runs: {
+      definition_runs: {
         "address_pr_comments.toml": "completed",
         "merge_base.toml": "completed",
       },
@@ -227,7 +227,7 @@ export const CompletedMerged: Story = {
         { index: 0, name: "Dev server", running: false, forwarded_port: null },
         { index: 1, name: "Storybook", running: true, forwarded_port: [6006, "/s/sb456/"] },
       ],
-      workflow_def_runs: {
+      definition_runs: {
         "address_pr_comments.toml": "completed",
         "merge_base.toml": "completed",
         "deploy.toml": "completed",
@@ -258,7 +258,7 @@ export const Error: Story = {
         { index: 0, name: "Dev server", running: false, forwarded_port: null },
         { index: 1, name: "Storybook", running: false, forwarded_port: null },
       ],
-      workflow_def_runs: {
+      definition_runs: {
         "address_pr_comments.toml": "error",
         "merge_base.toml": "completed",
       },
@@ -283,7 +283,7 @@ export const Stopped: Story = {
         { index: 0, name: "Dev server", running: false, forwarded_port: null },
         { index: 1, name: "Storybook", running: false, forwarded_port: null },
       ],
-      workflow_def_runs: {
+      definition_runs: {
         "merge_base.toml": "completed",
       },
     },
@@ -375,7 +375,7 @@ export const CompletedWithRunCommands: Story = {
         { index: 0, name: "Dev server", running: true, forwarded_port: [3000, "/s/dev789/"] },
         { index: 1, name: "Storybook", running: false, forwarded_port: null },
       ],
-      workflow_def_runs: {
+      definition_runs: {
         "address_pr_comments.toml": "completed",
         "merge_base.toml": "running",
       },

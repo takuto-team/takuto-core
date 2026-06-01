@@ -50,7 +50,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   const handleEventWithDefs = useCallback((evt: WorkflowEvent) => {
     handleEvent(evt);
     if (evt.event_type === "workflow_definitions_changed" ||
-        evt.event_type === "workflow_updated" ||
+        evt.event_type === "work_item_updated" ||
         evt.event_type === "step_completed") {
       scheduleWorkflowDefsRefresh();
     }
