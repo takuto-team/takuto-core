@@ -529,6 +529,26 @@ pub async fn get_access_fields_by_ticket_key(
     )))
 }
 
+/// Plan-07 slice 12: full-row fetch keyed by ticket_key. No
+/// visibility filter — callers must run their own policy check
+/// (the route layer's `require_workflow_access` already does so as
+/// the first action on every endpoint that uses this). Picks the
+/// most-recently-started row when historical duplicates exist,
+/// mirroring [`get_access_fields_by_ticket_key`].
+pub async fn get_work_item_by_ticket_key(
+    adapter: &DbAdapter,
+    ticket_key: &str,
+) -> Result<Option<WorkItemRow>> {
+    let sql = format!(
+        "{SELECT_WORK_ITEM} WHERE ticket_key = ? ORDER BY started_at DESC LIMIT 1"
+    );
+    let row = adapter
+        .query_optional(&sql, vec![DbValue::Text(ticket_key.to_string())])
+        .await?;
+    let Some(row) = row else { return Ok(None) };
+    Ok(Some(decode_work_item(&row)?))
+}
+
 pub async fn get_work_item(
     adapter: &DbAdapter,
     id: &str,

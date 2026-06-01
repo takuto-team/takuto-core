@@ -424,6 +424,13 @@ pub async fn get_workflow(
 
 
 /// Return the generated report markdown for a workflow (from `lore/reports/<key>_report.md` in the worktree).
+///
+/// **Plan-07 slice 12 — DB is the primary source for `worktree_path`
+/// and `ticket_key`.** The route already gated access via
+/// `require_workflow_access`, so we read the full row without an
+/// additional visibility filter. The HashMap fallback covers
+/// workflows that pre-date the shadow-write (plan-07 step 6
+/// backfill will retire it).
 pub async fn get_workflow_report(
     State(engine): State<EngineState>,
     State(auth_state): State<AuthState>,
@@ -431,16 +438,42 @@ pub async fn get_workflow_report(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<WorkflowReportResponse>, StatusCode> {
     require_workflow_access(&engine, &auth_state, &auth, &id).await?;
-    let wf_arc = engine.engine.workflows_arc();
-    let workflows = wf_arc.read().await;
-    let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    let worktree_path = w
-        .worktree_path
-        .as_ref()
-        .ok_or(StatusCode::NOT_FOUND)?
-        .clone();
-    let ticket_key = w.ticket_key.clone();
-    drop(workflows);
+
+    // ── DB-first read of (worktree_path, ticket_key) ────────────
+    let mut resolved: Option<(std::path::PathBuf, String)> = None;
+    if let Some(database) = auth_state.db.as_ref() {
+        match maestro_core::db::work_items::get_work_item_by_ticket_key(
+            database.adapter(),
+            &id,
+        )
+        .await
+        {
+            Ok(Some(row)) => {
+                let Some(wt) = row.worktree_path else {
+                    return Err(StatusCode::NOT_FOUND);
+                };
+                resolved = Some((std::path::PathBuf::from(wt), row.ticket_key));
+            }
+            Ok(None) => { /* fall through to HashMap */ }
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        }
+    }
+
+    // ── Legacy HashMap fallback ────────────────────────────────
+    let (worktree_path, ticket_key) = match resolved {
+        Some(v) => v,
+        None => {
+            let wf_arc = engine.engine.workflows_arc();
+            let workflows = wf_arc.read().await;
+            let w = workflows.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+            let wt = w
+                .worktree_path
+                .as_ref()
+                .ok_or(StatusCode::NOT_FOUND)?
+                .clone();
+            (wt, w.ticket_key.clone())
+        }
+    };
 
     let report_path = worktree_path.join(format!("lore/reports/{ticket_key}_report.md"));
     if !report_path.exists() {
