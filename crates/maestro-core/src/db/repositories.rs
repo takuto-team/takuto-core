@@ -193,14 +193,12 @@ pub async fn delete(adapter: &DbAdapter, id: &str) -> Result<bool> {
 /// recently added first — matches the start-manual default repo selection).
 ///
 /// `added_at` is stored in whole seconds, so two calls to `add_for_user`
-/// within the same second produce ties. Sub-second insertion order is
-/// preserved via SQLite's monotonically-increasing `ROWID` as a secondary
-/// sort key — the most recently inserted association still wins on ties.
-///
-/// **Backend caveat**: the `ROWID` tie-break is SQLite-only. Postgres and
-/// MySQL don't expose a stable per-row insertion order. For sub-second
-/// determinism on those backends we'd need an explicit per-row sequence
-/// column. Plan §10 step 4 follow-up.
+/// within the same second produce ties. The secondary sort on
+/// `ur.repository_id DESC` gives every backend a deterministic order
+/// for tied rows — alphanumeric on the UUID, not insertion order, but
+/// stable across the cluster of backends we support. (The previous
+/// `ur.rowid DESC` was SQLite-only and broke `My Repositories` on
+/// Postgres with `column ur.rowid does not exist`.)
 pub async fn list_for_user(
     adapter: &DbAdapter,
     user_id: &str,
@@ -211,7 +209,7 @@ pub async fn list_for_user(
              FROM repositories r \
              INNER JOIN user_repositories ur ON ur.repository_id = r.id \
              WHERE ur.user_id = ? \
-             ORDER BY ur.added_at DESC, ur.rowid DESC",
+             ORDER BY ur.added_at DESC, ur.repository_id DESC",
             vec![DbValue::Text(user_id.to_string())],
         )
         .await?;
