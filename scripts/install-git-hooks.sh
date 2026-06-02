@@ -18,10 +18,26 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+repo_root="$(pwd)"
 
-mkdir -p .git/hooks
+# If `core.hooksPath` is set globally to a path that ISN'T this
+# repo's own `.git/hooks/`, git ignores `<repo>/.git/hooks/pre-push`
+# entirely. That breaks the install silently. Override locally so
+# this repo's hooks are read from this repo's hook directory — a
+# global setting pointing at someone else's repo is almost always
+# unintentional in this context.
+configured_hooks_path="$(git config --get core.hooksPath || true)"
+expected_hooks_path="$repo_root/.git/hooks"
+if [[ -n "$configured_hooks_path" && "$configured_hooks_path" != "$expected_hooks_path" ]]; then
+  echo "core.hooksPath is set globally to: $configured_hooks_path"
+  echo "Overriding locally for this repo so the hook lands where git reads it."
+  git config --local --unset-all core.hooksPath || true
+fi
 
-cat > .git/hooks/pre-push <<'HOOK'
+hooks_dir="$expected_hooks_path"
+mkdir -p "$hooks_dir"
+
+cat > "$hooks_dir/pre-push" <<'HOOK'
 #!/usr/bin/env bash
 # Auto-installed by scripts/install-git-hooks.sh.
 # Runs the same gates CI runs on every PR. To bypass once,
@@ -35,9 +51,9 @@ fi
 exec ./scripts/preflight.sh "${ARGS[@]}"
 HOOK
 
-chmod +x .git/hooks/pre-push
+chmod +x "$hooks_dir/pre-push"
 
-echo "Installed pre-push hook → .git/hooks/pre-push"
+echo "Installed pre-push hook → $hooks_dir/pre-push"
 echo
 echo "Bypass once:           git push --no-verify"
 echo "Run full set on push:  PREFLIGHT_FULL=1 git push"
