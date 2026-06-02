@@ -44,10 +44,16 @@ cat > "$hooks_dir/pre-push" <<'HOOK'
 # `git push --no-verify`.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+# Git passes the to-be-pushed refs to this hook on stdin. Drain
+# the stream BEFORE running the gates so subprocesses (cargo,
+# npm, etc.) can't consume it — otherwise git's "what should I
+# push" list disappears and the push silently no-ops while
+# reporting success.
+cat >/dev/null
 if [[ "${PREFLIGHT_FULL:-0}" == "1" ]]; then
-  exec ./scripts/preflight.sh --full
+  exec ./scripts/preflight.sh --full </dev/null
 else
-  exec ./scripts/preflight.sh
+  exec ./scripts/preflight.sh </dev/null
 fi
 HOOK
 
