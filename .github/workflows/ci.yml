@@ -177,5 +177,8 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      - name: npm test
+        run: npm test
+
       - name: npm run build
         run: npm run build
