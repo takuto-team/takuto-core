@@ -1299,27 +1299,47 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{SignalKind, signal};
-                // SAFETY: `signal(SIGTERM)` only fails on a system that does
-                // not support tokio's signal driver (no Unix process flag, no
-                // tokio runtime). Both are guaranteed by the cfg(unix) gate +
-                // the `#[tokio::main]`-equivalent runtime we already entered.
-                let mut sigterm = signal(SignalKind::terminate())
-                    .expect("signal(SIGTERM) cannot fail under cfg(unix) + tokio runtime");
-                tokio::select! {
-                    _ = ctrl_c => {
-                        info!("Received SIGINT, initiating graceful shutdown");
+                match signal(SignalKind::terminate()) {
+                    Ok(mut sigterm) => {
+                        tokio::select! {
+                            _ = ctrl_c => {
+                                info!("Received SIGINT, initiating graceful shutdown");
+                            }
+                            _ = sigterm.recv() => {
+                                info!("Received SIGTERM, initiating graceful shutdown");
+                            }
+                        }
                     }
-                    _ = sigterm.recv() => {
-                        info!("Received SIGTERM, initiating graceful shutdown");
+                    Err(e) => {
+                        // Degrade gracefully: keep running with only the Ctrl+C
+                        // hook. SIGTERM-based shutdown is unavailable, but the
+                        // process still responds to SIGINT and cancellation.
+                        tracing::error!(
+                            error = %e,
+                            "Failed to install SIGTERM handler; continuing with Ctrl+C only"
+                        );
+                        if let Err(e) = ctrl_c.await {
+                            tracing::error!(
+                                error = %e,
+                                "Ctrl+C handler unavailable; running without signal-based shutdown"
+                            );
+                            std::future::pending::<()>().await;
+                        }
+                        info!("Received Ctrl+C, initiating graceful shutdown");
                     }
                 }
             }
             #[cfg(not(unix))]
             {
-                // SAFETY: `ctrl_c().await` only fails on a system without a
-                // ctrl_c hook (none of our supported targets), or if no tokio
-                // runtime is active — both impossible here.
-                ctrl_c.await.expect("ctrl_c() cannot fail under tokio runtime");
+                if let Err(e) = ctrl_c.await {
+                    // No Ctrl+C hook available: park forever rather than triggering
+                    // an immediate shutdown. The process still stops via cancellation.
+                    tracing::error!(
+                        error = %e,
+                        "Ctrl+C handler unavailable; running without signal-based shutdown"
+                    );
+                    std::future::pending::<()>().await;
+                }
                 info!("Received Ctrl+C, initiating graceful shutdown");
             }
         } => {

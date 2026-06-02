@@ -144,12 +144,15 @@ pub async fn open_editor(
     {
         let mut entries = Vec::new();
         for (cp, hp) in &info.port_mappings {
-            let path_token = editor.path_token_registry.register(SessionRoute {
+            let Some(path_token) = editor.path_token_registry.register(SessionRoute {
                 kind: SessionRouteKind::DynamicPort,
                 host_port: *hp,
                 ticket_key: ticket_key.clone(),
                 user_id: auth.user_id.clone(),
-            }).await;
+            }).await else {
+                tracing::error!(container_port = *cp, host_port = *hp, "Could not allocate a proxy token; skipping port mapping");
+                continue;
+            };
             let proxy_url = container::build_session_dynamic_port_url(&path_token);
             // Shadow-write the static port row.
             maestro_core::db::work_items::shadow_upsert_port_mapping(
@@ -386,17 +389,19 @@ pub async fn open_terminal(
             .await
         {
             Some(t) => t,
-            None => {
-                editor
-                    .path_token_registry
-                    .register(SessionRoute {
-                        kind: SessionRouteKind::Terminal,
-                        host_port: port,
-                        ticket_key: id.clone(),
-                        user_id: auth.user_id.clone(),
-                    })
-                    .await
-            }
+            None => editor
+                .path_token_registry
+                .register(SessionRoute {
+                    kind: SessionRouteKind::Terminal,
+                    host_port: port,
+                    ticket_key: id.clone(),
+                    user_id: auth.user_id.clone(),
+                })
+                .await
+                .ok_or((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Could not allocate a proxy token for the terminal.".to_string(),
+                ))?,
         };
         let url = container::build_session_terminal_url(&path_token, &token);
         return Ok(Json(OpenTerminalResponse {
@@ -428,7 +433,11 @@ pub async fn open_terminal(
                 ticket_key: id.clone(),
                 user_id: auth.user_id.clone(),
             })
-            .await;
+            .await
+            .ok_or((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not allocate a proxy token for the terminal.".to_string(),
+            ))?;
         let url = container::build_session_terminal_url(&path_token, &token);
         return Ok(Json(OpenTerminalResponse {
             url,
@@ -464,7 +473,11 @@ pub async fn open_terminal(
             ticket_key: id.clone(),
             user_id: auth.user_id.clone(),
         })
-        .await;
+        .await
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not allocate a proxy token for the terminal.".to_string(),
+        ))?;
     let url = container::build_session_terminal_url(&path_token, &token);
 
     tracing::info!(workflow = %id, port, "Terminal started on port");

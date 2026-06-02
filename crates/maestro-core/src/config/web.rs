@@ -128,16 +128,14 @@ pub fn validate_cors_origin(origin: &str) -> std::result::Result<String, String>
 
     // Normalize default ports: strip :80 for http, :443 for https.
     let normalized = match scheme {
-        // SAFETY: the match guard `ends_with(":80")` proves the suffix
-        // exists, so `strip_suffix` returns `Some`.
-        "http" if authority.ends_with(":80") => {
-            format!("http://{}", authority.strip_suffix(":80").expect("ends_with :80 above"))
-        }
-        // SAFETY: the match guard `ends_with(":443")` proves the suffix
-        // exists, so `strip_suffix` returns `Some`.
-        "https" if authority.ends_with(":443") => {
-            format!("https://{}", authority.strip_suffix(":443").expect("ends_with :443 above"))
-        }
+        "http" => match authority.strip_suffix(":80") {
+            Some(host) => format!("http://{host}"),
+            None => format!("http://{authority}"),
+        },
+        "https" => match authority.strip_suffix(":443") {
+            Some(host) => format!("https://{host}"),
+            None => format!("https://{authority}"),
+        },
         _ => format!("{scheme}://{authority}"),
     };
 

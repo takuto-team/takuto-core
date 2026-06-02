@@ -102,7 +102,12 @@ impl PathTokenRegistry {
     /// existing entry. `HashMap::entry` is used so the check-and-insert is
     /// atomic under the held write guard — no TOCTOU between lookup and
     /// insert.
-    pub async fn register(&self, route: SessionRoute) -> String {
+    ///
+    /// Returns `None` only if every attempt collides — astronomically
+    /// unlikely with 128 bits of entropy, and only reachable under a
+    /// degraded CSPRNG. Callers treat `None` as a transient failure (skip the
+    /// route or respond `500`) rather than aborting the process.
+    pub async fn register(&self, route: SessionRoute) -> Option<String> {
         let mut guard = self.inner.write().await;
         // 128 bits of entropy: collisions are negligible. The bounded loop
         // is belt-and-braces so a runaway loop is impossible even under
@@ -111,11 +116,13 @@ impl PathTokenRegistry {
             let token = generate_session_path_token();
             if let std::collections::hash_map::Entry::Vacant(slot) = guard.entry(token.clone()) {
                 slot.insert(route);
-                return token;
+                return Some(token);
             }
         }
-        // Astronomically unlikely; treat as a logic error.
-        panic!("PathTokenRegistry::register: 8 consecutive 128-bit collisions");
+        tracing::error!(
+            "PathTokenRegistry::register: 8 consecutive 128-bit token collisions; CSPRNG may be degraded"
+        );
+        None
     }
 
     /// Register with a caller-supplied token. Returns `true` on insert,
@@ -244,7 +251,7 @@ mod tests {
     #[tokio::test]
     async fn register_returns_token_present_in_lookup() {
         let reg = PathTokenRegistry::new();
-        let token = reg.register(editor_route("PROJ-1", 9101)).await;
+        let token = reg.register(editor_route("PROJ-1", 9101)).await.expect("register");
         let route = reg.lookup(&token).await.expect("just registered");
         assert_eq!(route.kind, SessionRouteKind::Editor);
         assert_eq!(route.host_port, 9101);
@@ -254,7 +261,7 @@ mod tests {
     #[tokio::test]
     async fn register_returns_32_char_hex_token() {
         let reg = PathTokenRegistry::new();
-        let token = reg.register(editor_route("PROJ-1", 9101)).await;
+        let token = reg.register(editor_route("PROJ-1", 9101)).await.expect("register");
         assert_eq!(token.len(), 32);
         assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -262,7 +269,7 @@ mod tests {
     #[tokio::test]
     async fn lookup_unknown_token_returns_none() {
         let reg = PathTokenRegistry::new();
-        let _ = reg.register(editor_route("PROJ-1", 9101)).await;
+        let _ = reg.register(editor_route("PROJ-1", 9101)).await.expect("register");
         assert!(reg.lookup("not-a-real-token").await.is_none());
         // Even a well-formed-looking but unknown token returns None.
         assert!(
@@ -275,8 +282,8 @@ mod tests {
     #[tokio::test]
     async fn register_produces_distinct_tokens_per_call() {
         let reg = PathTokenRegistry::new();
-        let t1 = reg.register(editor_route("A", 9101)).await;
-        let t2 = reg.register(terminal_route("A", 9102)).await;
+        let t1 = reg.register(editor_route("A", 9101)).await.expect("register");
+        let t2 = reg.register(terminal_route("A", 9102)).await.expect("register");
         assert_ne!(t1, t2);
         assert!(reg.lookup(&t1).await.is_some());
         assert!(reg.lookup(&t2).await.is_some());
@@ -285,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn remove_drops_route() {
         let reg = PathTokenRegistry::new();
-        let token = reg.register(editor_route("PROJ-1", 9101)).await;
+        let token = reg.register(editor_route("PROJ-1", 9101)).await.expect("register");
         assert!(reg.lookup(&token).await.is_some());
         let dropped = reg.remove(&token).await;
         assert!(dropped.is_some());
@@ -303,9 +310,9 @@ mod tests {
     #[tokio::test]
     async fn remove_for_ticket_drops_only_owned_routes() {
         let reg = PathTokenRegistry::new();
-        let _ = reg.register(editor_route("A", 9101)).await;
-        let _ = reg.register(terminal_route("A", 9102)).await;
-        let b_token = reg.register(editor_route("B", 9103)).await;
+        let _ = reg.register(editor_route("A", 9101)).await.expect("register");
+        let _ = reg.register(terminal_route("A", 9102)).await.expect("register");
+        let b_token = reg.register(editor_route("B", 9103)).await.expect("register");
         let dropped = reg.remove_for_ticket("A").await;
         assert_eq!(dropped.len(), 2);
         assert_eq!(reg.len().await, 1);
@@ -319,7 +326,7 @@ mod tests {
         for i in 0..50 {
             let r = reg.clone();
             handles.push(tokio::spawn(async move {
-                r.register(editor_route(&format!("T-{i}"), 9100 + i)).await
+                r.register(editor_route(&format!("T-{i}"), 9100 + i)).await.expect("register")
             }));
         }
         let mut tokens = Vec::new();
@@ -337,8 +344,8 @@ mod tests {
     #[tokio::test]
     async fn kind_is_preserved() {
         let reg = PathTokenRegistry::new();
-        let e = reg.register(editor_route("A", 9101)).await;
-        let t = reg.register(terminal_route("A", 9102)).await;
+        let e = reg.register(editor_route("A", 9101)).await.expect("register");
+        let t = reg.register(terminal_route("A", 9102)).await.expect("register");
         assert_eq!(reg.lookup(&e).await.unwrap().kind, SessionRouteKind::Editor);
         assert_eq!(
             reg.lookup(&t).await.unwrap().kind,
@@ -377,9 +384,9 @@ mod tests {
     #[tokio::test]
     async fn remove_for_ticket_kind_drops_only_matching_kind() {
         let reg = PathTokenRegistry::new();
-        let editor_token = reg.register(editor_route("A", 9101)).await;
-        let terminal_token = reg.register(terminal_route("A", 9102)).await;
-        let _ = reg.register(editor_route("B", 9103)).await;
+        let editor_token = reg.register(editor_route("A", 9101)).await.expect("register");
+        let terminal_token = reg.register(terminal_route("A", 9102)).await.expect("register");
+        let _ = reg.register(editor_route("B", 9103)).await.expect("register");
 
         // Remove only terminal routes for ticket A.
         let dropped = reg
@@ -399,8 +406,8 @@ mod tests {
     #[tokio::test]
     async fn remove_for_ticket_kind_preserves_other_ticket() {
         let reg = PathTokenRegistry::new();
-        let _ = reg.register(terminal_route("A", 9101)).await;
-        let b_term = reg.register(terminal_route("B", 9102)).await;
+        let _ = reg.register(terminal_route("A", 9101)).await.expect("register");
+        let b_term = reg.register(terminal_route("B", 9102)).await.expect("register");
 
         let dropped = reg
             .remove_for_ticket_kind("A", SessionRouteKind::Terminal)
@@ -413,7 +420,7 @@ mod tests {
     #[tokio::test]
     async fn remove_for_ticket_kind_noop_when_no_match() {
         let reg = PathTokenRegistry::new();
-        let editor_token = reg.register(editor_route("A", 9101)).await;
+        let editor_token = reg.register(editor_route("A", 9101)).await.expect("register");
 
         // No terminal route for A exists — should be a no-op.
         let dropped = reg
@@ -430,8 +437,8 @@ mod tests {
     #[tokio::test]
     async fn find_token_for_returns_matching_token() {
         let reg = PathTokenRegistry::new();
-        let editor_token = reg.register(editor_route("A", 9101)).await;
-        let _ = reg.register(terminal_route("A", 9102)).await;
+        let editor_token = reg.register(editor_route("A", 9101)).await.expect("register");
+        let _ = reg.register(terminal_route("A", 9102)).await.expect("register");
 
         let found = reg
             .find_token_for("A", SessionRouteKind::Editor)
@@ -442,7 +449,7 @@ mod tests {
     #[tokio::test]
     async fn find_token_for_returns_none_when_kind_mismatch() {
         let reg = PathTokenRegistry::new();
-        let _ = reg.register(editor_route("A", 9101)).await;
+        let _ = reg.register(editor_route("A", 9101)).await.expect("register");
 
         let found = reg
             .find_token_for("A", SessionRouteKind::Terminal)
@@ -453,7 +460,7 @@ mod tests {
     #[tokio::test]
     async fn find_token_for_returns_none_when_ticket_mismatch() {
         let reg = PathTokenRegistry::new();
-        let _ = reg.register(editor_route("A", 9101)).await;
+        let _ = reg.register(editor_route("A", 9101)).await.expect("register");
 
         let found = reg
             .find_token_for("B", SessionRouteKind::Editor)
@@ -474,9 +481,9 @@ mod tests {
     #[tokio::test]
     async fn dynamic_port_kind_preserved_and_scoped() {
         let reg = PathTokenRegistry::new();
-        let editor = reg.register(editor_route("A", 9101)).await;
-        let terminal = reg.register(terminal_route("A", 9102)).await;
-        let dyn_tok = reg.register(dynamic_port_route("A", 9103)).await;
+        let editor = reg.register(editor_route("A", 9101)).await.expect("register");
+        let terminal = reg.register(terminal_route("A", 9102)).await.expect("register");
+        let dyn_tok = reg.register(dynamic_port_route("A", 9103)).await.expect("register");
 
         assert_eq!(reg.lookup(&dyn_tok).await.unwrap().kind, SessionRouteKind::DynamicPort);
 

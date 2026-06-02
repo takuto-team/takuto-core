@@ -329,6 +329,11 @@ pub fn apply_migrations_blocking(adapter: &DbAdapter) -> Result<(), sqlx::migrat
                 .map_err(|e| sqlx::migrate::MigrateError::Execute(sqlx::Error::Io(e)))?;
             rt.block_on(apply_migrations(&adapter))
         })
+        // SAFETY: `join()` only returns `Err` when the spawned thread itself
+        // panicked. Re-propagating that panic preserves the original migration
+        // failure (and its backtrace) instead of masking it behind a synthetic
+        // error variant; the migration body returns its errors via the inner
+        // `Result`, which is what this function forwards on the success path.
         .join()
         .expect("migration thread panicked")
     })

@@ -77,6 +77,9 @@ pub fn build_ignore_tail(backend: DbBackend, conflict_cols: &[&str]) -> String {
         DbBackend::MySql => {
             // The no-op assignment must reference some column; using the
             // first conflict column is uniformly safe.
+            // SAFETY: every caller passes a non-empty `conflict_cols` — an
+            // upsert has no meaning without conflict columns — so an empty
+            // slice is a programming error, not a runtime condition.
             let first = conflict_cols
                 .first()
                 .copied()

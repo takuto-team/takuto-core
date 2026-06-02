@@ -196,12 +196,12 @@ impl ProcessHandle {
             .child
             .stdout
             .take()
-            .expect("ProcessHandle::spawn pipes stdout; take() called once");
+            .ok_or_else(|| std::io::Error::other("child stdout pipe missing"))?;
         let stderr = self
             .child
             .stderr
             .take()
-            .expect("ProcessHandle::spawn pipes stderr; take() called once");
+            .ok_or_else(|| std::io::Error::other("child stderr pipe missing"))?;
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
@@ -267,12 +267,12 @@ impl ProcessHandle {
             .child
             .stdout
             .take()
-            .expect("ProcessHandle::spawn pipes stdout; take() called once");
+            .ok_or_else(|| std::io::Error::other("child stdout pipe missing"))?;
         let stderr = self
             .child
             .stderr
             .take()
-            .expect("ProcessHandle::spawn pipes stderr; take() called once");
+            .ok_or_else(|| std::io::Error::other("child stderr pipe missing"))?;
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();

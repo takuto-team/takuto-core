@@ -485,12 +485,15 @@ pub async fn get_workflow(
         let mut entries = Vec::new();
         let mut result = Vec::new();
         for (cp, hp) in &raw {
-            let path_token = editor.path_token_registry.register(SessionRoute {
+            let Some(path_token) = editor.path_token_registry.register(SessionRoute {
                 kind: SessionRouteKind::DynamicPort,
                 host_port: *hp,
                 ticket_key: ticket_key.clone(),
                 user_id: auth.user_id.clone(),
-            }).await;
+            }).await else {
+                tracing::error!(container_port = *cp, host_port = *hp, "Could not allocate a proxy token; skipping port mapping");
+                continue;
+            };
             let proxy_url = container::build_session_dynamic_port_url(&path_token);
             result.push((*cp, proxy_url.clone()));
             entries.push(DynamicPortForward {

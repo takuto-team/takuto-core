@@ -46,12 +46,15 @@ pub async fn track_port_forwards(
                             let mut map = dyn_fwd.write().await;
                             let list = map.entry(ticket_key.clone()).or_default();
                             if !list.iter().any(|f| f.container_port == cp) {
-                                let path_token = registry.register(SessionRoute {
+                                let Some(path_token) = registry.register(SessionRoute {
                                     kind: SessionRouteKind::DynamicPort,
                                     host_port: hp,
                                     ticket_key: ticket_key.clone(),
                                     user_id: user_id.clone(),
-                                }).await;
+                                }).await else {
+                                    tracing::error!(container_port = cp, host_port = hp, "Could not allocate a proxy token; skipping forwarded port");
+                                    continue;
+                                };
                                 let proxy_url = container::build_session_dynamic_port_url(&path_token);
                                 // Shadow-write the scanner-detected Dynamic
                                 // port row. Cleanup is handled in bulk by

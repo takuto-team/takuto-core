@@ -38,23 +38,23 @@ static CURRENT_TIER: OnceLock<LicenseTier> = OnceLock::new();
 
 /// Initialise the license tier from the `MAESTRO_LICENSE_TIER` environment variable.
 ///
-/// Must be called once at startup. Panics with a clear message if the value is
-/// unrecognised, so operators see the problem immediately.
+/// Called once at startup. An unrecognised value is a fatal misconfiguration:
+/// the error is logged and the process exits so operators see it immediately.
 pub fn init_license_tier() {
     let raw = std::env::var("MAESTRO_LICENSE_TIER").unwrap_or_else(|_| "community".to_string());
-    let tier = LicenseTier::from_str_value(&raw).unwrap_or_else(|| {
-        panic!(
+    let Some(tier) = LicenseTier::from_str_value(&raw) else {
+        tracing::error!(
             "Invalid MAESTRO_LICENSE_TIER value: \"{raw}\". \
              Expected one of: community, cloud, enterprise."
         );
-    });
-    // SAFETY: `OnceLock::set` only fails when the cell is already initialised.
-    // `init_license_tier` is called exactly once from `maestro-cli/src/main.rs`
-    // during startup before any spawned task. A second call is a programming
-    // error and panics deterministically.
-    CURRENT_TIER
-        .set(tier)
-        .expect("init_license_tier must be called exactly once at startup");
+        std::process::exit(1);
+    };
+    // `init_license_tier` is called exactly once during startup before any
+    // spawned task. A redundant call leaves the already-set tier untouched.
+    if CURRENT_TIER.set(tier).is_err() {
+        tracing::warn!("License tier already initialised; ignoring repeat call");
+        return;
+    }
     tracing::info!("License tier: {tier}");
 }
 
