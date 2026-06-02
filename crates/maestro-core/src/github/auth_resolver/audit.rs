@@ -11,9 +11,9 @@
 //! debounce window and the `(event="used", outcome="ok")` row layout are
 //! a stable part of the security audit contract.
 
+use crate::db::Database;
 use crate::db::credential_audit::{self, CredentialAuditKind};
 use crate::db::github_credentials;
-use crate::db::Database;
 
 /// "First use in the last minute" debounce. Returns `true` if we should
 /// emit an audit row for this use. `last_used` is the previous
@@ -42,9 +42,7 @@ pub(super) fn should_audit_first_use(last_used: Option<&str>) -> bool {
 /// is acceptable (the touch precedes the audit log, so a failure between
 /// them leaves the debounce flag in the safe state).
 pub(super) async fn record_first_use(db: &Database, user_id: &str) {
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let adapter = db.adapter();
     let _ = github_credentials::touch_last_validated_adapter(adapter, user_id, &now).await;
     let _ = credential_audit::log(
@@ -59,4 +57,3 @@ pub(super) async fn record_first_use(db: &Database, user_id: &str) {
     )
     .await;
 }
-

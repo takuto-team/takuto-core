@@ -151,8 +151,7 @@ command = "npm run dev"
 
 #[test]
 fn runtime_patch_json_unknown_top_level_field_fails() {
-    let err =
-        serde_json::from_str::<RuntimeDashboardConfigPatch>(r#"{"jira":{}}"#).unwrap_err();
+    let err = serde_json::from_str::<RuntimeDashboardConfigPatch>(r#"{"jira":{}}"#).unwrap_err();
     let s = err.to_string();
     assert!(
         s.contains("unknown field") || s.contains("Unknown field"),
@@ -708,8 +707,7 @@ provider = "opencode"
 
 fn config_with_provisioning(cmds: &[&str]) -> Config {
     let mut cfg = Config::default();
-    cfg.provisioning.install_commands =
-        cmds.iter().map(|s| s.to_string()).collect();
+    cfg.provisioning.install_commands = cmds.iter().map(|s| s.to_string()).collect();
     cfg
 }
 
@@ -724,8 +722,10 @@ fn provisioning_sha_is_stable_for_same_content() {
     // 64 lowercase hex chars (sha256 hex digest).
     let sha = a.provisioning_sha();
     assert_eq!(sha.len(), 64, "sha must be 64 hex chars; got {sha}");
-    assert!(sha.chars().all(|c| c.is_ascii_hexdigit()
-        && (!c.is_ascii_alphabetic() || c.is_ascii_lowercase())));
+    assert!(
+        sha.chars()
+            .all(|c| c.is_ascii_hexdigit() && (!c.is_ascii_alphabetic() || c.is_ascii_lowercase()))
+    );
 }
 
 /// T-PROV-SHA-002: edit a command → SHA changes (cache invalidation).

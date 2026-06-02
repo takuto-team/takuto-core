@@ -607,9 +607,7 @@ mod system_status_tests {
     /// already-covered `config_missing` case).
     #[test]
     fn check_config_dir_writable_returns_none_when_parent_missing() {
-        let cfg_path = std::path::Path::new(
-            "/nonexistent/maestro-task-37/parent/config.toml",
-        );
+        let cfg_path = std::path::Path::new("/nonexistent/maestro-task-37/parent/config.toml");
         let result = check_config_dir_writable(cfg_path);
         assert!(
             result.is_none(),

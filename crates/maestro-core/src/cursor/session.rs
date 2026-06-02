@@ -88,9 +88,11 @@ async fn run_cursor_agent_session(
     resume_session_id: Option<&str>,
     container_runner: Option<&ContainerRunner>,
 ) -> Result<(String, String)> {
-    let workspace = worktree.to_str().ok_or(AgentError::WorktreePathInvalidUtf8 {
-        provider: AiAgentProvider::Cursor,
-    })?;
+    let workspace = worktree
+        .to_str()
+        .ok_or(AgentError::WorktreePathInvalidUtf8 {
+            provider: AiAgentProvider::Cursor,
+        })?;
 
     let mut owned: Vec<String> = vec![
         "-p".to_string(),
@@ -136,8 +138,7 @@ async fn run_cursor_agent_session(
         ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
     } else {
         ProcessHandle::spawn(cursor_cli, &arg_refs, worktree, cancel_token).await
-    }
-    ?;
+    }?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await

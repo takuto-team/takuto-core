@@ -220,9 +220,11 @@ mod tests {
         assert!(!s.has_critical());
         s.warnings.push(StructuredWarning::warning("x", "x"));
         s.warnings.push(StructuredWarning::info("y", "y"));
-        assert!(!s.has_critical(), "non-critical warnings must not trip has_critical");
-        s.warnings
-            .push(StructuredWarning::critical("z", "z"));
+        assert!(
+            !s.has_critical(),
+            "non-critical warnings must not trip has_critical"
+        );
+        s.warnings.push(StructuredWarning::critical("z", "z"));
         assert!(s.has_critical());
     }
 }

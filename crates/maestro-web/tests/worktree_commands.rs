@@ -33,9 +33,7 @@ async fn create_and_login_regular_user(
     password: &str,
 ) -> String {
     let app = build_router(state.clone());
-    let body = format!(
-        r#"{{"username":"{username}","password":"{password}","role":"user"}}"#
-    );
+    let body = format!(r#"{{"username":"{username}","password":"{password}","role":"user"}}"#);
     let resp = app
         .oneshot(
             Request::post("/api/users")
@@ -91,11 +89,7 @@ async fn put_commands(
     .unwrap()
 }
 
-async fn get_one(
-    state: &AppState,
-    cookie: &str,
-    workspace: &str,
-) -> axum::response::Response {
+async fn get_one(state: &AppState, cookie: &str, workspace: &str) -> axum::response::Response {
     let app = build_router(state.clone());
     app.oneshot(
         Request::get(format!("/api/worktree-commands/{workspace}"))
@@ -119,11 +113,7 @@ async fn list_mine(state: &AppState, cookie: &str) -> axum::response::Response {
     .unwrap()
 }
 
-async fn delete_one(
-    state: &AppState,
-    cookie: &str,
-    workspace: &str,
-) -> axum::response::Response {
+async fn delete_one(state: &AppState, cookie: &str, workspace: &str) -> axum::response::Response {
     let app = build_router(state.clone());
     app.oneshot(
         Request::builder()
@@ -149,12 +139,16 @@ async fn non_admin_can_put_and_get_their_own() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
     let user_cookie =
-        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#")
-            .await;
+        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#").await;
 
-    let body = r#"{"init_commands":["echo init"],"run_commands":[{"name":"UI","command":"npm run dev"}]}"#;
+    let body =
+        r#"{"init_commands":["echo init"],"run_commands":[{"name":"UI","command":"npm run dev"}]}"#;
     let resp = put_commands(&state, &user_cookie, "frontend", body).await;
-    assert_eq!(resp.status(), StatusCode::OK, "PUT should succeed for non-admin");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "PUT should succeed for non-admin"
+    );
 
     let resp = get_one(&state, &user_cookie, "frontend").await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -176,14 +170,12 @@ async fn user_a_cannot_see_user_b_data() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
     let alice =
-        create_and_login_regular_user(&state, &admin_cookie, "alice", "secretpassword123!@#")
-            .await;
-    let bob = create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#")
-        .await;
+        create_and_login_regular_user(&state, &admin_cookie, "alice", "secretpassword123!@#").await;
+    let bob =
+        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#").await;
 
     // Alice saves a row for `frontend`.
-    let alice_body =
-        r#"{"init_commands":["echo alice-init"],"run_commands":[{"name":"Alice","command":"true"}]}"#;
+    let alice_body = r#"{"init_commands":["echo alice-init"],"run_commands":[{"name":"Alice","command":"true"}]}"#;
     assert_eq!(
         put_commands(&state, &alice, "frontend", alice_body)
             .await
@@ -287,8 +279,7 @@ async fn _workspaces_includes_has_my_commands() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
     let user_cookie =
-        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#")
-            .await;
+        create_and_login_regular_user(&state, &admin_cookie, "bob", "secretpassword123!@#").await;
 
     // Save a row for `frontend` so the DB read has something to match against.
     assert_eq!(
@@ -338,8 +329,7 @@ async fn put_rejects_oversize_init_list() {
     let admin_cookie = register_and_login(&state).await;
 
     let cmds: Vec<String> = (0..51).map(|i| format!("echo {i}")).collect();
-    let body =
-        serde_json::json!({ "init_commands": cmds, "run_commands": [] }).to_string();
+    let body = serde_json::json!({ "init_commands": cmds, "run_commands": [] }).to_string();
     let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
@@ -352,8 +342,7 @@ async fn put_rejects_oversize_run_list() {
     let rcs: Vec<_> = (0..51)
         .map(|i| serde_json::json!({ "name": format!("n{i}"), "command": "echo" }))
         .collect();
-    let body =
-        serde_json::json!({ "init_commands": [], "run_commands": rcs }).to_string();
+    let body = serde_json::json!({ "init_commands": [], "run_commands": rcs }).to_string();
     let resp = put_commands(&state, &admin_cookie, "frontend", &body).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
@@ -418,8 +407,7 @@ async fn put_rejects_empty_run_name() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
-    let body =
-        r#"{"init_commands":[],"run_commands":[{"name":"  ","command":"echo"}]}"#;
+    let body = r#"{"init_commands":[],"run_commands":[{"name":"  ","command":"echo"}]}"#;
     let resp = put_commands(&state, &admin_cookie, "frontend", body).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
@@ -429,8 +417,7 @@ async fn put_rejects_empty_run_command() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 
-    let body =
-        r#"{"init_commands":[],"run_commands":[{"name":"ok","command":""}]}"#;
+    let body = r#"{"init_commands":[],"run_commands":[{"name":"ok","command":""}]}"#;
     let resp = put_commands(&state, &admin_cookie, "frontend", body).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
@@ -524,13 +511,8 @@ async fn put_rejects_path_traversal_workspace_name() {
 async fn list_top_level_returns_only_callers_rows_sorted() {
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
-    let alice = create_and_login_regular_user(
-        &state,
-        &admin_cookie,
-        "alice",
-        "secretpassword123!@#",
-    )
-    .await;
+    let alice =
+        create_and_login_regular_user(&state, &admin_cookie, "alice", "secretpassword123!@#").await;
 
     // Alice writes two rows.
     assert_eq!(

@@ -143,10 +143,12 @@ impl ConfigWriter {
             .write(true)
             .truncate(true)
             .open(&lock_path)?;
-        lock_file.lock_exclusive().map_err(|e| ConfigError::Operational {
-            op: "config file lock",
-            detail: e.to_string(),
-        })?;
+        lock_file
+            .lock_exclusive()
+            .map_err(|e| ConfigError::Operational {
+                op: "config file lock",
+                detail: e.to_string(),
+            })?;
 
         // 4. Write to temp file.
         let tmp_path = self.config_path.with_extension("toml.tmp");
@@ -167,10 +169,9 @@ impl ConfigWriter {
                     "config.toml is bind-mounted as a single file; \
                      using in-place write fallback (atomic rename returned EBUSY)"
                 );
-                if let Err(write_err) = Self::write_in_place_with_backup(
-                    &self.config_path,
-                    toml_string.as_bytes(),
-                ) {
+                if let Err(write_err) =
+                    Self::write_in_place_with_backup(&self.config_path, toml_string.as_bytes())
+                {
                     let _ = fs::remove_file(&tmp_path);
                     let _ = lock_file.unlock();
                     return Err(write_err.into());
@@ -232,10 +233,7 @@ impl ConfigWriter {
         // contents are zeroed before write_all — required because the bind
         // mount may already be open by another reader. fsync to make the
         // new contents durable.
-        let mut f = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(target)?;
+        let mut f = OpenOptions::new().write(true).truncate(true).open(target)?;
         f.write_all(new_contents)?;
         f.sync_all()?;
         Ok(())
@@ -431,7 +429,10 @@ step_timeout_secs = 600
 
         // .bak file exists and carries the PRE-write contents.
         let bak_path = path.with_extension("toml.bak");
-        assert!(bak_path.exists(), ".bak file must exist after in-place write");
+        assert!(
+            bak_path.exists(),
+            ".bak file must exist after in-place write"
+        );
         let bak_content = fs::read_to_string(&bak_path).unwrap();
         assert_eq!(
             bak_content, original_content,

@@ -218,11 +218,7 @@ pub fn resolve_cookie_secure(web: &WebConfig, headers: &HeaderMap) -> bool {
     if let Some(v) = web.cookie_secure {
         return v;
     }
-    if web
-        .cors_origins
-        .iter()
-        .any(|o| o.starts_with("https://"))
-    {
+    if web.cors_origins.iter().any(|o| o.starts_with("https://")) {
         return true;
     }
     if let Some(proto) = headers
@@ -436,10 +432,7 @@ pub async fn validate_db_session_no_extend(
 }
 
 /// Delete a specific database session. Returns `true` if a session was deleted.
-pub async fn delete_db_session(
-    adapter: &maestro_core::db::DbAdapter,
-    cookie_value: &str,
-) -> bool {
+pub async fn delete_db_session(adapter: &maestro_core::db::DbAdapter, cookie_value: &str) -> bool {
     use maestro_core::db::DbValue;
 
     let Some(session_id) = cookie_value.strip_prefix(DB_SESSION_PREFIX) else {

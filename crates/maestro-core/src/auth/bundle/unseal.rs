@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::auth::{open, MasterKey, SealedBlob};
+use crate::auth::{MasterKey, SealedBlob, open};
 use crate::config::{AiAgentProvider, Config, ConfigError};
 use crate::db::provider_credentials;
 use crate::error::Result;

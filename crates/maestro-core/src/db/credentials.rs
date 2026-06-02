@@ -48,10 +48,9 @@ const CURRENT_P_COST: u32 = 1;
 /// rows.
 pub fn legacy_argon2_default_hash_for_tests(password: &str) -> Result<Vec<u8>> {
     let mut salt_bytes = [0u8; 16];
-    getrandom::fill(&mut salt_bytes)
-        .map_err(|source| AuthError::SaltGeneration { source })?;
-    let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|source| AuthError::SaltEncoding { source })?;
+    getrandom::fill(&mut salt_bytes).map_err(|source| AuthError::SaltGeneration { source })?;
+    let salt =
+        SaltString::encode_b64(&salt_bytes).map_err(|source| AuthError::SaltEncoding { source })?;
     let argon2 = Argon2::default();
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
@@ -90,10 +89,9 @@ fn current_argon2_recovery() -> Argon2<'static> {
 /// Hash a password using Argon2id with the current parameters and a random salt.
 pub fn hash_password(password: &str) -> Result<Vec<u8>> {
     let mut salt_bytes = [0u8; 16];
-    getrandom::fill(&mut salt_bytes)
-        .map_err(|source| AuthError::SaltGeneration { source })?;
-    let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|source| AuthError::SaltEncoding { source })?;
+    getrandom::fill(&mut salt_bytes).map_err(|source| AuthError::SaltGeneration { source })?;
+    let salt =
+        SaltString::encode_b64(&salt_bytes).map_err(|source| AuthError::SaltEncoding { source })?;
     let argon2 = current_argon2_password();
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
@@ -106,10 +104,9 @@ pub fn hash_password(password: &str) -> Result<Vec<u8>> {
 
 fn hash_recovery_code(code: &str) -> Result<Vec<u8>> {
     let mut salt_bytes = [0u8; 16];
-    getrandom::fill(&mut salt_bytes)
-        .map_err(|source| AuthError::SaltGeneration { source })?;
-    let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|source| AuthError::SaltEncoding { source })?;
+    getrandom::fill(&mut salt_bytes).map_err(|source| AuthError::SaltGeneration { source })?;
+    let salt =
+        SaltString::encode_b64(&salt_bytes).map_err(|source| AuthError::SaltEncoding { source })?;
     let argon2 = current_argon2_recovery();
     let hash = argon2
         .hash_password(code.as_bytes(), &salt)
@@ -126,8 +123,8 @@ fn hash_recovery_code(code: &str) -> Result<Vec<u8>> {
 pub fn verify_password(password: &str, stored_hash: &[u8]) -> Result<bool> {
     let hash_str = std::str::from_utf8(stored_hash)
         .map_err(|source| AuthError::StoredHashEncoding { source })?;
-    let parsed_hash = PasswordHash::new(hash_str)
-        .map_err(|source| AuthError::PasswordHashFormat { source })?;
+    let parsed_hash =
+        PasswordHash::new(hash_str).map_err(|source| AuthError::PasswordHashFormat { source })?;
     let argon2 = current_argon2_password();
     Ok(argon2
         .verify_password(password.as_bytes(), &parsed_hash)
@@ -137,10 +134,9 @@ pub fn verify_password(password: &str, stored_hash: &[u8]) -> Result<bool> {
 fn is_password_hash_weaker_than_current(stored_hash: &[u8]) -> Result<bool> {
     let hash_str = std::str::from_utf8(stored_hash)
         .map_err(|source| AuthError::StoredHashEncoding { source })?;
-    let parsed = PasswordHash::new(hash_str)
-        .map_err(|source| AuthError::PasswordHashFormat { source })?;
-    let params = Params::try_from(&parsed)
-        .map_err(|source| AuthError::ArgonParams { source })?;
+    let parsed =
+        PasswordHash::new(hash_str).map_err(|source| AuthError::PasswordHashFormat { source })?;
+    let params = Params::try_from(&parsed).map_err(|source| AuthError::ArgonParams { source })?;
     Ok(params.m_cost() < CURRENT_M_COST
         || params.t_cost() < CURRENT_T_COST_PASSWORD
         || params.p_cost() < CURRENT_P_COST)
@@ -337,10 +333,7 @@ pub async fn verify_and_consume_recovery_code(
 /// Delete all sessions for a user (for use on suspend/password change).
 /// Inside a `DbTransaction` so the password-change flow commits the
 /// session wipe atomically.
-pub async fn delete_user_sessions(
-    tx: &mut DbTransaction<'_>,
-    user_id: &str,
-) -> Result<()> {
+pub async fn delete_user_sessions(tx: &mut DbTransaction<'_>, user_id: &str) -> Result<()> {
     tx.execute(
         "DELETE FROM sessions WHERE user_id = ?",
         vec![DbValue::Text(user_id.to_string())],
@@ -382,19 +375,20 @@ mod tests {
             .await
             .unwrap();
         let adapter = DbAdapter::new(DbPool::Sqlite(pool));
-        let user_id = crate::db::users::create_user(
-            &adapter,
-            "alice",
-            crate::db::models::UserRole::User,
-        )
-        .await
-        .unwrap()
-        .id;
+        let user_id =
+            crate::db::users::create_user(&adapter, "alice", crate::db::models::UserRole::User)
+                .await
+                .unwrap()
+                .id;
         (adapter, user_id)
     }
 
     /// Helper: wrap a single write in a short transaction.
-    async fn store_password_committed(adapter: &DbAdapter, user_id: &str, password: &str) -> String {
+    async fn store_password_committed(
+        adapter: &DbAdapter,
+        user_id: &str,
+        password: &str,
+    ) -> String {
         let mut tx = adapter.begin().await.unwrap();
         let id = store_password(&mut tx, user_id, password).await.unwrap();
         tx.commit().await.unwrap();
@@ -438,9 +432,11 @@ mod tests {
     async fn store_and_verify_password() {
         let (a, user_id) = fresh_adapter_with_user().await;
         store_password_committed(&a, &user_id, "mypassword").await;
-        assert!(verify_user_password(&a, &user_id, "mypassword")
-            .await
-            .unwrap());
+        assert!(
+            verify_user_password(&a, &user_id, "mypassword")
+                .await
+                .unwrap()
+        );
         assert!(!verify_user_password(&a, &user_id, "wrong").await.unwrap());
     }
 
@@ -582,9 +578,11 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(verify_user_password(&a, &user_id, "hunter22hunter")
-            .await
-            .unwrap());
+        assert!(
+            verify_user_password(&a, &user_id, "hunter22hunter")
+                .await
+                .unwrap()
+        );
 
         let row = a
             .query_one(
@@ -612,9 +610,11 @@ mod tests {
             .unwrap();
         let before = row.get_bytes(0).unwrap();
 
-        assert!(verify_user_password(&a, &user_id, "hunter22hunter")
-            .await
-            .unwrap());
+        assert!(
+            verify_user_password(&a, &user_id, "hunter22hunter")
+                .await
+                .unwrap()
+        );
 
         let row = a
             .query_one(

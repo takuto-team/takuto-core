@@ -178,8 +178,7 @@ mod tests {
             ),
             (
                 GitError::GhApiUserParseJson {
-                    source: serde_json::from_str::<serde_json::Value>("{invalid")
-                        .unwrap_err(),
+                    source: serde_json::from_str::<serde_json::Value>("{invalid").unwrap_err(),
                 },
                 // Display delegates to the inner serde_json::Error
                 "failed to parse gh api user JSON: key must be a string at line 1 column 2",
@@ -256,8 +255,7 @@ mod tests {
                 stderr: "".to_string(),
             },
             GitError::GhApiUserParseJson {
-                source: serde_json::from_str::<serde_json::Value>("{invalid")
-                    .unwrap_err(),
+                source: serde_json::from_str::<serde_json::Value>("{invalid").unwrap_err(),
             },
             GitError::GhApiUserEmptyLogin,
             GitError::EmptyPrUrl,

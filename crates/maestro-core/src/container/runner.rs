@@ -103,7 +103,9 @@ impl ContainerRunner {
 
     /// Bundle's `extra_args` (provider sub-table). `None` when no bundle attached.
     pub fn provider_extra_args(&self) -> Option<&[String]> {
-        self.secrets_bundle.as_ref().map(|b| b.extra_args.as_slice())
+        self.secrets_bundle
+            .as_ref()
+            .map(|b| b.extra_args.as_slice())
     }
 
     /// Returns a unique container name for this ticket, incrementing an internal counter.
@@ -641,5 +643,4 @@ mod tests {
             "wrap_command preamble must source the GitHub App token file; got: {sh_body}"
         );
     }
-
 }

@@ -137,15 +137,19 @@ fn seed_orphan_snapshot(data_dir: &std::path::Path, ws_name: &str, ticket_key: &
         workspace_name: ws_name.to_string(),
         repository_id: None,
         user_id: None,
-            auth_pin: None,    };
+        auth_pin: None,
+    };
 
     let file = WorkflowSnapshotFile {
         version: SNAPSHOT_VERSION,
         workflows: vec![rec],
     };
     let path = ws_dir.join(SNAPSHOT_FILENAME);
-    std::fs::write(&path, serde_json::to_vec_pretty(&file).expect("serialize snapshot"))
-        .expect("write snapshot");
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&file).expect("serialize snapshot"),
+    )
+    .expect("write snapshot");
 }
 
 /// Fresh, unique data dir for one phase of the test.

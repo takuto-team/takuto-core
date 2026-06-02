@@ -15,14 +15,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::auth::{open, GhClient, SealedBlob};
-use crate::db::github_credentials;
+use crate::auth::{GhClient, SealedBlob, open};
 use crate::db::Database;
+use crate::db::github_credentials;
 use crate::github_app::GitHubAppTokenManager;
 
 use super::{
-    audit, decide_token_source, validator, GitAction, GitAuthError, GitAuthResult, GitToken,
-    GithubAuthMode, SecretToken, TokenSource,
+    GitAction, GitAuthError, GitAuthResult, GitToken, GithubAuthMode, SecretToken, TokenSource,
+    audit, decide_token_source, validator,
 };
 
 /// Picks the right token per-action per-user per the matrix at the top of
@@ -75,11 +75,7 @@ impl GitAuthResolver {
     }
 
     /// Pick + materialise a token for `(action, user_id)`.
-    pub async fn token_for(
-        &self,
-        action: GitAction,
-        user_id: &str,
-    ) -> GitAuthResult<GitToken> {
+    pub async fn token_for(&self, action: GitAction, user_id: &str) -> GitAuthResult<GitToken> {
         let mode = self.mode_for_user(user_id).await?;
         let attribute_commits = self.attribute_commits(user_id).await?;
         let source = decide_token_source(action, mode, attribute_commits)?
@@ -185,12 +181,9 @@ impl GitAuthResolver {
     }
 
     async fn materialise_app_token(&self) -> GitAuthResult<GitToken> {
-        let app = self
-            .app
-            .as_ref()
-            .ok_or_else(|| GitAuthError::Internal {
-                message: "App-path selected but no GitHubAppTokenManager configured".into(),
-            })?;
+        let app = self.app.as_ref().ok_or_else(|| GitAuthError::Internal {
+            message: "App-path selected but no GitHubAppTokenManager configured".into(),
+        })?;
         let token = app
             .get_installation_token(&self.app_token_cwd)
             .await
@@ -254,7 +247,7 @@ impl GitAuthResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::{seal, MasterKey};
+    use crate::auth::{MasterKey, seal};
 
     fn in_mem_db_with_master_key(mk: MasterKey) -> Database {
         Database::open_in_memory()
@@ -408,7 +401,10 @@ mod tests {
             .token_for(GitAction::Clone, "u-alice")
             .await
             .expect_err("must be MasterKeyUnavailable");
-        assert!(matches!(err, GitAuthError::MasterKeyUnavailable { .. }), "got {err:?}");
+        assert!(
+            matches!(err, GitAuthError::MasterKeyUnavailable { .. }),
+            "got {err:?}"
+        );
         assert_eq!(err.code(), "master_key_unavailable");
     }
 
@@ -421,7 +417,10 @@ mod tests {
 
         async fn used_count(db: &Database) -> i64 {
             db.adapter()
-                .query_one("SELECT COUNT(*) FROM credential_audit WHERE event='used'", vec![])
+                .query_one(
+                    "SELECT COUNT(*) FROM credential_audit WHERE event='used'",
+                    vec![],
+                )
                 .await
                 .unwrap()
                 .get_i64(0)
@@ -577,10 +576,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::auth::gh_client::GhClient for RevalMockGh {
-        async fn api_user(
-            &self,
-            _pat: &str,
-        ) -> Result<crate::auth::gh_client::GhResponse, String> {
+        async fn api_user(&self, _pat: &str) -> Result<crate::auth::gh_client::GhResponse, String> {
             Ok(self.user.lock().unwrap().clone())
         }
         async fn api_org(

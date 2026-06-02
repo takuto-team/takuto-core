@@ -324,11 +324,7 @@ pub async fn find_all_for_user(
 /// skip the audit emit on a no-op delete).
 ///
 /// Inside a `DbTransaction` so the audit row co-commits.
-pub async fn delete(
-    tx: &mut DbTransaction<'_>,
-    user_id: &str,
-    provider: &str,
-) -> Result<bool> {
+pub async fn delete(tx: &mut DbTransaction<'_>, user_id: &str, provider: &str) -> Result<bool> {
     let n = tx
         .execute(
             "DELETE FROM user_provider_credentials WHERE user_id = ? AND provider = ?",
@@ -424,8 +420,8 @@ pub fn err_master_key_unavailable() -> MaestroError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::seal;
     use crate::auth::MasterKey;
+    use crate::auth::seal;
     use crate::db::adapter::DbAdapter;
     use crate::db::migrate::DialectAwareMigrationSource;
     use crate::db::pool::{DbBackend, DbPool};
@@ -556,7 +552,12 @@ mod tests {
         .await;
         mark_inactive(&a, "u-alice", "claude").await.unwrap();
 
-        assert!(find_active(&a, "u-alice", "claude").await.unwrap().is_none());
+        assert!(
+            find_active(&a, "u-alice", "claude")
+                .await
+                .unwrap()
+                .is_none()
+        );
         // But find_all still sees it.
         assert_eq!(find_all_for_user(&a, "u-alice").await.unwrap().len(), 1);
     }
@@ -584,7 +585,12 @@ mod tests {
         assert!(!delete(&mut tx, "u-alice", "claude").await.unwrap());
         tx.commit().await.unwrap();
 
-        assert!(find_active(&a, "u-alice", "claude").await.unwrap().is_none());
+        assert!(
+            find_active(&a, "u-alice", "claude")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -612,7 +618,10 @@ mod tests {
             .unwrap();
 
         let row2 = find_active(&a, "u-alice", "claude").await.unwrap().unwrap();
-        assert_eq!(row2.last_validated_at.as_deref(), Some("2026-05-18T01:00:00Z"));
+        assert_eq!(
+            row2.last_validated_at.as_deref(),
+            Some("2026-05-18T01:00:00Z")
+        );
         assert_eq!(row2.last_used_at.as_deref(), Some("2026-05-18T02:00:00Z"));
     }
 }

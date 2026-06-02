@@ -33,6 +33,6 @@ pub mod errors;
 pub mod resolver;
 pub mod validator;
 
-pub use decision::{decide_token_source, GitAction, GithubAuthMode, TokenSource};
-pub use errors::{auth_warning_payload, GitAuthError, GitAuthResult, GitToken, SecretToken};
+pub use decision::{GitAction, GithubAuthMode, TokenSource, decide_token_source};
+pub use errors::{GitAuthError, GitAuthResult, GitToken, SecretToken, auth_warning_payload};
 pub use resolver::GitAuthResolver;

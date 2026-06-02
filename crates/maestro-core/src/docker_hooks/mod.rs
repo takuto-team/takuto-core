@@ -34,6 +34,5 @@ pub use status::{
     collect_system_status_with_db,
 };
 pub use status_types::{
-    GitHubStatus, PreflightResult, ProviderStatus, StructuredWarning, SystemStatus,
-    TicketingStatus,
+    GitHubStatus, PreflightResult, ProviderStatus, StructuredWarning, SystemStatus, TicketingStatus,
 };

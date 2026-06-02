@@ -245,7 +245,9 @@ pub(crate) async fn do_clone(
             Ok(tok) => Some(tok.bearer.expose().to_string()),
             // Resolver returned UnauthenticatedGit (Mode Missing) — surface
             // as a clean clone failure rather than crashing.
-            Err(maestro_core::github::auth_resolver::GitAuthError::UnauthenticatedGit { .. }) => {
+            Err(maestro_core::github::auth_resolver::GitAuthError::UnauthenticatedGit {
+                ..
+            }) => {
                 return Err(
                     "GitHub authentication unavailable for this user — paste a PAT in My Credentials or configure a GitHub App.".into(),
                 );
@@ -254,11 +256,13 @@ pub(crate) async fn do_clone(
         },
         // 2. Legacy path: ask the App directly via the existing actions trait.
         //    Mode `db: None` tests and pre-Phase-2b.2 poller calls go through here.
-        _ => engine
-            .engine
-            .actions()
-            .get_gh_installation_token(token_cwd)
-            .await,
+        _ => {
+            engine
+                .engine
+                .actions()
+                .get_gh_installation_token(token_cwd)
+                .await
+        }
     };
 
     let clone_url = format!("https://github.com/{full_name}.git");

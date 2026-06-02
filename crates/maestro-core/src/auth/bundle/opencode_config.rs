@@ -26,7 +26,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::config::ConfigError;
 use crate::error::Result;

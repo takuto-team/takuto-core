@@ -119,10 +119,7 @@ impl WorkerSecretsBundle {
     /// only compiled into test builds, never used outside.
     #[cfg(test)]
     #[doc(hidden)]
-    pub(crate) fn for_tests(
-        provider: AiAgentProvider,
-        extra_env: Vec<(String, String)>,
-    ) -> Self {
+    pub(crate) fn for_tests(provider: AiAgentProvider, extra_env: Vec<(String, String)>) -> Self {
         let dir = tempfile::TempDir::new().expect("tempdir for test bundle");
         let provider_path = dir.path().join("provider");
         let gh_path = dir.path().join("gh");

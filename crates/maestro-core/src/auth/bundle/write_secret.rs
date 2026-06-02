@@ -27,11 +27,12 @@ pub(super) fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
             path: path.to_path_buf(),
             detail: e.to_string(),
         })?;
-    f.write_all(bytes).map_err(|e| ConfigError::BundleSecretFile {
-        op: "write",
-        path: path.to_path_buf(),
-        detail: e.to_string(),
-    })?;
+    f.write_all(bytes)
+        .map_err(|e| ConfigError::BundleSecretFile {
+            op: "write",
+            path: path.to_path_buf(),
+            detail: e.to_string(),
+        })?;
     f.sync_all().ok();
     Ok(())
 }
@@ -48,11 +49,12 @@ pub(super) fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
             path: path.to_path_buf(),
             detail: e.to_string(),
         })?;
-    f.write_all(bytes).map_err(|e| ConfigError::BundleSecretFile {
-        op: "write",
-        path: path.to_path_buf(),
-        detail: e.to_string(),
-    })?;
+    f.write_all(bytes)
+        .map_err(|e| ConfigError::BundleSecretFile {
+            op: "write",
+            path: path.to_path_buf(),
+            detail: e.to_string(),
+        })?;
     f.sync_all().ok();
     Ok(())
 }

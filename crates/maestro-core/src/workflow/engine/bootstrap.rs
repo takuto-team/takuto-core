@@ -54,8 +54,7 @@ pub(super) async fn prepare_worktree_for_ticket(
     // The repository path is per-workflow (the registered repo the
     // caller picked when starting the workflow). Fall back to the global
     // `cfg.git.repo_path` only when no DB / `repository_id` is available.
-    let (repo_path, base_branch) =
-        resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
+    let (repo_path, base_branch) = resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
 
     // Configure git credentials before fetching.
     if let Err(e) = actions.configure_git_author_from_github(&repo_path).await {
@@ -175,8 +174,7 @@ pub(super) async fn bootstrap_new_workflow(
     // Repo path comes from the workflow's `repository_id` lookup, not
     // from a global `cfg.git.repo_path`. `project_keys` stays in config —
     // it is workflow-independent.
-    let (repo_path, base_branch) =
-        resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
+    let (repo_path, base_branch) = resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
     let project_keys = {
         let cfg = config.read().await;
         cfg.jira.project_keys.clone()
@@ -465,12 +463,8 @@ pub(super) async fn bootstrap_new_workflow(
             .map(|w| (w.user_id.clone(), w.workspace_name.clone()))
             .unwrap_or_default()
     };
-    let init_commands = resolve_worktree_init_commands(
-        workflow_user_id.as_deref(),
-        &workspace_name,
-        db,
-    )
-    .await;
+    let init_commands =
+        resolve_worktree_init_commands(workflow_user_id.as_deref(), &workspace_name, db).await;
 
     // Mise install (if project declares mise tools).
     if crate::process::worktree_has_mise_config(&worktree_path) {

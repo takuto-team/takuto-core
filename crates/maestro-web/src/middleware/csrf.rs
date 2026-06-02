@@ -137,9 +137,7 @@ pub fn origin_from_referer(referer: &str) -> Option<String> {
         return None;
     };
     // Authority ends at the first `/`, `?`, or `#`.
-    let end = rest
-        .find(['/', '?', '#'])
-        .unwrap_or(rest.len());
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..end];
     if authority.is_empty() {
         return None;

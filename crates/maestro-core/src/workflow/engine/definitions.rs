@@ -30,8 +30,7 @@ pub(crate) struct WorkflowDefinitionManager {
     pub(crate) db: Option<Database>,
     /// Resolver for pin + bundle build. Set via
     /// [`WorkflowEngine::with_git_auth_resolver`].
-    pub(crate) git_auth_resolver:
-        Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    pub(crate) git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
 }
 
 impl WorkflowDefinitionManager {

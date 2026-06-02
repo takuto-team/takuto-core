@@ -22,15 +22,10 @@ use maestro_web::state::AppState;
 use maestro_web::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
 
 /// Register a non-admin user via the admin endpoint and log them in.
-async fn create_and_login_user(
-    state: &AppState,
-    admin_cookie: &str,
-    username: &str,
-) -> String {
+async fn create_and_login_user(state: &AppState, admin_cookie: &str, username: &str) -> String {
     let app = build_router(state.clone());
-    let body = format!(
-        r#"{{"username":"{username}","password":"testpassword1234","role":"user"}}"#,
-    );
+    let body =
+        format!(r#"{{"username":"{username}","password":"testpassword1234","role":"user"}}"#,);
     let resp = app
         .oneshot(
             Request::post("/api/users")
@@ -45,9 +40,7 @@ async fn create_and_login_user(
     assert_eq!(resp.status(), StatusCode::CREATED);
 
     let app = build_router(state.clone());
-    let body = format!(
-        r#"{{"username":"{username}","password":"testpassword1234"}}"#
-    );
+    let body = format!(r#"{{"username":"{username}","password":"testpassword1234"}}"#);
     let resp = app
         .oneshot(
             Request::post("/api/auth/login")
@@ -75,12 +68,7 @@ async fn user_id_for(state: &AppState, username: &str) -> String {
 /// Insert a workflow into the engine map and seed a matching
 /// `work_items` row in the DB so the FK on `work_item_steps`
 /// resolves.
-async fn seed_workflow_and_db_row(
-    state: &AppState,
-    wf_id: &str,
-    ticket_key: &str,
-    user_id: &str,
-) {
+async fn seed_workflow_and_db_row(state: &AppState, wf_id: &str, ticket_key: &str, user_id: &str) {
     // `require_workflow_access` checks that the workflow's repository (or
     // workspace_name fallback) is one the caller has added. Seed a repo
     // named "ws" and associate it with this user.

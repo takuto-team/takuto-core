@@ -255,10 +255,7 @@ fn validate_run_commands(commands: &[RunCommand]) -> Result<(), (StatusCode, Str
     if commands.len() > MAX_COMMANDS {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!(
-                "Too many run commands: {} > {MAX_COMMANDS}",
-                commands.len()
-            ),
+            format!("Too many run commands: {} > {MAX_COMMANDS}", commands.len()),
         ));
     }
     let mut seen_names: HashSet<&str> = HashSet::with_capacity(commands.len());
@@ -327,10 +324,7 @@ fn validate_run_commands(commands: &[RunCommand]) -> Result<(), (StatusCode, Str
 /// are independently capped above; this guards against pathological JSON
 /// (e.g. 50 × 2000-char commands × 2 kinds = ~200 KiB — still well below
 /// 1 MiB, but operators may save smaller-than-cap lists in odd shapes).
-fn validate_combined_size(
-    init_bytes: &[u8],
-    run_bytes: &[u8],
-) -> Result<(), (StatusCode, String)> {
+fn validate_combined_size(init_bytes: &[u8], run_bytes: &[u8]) -> Result<(), (StatusCode, String)> {
     if init_bytes.len().saturating_add(run_bytes.len()) > MAX_BODY_BYTES {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -357,7 +351,10 @@ pub async fn list_my_rows(
     let db = auth_state
         .db
         .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable".into(),
+        ))?
         .clone();
     let user_id = auth.user_id.clone();
 
@@ -383,7 +380,10 @@ pub async fn get_my_row(
     let db = auth_state
         .db
         .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable".into(),
+        ))?
         .clone();
     let user_id = auth.user_id.clone();
     let lookup_name = workspace.clone();
@@ -415,7 +415,10 @@ pub async fn put_my_row(
     let db = auth_state
         .db
         .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable".into(),
+        ))?
         .clone();
 
     let user_id = auth.user_id.clone();
@@ -439,9 +442,7 @@ pub async fn put_my_row(
     let row = user_worktree_commands::get(db.adapter(), &user_id, &lookup_name)
         .await
         .map_err(db_error)?
-        .ok_or_else(|| {
-            db_error(maestro_core::db::DbError::RowDisappearedAfterUpsert.into())
-        })?;
+        .ok_or_else(|| db_error(maestro_core::db::DbError::RowDisappearedAfterUpsert.into()))?;
 
     // Audit log — scrubbed init snippets + hashes of both kinds.
     let scrubbed_init = scrub_secrets_for_log(&row.init_commands);
@@ -488,7 +489,10 @@ pub async fn delete_my_row(
     let db = auth_state
         .db
         .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable".into(),
+        ))?
         .clone();
 
     let user_id = auth.user_id.clone();
@@ -546,7 +550,10 @@ pub async fn list_workspaces_with_has_commands(
     let db = auth_state
         .db
         .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))?
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable".into(),
+        ))?
         .clone();
     let user_id = auth.user_id.clone();
 

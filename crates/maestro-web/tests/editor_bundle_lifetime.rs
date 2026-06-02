@@ -49,7 +49,12 @@ async fn t_freshly_constructed_appstate_has_empty_bundle_maps() {
         "freshly constructed AppState must have an empty editor_bundles map"
     );
     assert!(
-        state.run_command().run_command_bundles.read().await.is_empty(),
+        state
+            .run_command()
+            .run_command_bundles
+            .read()
+            .await
+            .is_empty(),
         "freshly constructed AppState must have an empty run_command_bundles map"
     );
 }
@@ -192,7 +197,10 @@ async fn t_run_command_bundle_map_is_keyed_by_ticket_and_index() {
     let b = mk_bundle().await;
     let a_dir = a.host_dir().to_path_buf();
     let b_dir = b.host_dir().to_path_buf();
-    assert_ne!(a_dir, b_dir, "test setup: each bundle must own a unique TempDir");
+    assert_ne!(
+        a_dir, b_dir,
+        "test setup: each bundle must own a unique TempDir"
+    );
 
     let ticket = "task-42b-ticket".to_string();
     {
@@ -224,5 +232,8 @@ async fn t_run_command_bundle_map_is_keyed_by_ticket_and_index() {
         .write()
         .await
         .retain(|(tk, _), _| tk != &ticket);
-    assert!(!b_dir.exists(), "workflow teardown must drop remaining entries");
+    assert!(
+        !b_dir.exists(),
+        "workflow teardown must drop remaining entries"
+    );
 }

@@ -48,9 +48,8 @@ pub fn test_state_with_db() -> AppState {
 /// constructing the state.
 pub fn test_state_with_db_instance(db: Database) -> AppState {
     let config = Arc::new(RwLock::new(Config::default()));
-    let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-        DryRunActions::new("origin".to_string(), None),
-    );
+    let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> =
+        Arc::new(DryRunActions::new("origin".to_string(), None));
     let jira_available = Arc::new(AtomicBool::new(false));
     let engine = Arc::new(WorkflowEngine::new_with_db(
         config.clone(),

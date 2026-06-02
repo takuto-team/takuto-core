@@ -93,13 +93,14 @@ fn db_error(e: maestro_core::error::MaestroError) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-fn require_db(
-    auth_state: &AuthState,
-) -> Result<maestro_core::db::Database, (StatusCode, String)> {
+fn require_db(auth_state: &AuthState) -> Result<maestro_core::db::Database, (StatusCode, String)> {
     auth_state
         .db
         .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "database unavailable".into()))
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable".into(),
+        ))
         .cloned()
 }
 
@@ -259,7 +260,10 @@ pub async fn list_available(
         .await
         .map_err(db_error)?;
 
-    let dtos = rows.into_iter().map(|r| row_to_dto(r, None, None)).collect();
+    let dtos = rows
+        .into_iter()
+        .map(|r| row_to_dto(r, None, None))
+        .collect();
     Ok(Json(dtos))
 }
 
@@ -282,9 +286,7 @@ pub async fn add(
             "Provide either repository_id or repo_url".into(),
         )),
         (Some(repo_id), None) => add_existing(&db, &auth, &repo_id).await,
-        (None, Some(repo_url)) => {
-            add_via_clone(&engine, &auth_state, &db, &auth, &repo_url).await
-        }
+        (None, Some(repo_url)) => add_via_clone(&engine, &auth_state, &db, &auth, &repo_url).await,
     }
 }
 
@@ -519,7 +521,10 @@ pub async fn delete(
     if !relevant_blockers.is_empty() {
         let entries: Vec<BlockingWorkflowEntry> = relevant_blockers
             .into_iter()
-            .map(|(ticket_key, user_id)| BlockingWorkflowEntry { ticket_key, user_id })
+            .map(|(ticket_key, user_id)| BlockingWorkflowEntry {
+                ticket_key,
+                user_id,
+            })
             .collect();
         let error_msg = if force_purge {
             "active workflows reference this repository — stop or finish them first"
@@ -536,16 +541,16 @@ pub async fn delete(
 
     // 2. Try to remove the caller's association. 404 if no row.
     if !force_purge {
-        let removed = maestro_core::db::repositories::remove_for_user(
-            adapter,
-            &auth.user_id,
-            &repository_id,
-        )
-        .await
-        .map_err(db_error)?;
+        let removed =
+            maestro_core::db::repositories::remove_for_user(adapter, &auth.user_id, &repository_id)
+                .await
+                .map_err(db_error)?;
 
         if !removed {
-            return Err((StatusCode::NOT_FOUND, "repository not in your dashboard".into()));
+            return Err((
+                StatusCode::NOT_FOUND,
+                "repository not in your dashboard".into(),
+            ));
         }
     }
 
@@ -562,10 +567,8 @@ pub async fn delete(
                 )
                 .await
                 .map_err(|e| db_error(e.into()))?;
-            let mut affected_users: Vec<String> = rows
-                .iter()
-                .filter_map(|row| row.get_text(0).ok())
-                .collect();
+            let mut affected_users: Vec<String> =
+                rows.iter().filter_map(|row| row.get_text(0).ok()).collect();
             affected_users.sort();
             Some((r, affected_users))
         }
@@ -614,9 +617,10 @@ pub async fn delete(
         // Remove on-disk clone. Best-effort — log on failure.
         let local_path = std::path::Path::new(&row.local_path).to_path_buf();
         let local_path_owned = local_path.clone();
-        let rm_result = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&local_path_owned))
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?;
+        let rm_result =
+            tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&local_path_owned))
+                .await
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "join error".into()))?;
         match rm_result {
             Ok(()) => info!(
                 actor_user_id = %auth.user_id,

@@ -22,15 +22,10 @@ use maestro_web::server::build_router;
 use maestro_web::state::AppState;
 use maestro_web::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
 
-async fn create_and_login_user(
-    state: &AppState,
-    admin_cookie: &str,
-    username: &str,
-) -> String {
+async fn create_and_login_user(state: &AppState, admin_cookie: &str, username: &str) -> String {
     let app = build_router(state.clone());
-    let body = format!(
-        r#"{{"username":"{username}","password":"testpassword1234","role":"user"}}"#
-    );
+    let body =
+        format!(r#"{{"username":"{username}","password":"testpassword1234","role":"user"}}"#);
     let resp = app
         .oneshot(
             Request::post("/api/users")
@@ -45,9 +40,7 @@ async fn create_and_login_user(
     assert_eq!(resp.status(), StatusCode::CREATED);
 
     let app = build_router(state.clone());
-    let body = format!(
-        r#"{{"username":"{username}","password":"testpassword1234"}}"#
-    );
+    let body = format!(r#"{{"username":"{username}","password":"testpassword1234"}}"#);
     let resp = app
         .oneshot(
             Request::post("/api/auth/login")
@@ -127,14 +120,7 @@ async fn seed_workflow_in_map_and_db(
     db_repo_id: Option<String>,
     db_workspace: &str,
 ) {
-    seed_workflow_in_map_only(
-        state,
-        ticket_key,
-        map_owner,
-        map_workspace,
-        map_repo_id,
-    )
-    .await;
+    seed_workflow_in_map_only(state, ticket_key, map_owner, map_workspace, map_repo_id).await;
 
     let db = state.engine().engine.db().expect("db");
     db.adapter()
@@ -223,14 +209,7 @@ async fn hashmap_fallback_used_when_db_row_absent() {
     let repo_alice = seed_repo(&state, "ws", &alice_id).await;
 
     // Workflow ONLY in the in-memory HashMap.
-    seed_workflow_in_map_only(
-        &state,
-        "TICK-LEGACY",
-        &alice_id,
-        "ws",
-        Some(repo_alice),
-    )
-    .await;
+    seed_workflow_in_map_only(&state, "TICK-LEGACY", &alice_id, "ws", Some(repo_alice)).await;
 
     assert_eq!(
         get_via_route(&state, "TICK-LEGACY", &alice_cookie).await,

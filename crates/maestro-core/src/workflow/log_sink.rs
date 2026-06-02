@@ -145,7 +145,7 @@ async fn flush(db: &Database, buffer: &mut Vec<LogLineInsert>) {
 mod tests {
     use super::*;
     use crate::db::adapter::DbValue;
-    use crate::db::work_items::{LogStream, fetch_log_lines, LogPaging};
+    use crate::db::work_items::{LogPaging, LogStream, fetch_log_lines};
 
     async fn seeded_db() -> Database {
         let db = Database::open_in_memory().expect("open db");

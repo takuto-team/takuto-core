@@ -50,9 +50,7 @@ pub async fn create_user(adapter: &DbAdapter, username: &str, role: UserRole) ->
     }
 
     let mut tx = adapter.begin().await?;
-    let count_row = tx
-        .query_one("SELECT COUNT(*) FROM users", vec![])
-        .await?;
+    let count_row = tx.query_one("SELECT COUNT(*) FROM users", vec![]).await?;
     let count = count_row.get_i64(0)?;
     let effective_role = if count == 0 { UserRole::Admin } else { role };
 
@@ -162,10 +160,7 @@ pub async fn update_user(
     let existing = match existing_row {
         Some(r) => decode_user(&r)?,
         None => {
-            return Err(AuthError::UserNotFound {
-                id: id.to_string(),
-            }
-            .into());
+            return Err(AuthError::UserNotFound { id: id.to_string() }.into());
         }
     };
 
@@ -225,10 +220,7 @@ pub async fn suspend_user(adapter: &DbAdapter, id: &str) -> Result<()> {
     let user = match row {
         Some(r) => decode_user(&r)?,
         None => {
-            return Err(AuthError::UserNotFound {
-                id: id.to_string(),
-            }
-            .into());
+            return Err(AuthError::UserNotFound { id: id.to_string() }.into());
         }
     };
     if user.role == UserRole::Admin {
@@ -262,10 +254,7 @@ pub async fn unsuspend_user(adapter: &DbAdapter, id: &str) -> Result<()> {
         .await?;
     let exists = exists_row.get_i64(0)? != 0;
     if !exists {
-        return Err(AuthError::UserNotFound {
-            id: id.to_string(),
-        }
-        .into());
+        return Err(AuthError::UserNotFound { id: id.to_string() }.into());
     }
     adapter
         .execute(
@@ -290,10 +279,7 @@ pub async fn delete_user(adapter: &DbAdapter, id: &str) -> Result<()> {
     let user = match row {
         Some(r) => decode_user(&r)?,
         None => {
-            return Err(AuthError::UserNotFound {
-                id: id.to_string(),
-            }
-            .into());
+            return Err(AuthError::UserNotFound { id: id.to_string() }.into());
         }
     };
     if user.role == UserRole::Admin {
@@ -418,7 +404,9 @@ mod tests {
         let a = fresh_adapter().await;
         let user = create_user(&a, "alice", UserRole::User).await.unwrap();
         let _ = create_user(&a, "bob", UserRole::User).await.unwrap();
-        let updated = update_user(&a, &user.id, Some("alice2"), None).await.unwrap();
+        let updated = update_user(&a, &user.id, Some("alice2"), None)
+            .await
+            .unwrap();
         assert_eq!(updated.username, "alice2");
     }
 
@@ -429,7 +417,11 @@ mod tests {
         assert_eq!(admin.role, UserRole::Admin);
         let err = update_user(&a, &admin.id, None, Some(UserRole::User)).await;
         assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("last non-suspended admin"));
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains("last non-suspended admin")
+        );
     }
 
     #[tokio::test]
@@ -457,7 +449,11 @@ mod tests {
         assert_eq!(admin.role, UserRole::Admin);
         let err = suspend_user(&a, &admin.id).await;
         assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("last non-suspended admin"));
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains("last non-suspended admin")
+        );
     }
 
     #[tokio::test]

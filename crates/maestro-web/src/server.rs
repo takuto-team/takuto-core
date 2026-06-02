@@ -35,7 +35,10 @@ pub struct LoginKeyExtractor;
 impl KeyExtractor for LoginKeyExtractor {
     type Key = String;
 
-    fn extract<T>(&self, req: &axum::http::Request<T>) -> Result<Self::Key, tower_governor::GovernorError> {
+    fn extract<T>(
+        &self,
+        req: &axum::http::Request<T>,
+    ) -> Result<Self::Key, tower_governor::GovernorError> {
         // 1. X-Forwarded-For: first comma-separated entry.
         if let Some(v) = req.headers().get("x-forwarded-for")
             && let Ok(s) = v.to_str()
@@ -54,8 +57,9 @@ impl KeyExtractor for LoginKeyExtractor {
             return Ok(s.trim().to_string());
         }
         // 3. Peer addr via Axum's ConnectInfo, if it was wired in.
-        if let Some(ci) =
-            req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        if let Some(ci) = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         {
             return Ok(ci.0.ip().to_string());
         }
@@ -126,10 +130,7 @@ pub fn build_router(state: AppState) -> Router {
 
     let api_protected = Router::new()
         .route("/auth/me", get(routes::auth::me))
-        .route(
-            "/auth/change-password",
-            post(routes::auth::change_password),
-        )
+        .route("/auth/change-password", post(routes::auth::change_password))
         .route(
             "/auth/recovery-codes",
             post(routes::auth::regenerate_recovery_codes),
@@ -159,7 +160,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/workflows", get(routes::workflows::list_workflows))
         .route("/work-items", get(routes::workflows::list_workflows))
         .route("/workflows/counts", get(routes::workflows::workflow_counts))
-        .route("/work-items/counts", get(routes::workflows::workflow_counts))
+        .route(
+            "/work-items/counts",
+            get(routes::workflows::workflow_counts),
+        )
         .route("/workflows/{id}", get(routes::workflows::get_workflow))
         .route("/work-items/{id}", get(routes::workflows::get_workflow))
         // Step history from work_item_steps.
@@ -337,10 +341,7 @@ pub fn build_router(state: AppState) -> Router {
             "/repositories/_available",
             get(routes::repositories::list_available),
         )
-        .route(
-            "/repositories/{id}",
-            delete(routes::repositories::delete),
-        )
+        .route("/repositories/{id}", delete(routes::repositories::delete))
         .route(
             "/tickets/{key}/improve",
             post(routes::tickets::improve_ticket),
@@ -358,10 +359,7 @@ pub fn build_router(state: AppState) -> Router {
         // Admin-only patch of the [agent] section. Behind the same auth+CSRF
         // stack as the existing PUT /api/config and gated additionally via
         // require_admin_for in the handler.
-        .route(
-            "/config/agent",
-            put(routes::config_agent::put_agent_config),
-        )
+        .route("/config/agent", put(routes::config_agent::put_agent_config))
         .route("/config/reload", post(routes::config::reload_config))
         // Per-user credential surface.
         .route(

@@ -23,7 +23,10 @@ use maestro_web::test_helpers::{register_and_login, test_state_with_db};
 // ---------------------------------------------------------------------------
 
 /// Promote a non-admin user to user role and return their session cookie.
-async fn create_regular_user_login(state: &maestro_web::state::AppState, admin_cookie: &str) -> String {
+async fn create_regular_user_login(
+    state: &maestro_web::state::AppState,
+    admin_cookie: &str,
+) -> String {
     let app = build_router(state.clone());
     let create_resp = app
         .oneshot(
@@ -155,7 +158,9 @@ async fn put_config_agent_emits_config_file_bind_mounted_when_writer_flag_set() 
     // production the writer would set this itself after an EBUSY fallback;
     // exposing it via the public Arc<AtomicBool> accessor keeps the test
     // independent of forcing a real Linux bind mount.
-    writer.used_inplace_fallback().store(true, Ordering::Release);
+    writer
+        .used_inplace_fallback()
+        .store(true, Ordering::Release);
     state.config_mut().config_writer = Some(writer);
     state.config_mut().config_path = config_path.clone();
 
@@ -204,9 +209,7 @@ async fn put_config_agent_as_non_admin_returns_403_no_side_effects() {
                 .header("Content-Type", "application/json")
                 .header("Origin", "http://localhost:8080")
                 .header("Cookie", &alice_cookie)
-                .body(Body::from(
-                    r#"{"providers":{"claude":{"model":"hack"}}}"#,
-                ))
+                .body(Body::from(r#"{"providers":{"claude":{"model":"hack"}}}"#))
                 .unwrap(),
         )
         .await

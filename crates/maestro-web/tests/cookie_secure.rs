@@ -43,7 +43,10 @@ fn cookie_has_secure(set_cookie: &str) -> bool {
 }
 
 /// Send `POST /api/auth/login` for the admin user, optionally adding extra headers.
-async fn login_request(state: &AppState, extra_headers: &[(&str, &str)]) -> axum::http::Response<Body> {
+async fn login_request(
+    state: &AppState,
+    extra_headers: &[(&str, &str)],
+) -> axum::http::Response<Body> {
     let app = build_router(state.clone());
     let mut req = Request::post("/api/auth/login")
         .header("Content-Type", "application/json")
@@ -109,10 +112,7 @@ async fn cookie_secure_when_https_origin_present() {
 
     {
         let mut cfg = state.config().config.write().await;
-        cfg.web.cors_origins = vec![
-            TEST_ORIGIN.into(),
-            "https://maestro.example.com".into(),
-        ];
+        cfg.web.cors_origins = vec![TEST_ORIGIN.into(), "https://maestro.example.com".into()];
     }
 
     let resp = login_request(&state, &[]).await;
@@ -151,10 +151,7 @@ async fn explicit_cookie_secure_false_overrides_auto_detect() {
     {
         let mut cfg = state.config().config.write().await;
         cfg.web.cookie_secure = Some(false);
-        cfg.web.cors_origins = vec![
-            TEST_ORIGIN.into(),
-            "https://maestro.example.com".into(),
-        ];
+        cfg.web.cors_origins = vec![TEST_ORIGIN.into(), "https://maestro.example.com".into()];
     }
 
     let resp = login_request(&state, &[("X-Forwarded-Proto", "https")]).await;

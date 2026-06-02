@@ -52,8 +52,7 @@ fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-const SELECT_COLS: &str =
-    "user_id, ciphertext, nonce, wrapped_dek, wnonce, github_login, scopes_json, \
+const SELECT_COLS: &str = "user_id, ciphertext, nonce, wrapped_dek, wnonce, github_login, scopes_json, \
      sign_commits, last_validated_at, created_at, updated_at";
 
 fn decode_row(r: &crate::db::DbRow) -> Result<GitHubCredentialRow> {
@@ -141,9 +140,7 @@ pub async fn upsert(
 /// Look up the user's GitHub credential row, if any. Read-only; takes
 /// `&DbAdapter`.
 pub async fn find(adapter: &DbAdapter, user_id: &str) -> Result<Option<GitHubCredentialRow>> {
-    let sql = format!(
-        "SELECT {SELECT_COLS} FROM user_github_credentials WHERE user_id = ?"
-    );
+    let sql = format!("SELECT {SELECT_COLS} FROM user_github_credentials WHERE user_id = ?");
     let row = adapter
         .query_optional(&sql, vec![DbValue::Text(user_id.to_string())])
         .await?;
@@ -232,8 +229,8 @@ pub async fn touch_last_validated_adapter(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::seal;
     use crate::auth::MasterKey;
+    use crate::auth::seal;
     use crate::db::adapter::DbAdapter;
     use crate::db::migrate::DialectAwareMigrationSource;
     use crate::db::pool::{DbBackend, DbPool};
@@ -276,9 +273,16 @@ mod tests {
         sign_commits: bool,
     ) {
         let mut tx = adapter.begin().await.unwrap();
-        upsert(&mut tx, user_id, sealed, github_login, scopes_json, sign_commits)
-            .await
-            .unwrap();
+        upsert(
+            &mut tx,
+            user_id,
+            sealed,
+            github_login,
+            scopes_json,
+            sign_commits,
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
     }
 

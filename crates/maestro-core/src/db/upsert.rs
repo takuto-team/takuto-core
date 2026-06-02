@@ -99,11 +99,7 @@ mod tests {
 
     #[test]
     fn update_tail_sqlite_uses_excluded_form() {
-        let got = build_update_tail(
-            DbBackend::Sqlite,
-            &["user_id"],
-            &["value", "updated_at"],
-        );
+        let got = build_update_tail(DbBackend::Sqlite, &["user_id"], &["value", "updated_at"]);
         assert_eq!(
             got,
             "ON CONFLICT(user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
@@ -121,11 +117,7 @@ mod tests {
 
     #[test]
     fn update_tail_mysql_uses_values_form() {
-        let got = build_update_tail(
-            DbBackend::MySql,
-            &["user_id"],
-            &["value", "updated_at"],
-        );
+        let got = build_update_tail(DbBackend::MySql, &["user_id"], &["value", "updated_at"]);
         assert_eq!(
             got,
             "ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)"

@@ -57,18 +57,16 @@ pub async fn list_run_commands(
     // empty list.
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
         match (owner_user_id.as_deref(), auth_state.db.as_ref()) {
-            (Some(uid), Some(database)) => {
-                maestro_core::db::user_worktree_commands::get(
-                    database.adapter(),
-                    uid,
-                    &workspace_name,
-                )
-                .await
-                .ok()
-                .flatten()
-                .map(|r| r.run_commands)
-                .unwrap_or_default()
-            }
+            (Some(uid), Some(database)) => maestro_core::db::user_worktree_commands::get(
+                database.adapter(),
+                uid,
+                &workspace_name,
+            )
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.run_commands)
+            .unwrap_or_default(),
             _ => Vec::new(),
         };
 
@@ -105,18 +103,16 @@ pub async fn start_run_command(
 
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
         match (owner_user_id.as_deref(), auth_state.db.as_ref()) {
-            (Some(uid), Some(database)) => {
-                maestro_core::db::user_worktree_commands::get(
-                    database.adapter(),
-                    uid,
-                    &workspace_name,
-                )
-                .await
-                .ok()
-                .flatten()
-                .map(|r| r.run_commands)
-                .unwrap_or_default()
-            }
+            (Some(uid), Some(database)) => maestro_core::db::user_worktree_commands::get(
+                database.adapter(),
+                uid,
+                &workspace_name,
+            )
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.run_commands)
+            .unwrap_or_default(),
             _ => Vec::new(),
         };
 
@@ -298,8 +294,7 @@ pub async fn start_run_command(
     // (same as workflow.id); the container name is deterministic
     // (`run_command_container_name`) so we record it as the
     // `container_id` for cross-restart visibility.
-    let container_name =
-        maestro_core::container::run_command_container_name(&ticket_key, index);
+    let container_name = maestro_core::container::run_command_container_name(&ticket_key, index);
     maestro_core::db::work_items::shadow_start_run_command_row(
         engine.engine.db(),
         &id,

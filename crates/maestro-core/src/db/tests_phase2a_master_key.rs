@@ -69,7 +69,10 @@ async fn database_open_reads_subsequent_keyfile_after_first_auto_generate() {
     // Second open: must reuse the existing keyfile, not regenerate.
     let second = Database::open(dir.path(), true).expect("open 2");
     let second_bytes = std::fs::read(dir.path().join("secret.key")).unwrap();
-    assert_eq!(first_bytes, second_bytes, "keyfile must persist across opens");
+    assert_eq!(
+        first_bytes, second_bytes,
+        "keyfile must persist across opens"
+    );
     assert_eq!(
         second.master_key().map(|s| s.source),
         Some(MasterKeySource::Keyfile),

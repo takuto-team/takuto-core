@@ -41,9 +41,9 @@ pub use types::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::{seal, MasterKey};
+    use crate::auth::{MasterKey, seal};
     use crate::config::{AiAgentProvider, Config};
-    use crate::db::{provider_credentials, Database};
+    use crate::db::{Database, provider_credentials};
     use crate::github::auth_resolver::GitAuthResolver;
     use crate::workflow::snapshot::AuthPin;
     use std::sync::Arc;
@@ -217,9 +217,7 @@ mod tests {
         let cfg = fixed_config(AiAgentProvider::Claude);
         let pin = fixed_pin(AiAgentProvider::Claude);
 
-        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
-            .await
-            .unwrap();
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice").await.unwrap();
         let secret_path = bundle.provider_secret_file.clone().unwrap();
         assert!(secret_path.exists());
 
@@ -239,19 +237,15 @@ mod tests {
         let resolver = make_resolver(db.clone());
         let mut cfg = fixed_config(AiAgentProvider::Claude);
         cfg.agent.providers.claude.base_url = "https://proxy.example.com".into();
-        cfg.agent.providers.claude.extra_args =
-            vec!["--max-turns".into(), "50".into()];
+        cfg.agent.providers.claude.extra_args = vec!["--max-turns".into(), "50".into()];
         let pin = fixed_pin(AiAgentProvider::Claude);
 
-        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
-            .await
-            .unwrap();
+        let bundle = build(&cfg, &db, &resolver, &pin, "u-alice").await.unwrap();
         assert!(
             bundle
                 .extra_env
                 .iter()
-                .any(|(k, v)| k == "ANTHROPIC_BASE_URL"
-                    && v == "https://proxy.example.com")
+                .any(|(k, v)| k == "ANTHROPIC_BASE_URL" && v == "https://proxy.example.com")
         );
         assert_eq!(bundle.extra_args, vec!["--max-turns", "50"]);
         // MAESTRO_AUTH_BUNDLE is the worker entrypoint's discriminator.
@@ -270,9 +264,7 @@ mod tests {
         seed_provider_credential(&db, "u-alice", "claude", b"sk-ant").await;
         let cfg = fixed_config(AiAgentProvider::Claude);
 
-        let pin = pin_for_workflow(&cfg, &db, "u-alice")
-            .await
-            .expect("pin");
+        let pin = pin_for_workflow(&cfg, &db, "u-alice").await.expect("pin");
         assert_eq!(pin.provider, "claude");
         assert!(pin.provider_credential_row_id.is_some());
         assert_eq!(pin.github_mode, "app"); // No GitHub PAT seeded.
@@ -561,7 +553,8 @@ mod tests {
     /// `data_dir()` returns a real path the bundle can sit under.
     fn db_with_master_key_and_disk_data_dir() -> (Database, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("disk-backed tempdir");
-        let db = Database::open(dir.path(), true).expect("open disk DB")
+        let db = Database::open(dir.path(), true)
+            .expect("open disk DB")
             .with_test_master_key(MasterKey::from_bytes([0xAA; 32]));
         (db, dir)
     }
@@ -621,7 +614,10 @@ mod tests {
         assert_eq!(n, 2, "must remove both orphan dirs");
         assert!(!root.join("orphan-a").exists());
         assert!(!root.join("orphan-b").exists());
-        assert!(root.join("stray-file").exists(), "files outside dir entries survive");
+        assert!(
+            root.join("stray-file").exists(),
+            "files outside dir entries survive"
+        );
     }
 
     // ─── OpenCode self-hosted spec (2026-05-27) ──────────────────────────
@@ -635,10 +631,7 @@ mod tests {
         seed_user(&db, "u-alice").await;
         seed_provider_credential(&db, "u-alice", "opencode", b"user-bearer").await;
         let resolver = make_resolver(db.clone());
-        let cfg = fixed_opencode_config(
-            "http://lm-studio:1234/v1",
-            "lmstudio/qwen3-coder",
-        );
+        let cfg = fixed_opencode_config("http://lm-studio:1234/v1", "lmstudio/qwen3-coder");
         let pin = fixed_pin(AiAgentProvider::OpenCode);
 
         let bundle = build(&cfg, &db, &resolver, &pin, "u-alice")
@@ -683,10 +676,7 @@ mod tests {
         let db = db_with_master_key();
         seed_user(&db, "u-alice").await;
         let resolver = make_resolver(db.clone());
-        let mut cfg = fixed_opencode_config(
-            "http://lm-studio:1234/v1",
-            "lmstudio/qwen3-coder",
-        );
+        let mut cfg = fixed_opencode_config("http://lm-studio:1234/v1", "lmstudio/qwen3-coder");
         // Allow the shared-default fallback — the user has no credential
         // and LM Studio doesn't care about the key value.
         cfg.agent.providers.opencode.allow_shared_default = true;
@@ -702,7 +692,10 @@ mod tests {
             .join("opencode.json");
         let v: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&cfg_file).unwrap()).unwrap();
-        assert_eq!(v["provider"]["self_hosted"]["options"]["apiKey"], "lm-studio");
+        assert_eq!(
+            v["provider"]["self_hosted"]["options"]["apiKey"],
+            "lm-studio"
+        );
     }
 
     /// Defence in depth: an OpenCode bundle built with a hand-crafted

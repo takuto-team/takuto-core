@@ -112,9 +112,7 @@ pub enum AuthError {
 
     /// `POST /api/auth/register` rejected because `SELECT count(*) FROM users`
     /// returned non-zero (first-user setup is closed once a user exists).
-    #[error(
-        "Registration is closed: users already exist. Use admin API to create new users."
-    )]
+    #[error("Registration is closed: users already exist. Use admin API to create new users.")]
     RegistrationClosed,
 
     /// Password length validation (`< 12 chars`) on register / change-password
@@ -160,7 +158,8 @@ mod tests {
 
     #[test]
     fn lock_in_auth_error_display() {
-        let cases: Vec<(AuthError, String)> = vec![
+        let cases: Vec<(AuthError, String)> =
+            vec![
             (AuthError::EmptyUsername, "Username cannot be empty".to_string()),
             (
                 AuthError::UsernameAlreadyExists {

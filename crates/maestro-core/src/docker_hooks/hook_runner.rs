@@ -50,12 +50,10 @@ pub fn run_hook_commands(commands: &[String], cwd: &Path, label: &str) -> Result
             .env("CURSOR_CONFIG_DIR", &cursor_dir)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
-        let status = cmd
-            .status()
-            .map_err(|e| ConfigError::Operational {
-                op: "hook spawn",
-                detail: format!("{label} hook {n}: {e}"),
-            })?;
+        let status = cmd.status().map_err(|e| ConfigError::Operational {
+            op: "hook spawn",
+            detail: format!("{label} hook {n}: {e}"),
+        })?;
         if !status.success() {
             return Err(ConfigError::Operational {
                 op: "hook exit",

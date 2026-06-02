@@ -214,25 +214,19 @@ async fn connect_sqlite(url: &str, tuning: &PoolTuning) -> Result<SqlitePool, Po
 async fn connect_postgres(url: &str, tuning: &PoolTuning) -> Result<PgPool, PoolError> {
     let mut builder = PgPoolOptions::new();
     builder = apply_pool_tuning!(builder, tuning);
-    builder
-        .connect(url)
-        .await
-        .map_err(|e| PoolError::Sqlx {
-            backend: DbBackend::Postgres,
-            source: e,
-        })
+    builder.connect(url).await.map_err(|e| PoolError::Sqlx {
+        backend: DbBackend::Postgres,
+        source: e,
+    })
 }
 
 async fn connect_mysql(url: &str, tuning: &PoolTuning) -> Result<MySqlPool, PoolError> {
     let mut builder = MySqlPoolOptions::new();
     builder = apply_pool_tuning!(builder, tuning);
-    builder
-        .connect(url)
-        .await
-        .map_err(|e| PoolError::Sqlx {
-            backend: DbBackend::MySql,
-            source: e,
-        })
+    builder.connect(url).await.map_err(|e| PoolError::Sqlx {
+        backend: DbBackend::MySql,
+        source: e,
+    })
 }
 
 impl DbPool {
@@ -354,10 +348,16 @@ mod tests {
 
     #[test]
     fn parse_backend_recognises_sqlite_variants() {
-        assert_eq!(parse_backend("sqlite:///tmp/x.db").unwrap(), DbBackend::Sqlite);
+        assert_eq!(
+            parse_backend("sqlite:///tmp/x.db").unwrap(),
+            DbBackend::Sqlite
+        );
         // Single-colon shorthand (sqlx accepts; we mirror).
         assert_eq!(parse_backend("sqlite::memory:").unwrap(), DbBackend::Sqlite);
-        assert_eq!(parse_backend("sqlite:/var/lib/x.db").unwrap(), DbBackend::Sqlite);
+        assert_eq!(
+            parse_backend("sqlite:/var/lib/x.db").unwrap(),
+            DbBackend::Sqlite
+        );
     }
 
     #[test]
@@ -382,7 +382,10 @@ mod tests {
 
     #[test]
     fn parse_backend_is_case_insensitive_on_scheme() {
-        assert_eq!(parse_backend("SQLITE:///tmp/x.db").unwrap(), DbBackend::Sqlite);
+        assert_eq!(
+            parse_backend("SQLITE:///tmp/x.db").unwrap(),
+            DbBackend::Sqlite
+        );
         assert_eq!(
             parse_backend("Postgres://u@h/db").unwrap(),
             DbBackend::Postgres

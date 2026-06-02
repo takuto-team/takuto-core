@@ -10,14 +10,14 @@
 // call site takes `&DbAdapter`; the adapter dispatches to the right
 // sqlx driver internally.
 pub mod adapter;
-pub mod importer;
-pub mod upsert;
 pub mod credential_audit;
 pub mod credentials;
 pub mod error;
 pub mod github_credentials;
+pub mod importer;
 pub mod log_retention;
 pub mod login_attempts;
+pub mod upsert;
 // Legacy rusqlite migration runner (versioned schema_migrations table).
 pub mod migration;
 // sqlx-based migration source with per-backend dialect transforms. Lives
@@ -30,13 +30,11 @@ pub mod onboarding;
 pub mod pool;
 pub mod provider_credentials;
 pub mod repositories;
-pub mod users;
 pub mod user_worktree_commands;
+pub mod users;
 pub mod work_items;
 
-pub use adapter::{
-    DbAdapter, DbError as AdapterError, DbResult, DbRow, DbTransaction, DbValue,
-};
+pub use adapter::{DbAdapter, DbError as AdapterError, DbResult, DbRow, DbTransaction, DbValue};
 pub use error::DbError;
 pub use pool::{DbBackend, DbPool, PoolError, PoolTuning};
 
@@ -209,11 +207,11 @@ impl Database {
         // Build the sqlx adapter and run all migrations through it.
         // `migrations/*.sql` is the single source of truth for schema.
         let adapter = build_sqlite_adapter(&db_path);
-        migrate::apply_migrations_blocking(&adapter).map_err(|e| DbError::Adapter(
-            adapter::DbError::Sqlx {
+        migrate::apply_migrations_blocking(&adapter).map_err(|e| {
+            DbError::Adapter(adapter::DbError::Sqlx {
                 source: sqlx::Error::Migrate(Box::new(e)),
-            },
-        ))?;
+            })
+        })?;
 
         Ok(Self {
             adapter,
@@ -412,11 +410,11 @@ impl Database {
         let anchor = rusqlite::Connection::open_with_flags(&url, flags)?;
 
         let adapter = build_shared_in_memory_adapter(&mem_id);
-        migrate::apply_migrations_blocking(&adapter).map_err(|e| DbError::Adapter(
-            adapter::DbError::Sqlx {
+        migrate::apply_migrations_blocking(&adapter).map_err(|e| {
+            DbError::Adapter(adapter::DbError::Sqlx {
                 source: sqlx::Error::Migrate(Box::new(e)),
-            },
-        ))?;
+            })
+        })?;
         Ok(Self {
             adapter,
             master_key: None,

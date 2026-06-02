@@ -259,9 +259,8 @@ mod tests {
 
     fn test_state() -> AppState {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new("origin".to_string(), None),
-        );
+        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> =
+            Arc::new(DryRunActions::new("origin".to_string(), None));
         let jira_available = Arc::new(AtomicBool::new(false));
         let engine = Arc::new(WorkflowEngine::new(
             config.clone(),

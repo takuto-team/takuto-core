@@ -35,11 +35,11 @@ use super::types::{Workflow, WorkflowEvent};
 // compiling unchanged after the split.
 // ---------------------------------------------------------------------------
 
-pub(crate) use super::resolve::{resolve_repo_for_ticket, resolve_workspace_name};
 pub(super) use super::bootstrap::prepare_worktree_for_ticket;
-pub(super) use super::resolve::scan_definitions_dir;
-pub(super) use super::step_runner::close_github_issue;
 pub use super::resolve::resolve_worktree_init_commands;
+pub(super) use super::resolve::scan_definitions_dir;
+pub(crate) use super::resolve::{resolve_repo_for_ticket, resolve_workspace_name};
+pub(super) use super::step_runner::close_github_issue;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn drive_workflow_def(

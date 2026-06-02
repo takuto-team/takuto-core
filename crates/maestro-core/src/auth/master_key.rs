@@ -33,7 +33,9 @@ pub struct MasterKey([u8; 32]);
 impl std::fmt::Debug for MasterKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Never leak the key bytes through Debug.
-        f.debug_struct("MasterKey").field("bytes", &"<redacted>").finish()
+        f.debug_struct("MasterKey")
+            .field("bytes", &"<redacted>")
+            .finish()
     }
 }
 
@@ -59,9 +61,7 @@ impl MasterKey {
             .into());
         }
         let raw = hex::decode(cleaned).map_err(|source| ConfigError::MasterKeyHex { source })?;
-        let bytes: [u8; 32] = raw
-            .try_into()
-            .map_err(|_| ConfigError::MasterKeyLength)?;
+        let bytes: [u8; 32] = raw.try_into().map_err(|_| ConfigError::MasterKeyLength)?;
         Ok(Self(bytes))
     }
 
@@ -247,11 +247,12 @@ fn write_keyfile(path: &Path, key: &MasterKey) -> Result<()> {
             path: path.to_path_buf(),
             detail: e.to_string(),
         })?;
-    f.write_all(key.as_bytes()).map_err(|e| ConfigError::MasterKeyFile {
-        op: "write",
-        path: path.to_path_buf(),
-        detail: e.to_string(),
-    })?;
+    f.write_all(key.as_bytes())
+        .map_err(|e| ConfigError::MasterKeyFile {
+            op: "write",
+            path: path.to_path_buf(),
+            detail: e.to_string(),
+        })?;
     f.sync_all().map_err(|e| ConfigError::MasterKeyFile {
         op: "fsync",
         path: path.to_path_buf(),
@@ -271,11 +272,12 @@ fn write_keyfile(path: &Path, key: &MasterKey) -> Result<()> {
             path: path.to_path_buf(),
             detail: e.to_string(),
         })?;
-    f.write_all(key.as_bytes()).map_err(|e| ConfigError::MasterKeyFile {
-        op: "write",
-        path: path.to_path_buf(),
-        detail: e.to_string(),
-    })?;
+    f.write_all(key.as_bytes())
+        .map_err(|e| ConfigError::MasterKeyFile {
+            op: "write",
+            path: path.to_path_buf(),
+            detail: e.to_string(),
+        })?;
     f.sync_all().ok();
     Ok(())
 }
@@ -380,8 +382,8 @@ mod tests {
         let dir = tempdir().unwrap();
         set_env("not-hex");
 
-        let err = load_or_init_master_key(dir.path(), true)
-            .expect_err("malformed env var must reject");
+        let err =
+            load_or_init_master_key(dir.path(), true).expect_err("malformed env var must reject");
         assert!(err.to_string().contains("64 hex characters"));
 
         clear_env();
@@ -399,15 +401,11 @@ mod tests {
         std::fs::write(&keyfile, raw).unwrap();
         #[cfg(unix)]
         {
-            std::fs::set_permissions(
-                &keyfile,
-                std::fs::Permissions::from_mode(0o600),
-            )
-            .unwrap();
+            std::fs::set_permissions(&keyfile, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
 
-        let loaded = load_or_init_master_key(dir.path(), false)
-            .expect("existing keyfile path must succeed");
+        let loaded =
+            load_or_init_master_key(dir.path(), false).expect("existing keyfile path must succeed");
         assert_eq!(loaded.source, MasterKeySource::Keyfile);
         assert_eq!(loaded.key.as_bytes(), &raw);
         assert!(!loaded.keyfile_world_readable);
@@ -461,8 +459,8 @@ mod tests {
         let _g = ENV_LOCK.lock().unwrap();
         clear_env();
         let dir = tempdir().unwrap();
-        let err = load_or_init_master_key(dir.path(), false)
-            .expect_err("disabled auto-gen must reject");
+        let err =
+            load_or_init_master_key(dir.path(), false).expect_err("disabled auto-gen must reject");
         assert!(err.to_string().contains("auto-generation is disabled"));
         // And no file was written.
         assert!(!dir.path().join("secret.key").exists());

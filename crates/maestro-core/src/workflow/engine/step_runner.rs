@@ -18,6 +18,7 @@ use tokio::sync::{RwLock, Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use crate::actions::AgentError;
 use crate::agent_prompt::{headless_instructions_suffix, report_injection_suffix};
 use crate::claude::session::ClaudeSession;
 use crate::codex::CodexSession;
@@ -28,7 +29,6 @@ use crate::config::{
 use crate::container::ContainerRunner;
 use crate::cursor::session::CursorSession;
 use crate::db::Database;
-use crate::actions::AgentError;
 use crate::error::{MaestroError, Result};
 use crate::jira::client::JiraTicket;
 use crate::opencode::OpenCodeSession;
@@ -186,11 +186,19 @@ pub(super) async fn run_workflow_def_steps(
     // means "use the CLI's default" (no `-m` flag emitted).
     let codex_model = {
         let m = cfg.agent.providers.codex.model.trim();
-        if m.is_empty() { None } else { Some(m.to_string()) }
+        if m.is_empty() {
+            None
+        } else {
+            Some(m.to_string())
+        }
     };
     let opencode_model = {
         let m = cfg.agent.providers.opencode.model.trim();
-        if m.is_empty() { None } else { Some(m.to_string()) }
+        if m.is_empty() {
+            None
+        } else {
+            Some(m.to_string())
+        }
     };
     let ticketing_avail = {
         let wf = workflows.read().await;
@@ -263,7 +271,15 @@ pub(super) async fn run_workflow_def_steps(
             w.pr_url = Some(url.clone());
         }
     }
-    transition(workflows, event_tx, ticket_key, WorkflowState::Done, config, db).await;
+    transition(
+        workflows,
+        event_tx,
+        ticket_key,
+        WorkflowState::Done,
+        config,
+        db,
+    )
+    .await;
 
     Ok(())
 }
@@ -822,10 +838,18 @@ pub(super) async fn run_agent_step_sequence(
                             add_step_log(workflows, ticket_key, step_log).await;
                             error!(ticket = %ticket_key, "Agent step AI session failed — aborting workflow");
                             let hint: &'static str = match ai_stream_provider {
-                                AiAgentProvider::Claude => "check that Claude Code is authenticated in the container",
-                                AiAgentProvider::Cursor => "check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli",
-                                AiAgentProvider::Codex => "check Codex (`codex login --with-api-key` or OPENAI_API_KEY) and agent.providers.codex.model",
-                                AiAgentProvider::OpenCode => "check OpenCode (`opencode auth login` or a project opencode.json) and agent.providers.opencode.model",
+                                AiAgentProvider::Claude => {
+                                    "check that Claude Code is authenticated in the container"
+                                }
+                                AiAgentProvider::Cursor => {
+                                    "check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli"
+                                }
+                                AiAgentProvider::Codex => {
+                                    "check Codex (`codex login --with-api-key` or OPENAI_API_KEY) and agent.providers.codex.model"
+                                }
+                                AiAgentProvider::OpenCode => {
+                                    "check OpenCode (`opencode auth login` or a project opencode.json) and agent.providers.opencode.model"
+                                }
                             };
                             return Err(AgentError::AgentStepAborted { hint }.into());
                         }
@@ -1033,18 +1057,16 @@ pub(super) async fn close_github_issue(
     cwd: &Path,
     actions: &dyn crate::actions::traits::ExternalActions,
 ) -> Result<()> {
-    let issue_number = parse_gh_issue_number(ticket_key).ok_or_else(|| {
-        ConfigError::Operational {
+    let issue_number =
+        parse_gh_issue_number(ticket_key).ok_or_else(|| ConfigError::Operational {
             op: "close GitHub issue",
             detail: format!("'{ticket_key}' is not a GH-{{number}} key"),
-        }
-    })?;
-    let owner_repo = crate::github::parse_github_repo(repo_url).ok_or_else(|| {
-        ConfigError::Operational {
+        })?;
+    let owner_repo =
+        crate::github::parse_github_repo(repo_url).ok_or_else(|| ConfigError::Operational {
             op: "close GitHub issue",
             detail: format!("failed to parse owner/repo from '{repo_url}'"),
-        }
-    })?;
+        })?;
 
     let gh_token = actions.get_gh_installation_token(cwd).await;
     let env: Vec<(&str, &str)> = gh_token

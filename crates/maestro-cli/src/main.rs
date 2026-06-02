@@ -23,8 +23,8 @@ use maestro_core::docker_hooks;
 use maestro_core::github::poller::GitHubPoller;
 use maestro_core::github::pr_merge_poller::PrMergePoller;
 use maestro_core::jira::poller::JiraPoller;
-use maestro_core::workflow::engine::WorkflowEngine;
 use maestro_core::repo_reconcile;
+use maestro_core::workflow::engine::WorkflowEngine;
 use maestro_web::server::build_router;
 use maestro_web::state::{
     AppState, AuthState, ConfigState, EditorState, EngineState, RunCommandState,
@@ -278,9 +278,7 @@ fn run_preflight(config_path: &std::path::Path, strict: bool) -> ExitCode {
                     }
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[maestro preflight] WARNING: failed to fetch GitHub App token: {e}"
-                    );
+                    eprintln!("[maestro preflight] WARNING: failed to fetch GitHub App token: {e}");
                 }
             }
         }
@@ -399,9 +397,7 @@ fn run_provisioning(config_path: &std::path::Path, action: &ProvisioningAction) 
             use std::io::Write;
             let mut out = std::io::stdout().lock();
             for cmd in &config.provisioning.install_commands {
-                if out.write_all(cmd.as_bytes()).is_err()
-                    || out.write_all(&[0u8]).is_err()
-                {
+                if out.write_all(cmd.as_bytes()).is_err() || out.write_all(&[0u8]).is_err() {
                     return ExitCode::FAILURE;
                 }
             }
@@ -574,9 +570,7 @@ fn main() -> ExitCode {
         Some(Commands::Keys {
             action: KeysAction::Reset { yes_i_am_sure },
         }) => run_keys_reset(&cli.config, *yes_i_am_sure),
-        Some(Commands::Provisioning { action }) => {
-            run_provisioning(&cli.config, action)
-        }
+        Some(Commands::Provisioning { action }) => run_provisioning(&cli.config, action),
         None => match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -831,11 +825,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // and the workflow filter hides every legacy workflow from its
     // owner's dashboard until an admin manually re-adds.
     if let (Some(db), Some(data_dir)) = (db.as_ref(), resolved_data_dir.as_deref()) {
-        let migrate_associations = config
-            .read()
-            .await
-            .general
-            .migrate_orphan_repo_associations;
+        let migrate_associations = config.read().await.general.migrate_orphan_repo_associations;
 
         // Repositories DAO uses the agnostic adapter — no rusqlite
         // MutexGuard needed for the reconciliation path; both helpers
@@ -861,8 +851,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         // Backfill `user_repositories` from restored snapshot workflows
         // (gated; default on).
         if migrate_associations {
-            match repo_reconcile::backfill_user_repositories_from_snapshots(adapter, data_dir)
-                .await
+            match repo_reconcile::backfill_user_repositories_from_snapshots(adapter, data_dir).await
             {
                 Ok(n) if n > 0 => info!(
                     count = n,
@@ -898,12 +887,11 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         // matching any registered repository.
         let cfg_repo_path = config.read().await.git.repo_path.clone();
         if !cfg_repo_path.is_empty() && cfg_repo_path != "/workspace" {
-            let matches_any =
-                maestro_core::db::repositories::get_by_path(adapter, &cfg_repo_path)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some();
+            let matches_any = maestro_core::db::repositories::get_by_path(adapter, &cfg_repo_path)
+                .await
+                .ok()
+                .flatten()
+                .is_some();
             if !matches_any {
                 tracing::warn!(
                     repo_path = %cfg_repo_path,
@@ -983,16 +971,17 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // One-shot orphan migration (gated by `[general] migrate_orphan_workflows`).
     // Reassigns any restored workflow with `user_id == None` to the resolved
     // poller owner so it becomes visible on that user's dashboard.
-    if migrate_orphans
-        && let Some(ref owner_id) = resolved_poller_owner
-    {
+    if migrate_orphans && let Some(ref owner_id) = resolved_poller_owner {
         let migrated = engine.migrate_orphan_workflows_to_owner(owner_id).await;
         if migrated > 0 {
             // Persist immediately so the migration survives a crash.
             if let Err(e) = engine.sync_workflow_snapshot().await {
                 tracing::warn!(error = %e, "Failed to persist workflow snapshot after orphan migration");
             } else {
-                info!(count = migrated, "Orphan workflow migration complete and persisted");
+                info!(
+                    count = migrated,
+                    "Orphan workflow migration complete and persisted"
+                );
             }
         }
     }

@@ -100,11 +100,7 @@ pub(super) fn build_upstream_uri(host_port: u16, rest: &str, query: Option<&str>
 /// Strip hop-by-hop headers and rewrite `Host` to point at the backend.
 /// Used for plain HTTP forwarding only — the WS-upgrade path keeps
 /// `Connection`/`Upgrade` intact intentionally (they ARE the upgrade).
-pub(super) fn sanitise_request_headers(
-    req: &mut Request<Body>,
-    host_port: u16,
-    is_upgrade: bool,
-) {
+pub(super) fn sanitise_request_headers(req: &mut Request<Body>, host_port: u16, is_upgrade: bool) {
     if !is_upgrade {
         for name in HOP_BY_HOP_HEADERS {
             req.headers_mut().remove(*name);
@@ -214,11 +210,13 @@ pub(super) async fn forward_http(
                     .get(header::CONTENT_TYPE)
                     .and_then(|v| v.to_str().ok())
                     .is_some_and(|ct| ct.starts_with("text/html"))
-                && let Ok(cookie_val) = HeaderValue::from_str(
-                    &format!("maestro_dynamic_port={token}; Path=/; SameSite=Lax")
-                )
+                && let Ok(cookie_val) = HeaderValue::from_str(&format!(
+                    "maestro_dynamic_port={token}; Path=/; SameSite=Lax"
+                ))
             {
-                response.headers_mut().append(header::SET_COOKIE, cookie_val);
+                response
+                    .headers_mut()
+                    .append(header::SET_COOKIE, cookie_val);
             }
             response
         }

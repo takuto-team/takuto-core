@@ -264,8 +264,12 @@ mod tests {
         .await;
 
         writer.write_step("Build", "starting").await;
-        writer.write_output("Build", "stdout", "compiling foo").await;
-        writer.write_output("Build", "stderr", "warning: unused").await;
+        writer
+            .write_output("Build", "stdout", "compiling foo")
+            .await;
+        writer
+            .write_output("Build", "stderr", "warning: unused")
+            .await;
 
         // Drop sink + writer so the batcher hits the
         // "sender disconnected" path and flushes immediately.
@@ -279,10 +283,8 @@ mod tests {
         // The first two rows are the header (write_step body via
         // `write()` → LogStream::System) for the constructor. Then
         // our three explicit emissions.
-        let by_stream: Vec<(LogStream, String)> = rows
-            .iter()
-            .map(|r| (r.stream, r.content.clone()))
-            .collect();
+        let by_stream: Vec<(LogStream, String)> =
+            rows.iter().map(|r| (r.stream, r.content.clone())).collect();
         assert!(
             by_stream
                 .iter()
@@ -302,9 +304,7 @@ mod tests {
             "write_output stderr must emit as Stderr"
         );
         assert!(
-            by_stream
-                .iter()
-                .any(|(s, _)| *s == LogStream::System),
+            by_stream.iter().any(|(s, _)| *s == LogStream::System),
             "the constructor header (via `write()`) emits as System"
         );
 

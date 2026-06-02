@@ -48,23 +48,25 @@ pub fn seal(master: &MasterKey, plaintext: &[u8]) -> Result<SealedBlob> {
     let dek_cipher = XChaCha20Poly1305::new((&*dek).into());
     let nonce_arr: XNonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
     let nonce: [u8; 24] = nonce_arr.into();
-    let ciphertext = dek_cipher
-        .encrypt(&nonce_arr, plaintext)
-        .map_err(|e| ConfigError::AeadEncrypt {
-            op: "plaintext",
-            detail: e.to_string(),
-        })?;
+    let ciphertext =
+        dek_cipher
+            .encrypt(&nonce_arr, plaintext)
+            .map_err(|e| ConfigError::AeadEncrypt {
+                op: "plaintext",
+                detail: e.to_string(),
+            })?;
 
     // Wrap the DEK with the master key + a separate fresh nonce.
     let mk_cipher = XChaCha20Poly1305::new((master.as_bytes()).into());
     let wnonce_arr: XNonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
     let wnonce: [u8; 24] = wnonce_arr.into();
-    let wrapped_dek = mk_cipher
-        .encrypt(&wnonce_arr, &dek[..])
-        .map_err(|e| ConfigError::AeadEncrypt {
-            op: "DEK",
-            detail: e.to_string(),
-        })?;
+    let wrapped_dek =
+        mk_cipher
+            .encrypt(&wnonce_arr, &dek[..])
+            .map_err(|e| ConfigError::AeadEncrypt {
+                op: "DEK",
+                detail: e.to_string(),
+            })?;
 
     // `dek` zeroizes on drop.
     Ok(SealedBlob {

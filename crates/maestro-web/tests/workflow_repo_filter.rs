@@ -191,8 +191,7 @@ async fn user_cannot_see_other_users_workflow_even_on_shared_repo() {
     let state = test_state_with_db();
     let alice_cookie = register_and_login(&state).await;
     let alice_id = user_id_for(&state, "admin").await;
-    let bob_cookie =
-        create_and_login_user(&state, &alice_cookie, "bob", "testpassword1234").await;
+    let bob_cookie = create_and_login_user(&state, &alice_cookie, "bob", "testpassword1234").await;
     let bob_id = user_id_for(&state, "bob").await;
 
     // Both users add the same repo.

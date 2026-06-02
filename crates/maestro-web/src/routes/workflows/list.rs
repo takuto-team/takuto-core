@@ -59,8 +59,7 @@ pub async fn list_workflows(
         std::collections::HashSet<String>,
         std::collections::HashSet<String>,
     ) = if let Some(database) = auth_state.db.as_ref() {
-        match maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id)
-            .await
+        match maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id).await
         {
             Ok(repos) => {
                 let mut ids = std::collections::HashSet::new();
@@ -111,7 +110,9 @@ pub async fn list_workflows(
             .filter_map(|(ticket_key, ttyd_token)| {
                 registry
                     .iter()
-                    .find(|(_, r)| r.ticket_key == *ticket_key && r.kind == SessionRouteKind::Terminal)
+                    .find(|(_, r)| {
+                        r.ticket_key == *ticket_key && r.kind == SessionRouteKind::Terminal
+                    })
                     .map(|(path_token, _)| {
                         (
                             ticket_key.clone(),
@@ -226,7 +227,12 @@ pub async fn list_workflows(
             // appear immediately on page load (no per-workflow Docker call).
             let port_mappings: Vec<(u16, String)> = dyn_fwd
                 .get(&w.ticket_key)
-                .map(|forwards| forwards.iter().map(|f| (f.container_port, f.proxy_url.clone())).collect())
+                .map(|forwards| {
+                    forwards
+                        .iter()
+                        .map(|f| (f.container_port, f.proxy_url.clone()))
+                        .collect()
+                })
                 .unwrap_or_default();
             let configured_run_cmds: &[maestro_core::db::user_worktree_commands::RunCommand] =
                 match w.user_id.as_deref() {
@@ -349,18 +355,16 @@ pub async fn workflow_counts(
     State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Json<WorkflowCountsResponse> {
-    use std::collections::HashMap;
     use maestro_core::db::work_items::WorkItemStateKind;
+    use std::collections::HashMap;
 
     let mut counted: HashMap<String, WorkItemStateKind> = HashMap::new();
 
     // ── DB primary ─────────────────────────────────────────────
     if let Some(database) = auth_state.db.as_ref()
-        && let Ok(rows) = maestro_core::db::work_items::list_user_state_kinds(
-            database.adapter(),
-            &auth.user_id,
-        )
-        .await
+        && let Ok(rows) =
+            maestro_core::db::work_items::list_user_state_kinds(database.adapter(), &auth.user_id)
+                .await
     {
         for (ticket_key, kind) in rows {
             counted.insert(ticket_key, kind);
@@ -424,7 +428,12 @@ pub async fn workflow_counts(
             | WorkItemStateKind::CreatingPr => running += 1,
         }
     }
-    Json(WorkflowCountsResponse { running, completed, errors, paused })
+    Json(WorkflowCountsResponse {
+        running,
+        completed,
+        errors,
+        paused,
+    })
 }
 
 pub async fn get_workflow(
@@ -447,11 +456,8 @@ pub async fn get_workflow(
     // they have no DB equivalent.
     let db_row: Option<maestro_core::db::work_items::WorkItemRow> =
         if let Some(database) = auth_state.db.as_ref() {
-            match maestro_core::db::work_items::get_work_item_by_ticket_key(
-                database.adapter(),
-                &id,
-            )
-            .await
+            match maestro_core::db::work_items::get_work_item_by_ticket_key(database.adapter(), &id)
+                .await
             {
                 Ok(row) => row,
                 Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -472,7 +478,10 @@ pub async fn get_workflow(
     // Maestro process started (server restart).
     let dyn_fwd = editor.dynamic_forwards.read().await;
     let port_mappings: Vec<(u16, String)> = if let Some(forwards) = dyn_fwd.get(&ticket_key) {
-        forwards.iter().map(|f| (f.container_port, f.proxy_url.clone())).collect()
+        forwards
+            .iter()
+            .map(|f| (f.container_port, f.proxy_url.clone()))
+            .collect()
     } else {
         // Fallback: editor opened before this Maestro process started (restart
         // recovery). Register proxy tokens on the fly and seed the cache so
@@ -485,13 +494,21 @@ pub async fn get_workflow(
         let mut entries = Vec::new();
         let mut result = Vec::new();
         for (cp, hp) in &raw {
-            let Some(path_token) = editor.path_token_registry.register(SessionRoute {
-                kind: SessionRouteKind::DynamicPort,
-                host_port: *hp,
-                ticket_key: ticket_key.clone(),
-                user_id: auth.user_id.clone(),
-            }).await else {
-                tracing::error!(container_port = *cp, host_port = *hp, "Could not allocate a proxy token; skipping port mapping");
+            let Some(path_token) = editor
+                .path_token_registry
+                .register(SessionRoute {
+                    kind: SessionRouteKind::DynamicPort,
+                    host_port: *hp,
+                    ticket_key: ticket_key.clone(),
+                    user_id: auth.user_id.clone(),
+                })
+                .await
+            else {
+                tracing::error!(
+                    container_port = *cp,
+                    host_port = *hp,
+                    "Could not allocate a proxy token; skipping port mapping"
+                );
                 continue;
             };
             let proxy_url = container::build_session_dynamic_port_url(&path_token);
@@ -592,18 +609,16 @@ pub async fn get_workflow(
             // an empty list (no buttons rendered on the card).
             let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
                 match (w.user_id.as_deref(), auth_state.db.as_ref()) {
-                    (Some(uid), Some(database)) => {
-                        maestro_core::db::user_worktree_commands::get(
-                            database.adapter(),
-                            uid,
-                            &w.workspace_name,
-                        )
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(|r| r.run_commands)
-                        .unwrap_or_default()
-                    }
+                    (Some(uid), Some(database)) => maestro_core::db::user_worktree_commands::get(
+                        database.adapter(),
+                        uid,
+                        &w.workspace_name,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| r.run_commands)
+                    .unwrap_or_default(),
                     _ => Vec::new(),
                 };
             let run_cmds_state = run_command.run_commands.read().await;
@@ -631,7 +646,6 @@ pub async fn get_workflow(
     }))
 }
 
-
 /// Return the generated report markdown for a workflow (from `lore/reports/<key>_report.md` in the worktree).
 ///
 /// **DB is the primary source for `worktree_path` and `ticket_key`.**
@@ -649,11 +663,8 @@ pub async fn get_workflow_report(
     // ── DB-first read of (worktree_path, ticket_key) ────────────
     let mut resolved: Option<(std::path::PathBuf, String)> = None;
     if let Some(database) = auth_state.db.as_ref() {
-        match maestro_core::db::work_items::get_work_item_by_ticket_key(
-            database.adapter(),
-            &id,
-        )
-        .await
+        match maestro_core::db::work_items::get_work_item_by_ticket_key(database.adapter(), &id)
+            .await
         {
             Ok(Some(row)) => {
                 let Some(wt) = row.worktree_path else {

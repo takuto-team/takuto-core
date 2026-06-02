@@ -106,7 +106,8 @@ fn seed_snapshot_workflow(
         workspace_name: workspace_name.to_string(),
         repository_id: None,
         user_id: Some(user_id.to_string()),
-            auth_pin: None,    };
+        auth_pin: None,
+    };
 
     let file = WorkflowSnapshotFile {
         version: SNAPSHOT_VERSION,
@@ -128,11 +129,7 @@ async fn reconcile_then_backfill_e2e() {
     std::fs::create_dir_all(&workspaces_dir).expect("create workspaces dir");
 
     // Two fake clones.
-    make_fake_clone(
-        &workspaces_dir,
-        "alpha",
-        "git@github.com:owner-a/alpha.git",
-    );
+    make_fake_clone(&workspaces_dir, "alpha", "git@github.com:owner-a/alpha.git");
     make_fake_clone(
         &workspaces_dir,
         "beta",
@@ -158,19 +155,30 @@ async fn reconcile_then_backfill_e2e() {
     );
 
     let all = repositories::list_all(adapter).await.expect("list_all");
-    assert_eq!(all.len(), 2, "expected 2 repository rows; got {}", all.len());
+    assert_eq!(
+        all.len(),
+        2,
+        "expected 2 repository rows; got {}",
+        all.len()
+    );
     let names: Vec<&str> = all.iter().map(|r| r.name.as_str()).collect();
     assert!(names.contains(&"alpha"));
     assert!(names.contains(&"beta"));
 
     // URL discovery worked for both: SSH form was normalised to HTTPS.
-    let alpha = all.iter().find(|r| r.name == "alpha").expect("alpha row exists");
+    let alpha = all
+        .iter()
+        .find(|r| r.name == "alpha")
+        .expect("alpha row exists");
     assert_eq!(
         alpha.repo_url.as_deref(),
         Some("https://github.com/owner-a/alpha"),
         "SSH origin URL must be normalised"
     );
-    let beta = all.iter().find(|r| r.name == "beta").expect("beta row exists");
+    let beta = all
+        .iter()
+        .find(|r| r.name == "beta")
+        .expect("beta row exists");
     assert_eq!(
         beta.repo_url.as_deref(),
         Some("https://github.com/owner-b/beta"),
@@ -273,7 +281,10 @@ async fn backfill_skips_unmatched_workspaces() {
     let mine = repositories::list_for_user(adapter, &alice_id)
         .await
         .expect("list_for_user");
-    assert!(mine.is_empty(), "alice has no associations (unmatched snapshot)");
+    assert!(
+        mine.is_empty(),
+        "alice has no associations (unmatched snapshot)"
+    );
 
     let _ = std::fs::remove_dir_all(&data_dir);
 }
@@ -320,7 +331,8 @@ async fn backfill_skips_orphan_workflows() {
         workspace_name: "alpha".into(),
         repository_id: None,
         user_id: None,
-            auth_pin: None,    };
+        auth_pin: None,
+    };
     let file = WorkflowSnapshotFile {
         version: SNAPSHOT_VERSION,
         workflows: vec![rec],

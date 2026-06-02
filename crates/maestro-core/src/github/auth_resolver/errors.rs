@@ -80,7 +80,9 @@ pub struct GitToken {
 /// audit-log `error_code`.
 #[derive(Debug, thiserror::Error)]
 pub enum GitAuthError {
-    #[error("UnauthenticatedGit: no GitHub auth source available for action {action} (user {user_id})")]
+    #[error(
+        "UnauthenticatedGit: no GitHub auth source available for action {action} (user {user_id})"
+    )]
     UnauthenticatedGit {
         user_id: String,
         action: &'static str,
@@ -133,10 +135,9 @@ pub fn auth_warning_payload(err: &GitAuthError) -> (&'static str, String) {
             "master_key_unavailable",
             "Master key not loaded; per-user credentials cannot be unsealed".to_string(),
         ),
-        GitAuthError::GitHubAppTokenFetchFailed { message } => (
-            "github_app_token_fetch_failed",
-            message.clone(),
-        ),
+        GitAuthError::GitHubAppTokenFetchFailed { message } => {
+            ("github_app_token_fetch_failed", message.clone())
+        }
         GitAuthError::Internal { message } => ("auth_warning", message.clone()),
     }
 }

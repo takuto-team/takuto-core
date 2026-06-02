@@ -159,14 +159,16 @@ pub async fn upsert(
         }
     }
 
-    let init_json = serde_json::to_string(init_commands).map_err(|e| DbError::CommandsJsonEncode {
-        column: "init_commands_json",
-        source: e,
-    })?;
-    let run_json = serde_json::to_string(run_commands).map_err(|e| DbError::CommandsJsonEncode {
-        column: "run_commands_json",
-        source: e,
-    })?;
+    let init_json =
+        serde_json::to_string(init_commands).map_err(|e| DbError::CommandsJsonEncode {
+            column: "init_commands_json",
+            source: e,
+        })?;
+    let run_json =
+        serde_json::to_string(run_commands).map_err(|e| DbError::CommandsJsonEncode {
+            column: "run_commands_json",
+            source: e,
+        })?;
     let now = chrono::Utc::now().timestamp();
 
     let tail = super::upsert::build_update_tail(
@@ -196,11 +198,7 @@ pub async fn upsert(
 
 /// Remove the row for `(user_id, workspace_name)`. Returns `true` if a row
 /// was deleted, `false` if none existed.
-pub async fn delete(
-    adapter: &DbAdapter,
-    user_id: &str,
-    workspace_name: &str,
-) -> Result<bool> {
+pub async fn delete(adapter: &DbAdapter, user_id: &str, workspace_name: &str) -> Result<bool> {
     let affected = adapter
         .execute(
             "DELETE FROM user_worktree_commands WHERE user_id = ? AND workspace_name = ?",
@@ -714,7 +712,10 @@ mod tests {
 
         // init: pure list of strings.
         let init_parsed: Vec<String> = serde_json::from_str(&init_raw).unwrap();
-        assert_eq!(init_parsed, vec!["echo a".to_string(), "echo b".to_string()]);
+        assert_eq!(
+            init_parsed,
+            vec!["echo a".to_string(), "echo b".to_string()]
+        );
 
         // run: list of objects with `name` and `command` fields.
         let run_value: serde_json::Value = serde_json::from_str(&run_raw).unwrap();

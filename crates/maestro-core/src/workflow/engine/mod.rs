@@ -247,9 +247,7 @@ impl WorkflowEngine {
     /// Optional `GitAuthResolver` used to pin credentials at workflow start.
     /// Returns a cloned `Option<Arc<...>>` so callers can share the resolver
     /// without holding the engine.
-    pub fn git_auth_resolver(
-        &self,
-    ) -> Option<Arc<crate::github::auth_resolver::GitAuthResolver>> {
+    pub fn git_auth_resolver(&self) -> Option<Arc<crate::github::auth_resolver::GitAuthResolver>> {
         self.git_auth_resolver.clone()
     }
 
@@ -565,7 +563,8 @@ mod tests {
             workspace_name: "test-workspace".into(),
             repository_id: None,
             user_id: None,
-            auth_pin: None,        }
+            auth_pin: None,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -937,7 +936,8 @@ mod tests {
             workspace_name: "test-workspace".into(),
             repository_id: None,
             user_id: None,
-            auth_pin: None,        }
+            auth_pin: None,
+        }
     }
 
     #[test]
@@ -1066,7 +1066,8 @@ mod tests {
             workspace_name: String::new(),
             repository_id: None,
             user_id: None,
-            auth_pin: None,        };
+            auth_pin: None,
+        };
         let w = Workflow::from_persisted_record(rec);
         assert_eq!(
             w.ticketing_system,
@@ -1131,7 +1132,8 @@ mod tests {
             workspace_name: "test-workspace".into(),
             repository_id: Some("repo-uuid-99".into()),
             user_id: Some("user-abc".into()),
-            auth_pin: None,        };
+            auth_pin: None,
+        };
 
         let json = serde_json::to_string_pretty(&rec).expect("serialize PersistedWorkflowRecord");
         let back: PersistedWorkflowRecord =
@@ -1223,11 +1225,9 @@ mod tests {
     #[test]
     fn workflow_engine_new_does_not_panic() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> =
-            Arc::new(crate::actions::dry_run::DryRunActions::new(
-                "origin".into(),
-                None,
-            ));
+        let actions: Arc<dyn ExternalActions> = Arc::new(
+            crate::actions::dry_run::DryRunActions::new("origin".into(), None),
+        );
         let jira_available = Arc::new(AtomicBool::new(false));
         let engine = WorkflowEngine::new(
             config,
@@ -1246,11 +1246,9 @@ mod tests {
     #[test]
     fn workflow_engine_new_with_higher_concurrency() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> =
-            Arc::new(crate::actions::dry_run::DryRunActions::new(
-                "origin".into(),
-                None,
-            ));
+        let actions: Arc<dyn ExternalActions> = Arc::new(
+            crate::actions::dry_run::DryRunActions::new("origin".into(), None),
+        );
         let jira_available = Arc::new(AtomicBool::new(true));
         let engine = WorkflowEngine::new(
             config,
@@ -1277,16 +1275,12 @@ mod tests {
     #[tokio::test]
     async fn start_workflow_propagates_user_id() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> =
-            Arc::new(crate::actions::dry_run::DryRunActions::new(
-                "origin".into(),
-                None,
-            ));
+        let actions: Arc<dyn ExternalActions> = Arc::new(
+            crate::actions::dry_run::DryRunActions::new("origin".into(), None),
+        );
         let jira_available = Arc::new(AtomicBool::new(false));
-        let workflows_dir = std::env::temp_dir().join(format!(
-            "maestro-engine-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let workflows_dir =
+            std::env::temp_dir().join(format!("maestro-engine-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
         let engine = WorkflowEngine::new(
             config,
@@ -1326,16 +1320,12 @@ mod tests {
     #[tokio::test]
     async fn start_workflow_with_none_user_id_creates_orphan() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> =
-            Arc::new(crate::actions::dry_run::DryRunActions::new(
-                "origin".into(),
-                None,
-            ));
+        let actions: Arc<dyn ExternalActions> = Arc::new(
+            crate::actions::dry_run::DryRunActions::new("origin".into(), None),
+        );
         let jira_available = Arc::new(AtomicBool::new(false));
-        let workflows_dir = std::env::temp_dir().join(format!(
-            "maestro-engine-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let workflows_dir =
+            std::env::temp_dir().join(format!("maestro-engine-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
         let engine = WorkflowEngine::new(
             config,
@@ -1362,7 +1352,10 @@ mod tests {
         let wf_arc = engine.workflows_arc();
         let map = wf_arc.read().await;
         let wf = map.get("POLLED-2").expect("workflow should exist");
-        assert!(wf.user_id.is_none(), "None should leave the workflow unowned");
+        assert!(
+            wf.user_id.is_none(),
+            "None should leave the workflow unowned"
+        );
     }
 
     /// Every call to `start_workflow` must shadow-write the matching
@@ -1372,16 +1365,12 @@ mod tests {
     #[tokio::test]
     async fn start_workflow_shadow_writes_work_items_row() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> =
-            Arc::new(crate::actions::dry_run::DryRunActions::new(
-                "origin".into(),
-                None,
-            ));
+        let actions: Arc<dyn ExternalActions> = Arc::new(
+            crate::actions::dry_run::DryRunActions::new("origin".into(), None),
+        );
         let jira_available = Arc::new(AtomicBool::new(false));
-        let workflows_dir = std::env::temp_dir().join(format!(
-            "maestro-engine-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let workflows_dir =
+            std::env::temp_dir().join(format!("maestro-engine-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
 
         let db = Database::open_in_memory().expect("open in-memory db");
@@ -1514,16 +1503,12 @@ mod tests {
         use crate::workflow::state::WorkflowState;
 
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> =
-            Arc::new(crate::actions::dry_run::DryRunActions::new(
-                "origin".into(),
-                None,
-            ));
+        let actions: Arc<dyn ExternalActions> = Arc::new(
+            crate::actions::dry_run::DryRunActions::new("origin".into(), None),
+        );
         let jira_available = Arc::new(AtomicBool::new(false));
-        let workflows_dir = std::env::temp_dir().join(format!(
-            "maestro-engine-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let workflows_dir =
+            std::env::temp_dir().join(format!("maestro-engine-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
         let db = Database::open_in_memory().expect("open in-memory db");
         db.adapter()
@@ -1613,16 +1598,12 @@ mod tests {
         use crate::workflow::state::WorkflowState;
 
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn ExternalActions> =
-            Arc::new(crate::actions::dry_run::DryRunActions::new(
-                "origin".into(),
-                None,
-            ));
+        let actions: Arc<dyn ExternalActions> = Arc::new(
+            crate::actions::dry_run::DryRunActions::new("origin".into(), None),
+        );
         let jira_available = Arc::new(AtomicBool::new(false));
-        let workflows_dir = std::env::temp_dir().join(format!(
-            "maestro-engine-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let workflows_dir =
+            std::env::temp_dir().join(format!("maestro-engine-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
         let db = Database::open_in_memory().expect("open in-memory db");
         db.adapter()
@@ -1769,18 +1750,14 @@ mod tests {
         .await
         .expect("shadow_record_step_start must return an id");
 
-        let steps =
-            crate::db::work_items::list_steps(db.adapter(), "wf-step-1")
-                .await
-                .expect("list_steps");
+        let steps = crate::db::work_items::list_steps(db.adapter(), "wf-step-1")
+            .await
+            .expect("list_steps");
         assert_eq!(steps.len(), 1, "exactly one step row after start");
         assert_eq!(steps[0].id, step_id);
         assert_eq!(steps[0].name, "build (run 1/1)");
         assert_eq!(steps[0].definition_filename.as_deref(), Some("ship.toml"));
-        assert_eq!(
-            steps[0].status,
-            crate::db::work_items::StepStatus::Running
-        );
+        assert_eq!(steps[0].status, crate::db::work_items::StepStatus::Running);
         assert_eq!(steps[0].started_at, 200);
         assert_eq!(steps[0].ended_at, None);
 
@@ -1795,16 +1772,12 @@ mod tests {
         )
         .await;
 
-        let steps =
-            crate::db::work_items::list_steps(db.adapter(), "wf-step-1")
-                .await
-                .expect("list_steps");
+        let steps = crate::db::work_items::list_steps(db.adapter(), "wf-step-1")
+            .await
+            .expect("list_steps");
         assert_eq!(steps.len(), 1, "end must update — never insert");
         assert_eq!(steps[0].id, step_id, "same row");
-        assert_eq!(
-            steps[0].status,
-            crate::db::work_items::StepStatus::Failed
-        );
+        assert_eq!(steps[0].status, crate::db::work_items::StepStatus::Failed);
         assert_eq!(steps[0].exit_code, Some(7));
         assert_eq!(
             steps[0].error_message.as_deref(),
@@ -1844,24 +1817,14 @@ mod tests {
             .expect("seed work_items");
 
         // Start: Running, started_at=200.
-        super::driver::shadow_start_def_run(
-            Some(&db),
-            "wf-def-1",
-            "ship.toml",
-            200,
-        )
-        .await;
+        super::driver::shadow_start_def_run(Some(&db), "wf-def-1", "ship.toml", 200).await;
 
-        let runs =
-            crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
-                .await
-                .expect("list");
+        let runs = crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
+            .await
+            .expect("list");
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].definition_filename, "ship.toml");
-        assert_eq!(
-            runs[0].state,
-            crate::db::work_items::DefRunState::Running
-        );
+        assert_eq!(runs[0].state, crate::db::work_items::DefRunState::Running);
         assert_eq!(runs[0].started_at, Some(200));
         assert_eq!(runs[0].ended_at, None);
         assert_eq!(runs[0].error_message, None);
@@ -1877,15 +1840,11 @@ mod tests {
         )
         .await;
 
-        let runs =
-            crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
-                .await
-                .expect("list");
+        let runs = crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
+            .await
+            .expect("list");
         assert_eq!(runs.len(), 1, "UPDATE-only — never duplicates");
-        assert_eq!(
-            runs[0].state,
-            crate::db::work_items::DefRunState::Completed
-        );
+        assert_eq!(runs[0].state, crate::db::work_items::DefRunState::Completed);
         assert_eq!(
             runs[0].started_at,
             Some(200),
@@ -1905,40 +1864,23 @@ mod tests {
         )
         .await;
 
-        let runs =
-            crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
-                .await
-                .expect("list");
+        let runs = crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
+            .await
+            .expect("list");
         assert_eq!(runs.len(), 1);
-        assert_eq!(
-            runs[0].state,
-            crate::db::work_items::DefRunState::Error
-        );
+        assert_eq!(runs[0].state, crate::db::work_items::DefRunState::Error);
         assert_eq!(runs[0].started_at, Some(200), "still preserved");
         assert_eq!(runs[0].ended_at, Some(500));
-        assert_eq!(
-            runs[0].error_message.as_deref(),
-            Some("agent crashed")
-        );
+        assert_eq!(runs[0].error_message.as_deref(), Some("agent crashed"));
 
         // A second start_def_run (retry) MUST reset the row to
         // Running with fresh timing and clear the prior error so
         // observers see a clean fresh-run state.
-        super::driver::shadow_start_def_run(
-            Some(&db),
-            "wf-def-1",
-            "ship.toml",
-            900,
-        )
-        .await;
-        let runs =
-            crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
-                .await
-                .expect("list");
-        assert_eq!(
-            runs[0].state,
-            crate::db::work_items::DefRunState::Running
-        );
+        super::driver::shadow_start_def_run(Some(&db), "wf-def-1", "ship.toml", 900).await;
+        let runs = crate::db::work_items::list_definition_runs(db.adapter(), "wf-def-1")
+            .await
+            .expect("list");
+        assert_eq!(runs[0].state, crate::db::work_items::DefRunState::Running);
         assert_eq!(runs[0].started_at, Some(900));
         assert_eq!(runs[0].ended_at, None);
         assert_eq!(runs[0].error_message, None);
@@ -1985,10 +1927,9 @@ mod tests {
         )
         .await;
 
-        let runs =
-            crate::db::work_items::list_definition_runs(db.adapter(), "wf-orphan")
-                .await
-                .expect("list");
+        let runs = crate::db::work_items::list_definition_runs(db.adapter(), "wf-orphan")
+            .await
+            .expect("list");
         assert!(
             runs.is_empty(),
             "finish without start must not synthesise a row"

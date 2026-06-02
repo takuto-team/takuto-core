@@ -72,12 +72,11 @@ pub async fn security_headers_middleware(
 
 /// Insert the security headers onto a response. Extracted so this can be
 /// unit-tested without spinning up a full router.
-fn apply_headers(
-    headers: &mut axum::http::HeaderMap,
-    is_proxy_path: bool,
-    https_context: bool,
-) {
-    headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+fn apply_headers(headers: &mut axum::http::HeaderMap, is_proxy_path: bool, https_context: bool) {
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
 
     if is_proxy_path {
         // Proxy responses: tighter `Referrer-Policy` (the path token is
@@ -170,14 +169,20 @@ mod tests {
         let mut h = HeaderMap::new();
         apply_headers(&mut h, false, true);
         assert_eq!(
-            h.get("strict-transport-security").unwrap().to_str().unwrap(),
+            h.get("strict-transport-security")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             HSTS_VALUE
         );
 
         let mut h = HeaderMap::new();
         apply_headers(&mut h, true, true);
         assert_eq!(
-            h.get("strict-transport-security").unwrap().to_str().unwrap(),
+            h.get("strict-transport-security")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             HSTS_VALUE
         );
     }

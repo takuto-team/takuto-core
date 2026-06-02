@@ -79,10 +79,7 @@ pub async fn get_by_name(adapter: &DbAdapter, name: &str) -> Result<Option<Repos
 }
 
 /// Fetch a repository by `local_path` (which is UNIQUE).
-pub async fn get_by_path(
-    adapter: &DbAdapter,
-    local_path: &str,
-) -> Result<Option<RepositoryRow>> {
+pub async fn get_by_path(adapter: &DbAdapter, local_path: &str) -> Result<Option<RepositoryRow>> {
     let row = adapter
         .query_optional(
             "SELECT id, name, repo_url, local_path, default_branch, created_at, created_by \
@@ -197,10 +194,7 @@ pub async fn delete(adapter: &DbAdapter, id: &str) -> Result<bool> {
 /// stable across the cluster of backends we support. (The previous
 /// `ur.rowid DESC` was SQLite-only and broke `My Repositories` on
 /// Postgres with `column ur.rowid does not exist`.)
-pub async fn list_for_user(
-    adapter: &DbAdapter,
-    user_id: &str,
-) -> Result<Vec<RepositoryRow>> {
+pub async fn list_for_user(adapter: &DbAdapter, user_id: &str) -> Result<Vec<RepositoryRow>> {
     let rows = adapter
         .query_all(
             "SELECT r.id, r.name, r.repo_url, r.local_path, r.default_branch, r.created_at, r.created_by \
@@ -248,16 +242,9 @@ pub async fn list_available_for_user(
 ///
 /// Uses `INSERT ... ON CONFLICT(user_id, repository_id) DO NOTHING`, so racing
 /// concurrent adds collapse to a single row. (MySQL caveat per `upsert`.)
-pub async fn add_for_user(
-    adapter: &DbAdapter,
-    user_id: &str,
-    repository_id: &str,
-) -> Result<bool> {
+pub async fn add_for_user(adapter: &DbAdapter, user_id: &str, repository_id: &str) -> Result<bool> {
     let now = chrono::Utc::now().timestamp();
-    let tail = super::upsert::build_ignore_tail(
-        adapter.backend(),
-        &["user_id", "repository_id"],
-    );
+    let tail = super::upsert::build_ignore_tail(adapter.backend(), &["user_id", "repository_id"]);
     let sql = format!(
         "INSERT INTO user_repositories (user_id, repository_id, added_at) \
          VALUES (?, ?, ?) {tail}"
@@ -305,11 +292,7 @@ pub async fn remove_for_user(
 /// filter uses this when the workflow's `repository_id` is absent. Returns
 /// `true` if at least one repository with that `name` is in the user's
 /// added set.
-pub async fn user_has(
-    adapter: &DbAdapter,
-    user_id: &str,
-    repository_name: &str,
-) -> Result<bool> {
+pub async fn user_has(adapter: &DbAdapter, user_id: &str, repository_name: &str) -> Result<bool> {
     let row = adapter
         .query_one(
             "SELECT COUNT(*) FROM repositories r \
@@ -359,8 +342,8 @@ pub async fn repository_has_active_workflow(
     // 3. Read every snapshot record from disk, filter to ones whose
     //    workspace_name matches our repository's `name` AND whose state is
     //    active.
-    let records = crate::workflow::snapshot::read_all_workspace_snapshots(&data_dir)
-        .unwrap_or_default();
+    let records =
+        crate::workflow::snapshot::read_all_workspace_snapshots(&data_dir).unwrap_or_default();
 
     let mut blockers = Vec::new();
     for rec in records {
@@ -507,14 +490,24 @@ mod tests {
     #[tokio::test]
     async fn get_by_name_and_path_lookups_work() {
         let a = fresh_adapter().await;
-        let id = upsert(&a, "maestro-core", None, "/workspaces/maestro-core", "main", None)
-            .await
-            .unwrap();
+        let id = upsert(
+            &a,
+            "maestro-core",
+            None,
+            "/workspaces/maestro-core",
+            "main",
+            None,
+        )
+        .await
+        .unwrap();
 
         let by_name = get_by_name(&a, "maestro-core").await.unwrap().unwrap();
         assert_eq!(by_name.id, id);
 
-        let by_path = get_by_path(&a, "/workspaces/maestro-core").await.unwrap().unwrap();
+        let by_path = get_by_path(&a, "/workspaces/maestro-core")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(by_path.id, id);
 
         assert!(get_by_name(&a, "does-not-exist").await.unwrap().is_none());
@@ -526,9 +519,16 @@ mod tests {
         let a = fresh_adapter().await;
         let alice = seed_user(&a, "alice", "user").await;
         let bob = seed_user(&a, "bob", "user").await;
-        let repo = upsert(&a, "maestro-core", None, "/workspaces/maestro-core", "main", None)
-            .await
-            .unwrap();
+        let repo = upsert(
+            &a,
+            "maestro-core",
+            None,
+            "/workspaces/maestro-core",
+            "main",
+            None,
+        )
+        .await
+        .unwrap();
 
         // Both users add the repo.
         assert!(add_for_user(&a, &alice, &repo).await.unwrap());
@@ -546,7 +546,11 @@ mod tests {
             .query_one("SELECT COUNT(*) FROM user_repositories", vec![])
             .await
             .unwrap();
-        assert_eq!(row.get_i64(0).unwrap(), 0, "FK cascade must drop association rows");
+        assert_eq!(
+            row.get_i64(0).unwrap(),
+            0,
+            "FK cascade must drop association rows"
+        );
 
         // Second delete returns false.
         assert!(!delete(&a, &repo).await.unwrap());
@@ -557,9 +561,16 @@ mod tests {
         let a = fresh_adapter().await;
         let alice = seed_user(&a, "alice", "admin").await;
         let _bob = seed_user(&a, "bob", "admin").await;
-        let repo = upsert(&a, "maestro-core", None, "/workspaces/maestro-core", "main", None)
-            .await
-            .unwrap();
+        let repo = upsert(
+            &a,
+            "maestro-core",
+            None,
+            "/workspaces/maestro-core",
+            "main",
+            None,
+        )
+        .await
+        .unwrap();
         add_for_user(&a, &alice, &repo).await.unwrap();
 
         // Direct DELETE on users bypasses the users DAO (still rusqlite) —
@@ -587,7 +598,9 @@ mod tests {
     async fn add_for_user_returns_true_then_false_on_duplicate() {
         let a = fresh_adapter().await;
         let alice = seed_user(&a, "alice", "user").await;
-        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None).await.unwrap();
+        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None)
+            .await
+            .unwrap();
 
         assert!(add_for_user(&a, &alice, &repo).await.unwrap());
         // Second add for the same pair is a no-op.
@@ -598,7 +611,9 @@ mod tests {
     async fn remove_for_user_returns_true_then_false() {
         let a = fresh_adapter().await;
         let alice = seed_user(&a, "alice", "user").await;
-        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None).await.unwrap();
+        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None)
+            .await
+            .unwrap();
         add_for_user(&a, &alice, &repo).await.unwrap();
 
         assert!(remove_for_user(&a, &alice, &repo).await.unwrap());
@@ -610,9 +625,15 @@ mod tests {
         let a = fresh_adapter().await;
         let alice = seed_user(&a, "alice", "user").await;
         let bob = seed_user(&a, "bob", "user").await;
-        let r1 = upsert(&a, "r1", None, "/workspaces/r1", "main", None).await.unwrap();
-        let r2 = upsert(&a, "r2", None, "/workspaces/r2", "main", None).await.unwrap();
-        let r3 = upsert(&a, "r3", None, "/workspaces/r3", "main", None).await.unwrap();
+        let r1 = upsert(&a, "r1", None, "/workspaces/r1", "main", None)
+            .await
+            .unwrap();
+        let r2 = upsert(&a, "r2", None, "/workspaces/r2", "main", None)
+            .await
+            .unwrap();
+        let r3 = upsert(&a, "r3", None, "/workspaces/r3", "main", None)
+            .await
+            .unwrap();
 
         add_for_user(&a, &alice, &r1).await.unwrap();
         add_for_user(&a, &alice, &r2).await.unwrap();
@@ -640,9 +661,15 @@ mod tests {
     async fn list_available_for_user_is_complement_of_list_for_user() {
         let a = fresh_adapter().await;
         let alice = seed_user(&a, "alice", "user").await;
-        let r1 = upsert(&a, "r1", None, "/workspaces/r1", "main", None).await.unwrap();
-        let r2 = upsert(&a, "r2", None, "/workspaces/r2", "main", None).await.unwrap();
-        let r3 = upsert(&a, "r3", None, "/workspaces/r3", "main", None).await.unwrap();
+        let r1 = upsert(&a, "r1", None, "/workspaces/r1", "main", None)
+            .await
+            .unwrap();
+        let r2 = upsert(&a, "r2", None, "/workspaces/r2", "main", None)
+            .await
+            .unwrap();
+        let r3 = upsert(&a, "r3", None, "/workspaces/r3", "main", None)
+            .await
+            .unwrap();
 
         add_for_user(&a, &alice, &r1).await.unwrap();
 
@@ -659,9 +686,16 @@ mod tests {
         let a = fresh_adapter().await;
         let alice = seed_user(&a, "alice", "user").await;
         let bob = seed_user(&a, "bob", "user").await;
-        let repo = upsert(&a, "maestro-core", None, "/workspaces/maestro-core", "main", None)
-            .await
-            .unwrap();
+        let repo = upsert(
+            &a,
+            "maestro-core",
+            None,
+            "/workspaces/maestro-core",
+            "main",
+            None,
+        )
+        .await
+        .unwrap();
         add_for_user(&a, &alice, &repo).await.unwrap();
 
         assert!(user_has(&a, &alice, "maestro-core").await.unwrap());
@@ -701,9 +735,15 @@ mod tests {
     #[tokio::test]
     async fn list_all_returns_every_repository() {
         let a = fresh_adapter().await;
-        upsert(&a, "r1", None, "/workspaces/r1", "main", None).await.unwrap();
-        upsert(&a, "r2", None, "/workspaces/r2", "main", None).await.unwrap();
-        upsert(&a, "r3", None, "/workspaces/r3", "main", None).await.unwrap();
+        upsert(&a, "r1", None, "/workspaces/r1", "main", None)
+            .await
+            .unwrap();
+        upsert(&a, "r2", None, "/workspaces/r2", "main", None)
+            .await
+            .unwrap();
+        upsert(&a, "r3", None, "/workspaces/r3", "main", None)
+            .await
+            .unwrap();
 
         let all = list_all(&a).await.unwrap();
         assert_eq!(all.len(), 3);
@@ -757,7 +797,9 @@ mod tests {
     #[tokio::test]
     async fn repository_has_active_workflow_empty_without_snapshots() {
         let a = fresh_adapter().await;
-        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None).await.unwrap();
+        let repo = upsert(&a, "x", None, "/workspaces/x", "main", None)
+            .await
+            .unwrap();
         let blockers = repository_has_active_workflow(&a, &repo).await.unwrap();
         assert!(blockers.is_empty());
     }
@@ -767,7 +809,9 @@ mod tests {
     #[tokio::test]
     async fn repository_has_active_workflow_unknown_id_is_empty() {
         let a = fresh_adapter().await;
-        let blockers = repository_has_active_workflow(&a, "no-such-id").await.unwrap();
+        let blockers = repository_has_active_workflow(&a, "no-such-id")
+            .await
+            .unwrap();
         assert!(blockers.is_empty());
     }
 }

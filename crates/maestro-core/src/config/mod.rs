@@ -30,9 +30,7 @@ pub use agent::{
     CodexProviderConfig, CursorProviderConfig, DENIED_EXTRA_ARG_FLAGS, SkillRef, StepAvailability,
     cursor_model_for_cli, validate_extra_args,
 };
-pub use general::{
-    DevConfig, DockerConfig, GeneralConfig, ProvisioningConfig, TicketingSystem,
-};
+pub use general::{DevConfig, DockerConfig, GeneralConfig, ProvisioningConfig, TicketingSystem};
 pub use git::{GitConfig, GitHubAppConfig};
 pub use jira::{JiraConfig, LinkedItemsPromptMode};
 pub use load::{detect_legacy_command_keys, resolve_config_relative_path};

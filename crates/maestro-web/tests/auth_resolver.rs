@@ -12,8 +12,10 @@
 
 use std::sync::Arc;
 
-use maestro_core::auth::{seal, MasterKey};
-use maestro_core::github::auth_resolver::{GitAction, GitAuthResolver, GithubAuthMode, TokenSource};
+use maestro_core::auth::{MasterKey, seal};
+use maestro_core::github::auth_resolver::{
+    GitAction, GitAuthResolver, GithubAuthMode, TokenSource,
+};
 
 // ---------------------------------------------------------------------------
 // Mode A — App only

@@ -147,11 +147,8 @@ pub async fn mark_step(
 ) -> Result<()> {
     let column = step.column();
     // SAFETY: `column` comes from a closed enum, never user input.
-    let tail = super::upsert::build_update_tail(
-        adapter.backend(),
-        &["user_id"],
-        &[column, "updated_at"],
-    );
+    let tail =
+        super::upsert::build_update_tail(adapter.backend(), &["user_id"], &[column, "updated_at"]);
     let sql = format!(
         "INSERT INTO onboarding_state (user_id, {column}, updated_at) \
          VALUES (?, ?, ?) {tail}"
@@ -179,12 +176,16 @@ pub async fn mark_completed(adapter: &DbAdapter, user_id: &str) -> Result<()> {
     // Spell each backend's form inline; the shape is identical, only
     // the existing-row alias and the proposed-value form differ.
     let tail = match adapter.backend() {
-        super::DbBackend::MySql => "ON DUPLICATE KEY UPDATE \
+        super::DbBackend::MySql => {
+            "ON DUPLICATE KEY UPDATE \
                 completed_at = COALESCE(completed_at, VALUES(completed_at)), \
-                updated_at = VALUES(updated_at)",
-        _ => "ON CONFLICT(user_id) DO UPDATE SET \
+                updated_at = VALUES(updated_at)"
+        }
+        _ => {
+            "ON CONFLICT(user_id) DO UPDATE SET \
                 completed_at = COALESCE(onboarding_state.completed_at, excluded.completed_at), \
-                updated_at = excluded.updated_at",
+                updated_at = excluded.updated_at"
+        }
     };
     let sql = format!(
         "INSERT INTO onboarding_state (user_id, completed_at, updated_at) \
@@ -211,10 +212,7 @@ pub async fn clear_completed(adapter: &DbAdapter, user_id: &str) -> Result<()> {
         .execute(
             "UPDATE onboarding_state SET completed_at = NULL, updated_at = ? \
              WHERE user_id = ?",
-            vec![
-                DbValue::Text(now_iso()),
-                DbValue::Text(user_id.to_string()),
-            ],
+            vec![DbValue::Text(now_iso()), DbValue::Text(user_id.to_string())],
         )
         .await?;
     Ok(())
@@ -270,10 +268,7 @@ mod tests {
         .await
         .unwrap();
         let row = get(&a, "u-alice").await.unwrap().unwrap();
-        assert_eq!(
-            row.step_1_ticketing,
-            Some(OnboardingStepState::Completed)
-        );
+        assert_eq!(row.step_1_ticketing, Some(OnboardingStepState::Completed));
         assert!(row.step_2_provider.is_none());
 
         // Updating a different step preserves the first.
@@ -286,10 +281,7 @@ mod tests {
         .await
         .unwrap();
         let row2 = get(&a, "u-alice").await.unwrap().unwrap();
-        assert_eq!(
-            row2.step_1_ticketing,
-            Some(OnboardingStepState::Completed)
-        );
+        assert_eq!(row2.step_1_ticketing, Some(OnboardingStepState::Completed));
         assert_eq!(row2.step_2_provider, Some(OnboardingStepState::Skipped));
     }
 

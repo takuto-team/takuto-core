@@ -47,16 +47,12 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
     EmbeddedMigration {
         version: 20_260_101_000_001,
         description: "initial_users_credentials_recovery",
-        sql: include_str!(
-            "../../migrations/20260101000001_initial_users_credentials_recovery.sql"
-        ),
+        sql: include_str!("../../migrations/20260101000001_initial_users_credentials_recovery.sql"),
     },
     EmbeddedMigration {
         version: 20_260_102_000_001,
         description: "login_attempts_and_session_columns",
-        sql: include_str!(
-            "../../migrations/20260102000001_login_attempts_and_session_columns.sql"
-        ),
+        sql: include_str!("../../migrations/20260102000001_login_attempts_and_session_columns.sql"),
     },
     EmbeddedMigration {
         version: 20_260_103_000_001,
@@ -81,9 +77,7 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
     EmbeddedMigration {
         version: 20_260_116_000_001,
         description: "pluggable_db_system_metadata",
-        sql: include_str!(
-            "../../migrations/20260116000001_pluggable_db_system_metadata.sql"
-        ),
+        sql: include_str!("../../migrations/20260116000001_pluggable_db_system_metadata.sql"),
     },
     EmbeddedMigration {
         version: 20_260_117_000_001,
@@ -219,10 +213,8 @@ fn replace_whole_token(haystack: &str, needle: &str, replacement: &str) -> Strin
     while let Some(rel) = haystack[cursor..].find(needle) {
         let start = cursor + rel;
         let end = start + needle.len();
-        let before_ok = start == 0
-            || !is_ident_char(haystack.as_bytes()[start - 1]);
-        let after_ok = end == haystack.len()
-            || !is_ident_char(haystack.as_bytes()[end]);
+        let before_ok = start == 0 || !is_ident_char(haystack.as_bytes()[start - 1]);
+        let after_ok = end == haystack.len() || !is_ident_char(haystack.as_bytes()[end]);
         if before_ok && after_ok {
             out.push_str(&haystack[cursor..start]);
             out.push_str(replacement);
@@ -299,12 +291,10 @@ fn wrap_text_defaults_for_mysql(sql: &str) -> String {
 pub async fn apply_migrations(adapter: &DbAdapter) -> Result<(), sqlx::migrate::MigrateError> {
     let backend = adapter.backend();
     let source = DialectAwareMigrationSource::for_backend(backend);
-    let migrator = Migrator::new(source)
-        .await
-        .map_err(|e| match e {
-            sqlx::migrate::MigrateError::Source(s) => sqlx::migrate::MigrateError::Source(s),
-            other => other,
-        })?;
+    let migrator = Migrator::new(source).await.map_err(|e| match e {
+        sqlx::migrate::MigrateError::Source(s) => sqlx::migrate::MigrateError::Source(s),
+        other => other,
+    })?;
     match adapter.pool() {
         DbPool::Sqlite(pool) => migrator.run(pool).await,
         DbPool::Postgres(pool) => migrator.run(pool).await,
@@ -368,7 +358,10 @@ mod tests {
             !got.contains("AUTOINCREMENT"),
             "PG output still contains AUTOINCREMENT: {got}"
         );
-        assert!(!got.contains("BLOB"), "PG output still contains BLOB: {got}");
+        assert!(
+            !got.contains("BLOB"),
+            "PG output still contains BLOB: {got}"
+        );
     }
 
     #[test]
@@ -433,8 +426,14 @@ mod tests {
         let postgres = translate_for_backend(input, DbBackend::Postgres);
         assert!(sqlite.contains("DEFAULT ''"), "SQLite: {sqlite}");
         assert!(postgres.contains("DEFAULT ''"), "Postgres: {postgres}");
-        assert!(!sqlite.contains("DEFAULT ('')"), "SQLite over-wrapped: {sqlite}");
-        assert!(!postgres.contains("DEFAULT ('')"), "PG over-wrapped: {postgres}");
+        assert!(
+            !sqlite.contains("DEFAULT ('')"),
+            "SQLite over-wrapped: {sqlite}"
+        );
+        assert!(
+            !postgres.contains("DEFAULT ('')"),
+            "PG over-wrapped: {postgres}"
+        );
     }
 
     #[test]
@@ -448,7 +447,10 @@ mod tests {
         );
         // The identifier prefix `my_blob_` is preserved because it's a
         // different token (would-be transform fails the whole-word guard).
-        assert!(got.contains("my_blob_col"), "identifier must survive: {got}");
+        assert!(
+            got.contains("my_blob_col"),
+            "identifier must survive: {got}"
+        );
     }
 
     #[test]
@@ -498,9 +500,7 @@ mod tests {
             // DROP at least once.
             let upper = m.sql.to_uppercase();
             assert!(
-                upper.contains("CREATE")
-                    || upper.contains("ALTER")
-                    || upper.contains("DROP"),
+                upper.contains("CREATE") || upper.contains("ALTER") || upper.contains("DROP"),
                 "migration {} ({}) does not appear to do any DDL",
                 m.version,
                 m.description
@@ -588,11 +588,10 @@ mod tests {
         migrator.run(&pool).await.expect("first run");
         migrator.run(&pool).await.expect("second run is a no-op");
 
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
-                .fetch_one(&pool)
-                .await
-                .expect("count rows");
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await
+            .expect("count rows");
         assert_eq!(
             count.0, 9,
             "expected 9 applied migrations recorded by sqlx, got {}",
@@ -609,7 +608,11 @@ mod tests {
         let src = DialectAwareMigrationSource::for_backend(DbBackend::Sqlite);
         for m in MIGRATIONS {
             let got = src.translated_sql_for(m.version).expect("known version");
-            assert_eq!(got, m.sql, "SQLite output differs from source for {}", m.description);
+            assert_eq!(
+                got, m.sql,
+                "SQLite output differs from source for {}",
+                m.description
+            );
         }
     }
 
@@ -626,7 +629,9 @@ mod tests {
     async fn migrations_apply_clean_to_postgres() {
         let url = std::env::var("DATABASE_URL")
             .expect("set DATABASE_URL=postgres://... to run this test");
-        let pool = sqlx::postgres::PgPool::connect(&url).await.expect("connect");
+        let pool = sqlx::postgres::PgPool::connect(&url)
+            .await
+            .expect("connect");
         let source = DialectAwareMigrationSource::for_backend(DbBackend::Postgres);
         sqlx::migrate::Migrator::new(source)
             .await
@@ -639,9 +644,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires DATABASE_URL=mysql://..."]
     async fn migrations_apply_clean_to_mysql() {
-        let url = std::env::var("DATABASE_URL")
-            .expect("set DATABASE_URL=mysql://... to run this test");
-        let pool = sqlx::mysql::MySqlPool::connect(&url).await.expect("connect");
+        let url =
+            std::env::var("DATABASE_URL").expect("set DATABASE_URL=mysql://... to run this test");
+        let pool = sqlx::mysql::MySqlPool::connect(&url)
+            .await
+            .expect("connect");
         let source = DialectAwareMigrationSource::for_backend(DbBackend::MySql);
         sqlx::migrate::Migrator::new(source)
             .await
@@ -699,7 +706,10 @@ mod tests {
 
         assert_eq!(fetched.username, username);
         assert_eq!(fetched.id, created.id);
-        assert!(!fetched.suspended, "freshly-created user must not be suspended");
+        assert!(
+            !fetched.suspended,
+            "freshly-created user must not be suspended"
+        );
 
         // Admin round-trip plus `list_admins`. `list_admins` is the
         // SELECT path the poller-owner resolver uses at boot — it was
@@ -749,7 +759,7 @@ mod tests {
     async fn postgres_importer_handles_null_and_non_null_fks() {
         use crate::db::adapter::DbAdapter;
         use crate::db::models::UserRole;
-        use crate::db::{importer, pool, repositories, users, DbValue};
+        use crate::db::{DbValue, importer, pool, repositories, users};
 
         let url = std::env::var("DATABASE_URL")
             .expect("set DATABASE_URL=postgres://... to run this test");
@@ -758,7 +768,9 @@ mod tests {
             .await
             .expect("connect");
         let target = DbAdapter::new(backend_pool);
-        super::apply_migrations(&target).await.expect("migrate target");
+        super::apply_migrations(&target)
+            .await
+            .expect("migrate target");
 
         // Wipe importer-touched tables so the test starts from zero
         // and is re-runnable. `TRUNCATE ... RESTART IDENTITY CASCADE`
@@ -783,8 +795,7 @@ mod tests {
         // repositories — one with `created_by = NULL`, one with a
         // valid FK to the admin.
         let src_tmp = tempfile::tempdir().expect("source tempdir");
-        let source = crate::db::Database::open(src_tmp.path(), true)
-            .expect("open source SQLite");
+        let source = crate::db::Database::open(src_tmp.path(), true).expect("open source SQLite");
         let admin = users::create_user(source.adapter(), "ci_imp_admin", UserRole::Admin)
             .await
             .expect("seed admin");
@@ -816,7 +827,10 @@ mod tests {
         let copied = importer::import_from_sqlite(src_tmp.path(), &target)
             .await
             .expect("importer must succeed against Postgres target");
-        assert!(copied >= 4, "expected ≥ 4 rows imported (2 users + 2 repos), got {copied}");
+        assert!(
+            copied >= 4,
+            "expected ≥ 4 rows imported (2 users + 2 repos), got {copied}"
+        );
 
         // Marker was set.
         assert!(
@@ -829,9 +843,14 @@ mod tests {
             .await
             .expect("list_admins on target after import");
         assert!(
-            admins_on_target.iter().any(|u| u.username == "ci_imp_admin"),
+            admins_on_target
+                .iter()
+                .any(|u| u.username == "ci_imp_admin"),
             "imported admin must show up in list_admins: {:?}",
-            admins_on_target.iter().map(|u| &u.username).collect::<Vec<_>>()
+            admins_on_target
+                .iter()
+                .map(|u| &u.username)
+                .collect::<Vec<_>>()
         );
 
         // The NULL-FK repo arrived with NULL (not "") in created_by —
@@ -881,8 +900,8 @@ mod tests {
         use crate::db::models::UserRole;
         use crate::db::{pool, users};
 
-        let url = std::env::var("DATABASE_URL")
-            .expect("set DATABASE_URL=mysql://... to run this test");
+        let url =
+            std::env::var("DATABASE_URL").expect("set DATABASE_URL=mysql://... to run this test");
 
         let backend_pool = pool::connect(&url, &pool::PoolTuning::default())
             .await

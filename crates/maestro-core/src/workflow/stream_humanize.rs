@@ -313,10 +313,7 @@ fn humanize_opencode_output(raw: &str) -> Option<String> {
     match event_type {
         "step_start" => Some("OpenCode session initialized".to_string()),
         "step_finish" => {
-            let reason = value
-                .get("reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let reason = value.get("reason").and_then(|v| v.as_str()).unwrap_or("");
             if reason == "stop" {
                 Some("OpenCode session completed".to_string())
             } else {
@@ -526,13 +523,15 @@ mod tests {
 
     #[test]
     fn codex_agent_message_yields_assistant_text() {
-        let raw = r#"{"type":"item.completed","item":{"type":"agent_message","text":"hello world"}}"#;
+        let raw =
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"hello world"}}"#;
         assert_eq!(codex_humanize(raw).as_deref(), Some("hello world"));
     }
 
     #[test]
     fn codex_reasoning_is_suppressed() {
-        let raw = r#"{"type":"item.completed","item":{"type":"reasoning","text":"chain of thought"}}"#;
+        let raw =
+            r#"{"type":"item.completed","item":{"type":"reasoning","text":"chain of thought"}}"#;
         assert_eq!(codex_humanize(raw), None);
     }
 

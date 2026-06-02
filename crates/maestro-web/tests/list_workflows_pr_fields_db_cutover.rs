@@ -115,12 +115,7 @@ async fn fetch_list_by_key(state: &AppState, cookie: &str) -> HashMap<String, se
         .unwrap();
     let arr: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
     arr.into_iter()
-        .map(|item| {
-            (
-                item["ticket_key"].as_str().unwrap().to_string(),
-                item,
-            )
-        })
+        .map(|item| (item["ticket_key"].as_str().unwrap().to_string(), item))
         .collect()
 }
 
@@ -135,15 +130,29 @@ async fn list_pr_fields_come_from_db_rows() {
     let repo = seed_repo(&state, "ws", &uid).await;
 
     seed_map_and_db(
-        &state, "T-LIST-1", &uid, &repo,
-        "feature/m1", Some("https://github.com/example/repo/pull/1"), false,
-        Some("feature/db-1"), Some("https://github.com/example/repo/pull/100"), true,
+        &state,
+        "T-LIST-1",
+        &uid,
+        &repo,
+        "feature/m1",
+        Some("https://github.com/example/repo/pull/1"),
+        false,
+        Some("feature/db-1"),
+        Some("https://github.com/example/repo/pull/100"),
+        true,
     )
     .await;
     seed_map_and_db(
-        &state, "T-LIST-2", &uid, &repo,
-        "feature/m2", Some("https://github.com/example/repo/pull/2"), true,
-        Some("feature/db-2"), Some("https://github.com/example/repo/pull/200"), false,
+        &state,
+        "T-LIST-2",
+        &uid,
+        &repo,
+        "feature/m2",
+        Some("https://github.com/example/repo/pull/2"),
+        true,
+        Some("feature/db-2"),
+        Some("https://github.com/example/repo/pull/200"),
+        false,
     )
     .await;
 
@@ -170,9 +179,16 @@ async fn list_falls_back_per_row_when_db_row_missing() {
 
     // T-A: both map and DB (DB wins).
     seed_map_and_db(
-        &state, "T-A", &uid, &repo,
-        "map-branch", Some("https://map"), false,
-        Some("db-branch"), Some("https://db"), true,
+        &state,
+        "T-A",
+        &uid,
+        &repo,
+        "map-branch",
+        Some("https://map"),
+        false,
+        Some("db-branch"),
+        Some("https://db"),
+        true,
     )
     .await;
 

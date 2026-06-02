@@ -48,7 +48,8 @@ impl Config {
                 return Err(ConfigError::Validation {
                     section: "general",
                     field: "patch",
-                    detail: "must include max_concurrent_workflows and/or max_active_workflows".to_string(),
+                    detail: "must include max_concurrent_workflows and/or max_active_workflows"
+                        .to_string(),
                 }
                 .into());
             }
@@ -65,7 +66,8 @@ impl Config {
             return Err(ConfigError::Validation {
                 section: "runtime",
                 field: "patch",
-                detail: "empty patch: include \"web\" and/or \"general\" with at least one field".to_string(),
+                detail: "empty patch: include \"web\" and/or \"general\" with at least one field"
+                    .to_string(),
             }
             .into());
         }

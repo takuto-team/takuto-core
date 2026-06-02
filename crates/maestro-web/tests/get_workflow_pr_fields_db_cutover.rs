@@ -112,7 +112,11 @@ async fn fetch_workflow(state: &AppState, ticket_key: &str, cookie: &str) -> ser
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "GET /api/work-items/{ticket_key}");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "GET /api/work-items/{ticket_key}"
+    );
     let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
         .await
         .unwrap();
@@ -145,7 +149,10 @@ async fn pr_fields_come_from_db_row_not_hashmap() {
     .await;
 
     let v = fetch_workflow(&state, "T-PR", &cookie).await;
-    assert_eq!(v["branch_name"], "feature/from-db", "branch must come from DB");
+    assert_eq!(
+        v["branch_name"], "feature/from-db",
+        "branch must come from DB"
+    );
     assert_eq!(
         v["pr_url"], "https://github.com/example/repo/pull/42",
         "pr_url must come from DB"
@@ -181,7 +188,10 @@ async fn pr_fields_db_null_is_authoritative_not_fallback() {
 
     let v = fetch_workflow(&state, "T-NULL", &cookie).await;
     assert_eq!(v["branch_name"], "");
-    assert!(v["pr_url"].is_null(), "pr_url must be null per DB, not the HashMap's URL");
+    assert!(
+        v["pr_url"].is_null(),
+        "pr_url must be null per DB, not the HashMap's URL"
+    );
     assert_eq!(v["pr_merged"], false);
 }
 

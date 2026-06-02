@@ -140,14 +140,16 @@ pub async fn clear_worktree_path_for_recreate(
                 path = %worktree_path.display(),
                 "git worktree remove failed (unregistered or corrupt tree); removing directory from disk"
             );
-            tokio::fs::remove_dir_all(worktree_path).await.map_err(|io_err| {
-                GitError::WorktreeDirRemoveFailed {
-                    path: worktree_path.to_path_buf(),
-                    io: io_err,
-                    git_err: git_err.to_string(),
-                }
-                .into()
-            })
+            tokio::fs::remove_dir_all(worktree_path)
+                .await
+                .map_err(|io_err| {
+                    GitError::WorktreeDirRemoveFailed {
+                        path: worktree_path.to_path_buf(),
+                        io: io_err,
+                        git_err: git_err.to_string(),
+                    }
+                    .into()
+                })
         }
     }
 }

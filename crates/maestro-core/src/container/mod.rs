@@ -49,10 +49,10 @@ pub use run_command::{
     run_run_command_port_scanner, start_run_command, stop_all_run_commands, stop_run_command,
 };
 pub use runner::ContainerRunner;
-pub use volumes::build_volume_args;
 pub use terminal::{
     find_running_terminal, parse_terminal_auth_from_pgrep, start_terminal, stop_terminal,
 };
+pub use volumes::build_volume_args;
 
 // `pub(crate)` re-export so internal callers that reach
 // `crate::container::apply_secrets_bundle_to_args` (e.g. `auth/bundle.rs`

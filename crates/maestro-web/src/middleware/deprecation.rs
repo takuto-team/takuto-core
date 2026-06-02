@@ -47,9 +47,9 @@ mod tests {
 
     #[test]
     fn matches_legacy_root() {
-        assert!(is_legacy_workflows_path(
-            &Uri::from_static("/api/workflows")
-        ));
+        assert!(is_legacy_workflows_path(&Uri::from_static(
+            "/api/workflows"
+        )));
     }
 
     #[test]
@@ -66,7 +66,11 @@ mod tests {
 
     #[test]
     fn does_not_match_new_paths() {
-        for p in ["/api/work-items", "/api/work-items/abc", "/api/work-items/abc/pause"] {
+        for p in [
+            "/api/work-items",
+            "/api/work-items/abc",
+            "/api/work-items/abc/pause",
+        ] {
             assert!(!is_legacy_workflows_path(&Uri::from_str_panic(p)), "{p}");
         }
     }

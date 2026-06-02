@@ -46,7 +46,11 @@ async fn create_and_login_user(
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED, "create user should succeed");
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "create user should succeed"
+    );
 
     login_as(state, username, password).await
 }
@@ -80,7 +84,11 @@ async fn login_with(state: &AppState, body_json: &str) -> (StatusCode, String, O
 async fn login_as(state: &AppState, username: &str, password: &str) -> String {
     let body = format!(r#"{{"username":"{username}","password":"{password}"}}"#);
     let (status, body, cookie) = login_with(state, &body).await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "login should succeed: {body}");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "login should succeed: {body}"
+    );
     cookie.expect("login should set a cookie")
 }
 
@@ -103,7 +111,12 @@ async fn recover_with(state: &AppState, body_json: &str) -> (StatusCode, String)
 
 /// Look up a user's `id` from the database. Used by the unlock route tests.
 async fn user_id_for(state: &AppState, username: &str) -> String {
-    let db = state.auth().db.as_ref().expect("test state has a db").clone();
+    let db = state
+        .auth()
+        .db
+        .as_ref()
+        .expect("test state has a db")
+        .clone();
     maestro_core::db::users::get_user_by_username(db.adapter(), username)
         .await
         .ok()
@@ -239,11 +252,8 @@ async fn unknown_username_never_locks() {
     // 6+ login attempts for a username that doesn't exist — every one must be
     // 401, NEVER 429. Otherwise the throttle leaks account existence info.
     for _ in 0..7 {
-        let (s, _, _) = login_with(
-            &state,
-            r#"{"username":"ghost","password":"any-password!"}"#,
-        )
-        .await;
+        let (s, _, _) =
+            login_with(&state, r#"{"username":"ghost","password":"any-password!"}"#).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
 
@@ -341,7 +351,11 @@ async fn admin_unlock_clears_counters_and_unblocks_user() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "admin unlock should 204");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NO_CONTENT,
+        "admin unlock should 204"
+    );
 
     // Correct credentials now succeed.
     let (s, body, _) = login_with(
@@ -349,7 +363,11 @@ async fn admin_unlock_clears_counters_and_unblocks_user() {
         r#"{"username":"alice","password":"alice_passWORD1!"}"#,
     )
     .await;
-    assert_eq!(s, StatusCode::NO_CONTENT, "expected success post-unlock: {body}");
+    assert_eq!(
+        s,
+        StatusCode::NO_CONTENT,
+        "expected success post-unlock: {body}"
+    );
 }
 
 #[tokio::test]

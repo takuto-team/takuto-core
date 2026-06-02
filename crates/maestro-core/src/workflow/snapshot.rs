@@ -317,8 +317,8 @@ pub fn write_workflow_snapshot(
         version: SNAPSHOT_VERSION,
         workflows: workflows.to_vec(),
     };
-    let json = serde_json::to_string_pretty(&file)
-        .map_err(|e| crate::config::ConfigError::Snapshot {
+    let json =
+        serde_json::to_string_pretty(&file).map_err(|e| crate::config::ConfigError::Snapshot {
             op: "serde_json",
             detail: e.to_string(),
         })?;
@@ -335,11 +335,11 @@ pub fn read_workflow_snapshot(
     let path = snapshot_path(repo_path);
     if path.exists() {
         let bytes = fs::read(&path)?;
-        let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::config::ConfigError::Snapshot {
-            op: "serde_json",
-            detail: e.to_string(),
-        })?;
+        let file: WorkflowSnapshotFile =
+            serde_json::from_slice(&bytes).map_err(|e| crate::config::ConfigError::Snapshot {
+                op: "serde_json",
+                detail: e.to_string(),
+            })?;
         return Ok(Some(file));
     }
 
@@ -347,11 +347,11 @@ pub fn read_workflow_snapshot(
     let legacy = legacy_snapshot_path(repo_path);
     if legacy != path && legacy.exists() {
         let bytes = fs::read(&legacy)?;
-        let mut file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::config::ConfigError::Snapshot {
-            op: "serde_json",
-            detail: e.to_string(),
-        })?;
+        let mut file: WorkflowSnapshotFile =
+            serde_json::from_slice(&bytes).map_err(|e| crate::config::ConfigError::Snapshot {
+                op: "serde_json",
+                detail: e.to_string(),
+            })?;
         let ws_name = workspace_name_from_repo_path(repo_path);
         // Backfill workspace_name for legacy records.
         for rec in &mut file.workflows {
@@ -383,11 +383,11 @@ pub fn read_workflow_snapshot(
     let global = resolve_snapshot_dir(repo_path).join(SNAPSHOT_FILENAME);
     if global != path && global.exists() {
         let bytes = fs::read(&global)?;
-        let mut file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::config::ConfigError::Snapshot {
-            op: "serde_json",
-            detail: e.to_string(),
-        })?;
+        let mut file: WorkflowSnapshotFile =
+            serde_json::from_slice(&bytes).map_err(|e| crate::config::ConfigError::Snapshot {
+                op: "serde_json",
+                detail: e.to_string(),
+            })?;
         let ws_name = workspace_name_from_repo_path(repo_path);
         for rec in &mut file.workflows {
             if rec.workspace_name.is_empty() {
@@ -465,11 +465,11 @@ pub fn read_all_workspace_snapshots(
     let global = data_dir.join(SNAPSHOT_FILENAME);
     if global.exists() {
         let bytes = fs::read(&global)?;
-        let file: WorkflowSnapshotFile = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::config::ConfigError::Snapshot {
-            op: "serde_json",
-            detail: e.to_string(),
-        })?;
+        let file: WorkflowSnapshotFile =
+            serde_json::from_slice(&bytes).map_err(|e| crate::config::ConfigError::Snapshot {
+                op: "serde_json",
+                detail: e.to_string(),
+            })?;
         if file.version == SNAPSHOT_VERSION && !file.workflows.is_empty() {
             tracing::info!(
                 count = file.workflows.len(),
@@ -521,10 +521,11 @@ pub fn write_all_workspace_snapshots(
             version: SNAPSHOT_VERSION,
             workflows: records.iter().map(|r| (*r).clone()).collect(),
         };
-        let json = serde_json::to_string_pretty(&file)
-            .map_err(|e| crate::config::ConfigError::Snapshot {
-            op: "serde_json",
-            detail: e.to_string(),
+        let json = serde_json::to_string_pretty(&file).map_err(|e| {
+            crate::config::ConfigError::Snapshot {
+                op: "serde_json",
+                detail: e.to_string(),
+            }
         })?;
         fs::write(&tmp, json)?;
         fs::rename(&tmp, &path)?;
@@ -595,7 +596,8 @@ mod tests {
             workspace_name: "my-repo".into(),
             repository_id: Some("repo-uuid-1".into()),
             user_id: Some("user-1".into()),
-            auth_pin: None,        };
+            auth_pin: None,
+        };
         let json = serde_json::to_string(&rec).unwrap();
         let back: PersistedWorkflowRecord = serde_json::from_str(&json).unwrap();
         assert!(!back.driver_started);
@@ -696,7 +698,8 @@ mod tests {
             workspace_name: "ws".into(),
             repository_id: None,
             user_id: None,
-            auth_pin: None,        }
+            auth_pin: None,
+        }
     }
 
     fn write_snapshot(data_dir: &Path, ws: &str, records: Vec<PersistedWorkflowRecord>) {

@@ -72,9 +72,8 @@ fn test_state_isolated() -> (AppState, TempDir) {
     let dir = TempDir::new();
     let db = Database::open(dir.path(), true).expect("open db");
     let config = Arc::new(RwLock::new(Config::default()));
-    let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-        DryRunActions::new("origin".to_string(), None),
-    );
+    let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> =
+        Arc::new(DryRunActions::new("origin".to_string(), None));
     let jira_available = Arc::new(AtomicBool::new(false));
     let engine = Arc::new(WorkflowEngine::new(
         config.clone(),
@@ -139,9 +138,7 @@ async fn create_user_login(
     password: &str,
 ) -> String {
     let app = build_router(state.clone());
-    let body = format!(
-        r#"{{"username":"{username}","password":"{password}","role":"user"}}"#
-    );
+    let body = format!(r#"{{"username":"{username}","password":"{password}","role":"user"}}"#);
     let resp = app
         .oneshot(
             Request::post("/api/users")
@@ -187,16 +184,9 @@ async fn seed_repository(
     local_path: &str,
 ) -> String {
     let db = state.auth().db.as_ref().expect("db");
-    maestro_core::db::repositories::upsert(
-        db.adapter(),
-        name,
-        repo_url,
-        local_path,
-        "main",
-        None,
-    )
-    .await
-    .expect("seed repository")
+    maestro_core::db::repositories::upsert(db.adapter(), name, repo_url, local_path, "main", None)
+        .await
+        .expect("seed repository")
 }
 
 async fn list_mine(state: &AppState, cookie: &str) -> (StatusCode, Value) {
@@ -404,12 +394,8 @@ async fn ac3_add_unknown_repository_id_returns_404() {
     let (state, _tmp) = test_state_isolated();
     let cookie = register_admin(&state).await;
 
-    let (status, _) = post_repositories(
-        &state,
-        &cookie,
-        r#"{"repository_id":"does-not-exist"}"#,
-    )
-    .await;
+    let (status, _) =
+        post_repositories(&state, &cookie, r#"{"repository_id":"does-not-exist"}"#).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -432,11 +418,7 @@ async fn ac10_user_a_cannot_see_user_b_associations() {
     // Bob's `_available` includes the repo (deployment-wide visibility per G10).
     let (_, avail) = list_available(&state, &bob_cookie).await;
     assert!(
-        avail
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|r| r["id"] == r1),
+        avail.as_array().unwrap().iter().any(|r| r["id"] == r1),
         "available list must show deployment-wide repos"
     );
 }
@@ -492,7 +474,9 @@ async fn ac7_last_user_remove_purges_disk() {
 
     // The DB row is gone.
     let db = state.auth().db.as_ref().unwrap();
-    let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
+    let row = maestro_core::db::repositories::get(db.adapter(), &r1)
+        .await
+        .unwrap();
     assert!(row.is_none(), "DB row must be deleted");
 }
 
@@ -520,7 +504,9 @@ async fn ac9_non_last_user_remove_keeps_disk_and_row() {
     // On-disk + DB row preserved.
     assert!(local_path.exists(), "shared clone must NOT be purged");
     let db = state.auth().db.as_ref().unwrap();
-    let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
+    let row = maestro_core::db::repositories::get(db.adapter(), &r1)
+        .await
+        .unwrap();
     assert!(row.is_some(), "DB row must be preserved");
 
     // Admin's list is now empty; bob still has it.
@@ -565,7 +551,9 @@ async fn ac8_admin_force_purge_drops_row_for_everyone() {
     // Filesystem + DB row + every association is gone.
     assert!(!local_path.exists());
     let db = state.auth().db.as_ref().unwrap();
-    let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
+    let row = maestro_core::db::repositories::get(db.adapter(), &r1)
+        .await
+        .unwrap();
     assert!(row.is_none());
     let (_, bob_mine) = list_mine(&state, &bob_cookie).await;
     assert!(bob_mine.as_array().unwrap().is_empty());
@@ -575,8 +563,7 @@ async fn ac8_admin_force_purge_drops_row_for_everyone() {
 async fn ac8_non_admin_force_purge_returns_403() {
     let (state, _tmp) = test_state_isolated();
     let admin_cookie = register_admin(&state).await;
-    let alice_cookie =
-        create_user_login(&state, &admin_cookie, "alice", "alicepassword1234").await;
+    let alice_cookie = create_user_login(&state, &admin_cookie, "alice", "alicepassword1234").await;
 
     let r1 = seed_repository(&state, "x", None, "/workspaces/x").await;
     let body = format!(r#"{{"repository_id":"{r1}"}}"#);
@@ -708,7 +695,8 @@ async fn ac16_callers_active_workflow_blocks_delete() {
             workspace_name: "active-wf-repo".to_string(),
             repository_id: Some(r1.clone()),
             user_id: Some(admin_uid.clone()),
-            auth_pin: None,        }],
+            auth_pin: None,
+        }],
     };
     std::fs::write(&snap_file, serde_json::to_string(&snap).unwrap()).unwrap();
 
@@ -808,7 +796,8 @@ async fn ac16_other_users_active_workflow_does_not_block_caller_delete() {
             workspace_name: "shared-repo".to_string(),
             repository_id: Some(r1.clone()),
             user_id: Some(admin_uid.clone()),
-            auth_pin: None,        }],
+            auth_pin: None,
+        }],
     };
     std::fs::write(&snap_file, serde_json::to_string(&snap).unwrap()).unwrap();
 
@@ -872,15 +861,42 @@ async fn invalid_repo_urls_are_rejected_with_400() {
     let cookie = register_admin(&state).await;
 
     let bad_cases: Vec<(&str, &str)> = vec![
-        ("credentials", r#"{"repo_url":"https://user:pass@github.com/owner/repo"}"#),
-        ("query_string", r#"{"repo_url":"https://github.com/owner/repo?ref=main"}"#),
-        ("fragment", r#"{"repo_url":"https://github.com/owner/repo#x"}"#),
-        ("path_traversal", r#"{"repo_url":"https://github.com/owner/.."}"#),
-        ("non_github", r#"{"repo_url":"https://gitlab.com/owner/repo"}"#),
-        ("extra_segments", r#"{"repo_url":"https://github.com/owner/repo/tree/main"}"#),
-        ("missing_repo", r#"{"repo_url":"https://github.com/owner/"}"#),
-        ("invalid_char", r#"{"repo_url":"https://github.com/owner!/repo"}"#),
-        ("http_scheme", r#"{"repo_url":"http://github.com/owner/repo"}"#),
+        (
+            "credentials",
+            r#"{"repo_url":"https://user:pass@github.com/owner/repo"}"#,
+        ),
+        (
+            "query_string",
+            r#"{"repo_url":"https://github.com/owner/repo?ref=main"}"#,
+        ),
+        (
+            "fragment",
+            r#"{"repo_url":"https://github.com/owner/repo#x"}"#,
+        ),
+        (
+            "path_traversal",
+            r#"{"repo_url":"https://github.com/owner/.."}"#,
+        ),
+        (
+            "non_github",
+            r#"{"repo_url":"https://gitlab.com/owner/repo"}"#,
+        ),
+        (
+            "extra_segments",
+            r#"{"repo_url":"https://github.com/owner/repo/tree/main"}"#,
+        ),
+        (
+            "missing_repo",
+            r#"{"repo_url":"https://github.com/owner/"}"#,
+        ),
+        (
+            "invalid_char",
+            r#"{"repo_url":"https://github.com/owner!/repo"}"#,
+        ),
+        (
+            "http_scheme",
+            r#"{"repo_url":"http://github.com/owner/repo"}"#,
+        ),
     ];
 
     for (label, body) in bad_cases {

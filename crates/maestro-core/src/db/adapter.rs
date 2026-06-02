@@ -357,9 +357,15 @@ impl DbRow {
     /// Get optional bytes from column index.
     pub fn get_bytes_opt(&self, idx: usize) -> DbResult<Option<Vec<u8>>> {
         match &self.inner {
-            DbRowInner::Sqlite(r) => r.try_get::<Option<Vec<u8>>, _>(idx).map_err(decode_err(idx)),
-            DbRowInner::Postgres(r) => r.try_get::<Option<Vec<u8>>, _>(idx).map_err(decode_err(idx)),
-            DbRowInner::MySql(r) => r.try_get::<Option<Vec<u8>>, _>(idx).map_err(decode_err(idx)),
+            DbRowInner::Sqlite(r) => r
+                .try_get::<Option<Vec<u8>>, _>(idx)
+                .map_err(decode_err(idx)),
+            DbRowInner::Postgres(r) => r
+                .try_get::<Option<Vec<u8>>, _>(idx)
+                .map_err(decode_err(idx)),
+            DbRowInner::MySql(r) => r
+                .try_get::<Option<Vec<u8>>, _>(idx)
+                .map_err(decode_err(idx)),
         }
     }
 
@@ -376,18 +382,9 @@ impl DbRow {
     /// typed accessor and inspecting `_opt` variants.
     pub fn is_null(&self, idx: usize) -> bool {
         match &self.inner {
-            DbRowInner::Sqlite(r) => r
-                .try_get_raw(idx)
-                .map(|raw| raw.is_null())
-                .unwrap_or(false),
-            DbRowInner::Postgres(r) => r
-                .try_get_raw(idx)
-                .map(|raw| raw.is_null())
-                .unwrap_or(false),
-            DbRowInner::MySql(r) => r
-                .try_get_raw(idx)
-                .map(|raw| raw.is_null())
-                .unwrap_or(false),
+            DbRowInner::Sqlite(r) => r.try_get_raw(idx).map(|raw| raw.is_null()).unwrap_or(false),
+            DbRowInner::Postgres(r) => r.try_get_raw(idx).map(|raw| raw.is_null()).unwrap_or(false),
+            DbRowInner::MySql(r) => r.try_get_raw(idx).map(|raw| raw.is_null()).unwrap_or(false),
         }
     }
 
@@ -397,9 +394,18 @@ impl DbRow {
     /// backends.
     pub fn column_type_name(&self, idx: usize) -> Option<Cow<'_, str>> {
         match &self.inner {
-            DbRowInner::Sqlite(r) => r.columns().get(idx).map(|c| Cow::Borrowed(c.type_info().name())),
-            DbRowInner::Postgres(r) => r.columns().get(idx).map(|c| Cow::Borrowed(c.type_info().name())),
-            DbRowInner::MySql(r) => r.columns().get(idx).map(|c| Cow::Borrowed(c.type_info().name())),
+            DbRowInner::Sqlite(r) => r
+                .columns()
+                .get(idx)
+                .map(|c| Cow::Borrowed(c.type_info().name())),
+            DbRowInner::Postgres(r) => r
+                .columns()
+                .get(idx)
+                .map(|c| Cow::Borrowed(c.type_info().name())),
+            DbRowInner::MySql(r) => r
+                .columns()
+                .get(idx)
+                .map(|c| Cow::Borrowed(c.type_info().name())),
         }
     }
 }
@@ -570,11 +576,7 @@ impl DbAdapter {
     }
 
     /// Fetch zero or one row.
-    pub async fn query_optional(
-        &self,
-        sql: &str,
-        params: Vec<DbValue>,
-    ) -> DbResult<Option<DbRow>> {
+    pub async fn query_optional(&self, sql: &str, params: Vec<DbValue>) -> DbResult<Option<DbRow>> {
         match &self.pool {
             DbPool::Sqlite(p) => {
                 let mut q = sqlx::query(sql);
@@ -791,7 +793,7 @@ impl<'a> DbTransaction<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::pool::{connect, PoolTuning};
+    use crate::db::pool::{PoolTuning, connect};
 
     // ── Placeholder rewrite ──────────────────────────────────────────────
 
@@ -855,10 +857,7 @@ mod tests {
             .await
             .expect("create");
         let n = a
-            .execute(
-                "INSERT INTO t (id, name) VALUES (?), (?)",
-                vec![],
-            )
+            .execute("INSERT INTO t (id, name) VALUES (?), (?)", vec![])
             .await
             .expect_err("missing params should error")
             .to_string();
@@ -877,9 +876,12 @@ mod tests {
     #[tokio::test]
     async fn query_one_fetches_typed_columns() {
         let a = sqlite_adapter().await;
-        a.execute("CREATE TABLE t (id INTEGER, name TEXT, blob_col BLOB)", vec![])
-            .await
-            .unwrap();
+        a.execute(
+            "CREATE TABLE t (id INTEGER, name TEXT, blob_col BLOB)",
+            vec![],
+        )
+        .await
+        .unwrap();
         a.execute(
             "INSERT INTO t (id, name, blob_col) VALUES (?, ?, ?)",
             vec![
@@ -892,7 +894,10 @@ mod tests {
         .unwrap();
 
         let row = a
-            .query_one("SELECT id, name, blob_col FROM t WHERE id = ?", vec![DbValue::I64(42)])
+            .query_one(
+                "SELECT id, name, blob_col FROM t WHERE id = ?",
+                vec![DbValue::I64(42)],
+            )
             .await
             .expect("fetch row");
         assert_eq!(row.get_i64(0).unwrap(), 42);
@@ -925,10 +930,7 @@ mod tests {
             .query_one("SELECT id FROM t WHERE id = ?", vec![DbValue::I64(1)])
             .await
             .expect_err("no match");
-        assert!(
-            err.is_row_not_found(),
-            "expected RowNotFound, got: {err:?}"
-        );
+        assert!(err.is_row_not_found(), "expected RowNotFound, got: {err:?}");
     }
 
     #[tokio::test]
@@ -966,10 +968,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let row = a
-            .query_one("SELECT a, b FROM t", vec![])
-            .await
-            .unwrap();
+        let row = a.query_one("SELECT a, b FROM t", vec![]).await.unwrap();
         assert_eq!(row.get_text_opt(0).unwrap(), None);
         assert_eq!(row.get_i64_opt(1).unwrap(), None);
         assert!(row.is_null(0));
@@ -982,10 +981,12 @@ mod tests {
         a.execute("CREATE TABLE t (b INTEGER)", vec![])
             .await
             .unwrap();
-        a.execute("INSERT INTO t (b) VALUES (?), (?)",
-            vec![DbValue::Bool(true), DbValue::Bool(false)])
-            .await
-            .unwrap();
+        a.execute(
+            "INSERT INTO t (b) VALUES (?), (?)",
+            vec![DbValue::Bool(true), DbValue::Bool(false)],
+        )
+        .await
+        .unwrap();
         let rows = a
             .query_all("SELECT b FROM t ORDER BY b DESC", vec![])
             .await
@@ -1006,10 +1007,7 @@ mod tests {
             .unwrap();
         tx.commit().await.expect("commit");
 
-        let row = a
-            .query_one("SELECT id FROM t", vec![])
-            .await
-            .expect("row");
+        let row = a.query_one("SELECT id FROM t", vec![]).await.expect("row");
         assert_eq!(row.get_i64(0).unwrap(), 7);
     }
 
@@ -1025,10 +1023,7 @@ mod tests {
             .unwrap();
         tx.rollback().await.expect("rollback");
 
-        let r = a
-            .query_optional("SELECT id FROM t", vec![])
-            .await
-            .unwrap();
+        let r = a.query_optional("SELECT id FROM t", vec![]).await.unwrap();
         assert!(
             r.is_none(),
             "rollback must discard the insert; got row: {r:?}"
@@ -1046,12 +1041,20 @@ mod tests {
     async fn db_value_from_conversions_cover_common_types() {
         // Bind via the From impls — keeps DAO call sites terse.
         let a = sqlite_adapter().await;
-        a.execute("CREATE TABLE t (s TEXT, i INTEGER, b INTEGER, by BLOB)", vec![])
-            .await
-            .unwrap();
+        a.execute(
+            "CREATE TABLE t (s TEXT, i INTEGER, b INTEGER, by BLOB)",
+            vec![],
+        )
+        .await
+        .unwrap();
         a.execute(
             "INSERT INTO t (s, i, b, by) VALUES (?, ?, ?, ?)",
-            vec!["hello".into(), 42_i64.into(), true.into(), vec![1_u8, 2, 3].into()],
+            vec![
+                "hello".into(),
+                42_i64.into(),
+                true.into(),
+                vec![1_u8, 2, 3].into(),
+            ],
         )
         .await
         .unwrap();

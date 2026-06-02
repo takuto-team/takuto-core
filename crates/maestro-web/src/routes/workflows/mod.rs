@@ -18,12 +18,7 @@ mod run_commands;
 mod steps;
 
 pub use definitions::{list_workflow_definitions, retry_workflow_def, run_workflow_def};
-pub use list::{
-    WorkflowReportResponse, get_workflow, get_workflow_report, list_workflows, workflow_counts,
-};
-pub use dto::{
-    RunCommandStatus, TerminalLineDto, WorkflowCountsResponse, WorkflowSummary,
-};
+pub use dto::{RunCommandStatus, TerminalLineDto, WorkflowCountsResponse, WorkflowSummary};
 pub use editor::{
     OpenEditorResponse, OpenTerminalResponse, close_editor, close_terminal, open_editor,
     open_terminal,
@@ -32,15 +27,16 @@ pub use lifecycle::{
     delete_workflow, mark_work_done, pause_workflow, resume_from_error, resume_workflow,
     retry_workflow, stop_workflow,
 };
-pub use manual::{
-    StartManualWorkflowBody, StartManualWorkflowResponse, start_manual_workflow,
+pub use list::{
+    WorkflowReportResponse, get_workflow, get_workflow_report, list_workflows, workflow_counts,
 };
+pub use log::{LogLineDto, LogQuery, get_log};
+pub use manual::{StartManualWorkflowBody, StartManualWorkflowResponse, start_manual_workflow};
 pub use port_tracking::track_port_forwards;
 pub use run_commands::{
     RunCommandsStatusResponse, StartRunCommandRequest, StartRunCommandResponse, list_run_commands,
     start_run_command, stop_run_command,
 };
-pub use log::{LogLineDto, LogQuery, get_log};
 pub use steps::{StepDto, get_steps};
 
 /// Check whether the authenticated user may act on the workflow with the given ticket key.
@@ -118,13 +114,15 @@ pub(crate) async fn require_workflow_access(
     let workflow_workspace = w.workspace_name.clone();
     drop(workflows);
 
-    let repos =
-        match maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id)
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        };
+    let repos = match maestro_core::db::repositories::list_for_user(
+        database.adapter(),
+        &auth.user_id,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
     let has_access = if let Some(ref repo_id) = workflow_repo_id {
         repos.iter().any(|r| &r.id == repo_id)
     } else {
@@ -136,9 +134,6 @@ pub(crate) async fn require_workflow_access(
         Err(StatusCode::NOT_FOUND)
     }
 }
-
-
-
 
 /// Try to build a `WorkerSecretsBundle` for a side-channel container
 /// (browser editor, dev-server run command) tied to a workflow.
@@ -195,4 +190,3 @@ pub(super) async fn build_editor_or_run_command_bundle(
         }
     }
 }
-

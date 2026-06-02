@@ -9,9 +9,11 @@
 // these tests cover the snapshot back-compat invariants, the cross-snapshot
 // pin survival, and the integration with `PersistedWorkflowRecord`.
 
-use maestro_core::auth::{seal, MasterKey};
+use maestro_core::auth::{MasterKey, seal};
 use maestro_core::config::AiAgentProvider;
-use maestro_core::workflow::snapshot::{AuthPin, PersistedWorkflowRecord, WorkflowSnapshotFile, SNAPSHOT_VERSION};
+use maestro_core::workflow::snapshot::{
+    AuthPin, PersistedWorkflowRecord, SNAPSHOT_VERSION, WorkflowSnapshotFile,
+};
 
 // ---------------------------------------------------------------------------
 // T-PIN-002 (P0) — back-compat
@@ -131,7 +133,10 @@ fn auth_pin_is_independent_of_active_provider_at_read_time() {
         github_credential_row_id: None,
         started_at: "2026-05-18T13:00:00Z".to_string(),
     };
-    assert_ne!(parsed.workflows[0].auth_pin.as_ref().unwrap().provider, other.provider);
+    assert_ne!(
+        parsed.workflows[0].auth_pin.as_ref().unwrap().provider,
+        other.provider
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -184,12 +184,7 @@ impl ExternalActions for RealActions {
         Ok(output.stdout)
     }
 
-    async fn create_worktree(
-        &self,
-        repo_path: &Path,
-        branch: &str,
-        base: &str,
-    ) -> Result<PathBuf> {
+    async fn create_worktree(&self, repo_path: &Path, branch: &str, base: &str) -> Result<PathBuf> {
         let worktree_path = repo_path.join("worktrees").join(branch.replace('/', "-"));
         info!(branch = branch, base = base, path = %worktree_path.display(), "Creating git worktree");
 

@@ -60,7 +60,9 @@ pub async fn run_once(db: &Database, now_ms: i64, retention_days: u32) {
 mod tests {
     use super::*;
     use crate::db::adapter::DbValue;
-    use crate::db::work_items::{LogLineInsert, LogPaging, LogStream, append_log_lines, fetch_log_lines};
+    use crate::db::work_items::{
+        LogLineInsert, LogPaging, LogStream, append_log_lines, fetch_log_lines,
+    };
 
     #[test]
     fn retention_cutoff_ms_zero_disables_retention() {

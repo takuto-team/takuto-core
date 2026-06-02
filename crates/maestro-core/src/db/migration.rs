@@ -98,9 +98,11 @@ mod tests {
             .unwrap();
         assert_eq!(user.role, UserRole::Admin);
 
-        assert!(credentials::verify_user_password(&a, &user.id, "secret123")
-            .await
-            .unwrap());
+        assert!(
+            credentials::verify_user_password(&a, &user.id, "secret123")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

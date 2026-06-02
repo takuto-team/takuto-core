@@ -193,15 +193,7 @@ async fn report_falls_back_to_hashmap_when_no_db_row() {
     std::fs::create_dir_all(&map_wt).unwrap();
     write_report(&map_wt, "TICK-LEG", "legacy-fallback");
 
-    seed_workflow_in_map(
-        &state,
-        "TICK-LEG",
-        &alice_id,
-        "ws",
-        Some(repo_id),
-        map_wt,
-    )
-    .await;
+    seed_workflow_in_map(&state, "TICK-LEG", &alice_id, "ws", Some(repo_id), map_wt).await;
     // NOTE: deliberately no DB row.
 
     // require_workflow_access uses the DB-first path too — its

@@ -562,10 +562,7 @@ mod tests {
     fn effective_opencode_model_returns_set_value() {
         let mut cfg = AgentConfig::default();
         cfg.providers.opencode.model = "lmstudio/qwen3-coder".into();
-        assert_eq!(
-            cfg.effective_opencode_model(),
-            Some("lmstudio/qwen3-coder")
-        );
+        assert_eq!(cfg.effective_opencode_model(), Some("lmstudio/qwen3-coder"));
     }
 
     /// effective_opencode_model: empty / whitespace → None. Validator

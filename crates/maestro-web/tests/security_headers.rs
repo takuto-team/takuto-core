@@ -71,7 +71,11 @@ async fn dashboard_response_has_x_frame_options() {
         .await
         .unwrap();
     assert_eq!(
-        resp.headers().get("x-frame-options").unwrap().to_str().unwrap(),
+        resp.headers()
+            .get("x-frame-options")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "SAMEORIGIN"
     );
 }
@@ -90,7 +94,11 @@ async fn dashboard_response_has_referrer_policy() {
         .await
         .unwrap();
     assert_eq!(
-        resp.headers().get("referrer-policy").unwrap().to_str().unwrap(),
+        resp.headers()
+            .get("referrer-policy")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "strict-origin"
     );
 }
@@ -109,7 +117,11 @@ async fn dashboard_response_has_x_content_type_options() {
         .await
         .unwrap();
     assert_eq!(
-        resp.headers().get("x-content-type-options").unwrap().to_str().unwrap(),
+        resp.headers()
+            .get("x-content-type-options")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "nosniff"
     );
 }
@@ -121,11 +133,7 @@ async fn unauthenticated_401_response_has_security_headers() {
     let state = test_state_with_db();
     let app = build_router(state);
     let resp = app
-        .oneshot(
-            Request::get("/api/config")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -292,12 +300,20 @@ async fn proxy_path_no_csp_but_has_nosniff_and_no_referrer() {
         "/s/* responses must NOT carry X-Frame-Options"
     );
     assert_eq!(
-        resp.headers().get("referrer-policy").unwrap().to_str().unwrap(),
+        resp.headers()
+            .get("referrer-policy")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "no-referrer",
         "/s/* must override Referrer-Policy to no-referrer"
     );
     assert_eq!(
-        resp.headers().get("x-content-type-options").unwrap().to_str().unwrap(),
+        resp.headers()
+            .get("x-content-type-options")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "nosniff"
     );
 }

@@ -78,12 +78,8 @@ impl WorkflowLifecycle {
         // `repository_id` is provided (the canonical path). Fall back to
         // deriving it from `cfg.git.repo_path` for tests/dry-mode paths that
         // construct workflows without a DB or a repo association.
-        let ws_name = resolve_workspace_name(
-            repository_id.as_deref(),
-            self.db.as_ref(),
-            &self.config,
-        )
-        .await;
+        let ws_name =
+            resolve_workspace_name(repository_id.as_deref(), self.db.as_ref(), &self.config).await;
         let mut workflow = Workflow::new(
             ticket_key.clone(),
             ticket_summary,
@@ -150,12 +146,8 @@ impl WorkflowLifecycle {
         repository_id: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
-        let ws_name = resolve_workspace_name(
-            repository_id.as_deref(),
-            self.db.as_ref(),
-            &self.config,
-        )
-        .await;
+        let ws_name =
+            resolve_workspace_name(repository_id.as_deref(), self.db.as_ref(), &self.config).await;
         let mut workflow = Workflow::new(
             ticket_key.clone(),
             ticket_summary,

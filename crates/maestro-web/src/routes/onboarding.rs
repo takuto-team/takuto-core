@@ -154,9 +154,7 @@ pub async fn onboarding_status(
                         step_1_ticketing: r.step_1_ticketing.map(|s| s.as_str().to_string()),
                         step_2_provider: r.step_2_provider.map(|s| s.as_str().to_string()),
                         step_3_github: r.step_3_github.map(|s| s.as_str().to_string()),
-                        step_4_credentials: r
-                            .step_4_credentials
-                            .map(|s| s.as_str().to_string()),
+                        step_4_credentials: r.step_4_credentials.map(|s| s.as_str().to_string()),
                         completed_at: r.completed_at,
                     },
                     None => UserOnboardingSummary::default(),
@@ -365,13 +363,13 @@ mod tests {
         .into_iter()
         .map(critical)
         .collect();
-        let out = apply_user_warning_filter(
-            inputs.clone(),
-            "claude",
-            false,
-            &user_state(false, false),
+        let out =
+            apply_user_warning_filter(inputs.clone(), "claude", false, &user_state(false, false));
+        assert_eq!(
+            out.len(),
+            inputs.len(),
+            "every platform warning must survive"
         );
-        assert_eq!(out.len(), inputs.len(), "every platform warning must survive");
         assert_eq!(codes(&out), codes(&inputs));
     }
 
@@ -401,9 +399,18 @@ mod tests {
 
     #[test]
     fn provider_warning_code_mapping_is_complete_and_stable() {
-        assert_eq!(provider_warning_code("claude"), Some("claude_not_authenticated"));
-        assert_eq!(provider_warning_code("cursor"), Some("cursor_not_authenticated"));
-        assert_eq!(provider_warning_code("codex"), Some("codex_not_authenticated"));
+        assert_eq!(
+            provider_warning_code("claude"),
+            Some("claude_not_authenticated")
+        );
+        assert_eq!(
+            provider_warning_code("cursor"),
+            Some("cursor_not_authenticated")
+        );
+        assert_eq!(
+            provider_warning_code("codex"),
+            Some("codex_not_authenticated")
+        );
         assert_eq!(
             provider_warning_code("opencode"),
             Some("opencode_not_authenticated")

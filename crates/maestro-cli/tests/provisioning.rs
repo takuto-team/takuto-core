@@ -82,10 +82,7 @@ fn t_prov_cli_001_sha_empty_list() {
 #[test]
 fn t_prov_cli_002_sha_stable_for_same_content() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = write_config(
-        dir.path(),
-        r#"install_commands = ["echo one", "echo two"]"#,
-    );
+    let cfg = write_config(dir.path(), r#"install_commands = ["echo one", "echo two"]"#);
     let run_sha = || {
         let out = Command::new(maestro_bin())
             .args(["--config"])

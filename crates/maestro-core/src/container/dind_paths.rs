@@ -124,6 +124,9 @@ mod tests {
             "/home/maestro/.maestro",
             "/custom/dind/mount",
         );
-        assert_eq!(got.to_string_lossy(), "/custom/dind/mount/runtime/secrets/abc");
+        assert_eq!(
+            got.to_string_lossy(),
+            "/custom/dind/mount/runtime/secrets/abc"
+        );
     }
 }

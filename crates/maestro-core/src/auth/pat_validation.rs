@@ -55,11 +55,7 @@ impl PatValidationError {
 /// Classic-PAT required scope; sufficient on its own.
 const CLASSIC_REQUIRED: &str = "repo";
 /// Fine-grained PAT required scope set; all three must be present.
-const FINE_GRAINED_REQUIRED: &[&str] = &[
-    "contents:write",
-    "pull_requests:write",
-    "issues:read",
-];
+const FINE_GRAINED_REQUIRED: &[&str] = &["contents:write", "pull_requests:write", "issues:read"];
 
 /// Run the full PAT validation flow against the supplied `GhClient`.
 ///
@@ -263,10 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn validate_fine_grained_with_full_scope_set_succeeds() {
-        let gh = MockGh::user_ok(
-            "alice",
-            "contents:write, pull_requests:write, issues:read",
-        );
+        let gh = MockGh::user_ok("alice", "contents:write, pull_requests:write, issues:read");
         let v = validate_pat(&gh, "github_pat_test", &[]).await.unwrap();
         assert_eq!(v.login, "alice");
     }

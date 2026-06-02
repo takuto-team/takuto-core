@@ -126,10 +126,16 @@ async fn onboarding_status_is_public_and_returns_system_status_shape() {
         "headless_capable",
         "custom_base_url",
     ] {
-        assert!(raw["provider"].get(*key).is_some(), "missing provider.{key}");
+        assert!(
+            raw["provider"].get(*key).is_some(),
+            "missing provider.{key}"
+        );
     }
     for key in &["system", "acli_ok"] {
-        assert!(raw["ticketing"].get(*key).is_some(), "missing ticketing.{key}");
+        assert!(
+            raw["ticketing"].get(*key).is_some(),
+            "missing ticketing.{key}"
+        );
     }
 }
 
@@ -404,7 +410,11 @@ async fn register_admin_and_get_id(state: &AppState) -> (String, String) {
 /// key so the `seal()` envelope matches what production would produce.
 async fn seed_provider_credential(state: &AppState, user_id: &str, provider: &str) {
     let db = state.auth().db.clone().expect("test DB");
-    let mk = db.master_key().expect("test DB must have master key").key.clone();
+    let mk = db
+        .master_key()
+        .expect("test DB must have master key")
+        .key
+        .clone();
     let sealed = maestro_core::auth::seal(&mk, b"sk-test-token").unwrap();
     let adapter = db.adapter();
     let mut tx = adapter.begin().await.unwrap();
@@ -575,7 +585,10 @@ async fn t_onb_filter_004_gh_auth_missing_dropped_when_app_configured() {
         cfg.github.app_id = 12345;
         cfg.github.app_installation_id = 67890;
         cfg.github.app_private_key = "FAKE_PEM_BODY".into();
-        assert!(cfg.github.is_configured(), "test setup: app must be configured");
+        assert!(
+            cfg.github.is_configured(),
+            "test setup: app must be configured"
+        );
     }
     seed_warnings(&state, "claude_not_authenticated", true, false).await;
 

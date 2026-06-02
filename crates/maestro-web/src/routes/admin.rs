@@ -147,7 +147,8 @@ pub async fn create_user(
             let mut tx = adapter.begin().await?;
             maestro_core::db::credentials::store_password(&mut tx, &user.id, password).await?;
             let recovery =
-                maestro_core::db::credentials::generate_recovery_codes(&mut tx, &user.id, 8).await?;
+                maestro_core::db::credentials::generate_recovery_codes(&mut tx, &user.id, 8)
+                    .await?;
             tx.commit().await?;
             codes = Some(recovery);
         }
@@ -244,7 +245,8 @@ pub async fn update_user(
         let updated =
             maestro_core::db::users::update_user(adapter, &id, new_username.as_deref(), new_role)
                 .await?;
-        let role_changed = matches!((previous_role, new_role), (Some(prev), Some(new)) if prev != new);
+        let role_changed =
+            matches!((previous_role, new_role), (Some(prev), Some(new)) if prev != new);
         if role_changed {
             let mut tx = adapter.begin().await?;
             let _ = maestro_core::db::credentials::delete_user_sessions(&mut tx, &id).await;
@@ -587,9 +589,8 @@ mod tests {
     /// Create a test `AppState` with an in-memory SQLite database.
     fn test_state_with_db(db: Database) -> AppState {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new("origin".to_string(), None),
-        );
+        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> =
+            Arc::new(DryRunActions::new("origin".to_string(), None));
         let jira_available = Arc::new(AtomicBool::new(false));
         let engine = Arc::new(WorkflowEngine::new(
             config.clone(),
@@ -647,7 +648,9 @@ mod tests {
                 Request::post("/api/auth/register")
                     .header("Content-Type", "application/json")
                     .header("Origin", "http://localhost:8080")
-                    .body(Body::from(r#"{"username":"admin","password":"secret123!@#A"}"#))
+                    .body(Body::from(
+                        r#"{"username":"admin","password":"secret123!@#A"}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -665,7 +668,9 @@ mod tests {
                 Request::post("/api/auth/login")
                     .header("Content-Type", "application/json")
                     .header("Origin", "http://localhost:8080")
-                    .body(Body::from(r#"{"username":"admin","password":"secret123!@#A"}"#))
+                    .body(Body::from(
+                        r#"{"username":"admin","password":"secret123!@#A"}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -836,7 +841,9 @@ mod tests {
                     .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
                     .header("Content-Type", "application/json")
-                    .body(Body::from(r#"{"username":"bob","password":"pass123!@#ABCD"}"#))
+                    .body(Body::from(
+                        r#"{"username":"bob","password":"pass123!@#ABCD"}"#,
+                    ))
                     .unwrap(),
             )
             .await

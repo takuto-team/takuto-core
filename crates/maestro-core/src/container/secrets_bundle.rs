@@ -112,10 +112,7 @@ mod tests {
     /// any drift surfaces in CI.
     #[test]
     fn opencode_config_mountpoint_is_in_xdg_config_home() {
-        assert_eq!(
-            OPENCODE_CONFIG_MOUNTPOINT,
-            "/home/maestro/.config/opencode"
-        );
+        assert_eq!(OPENCODE_CONFIG_MOUNTPOINT, "/home/maestro/.config/opencode");
     }
 
     /// `apply_secrets_bundle_to_args` must emit a `-v <translated>:/run/maestro-secrets:ro`
@@ -124,9 +121,8 @@ mod tests {
     /// surface via the pure helper to avoid mutating process env.
     #[test]
     fn apply_secrets_bundle_uses_translated_path_for_dind() {
-        let host_path = std::path::PathBuf::from(
-            "/home/maestro/.maestro/runtime/secrets/bundle-abc",
-        );
+        let host_path =
+            std::path::PathBuf::from("/home/maestro/.maestro/runtime/secrets/bundle-abc");
         let translated = super::super::dind_paths::translate_path_for_dind_inner(
             &host_path,
             "/home/maestro/.maestro",

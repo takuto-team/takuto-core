@@ -14,9 +14,7 @@ use maestro_core::container::{self, ContainerRunner};
 
 use crate::auth::AuthenticatedUser;
 use crate::session_registry::{SessionRoute, SessionRouteKind};
-use crate::state::{
-    AuthState, ConfigState, DynamicPortForward, EditorState, EngineState,
-};
+use crate::state::{AuthState, ConfigState, DynamicPortForward, EditorState, EngineState};
 
 use super::dto::can_open_editor;
 use super::port_tracking::track_port_forwards;
@@ -144,13 +142,21 @@ pub async fn open_editor(
     {
         let mut entries = Vec::new();
         for (cp, hp) in &info.port_mappings {
-            let Some(path_token) = editor.path_token_registry.register(SessionRoute {
-                kind: SessionRouteKind::DynamicPort,
-                host_port: *hp,
-                ticket_key: ticket_key.clone(),
-                user_id: auth.user_id.clone(),
-            }).await else {
-                tracing::error!(container_port = *cp, host_port = *hp, "Could not allocate a proxy token; skipping port mapping");
+            let Some(path_token) = editor
+                .path_token_registry
+                .register(SessionRoute {
+                    kind: SessionRouteKind::DynamicPort,
+                    host_port: *hp,
+                    ticket_key: ticket_key.clone(),
+                    user_id: auth.user_id.clone(),
+                })
+                .await
+            else {
+                tracing::error!(
+                    container_port = *cp,
+                    host_port = *hp,
+                    "Could not allocate a proxy token; skipping port mapping"
+                );
                 continue;
             };
             let proxy_url = container::build_session_dynamic_port_url(&path_token);

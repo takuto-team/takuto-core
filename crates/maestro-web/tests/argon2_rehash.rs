@@ -96,7 +96,10 @@ async fn successful_login_rehashes_legacy_argon2_default_hash() {
 
     // The row should now hold a fresh, current-params hash.
     let after = credential_data(&db, &cred_id).await;
-    assert_ne!(legacy, after, "credentials.data should have been rewritten after login");
+    assert_ne!(
+        legacy, after,
+        "credentials.data should have been rewritten after login"
+    );
 
     // The PHC string format embeds the params textually as
     // `$argon2id$v=19$m=47104,t=1,p=1$<salt>$<hash>` — assert directly without

@@ -465,9 +465,7 @@ pub async fn post_provider_credential(
 /// We accept extra fields silently — Anthropic adds keys over time and we
 /// don't want to break paste flows when they ship a new release. The blob
 /// is stored verbatim.
-fn validate_claude_session_blob(
-    blob: &str,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn validate_claude_session_blob(blob: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if blob.trim().is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "claude_session_json_empty"));
     }
@@ -651,8 +649,7 @@ pub async fn post_github_pat(
     drop(master);
 
     let sign_commits = body.sign_commits.unwrap_or(true);
-    let scopes_json =
-        serde_json::to_string(&validated.scopes).unwrap_or_else(|_| "[]".to_string());
+    let scopes_json = serde_json::to_string(&validated.scopes).unwrap_or_else(|_| "[]".to_string());
     let login = validated.login.clone();
     let user_id = auth.user_id.clone();
     let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -693,7 +690,11 @@ pub async fn post_github_pat(
             tracing::warn!(error = %e, "touch_last_validated failed");
             err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
         })?;
-    let event = if already_present { "rotated" } else { "created" };
+    let event = if already_present {
+        "rotated"
+    } else {
+        "created"
+    };
     credential_audit::log_in_tx(
         &mut tx,
         &user_id,

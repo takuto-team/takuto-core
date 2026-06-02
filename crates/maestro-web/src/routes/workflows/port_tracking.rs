@@ -260,7 +260,9 @@ mod tests {
 
     /// Helper: extract `(container_port, host_port)` pairs from the map.
     fn port_pairs(fwd: &[DynamicPortForward]) -> Vec<(u16, u16)> {
-        fwd.iter().map(|f| (f.container_port, f.host_port)).collect()
+        fwd.iter()
+            .map(|f| (f.container_port, f.host_port))
+            .collect()
     }
 
     /// `track_port_forwards` adds ports on `port_forwarded` events and
@@ -276,7 +278,16 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
+        let handle = tokio::spawn(track_port_forwards(
+            "T-1".into(),
+            "test-user".into(),
+            m,
+            r,
+            rx,
+            c,
+            None,
+            None,
+        ));
 
         tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
             .unwrap();
@@ -309,21 +320,39 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
+        let handle = tokio::spawn(track_port_forwards(
+            "T-1".into(),
+            "test-user".into(),
+            m,
+            r,
+            rx,
+            c,
+            None,
+            None,
+        ));
 
         // Forward two ports.
-        tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
-        tx.send(port_event("port_forwarded", "T-1", 5000, 9101)).unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 5000, 9101))
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Capture the token for port 3000 before removal.
         let token_3000 = {
             let fwd = map.read().await;
-            fwd.get("T-1").unwrap().iter().find(|f| f.container_port == 3000).unwrap().path_token.clone()
+            fwd.get("T-1")
+                .unwrap()
+                .iter()
+                .find(|f| f.container_port == 3000)
+                .unwrap()
+                .path_token
+                .clone()
         };
 
         // Unforward port 3000.
-        tx.send(port_event("port_unforwarded", "T-1", 3000, 9100)).unwrap();
+        tx.send(port_event("port_unforwarded", "T-1", 3000, 9100))
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         {
@@ -350,7 +379,16 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
+        let handle = tokio::spawn(track_port_forwards(
+            "T-1".into(),
+            "test-user".into(),
+            m,
+            r,
+            rx,
+            c,
+            None,
+            None,
+        ));
 
         tx.send(port_event("port_forwarded", "T-2", 3000, 9100))
             .unwrap();
@@ -378,17 +416,32 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
+        let handle = tokio::spawn(track_port_forwards(
+            "T-1".into(),
+            "test-user".into(),
+            m,
+            r,
+            rx,
+            c,
+            None,
+            None,
+        ));
 
-        tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
 
         {
             let fwd = map.read().await;
             let ports = fwd.get("T-1").expect("should have entry");
-            assert_eq!(ports.len(), 1, "duplicate container port should not be added twice");
+            assert_eq!(
+                ports.len(),
+                1,
+                "duplicate container port should not be added twice"
+            );
         }
 
         cancel.cancel();
@@ -407,11 +460,23 @@ mod tests {
         let m = map.clone();
         let r = registry.clone();
         let c = cancel.clone();
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), m, r, rx, c, None, None));
+        let handle = tokio::spawn(track_port_forwards(
+            "T-1".into(),
+            "test-user".into(),
+            m,
+            r,
+            rx,
+            c,
+            None,
+            None,
+        ));
 
-        tx.send(port_event("port_forwarded", "T-1", 3000, 9100)).unwrap();
-        tx.send(port_event("port_forwarded", "T-1", 5173, 9101)).unwrap();
-        tx.send(port_event("port_forwarded", "T-1", 8080, 9102)).unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 3000, 9100))
+            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 5173, 9101))
+            .unwrap();
+        tx.send(port_event("port_forwarded", "T-1", 8080, 9102))
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         {
@@ -437,7 +502,16 @@ mod tests {
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), map, registry, rx, cancel.clone(), None, None));
+        let handle = tokio::spawn(track_port_forwards(
+            "T-1".into(),
+            "test-user".into(),
+            map,
+            registry,
+            rx,
+            cancel.clone(),
+            None,
+            None,
+        ));
 
         cancel.cancel();
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
@@ -455,7 +529,16 @@ mod tests {
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();
 
-        let handle = tokio::spawn(track_port_forwards("T-1".into(), "test-user".into(), map, registry, rx, cancel, None, None));
+        let handle = tokio::spawn(track_port_forwards(
+            "T-1".into(),
+            "test-user".into(),
+            map,
+            registry,
+            rx,
+            cancel,
+            None,
+            None,
+        ));
 
         drop(tx);
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
@@ -600,8 +683,7 @@ mod tests {
             .expect("seed work_items");
 
         let registry = PathTokenRegistry::new();
-        let run_cmds_map: crate::state::RunCommandsMap =
-            Arc::new(RwLock::new(HashMap::new()));
+        let run_cmds_map: crate::state::RunCommandsMap = Arc::new(RwLock::new(HashMap::new()));
         let (tx, _) = broadcast::channel(16);
         let cancel = CancellationToken::new();
         let rx = tx.subscribe();

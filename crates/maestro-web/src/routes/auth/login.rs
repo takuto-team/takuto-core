@@ -84,9 +84,14 @@ pub async fn login(
 
     // Step 2: lockout check.
     let adapter = db.adapter();
-    let count = failed_count_in_window(adapter, &user.id, AttemptKind::Password, LOCKOUT_WINDOW_SECS)
-        .await
-        .unwrap_or(0);
+    let count = failed_count_in_window(
+        adapter,
+        &user.id,
+        AttemptKind::Password,
+        LOCKOUT_WINDOW_SECS,
+    )
+    .await
+    .unwrap_or(0);
     let lockout = if count >= LOCKOUT_THRESHOLD {
         let oldest = oldest_failure_ts_in_window(
             adapter,

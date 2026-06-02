@@ -98,9 +98,11 @@ async fn run_codex_session(
     resume_session_id: Option<&str>,
     container_runner: Option<&ContainerRunner>,
 ) -> Result<(String, String)> {
-    let workspace = worktree.to_str().ok_or(AgentError::WorktreePathInvalidUtf8 {
-        provider: AiAgentProvider::Codex,
-    })?;
+    let workspace = worktree
+        .to_str()
+        .ok_or(AgentError::WorktreePathInvalidUtf8 {
+            provider: AiAgentProvider::Codex,
+        })?;
 
     let owned = build_codex_args(workspace, prompt, model, resume_session_id);
     let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
@@ -120,8 +122,7 @@ async fn run_codex_session(
         ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
     } else {
         ProcessHandle::spawn(CODEX_BIN, &arg_refs, worktree, cancel_token).await
-    }
-    ?;
+    }?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await

@@ -14,8 +14,8 @@ use maestro_core::codex::CodexSession;
 use maestro_core::config::{AiAgentProvider, TicketingSystem, cursor_model_for_cli};
 use maestro_core::container::ContainerRunner;
 use maestro_core::cursor::session::CursorSession;
-use maestro_core::opencode::OpenCodeSession;
 use maestro_core::jira::client::JiraClient;
+use maestro_core::opencode::OpenCodeSession;
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::github::parse_github_repo;
@@ -180,8 +180,7 @@ async fn run_description_session(
         // per-issue isolation logic (which derives the repo root from the grandparent)
         // does not apply.  The session is already sandboxed in its own ephemeral
         // container; it does not need worktree-level isolation.
-        let mut runner =
-            ContainerRunner::new(&format!("improve-{ticket_key}"), &worktree, &image);
+        let mut runner = ContainerRunner::new(&format!("improve-{ticket_key}"), &worktree, &image);
 
         // Attach a per-request `WorkerSecretsBundle` so the ephemeral worker
         // reads the caller's per-user provider key + GitHub token from
@@ -520,7 +519,8 @@ pub async fn update_ticket_description(
         .map_err(|s| (s, String::new()))?;
     // Resolve the cwd for `gh` / `acli` from the workflow's repository_id
     // rather than the global cfg.git.repo_path.
-    let workflow_repo_path = resolve_workflow_repo_path(&engine, &auth_state, &cfg_state, &key).await;
+    let workflow_repo_path =
+        resolve_workflow_repo_path(&engine, &auth_state, &cfg_state, &key).await;
     match cfg_state.ticketing_system {
         TicketingSystem::None => {
             // No external ticketing system — persist to the in-memory workflow.
@@ -681,9 +681,8 @@ mod tests {
     /// Build a minimal `AppState` for testing `update_ticket_description` in `None` mode.
     fn test_app_state_none() -> AppState {
         let config = Arc::new(RwLock::new(Config::default()));
-        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> = Arc::new(
-            DryRunActions::new("origin".to_string(), None),
-        );
+        let actions: Arc<dyn maestro_core::actions::traits::ExternalActions> =
+            Arc::new(DryRunActions::new("origin".to_string(), None));
         let jira_available = Arc::new(AtomicBool::new(false));
         let engine = Arc::new(WorkflowEngine::new(
             config.clone(),
@@ -766,7 +765,13 @@ mod tests {
     #[tokio::test]
     async fn update_description_none_mode_updates_description() {
         let state = test_app_state_none();
-        insert_workflow(&state.engine.engine, "T-1", "Old Summary", "Old description").await;
+        insert_workflow(
+            &state.engine.engine,
+            "T-1",
+            "Old Summary",
+            "Old description",
+        )
+        .await;
 
         let result = update_ticket_description(
             State(state.engine.clone()),
@@ -795,7 +800,13 @@ mod tests {
     #[tokio::test]
     async fn update_description_none_mode_updates_both() {
         let state = test_app_state_none();
-        insert_workflow(&state.engine.engine, "T-2", "Old Summary", "Old description").await;
+        insert_workflow(
+            &state.engine.engine,
+            "T-2",
+            "Old Summary",
+            "Old description",
+        )
+        .await;
 
         let result = update_ticket_description(
             State(state.engine.clone()),

@@ -146,7 +146,10 @@ async fn counts_dedupe_by_ticket_key_db_wins() {
     seed_db_row(&state, "T-DUP", &alice_id, "paused").await;
 
     let v = fetch_counts(&state, &alice_cookie).await;
-    assert_eq!(v["completed"], 0, "HashMap's Done must be overridden by DB's Paused");
+    assert_eq!(
+        v["completed"], 0,
+        "HashMap's Done must be overridden by DB's Paused"
+    );
     assert_eq!(v["paused"], 1, "DB row wins on dedupe");
     assert_eq!(v["running"], 0);
     assert_eq!(v["errors"], 0);

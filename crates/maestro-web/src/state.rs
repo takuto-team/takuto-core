@@ -145,8 +145,7 @@ pub struct EditorState {
     /// bind-mounted onto an empty directory. Keyed by ticket_key
     /// (workflow id) since the editor is 1-per-workflow. Cleared in
     /// `close_editor`, `delete_workflow`, and `mark_done`.
-    pub editor_bundles:
-        Arc<RwLock<HashMap<String, Arc<maestro_core::auth::WorkerSecretsBundle>>>>,
+    pub editor_bundles: Arc<RwLock<HashMap<String, Arc<maestro_core::auth::WorkerSecretsBundle>>>>,
     /// Registry of unguessable session path tokens for the shared-port proxy.
     /// Maps `{path-token} → SessionRoute` so `/s/{token}/...` requests can be
     /// dispatched to the right loopback backend (editor or terminal). The
@@ -372,12 +371,8 @@ mod tests {
 
         // 5. RunCommandState — 2 fields (run_commands, run_command_bundles).
         //    Both maps empty in the fixture.
-        let run_command_state =
-            <RunCommandState as FromRef<AppState>>::from_ref(&state);
+        let run_command_state = <RunCommandState as FromRef<AppState>>::from_ref(&state);
         assert_eq!(run_command_state.run_commands.read().await.len(), 0);
-        assert_eq!(
-            run_command_state.run_command_bundles.read().await.len(),
-            0,
-        );
+        assert_eq!(run_command_state.run_command_bundles.read().await.len(), 0,);
     }
 }

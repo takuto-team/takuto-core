@@ -72,8 +72,7 @@ pub struct CredentialAuditRow {
 /// SQL shared by [`log`] and [`log_in_tx`]. The legacy form used
 /// SQLite's `strftime` default for the `at` column; we now bind a Rust-
 /// computed ISO-8601 string so the SQL works on every backend.
-const INSERT_SQL: &str =
-    "INSERT INTO credential_audit \
+const INSERT_SQL: &str = "INSERT INTO credential_audit \
      (user_id, actor_user_id, kind, provider, event, outcome, error_code, at) \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
@@ -119,7 +118,15 @@ pub async fn log(
     outcome: &str,
     error_code: Option<&str>,
 ) -> Result<()> {
-    let params = bind_log_params(user_id, actor_user_id, kind, provider, event, outcome, error_code);
+    let params = bind_log_params(
+        user_id,
+        actor_user_id,
+        kind,
+        provider,
+        event,
+        outcome,
+        error_code,
+    );
     adapter.execute(INSERT_SQL, params).await?;
     Ok(())
 }
@@ -143,7 +150,15 @@ pub async fn log_in_tx(
     outcome: &str,
     error_code: Option<&str>,
 ) -> Result<()> {
-    let params = bind_log_params(user_id, actor_user_id, kind, provider, event, outcome, error_code);
+    let params = bind_log_params(
+        user_id,
+        actor_user_id,
+        kind,
+        provider,
+        event,
+        outcome,
+        error_code,
+    );
     tx.execute(INSERT_SQL, params).await?;
     Ok(())
 }

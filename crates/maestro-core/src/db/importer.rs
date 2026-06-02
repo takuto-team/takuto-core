@@ -124,11 +124,7 @@ async fn mark_import_complete(
     // import_source_path (with the path as `value`). Both share the
     // `updated_at` column. Dialect-aware upsert tail keeps the call
     // sites identical across SQLite / Postgres / MySQL.
-    let tail = super::upsert::build_update_tail(
-        tx.backend(),
-        &["key"],
-        &["value", "updated_at"],
-    );
+    let tail = super::upsert::build_update_tail(tx.backend(), &["key"], &["value", "updated_at"]);
     let sql_complete = format!(
         "INSERT INTO system_metadata (key, value, updated_at) \
          VALUES ('import_complete', ?, ?) {tail}"
@@ -159,20 +155,56 @@ async fn mark_import_complete(
 /// the source has.
 const TABLES: &[(&str, &[&str])] = &[
     // Parents first.
-    ("users", &["id", "username", "role", "suspended", "created_at", "updated_at"]),
+    (
+        "users",
+        &[
+            "id",
+            "username",
+            "role",
+            "suspended",
+            "created_at",
+            "updated_at",
+        ],
+    ),
     (
         "repositories",
-        &["id", "name", "repo_url", "local_path", "default_branch", "created_at", "created_by"],
+        &[
+            "id",
+            "name",
+            "repo_url",
+            "local_path",
+            "default_branch",
+            "created_at",
+            "created_by",
+        ],
     ),
     // Children — all FK → users (and user_repositories also → repositories).
     (
         "credentials",
-        &["id", "user_id", "kind", "data", "label", "created_at", "last_used_at"],
+        &[
+            "id",
+            "user_id",
+            "kind",
+            "data",
+            "label",
+            "created_at",
+            "last_used_at",
+        ],
     ),
-    ("recovery_codes", &["id", "user_id", "code_hash", "used", "created_at"]),
+    (
+        "recovery_codes",
+        &["id", "user_id", "code_hash", "used", "created_at"],
+    ),
     (
         "sessions",
-        &["id", "user_id", "data", "expires_at", "last_seen_at", "created_at_unix"],
+        &[
+            "id",
+            "user_id",
+            "data",
+            "expires_at",
+            "last_seen_at",
+            "created_at_unix",
+        ],
     ),
     (
         "login_attempts",
@@ -181,41 +213,90 @@ const TABLES: &[(&str, &[&str])] = &[
     ),
     (
         "container_users",
-        &["id", "user_id", "container_id", "container_type", "os_username", "created_at", "destroyed_at"],
+        &[
+            "id",
+            "user_id",
+            "container_id",
+            "container_type",
+            "os_username",
+            "created_at",
+            "destroyed_at",
+        ],
     ),
     (
         "user_worktree_commands",
-        &["user_id", "workspace_name", "init_commands_json", "run_commands_json", "updated_at"],
+        &[
+            "user_id",
+            "workspace_name",
+            "init_commands_json",
+            "run_commands_json",
+            "updated_at",
+        ],
     ),
-    ("user_repositories", &["user_id", "repository_id", "added_at"]),
+    (
+        "user_repositories",
+        &["user_id", "repository_id", "added_at"],
+    ),
     (
         "user_provider_credentials",
         // No `id`.
         &[
-            "user_id", "provider", "kind", "ciphertext", "nonce", "wrapped_dek", "wnonce",
-            "metadata_json", "inactive", "last_validated_at", "last_used_at", "created_at",
-            "updated_at", "expires_at",
+            "user_id",
+            "provider",
+            "kind",
+            "ciphertext",
+            "nonce",
+            "wrapped_dek",
+            "wnonce",
+            "metadata_json",
+            "inactive",
+            "last_validated_at",
+            "last_used_at",
+            "created_at",
+            "updated_at",
+            "expires_at",
         ],
     ),
     (
         "user_github_credentials",
         &[
-            "user_id", "ciphertext", "nonce", "wrapped_dek", "wnonce", "github_login",
-            "scopes_json", "sign_commits", "last_validated_at", "created_at", "updated_at",
+            "user_id",
+            "ciphertext",
+            "nonce",
+            "wrapped_dek",
+            "wnonce",
+            "github_login",
+            "scopes_json",
+            "sign_commits",
+            "last_validated_at",
+            "created_at",
+            "updated_at",
         ],
     ),
     (
         "credential_audit",
         // No `id`.
         &[
-            "user_id", "actor_user_id", "kind", "provider", "event", "outcome", "error_code", "at",
+            "user_id",
+            "actor_user_id",
+            "kind",
+            "provider",
+            "event",
+            "outcome",
+            "error_code",
+            "at",
         ],
     ),
     (
         "onboarding_state",
         &[
-            "user_id", "step_1_ticketing", "step_2_provider", "step_3_github",
-            "step_4_credentials", "completed_at", "updated_at",
+            "user_id",
+            "step_1_ticketing",
+            "step_2_provider",
+            "step_3_github",
+            "step_4_credentials",
+            "completed_at",
+            "updated_at",
         ],
     ),
 ];
@@ -278,10 +359,11 @@ pub async fn import_from_sqlite(
 
 async fn open_source_read_only(path: &Path) -> Result<SqlitePool, ImporterError> {
     let url = format!("sqlite://{}?mode=ro", path.display());
-    let opts = SqliteConnectOptions::from_str(&url).map_err(|source| ImporterError::OpenSource {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let opts =
+        SqliteConnectOptions::from_str(&url).map_err(|source| ImporterError::OpenSource {
+            path: path.to_path_buf(),
+            source,
+        })?;
     // Single-connection pool — the importer is single-threaded against
     // the source. `connect_with` is eager so any open-time failure
     // surfaces here rather than mid-import.
@@ -348,13 +430,13 @@ async fn copy_table(
             columns.join(", "),
             placeholders.join(", ")
         );
-        tx.execute(&insert_sql, bind_values).await.map_err(|e| {
-            ImporterError::Write {
+        tx.execute(&insert_sql, bind_values)
+            .await
+            .map_err(|e| ImporterError::Write {
                 table,
                 row: count,
                 source: to_sqlx(e),
-            }
-        })?;
+            })?;
         count += 1;
     }
     Ok(count)
@@ -410,9 +492,9 @@ pub(crate) fn is_skippable_backend(backend: DbBackend) -> bool {
 mod tests {
     use super::*;
     use crate::db::Database;
+    use crate::db::DbAdapter;
     use crate::db::migrate;
     use crate::db::pool::{DbBackend, DbPool};
-    use crate::db::DbAdapter;
 
     #[test]
     fn skippable_backend_only_for_sqlite() {
@@ -473,25 +555,26 @@ mod tests {
         let src_db = Database::open(src_tmp.path(), true).expect("open source");
         let src_adapter = src_db.adapter();
         for username in ["alice", "bob"] {
-            crate::db::users::create_user(
-                src_adapter,
-                username,
-                crate::db::models::UserRole::User,
-            )
-            .await
-            .expect("seed user");
+            crate::db::users::create_user(src_adapter, username, crate::db::models::UserRole::User)
+                .await
+                .expect("seed user");
         }
 
         // Target: fresh in-memory adapter with all migrations applied.
         let (target_adapter, _anchor) = build_target_adapter();
-        migrate::apply_migrations(&target_adapter).await.expect("migrate target");
+        migrate::apply_migrations(&target_adapter)
+            .await
+            .expect("migrate target");
         assert!(!import_already_complete(&target_adapter).await.unwrap());
 
         // Run.
         let copied = import_from_sqlite(src_tmp.path(), &target_adapter)
             .await
             .expect("import must succeed");
-        assert!(copied >= 2, "expected at least 2 imported rows; got {copied}");
+        assert!(
+            copied >= 2,
+            "expected at least 2 imported rows; got {copied}"
+        );
 
         // Target now has the two users.
         let count = target_adapter
@@ -519,13 +602,10 @@ mod tests {
         let src_tmp = tempfile::tempdir().expect("src tempdir");
         let src_db = Database::open(src_tmp.path(), true).expect("open source");
         let src_adapter = src_db.adapter();
-        let user = crate::db::users::create_user(
-            src_adapter,
-            "alice",
-            crate::db::models::UserRole::User,
-        )
-        .await
-        .expect("seed user");
+        let user =
+            crate::db::users::create_user(src_adapter, "alice", crate::db::models::UserRole::User)
+                .await
+                .expect("seed user");
         // Seed a fake session row with a far-future expiry.
         src_adapter
             .execute(
@@ -541,7 +621,9 @@ mod tests {
             .expect("seed session");
 
         let (target_adapter, _anchor) = build_target_adapter();
-        migrate::apply_migrations(&target_adapter).await.expect("migrate target");
+        migrate::apply_migrations(&target_adapter)
+            .await
+            .expect("migrate target");
         import_from_sqlite(src_tmp.path(), &target_adapter)
             .await
             .expect("import");

@@ -34,8 +34,7 @@ pub(crate) struct WorkflowTransitions {
     pub(crate) workflows_dir: PathBuf,
     pub(crate) db: Option<Database>,
     /// Resolver for pin + bundle build on resume-after-pause.
-    pub(crate) git_auth_resolver:
-        Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    pub(crate) git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
     /// GhClient for at-resume PAT revalidation.
     pub(crate) gh_client: Option<Arc<dyn crate::auth::GhClient>>,
 }
@@ -90,11 +89,12 @@ impl WorkflowTransitions {
         ) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
-            let workflow = workflows
-                .get_mut(ticket_key)
-                .ok_or_else(|| ConfigError::WorkflowNotFound {
-                    ticket_key: ticket_key.to_string(),
-                })?;
+            let workflow =
+                workflows
+                    .get_mut(ticket_key)
+                    .ok_or_else(|| ConfigError::WorkflowNotFound {
+                        ticket_key: ticket_key.to_string(),
+                    })?;
 
             if !workflow.state.is_active() {
                 return Err(ConfigError::InvalidWorkflowState {
@@ -167,11 +167,12 @@ impl WorkflowTransitions {
         let (running_defs, worktree_path, cancel_token, shadow_state, resume_session_id) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
-            let workflow = workflows
-                .get_mut(ticket_key)
-                .ok_or_else(|| ConfigError::WorkflowNotFound {
-                    ticket_key: ticket_key.to_string(),
-                })?;
+            let workflow =
+                workflows
+                    .get_mut(ticket_key)
+                    .ok_or_else(|| ConfigError::WorkflowNotFound {
+                        ticket_key: ticket_key.to_string(),
+                    })?;
 
             if let WorkflowState::Paused { source_state } = &workflow.state {
                 let restored = *source_state.clone();
@@ -303,8 +304,7 @@ impl WorkflowTransitions {
                         })
                     };
                     if let Some(uid) = pin_uid {
-                        let r_clone: Arc<crate::github::auth_resolver::GitAuthResolver> =
-                            r.clone();
+                        let r_clone: Arc<crate::github::auth_resolver::GitAuthResolver> = r.clone();
                         let gh_clone: Arc<dyn crate::auth::GhClient> = gh.clone();
                         let event_tx = engine_event_tx.clone();
                         let ticket_for_event = ticket_key.to_string();
@@ -342,7 +342,21 @@ impl WorkflowTransitions {
                 };
                 tokio::spawn(async move {
                     super::driver::drive_workflow_def(
-                        ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su, db,
+                        ticket,
+                        def_owned,
+                        steps,
+                        wt,
+                        ts,
+                        td,
+                        tt,
+                        ec,
+                        ew,
+                        ea,
+                        et,
+                        ct,
+                        as_,
+                        su,
+                        db,
                         resolver,
                         Some(resume_ctx),
                     )
@@ -360,11 +374,12 @@ impl WorkflowTransitions {
         let (ticket_key_owned, workflow_id, owner_user_id, updated_at) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
-            let workflow = workflows
-                .get_mut(ticket_key)
-                .ok_or_else(|| ConfigError::WorkflowNotFound {
-                    ticket_key: ticket_key.to_string(),
-                })?;
+            let workflow =
+                workflows
+                    .get_mut(ticket_key)
+                    .ok_or_else(|| ConfigError::WorkflowNotFound {
+                        ticket_key: ticket_key.to_string(),
+                    })?;
 
             workflow.cancel_token.cancel();
             workflow.current_step_label = None;
@@ -445,11 +460,12 @@ impl WorkflowTransitions {
         let (ticket_summary, ticket_description, ticket_url, user_id, repository_id) = {
             let wf_arc = self.repository.inner_arc();
             let workflows = wf_arc.read().await;
-            let workflow = workflows
-                .get(ticket_key)
-                .ok_or_else(|| ConfigError::WorkflowNotFound {
-                    ticket_key: ticket_key.to_string(),
-                })?;
+            let workflow =
+                workflows
+                    .get(ticket_key)
+                    .ok_or_else(|| ConfigError::WorkflowNotFound {
+                        ticket_key: ticket_key.to_string(),
+                    })?;
 
             if !workflow.state.is_terminal() {
                 return Err(ConfigError::InvalidWorkflowState {
@@ -503,11 +519,12 @@ impl WorkflowTransitions {
         let (error_defs, shadow) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
-            let workflow = workflows
-                .get_mut(ticket_key)
-                .ok_or_else(|| ConfigError::WorkflowNotFound {
-                    ticket_key: ticket_key.to_string(),
-                })?;
+            let workflow =
+                workflows
+                    .get_mut(ticket_key)
+                    .ok_or_else(|| ConfigError::WorkflowNotFound {
+                        ticket_key: ticket_key.to_string(),
+                    })?;
 
             // Require Error or Stopped state at the workflow level.
             if !matches!(

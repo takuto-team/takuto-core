@@ -77,9 +77,7 @@ pub async fn change_password(
     // create_db_session is a separate adapter call.
     let adapter = db.adapter();
     let result: maestro_core::error::Result<(String, String)> = async {
-        if !maestro_core::db::credentials::verify_user_password(adapter, &uid, &current_pw)
-            .await?
-        {
+        if !maestro_core::db::credentials::verify_user_password(adapter, &uid, &current_pw).await? {
             return Err(AuthError::CurrentPasswordIncorrect.into());
         }
         let mut tx = adapter.begin().await?;
@@ -203,11 +201,10 @@ pub async fn recover(
     // threshold and window match the password path, but the counter is
     // keyed by `AttemptKind::Recovery` so a brute-force on recovery codes
     // doesn't slip past the password counter and vice versa.
-    let user_lookup =
-        maestro_core::db::users::get_user_by_username(db.adapter(), &body.username)
-            .await
-            .ok()
-            .flatten();
+    let user_lookup = maestro_core::db::users::get_user_by_username(db.adapter(), &body.username)
+        .await
+        .ok()
+        .flatten();
     // Unknown user → generic 401 without recording an attempt (lockout
     // DoS would otherwise be free for any attacker who can guess a
     // username pattern).
@@ -228,9 +225,14 @@ pub async fn recover(
 
     // Lockout check for the recovery counter.
     let adapter = db.adapter();
-    let count = failed_count_in_window(adapter, &user.id, AttemptKind::Recovery, LOCKOUT_WINDOW_SECS)
-        .await
-        .unwrap_or(0);
+    let count = failed_count_in_window(
+        adapter,
+        &user.id,
+        AttemptKind::Recovery,
+        LOCKOUT_WINDOW_SECS,
+    )
+    .await
+    .unwrap_or(0);
     let lockout = if count >= LOCKOUT_THRESHOLD {
         let oldest = oldest_failure_ts_in_window(
             adapter,

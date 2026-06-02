@@ -32,8 +32,7 @@ pub(crate) struct WorkflowPersistence {
     pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
     pub(crate) actions: Arc<dyn ExternalActions>,
     /// Resolver for pin + bundle build on snapshot-restore.
-    pub(crate) git_auth_resolver:
-        Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    pub(crate) git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
     /// GhClient for at-restore PAT revalidation. Defaults to
     /// `None`; set by `WorkflowEngine::with_gh_client` (so tests can inject
     /// a mock without going through the real `gh` binary).
@@ -70,7 +69,6 @@ impl WorkflowPersistence {
         self.gh_client = Some(gh);
     }
 
-
     /// Periodic snapshot sync during normal operation (called by background task).
     pub async fn sync(&self) -> Result<()> {
         self.sync_from_map().await
@@ -92,8 +90,8 @@ impl WorkflowPersistence {
             let c = self.config.read().await;
             PathBuf::from(&c.git.repo_path)
         };
-        let data_dir = resolve_data_dir()
-            .unwrap_or_else(|| snapshot::resolve_snapshot_dir(&legacy_repo_path));
+        let data_dir =
+            resolve_data_dir().unwrap_or_else(|| snapshot::resolve_snapshot_dir(&legacy_repo_path));
 
         info!(
             data_dir = %data_dir.display(),
@@ -303,9 +301,8 @@ impl WorkflowPersistence {
                                 })
                             };
                             if let Some(uid) = pin_info {
-                                let r_clone: Arc<
-                                    crate::github::auth_resolver::GitAuthResolver,
-                                > = r.clone();
+                                let r_clone: Arc<crate::github::auth_resolver::GitAuthResolver> =
+                                    r.clone();
                                 let gh_clone: Arc<dyn crate::auth::GhClient> = gh.clone();
                                 let event_tx = engine_event_tx.clone();
                                 let ticket_for_event = ticket_key.clone();
@@ -315,17 +312,15 @@ impl WorkflowPersistence {
                                         .await
                                     {
                                         let (code, message) =
-                                            crate::github::auth_resolver::auth_warning_payload(
-                                                &e,
-                                            );
+                                            crate::github::auth_resolver::auth_warning_payload(&e);
                                         tracing::warn!(
                                             ticket = %ticket_for_event,
                                             user_id = %uid,
                                             code = code,
                                             "PAT revalidation failed at restore — emitting AuthWarning"
                                         );
-                                        let _ = event_tx.send(
-                                            crate::workflow::engine::WorkflowEvent {
+                                        let _ =
+                                            event_tx.send(crate::workflow::engine::WorkflowEvent {
                                                 event_type: "auth_warning".to_string(),
                                                 ticket_key: ticket_for_event,
                                                 timestamp: chrono::Utc::now(),
@@ -333,8 +328,7 @@ impl WorkflowPersistence {
                                                 auth_warning_code: Some(code.to_string()),
                                                 auth_warning_message: Some(message),
                                                 ..Default::default()
-                                            },
-                                        );
+                                            });
                                     }
                                 });
                             }

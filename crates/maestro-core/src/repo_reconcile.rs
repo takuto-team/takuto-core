@@ -143,8 +143,7 @@ pub async fn backfill_user_repositories_from_snapshots(
         if rec.workspace_name.is_empty() {
             continue;
         }
-        let Some(repo) = crate::db::repositories::get_by_name(adapter, &rec.workspace_name)
-            .await?
+        let Some(repo) = crate::db::repositories::get_by_name(adapter, &rec.workspace_name).await?
         else {
             // The workflow points at a workspace_name we couldn't reconcile to
             // a registered repository — skip silently. The workflow will be

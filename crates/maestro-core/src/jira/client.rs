@@ -423,8 +423,8 @@ impl JiraClient {
 
 fn parse_ticket_list(json_str: &str, default_type: &str) -> Result<Vec<JiraTicket>> {
     // acli returns a JSON array of work items directly
-    let issues: Vec<serde_json::Value> =
-        serde_json::from_str(json_str).map_err(|source| JiraError::ParseTicketListJson { source })?;
+    let issues: Vec<serde_json::Value> = serde_json::from_str(json_str)
+        .map_err(|source| JiraError::ParseTicketListJson { source })?;
 
     let mut tickets = Vec::new();
     for issue in &issues {
@@ -469,8 +469,8 @@ fn dedupe_tickets_preserve_order(tickets: &mut Vec<JiraTicket>) {
 }
 
 fn parse_ticket_detail(json_str: &str) -> Result<JiraTicket> {
-    let value: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|source| JiraError::ParseTicketDetailJson { source })?;
+    let value: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|source| JiraError::ParseTicketDetailJson { source })?;
 
     let fields = value.get("fields").unwrap_or(&value);
 
@@ -591,8 +591,8 @@ fn extract_linked_keys(json_str: &str) -> Vec<(String, String)> {
 }
 
 fn parse_linked_item(json_str: &str) -> Result<LinkedItem> {
-    let value: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|source| JiraError::ParseLinkedItemJson { source })?;
+    let value: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|source| JiraError::ParseLinkedItemJson { source })?;
 
     let fields = value.get("fields").unwrap_or(&value);
 

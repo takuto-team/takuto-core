@@ -19,8 +19,7 @@ use super::opencode_config::write_opencode_config;
 use super::tempdir::secrets_dir_for_db;
 use super::types::{SECRET_FILE_GH, WorkerSecretsBundle};
 use super::unseal::{
-    non_empty, unseal_claude_session, unseal_provider_credential,
-    unseal_provider_plaintext_bytes,
+    non_empty, unseal_claude_session, unseal_provider_credential, unseal_provider_plaintext_bytes,
 };
 use super::write_secret::write_secret_file;
 
@@ -98,9 +97,7 @@ pub async fn build(
     // the init-shim below. We still surface it on the bundle for
     // observability (Debug, logging), but `extra_env` will not carry it.
     let base_url = match provider {
-        AiAgentProvider::Claude => {
-            non_empty(&config.agent.providers.claude.base_url)
-        }
+        AiAgentProvider::Claude => non_empty(&config.agent.providers.claude.base_url),
         AiAgentProvider::Cursor => None, // Amendment A1: Cursor has no base_url.
         AiAgentProvider::Codex => non_empty(&config.agent.providers.codex.base_url),
         AiAgentProvider::OpenCode => non_empty(&config.agent.providers.opencode.base_url),
@@ -129,14 +126,9 @@ pub async fn build(
 
         // Unseal the user's bearer to plaintext bytes (no on-disk secret
         // file — the bearer is embedded in opencode.json directly).
-        let bearer = unseal_provider_plaintext_bytes(
-            config,
-            db,
-            &master_key,
-            auth_pin,
-            workflow_user_id,
-        )
-        .await?;
+        let bearer =
+            unseal_provider_plaintext_bytes(config, db, &master_key, auth_pin, workflow_user_id)
+                .await?;
 
         let cfg_dir = dir.path().join(OPENCODE_CONFIG_SUBDIR);
         std::fs::create_dir(&cfg_dir).map_err(|e| ConfigError::BundleSecretFile {
@@ -297,12 +289,12 @@ pub async fn pin_for_workflow(
                 op: "provider_credentials::find_active",
                 detail: e.to_string(),
             })?;
-        let g = github_credentials::find(adapter, workflow_user_id).await.map_err(|e| {
-            ConfigError::BundleDbLookup {
+        let g = github_credentials::find(adapter, workflow_user_id)
+            .await
+            .map_err(|e| ConfigError::BundleDbLookup {
                 op: "github_credentials::find",
                 detail: e.to_string(),
-            }
-        })?;
+            })?;
         let github_mode = if g.is_some() {
             TokenSource::UserPat.as_str().to_string()
         } else {

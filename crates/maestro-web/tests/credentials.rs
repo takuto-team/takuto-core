@@ -98,8 +98,7 @@ fn break_master_key(state: &mut AppState) {
     let dir = std::env::temp_dir().join(format!("maestro-cred-degraded-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     state.auth_mut().db = Some(
-        maestro_core::db::Database::open(&dir, false)
-            .expect("open DB with auto-gen disabled"),
+        maestro_core::db::Database::open(&dir, false).expect("open DB with auto-gen disabled"),
     );
 }
 
@@ -386,11 +385,13 @@ async fn valid_pat_seal_upsert_and_returns_login_scopes_attribute_commits() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["login"], "alice-gh");
-    assert!(json["scopes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|v| v.as_str() == Some("repo")));
+    assert!(
+        json["scopes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some("repo"))
+    );
     assert_eq!(json["attribute_commits"], false);
 
     let post = audit_row_count(&state).await;
@@ -1313,8 +1314,7 @@ async fn t_jq_merge_001_session_overlay_preserves_existing_keys() {
         .output()
         .expect("jq must run");
     assert!(out.status.success(), "jq failed: {:?}", out.stderr);
-    let merged: serde_json::Value =
-        serde_json::from_slice(&out.stdout).expect("jq output is JSON");
+    let merged: serde_json::Value = serde_json::from_slice(&out.stdout).expect("jq output is JSON");
 
     // Existing top-level keys absent from the bundle MUST survive.
     assert_eq!(
@@ -1380,8 +1380,7 @@ async fn t_jq_merge_002_partial_paste_keeps_other_fields_intact() {
         ])
         .output()
         .expect("jq must run");
-    let merged: serde_json::Value =
-        serde_json::from_slice(&out.stdout).expect("jq output is JSON");
+    let merged: serde_json::Value = serde_json::from_slice(&out.stdout).expect("jq output is JSON");
 
     // Every left-hand key survives.
     assert_eq!(merged["hasCompletedOnboarding"], true);

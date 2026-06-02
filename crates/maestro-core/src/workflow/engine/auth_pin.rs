@@ -31,7 +31,11 @@ pub(super) async fn ensure_workflow_auth_pin(
     // Fast path: pin already set.
     {
         let wf = workflows.read().await;
-        if wf.get(ticket_key).and_then(|w| w.auth_pin.as_ref()).is_some() {
+        if wf
+            .get(ticket_key)
+            .and_then(|w| w.auth_pin.as_ref())
+            .is_some()
+        {
             return Ok(());
         }
     }

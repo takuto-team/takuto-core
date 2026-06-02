@@ -118,8 +118,7 @@ async fn run_opencode_session(
         ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
     } else {
         ProcessHandle::spawn("opencode", &arg_refs, worktree, cancel_token).await
-    }
-    ?;
+    }?;
 
     let result = if let Some(tx) = line_tx {
         handle.wait_with_streaming_timeout(timeout_secs, tx).await

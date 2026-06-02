@@ -28,12 +28,7 @@ pub trait ExternalActions: Send + Sync {
     // implementor no longer reads `self.repo_path()` (a global config
     // getter that was dropped); callers resolve the repository's
     // `local_path` from the workflow's `repository_id` and thread it in.
-    async fn create_worktree(
-        &self,
-        repo_path: &Path,
-        branch: &str,
-        base: &str,
-    ) -> Result<PathBuf>;
+    async fn create_worktree(&self, repo_path: &Path, branch: &str, base: &str) -> Result<PathBuf>;
     async fn remove_worktree(&self, repo_path: &Path, worktree_path: &Path) -> Result<()>;
     /// Best-effort **`git branch -D`** in the main repo after worktree removal (no-op if `branch` is empty or already gone).
     async fn delete_local_branch(&self, repo_path: &Path, branch: &str) -> Result<()>;

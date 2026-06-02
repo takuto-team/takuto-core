@@ -571,9 +571,7 @@ pub async fn get_work_item_by_ticket_key(
     adapter: &DbAdapter,
     ticket_key: &str,
 ) -> Result<Option<WorkItemRow>> {
-    let sql = format!(
-        "{SELECT_WORK_ITEM} WHERE ticket_key = ? ORDER BY started_at DESC LIMIT 1"
-    );
+    let sql = format!("{SELECT_WORK_ITEM} WHERE ticket_key = ? ORDER BY started_at DESC LIMIT 1");
     let row = adapter
         .query_optional(&sql, vec![DbValue::Text(ticket_key.to_string())])
         .await?;
@@ -593,7 +591,12 @@ pub async fn get_work_item(
         .await?;
     let Some(row) = row else { return Ok(None) };
     let item = decode_work_item(&row)?;
-    if !caller_can_see(&item, caller_user_id, caller_is_admin, /* include_team_visible= */ false) {
+    if !caller_can_see(
+        &item,
+        caller_user_id,
+        caller_is_admin,
+        /* include_team_visible= */ false,
+    ) {
         return Ok(None);
     }
     Ok(Some(item))
@@ -1101,10 +1104,7 @@ pub async fn list_definition_runs(
 /// the whole batch and the caller can retry.
 ///
 /// Empty batches are a no-op (no transaction overhead).
-pub async fn append_log_lines(
-    adapter: &DbAdapter,
-    batch: &[LogLineInsert],
-) -> Result<()> {
+pub async fn append_log_lines(adapter: &DbAdapter, batch: &[LogLineInsert]) -> Result<()> {
     if batch.is_empty() {
         return Ok(());
     }
@@ -1708,7 +1708,9 @@ mod tests {
         insert_work_item(&a, &row).await.unwrap();
 
         // Bob can't see Alice's item even though it exists.
-        let fetched = get_work_item(&a, "wi-1", Some("u-bob"), false).await.unwrap();
+        let fetched = get_work_item(&a, "wi-1", Some("u-bob"), false)
+            .await
+            .unwrap();
         assert!(fetched.is_none());
 
         // Admin can.
@@ -1726,7 +1728,10 @@ mod tests {
         let err = insert_work_item(&a, &sample_row("wi-2", "PROJ-1", Some("u-alice")))
             .await
             .err();
-        assert!(err.is_some(), "second insert with same (workspace, ticket) must fail UNIQUE");
+        assert!(
+            err.is_some(),
+            "second insert with same (workspace, ticket) must fail UNIQUE"
+        );
     }
 
     #[tokio::test]
@@ -1885,16 +1890,32 @@ mod tests {
         )
         .await
         .unwrap();
-        update_pr_url(&a, "wi-1", Some("https://github.com/o/r/pull/42"), 1_700_000_600)
+        update_pr_url(
+            &a,
+            "wi-1",
+            Some("https://github.com/o/r/pull/42"),
+            1_700_000_600,
+        )
+        .await
+        .unwrap();
+        update_pr_merged(&a, "wi-1", true, 1_700_000_700)
             .await
             .unwrap();
-        update_pr_merged(&a, "wi-1", true, 1_700_000_700).await.unwrap();
 
-        let fetched = get_work_item(&a, "wi-1", None, true).await.unwrap().unwrap();
+        let fetched = get_work_item(&a, "wi-1", None, true)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(fetched.state_kind, WorkItemStateKind::AddressingTicket);
         assert_eq!(fetched.state_payload.as_deref(), Some(r#"{"pass":2}"#));
-        assert_eq!(fetched.current_step_label.as_deref(), Some("Implement ticket (cycle 2/3)"));
-        assert_eq!(fetched.pr_url.as_deref(), Some("https://github.com/o/r/pull/42"));
+        assert_eq!(
+            fetched.current_step_label.as_deref(),
+            Some("Implement ticket (cycle 2/3)")
+        );
+        assert_eq!(
+            fetched.pr_url.as_deref(),
+            Some("https://github.com/o/r/pull/42")
+        );
         assert!(fetched.pr_merged);
         assert_eq!(fetched.updated_at, 1_700_000_700);
     }
@@ -1908,7 +1929,9 @@ mod tests {
             .unwrap();
 
         // Seed one row in each child table.
-        let step_id = record_step_start(&a, "wi-1", "step-1", None, 100).await.unwrap();
+        let step_id = record_step_start(&a, "wi-1", "step-1", None, 100)
+            .await
+            .unwrap();
         upsert_definition_run(
             &a,
             "wi-1",
@@ -1951,7 +1974,12 @@ mod tests {
 
         // Now delete the parent.
         delete_work_item(&a, "wi-1").await.unwrap();
-        assert!(get_work_item(&a, "wi-1", None, true).await.unwrap().is_none());
+        assert!(
+            get_work_item(&a, "wi-1", None, true)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         // Every child table is empty for this id.
         assert!(list_steps(&a, "wi-1").await.unwrap().is_empty());
@@ -2088,20 +2116,41 @@ mod tests {
 
         // Seed 3 mappings of different kinds.
         upsert_port_mapping(
-            &a, "wi-pm", 9100, 9100, "/s/tok-edit/", "tok-edit",
-            PortMappingKind::Editor, None, 100,
+            &a,
+            "wi-pm",
+            9100,
+            9100,
+            "/s/tok-edit/",
+            "tok-edit",
+            PortMappingKind::Editor,
+            None,
+            100,
         )
         .await
         .unwrap();
         upsert_port_mapping(
-            &a, "wi-pm", 3000, 19100, "/s/tok-app/", "tok-app",
-            PortMappingKind::Dynamic, None, 110,
+            &a,
+            "wi-pm",
+            3000,
+            19100,
+            "/s/tok-app/",
+            "tok-app",
+            PortMappingKind::Dynamic,
+            None,
+            110,
         )
         .await
         .unwrap();
         upsert_port_mapping(
-            &a, "wi-pm", 5173, 19101, "/s/tok-rc/", "tok-rc",
-            PortMappingKind::RunCommand, Some(0), 120,
+            &a,
+            "wi-pm",
+            5173,
+            19101,
+            "/s/tok-rc/",
+            "tok-rc",
+            PortMappingKind::RunCommand,
+            Some(0),
+            120,
         )
         .await
         .unwrap();
@@ -2112,8 +2161,15 @@ mod tests {
             .await
             .unwrap();
         upsert_port_mapping(
-            &a, "wi-other", 9100, 9100, "/s/keep/", "keep",
-            PortMappingKind::Editor, None, 130,
+            &a,
+            "wi-other",
+            9100,
+            9100,
+            "/s/keep/",
+            "keep",
+            PortMappingKind::Editor,
+            None,
+            130,
         )
         .await
         .unwrap();
@@ -2144,7 +2200,9 @@ mod tests {
             .await
             .unwrap();
 
-        finish_run_command_row(&a, "wi-orphan", 0, 42).await.unwrap();
+        finish_run_command_row(&a, "wi-orphan", 0, 42)
+            .await
+            .unwrap();
 
         assert!(
             list_run_commands(&a, "wi-orphan").await.unwrap().is_empty(),
@@ -2183,7 +2241,9 @@ mod tests {
             .await
             .unwrap();
 
-        let id1 = record_step_start(&a, "wi-1", "bootstrap", None, 100).await.unwrap();
+        let id1 = record_step_start(&a, "wi-1", "bootstrap", None, 100)
+            .await
+            .unwrap();
         let id2 = record_step_start(&a, "wi-1", "implement", Some("implement.toml"), 200)
             .await
             .unwrap();
@@ -2209,10 +2269,19 @@ mod tests {
         insert_work_item(&a, &sample_row("wi-1", "PROJ-1", Some("u-alice")))
             .await
             .unwrap();
-        let step_id = record_step_start(&a, "wi-1", "compile", None, 100).await.unwrap();
-        record_step_end(&a, step_id, StepStatus::Failed, Some(2), Some("rustc err"), 500)
+        let step_id = record_step_start(&a, "wi-1", "compile", None, 100)
             .await
             .unwrap();
+        record_step_end(
+            &a,
+            step_id,
+            StepStatus::Failed,
+            Some(2),
+            Some("rustc err"),
+            500,
+        )
+        .await
+        .unwrap();
         let steps = list_steps(&a, "wi-1").await.unwrap();
         assert_eq!(steps[0].status, StepStatus::Failed);
         assert_eq!(steps[0].exit_code, Some(2));
@@ -2268,7 +2337,9 @@ mod tests {
         insert_work_item(&a, &sample_row("wi-1", "PROJ-1", Some("u-alice")))
             .await
             .unwrap();
-        let step_id = record_step_start(&a, "wi-1", "compile", None, 100).await.unwrap();
+        let step_id = record_step_start(&a, "wi-1", "compile", None, 100)
+            .await
+            .unwrap();
 
         let mut batch = Vec::new();
         for i in 0..10 {
@@ -2352,7 +2423,9 @@ mod tests {
         .unwrap();
         let purged = purge_log_lines_older_than(&a, 500).await.unwrap();
         assert_eq!(purged, 1);
-        let remaining = fetch_log_lines(&a, "wi-1", LogPaging::default()).await.unwrap();
+        let remaining = fetch_log_lines(&a, "wi-1", LogPaging::default())
+            .await
+            .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].content, "new");
     }
@@ -2393,7 +2466,11 @@ mod tests {
         .await
         .unwrap();
         let mappings = list_port_mappings(&a, "wi-1").await.unwrap();
-        assert_eq!(mappings.len(), 1, "second upsert must REPLACE not duplicate");
+        assert_eq!(
+            mappings.len(),
+            1,
+            "second upsert must REPLACE not duplicate"
+        );
         assert_eq!(mappings[0].host_port, 18099);
         assert_eq!(mappings[0].path_token, "tok-2");
     }
@@ -2407,16 +2484,34 @@ mod tests {
             .unwrap();
         // Two kinds on the same container port — independent mappings.
         upsert_port_mapping(
-            &a, "wi-1", 8080, 18080, "u-editor", "tok-e", PortMappingKind::Editor, None, 100,
+            &a,
+            "wi-1",
+            8080,
+            18080,
+            "u-editor",
+            "tok-e",
+            PortMappingKind::Editor,
+            None,
+            100,
         )
         .await
         .unwrap();
         upsert_port_mapping(
-            &a, "wi-1", 8080, 28080, "u-terminal", "tok-t", PortMappingKind::Terminal, None, 100,
+            &a,
+            "wi-1",
+            8080,
+            28080,
+            "u-terminal",
+            "tok-t",
+            PortMappingKind::Terminal,
+            None,
+            100,
         )
         .await
         .unwrap();
-        delete_port_mapping(&a, "wi-1", 8080, PortMappingKind::Editor).await.unwrap();
+        delete_port_mapping(&a, "wi-1", 8080, PortMappingKind::Editor)
+            .await
+            .unwrap();
         let remaining = list_port_mappings(&a, "wi-1").await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].kind, PortMappingKind::Terminal);
@@ -2429,12 +2524,30 @@ mod tests {
         insert_work_item(&a, &sample_row("wi-1", "PROJ-1", Some("u-alice")))
             .await
             .unwrap();
-        upsert_run_command(&a, "wi-1", 0, "make test", true, Some("c-1"), Some(100), None)
-            .await
-            .unwrap();
-        upsert_run_command(&a, "wi-1", 0, "make test", false, Some("c-1"), Some(100), Some(500))
-            .await
-            .unwrap();
+        upsert_run_command(
+            &a,
+            "wi-1",
+            0,
+            "make test",
+            true,
+            Some("c-1"),
+            Some(100),
+            None,
+        )
+        .await
+        .unwrap();
+        upsert_run_command(
+            &a,
+            "wi-1",
+            0,
+            "make test",
+            false,
+            Some("c-1"),
+            Some(100),
+            Some(500),
+        )
+        .await
+        .unwrap();
         let rcs = list_run_commands(&a, "wi-1").await.unwrap();
         assert_eq!(rcs.len(), 1);
         assert!(!rcs[0].running);

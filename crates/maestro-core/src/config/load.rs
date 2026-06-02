@@ -128,7 +128,9 @@ impl Config {
                 return Err(ConfigError::Validation {
                     section: "jira",
                     field: "project_keys",
-                    detail: format!("invalid key '{key}': must be non-empty uppercase alphanumeric"),
+                    detail: format!(
+                        "invalid key '{key}': must be non-empty uppercase alphanumeric"
+                    ),
                 }
                 .into());
             }
@@ -219,8 +221,9 @@ impl Config {
             return Err(ConfigError::Validation {
                 section: "agent",
                 field: "providers.cursor.cli",
-                detail: "must be set (or legacy agent.cursor_cli) when agent.provider is \"cursor\""
-                    .to_string(),
+                detail:
+                    "must be set (or legacy agent.cursor_cli) when agent.provider is \"cursor\""
+                        .to_string(),
             }
             .into());
         }
@@ -257,7 +260,8 @@ impl Config {
                     field: "base_url",
                     detail: "opencode_base_url_required: set the OpenAI-compatible \
                              endpoint URL for your self-hosted model server \
-                             (e.g. http://lm-studio:1234/v1)".to_string(),
+                             (e.g. http://lm-studio:1234/v1)"
+                        .to_string(),
                 }
                 .into());
             }
@@ -266,7 +270,8 @@ impl Config {
                     section: "agent.providers.opencode",
                     field: "model",
                     detail: "opencode_model_required: set the model id served by \
-                             your endpoint (e.g. lmstudio/qwen3-coder)".to_string(),
+                             your endpoint (e.g. lmstudio/qwen3-coder)"
+                        .to_string(),
                 }
                 .into());
             }
@@ -283,12 +288,10 @@ impl Config {
 
         // available_providers entries must be parseable provider identifiers.
         for p in &self.agent.available_providers {
-            AiAgentProvider::parse(p).map_err(|e| {
-                ConfigError::Validation {
-                    section: "agent",
-                    field: "available_providers",
-                    detail: e.to_string(),
-                }
+            AiAgentProvider::parse(p).map_err(|e| ConfigError::Validation {
+                section: "agent",
+                field: "available_providers",
+                detail: e.to_string(),
             })?;
         }
 
@@ -337,7 +340,8 @@ impl Config {
                 return Err(ConfigError::Validation {
                     section: "github",
                     field: "app_private_key/app_private_key_path",
-                    detail: "set either app_private_key or app_private_key_path, not both".to_string(),
+                    detail: "set either app_private_key or app_private_key_path, not both"
+                        .to_string(),
                 }
                 .into());
             }
@@ -347,8 +351,7 @@ impl Config {
     }
 
     pub fn to_toml_string(&self) -> Result<String> {
-        toml::to_string_pretty(self)
-            .map_err(|source| ConfigError::SerializeToml { source }.into())
+        toml::to_string_pretty(self).map_err(|source| ConfigError::SerializeToml { source }.into())
     }
 
     /// Copy for JSON API responses: strips secrets (never expose via `GET /api/config`).

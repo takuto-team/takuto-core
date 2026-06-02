@@ -15,7 +15,9 @@ mod status;
 
 pub use login::{LoginBody, login, logout};
 pub use me::me;
-pub use password::{ChangePasswordBody, RecoverBody, change_password, recover, regenerate_recovery_codes};
+pub use password::{
+    ChangePasswordBody, RecoverBody, change_password, recover, regenerate_recovery_codes,
+};
 pub use register::{RegisterBody, register};
 pub use status::{AuthStatus, auth_status};
 

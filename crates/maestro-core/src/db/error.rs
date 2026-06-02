@@ -154,7 +154,10 @@ mod tests {
         );
 
         let vanished = DbError::RowDisappearedAfterUpsert;
-        assert_eq!(format!("{}", vanished), "row was just upserted but vanished");
+        assert_eq!(
+            format!("{}", vanished),
+            "row was just upserted but vanished"
+        );
     }
 
     #[test]

@@ -62,10 +62,7 @@ async fn resolver_returns_init_commands_from_owner_row() {
         db.adapter(),
         &alice,
         "frontend",
-        &[
-            "echo from-row-1".to_string(),
-            "echo from-row-2".to_string(),
-        ],
+        &["echo from-row-1".to_string(), "echo from-row-2".to_string()],
         &[],
     )
     .await
@@ -75,10 +72,7 @@ async fn resolver_returns_init_commands_from_owner_row() {
 
     assert_eq!(
         resolved,
-        vec![
-            "echo from-row-1".to_string(),
-            "echo from-row-2".to_string(),
-        ],
+        vec!["echo from-row-1".to_string(), "echo from-row-2".to_string(),],
         "the resolver must return the owner's init_commands verbatim"
     );
 }
@@ -148,8 +142,7 @@ async fn resolver_isolates_owners() {
     .await
     .expect("upsert bob");
 
-    let for_alice =
-        resolve_worktree_init_commands(Some(&alice), "frontend", Some(&db)).await;
+    let for_alice = resolve_worktree_init_commands(Some(&alice), "frontend", Some(&db)).await;
     let for_bob = resolve_worktree_init_commands(Some(&bob), "frontend", Some(&db)).await;
 
     assert_eq!(for_alice, vec!["echo alice".to_string()]);

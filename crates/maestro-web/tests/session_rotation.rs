@@ -258,7 +258,8 @@ async fn sliding_extend_only_when_threshold_crossed() {
         after_long.0
     );
     // The new expires_at should also reflect the slide: roughly t0 + 6min + idle_ttl.
-    let expected_exp = t0 + (SESSION_EXTEND_THRESHOLD_SECS as i64) + 60 + SESSION_IDLE_TTL_SECS as i64;
+    let expected_exp =
+        t0 + (SESSION_EXTEND_THRESHOLD_SECS as i64) + 60 + SESSION_IDLE_TTL_SECS as i64;
     let parsed = chrono::DateTime::parse_from_rfc3339(&after_long.1)
         .unwrap()
         .timestamp();

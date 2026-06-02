@@ -79,8 +79,8 @@ pub async fn register(
         .await?;
         let mut tx = adapter.begin().await?;
         maestro_core::db::credentials::store_password(&mut tx, &user.id, &password).await?;
-        let codes = maestro_core::db::credentials::generate_recovery_codes(&mut tx, &user.id, 8)
-            .await?;
+        let codes =
+            maestro_core::db::credentials::generate_recovery_codes(&mut tx, &user.id, 8).await?;
         tx.commit().await?;
         Ok(RegisterResponse {
             user_id: user.id,
