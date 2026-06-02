@@ -292,11 +292,14 @@ jobs:
         uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: ~/.cargo/bin/cargo-deny
-          key: ${{ runner.os }}-cargo-deny-0.16
+          key: ${{ runner.os }}-cargo-deny-0.19.8
 
+      # 0.19+ pulls in a rustsec crate that understands CVSS 4.0
+      # (used by RUSTSEC-2026-0035 and later advisories). 0.16.x
+      # failed to parse the advisory db on every run.
       - name: Install cargo-deny
         if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
-        run: cargo install cargo-deny --locked --version 0.16.4
+        run: cargo install cargo-deny --locked --version 0.19.8
 
       - name: cargo-deny check
         run: cargo deny check advisories bans licenses sources

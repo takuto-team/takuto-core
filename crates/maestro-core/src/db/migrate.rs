@@ -192,6 +192,14 @@ pub(crate) fn translate_for_backend(sql: &str, backend: DbBackend) -> String {
             // is safe — the index won't pre-exist.
             let s = s.replace("CREATE INDEX IF NOT EXISTS", "CREATE INDEX");
             let s = s.replace("DROP INDEX IF EXISTS", "DROP INDEX");
+            // MySQL requires a prefix length when a TEXT/BLOB column
+            // participates in a key. `user_repositories.repo_url` is
+            // declared `TEXT NOT NULL` in the portable schema but joins
+            // the `UNIQUE(user_id, repo_url)` constraint, which MySQL
+            // rejects (error 1170). Widen the column to VARCHAR(512)
+            // for the MySQL pass so the UNIQUE is valid. SQLite and
+            // Postgres keep the original TEXT shape.
+            let s = s.replace("repo_url TEXT NOT NULL", "repo_url VARCHAR(512) NOT NULL");
             // MySQL 8.0.13+ accepts `DEFAULT` on `TEXT` / `BLOB` / `JSON`
             // columns ONLY when the literal is wrapped in parentheses
             // (`DEFAULT ('...')`). The source files use the simpler
@@ -658,9 +666,7 @@ mod tests {
         if url.starts_with(&format!("{expected_scheme}://")) {
             Some(url)
         } else {
-            eprintln!(
-                "skipping: DATABASE_URL scheme is not {expected_scheme}:// (got {url})"
-            );
+            eprintln!("skipping: DATABASE_URL scheme is not {expected_scheme}:// (got {url})");
             None
         }
     }
