@@ -74,7 +74,43 @@ pub(super) async fn drive_workflow_def(
     let log_dir = crate::workflow::snapshot::resolve_data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("logs");
-    let log_writer = Arc::new(WorkflowLogWriter::new(&log_dir, &ticket_key).await);
+
+    // Plan-07 slice 18: spawn a log batcher scoped to this drive
+    // when DB is attached. The sink is held in a local variable so
+    // when drive_workflow_def returns, the sink + writer drop, the
+    // batcher flushes its remaining buffer, and the task exits.
+    // Looking up work_item_id by ticket_key works because the
+    // engine shadow-writes the row at start_workflow (slice 1)
+    // BEFORE spawning the driver.
+    let (log_sink, work_item_id_for_log) = match db.as_ref() {
+        Some(database) => {
+            let resolved_id = match crate::db::work_items::get_work_item_by_ticket_key(
+                database.adapter(),
+                &ticket_key,
+            )
+            .await
+            {
+                Ok(Some(row)) => Some(row.id),
+                _ => None,
+            };
+            (
+                resolved_id
+                    .as_ref()
+                    .map(|_| crate::workflow::log_sink::spawn_batcher(database.clone())),
+                resolved_id,
+            )
+        }
+        None => (None, None),
+    };
+    let log_writer = Arc::new(
+        WorkflowLogWriter::with_sink(
+            &log_dir,
+            &ticket_key,
+            log_sink.clone(),
+            work_item_id_for_log,
+        )
+        .await,
+    );
 
     let result = async {
         // Bootstrap if no worktree exists yet (Pending workflow, first run).

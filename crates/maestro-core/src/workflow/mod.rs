@@ -5,6 +5,7 @@ pub mod dashboard_progress;
 pub mod definitions;
 pub mod engine;
 pub(crate) mod helpers;
+pub mod log_sink;
 pub mod log_writer;
 pub mod outcome;
 pub mod snapshot;
