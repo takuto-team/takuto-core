@@ -30,6 +30,7 @@ Settings are reloaded on file change (5-second poller). A few keys are
 - [`[terminal]`](#terminal)
 - [`[network]`](#network)
 - [`[dev]`](#dev)
+- [`[provisioning]`](#provisioning)
 - [Ignored sections](#ignored-sections)
 
 ---
@@ -199,6 +200,18 @@ Dev-only knobs. Leave commented out in production.
 | `mock_agent_script_path` | `"tmp/mock_script.txt"` | string | Path to the mock script file. |
 | `mock_agent_line_delay_ms` | `75` | int | Delay between mock output lines. |
 | `mock_agent_total_ms` | `5000` | int | Total mock session duration. |
+
+---
+
+## `[provisioning]`
+
+Extra CLI tools installed into the shared tools volume at startup, on top of
+the ones baked into the image. Use this to pin a tool version, add a tool that
+was removed from the bake, or skip one entirely.
+
+| Key | Default | Type | Description |
+|---|---|---|---|
+| `install_commands` | `[]` | array of strings | Shell snippets run in order against the tools volume. The set is SHA-gated: Maestro hashes the canonicalised list and re-runs provisioning only when it changes. Each snippet should be idempotent (guard with `[ -f "$MAESTRO_TOOLS_BIN/<tool>" ] || …`) and install into `$MAESTRO_TOOLS_BIN`. |
 
 ---
 

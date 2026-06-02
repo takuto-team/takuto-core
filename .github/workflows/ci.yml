@@ -60,6 +60,9 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace --locked
 
+      - name: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps --locked
+
   db-postgres:
     # Plan-11 §10 step 4: prove the dialect-aware migration source and the
     # DbAdapter-backed DAOs work end-to-end against a real PostgreSQL.
@@ -180,6 +183,9 @@ jobs:
       - name: npm test
         run: npm test
 
+      - name: tsc --noEmit (strict type check)
+        run: npx tsc --noEmit
+
       - name: npm run build
         run: npm run build
 
@@ -266,3 +272,34 @@ jobs:
           #   RUSTSEC-2026-0009 — time DoS; fixed in >=0.3.47, blocked by an
           #                       exact `=0.3.45` pin in maestro-web.
           ignore: RUSTSEC-2023-0071,RUSTSEC-2026-0009
+
+  config-doc:
+    name: Config documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Every config.toml.example key is documented
+        run: ./scripts/check-config-doc.sh
+
+  container-build:
+    name: Container smoke build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Smoke-build the production image (the Dockerfile's final stage). Proves
+      # the image assembles; not pushed or loaded. GHA layer cache keeps PRs fast.
+      - name: Build runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: maestro:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
