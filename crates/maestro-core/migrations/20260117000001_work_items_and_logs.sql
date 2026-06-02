@@ -1,11 +1,17 @@
--- Work-item state, steps, definition runs, log lines, port mappings,
--- and run-command state in the database.
+-- Plan-07 step 2 — work-item state, steps, definition runs, log lines,
+-- port mappings, and run-command state in the database.
+--
+-- Source: tmp/plan-07-work-items-in-db.md §2.1.
 --
 -- These tables become the truth-of-record for everything that today
 -- lives in:
 --   • `workspaces/*/workflow_snapshot.json` (rewritten every 60 s)
 --   • `{repo_path}/logs/<TICKET>.log` (per-ticket append-only logs)
 --   • the engine's in-memory `HashMap<String, Workflow>`
+--
+-- Plan-07 step 3 adds `db/work_items.rs` (the DAO). Plan-07 step 4
+-- replaces the snapshot/HashMap path. Plan-07 step 6 imports legacy
+-- snapshot data into these tables on first boot.
 --
 -- Portability notes (matching the existing migration set):
 --   • IDs use VARCHAR(64) — MySQL rejects TEXT PRIMARY KEY.
@@ -18,7 +24,8 @@
 --     INT4.
 --   • Composite primary keys avoid nullable columns (Postgres rejects
 --     NULL in PK). The port-mapping table uses an `id` surrogate PK +
---     a non-unique index in place of the natural composite key.
+--     a non-unique index in place of the natural composite key the
+--     plan sketches.
 
 -- ── work_items ──────────────────────────────────────────────────────
 -- One row per Jira/GitHub ticket or manually-pasted item.

@@ -1,8 +1,9 @@
--- Per-user repositories. Adds the `repositories` registry and reshapes
+-- Plan-11 step 2 — hand-translated port of MIGRATION_V5 (plan-10
+-- per-user repositories). Adds the `repositories` registry and reshapes
 -- the v1 `user_repositories` table to FK to it via composite PK.
 --
--- The DROP of v1's `user_repositories` is safe because the initial
--- schema reserved the table but no code ever wrote to it.
+-- The DROP of v1's `user_repositories` is grandfathered per plan-11 §7.5
+-- because plan-01 reserved the table but no code ever wrote to it.
 
 -- `repo_url` and `local_path` use VARCHAR(512) rather than TEXT so the
 -- UNIQUE constraint and the secondary index work on MySQL without a

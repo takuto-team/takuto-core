@@ -1,11 +1,12 @@
--- Per-user credentials foundation (see 04_architecture.md §3.1).
+-- Plan-11 step 2 — hand-translated port of MIGRATION_V6 (Phase 2a
+-- per-user credentials foundation: 04_architecture.md §3.1).
 --
 -- Four new tables — provider credentials, GitHub PAT, credential audit,
 -- onboarding state. Envelope encryption uses the BLOB-typed `ciphertext`,
 -- `nonce`, `wrapped_dek`, `wnonce` columns (the DialectAware transformer
 -- rewrites `BLOB` to `BYTEA` for Postgres).
 --
--- Notes on portability changes vs the SQLite original:
+-- Notes on portability changes vs V6's SQLite original:
 --   • Auto-incrementing PKs (`id INTEGER PRIMARY KEY AUTOINCREMENT`) are
 --     rewritten per-backend by the transformer:
 --       SQLite → unchanged

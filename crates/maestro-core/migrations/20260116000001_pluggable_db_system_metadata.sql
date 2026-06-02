@@ -1,10 +1,10 @@
--- system_metadata table.
+-- Plan-11 step 6 — system_metadata table.
 --
 -- A small key/value store on the target backend for one-shot operation
--- markers. The importer writes `import_complete` here on successful
--- SQLite→remote copy; future one-shots (e.g. v2 importer variants,
--- post-deploy clean-ups) can reuse the table by reserving their own
--- key prefix.
+-- markers. The plan-11 importer writes `import_complete` here on
+-- successful SQLite→remote copy; future one-shots (e.g. v2 importer
+-- variants, post-deploy clean-ups) can reuse the table by reserving
+-- their own key prefix.
 --
 -- The migration runs on every backend so SQLite deployments also get
 -- the table — they never use the `import_complete` row (no import

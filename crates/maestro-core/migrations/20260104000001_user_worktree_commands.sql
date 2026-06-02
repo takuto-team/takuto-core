@@ -1,8 +1,10 @@
--- Per-user worktree settings. Drops the earlier `workspace_commands`
--- table (never released — see its file header) and replaces it with
--- the per-user table.
+-- Plan-11 step 2 — hand-translated port of MIGRATION_V4 (plan-09
+-- per-user worktree settings). Drops plan-08's `workspace_commands`
+-- (never released — see V3 file header) and replaces it with the
+-- per-user table.
 --
--- The DROP is safe because the previous table never held production data.
+-- The DROP is grandfathered per plan-11 §7.5 ("non-destructiveness
+-- guarantee") because the previous table never held production data.
 
 DROP TABLE IF EXISTS workspace_commands;
 
