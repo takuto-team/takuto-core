@@ -12,7 +12,7 @@ export const ONBOARDING_STEPS: { index: StepIndex; title: string; body: string }
   {
     index: 2,
     title: "AI provider",
-    body: "Choose the AI that drives your workflows. Each teammate brings their own login on top of this.",
+    body: "Choose the AI that drives your work items. Each teammate brings their own login on top of this.",
   },
   {
     index: 3,
@@ -22,7 +22,7 @@ export const ONBOARDING_STEPS: { index: StepIndex; title: string; body: string }
   {
     index: 4,
     title: "Your credentials",
-    body: "Add your own AI provider key and GitHub token so you can run workflows immediately.",
+    body: "Add your own AI provider key and GitHub token so you can run work items immediately.",
   },
 ];
 

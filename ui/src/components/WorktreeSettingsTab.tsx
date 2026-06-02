@@ -111,7 +111,7 @@ export function WorktreeSettingsTab() {
       init.replaceOriginal([]);
       run.replaceOriginal([]);
       setSuccess(
-        "Commands deleted. Future workflows on this workspace will run no init commands and show no run-command buttons.",
+        "Commands deleted. Future work items on this workspace will run no init commands and show no run-command buttons.",
       );
       setHasMyCommands(selected, false);
     } catch (e) {
@@ -223,7 +223,7 @@ export function WorktreeSettingsTab() {
       {confirmDelete && (
         <ConfirmModal
           title="Delete commands for this workspace"
-          message={`Remove your init commands and run commands for "${selected}"? Future workflows on this workspace will run no init commands and show no run-command buttons until you add them again.`}
+          message={`Remove your init commands and run commands for "${selected}"? Future work items on this workspace will run no init commands and show no run-command buttons until you add them again.`}
           onConfirm={handleDelete}
           onCancel={() => setConfirmDelete(false)}
         />

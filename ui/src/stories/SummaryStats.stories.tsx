@@ -29,8 +29,8 @@ export const ZeroCounts: Story = {
   name: "All zero counts",
 };
 
-export const ActiveWorkflows: Story = {
-  name: "Active workflows",
+export const ActiveWorkItems: Story = {
+  name: "Active work items",
   args: {
     counts: { running: 2, completed: 3, errors: 1, paused: 1 },
   },

@@ -83,7 +83,7 @@ export function WorkflowGrid({
       );
     }
 
-    // Repo exists but no workflows at all
+    // Repo exists but no work items at all
     return (
       <div className="text-center py-16">
         <p className="text-gray-500 text-sm mb-4">

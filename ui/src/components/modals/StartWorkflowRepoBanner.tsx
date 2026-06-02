@@ -45,7 +45,7 @@ export function StartWorkflowRepoBanner({
           >
             Add one
           </Link>{" "}
-          before starting a workflow.
+          before starting a work item.
         </span>
       ) : repos.length === 1 ? (
         <span className="text-xs text-gray-300 font-mono">{repos[0].name}</span>

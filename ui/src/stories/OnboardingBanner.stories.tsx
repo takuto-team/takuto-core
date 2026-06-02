@@ -124,7 +124,7 @@ export const ProviderNotImplementedAdmin: Story = {
           code: "provider_not_implemented",
           severity: "critical",
           message:
-            "Provider 'codex' adapter ships in Phase 4 — workflows can't start until then.",
+            "Provider 'codex' adapter is not yet available — work items can't start until then.",
         },
       ],
     },
@@ -142,7 +142,7 @@ export const ProviderNotImplementedNonAdmin: Story = {
           code: "provider_not_implemented",
           severity: "critical",
           message:
-            "Provider 'codex' adapter ships in Phase 4 — workflows can't start until then.",
+            "Provider 'codex' adapter is not yet available — work items can't start until then.",
         },
       ],
     },

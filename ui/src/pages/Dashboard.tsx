@@ -135,7 +135,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     modals.openDetail({ key, summary, description: desc, showStart: false });
   }, [ticketingSystem, modals]);
 
-  // Empty-state CTA links to My Repositories; per-card badges show repo per workflow.
+  // Empty-state CTA links to My Repositories; per-card badges show repo per work item.
   const repoExists = (hasAnyRepo ?? true);
 
   return (
