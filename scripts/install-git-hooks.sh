@@ -44,11 +44,11 @@ cat > "$hooks_dir/pre-push" <<'HOOK'
 # `git push --no-verify`.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-ARGS=()
 if [[ "${PREFLIGHT_FULL:-0}" == "1" ]]; then
-  ARGS+=(--full)
+  exec ./scripts/preflight.sh --full
+else
+  exec ./scripts/preflight.sh
 fi
-exec ./scripts/preflight.sh "${ARGS[@]}"
 HOOK
 
 chmod +x "$hooks_dir/pre-push"
