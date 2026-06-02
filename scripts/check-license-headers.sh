@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Verifies every source file carries the project's FSL license header.
+#
+# A file passes when one of these appears in its first 20 lines:
+#   - SPDX-License-Identifier: FSL-1.1-ALv2
+#   - the full "Functional Source License" notice
+#
+# Both forms are accepted because the tree mixes a short SPDX line and the
+# full notice; `scripts/add-license-header.sh` recognises the same two markers.
+#
+# Scope: *.rs under crates/ and *.ts / *.tsx under ui/src/. SQL migrations are
+# deliberately excluded — applied migration files are immutable (their on-disk
+# bytes are checksummed by sqlx), so they cannot carry an added header.
+#
+# Exit 0 when every in-scope file has a header; exit 1 and list offenders
+# otherwise.
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+HEADER_PATTERN='SPDX-License-Identifier: FSL|Functional Source License'
+
+missing=()
+checked=0
+
+while IFS= read -r -d '' file; do
+  checked=$((checked + 1))
+  if ! head -n 20 "$file" | grep -qE "$HEADER_PATTERN"; then
+    missing+=("$file")
+  fi
+done < <(find crates ui/src -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.tsx' \) -print0)
+
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "Missing FSL license header in ${#missing[@]} file(s):"
+  printf '  %s\n' "${missing[@]}"
+  echo ""
+  echo "Run scripts/add-license-header.sh to back-fill the header."
+  exit 1
+fi
+
+echo "License header check passed: $checked source file(s) carry the FSL header."

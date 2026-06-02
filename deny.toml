@@ -1,0 +1,63 @@
+# cargo-deny configuration — dependency advisory, license, ban, and source checks.
+# Run locally with `cargo deny check`; enforced in CI via the cargo-deny action.
+
+[graph]
+all-features = false
+
+[advisories]
+# RustSec advisory database checks. Vulnerabilities and unmaintained crates are
+# denied by default in current cargo-deny; list IDs in `ignore` to accept a
+# specific advisory with a justification.
+yanked = "warn"
+ignore = [
+  # rsa: Marvin Attack timing sidechannel. No fixed upstream release exists;
+  # reaches us transitively via jsonwebtoken -> rsa. Remove once rsa ships a fix.
+  "RUSTSEC-2023-0071",
+  # time: DoS via stack exhaustion when parsing untrusted RFC 2822 input. Fixed
+  # in time >=0.3.47, but maestro-web pins `time = "=0.3.45"` exactly. Remove
+  # this entry once that exact pin is bumped to >=0.3.47.
+  "RUSTSEC-2026-0009",
+]
+
+[licenses]
+# Permitted SPDX license identifiers for all crates in the graph (the workspace
+# crates themselves are FSL-1.1-ALv2). Tighten by removing entries as the tree allows.
+allow = [
+  "FSL-1.1-ALv2",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Zlib",
+  "CC0-1.0",
+  "0BSD",
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+exceptions = [
+  # Add per-crate license exceptions here with a justification comment.
+]
+
+[bans]
+# Start lenient and ratchet up: warn on duplicate versions until the skip list
+# is empty, then flip to "deny".
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own crates depend on each other by path (no version), which
+# reads as a wildcard requirement. Allow that for path deps only.
+allow-wildcard-paths = true
+deny = []
+skip = [
+  # Crates with known duplicate versions; pruned over time.
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-git = []
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -182,3 +182,87 @@ jobs:
 
       - name: npm run build
         run: npm run build
+
+  audit-ui:
+    name: UI (npm audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      # Fail only on high/critical advisories in production dependencies.
+      # Dev-only tooling (storybook, vitest, …) is excluded with --omit=dev,
+      # and low/moderate findings are triaged separately rather than blocking PRs.
+      - name: npm audit (production deps, high+)
+        run: npm audit --omit=dev --audit-level=high
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so push events scan every commit; PR events scan the
+          # commits in the pull request.
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # Required by the action's API call. No GITLEAKS_LICENSE is needed
+          # for personal accounts / this repository.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  license-headers:
+    name: License headers (FSL)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check FSL headers on source files
+        run: ./scripts/check-license-headers.sh
+
+  cargo-deny:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: cargo-deny check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  cargo-audit:
+    name: RustSec audit (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: cargo-audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Keep in sync with the `ignore` list in deny.toml:
+          #   RUSTSEC-2023-0071 — rsa Marvin attack, no upstream fix yet.
+          #   RUSTSEC-2026-0009 — time DoS; fixed in >=0.3.47, blocked by an
+          #                       exact `=0.3.45` pin in maestro-web.
+          ignore: RUSTSEC-2023-0071,RUSTSEC-2026-0009
