@@ -507,6 +507,20 @@ pub(super) async fn run_agent_step_sequence(
                                 break;
                             }
                             Err(e) => {
+                                // Cancellation from the workflow's
+                                // cancel_token isn't a command failure —
+                                // it's a pause/stop. Propagate the
+                                // cancellation so resume_workflow can
+                                // re-run the step instead of treating
+                                // the def as Errored.
+                                if matches!(e, MaestroError::Cancelled) {
+                                    info!(
+                                        ticket = %ticket_key,
+                                        step = %step_label,
+                                        "Command step cancelled (pause or stop) — propagating"
+                                    );
+                                    return Err(MaestroError::Cancelled);
+                                }
                                 let msg =
                                     format!("Command {}/{} error: {}", cmd_idx + 1, total_cmds, e);
                                 warn!(
@@ -764,6 +778,28 @@ pub(super) async fn run_agent_step_sequence(
                         step_log.complete(StepStatus::Success);
                     }
                     Err(e) => {
+                        // A cancellation from the workflow's cancel_token is
+                        // NOT a session failure — it's a pause/stop signal.
+                        // Wrapping it as AgentStepAborted would propagate
+                        // through drive_workflow_def's failure branch and
+                        // mark the def_run as Error, after which Resume
+                        // finds no Running defs and silently exits with
+                        // "no driver spawned". Propagate the cancellation
+                        // directly so the upper layer sees it for what
+                        // it is.
+                        if matches!(e, MaestroError::Cancelled) {
+                            info!(
+                                ticket = %ticket_key,
+                                step = %step.name,
+                                run = r,
+                                "Agent step cancelled (pause or stop) — propagating"
+                            );
+                            // Step's StepLog is dropped: the cancelled step
+                            // will be re-run on resume, and `wait_if_paused`
+                            // / the resume path will emit fresh step events
+                            // for the next attempt.
+                            return Err(MaestroError::Cancelled);
+                        }
                         warn!(
                             outer = outer,
                             step = %step.name,
