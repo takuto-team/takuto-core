@@ -1,19 +1,17 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-11 step 1 — pluggable database backends.
+//! Pluggable database backends.
 //!
-//! Source: `tmp/plan-11-pluggable-database-backends.md` §4. Introduces the
-//! [`DbPool`] enum and a connection URL parser. This module is **scaffolding
-//! only** — no existing call site reads it yet. Steps 2–6 of the plan migrate
-//! schema migrations, the `Database` builder, the importer, and the
-//! `&rusqlite::Connection` call sites in `db/*.rs` to use this pool.
+//! Introduces the [`DbPool`] enum and a connection URL parser, which the
+//! schema migrations, the `Database` builder, the importer, and the DAOs
+//! in `db/*.rs` use as their backend bridge.
 //!
-//! Why an enum rather than `sqlx::Any`: the plan explicitly rejects `Any`
-//! (see plan §4). `Any` upcasts results to dynamic types and silently masks
-//! per-backend syntax differences (`?` vs `$1`, `BLOB` vs `BYTEA`,
-//! `AUTOINCREMENT` shapes). The enum keeps per-backend bind / column-type
-//! support intact at the call sites that need it (the importer; future
+//! Why an enum rather than `sqlx::Any`: `Any` upcasts results to dynamic
+//! types and silently masks per-backend syntax differences (`?` vs `$1`,
+//! `BLOB` vs `BYTEA`, `AUTOINCREMENT` shapes). The enum keeps per-backend
+//! bind / column-type support intact at the call sites that need it (the
+//! importer; future
 //! per-backend SQL helpers).
 //!
 //! Threat model unchanged: nothing in this module exposes credentials in
@@ -73,7 +71,7 @@ pub enum DbPool {
 
 /// Optional pool tuning lifted from `[database]` in `config.toml`. `None`
 /// preserves sqlx defaults (10 connections, 30 s acquire timeout, 10 min
-/// idle timeout) which match plan-11 §5's documented defaults.
+/// idle timeout) which match the documented defaults.
 #[derive(Debug, Clone, Default)]
 pub struct PoolTuning {
     pub max_connections: Option<u32>,
@@ -87,8 +85,8 @@ pub struct PoolTuning {
 /// misconfig, `Sqlx` → live DB outage, etc.).
 #[derive(Debug, Error)]
 pub enum PoolError {
-    /// `[database].connection` was the empty string. Caller (in step 6,
-    /// `Database::connect`) is expected to interpret empty as
+    /// `[database].connection` was the empty string. Caller
+    /// (`Database::connect`) is expected to interpret empty as
     /// `sqlite://{data_dir}/maestro.db` BEFORE handing the URL to
     /// [`connect`]; this error guards the low-level path.
     #[error(
@@ -155,12 +153,12 @@ pub fn parse_backend(url: &str) -> Result<DbBackend, PoolError> {
 ///
 /// SQLite setup mirrors the legacy `Database::open` flow: WAL journal mode +
 /// `foreign_keys=ON`. This keeps the on-disk file format compatible with
-/// the existing maestro.db so the plan-11 step-6 importer can read it
-/// alongside the new sqlx-driven writes.
+/// the existing maestro.db so the importer can read it alongside the
+/// sqlx-driven writes.
 ///
-/// **Step 1 scope**: returns a constructed pool but does NOT run schema
-/// migrations and does NOT touch the importer. Plan §6 step 2 ("schema
-/// migrations") and §10 step 6 ("importer") layer those on top.
+/// Returns a constructed pool but does NOT run schema migrations and does
+/// NOT touch the importer — those are layered on top by the migration
+/// runner and `Database::connect` respectively.
 pub async fn connect(url: &str, tuning: &PoolTuning) -> Result<DbPool, PoolError> {
     let backend = parse_backend(url)?;
     match backend {
@@ -273,7 +271,7 @@ impl DbPool {
         }
     }
 
-    /// Best-effort connectivity probe (plan §6 step 3). Runs `SELECT 1`
+    /// Best-effort connectivity probe. Runs `SELECT 1`
     /// against the pool with a 5-second timeout. Returns the sqlx error
     /// verbatim on failure so the caller can decide whether to abort
     /// (`fail_fast = true`) or fall back to local SQLite

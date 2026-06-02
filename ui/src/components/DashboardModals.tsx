@@ -4,7 +4,7 @@
 /**
  * `DashboardModals` — dispatcher that renders exactly one of the five
  * Dashboard modals based on the discriminated union returned by
- * `useDashboardModals`. Phase 5 step 2 of Part B.
+ * `useDashboardModals`.
  *
  * The report-modal gate `workflows[reportKey] && generate_report &&
  * has_report` is preserved verbatim from the pre-extraction shell.

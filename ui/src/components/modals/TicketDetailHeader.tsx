@@ -4,8 +4,7 @@
 /**
  * Header strip of `TicketDetailModal`. Renders the ticket key, the title
  * (read-only or as an inline text input depending on edit mode), and the
- * close button. Extracted in Phase 5 step 2 (parallel) — no state moves
- * here; the shell still owns `editTitle` and `pendingImprovement`.
+ * close button. The shell still owns `editTitle` and `pendingImprovement`.
  */
 
 interface Props {

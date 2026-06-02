@@ -1,9 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-11 step 5 — `[database]` config block.
-//!
-//! Source: `tmp/plan-11-pluggable-database-backends.md` §5.
+//! `[database]` config block.
 //!
 //! When `connection` is empty (or the section is omitted entirely), Maestro
 //! keeps the legacy "SQLite at {data_dir}/maestro.db" behaviour. Setting it
@@ -42,8 +40,7 @@ pub struct DatabaseConfig {
 
     /// When true and a local SQLite file exists at `{data_dir}/maestro.db`
     /// AND the remote target has no `import_complete` marker, perform a
-    /// one-shot data import on startup. Default: true. The importer is
-    /// implemented in plan-11 §8 (separate cluster).
+    /// one-shot data import on startup. Default: true.
     #[serde(default = "default_true")]
     pub import_from_sqlite: bool,
 }

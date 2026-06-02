@@ -13,10 +13,10 @@ use crate::workflow::log_sink::LogSink;
 
 /// Writes timestamped log entries to a per-workflow log file.
 ///
-/// Plan-07 slice 18 — the writer ALSO forwards each line to an
-/// optional [`LogSink`] so it lands in `work_item_log_lines`. The
-/// file output is preserved unchanged; the DB is shadow data
-/// today (additive — `GET /api/work-items/{id}/log` reads it).
+/// The writer ALSO forwards each line to an optional [`LogSink`] so it
+/// lands in `work_item_log_lines`. The file output is preserved
+/// unchanged; the DB is shadow data today (additive —
+/// `GET /api/work-items/{id}/log` reads it).
 pub struct WorkflowLogWriter {
     log_path: PathBuf,
     sink: Option<LogSink>,
@@ -215,8 +215,7 @@ mod tests {
         assert!(content.contains("[Lint] [stderr] warning: unused var"));
     }
 
-    /// Plan-07 slice 18 — when constructed with a `LogSink` + a
-    /// `work_item_id`, the writer must:
+    /// When constructed with a `LogSink` + a `work_item_id`, the writer must:
     ///   - keep writing to the file (no regression to the legacy
     ///     download-log behaviour), AND
     ///   - emit each line through the sink so it lands in

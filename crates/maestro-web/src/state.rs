@@ -50,8 +50,8 @@ pub struct ActiveRunCommand {
 /// Map of active run commands: `ticket_key → vec of ActiveRunCommand`.
 pub type RunCommandsMap = Arc<RwLock<HashMap<String, Vec<ActiveRunCommand>>>>;
 
-/// Task #42: type alias for [`RunCommandState::run_command_bundles`]. Aliased
-/// so the nested generic stays under clippy's `type_complexity` cap.
+/// Type alias for [`RunCommandState::run_command_bundles`]. Aliased so the
+/// nested generic stays under clippy's `type_complexity` cap.
 pub type RunCommandBundlesMap =
     Arc<RwLock<HashMap<(String, usize), Arc<maestro_core::auth::WorkerSecretsBundle>>>>;
 
@@ -67,15 +67,15 @@ pub struct EngineState {
     pub polling_paused: Arc<AtomicBool>,
     /// `true` while an async `POST /api/repos/clone` operation is in progress.
     pub clone_in_progress: Arc<AtomicBool>,
-    /// Structured auth + integration snapshot (Phase 0). Served by
+    /// Structured auth + integration snapshot. Served by
     /// `GET /api/onboarding/status` and mirrored as three fields into
     /// `GET /api/auth/status`.
     ///
-    /// Wrapped in `Arc<RwLock<…>>` because Phase 1 mutates it: a successful
+    /// Wrapped in `Arc<RwLock<…>>` because a successful
     /// `PUT /api/config/agent` recomputes the snapshot from the patched
     /// config and replaces the value here, so `auth_status` and
     /// `onboarding_status` reflect the new provider / degraded state without
-    /// requiring a process restart (Phase 1 AC-4).
+    /// requiring a process restart.
     pub system_status: Arc<RwLock<maestro_core::docker_hooks::SystemStatus>>,
 }
 
@@ -87,14 +87,13 @@ pub struct AuthState {
     /// SQLite database for multi-user authentication and access control.
     /// `None` when the database has not been initialized (e.g., during tests that don't need it).
     pub db: Option<maestro_core::db::Database>,
-    /// Phase 2b.1: injectable shim around the `gh` CLI for per-user PAT
-    /// validation. Production uses [`maestro_core::auth::RealGhClient`];
-    /// tests inject a `MockGhClient` so the suite never touches github.com.
+    /// Injectable shim around the `gh` CLI for per-user PAT validation.
+    /// Production uses [`maestro_core::auth::RealGhClient`]; tests inject a
+    /// `MockGhClient` so the suite never touches github.com.
     pub gh_client: maestro_core::auth::SharedGhClient,
-    /// Phase 2b.2: picks App vs user-PAT per [`GitAction`] per
-    /// 04_architecture.md §4.2. Holds the DB (for user PAT rows) and the
-    /// optional `GitHubAppTokenManager` (for App installation tokens). Phase
-    /// 2b.3 will thread it into the worker container spawn path.
+    /// Picks App vs user-PAT per [`GitAction`]. Holds the DB (for user PAT
+    /// rows) and the optional `GitHubAppTokenManager` (for App installation
+    /// tokens), and is threaded into the worker container spawn path.
     ///
     /// `None` only when `db: None` — every production AppState carries
     /// `Some(resolver)`. Test fixtures with no DB use `None` and the
@@ -118,7 +117,7 @@ pub struct ConfigState {
     /// `true` when acli (Atlassian CLI) passed preflight authentication.
     /// When `false`: no Jira polling, no Jira operations in workflows, manual description entry only.
     pub jira_available: Arc<AtomicBool>,
-    /// **Deprecated (Phase 0).** Non-empty when preflight failed at startup
+    /// **Deprecated.** Non-empty when preflight failed at startup
     /// (e.g. `gh` not authenticated). Kept for one release as a fallback when
     /// the DB is unavailable; the UI should read `system_status` instead.
     pub preflight_error: Option<String>,
@@ -136,9 +135,9 @@ pub struct EditorState {
     pub dynamic_forwards: DynamicForwardsMap,
     /// Spare port and auth token allocated for ttyd web terminal per editor, keyed by ticket_key.
     pub terminal_ports: Arc<RwLock<HashMap<String, (u16, String)>>>,
-    /// Task #42: keep the editor's `WorkerSecretsBundle` alive for the
-    /// container's lifetime so the bind-mounted `/run/maestro-secrets/`
-    /// stays populated. Without this map the `Arc` returned by
+    /// Keep the editor's `WorkerSecretsBundle` alive for the container's
+    /// lifetime so the bind-mounted `/run/maestro-secrets/` stays populated.
+    /// Without this map the `Arc` returned by
     /// `build_editor_or_run_command_bundle` is the only strong reference;
     /// when `start_editor` returns, the route handler's stack drops it,
     /// the bundle's `TempDir` RAII fires, and the host tmpfs dir gets
@@ -148,7 +147,7 @@ pub struct EditorState {
     /// `close_editor`, `delete_workflow`, and `mark_done`.
     pub editor_bundles:
         Arc<RwLock<HashMap<String, Arc<maestro_core::auth::WorkerSecretsBundle>>>>,
-    /// Registry of unguessable session path tokens (GH-45 shared-port proxy).
+    /// Registry of unguessable session path tokens for the shared-port proxy.
     /// Maps `{path-token} → SessionRoute` so `/s/{token}/...` requests can be
     /// dispatched to the right loopback backend (editor or terminal). The
     /// `routes::sessions::proxy_session` handler reads from this registry on
@@ -164,10 +163,10 @@ pub struct EditorState {
 pub struct RunCommandState {
     /// Active run command processes, keyed by ticket_key.
     pub run_commands: RunCommandsMap,
-    /// Task #42: keep run-command bundles alive for the lifetime of each
-    /// detached run-command container. Keyed by `(ticket_key, cmd_index)`
-    /// since a workflow can have multiple concurrent run-commands. Cleared
-    /// in `stop_run_command`, `delete_workflow`, and `mark_done`.
+    /// Keep run-command bundles alive for the lifetime of each detached
+    /// run-command container. Keyed by `(ticket_key, cmd_index)` since a
+    /// workflow can have multiple concurrent run-commands. Cleared in
+    /// `stop_run_command`, `delete_workflow`, and `mark_done`.
     pub run_command_bundles: RunCommandBundlesMap,
 }
 

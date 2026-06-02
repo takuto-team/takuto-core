@@ -6,8 +6,7 @@
  * `TicketDetailModal`: title, text, write/preview tabs, side-by-side
  * toggle, the debounced preview value, and the save lifecycle.
  *
- * Extracted in Phase 5 step 3 from the pre-split modal. Behaviour
- * preserved verbatim:
+ * Behaviour preserved verbatim from the pre-split modal:
  *   * 400 ms debounce on `editText → debouncedText` (no unmount cleanup
  *     beyond the per-keystroke clearTimeout — designer flagged as
  *     intentional).

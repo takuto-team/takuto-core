@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 2a integration tests for `Database::open`'s master-key bootstrap
+//! Integration tests for `Database::open`'s master-key bootstrap
 //! interaction. These live in their own file so they can manipulate the
 //! `MAESTRO_SECRET_KEY` env var without racing against the rest of the
 //! `auth::master_key` unit tests.
@@ -23,11 +23,9 @@ fn clear_env() {
     }
 }
 
-// Plan-11 step 3: Database::open now also builds a sqlx pool via
-// `connect_lazy_with` which requires a Tokio runtime context (sqlx panics
-// otherwise — see sqlx-core/src/pool/inner.rs). These tests were
-// `#[test]` but the new dependency forces `#[tokio::test]`. Behaviour is
-// otherwise unchanged.
+// Database::open builds a sqlx pool via `connect_lazy_with` which requires
+// a Tokio runtime context (sqlx panics otherwise — see
+// sqlx-core/src/pool/inner.rs), so these tests must be `#[tokio::test]`.
 #[tokio::test]
 async fn database_open_auto_generates_keyfile_when_allowed() {
     let _g = ENV_LOCK.lock().unwrap();

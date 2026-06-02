@@ -1,12 +1,12 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 9 — `GET /api/work-items/{id}/steps`.
+//! `GET /api/work-items/{id}/steps`.
 //!
-//! Verifies the new pure-read endpoint at the route layer:
-//! seeds work_item_steps rows directly, hits the route through
-//! the full router, and asserts both the success shape and the
-//! `require_workflow_access` policy (404 for non-owners).
+//! Verifies the pure-read endpoint at the route layer: seeds
+//! work_item_steps rows directly, hits the route through the full router,
+//! and asserts both the success shape and the `require_workflow_access`
+//! policy (404 for non-owners).
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -81,9 +81,9 @@ async fn seed_workflow_and_db_row(
     ticket_key: &str,
     user_id: &str,
 ) {
-    // Plan-10: require_workflow_access checks that the workflow's
-    // repository (or workspace_name fallback) is one the caller has
-    // added. Seed a repo named "ws" and associate it with this user.
+    // `require_workflow_access` checks that the workflow's repository (or
+    // workspace_name fallback) is one the caller has added. Seed a repo
+    // named "ws" and associate it with this user.
     let db = state.engine().engine.db().expect("db");
     let repo_id =
         maestro_core::db::repositories::upsert(db.adapter(), "ws", None, "/tmp/ws", "main", None)
@@ -258,7 +258,7 @@ async fn get_steps_returns_404_for_non_owner() {
     assert_eq!(
         resp.status(),
         StatusCode::NOT_FOUND,
-        "non-owner must get 404, NOT 403 (AC-2 convention)"
+        "non-owner must get 404, NOT 403"
     );
 }
 

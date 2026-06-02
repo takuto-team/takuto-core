@@ -275,10 +275,10 @@ impl Default for AgentConfig {
 }
 
 impl AgentConfig {
-    /// Task #44: return the effective Claude model name, resolving in
-    /// precedence order:
-    /// 1. `[agent.providers.claude].model` (Phase 1 sub-table — the
-    ///    canonical location, written by `PUT /api/config/agent`).
+    /// Return the effective Claude model name, resolving in precedence
+    /// order:
+    /// 1. `[agent.providers.claude].model` (canonical location, written
+    ///    by `PUT /api/config/agent`).
     /// 2. `[agent].model` (legacy flat field — kept one release for
     ///    back-compat; populated by migration of old `config.toml`).
     /// 3. `None` — let `claude` choose its own default model.
@@ -493,7 +493,7 @@ mod tests {
         assert!(!step.is_command_step());
     }
 
-    // ─── Task #44: effective_claude_model precedence ────────────────────
+    // ─── effective_claude_model precedence ──────────────────────────────
 
     fn agent_cfg(legacy: &str, sub: &str) -> AgentConfig {
         let mut cfg = AgentConfig {

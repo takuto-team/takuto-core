@@ -58,30 +58,29 @@ pub(super) async fn drive_workflow_def(
     agent_run_semaphore: Arc<Semaphore>,
     suppress_cancelled_as_error: Arc<AtomicBool>,
     db: Option<Database>,
-    // Phase 2b.3: resolver passed through from the engine so the bootstrap
-    // step can pin credentials + build a `WorkerSecretsBundle`. `None`
-    // preserves the pre-Phase-2b.3 behaviour (legacy `PASSTHROUGH_ENV`).
+    // Resolver passed through from the engine so the bootstrap step can pin
+    // credentials + build a `WorkerSecretsBundle`. `None` preserves the
+    // legacy `PASSTHROUGH_ENV` behaviour.
     git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
 ) {
     use crate::workflow::definitions::WorkflowDefRunState;
 
     info!(ticket = %ticket_key, def = %def_name, "Workflow definition driver started");
 
-    // Plan-10: workflow logs live under `{data_dir}/logs/<TICKET>.log` so they
-    // are independent of the repository (there is no global active repo any
+    // Workflow logs live under `{data_dir}/logs/<TICKET>.log` so they are
+    // independent of the repository (there is no global active repo any
     // more). Fall back to a writable temp dir if the data dir cannot be
     // resolved, mirroring the existing best-effort log writer behaviour.
     let log_dir = crate::workflow::snapshot::resolve_data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("logs");
 
-    // Plan-07 slice 18: spawn a log batcher scoped to this drive
-    // when DB is attached. The sink is held in a local variable so
-    // when drive_workflow_def returns, the sink + writer drop, the
-    // batcher flushes its remaining buffer, and the task exits.
-    // Looking up work_item_id by ticket_key works because the
-    // engine shadow-writes the row at start_workflow (slice 1)
-    // BEFORE spawning the driver.
+    // Spawn a log batcher scoped to this drive when DB is attached. The
+    // sink is held in a local variable so when drive_workflow_def returns,
+    // the sink + writer drop, the batcher flushes its remaining buffer,
+    // and the task exits. Looking up work_item_id by ticket_key works
+    // because the engine shadow-writes the row at start_workflow BEFORE
+    // spawning the driver.
     let (log_sink, work_item_id_for_log) = match db.as_ref() {
         Some(database) => {
             let resolved_id = match crate::db::work_items::get_work_item_by_ticket_key(
@@ -180,8 +179,8 @@ pub(super) async fn drive_workflow_def(
                     w.updated_at = Utc::now();
                 }
             }
-            // Plan-07 step 4 slice 4: shadow-write Completed. UPDATE-only
-            // so we preserve the started_at written by start_workflow_def.
+            // Shadow-write Completed. UPDATE-only so we preserve the
+            // started_at written by start_workflow_def.
             shadow_finish_def_run(
                 db.as_ref(),
                 &workflow_id,
@@ -284,7 +283,7 @@ pub(super) async fn drive_workflow_def(
                     w.updated_at = Utc::now();
                 }
             }
-            // Plan-07 step 4 slice 4: shadow-write Error with the message.
+            // Shadow-write Error with the message.
             shadow_finish_def_run(
                 db.as_ref(),
                 &workflow_id,
@@ -383,7 +382,7 @@ pub(super) async fn transition_to_agent_step(
                 workflow.id.clone(),
                 workflow.status_display(),
                 workflow.user_id.clone(),
-                // Plan-07 step 4 slice 2: shadow-write inputs.
+                // Shadow-write inputs.
                 workflow.state.clone(),
                 workflow.current_step_label.clone(),
                 workflow.updated_at.timestamp(),
@@ -437,7 +436,7 @@ pub(super) async fn transition(
                 workflow.id.clone(),
                 workflow.status_display(),
                 workflow.user_id.clone(),
-                // Plan-07 step 4 slice 2: shadow-write inputs.
+                // Shadow-write inputs.
                 workflow.state.clone(),
                 workflow.updated_at.timestamp(),
             ))
@@ -469,8 +468,8 @@ pub(super) async fn transition(
     }
 }
 
-/// Plan-07 step 4 slice 2 — best-effort shadow-write of a state
-/// transition into the `work_items` row.
+/// Best-effort shadow-write of a state transition into the `work_items`
+/// row.
 ///
 /// Truth-of-record is the in-memory `HashMap<String, Workflow>` (the
 /// caller has already mutated it). This call exists so the DB row's
@@ -504,14 +503,13 @@ pub(crate) async fn shadow_persist_state_change(
             work_item_id,
             state_kind = %state_kind.as_str(),
             error = %e,
-            "Plan-07 shadow-write of work_items state failed (in-memory state is unaffected)"
+            "Ushadow-write of work_items state failed (in-memory state is unaffected)"
         );
     }
 }
 
-/// Plan-07 step 4 slice 3: shadow-write a step's start into
-/// `work_item_steps`. Returns the row's auto-increment id so the
-/// matching end-write can target the right row.
+/// Shadow-write a step's start into `work_item_steps`. Returns the row's
+/// auto-increment id so the matching end-write can target the right row.
 ///
 /// Failures (and a `None` `db`) log at WARN and yield `None`. A
 /// missing id later turns the end-write into a no-op — the engine
@@ -539,16 +537,15 @@ pub(crate) async fn shadow_record_step_start(
                 work_item_id,
                 step_name,
                 error = %e,
-                "Plan-07 shadow-write of step start failed (engine progress unaffected)"
+                "Ushadow-write of step start failed (engine progress unaffected)"
             );
             None
         }
     }
 }
 
-/// Plan-07 step 4 slice 3: shadow-write a step's end into
-/// `work_item_steps`. No-op when either `db` is `None` or the
-/// matching start-write didn't return a row id.
+/// Shadow-write a step's end into `work_item_steps`. No-op when either
+/// `db` is `None` or the matching start-write didn't return a row id.
 pub(crate) async fn shadow_record_step_end(
     db: Option<&Database>,
     step_db_id: Option<i64>,
@@ -573,16 +570,16 @@ pub(crate) async fn shadow_record_step_end(
         tracing::warn!(
             step_db_id,
             error = %e,
-            "Plan-07 shadow-write of step end failed (engine progress unaffected)"
+            "Ushadow-write of step end failed (engine progress unaffected)"
         );
     }
 }
 
-/// Plan-07 step 4 slice 4: shadow-write the start of a definition
-/// run. Marks the (work_item, definition) row as Running with
-/// `started_at` set; clears any prior error / ended_at so retries
-/// look fresh. Failures (and `None` `db`) log at WARN and never
-/// propagate — the in-memory map remains the truth-of-record.
+/// Shadow-write the start of a definition run. Marks the (work_item,
+/// definition) row as Running with `started_at` set; clears any prior
+/// error / ended_at so retries look fresh. Failures (and `None` `db`)
+/// log at WARN and never propagate — the in-memory map remains the
+/// truth-of-record.
 pub(crate) async fn shadow_start_def_run(
     db: Option<&Database>,
     work_item_id: &str,
@@ -602,15 +599,15 @@ pub(crate) async fn shadow_start_def_run(
             work_item_id,
             def_filename,
             error = %e,
-            "Plan-07 shadow-write of def-run start failed (engine progress unaffected)"
+            "Ushadow-write of def-run start failed (engine progress unaffected)"
         );
     }
 }
 
-/// Plan-07 step 4 slice 4: shadow-write the terminal state of a
-/// definition run. UPDATE-only: a missing row is a silent no-op so
-/// hot-start engines (where the start-write hadn't completed yet)
-/// can't surface this as an error path.
+/// Shadow-write the terminal state of a definition run. UPDATE-only:
+/// a missing row is a silent no-op so hot-start engines (where the
+/// start-write hadn't completed yet) can't surface this as an error
+/// path.
 pub(crate) async fn shadow_finish_def_run(
     db: Option<&Database>,
     work_item_id: &str,
@@ -635,7 +632,7 @@ pub(crate) async fn shadow_finish_def_run(
             def_filename,
             state = %state.as_str(),
             error = %e,
-            "Plan-07 shadow-write of def-run finish failed (engine progress unaffected)"
+            "Ushadow-write of def-run finish failed (engine progress unaffected)"
         );
     }
 }

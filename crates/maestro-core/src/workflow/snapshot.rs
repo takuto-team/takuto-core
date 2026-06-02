@@ -77,23 +77,23 @@ pub struct PersistedWorkflowRecord {
     /// Old snapshots without this field get an empty string (assigned during restore).
     #[serde(default)]
     pub workspace_name: String,
-    /// FK to `repositories.id`. Old snapshots predating plan-10 lack the field and
-    /// deserialize as `None`. The startup reconciliation
-    /// (`migrate_orphan_repo_associations`, Dev A's Step 3.2) back-fills it by joining
-    /// `workspace_name` against `repositories.name`. Workflows that cannot be back-filled
-    /// stay `None` and are hidden from the dashboard.
+    /// FK to `repositories.id`. Old snapshots that lack the field deserialize as
+    /// `None`. The startup reconciliation (`migrate_orphan_repo_associations`)
+    /// back-fills it by joining `workspace_name` against `repositories.name`.
+    /// Workflows that cannot be back-filled stay `None` and are hidden from
+    /// the dashboard.
     #[serde(default)]
     pub repository_id: Option<String>,
     /// ID of the user who created this workflow. Old snapshots without this field
     /// get `None` (unowned — visible to admins only during migration).
     #[serde(default)]
     pub user_id: Option<String>,
-    /// Phase 2b.3 (04_architecture.md §7.2): credentials pinned at the
-    /// workflow's first agent step. Survives an admin provider switch
-    /// mid-flight — the workflow keeps using the credential row id it was
-    /// pinned to, while the row's `inactive` flag may have flipped to `1`
-    /// for new workflows. `#[serde(default)]` so pre-v6 snapshots (which
-    /// predate Phase 2) deserialize as `None`.
+    /// Credentials pinned at the workflow's first agent step. Survives an
+    /// admin provider switch mid-flight — the workflow keeps using the
+    /// credential row id it was pinned to, while the row's `inactive`
+    /// flag may have flipped to `1` for new workflows.
+    /// `#[serde(default)]` so older snapshots (which predate the
+    /// pinning mechanism) deserialize as `None`.
     #[serde(default)]
     pub auth_pin: Option<AuthPin>,
 }
@@ -250,7 +250,7 @@ pub fn snapshot_path(repo_path: &Path) -> PathBuf {
     resolve_workspace_snapshot_dir(repo_path).join(SNAPSHOT_FILENAME)
 }
 
-/// Phase 2a (04_architecture.md §3.2, A5): scan every per-workspace snapshot
+/// Scan every per-workspace snapshot
 /// under `{data_dir}/workspaces/*/workflow_snapshot.json` and return the
 /// `ticket_key` of each workflow that is currently in flight. "In flight"
 /// means **not** in a terminal state (`Done` / `Stopped` / `Error`) and
@@ -665,7 +665,7 @@ mod tests {
         );
     }
 
-    // ── Phase 2a: scan_in_flight_workflow_keys ───────────────────────────
+    // ── scan_in_flight_workflow_keys ─────────────────────────────────────
 
     fn rec(ticket: &str, state: WorkflowState) -> PersistedWorkflowRecord {
         PersistedWorkflowRecord {

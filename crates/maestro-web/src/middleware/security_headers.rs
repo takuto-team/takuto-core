@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Defence-in-depth security response headers (plan-02 AC-6).
+//! Defence-in-depth security response headers.
 //!
 //! Sets the following headers on every response emitted by the top-level
 //! router:
@@ -106,9 +106,9 @@ fn apply_headers(
 /// `xfp_is_https` is pulled out by the caller so this future doesn't need to
 /// borrow the `Request` across an await point.
 ///
-/// Dev C owns the canonical `resolve_cookie_secure(&WebConfig, &HeaderMap)`
-/// helper in `auth.rs` (plan-02 AC-2). When that lands and exposes a
-/// `state.cookie_secure_resolved` snapshot, prefer it over this local mirror.
+/// The canonical `resolve_cookie_secure(&WebConfig, &HeaderMap)` helper
+/// lives in `auth.rs`. When it exposes a `state.cookie_secure_resolved`
+/// snapshot, prefer that over this local mirror.
 async fn resolve_https_context(cfg: &ConfigState, xfp_is_https: bool) -> bool {
     if xfp_is_https {
         return true;

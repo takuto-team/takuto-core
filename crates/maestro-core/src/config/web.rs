@@ -26,10 +26,10 @@ pub struct WebConfig {
     /// or the inbound request carries `X-Forwarded-Proto: https`.
     #[serde(default)]
     pub cookie_secure: Option<bool>,
-    /// Plan-02 AC-5: whether a successful login deletes prior sessions for the
-    /// same user. Defaults to `true` (security-first). Set to `false` if your
-    /// users routinely log in from multiple clients concurrently and the UX
-    /// cost of forcing re-login on every new login outweighs the security
+    /// Whether a successful login deletes prior sessions for the same user.
+    /// Defaults to `true` (security-first). Set to `false` if your users
+    /// routinely log in from multiple clients concurrently and the UX cost
+    /// of forcing re-login on every new login outweighs the security
     /// benefit of single-session enforcement.
     #[serde(default = "default_kick_other_sessions")]
     pub kick_other_sessions_on_login: bool,

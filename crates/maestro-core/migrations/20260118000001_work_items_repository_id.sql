@@ -1,8 +1,8 @@
--- Plan-07 slice 10: carry `repository_id` on `work_items` so the
+-- Carry `repository_id` on `work_items` so the
 -- `require_workflow_access` policy check can run against the DB row
 -- directly without consulting the in-memory `Workflow`. The column
 -- is nullable to match `Workflow::repository_id: Option<String>` —
--- pre-Plan-10 workflows have no repo association and that must stay
+-- legacy workflows have no repo association and that must stay
 -- a permitted state.
 --
 -- No FK to `repositories(id)` because that would force a

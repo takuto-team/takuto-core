@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 17 — `GET /work-items/{id}/log`.
+//! `GET /work-items/{id}/log`.
 //!
 //! Paged read of `work_item_log_lines` for a work item. The
 //! `step_id`, `limit`, and `offset` query params let the dashboard
@@ -13,8 +13,7 @@
 //!
 //! Returns an empty array when:
 //!   * the engine has no DB attached (test paths),
-//!   * the work item has no recorded log lines yet (plan-07 slice 18
-//!     will wire the writer).
+//!   * the work item has no recorded log lines yet.
 
 use axum::Extension;
 use axum::Json;
@@ -71,7 +70,7 @@ impl From<work_items::LogLine> for LogLineDto {
 
 /// `GET /work-items/{id}/log` — paged log lines, oldest first.
 /// Access is gated by `require_workflow_access` (404 for missing
-/// or unauthorised id, matching the convention from AC-2).
+/// or unauthorised id).
 pub async fn get_log(
     State(engine): State<EngineState>,
     State(auth_state): State<AuthState>,

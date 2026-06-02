@@ -19,7 +19,7 @@ pub use password::{ChangePasswordBody, RecoverBody, change_password, recover, re
 pub use register::{RegisterBody, register};
 pub use status::{AuthStatus, auth_status};
 
-/// Plan-02 AC-3: per-user lockout threshold and window.
+/// Per-user lockout threshold and window.
 ///
 /// 5 failed attempts within a 10-minute window locks the account until the
 /// **oldest** failure ages out (sliding window — admins can short-circuit via
@@ -55,9 +55,9 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["dashboard_auth_enabled"], true);
         assert_eq!(json["setup_required"], true);
-        // Phase 0 mirrored fields (04_architecture.md §1.3) — test_state_with_db
-        // seeds an empty default `SystemStatus`: provider=claude, github=missing,
-        // no warnings → degraded=false.
+        // Mirrored fields — test_state_with_db seeds an empty default
+        // `SystemStatus`: provider=claude, github=missing, no warnings →
+        // degraded=false.
         assert_eq!(json["provider_selected"], "claude");
         assert_eq!(json["github_mode"], "missing");
         assert_eq!(json["degraded"], false);
@@ -82,7 +82,7 @@ mod tests {
         assert_eq!(json["dashboard_auth_enabled"], true);
         assert_eq!(json["multi_user"], true);
         assert_eq!(json["setup_required"], false);
-        // Phase 0 mirrored fields present even after first-user registration.
+        // Mirrored fields present even after first-user registration.
         assert_eq!(json["provider_selected"], "claude");
         assert_eq!(json["github_mode"], "missing");
         assert_eq!(json["degraded"], false);

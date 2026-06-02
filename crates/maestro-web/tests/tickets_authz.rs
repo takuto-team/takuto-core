@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for AC-2 — IDOR fixes on /api/tickets/{key}/*.
+// Integration tests for IDOR fixes on /api/tickets/{key}/*.
 //
 // For each of the three ticket-action endpoints:
 //   - POST /api/tickets/{key}/improve
@@ -84,10 +84,10 @@ async fn create_and_login_regular_user(
 
 /// Insert a workflow with the given user_id directly into the engine map.
 ///
-/// Plan-10: the workflow's `workspace_name` must match a `repositories` row
-/// that the owning user has added to their `user_repositories`, otherwise
+/// The workflow's `workspace_name` must match a `repositories` row that the
+/// owning user has added to their `user_repositories`, otherwise
 /// `require_workflow_access` filters it out. Seed both alongside the workflow
-/// so the post-plan-10 visibility gate matches the test's intent.
+/// so the visibility gate matches the test's intent.
 async fn seed_workflow(state: &AppState, key: &str, user_id: &str) {
     let workspace = "test-workspace".to_string();
     let mut wf = Workflow::new(
@@ -100,7 +100,6 @@ async fn seed_workflow(state: &AppState, key: &str, user_id: &str) {
         workspace.clone(),
     );
     wf.user_id = Some(user_id.to_string());
-    // Plan-11 step 3: repositories DAO on the adapter — no spawn_blocking.
     let repository_id = {
         let db = state.auth().db.as_ref().expect("test state must have a DB");
         let adapter = db.adapter();

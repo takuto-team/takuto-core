@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Session path-token registry for the GH-45 shared-port reverse proxy.
+//! Session path-token registry for the shared-port reverse proxy.
 //!
 //! Maps an unguessable 32-char hex path token (≥128 bits of CSPRNG entropy,
 //! produced by [`maestro_core::container::generate_session_path_token`]) to
@@ -10,7 +10,7 @@
 //!  * the kind of session (editor or terminal) — purely informational, used
 //!    for tracing and the deregister-by-ticket helper;
 //!  * the host port the backend listens on (always `127.0.0.1:port` per the
-//!    GH-45 loopback-binding requirement);
+//!    loopback-binding requirement);
 //!  * the owning workflow ticket key — used so closing a workflow tears down
 //!    every route it owns in one call;
 //!  * (optional) the in-process auth secret the backend itself enforces
@@ -62,8 +62,8 @@ pub struct SessionRoute {
     pub kind: SessionRouteKind,
     /// The host port the backend listens on. The proxy connects to
     /// `127.0.0.1:host_port` — never to `0.0.0.0` — because backends MUST
-    /// bind to loopback (GH-45 acceptance criterion #10, enforced upstream
-    /// in `container::start_editor` via `session_publish_arg`).
+    /// bind to loopback (enforced upstream in `container::start_editor` via
+    /// `session_publish_arg`).
     pub host_port: u16,
     /// Workflow this route belongs to — used by `remove_for_ticket` so
     /// `close_editor` / `close_terminal` can drop every route they own
@@ -90,7 +90,7 @@ impl PathTokenRegistry {
     }
 
     /// Look up a route by token. Returns `None` for unknown tokens — callers
-    /// must respond with `404 Not Found` (no body, no info leak) per GH-45 #6.
+    /// must respond with `404 Not Found` (no body, no info leak).
     pub async fn lookup(&self, token: &str) -> Option<SessionRoute> {
         self.inner.read().await.get(token).cloned()
     }
@@ -135,9 +135,9 @@ impl PathTokenRegistry {
         }
     }
 
-    /// Remove a single token. No-op for unknown tokens. Per GH-45 #9 callers
-    /// MUST invoke this BEFORE tearing down the underlying port so in-flight
-    /// requests get a clean 404 instead of a hung connection.
+    /// Remove a single token. No-op for unknown tokens. Callers MUST invoke
+    /// this BEFORE tearing down the underlying port so in-flight requests
+    /// get a clean 404 instead of a hung connection.
     pub async fn remove(&self, token: &str) -> Option<SessionRoute> {
         self.inner.write().await.remove(token)
     }

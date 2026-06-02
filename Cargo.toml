@@ -38,7 +38,7 @@ axum-extra = "0.10"
 time = "=0.3.45"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
-# Per-IP rate limiting (plan-02 AC-3). Pinned to a release tested with
+# Per-IP rate limiting. Pinned to a release tested with
 # axum 0.8 + tower-http 0.6.
 tower_governor = "0.8"
 rust-embed = "8"
@@ -53,12 +53,12 @@ jsonwebtoken = "9"
 # File system utilities
 fs2 = "0.4"
 
-# Database — legacy embedded SQLite. Kept during the plan-11 cutover so the
-# importer can read the old maestro.db; dropped once sqlx's SQLite driver
-# takes over (plan-11 §10 step 8).
+# Database — legacy embedded SQLite. Kept during the cutover so the
+# importer can read the old maestro.db; dropped once sqlx's SQLite
+# driver fully takes over.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Plan-11: pluggable backends via sqlx. Tokio + rustls runtime; SQLite,
+# Pluggable backends via sqlx. Tokio + rustls runtime; SQLite,
 # Postgres, MySQL/MariaDB drivers; migrate framework; macros for compile-time
 # checked queries (optional). `chrono` + `uuid` feature flags map our
 # Rust types onto the wire format.

@@ -22,7 +22,7 @@
  * the active provider, edit its sub-table (base_url, model, extras,
  * allow_shared_default), and toggle the user-facing `available_providers`
  * whitelist. Switching the active provider triggers a confirm modal
- * (05_ux_design.md §2.6) because Phase 2 marks every per-user credential
+ * (05_ux_design.md §2.6) because the switch marks every per-user credential
  * for the previous provider as `inactive=1`.
  */
 

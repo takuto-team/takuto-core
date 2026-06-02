@@ -3,9 +3,8 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Phase 1 integration tests for PUT /api/config/agent and the
-// `provider_changed` WebSocket event. Source: tmp/multi-agents/04_architecture.md
-// §2.3.
+// Integration tests for PUT /api/config/agent and the `provider_changed`
+// WebSocket event. Source: tmp/multi-agents/04_architecture.md §2.3.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -133,7 +132,7 @@ async fn put_config_agent_as_admin_updates_and_persists() {
     assert!(on_disk.contains("claude-3-5-sonnet-latest"));
 }
 
-/// Task #38: when ConfigWriter has had to fall back to the in-place write
+/// When ConfigWriter has had to fall back to the in-place write
 /// path (`used_inplace_fallback` flag set), the next refresh of
 /// `system_status` from PUT /api/config/agent must include an info-level
 /// `config_file_bind_mounted` diagnostic. The dashboard reads
@@ -275,9 +274,10 @@ async fn put_config_agent_unknown_top_level_key_returns_400() {
         )
         .await
         .unwrap();
-    // T-ADMIN-004 / Phase 1 fixup: the handler accepts a serde_json::Value
-    // and re-deserializes with deny_unknown_fields so the rejection lands as
-    // 400 Bad Request (matching PUT /api/config), not axum's default 422.
+    // T-ADMIN-004: the handler accepts a serde_json::Value and
+    // re-deserializes with deny_unknown_fields so the rejection lands
+    // as 400 Bad Request (matching PUT /api/config), not axum's
+    // default 422.
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // Body carries the stable error code for the UI to switch on.
@@ -409,10 +409,10 @@ async fn put_config_agent_unknown_provider_value_returns_400() {
     assert_eq!(cfg.agent.provider, AiAgentProvider::Claude);
 }
 
-/// Phase 1 fixup AC-4: after PUT /api/config/agent changes the active
-/// provider, GET /api/auth/status reflects the new `provider_selected` in
-/// the same process (no restart required). Verifies the in-memory
-/// `system_status` refresh hooked into the PUT handler.
+/// After PUT /api/config/agent changes the active provider, GET
+/// /api/auth/status reflects the new `provider_selected` in the same
+/// process (no restart required). Verifies the in-memory `system_status`
+/// refresh hooked into the PUT handler.
 #[tokio::test]
 async fn put_config_agent_refreshes_system_status_for_auth_status() {
     let dir = std::env::temp_dir().join(format!("maestro-config-agent-{}", uuid::Uuid::new_v4()));

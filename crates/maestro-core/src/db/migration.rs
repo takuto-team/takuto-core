@@ -3,10 +3,9 @@
 
 //! Legacy migration: config.toml single-user password -> SQLite multi-user.
 //!
-//! Plan-11 step 3 cluster A: migrated alongside `users.rs` +
-//! `credentials.rs`. Takes `&DbAdapter`; the create_user + store_password
-//! sequence runs in an internal transaction so a racing concurrent boot
-//! can't end up with a half-migrated row.
+//! Takes `&DbAdapter`; the create_user + store_password sequence runs in
+//! an internal transaction so a racing concurrent boot can't end up with
+//! a half-migrated row.
 
 use crate::config::WebConfig;
 use crate::db::DbAdapter;

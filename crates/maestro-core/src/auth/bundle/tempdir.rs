@@ -13,7 +13,7 @@ use crate::error::Result;
 
 use super::types::SECRETS_DIR_REL;
 
-/// Task #43: resolve the host-side directory in which per-workflow secret
+/// Resolve the host-side directory in which per-workflow secret
 /// tempdirs live, and create a fresh TempDir inside it.
 ///
 /// Lives at `<data_dir>/runtime/secrets/<random>` when `data_dir` is
@@ -40,7 +40,7 @@ pub(super) fn secrets_dir_for_db(db: &crate::db::Database) -> Result<TempDir> {
     }
 }
 
-/// Task #43: best-effort startup sweep. `<data_dir>/runtime/secrets/`
+/// Best-effort startup sweep. `<data_dir>/runtime/secrets/`
 /// accumulates orphan bundle dirs when maestro crashes between TempDir
 /// creation and drop. Call this once at process boot — every entry is a
 /// dead bundle dir from a previous run (the current run hasn't created

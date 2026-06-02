@@ -3,27 +3,21 @@
 
 //! `onboarding_state` table — row shape + CRUD.
 //!
-//! Phase 2a defined the table; Phase 2b.1 grows the helpers consumed by the
-//! `GET /api/onboarding/status` (per-user shim) and the per-step mutators
-//! that Phase 2b.2 will turn into endpoints.
+//! Helpers consumed by the `GET /api/onboarding/status` (per-user shim)
+//! and the per-step mutators backing the onboarding endpoints.
 //!
-//! ### Plan-11 step 3 (commit `dc422de` + this commit)
-//!
-//! Second DAO migrated to the backend-agnostic [`DbAdapter`] API. Pattern
-//! template lives in `login_attempts.rs`; the additions specific to this
-//! DAO are:
+//! ### Backend-agnostic notes
 //!
 //! 1. **Timestamps computed in Rust.** The legacy SQL used
 //!    `strftime('%Y-%m-%dT%H:%M:%SZ','now')`, which is SQLite-only. The
-//!    migrated form binds an ISO-8601 string produced by `chrono::Utc::now`
-//!    so the same query runs on SQLite, Postgres, and MySQL once those
-//!    backends are wired (plan §10 step 4). The on-disk shape stays TEXT
-//!    so the live rusqlite path's schema is unchanged.
+//!    current form binds an ISO-8601 string produced by `chrono::Utc::now`
+//!    so the same query runs on SQLite, Postgres, and MySQL. The on-disk
+//!    shape stays TEXT so the live rusqlite path's schema is unchanged.
 //!
 //! 2. **`INSERT ... ON CONFLICT(user_id) DO UPDATE` works on SQLite +
 //!    Postgres.** MySQL uses `ON DUPLICATE KEY UPDATE` instead — when
-//!    `MAESTRO_TEST_BACKEND=mysql` lands in CI, this DAO will need a
-//!    per-backend `match adapter.backend()` branch. Documented inline.
+//!    MySQL is wired in CI, this DAO will need a per-backend
+//!    `match adapter.backend()` branch. Documented inline.
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -74,8 +68,8 @@ pub enum OnboardingStep {
 }
 
 impl OnboardingStep {
-    /// Stable wire identifier (matches the path parameter the Phase 2b.2
-    /// `POST /api/onboarding/skip/{step}` endpoint will use).
+    /// Stable wire identifier (matches the path parameter the
+    /// `POST /api/onboarding/skip/{step}` endpoint uses).
     pub fn as_str(self) -> &'static str {
         match self {
             OnboardingStep::Ticketing => "ticketing",
@@ -143,8 +137,8 @@ pub async fn get(adapter: &DbAdapter, user_id: &str) -> Result<Option<Onboarding
 ///
 /// Backend support: works on SQLite (≥ 3.24) and Postgres (≥ 9.5 with
 /// the same `excluded` keyword). MySQL uses `ON DUPLICATE KEY UPDATE`
-/// — when MySQL lands as a supported backend (plan §10 step 4) this fn
-/// will need a `match adapter.backend()` branch to emit the right form.
+/// — when MySQL is added as a supported backend this fn will need a
+/// `match adapter.backend()` branch to emit the right form.
 pub async fn mark_step(
     adapter: &DbAdapter,
     user_id: &str,
@@ -210,8 +204,8 @@ pub async fn mark_completed(adapter: &DbAdapter, user_id: &str) -> Result<()> {
 }
 
 /// Clear `completed_at` so the wizard re-enters on next dashboard load
-/// (FR-2.4). Phase 2b.2 wires the `POST /api/onboarding/re-enter` button to
-/// this helper.
+/// (FR-2.4). The `POST /api/onboarding/re-enter` button is wired to this
+/// helper.
 pub async fn clear_completed(adapter: &DbAdapter, user_id: &str) -> Result<()> {
     adapter
         .execute(

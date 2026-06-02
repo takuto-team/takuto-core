@@ -25,7 +25,7 @@ interface Props {
   showStartButton: boolean;
   /** Timeout in seconds for "Improve with AI" sessions, from server config. */
   improveTimeoutSecs?: number;
-  /** Plan-10: when `showStartButton` is true, the caller receives the chosen repository_id. */
+  /** When `showStartButton` is true, the caller receives the chosen repository_id. */
   onStart?: (description: string, summary: string, repositoryId: string) => void;
   onClose: () => void;
   /** Called after a successful save so the parent can refresh workflow data. */

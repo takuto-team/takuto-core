@@ -6,11 +6,9 @@
 //! The database file lives at `{data_dir}/maestro.db`. Schema migrations run
 //! automatically on first open via [`Database::open`].
 
-// Plan-11 step 3 (tmp/plan-11-pluggable-database-backends.md §4 +
-// 2026-05-27 user mandate): backend-agnostic DB adapter. Every DAO and
+// Backend-agnostic DB adapter (2026-05-27 user mandate). Every DAO and
 // call site takes `&DbAdapter`; the adapter dispatches to the right
-// sqlx driver internally. This is the cutover from the legacy
-// `&rusqlite::Connection` API.
+// sqlx driver internally.
 pub mod adapter;
 pub mod importer;
 pub mod upsert;
@@ -22,17 +20,13 @@ pub mod log_retention;
 pub mod login_attempts;
 // Legacy rusqlite migration runner (versioned schema_migrations table).
 pub mod migration;
-// Plan-11 step 2 (tmp/plan-11-pluggable-database-backends.md §7): sqlx-based
-// migration source with per-backend dialect transforms. Lives alongside
-// `migration.rs`; nothing reads it yet (call-site cutover is plan §10 step 3).
+// sqlx-based migration source with per-backend dialect transforms. Lives
+// alongside `migration.rs`.
 pub mod migrate;
 pub mod models;
 pub mod onboarding;
-// Plan-11 step 1 (tmp/plan-11-pluggable-database-backends.md §4): pluggable
-// database backends via sqlx. The module is scaffolding only at this step —
-// no existing call site reads it. Subsequent plan-11 steps cut the
-// `Database` builder, schema migrations, the importer, and every DAO over
-// to `DbPool` + `.await`.
+// Pluggable database backends via sqlx. The `Database` builder, schema
+// migrations, the importer, and every DAO take `DbPool` + `.await`.
 pub mod pool;
 pub mod provider_credentials;
 pub mod repositories;
@@ -63,7 +57,7 @@ use crate::error::Result;
 /// can:
 /// (a) surface degraded-mode warnings in `SystemStatus` when the key is
 ///     unavailable or the keyfile is world-readable;
-/// (b) pass the key into the per-user credential CRUD that lands in Phase 2b.
+/// (b) pass the key into the per-user credential CRUD.
 #[derive(Clone)]
 pub struct MasterKeyState {
     pub key: Arc<MasterKey>,
@@ -86,18 +80,15 @@ impl std::fmt::Debug for MasterKeyState {
 /// Wraps a backend-agnostic [`DbAdapter`] (over sqlx) plus the deployment's
 /// resolved master-key state. Every DAO and call site takes
 /// `&DbAdapter` from [`Database::adapter`]; production code does NOT touch
-/// the underlying driver type. When plan-11 step 5 lands, `adapter`'s
-/// inner pool may be SQLite, Postgres, or MySQL, transparently — all DAOs
-/// keep working.
+/// the underlying driver type. The `adapter`'s inner pool may be SQLite,
+/// Postgres, or MySQL transparently — all DAOs keep working.
 ///
-/// Plan-11 step 3 cluster RusqliteDrop: the legacy `Arc<Mutex<rusqlite::Connection>>`
-/// field is gone. SQLite-side pragmas (WAL, foreign keys) are now applied
-/// by sqlx's `SqliteConnectOptions` on every connection it opens; the
-/// rusqlite handle no longer serves any purpose.
+/// SQLite-side pragmas (WAL, foreign keys) are applied by sqlx's
+/// `SqliteConnectOptions` on every connection it opens.
 #[derive(Clone)]
 pub struct Database {
-    /// Plan-11: agnostic adapter wrapping a sqlx pool. DAOs take
-    /// `&DbAdapter` from here.
+    /// Agnostic adapter wrapping a sqlx pool. DAOs take `&DbAdapter`
+    /// from here.
     adapter: DbAdapter,
     /// Test-only: a long-lived rusqlite connection to the shared-cache
     /// in-memory SQLite. SQLite tears the in-memory DB down once the
@@ -108,7 +99,7 @@ pub struct Database {
     /// doesn't need this; the file persists on disk.
     #[cfg(test)]
     _mem_anchor: Option<Arc<std::sync::Mutex<rusqlite::Connection>>>,
-    /// Phase 2a: deployment master key state. `None` when:
+    /// Deployment master key state. `None` when:
     /// - `MAESTRO_SECRET_KEY` is unset AND
     /// - `${data_dir}/secret.key` does not exist AND
     /// - `allow_auto_generate_secret_key = false`
@@ -159,10 +150,10 @@ fn build_shared_in_memory_adapter(mem_id: &str) -> DbAdapter {
     // attaches to the same in-memory database. We pin a per-Database
     // unique `mem_id` so parallel tests don't cross-contaminate.
     //
-    // Plan-11 step 3 cluster RusqliteDrop: `min_connections = 1` keeps
-    // one connection permanently in the pool so the shared-cache
-    // memory DB stays alive for the lifetime of this `Database`.
-    // Without this, the DB would vanish whenever the pool drained.
+    // `min_connections = 1` keeps one connection permanently in the pool
+    // so the shared-cache memory DB stays alive for the lifetime of this
+    // `Database`. Without this, the DB would vanish whenever the pool
+    // drained.
     let url = format!("file:{mem_id}?mode=memory&cache=shared");
     let opts = SqliteConnectOptions::from_str(&url)
         .expect("shared-cache URI parses")
@@ -177,7 +168,7 @@ fn build_shared_in_memory_adapter(mem_id: &str) -> DbAdapter {
 impl Database {
     /// Open (or create) the database at `{data_dir}/maestro.db` and run migrations.
     ///
-    /// Phase 2a: also resolves the deployment master key via
+    /// Also resolves the deployment master key via
     /// [`load_or_init_master_key`]. Resolution failures are NOT fatal — the
     /// caller logs and surfaces a critical warning in `SystemStatus` so the
     /// dashboard renders degraded-mode copy instead of crashing.
@@ -215,10 +206,8 @@ impl Database {
             }
         };
 
-        // Plan-11 step 3 cluster Schema: build the sqlx adapter and run
-        // all migrations through it. This makes `migrations/*.sql` the
-        // single source of truth for schema; the rusqlite handle no
-        // longer drives DDL.
+        // Build the sqlx adapter and run all migrations through it.
+        // `migrations/*.sql` is the single source of truth for schema.
         let adapter = build_sqlite_adapter(&db_path);
         migrate::apply_migrations_blocking(&adapter).map_err(|e| DbError::Adapter(
             adapter::DbError::Sqlx {
@@ -235,7 +224,7 @@ impl Database {
         })
     }
 
-    /// Plan-11 step 5: open the deployment's configured backend.
+    /// Open the deployment's configured backend.
     ///
     /// Resolution:
     ///   - empty / omitted `connection` → SQLite at `{data_dir}/maestro.db`
@@ -244,9 +233,7 @@ impl Database {
     ///   - `postgres://…` / `postgresql://…` → PostgreSQL pool.
     ///   - `mysql://…` → MySQL/MariaDB pool.
     ///
-    /// The connectivity probe + `fail_fast` semantics from plan §6 are
-    /// deferred to a follow-up cluster — this constructor just builds the
-    /// pool and runs migrations.
+    /// This constructor builds the pool and runs migrations.
     pub async fn connect(
         data_dir: &Path,
         db_config: &crate::config::DatabaseConfig,
@@ -336,7 +323,7 @@ impl Database {
             })
         })?;
 
-        // Plan-11 §8: one-shot SQLite → remote import. Gated on the
+        // One-shot SQLite → remote import. Gated on the
         // `import_from_sqlite` config flag, the presence of a legacy
         // `{data_dir}/maestro.db`, and the target not already carrying
         // the `import_complete` marker.
@@ -405,12 +392,10 @@ impl Database {
     /// Open an in-memory database for testing. No master key resolution —
     /// callers that need the key can call `with_test_master_key`.
     ///
-    /// Plan-11 step 3 cluster B: rusqlite and the sqlx adapter both
-    /// attach to the SAME in-memory SQLite via a shared-cache URI
-    /// (`file:<uuid>?mode=memory&cache=shared`). Both views see the
-    /// same data — DAOs that have migrated to the adapter can be
-    /// tested alongside still-rusqlite ones in one `Database`
-    /// instance. The per-Database UUID isolates parallel tests.
+    /// Rusqlite and the sqlx adapter both attach to the SAME in-memory
+    /// SQLite via a shared-cache URI (`file:<uuid>?mode=memory&cache=shared`).
+    /// Both views see the same data. The per-Database UUID isolates
+    /// parallel tests.
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let mem_id = uuid::Uuid::new_v4().to_string();
@@ -453,8 +438,8 @@ impl Database {
         self
     }
 
-    /// Plan-11: return the backend-agnostic adapter. Every DAO and call
-    /// site takes `&DbAdapter` from here.
+    /// Return the backend-agnostic adapter. Every DAO and call site
+    /// takes `&DbAdapter` from here.
     pub fn adapter(&self) -> &DbAdapter {
         &self.adapter
     }

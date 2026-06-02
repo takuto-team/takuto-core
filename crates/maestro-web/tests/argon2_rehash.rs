@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration test for plan-02 AC-4 — Argon2id parameters + rehash-on-login.
+// Integration test for Argon2id parameters + rehash-on-login.
 //
 // Verifies the end-to-end flow: a credential row that stores a legacy
 // `Argon2::default()` hash is silently rewritten to the current (stronger)

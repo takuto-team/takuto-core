@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 18 — `LogSink` + `LogBatcher`.
+//! `LogSink` + `LogBatcher`.
 //!
 //! A cheaply-cloneable sink that workflow log writers can send
 //! `LogLineInsert`s through without blocking the engine on DB
@@ -19,8 +19,8 @@
 //!     to keep an `Arc<LogSink>` alongside the engine and rely on
 //!     normal shutdown to clean up.
 //!
-//! No retention policy here — plan-07 step 5 carves the retention
-//! runner into a separate background task in `maestro-cli`.
+//! No retention policy here — the retention runner lives as a separate
+//! background task in `maestro-cli`.
 
 use std::time::Duration;
 
@@ -135,7 +135,7 @@ async fn flush(db: &Database, buffer: &mut Vec<LogLineInsert>) {
         warn!(
             count = buffer.len(),
             error = %e,
-            "Plan-07 log batcher flush failed (lines dropped — shadow-write only)"
+            "Ulog batcher flush failed (lines dropped — shadow-write only)"
         );
     }
     buffer.clear();

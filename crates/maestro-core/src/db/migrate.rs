@@ -1,29 +1,22 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-11 step 2 — dialect-aware sqlx migration source.
-//!
-//! Source: `tmp/plan-11-pluggable-database-backends.md` §7.
+//! Dialect-aware sqlx migration source.
 //!
 //! The six existing schema migrations (`MIGRATION_V1`–`V6` in `schema.rs`)
 //! are hand-translated into `crates/maestro-core/migrations/*.sql` in a
-//! portable form (plan §7.2). At runtime the [`DialectAwareMigrationSource`]
-//! reads those files (embedded via `include_str!` so the deployment stays
+//! portable form. At runtime the [`DialectAwareMigrationSource`] reads
+//! those files (embedded via `include_str!` so the deployment stays
 //! single-binary) and applies a small set of per-backend regex rewrites
 //! before handing them to sqlx's migration runner.
 //!
-//! Step-2 scope: scaffolding only. Nothing reads this module yet. The
-//! existing `schema.rs::run_migrations` (rusqlite-driven) remains the live
-//! runtime path until plan-11 §10 step 3 ("call-site cutover") swaps it.
-//!
-//! Why one source file per migration rather than per-backend subdirectories
-//! (an option plan §7.2 enumerated): the per-backend differences land
-//! entirely on three textual rules (`BLOB`/`BYTEA`, two `AUTOINCREMENT`
-//! shapes). A regex transform keeps the migrations file count low and the
-//! diffs reviewable. If a future migration grows backend-specific syntax
-//! the transformer cannot express, plan §7.3 leaves the door open to per-
-//! backend files committed under `migrations/{backend}/` — that decision is
-//! deferred.
+//! Why one source file per migration rather than per-backend subdirectories:
+//! the per-backend differences land entirely on three textual rules
+//! (`BLOB`/`BYTEA`, two `AUTOINCREMENT` shapes). A regex transform keeps
+//! the migrations file count low and the diffs reviewable. If a future
+//! migration grows backend-specific syntax the transformer cannot express,
+//! per-backend files committed under `migrations/{backend}/` remain an
+//! option — that decision is deferred.
 
 use std::borrow::Cow;
 use std::future::Future;
@@ -48,8 +41,8 @@ struct EmbeddedMigration {
 /// them by ascending `version`. Adding a new migration means:
 ///   1. Drop the file into `crates/maestro-core/migrations/`.
 ///   2. Append the `EmbeddedMigration` entry here.
-///   3. Update the `schema.rs` const + `SCHEMA_VERSION` (during cutover; in
-///      the long run this duplication goes away when step 8 drops rusqlite).
+///   3. Update the `schema.rs` const + `SCHEMA_VERSION` (this duplication
+///      will go away when rusqlite is dropped).
 const MIGRATIONS: &[EmbeddedMigration] = &[
     EmbeddedMigration {
         version: 20_260_101_000_001,
@@ -481,10 +474,9 @@ mod tests {
 
     #[test]
     fn embedded_migration_count() {
-        // V1..V6 from the legacy schema.rs port (cluster Schema), V7
-        // = plan-11 importer's system_metadata, V8 = plan-07 work_items,
-        // V9 = plan-07 slice 10 (repository_id on work_items).
-        // Bump when adding new migrations.
+        // V1..V6 from the legacy schema.rs port, V7 = importer's
+        // system_metadata, V8 = work_items, V9 = repository_id on
+        // work_items. Bump when adding new migrations.
         assert_eq!(MIGRATIONS.len(), 9);
     }
 
@@ -513,7 +505,7 @@ mod tests {
 
     // ── End-to-end: run all migrations on in-memory SQLite ─────────────
 
-    /// Plan-11 step 2 acceptance: the full set applies cleanly via sqlx
+    /// The full migration set applies cleanly via sqlx
     /// against an in-memory SQLite pool. We then assert the table list
     /// matches what `schema.rs::run_migrations` produces on the same DB —
     /// a proxy for "the new path is schema-equivalent to the live one".
@@ -556,7 +548,7 @@ mod tests {
             "credential_audit",
             "onboarding_state",
             "system_metadata",
-            // Plan-07 step 2: work-item state tables.
+            // Work-item state tables.
             "work_items",
             "work_item_steps",
             "work_item_definition_runs",
@@ -618,9 +610,9 @@ mod tests {
 
     // ── Postgres / MySQL — ignored unless a container DSN is provided ───
     //
-    // Plan-11 §10 step 4 wires the CI matrix that sets `DATABASE_URL` for
-    // these tests. Until then they are `#[ignore]` so local `cargo test`
-    // stays fast and offline. To run them locally:
+    // The CI matrix sets `DATABASE_URL` for these tests. Until then they
+    // are `#[ignore]` so local `cargo test` stays fast and offline. To run
+    // them locally:
     //   cargo test --lib db::migrate -- --ignored
     // with `DATABASE_URL=postgres://...` (or `mysql://...`) exported.
 

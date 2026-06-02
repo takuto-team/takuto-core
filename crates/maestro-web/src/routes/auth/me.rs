@@ -30,7 +30,6 @@ pub async fn me(
         .into_response();
     };
 
-    // Plan-11 step 3 cluster Sessions: sessions + users on the adapter.
     let adapter = db.adapter();
     let cookie = session_cookie_from_headers(&headers).unwrap_or_default();
     let user_id = validate_db_session(adapter, cookie).await;

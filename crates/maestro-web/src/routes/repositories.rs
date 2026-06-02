@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-10 user-facing repository endpoints.
+//! User-facing repository endpoints.
 //!
 //! - `GET /api/repositories` — list MY repos.
 //! - `GET /api/repositories/_available` — registered repos I haven't added yet.
@@ -27,7 +27,7 @@ use crate::auth::AuthenticatedUser;
 use crate::routes::repos::{CloneGuard, do_clone, read_git_remote_url, sanitize_clone_error};
 use crate::state::{AuthState, EngineState};
 
-/// Plan-10 Step 4.2 URL validation.
+/// URL validation.
 ///
 /// Equivalent to the regex `^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`.
 /// Implemented as a hand-rolled matcher in [`validate_repo_url`] to avoid
@@ -103,7 +103,7 @@ fn require_db(
         .cloned()
 }
 
-/// Validate a GitHub repo URL. Plan-10 Step 4.2.
+/// Validate a GitHub repo URL.
 fn validate_repo_url(url: &str) -> Result<(String, String), (StatusCode, String)> {
     if url.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "repo_url cannot be empty".into()));
@@ -170,7 +170,7 @@ fn validate_repo_url(url: &str) -> Result<(String, String), (StatusCode, String)
 
 /// Determine an available `local_path` under `/workspaces/<derived>/`.
 /// Suffixes `-2`, `-3`, … when the base directory already exists with a
-/// different `repo_url` (plan-10 Step 4.1 path collision resolver).
+/// different `repo_url` (path collision resolver).
 fn pick_clone_target(base_name: &str) -> std::path::PathBuf {
     let workspaces = std::path::Path::new(WORKSPACES_DIR);
     let primary = workspaces.join(base_name);
@@ -211,9 +211,6 @@ pub async fn list_mine(
     State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<RepositoryDto>>, (StatusCode, String)> {
-    // Plan-11 step 3: repositories DAO migrated to the agnostic adapter.
-    // Raw added_at + co-user-count queries also use the adapter so we
-    // drop the spawn_blocking ceremony altogether.
     let db = require_db(&auth_state)?;
     let adapter = db.adapter();
     let user_id = auth.user_id.clone();
@@ -396,7 +393,7 @@ async fn add_via_clone(
     let clone_target = pick_clone_target(&repo_name);
     let token_cwd = std::path::Path::new(WORKSPACES_DIR);
 
-    // Phase 2b.2: pass the authenticated caller so do_clone can ask the
+    // Pass the authenticated caller so do_clone can ask the
     // GitAuthResolver to pick App vs user PAT per the §4.2 matrix.
     let clone_result = do_clone(
         engine,
@@ -415,7 +412,7 @@ async fn add_via_clone(
             error = %stderr,
             "clone failed"
         );
-        // GitHub App permission-denied UX (plan-10 Step 4.3).
+        // GitHub App permission-denied UX.
         if stderr.contains("Resource not accessible by integration") {
             return Err((
                 StatusCode::BAD_GATEWAY,
@@ -481,8 +478,8 @@ async fn add_via_clone(
 }
 
 /// `DELETE /api/repositories/{id}` — remove the caller's association.
-/// Always-purge per plan-10 Step 5 + reviewer rec #5 with the user-confirmed
-/// behaviour: drop the on-disk clone when the caller was the last user.
+/// Always-purge behaviour: drop the on-disk clone when the caller was the
+/// last user.
 pub async fn delete(
     State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,

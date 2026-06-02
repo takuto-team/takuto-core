@@ -1,14 +1,13 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 step 1 — deprecation header for renamed REST paths.
+//! Deprecation header for renamed REST paths.
 //!
-//! `/api/workflows/*` is renamed to `/api/work-items/*` per plan-07 §1.
-//! Both paths mount the same handlers for one minor release; this
-//! middleware tags responses on the legacy `/api/workflows/*` path with
-//! an `X-Maestro-Deprecation` header so external callers (curl scripts,
-//! integration bots) know to switch before the legacy paths are removed
-//! in the next release.
+//! `/api/workflows/*` is renamed to `/api/work-items/*`. Both paths mount
+//! the same handlers for one minor release; this middleware tags responses
+//! on the legacy `/api/workflows/*` path with an `X-Maestro-Deprecation`
+//! header so external callers (curl scripts, integration bots) know to
+//! switch before the legacy paths are removed in the next release.
 
 use axum::extract::Request;
 use axum::http::{HeaderName, HeaderValue, Uri};
@@ -17,8 +16,7 @@ use axum::response::Response;
 
 const DEPRECATION_HEADER: HeaderName = HeaderName::from_static("x-maestro-deprecation");
 // Note: workflow-definitions stays unchanged (the TOML *definitions* are
-// still called "workflows" per plan-07 §1 — only the work-item REST
-// surface renames).
+// still called "workflows" — only the work-item REST surface renames).
 const LEGACY_PREFIX: &str = "/api/workflows";
 
 /// Tag responses on `/api/workflows/*` (excluding `/api/workflow-definitions`)
@@ -76,8 +74,8 @@ mod tests {
     #[test]
     fn does_not_match_workflow_definitions() {
         // `workflow_definitions` refers to TOML pipeline definitions
-        // (which stay named "workflows" per plan-07 §1). Only the
-        // work-item REST surface renames.
+        // (which stay named "workflows"). Only the work-item REST surface
+        // renames.
         assert!(!is_legacy_workflows_path(&Uri::from_static(
             "/api/workflow-definitions"
         )));

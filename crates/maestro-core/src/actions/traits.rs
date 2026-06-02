@@ -12,10 +12,11 @@ use crate::process::CommandOutput;
 pub trait ExternalActions: Send + Sync {
     // Jira
     //
-    // Plan-10: ticket-scoped Jira methods now take `repo_path: &Path` explicitly
-    // so callers thread the workflow's repository row rather than reading a
-    // global `cfg.git.repo_path`. The path is the cwd for the `acli` subprocess
-    // (acli reads the workspace context from the cwd it's spawned in).
+    // Ticket-scoped Jira methods take `repo_path: &Path` explicitly so
+    // callers thread the workflow's repository row rather than reading a
+    // global `cfg.git.repo_path`. The path is the cwd for the `acli`
+    // subprocess (acli reads the workspace context from the cwd it's
+    // spawned in).
     async fn assign_ticket(&self, repo_path: &Path, key: &str) -> Result<()>;
     async fn transition_ticket(&self, repo_path: &Path, key: &str, status: &str) -> Result<()>;
     async fn unassign_ticket(&self, repo_path: &Path, key: &str) -> Result<()>;
@@ -23,10 +24,10 @@ pub trait ExternalActions: Send + Sync {
 
     // Git/GitHub
     //
-    // Plan-10: worktree-scoped operations now take `repo_path: &Path` explicitly.
-    // The implementor no longer reads `self.repo_path()` (a global config getter
-    // that was dropped); callers resolve the repository's `local_path` from the
-    // workflow's `repository_id` and thread it in.
+    // Worktree-scoped operations take `repo_path: &Path` explicitly. The
+    // implementor no longer reads `self.repo_path()` (a global config
+    // getter that was dropped); callers resolve the repository's
+    // `local_path` from the workflow's `repository_id` and thread it in.
     async fn create_worktree(
         &self,
         repo_path: &Path,

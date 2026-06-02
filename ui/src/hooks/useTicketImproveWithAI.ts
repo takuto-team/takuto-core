@@ -7,9 +7,9 @@
  * (true while the inline `AiPromptPanel` is loading), and the
  * confirm/discard handlers for the resulting diff.
  *
- * Phase 5 step 4 extraction. The abort cleanup `useEffect` aborts any
- * in-flight `/api/tickets/{key}/improve` request on unmount (transitively
- * from the modal closing). The non-AbortError toast path is preserved.
+ * The abort cleanup `useEffect` aborts any in-flight
+ * `/api/tickets/{key}/improve` request on unmount (transitively from the
+ * modal closing). The non-AbortError toast path is preserved.
  */
 
 import { useEffect, useRef, useState } from "react";

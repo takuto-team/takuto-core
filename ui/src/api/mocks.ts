@@ -2,12 +2,12 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Phase 2 mock layer — in-memory backend for the per-user credential
- * endpoints listed in 04_architecture.md §3 + §4. Used by Storybook (and
- * optionally by `npm run dev`) while Phase 2b is still landing the Rust
- * handlers. **Not** shipped in the production bundle: every entry point is
- * gated by `isMocksEnabled()`, which reads
- * `import.meta.env.VITE_USE_MOCKS === 'true'` or a runtime override.
+ * In-memory mock backend for the per-user credential endpoints listed in
+ * 04_architecture.md §3 + §4. Used by Storybook (and optionally by
+ * `npm run dev`) while the Rust handlers are still landing. **Not** shipped
+ * in the production bundle: every entry point is gated by `isMocksEnabled()`,
+ * which reads `import.meta.env.VITE_USE_MOCKS === 'true'` or a runtime
+ * override.
  *
  * Stories drive the runtime override (`setMocksEnabled(true)`) so the env
  * var is not required in CI / `npm run build`. The override also lets each
@@ -127,7 +127,7 @@ export function mockSetProviderCredential(
   const kind: ProviderCredentialKind = body.kind ?? "api_key";
 
   if (kind === "cli_state") {
-    // Task #39: only Claude accepts cli_state.
+    // Only Claude accepts cli_state.
     if (provider !== "claude") {
       return jsonResponse(400, {
         error: "cli_state_only_supported_for_claude",

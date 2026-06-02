@@ -34,19 +34,18 @@ pub struct LoginBody {
 ///
 /// Authenticate against the SQLite database and issue a `db-` session cookie.
 ///
-/// Plan-02 AC-3 flow (after the per-IP `tower_governor` layer has cleared the
-/// request):
+/// Flow (after the per-IP `tower_governor` layer has cleared the request):
 /// 1. Resolve the username to a `user_id`. Unknown username → generic **401**
-///    without recording any attempt (G/W/T 3.9 — locking a non-existent user
-///    would leak account existence via the 429 boundary).
+///    without recording any attempt (locking a non-existent user would leak
+///    account existence via the 429 boundary).
 /// 2. Check `failed_count_in_window(user_id, password, 600) >= 5` → **429**
 ///    with `Retry-After` and a JSON body containing the remaining window
-///    minutes (G/W/T 3.5).
+///    minutes.
 /// 3. Verify the password. Failure → record an attempt with `success=0` and
 ///    return **401**.
 /// 4. On success → record `success=1`, **clear failed counters** so the next
-///    failed attempt restarts from 1 (G/W/T 3.6), apply session rotation
-///    (G/W/T 5.1), then issue the session cookie.
+///    failed attempt restarts from 1, apply session rotation, then issue the
+///    session cookie.
 pub async fn login(
     State(auth): State<AuthState>,
     State(config): State<ConfigState>,
@@ -58,7 +57,6 @@ pub async fn login(
         return (StatusCode::SERVICE_UNAVAILABLE, "Database not available").into_response();
     };
 
-    // Plan-11 step 3 cluster A: users DAO on the adapter.
     let has_users = maestro_core::db::users::count_users(db.adapter())
         .await
         .unwrap_or(0)
@@ -85,10 +83,6 @@ pub async fn login(
     }
 
     // Step 2: lockout check.
-    //
-    // Plan-11 step 3: login_attempts moved to the agnostic DbAdapter API.
-    // The DAO is async so no `spawn_blocking` wrapping is needed — calling
-    // directly from this async handler is correct.
     let adapter = db.adapter();
     let count = failed_count_in_window(adapter, &user.id, AttemptKind::Password, LOCKOUT_WINDOW_SECS)
         .await
@@ -132,12 +126,9 @@ pub async fn login(
     // weak Argon2 hashes via Dev C's path).
     let verified = authenticate_db_user(db, &body.username, &body.password).await;
 
-    // Step 4: record the outcome.
-    //
-    // Plan-11 step 3: agnostic DbAdapter — direct async calls, no
-    // spawn_blocking wrapper. `_ = ` keeps the original "best-effort
-    // audit" semantics (a failure to record an attempt must not bubble
-    // up as a 5xx; the legitimate login path stays clean).
+    // Step 4: record the outcome. `_ = ` keeps the "best-effort audit"
+    // semantics (a failure to record an attempt must not bubble up as a
+    // 5xx; the legitimate login path stays clean).
     let adapter = db.adapter();
     let success = verified.is_some();
     let _ = record_attempt(adapter, &user.id, AttemptKind::Password, success).await;
@@ -151,8 +142,6 @@ pub async fn login(
     }
 
     // Step 5: session rotation + create session.
-    //
-    // Plan-11 step 3 cluster Sessions: sessions + credentials on the adapter.
     let kick = config.config.read().await.web.kick_other_sessions_on_login;
     if kick {
         let mut tx = match db.adapter().begin().await {
@@ -190,7 +179,6 @@ pub async fn logout(
     jar: CookieJar,
 ) -> impl IntoResponse {
     // If this is a DB session, delete the server-side session record.
-    // Plan-11 step 3 cluster Sessions: sessions on the adapter.
     if let Some(ref db) = auth.db
         && let Some(cookie) = jar.get(SESSION_COOKIE_NAME)
     {

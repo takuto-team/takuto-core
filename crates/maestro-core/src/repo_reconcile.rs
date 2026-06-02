@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-10 startup reconciliation helpers.
+//! Startup reconciliation helpers.
 //!
 //! Two passes run at startup, BEFORE `engine.restore_persisted_workflows()`:
 //!
@@ -13,22 +13,17 @@
 //!
 //! 2. **Snapshot → `user_repositories`**: for every persisted workflow with a
 //!    known `user_id` and a `workspace_name` matching a registered repo,
-//!    ensure the `(user_id, repository_id)` association exists. This makes
-//!    the plan-09 → plan-10 upgrade transparent — without it, every restored
-//!    workflow would disappear from its owner's dashboard the moment Step 6
-//!    filtering lands.
+//!    ensure the `(user_id, repository_id)` association exists. Without this
+//!    backfill, restored workflows would disappear from their owner's
+//!    dashboard once user-scoped filtering is enforced.
 //!
 //! The reconciliation is the *only* place we read snapshot files without
 //! consuming them into the engine — we intentionally use
 //! `workflow::snapshot::read_all_workspace_snapshots` which doesn't mutate
 //! state.
-
-//! ### Plan-11 step 3 (this commit)
 //!
-//! Migrated to the agnostic [`crate::db::DbAdapter`] alongside
-//! `db/repositories.rs`. Both helpers are now `async fn` taking
-//! `&DbAdapter`; callers (`maestro-cli/src/main.rs` startup) await them
-//! directly without the legacy `db.conn().lock().await` ceremony.
+//! Both helpers are `async fn` taking `&DbAdapter`; callers await them
+//! directly.
 
 use std::path::Path;
 
@@ -103,7 +98,7 @@ pub async fn reconcile_repositories(adapter: &DbAdapter, workspaces_dir: &str) -
                         local_path = %local_path,
                         repo_url = ?repo_url,
                         default_branch = %default_branch,
-                        "plan-10 reconciliation: registered repository"
+                        "Reconciliation: registered repository"
                     );
                 }
             }
@@ -112,7 +107,7 @@ pub async fn reconcile_repositories(adapter: &DbAdapter, workspaces_dir: &str) -
                     name = %name,
                     local_path = %local_path,
                     error = %e,
-                    "plan-10 reconciliation: failed to upsert repository"
+                    "Reconciliation: failed to upsert repository"
                 );
             }
         }
@@ -135,7 +130,7 @@ pub async fn backfill_user_repositories_from_snapshots(
     let records = match crate::workflow::snapshot::read_all_workspace_snapshots(data_dir) {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, "plan-10 backfill: failed to read workspace snapshots");
+            tracing::warn!(error = %e, "Backfill: failed to read workspace snapshots");
             return Ok(0);
         }
     };
@@ -153,7 +148,7 @@ pub async fn backfill_user_repositories_from_snapshots(
         else {
             // The workflow points at a workspace_name we couldn't reconcile to
             // a registered repository — skip silently. The workflow will be
-            // invisible until an admin re-adds the repo (matches AC-17).
+            // invisible until an admin re-adds the repo.
             continue;
         };
         if crate::db::repositories::add_for_user(adapter, uid, &repo.id).await? {
@@ -169,8 +164,7 @@ pub async fn backfill_user_repositories_from_snapshots(
 ///
 /// Mirrors the helper in `maestro_web::routes::repos::read_git_remote_url`
 /// which is `pub(super)` and therefore unreachable from here. Kept identical
-/// in behaviour. When plan-10 lands the unified repositories REST module
-/// (Dev C), both copies should reduce to one `pub` helper.
+/// in behaviour; both copies should eventually reduce to one `pub` helper.
 pub fn read_git_remote_url(repo_path: &Path) -> Option<String> {
     let git_config = std::fs::read_to_string(repo_path.join(".git/config")).ok()?;
     let mut in_origin = false;

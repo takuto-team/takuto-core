@@ -137,7 +137,7 @@ describe("apiPostJson()", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Per-user credentials (Phase 2 — auth-overhaul).
+// Per-user credentials.
 // All tests below force `clearMocksOverride()` first so a previous test that
 // flipped the runtime override doesn't bleed into the next.
 // ---------------------------------------------------------------------------
@@ -226,7 +226,7 @@ describe("per-user credentials client", () => {
     });
   });
 
-  // ── Task #40 — Claude `kind=cli_state` path. ──
+  // ── Claude `kind=cli_state` path. ──
 
   it("setProviderCredential threads kind + claude_session_json into the POST body", async () => {
     mockFetch(204);
@@ -486,7 +486,7 @@ describe("fetchOnboardingStatus()", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Plan-10 repository wrappers.
+// Repository wrappers.
 // ---------------------------------------------------------------------------
 
 describe("repository API wrappers", () => {

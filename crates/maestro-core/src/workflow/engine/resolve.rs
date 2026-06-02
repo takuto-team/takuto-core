@@ -29,7 +29,6 @@ pub(crate) async fn resolve_workspace_name(
     db: Option<&Database>,
     config: &Arc<RwLock<Config>>,
 ) -> String {
-    // Plan-11 step 3: repositories DAO migrated to the agnostic adapter.
     if let (Some(repo_id), Some(database)) = (repository_id, db)
         && let Ok(Some(row)) = crate::db::repositories::get(database.adapter(), repo_id).await
     {
@@ -43,9 +42,9 @@ pub(crate) async fn resolve_workspace_name(
 
 /// Resolve `(repo_path, default_branch)` for a workflow.
 ///
-/// Plan-10 threading rule: every workflow stores `repository_id` (the durable
-/// FK to the `repositories` row) plus `workspace_name` (denormalised back-compat
-/// handle). This helper looks them up in priority order:
+/// Threading rule: every workflow stores `repository_id` (the durable FK
+/// to the `repositories` row) plus `workspace_name` (denormalised
+/// back-compat handle). This helper looks them up in priority order:
 ///   1. `repository_id → db::repositories::get` (canonical).
 ///   2. `workspace_name → db::repositories::get_by_name` (defensive — covers
 ///      restored snapshots not yet back-filled by `migrate_orphan_repo_associations`).
@@ -124,7 +123,7 @@ pub(super) fn scan_definitions_dir(dir: &Path) -> Vec<(String, std::time::System
 }
 
 /// Resolve the list of `worktree_init_commands` for the workflow owner's
-/// `(user_id, workspace_name)` pair (plan-09 Step 3).
+/// `(user_id, workspace_name)` pair.
 ///
 /// Resolution rules:
 /// * If `workflow_user_id` is `None` or no `db` is available (e.g. some test
@@ -146,9 +145,9 @@ pub async fn resolve_worktree_init_commands(
     let (Some(user_id), Some(db)) = (workflow_user_id, db) else {
         return Vec::new();
     };
-    // Plan-11 step 3: user_worktree_commands migrated to the agnostic
-    // adapter; no rusqlite MutexGuard needed here anymore. The DAO is
-    // async — direct call from this already-async fn.
+    // user_worktree_commands uses the agnostic adapter; no rusqlite
+    // MutexGuard needed. The DAO is async — direct call from this
+    // already-async fn.
     match crate::db::user_worktree_commands::get(db.adapter(), user_id, workspace_name).await {
         Ok(Some(row)) => row.init_commands,
         Ok(None) => Vec::new(),

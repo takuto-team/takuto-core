@@ -58,15 +58,14 @@ pub struct WorkflowEngine {
     /// `worktree_init_commands` overrides. `None` when running without a DB (e.g.
     /// some test paths) — the driver then falls back to the global config.
     pub(crate) db: Option<Database>,
-    /// Phase 2b.3 (04_architecture.md §6): optional `GitAuthResolver` used to
-    /// pin credentials at workflow start and build per-step
-    /// `WorkerSecretsBundle`s. `None` when running without the resolver
-    /// (legacy poller / single-tenant) — the worker falls back to the
-    /// ambient-env `PASSTHROUGH_ENV` path.
+    /// Optional `GitAuthResolver` used to pin credentials at workflow
+    /// start and build per-step `WorkerSecretsBundle`s. `None` when
+    /// running without the resolver (legacy poller / single-tenant) —
+    /// the worker falls back to the ambient-env `PASSTHROUGH_ENV` path.
     pub(crate) git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
-    /// Phase 2b.3.x: `GhClient` used by the engine for at-resume PAT
-    /// revalidation. Defaults to a `RealGhClient`. Test fixtures override
-    /// via [`Self::with_gh_client`] to inject a mock.
+    /// `GhClient` used by the engine for at-resume PAT revalidation.
+    /// Defaults to a `RealGhClient`. Test fixtures override via
+    /// [`Self::with_gh_client`] to inject a mock.
     pub(crate) gh_client: Arc<dyn crate::auth::GhClient>,
     // Service structs
     persistence: WorkflowPersistence,
@@ -176,8 +175,8 @@ impl WorkflowEngine {
         }
     }
 
-    /// Phase 2b.3.x: override the GhClient (production uses `RealGhClient`;
-    /// tests inject a mock).
+    /// Override the GhClient (production uses `RealGhClient`; tests
+    /// inject a mock).
     pub fn with_gh_client(mut self, gh: Arc<dyn crate::auth::GhClient>) -> Self {
         self.gh_client = gh.clone();
         self.persistence.set_gh_client(gh.clone());
@@ -185,9 +184,9 @@ impl WorkflowEngine {
         self
     }
 
-    /// Phase 2b.3: attach the `GitAuthResolver` so the driver can pin
-    /// credentials at workflow start and build per-step worker secrets
-    /// bundles. Builder-style so the existing constructor signature stays
+    /// Attach the `GitAuthResolver` so the driver can pin credentials at
+    /// workflow start and build per-step worker secrets bundles.
+    /// Builder-style so the existing constructor signature stays
     /// back-compatible with all test fixtures.
     ///
     /// Propagates the same `Arc` to the three service structs that spawn
@@ -297,7 +296,7 @@ impl WorkflowEngine {
     /// Reassign every workflow currently in the repository whose `user_id` is
     /// `None` to `owner_id`. Returns the number of workflows that were touched.
     ///
-    /// This is the in-memory half of AC-4's one-shot orphan migration. The
+    /// This is the in-memory half of the one-shot orphan migration. The
     /// caller is responsible for persisting via [`sync_workflow_snapshot`]
     /// once the migration is complete so it survives a crash. The helper is
     /// idempotent: re-running it on a clean repository is a no-op.
@@ -1266,15 +1265,15 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 9. start_workflow propagates user_id (AC-4 wiring)
+    // 9. start_workflow propagates user_id
     // -----------------------------------------------------------------------
 
     /// Verifies that `WorkflowEngine::start_workflow` stores the caller-supplied
-    /// `user_id` on the created `Workflow`. This is the inner half of AC-4:
-    /// pollers pass `Some(resolved_owner_id)`, web `start-manual` passes
+    /// `user_id` on the created `Workflow`. Pollers pass
+    /// `Some(resolved_owner_id)`, web `start-manual` passes
     /// `Some(auth.user_id)`, and the workflow should carry that owner forward
-    /// so the per-user filter (AC-1) and dashboard list endpoint match the
-    /// right user.
+    /// so the per-user filter and dashboard list endpoint match the right
+    /// user.
     #[tokio::test]
     async fn start_workflow_propagates_user_id() {
         let config = Arc::new(RwLock::new(Config::default()));
@@ -1366,11 +1365,10 @@ mod tests {
         assert!(wf.user_id.is_none(), "None should leave the workflow unowned");
     }
 
-    /// Plan-07 step 4 first slice — every call to `start_workflow`
-    /// must shadow-write the matching `work_items` row alongside the
-    /// in-memory map insert. The map remains the truth-of-record; the
-    /// row in `work_items` is dead weight until later slices wire the
-    /// rest of the engine to it.
+    /// Every call to `start_workflow` must shadow-write the matching
+    /// `work_items` row alongside the in-memory map insert. The map
+    /// remains the truth-of-record; the row in `work_items` is consumed
+    /// by the dashboard reads.
     #[tokio::test]
     async fn start_workflow_shadow_writes_work_items_row() {
         let config = Arc::new(RwLock::new(Config::default()));
@@ -1445,11 +1443,10 @@ mod tests {
         assert!(!row.driver_started);
     }
 
-    /// Plan-07 slice 15 (step-6 backfill) — `shadow_persist_work_item`
-    /// must be safe to call twice on the same `Workflow`. This is
-    /// the load-bearing claim of the restore-time backfill:
-    /// restarting an already-backfilled install must not produce a
-    /// hard error and must not create a duplicate row.
+    /// `shadow_persist_work_item` must be safe to call twice on the same
+    /// `Workflow`. This is the load-bearing claim of the restore-time
+    /// backfill: restarting an already-backfilled install must not
+    /// produce a hard error and must not create a duplicate row.
     ///
     /// The helper logs WARN on the second call (the UNIQUE index
     /// on `(workspace_name, ticket_key)` rejects the duplicate) but
@@ -1507,11 +1504,10 @@ mod tests {
         );
     }
 
-    /// Plan-07 step 4 slice 2 — `pause_workflow` must shadow-write the
-    /// new `Paused` state to the DB row. We exercise the engine's
-    /// `WorkflowTransitions` (where the inline shadow-write lives)
-    /// rather than the free `driver::transition` helper to cover the
-    /// path the dashboard pause button actually uses.
+    /// `pause_workflow` must shadow-write the new `Paused` state to the
+    /// DB row. We exercise the engine's `WorkflowTransitions` (where the
+    /// inline shadow-write lives) rather than the free `driver::transition`
+    /// helper to cover the path the dashboard pause button actually uses.
     #[tokio::test]
     async fn pause_workflow_shadow_writes_state_change() {
         use crate::workflow::engine::transitions::WorkflowTransitions;
@@ -1607,10 +1603,10 @@ mod tests {
         );
     }
 
-    /// Plan-07 step 4 slice 3 — round-trip the step shadow helpers.
-    /// `shadow_record_step_start` returns an id which
-    /// `shadow_record_step_end` resolves to the same row; the final
-    /// row reflects the end-write's status, exit code, and timestamps.
+    /// Round-trip the step shadow helpers. `shadow_record_step_start`
+    /// returns an id which `shadow_record_step_end` resolves to the same
+    /// row; the final row reflects the end-write's status, exit code, and
+    /// timestamps.
     #[tokio::test]
     async fn shadow_record_step_start_and_end_round_trip() {
         let db = Database::open_in_memory().expect("open in-memory db");
@@ -1693,11 +1689,10 @@ mod tests {
         assert_eq!(steps[0].ended_at, Some(350));
     }
 
-    /// Plan-07 step 4 slice 4 — round-trip the def-run shadow
-    /// helpers. The start write places the row at Running with
-    /// `started_at` populated; subsequent finish writes flip the row
-    /// to Completed / Error while preserving the original
-    /// `started_at` (UPDATE-only contract).
+    /// Round-trip the def-run shadow helpers. The start write places the
+    /// row at Running with `started_at` populated; subsequent finish
+    /// writes flip the row to Completed / Error while preserving the
+    /// original `started_at` (UPDATE-only contract).
     #[tokio::test]
     async fn shadow_def_run_start_and_finish_round_trip() {
         let db = Database::open_in_memory().expect("open in-memory db");
@@ -1825,11 +1820,10 @@ mod tests {
         assert_eq!(runs[0].error_message, None);
     }
 
-    /// Plan-07 step 4 slice 4 — `shadow_finish_def_run` is a silent
-    /// no-op when no prior start row exists. This is critical: the
-    /// engine writes Completed/Error after the in-memory mutation,
-    /// and a slow / failed start-write must not surface as an error
-    /// path at finish time.
+    /// `shadow_finish_def_run` is a silent no-op when no prior start
+    /// row exists. This is critical: the engine writes Completed/Error
+    /// after the in-memory mutation, and a slow / failed start-write
+    /// must not surface as an error path at finish time.
     #[tokio::test]
     async fn shadow_finish_def_run_is_silent_noop_without_prior_start() {
         let db = Database::open_in_memory().expect("open in-memory db");
@@ -1877,9 +1871,9 @@ mod tests {
         );
     }
 
-    /// Plan-07 step 4 slice 3 — end-write is a no-op when `db` is
-    /// `None` OR when the start-write couldn't return an id. Confirms
-    /// that flaky DB conditions never throw from the engine path.
+    /// End-write is a no-op when `db` is `None` OR when the start-write
+    /// couldn't return an id. Confirms that flaky DB conditions never
+    /// throw from the engine path.
     #[tokio::test]
     async fn shadow_record_step_end_is_noop_when_id_missing() {
         let db = Database::open_in_memory().expect("open in-memory db");

@@ -23,8 +23,8 @@ use super::types::{
 };
 use super::write_secret::write_secret_file;
 
-/// Task #39: unseal the user's optional `kind = cli_state` row for Claude
-/// (the user's `~/.claude.json` blob) and write it to
+/// Unseal the user's optional `kind = cli_state` row for Claude (the
+/// user's `~/.claude.json` blob) and write it to
 /// `<dir>/claude_session.json` (mode 0400). Returns `None` when the row
 /// doesn't exist — callers treat that as "API-key-only setup, no session
 /// state needed" and don't error.
@@ -34,8 +34,8 @@ pub(super) async fn unseal_claude_session(
     workflow_user_id: &str,
     dir: &Path,
 ) -> Result<Option<PathBuf>> {
-    // Plan-11 step 3 cluster B: provider_credentials migrated to the
-    // agnostic adapter; no rusqlite MutexGuard needed.
+    // provider_credentials uses the agnostic adapter; no rusqlite
+    // MutexGuard needed.
     let row = provider_credentials::find_active_with_kind(
         db.adapter(),
         workflow_user_id,
@@ -174,11 +174,11 @@ pub(super) async fn unseal_provider_credential(
     })?;
 
     // Find the row by the pinned id when set; otherwise by (user, provider).
-    // Pre-Phase-2b.3 we don't yet have an `id`-keyed lookup helper, so the
-    // pinned row id is informational for now — we always do the
-    // (user_id, provider, kind=api_key) lookup. Task #39: switched to the
-    // kind-explicit query so the lookup is unambiguous when a Claude user
-    // also has a `cli_state` row (UNIQUE(user_id, provider, kind)).
+    // We don't yet have an `id`-keyed lookup helper, so the pinned row id
+    // is informational for now — we always do the (user_id, provider,
+    // kind=api_key) lookup. The kind-explicit query keeps the lookup
+    // unambiguous when a Claude user also has a `cli_state` row
+    // (UNIQUE(user_id, provider, kind)).
     let row = provider_credentials::find_active_with_kind(
         db.adapter(),
         workflow_user_id,

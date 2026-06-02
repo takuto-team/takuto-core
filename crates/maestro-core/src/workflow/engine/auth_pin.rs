@@ -1,9 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-//! Phase 2b.3 workflow auth pinning + per-step `WorkerSecretsBundle`
-//! construction. Split off `driver.rs` so the bootstrap and step-runner
-//! sub-modules can both reach the bundle helper without the bundle
-//! plumbing dominating `driver.rs`.
+//! Workflow auth pinning + per-step `WorkerSecretsBundle` construction.
+//! Split off `driver.rs` so the bootstrap and step-runner sub-modules can
+//! both reach the bundle helper without the bundle plumbing dominating
+//! `driver.rs`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use crate::error::Result;
 
 use super::types::Workflow;
 
-/// Phase 2b.3: pin the workflow's credentials at the first agent step.
+/// Pin the workflow's credentials at the first agent step.
 /// Idempotent — if the workflow already has an `auth_pin` (snapshot resume,
 /// re-entry after pause), the existing pin is preserved so an in-flight
 /// workflow survives an admin provider switch.
@@ -61,8 +61,8 @@ pub(super) async fn ensure_workflow_auth_pin(
     Ok(())
 }
 
-/// Phase 2b.3 — build a [`WorkerSecretsBundle`] for the workflow and return
-/// it as an `Arc` ready to hand to [`ContainerRunner::with_secrets_bundle`].
+/// Build a [`WorkerSecretsBundle`] for the workflow and return it as an
+/// `Arc` ready to hand to [`ContainerRunner::with_secrets_bundle`].
 ///
 /// Why a helper: the bundle MUST be attached to every runner that spawns an
 /// agent worker — both the bootstrap runner (mise install / worktree init)
@@ -74,8 +74,8 @@ pub(super) async fn ensure_workflow_auth_pin(
 /// even though the bundle had built successfully earlier in the workflow.
 ///
 /// Returns `None` (and logs a single line at debug or warn) when the
-/// pre-Phase-2b.3 legacy `PASSTHROUGH_ENV` path is the correct fallback:
-/// no resolver, no user_id, no db, or a build failure. Callers use
+/// legacy `PASSTHROUGH_ENV` path is the correct fallback: no resolver,
+/// no user_id, no db, or a build failure. Callers use
 /// `if let Some(bundle) = ... { runner = runner.with_secrets_bundle(bundle); }`.
 pub(super) async fn try_attach_secrets_bundle(
     ticket_key: &str,
@@ -96,7 +96,7 @@ pub(super) async fn try_attach_secrets_bundle(
                 has_resolver = git_auth_resolver.is_some(),
                 has_user = user_id.is_some(),
                 has_db = db.is_some(),
-                "Phase 2b.3 bundle path skipped — using legacy PASSTHROUGH_ENV"
+                "Bundle path skipped — using legacy PASSTHROUGH_ENV"
             );
             return None;
         }
@@ -127,7 +127,7 @@ pub(super) async fn try_attach_secrets_bundle(
                 ticket = %ticket_key,
                 user_id = %uid,
                 provider = %pin.provider,
-                "Worker secrets bundle attached (Phase 2b.3 path active)"
+                "Worker secrets bundle attached"
             );
             Some(Arc::new(bundle))
         }

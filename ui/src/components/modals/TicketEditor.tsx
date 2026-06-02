@@ -6,7 +6,6 @@
  * `TicketDetailModal` for description editing: Banner (dirty/save row),
  * TabBar (Write/Preview tabs + side-by-side toggle), and Content
  * (textarea + preview). State + handlers live in `useTicketEditor`.
- * Phase 5 step 3 extraction.
  */
 
 import { MarkdownPreview } from "../MarkdownPreview";

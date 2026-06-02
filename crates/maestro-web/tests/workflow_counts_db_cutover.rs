@@ -1,10 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 13 — `workflow_counts` aggregates over the DB,
-//! with the in-memory HashMap as a transition fallback. Each entry
-//! is keyed by ticket_key and the DB row wins when both sources
-//! have data — so a workflow never double-counts during transition.
+//! `workflow_counts` aggregates over the DB, with the in-memory HashMap as
+//! a fallback. Each entry is keyed by ticket_key and the DB row wins when
+//! both sources have data — so a workflow never double-counts.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

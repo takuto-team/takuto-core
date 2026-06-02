@@ -5,10 +5,10 @@
  * `useStartWorkflow` — owns the repository selector state for
  * `TicketDetailModal` when it is rendered with `showStartButton=true`.
  *
- * Extracted in Phase 5 step 2: the repo dropdown shows at the top of the
- * modal (`StartWorkflowRepoBanner`) and the "Add to Dashboard" button at
- * the bottom (`StartWorkflowFooter`) both read the selected `repositoryId`
- * — so the state lives in this hook called once from the modal shell.
+ * The repo dropdown shows at the top of the modal
+ * (`StartWorkflowRepoBanner`) and the "Add to Dashboard" button at the
+ * bottom (`StartWorkflowFooter`) both read the selected `repositoryId` —
+ * so the state lives in this hook called once from the modal shell.
  *
  * Auto-selects the first repository when at least one exists (preserves
  * the modal's pre-extraction behaviour).

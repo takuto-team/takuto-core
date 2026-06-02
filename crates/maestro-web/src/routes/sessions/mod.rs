@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 //! HTTP + WebSocket reverse-proxy that fronts every editor and terminal
-//! session under a single dashboard port (GH-45).
+//! session under a single dashboard port.
 //!
 //! Path shape: `/s/{path-token}/{*rest}`
 //!  * `path-token` is the 32-char hex token registered in the
@@ -11,19 +11,19 @@
 //!    upstream backend listener (derived from `DOCKER_HOST` in DinD mode,
 //!    or `127.0.0.1` with local Docker).
 //!
-//! Behaviour required by the GH-45 acceptance criteria:
+//! Behaviour requirements:
 //!  * When a user database is configured, every request must carry a valid
 //!    `maestro_session` cookie (database-backed session). Unauthenticated
 //!    requests receive `401 Unauthorized` before the path token is even
 //!    checked, so a leaked URL alone is not sufficient to access a session.
 //!  * Unknown tokens → `404 Not Found`, empty body, no `kind` echoed back
-//!    (anti-info-leak per AC #6).
+//!    (anti-info-leak).
 //!  * `/s/{token}` with no trailing slash → `308 Permanent Redirect` to
 //!    `/s/{token}/` so relative asset URLs from openvscode-server / ttyd
 //!    resolve correctly.
 //!  * WebSocket upgrade requests are token-validated **before** the 101
-//!    handshake completes (AC #7) — an unknown token returns 404, never an
-//!    upgrade response.
+//!    handshake completes — an unknown token returns 404, never an upgrade
+//!    response.
 //!  * Successful WebSocket upgrades are tunnelled bidirectionally so the
 //!    backend's existing `Upgrade: websocket` flow keeps working through
 //!    the proxy.
@@ -74,7 +74,7 @@ pub async fn proxy_or_static_fallback(
     req: Request<Body>,
 ) -> Response<Body> {
     // Unknown `/api/*` paths must NOT fall through to the SPA bundle — a route
-    // that has been deleted (e.g. plan-10's removed `/api/workspaces`) should
+    // that has been deleted (e.g. a removed `/api/workspaces`) should
     // return 404, not 200 with `index.html`. The SPA is for client-side routes
     // only; the dashboard's API surface is canonical.
     if req.uri().path().starts_with("/api/") {
@@ -134,7 +134,6 @@ async fn authenticate_request(
     };
     match session_cookie_from_headers(headers) {
         Some(raw) if raw.starts_with("db-") => {
-            // Plan-11 step 3 cluster Sessions: sessions on the adapter.
             let uid = validate_db_session(db.adapter(), raw).await;
             uid.map(Some).ok_or(())
         }

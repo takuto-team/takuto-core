@@ -3,8 +3,9 @@
 
 /**
  * Provider-switch confirmation modal (05_ux_design.md §2.6). Forces the
- * admin to type `SWITCH` before persisting a provider change because Phase 2
- * marks every per-user credential for the previous provider as `inactive=1`.
+ * admin to type `SWITCH` before persisting a provider change because
+ * switching marks every per-user credential for the previous provider as
+ * `inactive=1`.
  *
  * Extracted from `AiProviderSettingsSection.tsx` so the section shell stays
  * focused on the save flow (CODING_STANDARDS §3 one component per file).

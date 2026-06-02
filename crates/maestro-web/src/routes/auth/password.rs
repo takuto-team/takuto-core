@@ -50,7 +50,6 @@ pub async fn change_password(
     };
 
     // Resolve the current user from the session cookie.
-    // Plan-11 step 3 cluster Sessions: sessions on the adapter.
     let cookie = session_cookie_from_headers(&headers).unwrap_or_default();
     let user_id = validate_db_session(db.adapter(), cookie).await;
 
@@ -74,9 +73,8 @@ pub async fn change_password(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    // Plan-11 step 3 cluster Sessions: credentials + sessions on the
-    // adapter. The transaction covers the credential rotation; the
-    // follow-up create_db_session is a separate adapter call.
+    // The transaction covers the credential rotation; the follow-up
+    // create_db_session is a separate adapter call.
     let adapter = db.adapter();
     let result: maestro_core::error::Result<(String, String)> = async {
         if !maestro_core::db::credentials::verify_user_password(adapter, &uid, &current_pw)
@@ -139,7 +137,6 @@ pub async fn regenerate_recovery_codes(
         return StatusCode::BAD_REQUEST.into_response();
     };
 
-    // Plan-11 step 3 cluster Sessions: sessions + credentials on the adapter.
     let cookie = session_cookie_from_headers(&headers).unwrap_or_default();
     let user_id = validate_db_session(db.adapter(), cookie).await;
     let Some(user_id) = user_id else {
@@ -202,19 +199,18 @@ pub async fn recover(
             .into_response();
     }
 
-    // Plan-02 AC-3 G/W/T 3.7: separate per-user counter for recovery attempts.
-    // The lockout threshold and window match the password path, but the counter
-    // is keyed by `AttemptKind::Recovery` so a brute-force on recovery codes
+    // Separate per-user counter for recovery attempts. The lockout
+    // threshold and window match the password path, but the counter is
+    // keyed by `AttemptKind::Recovery` so a brute-force on recovery codes
     // doesn't slip past the password counter and vice versa.
-    // Plan-11 step 3 cluster A: users DAO on the adapter.
     let user_lookup =
         maestro_core::db::users::get_user_by_username(db.adapter(), &body.username)
             .await
             .ok()
             .flatten();
-    // G/W/T 3.9 equivalent for recovery: unknown user → generic 401 without
-    // recording an attempt (lockout DoS would otherwise be free for any attacker
-    // who can guess a username pattern).
+    // Unknown user → generic 401 without recording an attempt (lockout
+    // DoS would otherwise be free for any attacker who can guess a
+    // username pattern).
     let Some(user) = user_lookup else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -231,9 +227,6 @@ pub async fn recover(
     }
 
     // Lockout check for the recovery counter.
-    //
-    // Plan-11 step 3: login_attempts moved to the agnostic DbAdapter API.
-    // Async DAO; no spawn_blocking wrapper needed.
     let adapter = db.adapter();
     let count = failed_count_in_window(adapter, &user.id, AttemptKind::Recovery, LOCKOUT_WINDOW_SECS)
         .await
@@ -274,8 +267,7 @@ pub async fn recover(
             .into_response();
     }
 
-    // Plan-11 step 3 cluster A: credentials on the adapter. The
-    // recover-flow's verify_and_consume + change_password +
+    // The recover-flow's verify_and_consume + change_password +
     // delete_user_sessions all run in one DbTransaction so they commit
     // atomically.
     let adapter = db.adapter();

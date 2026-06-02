@@ -91,8 +91,8 @@ pub struct WorkflowSummary {
     pub has_report: bool,
     /// Status of each dynamic workflow definition run for this ticket: def_name -> state display name.
     ///
-    /// Plan-07 step 1: the wire field is `definition_runs` (the Rust
-    /// field keeps the old name until step 4's engine refactor renames
+    /// The wire field is `definition_runs` (the Rust field keeps the old
+    /// name until a future engine refactor renames
     /// `Workflow.workflow_def_runs` → `WorkItem.definition_runs`).
     #[serde(rename = "definition_runs")]
     pub workflow_def_runs: HashMap<String, String>,
@@ -103,11 +103,11 @@ pub struct WorkflowSummary {
     /// ID of the user who created this workflow. `None` for legacy/poller workflows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
-    /// Plan-10: name of the repository (`repositories.name`) this workflow runs against.
-    /// Powers the per-card repo badge on the dashboard. Always populated — every
-    /// workflow has a `workspace_name` even pre-plan-10.
+    /// Name of the repository (`repositories.name`) this workflow runs
+    /// against. Powers the per-card repo badge on the dashboard. Always
+    /// populated — every workflow has a `workspace_name`.
     pub workspace_name: String,
-    /// Plan-10: FK to `repositories.id`. `None` for pre-plan-10 snapshots not yet
+    /// FK to `repositories.id`. `None` for legacy snapshots not yet
     /// back-filled by the startup reconciliation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository_id: Option<String>,

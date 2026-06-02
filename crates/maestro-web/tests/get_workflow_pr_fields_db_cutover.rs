@@ -1,10 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 14 — `get_workflow` reads `pr_url`, `pr_merged`,
-//! and `branch_name` from the work_items row when present.
-//! These three scalars are written straight to the DB by hooks
-//! (`update_pr_url` etc.) so the row is the freshest source.
+//! `get_workflow` reads `pr_url`, `pr_merged`, and `branch_name` from the
+//! work_items row when present. These three scalars are written straight to
+//! the DB by hooks (`update_pr_url` etc.) so the row is the freshest source.
 //!
 //! Tests diverge DB from HashMap on the three fields and confirm
 //! the response follows the DB.
@@ -186,9 +185,9 @@ async fn pr_fields_db_null_is_authoritative_not_fallback() {
     assert_eq!(v["pr_merged"], false);
 }
 
-/// When no DB row exists, the HashMap values are used. Pre-plan-07
-/// workflows must continue to render correctly during the
-/// transition window.
+/// When no DB row exists, the HashMap values are used. Legacy
+/// workflows must continue to render correctly when no work_items row
+/// has been written yet.
 #[tokio::test]
 async fn pr_fields_fall_back_to_hashmap_when_no_db_row() {
     let state = test_state_with_db();

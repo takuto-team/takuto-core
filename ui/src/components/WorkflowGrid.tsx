@@ -19,8 +19,8 @@ interface Props {
   repoExists: boolean;
   onSetupProject?: () => void;
   /**
-   * Plan-10: when set, only workflows whose `workspace_name` matches this
-   * value are shown. `null` (or omitted) shows all of the caller's items.
+   * When set, only workflows whose `workspace_name` matches this value are
+   * shown. `null` (or omitted) shows all of the caller's items.
    */
   activeRepoName?: string | null;
 }

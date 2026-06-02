@@ -13,8 +13,8 @@ interface Props {
   githubAppName?: string | null;
   onLogout: () => void;
   /**
-   * Plan-10: the user's added repositories. When the list is non-empty the
-   * header shows a small picker (active repo + chevron) instead of the bare
+   * The user's added repositories. When the list is non-empty the header
+   * shows a small picker (active repo + chevron) instead of the bare
    * "My Repositories" link.
    */
   repos?: RepositoryRow[];
@@ -28,7 +28,7 @@ interface Props {
 }
 
 /**
- * Plan-10: per-user repo picker in the header.
+ * Per-user repo picker in the header.
  *
  * - When the caller has zero repos added → shows the legacy CTA link to the
  *   "My Repositories" tab so they can add one.

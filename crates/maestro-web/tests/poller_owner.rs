@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for AC-4 — poller workflow ownership and one-shot orphan
+// Integration tests for poller workflow ownership and one-shot orphan
 // migration. These tests do not exercise the binary's startup directly; instead
 // they reproduce the same sequence the binary does (open DB → restore snapshot →
 // optionally migrate orphans → build router) so the migration helper's effect
@@ -208,13 +208,12 @@ async fn orphan_migration_e2e() {
             );
         }
 
-        // Plan-10: the workflow list endpoint additionally gates visibility
-        // on the caller's `user_repositories` set. Seed a `repositories` row
-        // matching the workflow's `workspace_name` and associate it with the
-        // admin so the post-migration assertion still observes the workflow.
-        // (Dev A's startup reconciliation does this for real boots; this test
-        // bypasses startup, so we do it inline.)
-        // Plan-11 step 3: repositories DAO on the adapter.
+        // The workflow list endpoint additionally gates visibility on the
+        // caller's `user_repositories` set. Seed a `repositories` row matching
+        // the workflow's `workspace_name` and associate it with the admin so
+        // the post-migration assertion still observes the workflow. (Startup
+        // reconciliation does this for real boots; this test bypasses
+        // startup, so we do it inline.)
         {
             let db = state.auth().db.as_ref().unwrap();
             let adapter = db.adapter();

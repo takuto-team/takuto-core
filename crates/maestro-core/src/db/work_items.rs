@@ -1,9 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 step 3 — typed DAO over the work-item tables.
+//! Typed DAO over the work-item tables.
 //!
-//! Six tables (created by migration v8, plan-07 step 2):
+//! Six tables:
 //!   - `work_items` — one row per Jira/GitHub ticket or manual item;
 //!     state + ticket metadata + git/PR state + agent state.
 //!   - `work_item_steps` — per-step execution log.
@@ -11,10 +11,6 @@
 //!   - `work_item_log_lines` — stdout/stderr/info/system lines.
 //!   - `work_item_port_mappings` — persisted port forwards.
 //!   - `work_item_run_commands` — run-command running state.
-//!
-//! This module is **dead code in production until plan-07 step 4** wires
-//! the engine to read/write through it. The DAO is self-contained,
-//! tested in isolation, and ready to be called.
 //!
 //! ## Style
 //!
@@ -25,7 +21,7 @@
 //!     through a Rust enum's `as_str()` / `parse()`.
 //!   - Visibility predicate (`list_work_items`, `get_work_item`) takes
 //!     `caller_user_id` + `caller_is_admin` and filters in one
-//!     `WHERE` clause — plan §3.
+//!     `WHERE` clause.
 
 use std::str::FromStr;
 
@@ -40,9 +36,8 @@ use crate::error::Result;
 /// keep that data as JSON in `state_payload`; the kind alone drives
 /// indexed queries.
 ///
-/// Plan-07 step 4: covers every variant the engine's `WorkflowState`
-/// enum has, so the engine's persist-to-DB pass can map 1:1 without
-/// information loss.
+/// Covers every variant the engine's `WorkflowState` enum has, so the
+/// engine's persist-to-DB pass can map 1:1 without information loss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkItemStateKind {
     Pending,
@@ -248,9 +243,9 @@ pub struct WorkItemRow {
     pub ticket_key: String,
     pub workspace_name: String,
     pub user_id: Option<String>,
-    // Plan-07 slice 10: repo association. Nullable to match
-    // `Workflow::repository_id: Option<String>` — pre-Plan-10
-    // workflows have no repo association.
+    // Repo association. Nullable to match
+    // `Workflow::repository_id: Option<String>` — legacy workflows have
+    // no repo association.
     pub repository_id: Option<String>,
     pub private: bool,
     pub started_manually: bool,
@@ -390,7 +385,7 @@ impl Default for LogPaging {
 /// ```
 ///
 /// `include_team_visible` defaults to `false` (creator-only model)
-/// until plan-03 lands the team-visibility policy.
+/// until the team-visibility policy lands.
 #[derive(Debug, Clone)]
 pub struct WorkItemListQuery {
     pub caller_user_id: Option<String>,
@@ -467,7 +462,7 @@ fn decode_work_item(r: &crate::db::DbRow) -> Result<WorkItemRow> {
         ticket_key: r.get_text(1)?,
         workspace_name: r.get_text(2)?,
         user_id: r.get_text_opt(3)?,
-        // Plan-07 slice 10: appended at column 26 to keep the
+        // Appended at column 26 to keep the
         // pre-existing positional indexes stable.
         repository_id: r.get_text_opt(26)?,
         private: r.get_i64(4)? != 0,
@@ -499,16 +494,15 @@ fn decode_work_item(r: &crate::db::DbRow) -> Result<WorkItemRow> {
 /// applied. Returns `Ok(None)` both when the row doesn't exist and when
 /// it exists but the caller can't see it — callers that need to
 /// distinguish "missing" from "forbidden" should fetch admin-side first.
-/// Plan-07 slice 11: focused getter for the three fields
-/// `require_workflow_access` consults, keyed by `ticket_key`. The
-/// route's path id is the ticket_key (matches the in-memory map
-/// key), not the row's `id` column (a UUID). We pick the
-/// most-recently started row when more than one matches — only one
-/// workflow is active per ticket_key at a time but historical rows
-/// from prior runs can accumulate.
+/// Focused getter for the three fields `require_workflow_access`
+/// consults, keyed by `ticket_key`. The route's path id is the
+/// ticket_key (matches the in-memory map key), not the row's `id`
+/// column (a UUID). We pick the most-recently started row when more
+/// than one matches — only one workflow is active per ticket_key at a
+/// time but historical rows from prior runs can accumulate.
 ///
 /// Returns `None` when no row matches; caller falls back to the
-/// in-memory HashMap during the plan-07 transition window.
+/// in-memory HashMap.
 pub async fn get_access_fields_by_ticket_key(
     adapter: &DbAdapter,
     ticket_key: &str,
@@ -529,9 +523,9 @@ pub async fn get_access_fields_by_ticket_key(
     )))
 }
 
-/// Plan-07 slice 13: project (ticket_key, state_kind) for every
-/// work item owned by `user_id`. Used by `workflow_counts` to
-/// aggregate by state without pulling full rows.
+/// Project (ticket_key, state_kind) for every work item owned by
+/// `user_id`. Used by `workflow_counts` to aggregate by state without
+/// pulling full rows.
 ///
 /// Returns one entry per ticket_key — when historical duplicates
 /// exist, the most-recently-started one wins. This matches the
@@ -567,12 +561,12 @@ pub async fn list_user_state_kinds(
     Ok(out)
 }
 
-/// Plan-07 slice 12: full-row fetch keyed by ticket_key. No
-/// visibility filter — callers must run their own policy check
-/// (the route layer's `require_workflow_access` already does so as
-/// the first action on every endpoint that uses this). Picks the
-/// most-recently-started row when historical duplicates exist,
-/// mirroring [`get_access_fields_by_ticket_key`].
+/// Full-row fetch keyed by ticket_key. No visibility filter — callers
+/// must run their own policy check (the route layer's
+/// `require_workflow_access` already does so as the first action on
+/// every endpoint that uses this). Picks the most-recently-started row
+/// when historical duplicates exist, mirroring
+/// [`get_access_fields_by_ticket_key`].
 pub async fn get_work_item_by_ticket_key(
     adapter: &DbAdapter,
     ticket_key: &str,
@@ -1282,9 +1276,9 @@ pub async fn delete_port_mappings_for_work_item(
     Ok(())
 }
 
-/// Plan-07 step 4 slice 6: shadow-write a port-mapping registration.
-/// Wraps [`upsert_port_mapping`] with the standard shadow contract:
-/// `None` `db` short-circuits, errors WARN and never propagate.
+/// Shadow-write a port-mapping registration. Wraps
+/// [`upsert_port_mapping`] with the standard shadow contract: `None`
+/// `db` short-circuits, errors WARN and never propagate.
 #[allow(clippy::too_many_arguments)]
 pub async fn shadow_upsert_port_mapping(
     db: Option<&crate::db::Database>,
@@ -1317,14 +1311,14 @@ pub async fn shadow_upsert_port_mapping(
             host_port,
             kind = %kind.as_str(),
             error = %e,
-            "Plan-07 shadow-write of port mapping upsert failed (route handler progress unaffected)"
+            "Ushadow-write of port mapping upsert failed (route handler progress unaffected)"
         );
     }
 }
 
-/// Plan-07 step 4 slice 6: shadow-clean every port mapping for a
-/// work item. Used at editor close so the DB row mirrors the
-/// in-memory `path_token_registry` cleanup.
+/// Shadow-clean every port mapping for a work item. Used at editor
+/// close so the DB row mirrors the in-memory `path_token_registry`
+/// cleanup.
 pub async fn shadow_delete_port_mappings_for_work_item(
     db: Option<&crate::db::Database>,
     work_item_id: &str,
@@ -1334,7 +1328,7 @@ pub async fn shadow_delete_port_mappings_for_work_item(
         tracing::warn!(
             work_item_id,
             error = %e,
-            "Plan-07 shadow-clean of port mappings failed (route handler progress unaffected)"
+            "Ushadow-clean of port mappings failed (route handler progress unaffected)"
         );
     }
 }
@@ -1470,11 +1464,11 @@ pub async fn finish_run_command_row(
     Ok(())
 }
 
-/// Plan-07 step 4 slice 5: shadow-write the start of a run-command
-/// container. Marks the (work_item, command_index) row as Running
-/// with `started_at` set and `container_id` populated. Failures (and
-/// `None` `db`) log at WARN and never propagate — the container has
-/// already started; the secondary store catching up is best-effort.
+/// Shadow-write the start of a run-command container. Marks the
+/// (work_item, command_index) row as Running with `started_at` set and
+/// `container_id` populated. Failures (and `None` `db`) log at WARN
+/// and never propagate — the container has already started; the
+/// secondary store catching up is best-effort.
 pub async fn shadow_start_run_command_row(
     db: Option<&crate::db::Database>,
     work_item_id: &str,
@@ -1498,15 +1492,15 @@ pub async fn shadow_start_run_command_row(
             work_item_id,
             command_index,
             error = %e,
-            "Plan-07 shadow-write of run-command start failed (route handler progress unaffected)"
+            "Ushadow-write of run-command start failed (route handler progress unaffected)"
         );
     }
 }
 
-/// Plan-07 step 4 slice 5: shadow-write the stop of a run-command
-/// container. UPDATE-only: an absent row stays absent so an
-/// out-of-order stop (e.g. stop fires before the start row landed)
-/// silently no-ops rather than producing an inconsistent row.
+/// Shadow-write the stop of a run-command container. UPDATE-only: an
+/// absent row stays absent so an out-of-order stop (e.g. stop fires
+/// before the start row landed) silently no-ops rather than producing
+/// an inconsistent row.
 pub async fn shadow_finish_run_command_row(
     db: Option<&crate::db::Database>,
     work_item_id: &str,
@@ -1521,7 +1515,7 @@ pub async fn shadow_finish_run_command_row(
             work_item_id,
             command_index,
             error = %e,
-            "Plan-07 shadow-write of run-command finish failed (route handler progress unaffected)"
+            "Ushadow-write of run-command finish failed (route handler progress unaffected)"
         );
     }
 }
@@ -1972,10 +1966,10 @@ mod tests {
         assert!(list_run_commands(&a, "wi-1").await.unwrap().is_empty());
     }
 
-    /// Plan-07 step 4 slice 5 — round-trip the run-command lifecycle
-    /// DAO helpers. `start_run_command_row` populates `running=true`
-    /// + `started_at`; `finish_run_command_row` flips `running=false`
-    /// + `ended_at` while leaving `started_at` intact.
+    /// Round-trip the run-command lifecycle DAO helpers.
+    /// `start_run_command_row` populates `running=true` + `started_at`;
+    /// `finish_run_command_row` flips `running=false` + `ended_at`
+    /// while leaving `started_at` intact.
     #[tokio::test]
     async fn start_run_command_row_then_finish_preserves_started_at() {
         let a = fresh_adapter().await;
@@ -2044,11 +2038,10 @@ mod tests {
         assert_eq!(rows[0].ended_at, None);
     }
 
-    /// Plan-07 slice 10 — `repository_id` round-trips through
-    /// insert + decode. Both Some and None must survive intact;
-    /// the column is the sole input to the upcoming
-    /// `require_workflow_access` cutover, so a silent loss here
-    /// would defeat that whole slice.
+    /// `repository_id` round-trips through insert + decode. Both Some
+    /// and None must survive intact; the column is the sole input to
+    /// `require_workflow_access`, so a silent loss here would defeat
+    /// the visibility check.
     #[tokio::test]
     async fn work_item_repository_id_round_trips_insert_and_get() {
         let a = fresh_adapter().await;
@@ -2065,7 +2058,7 @@ mod tests {
             .expect("row");
         assert_eq!(got.repository_id.as_deref(), Some("repo-123"));
 
-        // Row WITHOUT a repo association (legacy / pre-Plan-10).
+        // Row WITHOUT a repo association (legacy).
         let without_repo = sample_row("wf-without", "T-2", Some("u-1"));
         insert_work_item(&a, &without_repo).await.unwrap();
         let got = get_work_item(&a, "wf-without", Some("u-1"), false)
@@ -2075,9 +2068,9 @@ mod tests {
         assert_eq!(got.repository_id, None);
     }
 
-    /// Plan-07 step 4 slice 6 — `delete_port_mappings_for_work_item`
-    /// wipes every port mapping for a work item regardless of kind,
-    /// and is a silent no-op when none exist. Mirrors the contract
+    /// `delete_port_mappings_for_work_item` wipes every port mapping
+    /// for a work item regardless of kind, and is a silent no-op when
+    /// none exist. Mirrors the contract
     /// `shadow_delete_port_mappings_for_work_item` relies on at
     /// `close_editor`.
     #[tokio::test]
@@ -2140,10 +2133,9 @@ mod tests {
         );
     }
 
-    /// Plan-07 step 4 slice 5 — `finish_run_command_row` is a silent
-    /// no-op when no prior start row exists. Critical: a stop that
-    /// races ahead of the start shadow-write must not produce an
-    /// inconsistent row.
+    /// `finish_run_command_row` is a silent no-op when no prior start
+    /// row exists. Critical: a stop that races ahead of the start
+    /// shadow-write must not produce an inconsistent row.
     #[tokio::test]
     async fn finish_run_command_row_is_silent_noop_without_prior_start() {
         let a = fresh_adapter().await;

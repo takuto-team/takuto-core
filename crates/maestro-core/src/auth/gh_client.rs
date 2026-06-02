@@ -3,9 +3,9 @@
 
 //! Injectable shim around the `gh` CLI for per-user PAT validation.
 //!
-//! The Phase 2b.1 PAT-save flow shells out to `gh api -i user` (and
-//! `gh api orgs/<org>`) with `-H "Authorization: token <pat>"` so a freshly
-//! pasted PAT can be validated without touching the host's `gh auth login`
+//! The PAT-save flow shells out to `gh api -i user` (and `gh api
+//! orgs/<org>`) with `-H "Authorization: token <pat>"` so a freshly pasted
+//! PAT can be validated without touching the host's `gh auth login`
 //! credentials. The trait isolates the network from tests — every test
 //! fixture wires a `MockGhClient` so the suite never hits github.com.
 //!
@@ -52,9 +52,9 @@ pub trait GhClient: Send + Sync + 'static {
 
 /// Production [`GhClient`] that shells out to the real `gh` binary on PATH.
 ///
-/// Phase 2b.1 only uses the read endpoints (`api/user`, `api/orgs/<org>`)
-/// over a per-call PAT. The shim never persists the token; it lives only as
-/// a `-H` arg for the duration of one `gh` invocation.
+/// Only the read endpoints (`api/user`, `api/orgs/<org>`) are used, over a
+/// per-call PAT. The shim never persists the token; it lives only as a `-H`
+/// arg for the duration of one `gh` invocation.
 pub struct RealGhClient;
 
 impl RealGhClient {

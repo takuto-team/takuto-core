@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Task #48 — integration tests for `maestro provisioning {sha,commands}`.
+// Integration tests for `maestro provisioning {sha,commands}`.
 //
 // These tests invoke the compiled `maestro` binary against a temp config
 // file so the entrypoint shell's contract (run `maestro provisioning

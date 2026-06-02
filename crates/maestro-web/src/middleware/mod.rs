@@ -3,9 +3,8 @@
 
 //! Cross-cutting Tower/Axum middleware layers.
 //!
-//! - [`csrf`] — Origin/Referer allowlist for `POST/PUT/DELETE/PATCH` (plan-02 AC-1).
-//! - [`security_headers`] — CSP, HSTS, X-Frame-Options, etc. on every response
-//!   (plan-02 AC-6).
+//! - [`csrf`] — Origin/Referer allowlist for `POST/PUT/DELETE/PATCH`.
+//! - [`security_headers`] — CSP, HSTS, X-Frame-Options, etc. on every response.
 
 pub mod csrf;
 pub mod deprecation;

@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Per-user repository registry (plan-10).
+//! Per-user repository registry.
 //!
 //! Two tables, one module:
 //!
@@ -14,16 +14,14 @@
 //!   repository delete.
 //!
 //! The dashboard's "my repositories" tab and the workflow-list filter both
-//! drive off this table. See `tmp/plan-10-per-user-repositories.md` for the
-//! product model.
+//! drive off this table.
 //!
-//! ### Plan-11 step 3 (commit dc422de → 543606b → cd55778 → this commit)
+//! ### Backend compatibility
 //!
-//! Fourth DAO migrated to the backend-agnostic [`DbAdapter`] API. The
-//! `INSERT ... ON CONFLICT(col) DO NOTHING` form used by `upsert` and
+//! The `INSERT ... ON CONFLICT(col) DO NOTHING` form used by `upsert` and
 //! `add_for_user` is SQLite + Postgres-compatible; MySQL would need
-//! `ON DUPLICATE KEY UPDATE` (documented inline, deferred to plan §10
-//! step 4 when MySQL CI lands).
+//! `ON DUPLICATE KEY UPDATE` (documented inline, deferred until MySQL CI
+//! lands).
 
 use uuid::Uuid;
 
@@ -123,11 +121,11 @@ pub async fn list_all(adapter: &DbAdapter) -> Result<Vec<RepositoryRow>> {
 /// Other columns are *only* applied on insert — if a row already exists at
 /// `local_path`, the existing `name` / `repo_url` / `default_branch` /
 /// `created_by` are preserved. Use a separate update path if those need to
-/// change (none exists in plan-10).
+/// change (none exists today).
 ///
 /// Backend support: SQLite (≥ 3.24) and Postgres use `ON CONFLICT(...) DO
-/// NOTHING` verbatim. MySQL would use `INSERT IGNORE` — when MySQL lands
-/// (plan §10 step 4), this fn needs a `match adapter.backend()` branch.
+/// NOTHING` verbatim. MySQL would use `INSERT IGNORE` — when MySQL is
+/// added, this fn needs a `match adapter.backend()` branch.
 pub async fn upsert(
     adapter: &DbAdapter,
     name: &str,
@@ -176,7 +174,7 @@ pub async fn upsert(
 /// `false` if no such id existed. Cascades to `user_repositories` via FK.
 ///
 /// This is a DB-only delete; the on-disk clone is removed by the calling
-/// REST handler when appropriate (see plan-10 Step 5 always-purge).
+/// REST handler when appropriate (always-purge semantics).
 pub async fn delete(adapter: &DbAdapter, id: &str) -> Result<bool> {
     let affected = adapter
         .execute(
@@ -282,7 +280,7 @@ pub async fn add_for_user(
 ///
 /// This is a single-link delete only — it doesn't cascade to the
 /// `repositories` row or the on-disk clone. The REST layer decides whether to
-/// purge based on "last user remove" semantics (see plan-10 Step 5).
+/// purge based on "last user remove" semantics.
 pub async fn remove_for_user(
     adapter: &DbAdapter,
     user_id: &str,
@@ -303,9 +301,10 @@ pub async fn remove_for_user(
 /// Does the user have any registered repository with this `name`?
 ///
 /// Defensive back-compat path: workflow snapshots persist `workspace_name`
-/// (a string) rather than `repository_id` for legacy rows. The Step 6 filter
-/// uses this when the workflow's `repository_id` is absent. Returns `true` if
-/// at least one repository with that `name` is in the user's added set.
+/// (a string) rather than `repository_id` for legacy rows. The repository
+/// filter uses this when the workflow's `repository_id` is absent. Returns
+/// `true` if at least one repository with that `name` is in the user's
+/// added set.
 pub async fn user_has(
     adapter: &DbAdapter,
     user_id: &str,
@@ -327,7 +326,7 @@ pub async fn user_has(
 
 /// Return every active (non-terminal) workflow on `repository_id`, as
 /// `(ticket_key, user_id)` pairs. Used by the DELETE-repo handler to refuse
-/// removal when active work is in progress (plan-10 AC-16).
+/// removal when active work is in progress.
 ///
 /// "Active" = not Done, Stopped, or Error. We probe the per-workspace snapshot
 /// files via `workspace_name` matching (durable for restored snapshots), then
@@ -336,10 +335,10 @@ pub async fn user_has(
 ///
 /// **Caveat**: at the time of writing, workflow snapshots persist by
 /// `workspace_name` (the on-disk dir name) rather than `repository_id`. We
-/// resolve `local_path → name → snapshot_dir` so this works for legacy and
-/// post-plan-10 snapshots alike. If `repository_id` is later added to the
-/// snapshot model, this helper should be updated to match on `repository_id`
-/// first and fall back to `workspace_name`.
+/// resolve `local_path → name → snapshot_dir` so this works for both
+/// legacy and current snapshot layouts. If `repository_id` is later added
+/// to the snapshot model, this helper should be updated to match on
+/// `repository_id` first and fall back to `workspace_name`.
 pub async fn repository_has_active_workflow(
     adapter: &DbAdapter,
     repository_id: &str,

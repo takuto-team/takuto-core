@@ -66,10 +66,9 @@ pub struct GitToken {
     /// `Some(<login>@users.noreply.github.com)` when [`TokenSource::UserPat`];
     /// `Some(<app_id>+maestro-bot[bot]@users.noreply.github.com)` when App.
     pub author_email: Option<String>,
-    /// Phase 2b.3 will pin this onto `PersistedWorkflowRecord.auth_pin` so a
-    /// restored workflow still resolves the same credential row even after
-    /// a deployment-wide provider switch invalidated newer rows. Phase 2b.2
-    /// only populates it; nothing consumes it yet.
+    /// Pinned onto `PersistedWorkflowRecord.auth_pin` so a restored
+    /// workflow still resolves the same credential row even after a
+    /// deployment-wide provider switch invalidated newer rows.
     pub credential_row_id: Option<i64>,
 }
 
@@ -116,7 +115,7 @@ impl GitAuthError {
 
 pub type GitAuthResult<T> = std::result::Result<T, GitAuthError>;
 
-/// Phase 2b.3.x: build a `WorkflowEvent::AuthWarning`-shaped payload from a
+/// Build a `WorkflowEvent::AuthWarning`-shaped payload from a
 /// [`GitAuthError`] for the dashboard to render. Pure helper so the engine
 /// can call this from both the restore path and the resume path without
 /// duplicating string-building logic.

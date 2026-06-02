@@ -1,9 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 16 — list_workflows reads pr_url / pr_merged /
-//! branch_name from work_items rows (batched). Symmetric with
-//! slice 14 but applied per-item across the dashboard list.
+//! `list_workflows` reads pr_url / pr_merged / branch_name from work_items
+//! rows (batched), mirroring the single-item `get_workflow` behaviour but
+//! applied per-item across the dashboard list.
 
 use std::collections::HashMap;
 

@@ -55,8 +55,8 @@ pub fn parse_session_path(path: &str) -> Option<(&str, Option<&str>)> {
     }
 }
 
-/// Build a 404 with no body. Per GH-45 #6, the body must NOT contain the
-/// token, the kind, or any other discoverable information.
+/// Build a 404 with no body. The body must NOT contain the token, the
+/// kind, or any other discoverable information.
 pub(super) fn not_found() -> Response<Body> {
     // SAFETY: Response::builder() with only a `StatusCode` set + an empty
     // body cannot fail — no header validation, no body construction risk.

@@ -1,8 +1,8 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 1: `PUT /api/config/agent` — admin-only patch endpoint for the
-//! `[agent]` section. Source: 04_architecture.md §2.3.
+//! `PUT /api/config/agent` — admin-only patch endpoint for the `[agent]`
+//! section. Source: 04_architecture.md §2.3.
 //!
 //! Why a new endpoint instead of extending `PUT /api/config`: the existing
 //! patch is a strict 4-field allowlist (web.{user,password},
@@ -290,32 +290,31 @@ pub async fn put_agent_config(
         (false, None)
     };
 
-    // Phase 1 AC-4: refresh `state.engine.system_status` so subsequent reads of
+    // Refresh `state.engine.system_status` so subsequent reads of
     // `/api/onboarding/status` and the three mirrored fields on
     // `/api/auth/status` reflect the new provider / degraded state without
     // a process restart. We do this regardless of whether the disk write
     // succeeded — the in-memory config was applied and validated either way,
     // and the dashboard polls these endpoints on the WS `provider_changed`
-    // event we're about to broadcast.
-    // Phase 2a: pass the DB through so master-key warnings (which depend on
-    // boot-time key resolution, not the patched config) are re-attached.
+    // event we're about to broadcast. Pass the DB through so master-key
+    // warnings (which depend on boot-time key resolution, not the patched
+    // config) are re-attached.
     let mut refreshed = collect_system_status_with_db(&config_snapshot, auth_state.db.as_ref());
-    // Task #37 (Phase 2c): also re-probe config-dir write-ability on the
-    // refresh path. The dashboard typically triggers this branch via
-    // PUT /api/config/agent, so the user just attempted a save — surfacing
-    // the warning here means the next poll of /api/onboarding/status
-    // immediately exposes "your save didn't persist" without waiting for a
-    // restart.
+    // Also re-probe config-dir write-ability on the refresh path. The
+    // dashboard typically triggers this branch via PUT /api/config/agent,
+    // so the user just attempted a save — surfacing the warning here means
+    // the next poll of /api/onboarding/status immediately exposes "your
+    // save didn't persist" without waiting for a restart.
     if let Some(w) = maestro_core::docker_hooks::check_config_dir_writable(&cfg_state.config_path) {
         refreshed.warnings.push(w);
     }
-    // Task #38 (Phase 2c continued): when the writer has had to fall back
-    // to the in-place path because `config.toml` is bind-mounted as a
-    // single file, surface an info-level diagnostic so admins know which
-    // write protocol is active. The flag latches `true` for the process
-    // lifetime — emit once-set-stay-set semantics. Severity is `info`
-    // (not critical) because saves SUCCEED via the fallback; this is
-    // purely a "you're on the alt path" notice, not a failure.
+    // When the writer has had to fall back to the in-place path because
+    // `config.toml` is bind-mounted as a single file, surface an
+    // info-level diagnostic so admins know which write protocol is
+    // active. The flag latches `true` for the process lifetime — emit
+    // once-set-stay-set semantics. Severity is `info` (not critical)
+    // because saves SUCCEED via the fallback; this is purely a "you're on
+    // the alt path" notice, not a failure.
     if let Some(ref writer) = cfg_state.config_writer
         && writer
             .used_inplace_fallback()
@@ -340,8 +339,8 @@ pub async fn put_agent_config(
         s.per_user_required = prior_per_user_required;
     }
 
-    // Broadcast provider.changed (Phase 1: affected_users is empty until
-    // Phase 2 ships per-user credentials).
+    // Broadcast provider.changed. `affected_users` is empty until per-user
+    // credentials are wired through this event.
     if let Some((from, to)) = provider_change {
         info!(from = %from, to = %to, "Active AI provider changed via PUT /api/config/agent");
         engine.engine.broadcast_event(WorkflowEvent {

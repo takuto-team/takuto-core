@@ -70,8 +70,8 @@ pub fn build_volume_args(worktree_path: &Path, isolate_workspace: bool) -> Vec<S
             mounts.push("/workspace:/workspace".to_string());
         }
     }
-    // Task #48: mount the `maestro-tools` named volume read-only into
-    // every spawned worker / editor / run-command. The maestro container
+    // Mount the `maestro-tools` named volume read-only into every spawned
+    // worker / editor / run-command. The maestro container
     // populates this volume at startup via the `[provisioning]` install
     // commands (see `docs/extending-maestro.md`). The volume is a Docker
     // NAMED volume — no host-path translation is needed even in DinD

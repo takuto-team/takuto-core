@@ -33,10 +33,10 @@ pub(crate) struct WorkflowTransitions {
     pub(crate) jira_available: Arc<AtomicBool>,
     pub(crate) workflows_dir: PathBuf,
     pub(crate) db: Option<Database>,
-    /// Phase 2b.3: resolver for pin + bundle build on resume-after-pause.
+    /// Resolver for pin + bundle build on resume-after-pause.
     pub(crate) git_auth_resolver:
         Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
-    /// Phase 2b.3.x: GhClient for at-resume PAT revalidation.
+    /// GhClient for at-resume PAT revalidation.
     pub(crate) gh_client: Option<Arc<dyn crate::auth::GhClient>>,
 }
 
@@ -121,13 +121,13 @@ impl WorkflowTransitions {
                 ticket_key.to_string(),
                 workflow.id.clone(),
                 workflow.user_id.clone(),
-                // Plan-07 step 4 slice 2: shadow-write inputs.
+                // Capture shadow-write inputs.
                 workflow.state.clone(),
                 workflow.current_step_label.clone(),
                 workflow.updated_at.timestamp(),
             )
         };
-        // Plan-07 step 4 slice 2: shadow-persist the new state.
+        // Shadow-persist the new state.
         super::driver::shadow_persist_state_change(
             self.db.as_ref(),
             &workflow_id,
@@ -209,8 +209,7 @@ impl WorkflowTransitions {
                     .collect();
 
                 let wt = workflow.worktree_path.clone().filter(|p| p.exists());
-                // Plan-07 step 4 slice 2: capture shadow-write inputs
-                // before the lock drops.
+                // Capture shadow-write inputs before the lock drops.
                 let shadow = (
                     workflow.id.clone(),
                     workflow.state.clone(),
@@ -227,7 +226,7 @@ impl WorkflowTransitions {
                 .into());
             }
         };
-        // Plan-07 step 4 slice 2: shadow-persist the restored state.
+        // Shadow-persist the restored state.
         let (sw_id, sw_state, sw_label, sw_ts) = shadow_state;
         super::driver::shadow_persist_state_change(
             self.db.as_ref(),
@@ -279,10 +278,10 @@ impl WorkflowTransitions {
                 let su = suppress.clone();
                 let ct = cancel_token.clone();
                 let db = self.db.clone();
-                // Phase 2b.3.x: revalidate the user's PAT on resume —
-                // their SSO session may have lapsed while paused. Done BEFORE
-                // taking the owned `resolver` clone for `drive_workflow_def` so
-                // we don't move-then-borrow.
+                // Revalidate the user's PAT on resume — their SSO session
+                // may have lapsed while paused. Done BEFORE taking the owned
+                // `resolver` clone for `drive_workflow_def` so we don't
+                // move-then-borrow.
                 if let (Some(r), Some(gh)) =
                     (self.git_auth_resolver.as_ref(), self.gh_client.as_ref())
                 {
@@ -329,7 +328,7 @@ impl WorkflowTransitions {
                     }
                 }
 
-                // Phase 2b.3: thread the resolver into the resumed driver task.
+                // Thread the resolver into the resumed driver task.
                 let resolver = self.git_auth_resolver.clone();
                 tokio::spawn(async move {
                     super::driver::drive_workflow_def(
@@ -369,7 +368,7 @@ impl WorkflowTransitions {
             )
         };
 
-        // Plan-07 step 4 slice 2: shadow-persist the Stopped state.
+        // Shadow-persist the Stopped state.
         super::driver::shadow_persist_state_change(
             self.db.as_ref(),
             &workflow_id,
@@ -538,7 +537,7 @@ impl WorkflowTransitions {
             workflow.current_step_label = None;
             workflow.updated_at = Utc::now();
 
-            // Plan-07 step 4 slice 2: capture shadow-write inputs.
+            // Capture shadow-write inputs.
             let shadow = (
                 workflow.id.clone(),
                 workflow.state.clone(),
@@ -546,7 +545,7 @@ impl WorkflowTransitions {
             );
             (defs, shadow)
         };
-        // Plan-07 step 4 slice 2: shadow-persist the Pending state.
+        // Shadow-persist the Pending state.
         let (sw_id, sw_state, sw_ts) = shadow;
         super::driver::shadow_persist_state_change(
             self.db.as_ref(),

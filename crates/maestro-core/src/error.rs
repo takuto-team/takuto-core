@@ -103,10 +103,10 @@ pub enum MaestroError {
 }
 
 /// Test-only bridge so `Database::open_in_memory`'s rusqlite anchor can
-/// `?`-propagate failures into `MaestroError`. Plan-11 production code
-/// paths never produce `rusqlite::Error` — they go through the sqlx
-/// adapter — so this impl stays behind `#[cfg(test)]` and the crate
-/// ships without rusqlite as a runtime dependency.
+/// `?`-propagate failures into `MaestroError`. Production code paths never
+/// produce `rusqlite::Error` — they go through the sqlx adapter — so this
+/// impl stays behind `#[cfg(test)]` and the crate ships without rusqlite
+/// as a runtime dependency.
 #[cfg(test)]
 impl From<rusqlite::Error> for MaestroError {
     fn from(e: rusqlite::Error) -> Self {
@@ -114,8 +114,8 @@ impl From<rusqlite::Error> for MaestroError {
     }
 }
 
-/// Plan-11 step 3: `?`-propagate adapter errors from DAOs migrated to
-/// the agnostic [`crate::db::DbAdapter`] API. The chain
+/// `?`-propagate adapter errors from DAOs using the agnostic
+/// [`crate::db::DbAdapter`] API. The chain
 /// `adapter::DbError → DbError::Adapter → MaestroError::Db` needs an
 /// explicit `From` because Rust's `?` operator follows at most one
 /// `From` conversion. This bridge keeps DAOs terse (`adapter.execute(...).await?`)

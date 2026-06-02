@@ -3,8 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Phase 2b.1 integration tests for the per-user credential surface.
-// Source: tmp/multi-agents/04_architecture.md §3 + §4.
+// Integration tests for the per-user credential surface.
 //
 // Every test uses an in-process MockGhClient — the real `gh` CLI is never
 // invoked.
@@ -161,15 +160,15 @@ async fn post_provider_credential_creates_row_and_get_reports_it() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    // Task #39: wire shape is now a bundle — `provider.api_key.kind` rather
-    // than `provider.kind`. The bundle's `provider` field repeats the
+    // Wire shape is a bundle — `provider.api_key.kind` rather than
+    // `provider.kind`. The bundle's `provider` field repeats the
     // active-provider name once so older clients keying off `provider.provider`
     // still resolve to a string.
     assert_eq!(json["provider"]["provider"], "claude");
     assert_eq!(json["provider"]["api_key"]["provider"], "claude");
     assert_eq!(json["provider"]["api_key"]["kind"], "api_key");
     assert_eq!(json["provider"]["api_key"]["active"], true);
-    // Task #39: cli_state slot must be absent when only api_key is stored.
+    // cli_state slot must be absent when only api_key is stored.
     assert!(
         json["provider"].get("cli_state").is_none(),
         "cli_state slot must be omitted when only api_key is set: {}",
@@ -678,7 +677,7 @@ async fn get_my_credentials_never_returns_sealed_bytes_or_tokens() {
 }
 
 // ---------------------------------------------------------------------------
-// /api/auth/status — Phase 2b.1 mirror field
+// /api/auth/status — credential-present mirror field
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -742,7 +741,7 @@ async fn auth_status_reflects_provider_credential_present_after_paste() {
 }
 
 // ---------------------------------------------------------------------------
-// /api/onboarding/status — Phase 2b.1 user_onboarding extension
+// /api/onboarding/status — user_onboarding extension
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -798,7 +797,7 @@ async fn onboarding_status_step4_flips_to_completed_when_credential_present() {
 }
 
 // ---------------------------------------------------------------------------
-// Task #39: T-CLAUDE-CLI-STATE-*  —  kind=cli_state for Claude
+// kind=cli_state for Claude
 // ---------------------------------------------------------------------------
 
 /// Build a minimal valid `~/.claude.json` blob carrying the three required
@@ -1135,7 +1134,7 @@ async fn t_claude_cli_state_007_get_shape_with_both_kinds_present() {
 }
 
 // ---------------------------------------------------------------------------
-// Task #41: size-cap raise + jq-merge sourcing
+// Size-cap raise + jq-merge sourcing
 // ---------------------------------------------------------------------------
 
 /// T-CLI-STATE-CAP-001: a payload at exactly 1 MiB MUST be accepted. The

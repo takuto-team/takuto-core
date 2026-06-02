@@ -150,9 +150,8 @@ function SecurityTabConnected() {
 // ---------------------------------------------------------------------------
 
 export function Config({ onLogout, authEnabled, isAdmin }: Props) {
-  // Admin-only tabs: "Users". Plan-09 dropped the admin gate on
-  // "Worktree Settings" — every authenticated user manages their own data.
-  // Plan-10 added "My Repositories" — also user-facing, no admin gate.
+  // Admin-only tabs: "Users". "Worktree Settings" and "My Repositories"
+  // are user-facing — no admin gate; each user manages their own data.
   const tabs = ALL_TABS.filter((t) => (t === "Users" ? isAdmin : true));
 
   // Allow direct deep-linking via `?tab=<slug>` (used by Header, redirects

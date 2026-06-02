@@ -1,12 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 2b.2 — `GitAuthResolver`. Picks the right token (GitHub App
-//! installation token vs. per-user PAT) for a given [`GitAction`], based on
-//! the per-user mode matrix in `tmp/multi-agents/04_architecture.md §4.2`.
-//!
-//! Scope: resolver + git-author plumbing. Worker container injection and
-//! the per-workflow `auth_pin` ship in Phase 2b.3.
+//! `GitAuthResolver`. Picks the right token (GitHub App installation
+//! token vs. per-user PAT) for a given [`GitAction`], based on the
+//! per-user mode matrix in the architecture doc §4.2.
 //!
 //! Decision matrix (verbatim from arch doc §4.2):
 //!

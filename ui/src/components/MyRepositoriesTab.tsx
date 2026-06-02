@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Plan-10 (revised): My Repositories tab.
+ * My Repositories tab.
  *
  * Two sections:
  *   1. My repositories       — repos the caller has added; Remove / Force purge.

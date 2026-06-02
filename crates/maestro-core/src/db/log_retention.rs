@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 19 — log-line retention.
+//! Log-line retention.
 //!
 //! A simple periodic helper that computes the cutoff timestamp
 //! and calls [`crate::db::work_items::purge_log_lines_older_than`].
@@ -43,14 +43,14 @@ pub async fn run_once(db: &Database, now_ms: i64, retention_days: u32) {
                 deleted = n,
                 retention_days = retention_days,
                 cutoff_ms = cutoff,
-                "Plan-07 log retention purge"
+                "Ulog retention purge"
             );
         }
         Err(e) => {
             warn!(
                 error = %e,
                 retention_days = retention_days,
-                "Plan-07 log retention purge failed (will retry next tick)"
+                "Ulog retention purge failed (will retry next tick)"
             );
         }
     }

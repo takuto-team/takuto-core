@@ -51,7 +51,7 @@ pub(super) async fn prepare_worktree_for_ticket(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     db: Option<&Database>,
 ) {
-    // Plan-10: the repository path is per-workflow (the registered repo the
+    // The repository path is per-workflow (the registered repo the
     // caller picked when starting the workflow). Fall back to the global
     // `cfg.git.repo_path` only when no DB / `repository_id` is available.
     let (repo_path, base_branch) =
@@ -158,10 +158,10 @@ pub(super) async fn bootstrap_new_workflow(
     log_writer: &Arc<WorkflowLogWriter>,
     agent_run_semaphore: &Arc<Semaphore>,
     db: Option<&Database>,
-    // Phase 2b.3: when `Some` plus the workflow has a `user_id`, the
-    // bootstrap pins credentials at the start of the workflow and builds a
-    // per-step `WorkerSecretsBundle` that the ContainerRunner mounts as a
-    // tmpfs directory.
+    // When `Some` plus the workflow has a `user_id`, the bootstrap pins
+    // credentials at the start of the workflow and builds a per-step
+    // `WorkerSecretsBundle` that the ContainerRunner mounts as a tmpfs
+    // directory.
     git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
 ) -> Result<(PathBuf, JiraTicket)> {
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
@@ -172,9 +172,9 @@ pub(super) async fn bootstrap_new_workflow(
         wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
     };
 
-    // Plan-10: repo path comes from the workflow's `repository_id` lookup, not
-    // from a global `cfg.git.repo_path`. `project_keys` stays in config — it
-    // is workflow-independent.
+    // Repo path comes from the workflow's `repository_id` lookup, not
+    // from a global `cfg.git.repo_path`. `project_keys` stays in config —
+    // it is workflow-independent.
     let (repo_path, base_branch) =
         resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
     let project_keys = {
@@ -437,10 +437,10 @@ pub(super) async fn bootstrap_new_workflow(
         let mut runner =
             ContainerRunner::new(ticket_key, &worktree_path, &image).with_isolate_workspace();
 
-        // Phase 2b.3: pin credentials + attach the per-workflow secrets
-        // bundle so the worker entrypoint reads tokens from tmpfs files
-        // instead of `docker run -e` strings. Skip / fallback handling
-        // lives in `try_attach_secrets_bundle`.
+        // Pin credentials + attach the per-workflow secrets bundle so the
+        // worker entrypoint reads tokens from tmpfs files instead of
+        // `docker run -e` strings. Skip / fallback handling lives in
+        // `try_attach_secrets_bundle`.
         if let Some(bundle) =
             try_attach_secrets_bundle(ticket_key, config, workflows, db, git_auth_resolver).await
         {
@@ -457,8 +457,8 @@ pub(super) async fn bootstrap_new_workflow(
         cfg.agent.provider
     };
     // Resolve worktree init commands from the workflow owner's per-user
-    // per-workspace DB row (plan-09). No row, or no owner, or no db → run
-    // zero init commands. There is no global default.
+    // per-workspace DB row. No row, or no owner, or no db → run zero
+    // init commands. There is no global default.
     let (workflow_user_id, workspace_name) = {
         let wf = workflows.read().await;
         wf.get(ticket_key)
@@ -546,9 +546,9 @@ pub(super) async fn bootstrap_new_workflow(
         }
     }
 
-    // Worktree init commands (plan-08): replaces the legacy pre_install / install /
-    // pre_workflow loops. AC-8/AC-9: an empty list (no override + empty default,
-    // or an explicit `[]` override) skips this entire section and proceeds
+    // Worktree init commands: replaces the legacy pre_install / install /
+    // pre_workflow loops. An empty list (no override + empty default, or
+    // an explicit `[]` override) skips this entire section and proceeds
     // straight to the agent steps.
     if !init_commands.is_empty() {
         let total = init_commands.len();

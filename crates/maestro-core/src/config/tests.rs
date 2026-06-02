@@ -86,9 +86,9 @@ fn test_validate_empty_git_remote() {
 
 #[test]
 fn legacy_commands_table_is_silently_ignored() {
-    // Plan-09: stale `[commands]` in a user's config.toml is ignored at
-    // load time. The startup warning is logged but the config still
-    // parses cleanly (no panic, no error).
+    // Stale `[commands]` in a user's config.toml is ignored at load time.
+    // The startup warning is logged but the config still parses cleanly
+    // (no panic, no error).
     let mut f = NamedTempFile::new().unwrap();
     f.write_all(
         br#"
@@ -120,7 +120,7 @@ step_timeout_secs = 600
 
 #[test]
 fn legacy_run_commands_array_is_silently_ignored() {
-    // Plan-09: stale `[[run_commands]]` entries are ignored at load time.
+    // Stale `[[run_commands]]` entries are ignored at load time.
     let mut f = NamedTempFile::new().unwrap();
     f.write_all(
         br#"
@@ -704,7 +704,7 @@ provider = "opencode"
     assert_eq!(cfg.agent.provider.as_str(), "opencode");
 }
 
-// ─── Task #48: provisioning_sha ─────────────────────────────────────
+// ─── provisioning_sha ───────────────────────────────────────────────
 
 fn config_with_provisioning(cmds: &[&str]) -> Config {
     let mut cfg = Config::default();

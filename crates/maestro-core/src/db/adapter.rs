@@ -1,11 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-11 step 3 — backend-agnostic database adapter.
+//! Backend-agnostic database adapter.
 //!
-//! Source: `tmp/plan-11-pluggable-database-backends.md` §4. Caller mandate
-//! (2026-05-27): "all database calls are made through an agnostic adapter
-//! that is in charge to use the right DB driver."
+//! Caller mandate (2026-05-27): "all database calls are made through an
+//! agnostic adapter that is in charge to use the right DB driver."
 //!
 //! Hides the [`DbPool`] enum from every DAO + call site. The adapter exposes
 //! four query operations (`execute`, `query_one`, `query_optional`,

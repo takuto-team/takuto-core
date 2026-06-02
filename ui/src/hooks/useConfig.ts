@@ -4,8 +4,8 @@
 /**
  * `useConfig` — fetches `/api/config` once on mount and exposes the
  * `ConfigResponse | null` result. Extracted alongside the rest of the
- * Dashboard data hooks (Phase 5 step 3 of Part B) so the shell shows
- * exactly one `useEffect` call site (the WS-reconnect refetch).
+ * Dashboard data hooks so the shell shows exactly one `useEffect` call
+ * site (the WS-reconnect refetch).
  */
 
 import { useEffect, useState } from "react";

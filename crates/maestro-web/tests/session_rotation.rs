@@ -3,8 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-02 AC-5 — session rotation, sliding-extend, and
-// absolute TTL.
+// Integration tests for session rotation, sliding-extend, and absolute TTL.
 //
 // Time-dependent cases drive a test-only clock seam in `maestro_web::auth`
 // (`set_test_now_unix` / `clear_test_now_unix`) so we never sleep — the

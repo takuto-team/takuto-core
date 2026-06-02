@@ -357,7 +357,7 @@ impl Config {
         c.web.dashboard_password.clear();
         c.github.app_private_key.clear();
         c.github.app_private_key_path.clear();
-        // Plan-11 step 5: `[database].connection` may carry a password
+        // `[database].connection` may carry a password
         // (`postgres://user:pw@host/db`). Redact only the password component;
         // operators still need to see the rest of the URL to verify they're
         // pointing at the intended host.

@@ -11,9 +11,9 @@ interface Props {
 }
 
 /**
- * Plan-10: a repository dropdown is now required above the description input.
- * Without a repo association the workflow has no worktree base and the engine
- * can't bootstrap it.
+ * A repository dropdown is required above the description input. Without a
+ * repo association the workflow has no worktree base and the engine can't
+ * bootstrap it.
  */
 export function PasteDescriptionModal({ onSubmit, onClose }: Props) {
   const [name, setName] = useState("");

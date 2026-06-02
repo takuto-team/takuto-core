@@ -25,9 +25,9 @@ pub struct StartManualWorkflowBody {
     /// Used so clicking the issue key on the dashboard opens the correct URL for GitHub workflows.
     #[serde(default)]
     pub issue_url: Option<String>,
-    /// Plan-10: id of a `repositories` row the caller has added. When omitted,
-    /// the server picks the caller's most-recently-added repo (or rejects when
-    /// the caller has none).
+    /// Id of a `repositories` row the caller has added. When omitted, the
+    /// server picks the caller's most-recently-added repo (or rejects
+    /// when the caller has none).
     #[serde(default)]
     pub repository_id: Option<String>,
 }
@@ -96,7 +96,7 @@ pub async fn start_manual_workflow(
         if let Some(existing) = map.get(&ticket_key) {
             // Terminal-state entries (Done / Stopped / Error) are safe to replace —
             // the user is starting fresh on the same ticket. Replacement also recovers
-            // from "orphan" rows (user_id = None) carried over from pre-plan-01 snapshots:
+            // from "orphan" rows (user_id = None) carried over from legacy snapshots:
             // those rows are invisible to the caller (per-user isolation), so without
             // this branch they would be undeletable zombies blocking the re-add.
             let terminal = matches!(
@@ -152,11 +152,10 @@ pub async fn start_manual_workflow(
         .filter(|s| !s.is_empty())
         .map(String::from);
 
-    // Plan-10: resolve the workflow's repository_id. When the body specifies
-    // one, validate the caller has it associated; otherwise, default to the
+    // Resolve the workflow's repository_id. When the body specifies one,
+    // validate the caller has it associated; otherwise, default to the
     // most-recently-added repo. Reject when the caller has zero repos.
     let repository_id = if let Some(database) = auth_state.db.as_ref() {
-        // Plan-11 step 3: repositories DAO on the adapter.
         let user_repos =
             maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id)
                 .await

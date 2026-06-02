@@ -3,14 +3,15 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Task #42 — `WorkerSecretsBundle` lifetime guards.
+// `WorkerSecretsBundle` lifetime guards.
 //
-// The user's editor terminal showed `/run/maestro-secrets/` was empty
+// Background: the editor terminal showed `/run/maestro-secrets/` was empty
 // (`total 4`, only `.` and `..`) because the bundle's `TempDir` was
 // dropping after the `start_editor` route returned. The fix stashes the
-// bundle's `Arc` into `state.editor().editor_bundles` (and `state.run_command().run_command_bundles`
-// for run-command containers) so the host-side directory survives until
-// the matching close/stop handler removes the entry.
+// bundle's `Arc` into `state.editor().editor_bundles` (and
+// `state.run_command().run_command_bundles` for run-command containers) so
+// the host-side directory survives until the matching close/stop handler
+// removes the entry.
 //
 // These integration tests exercise the lifetime contract at the AppState
 // layer, without needing DinD: we manually construct a test bundle Arc,

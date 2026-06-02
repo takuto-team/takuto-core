@@ -62,7 +62,6 @@ pub(crate) async fn require_admin(
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let raw_cookie = session_cookie_from_headers(headers).ok_or(StatusCode::UNAUTHORIZED)?;
-    // Plan-11 step 3 cluster Sessions: sessions + users on the adapter.
     let adapter = db.adapter();
     let user_id = validate_db_session(adapter, raw_cookie)
         .await
@@ -99,7 +98,6 @@ pub async fn list_users(State(auth): State<AuthState>, headers: HeaderMap) -> im
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    // Plan-11 step 3 cluster A: users DAO on the adapter.
     match maestro_core::db::users::list_users(db.adapter()).await {
         Ok(users) => Json(users).into_response(),
         Err(e) => (
@@ -134,10 +132,8 @@ pub async fn create_user(
     };
     let adapter = db.adapter();
 
-    // Plan-11 step 3 cluster A: users + credentials on the agnostic
-    // adapter. create_user opens its own internal tx; password +
-    // recovery codes go through a single explicit tx so they
-    // co-commit.
+    // create_user opens its own internal tx; password + recovery codes
+    // go through a single explicit tx so they co-commit.
     let role = body.role.unwrap_or(UserRole::User);
     let result: maestro_core::error::Result<CreateUserResponse> = async {
         let user = maestro_core::db::users::create_user(adapter, &body.username, role).await?;
@@ -234,11 +230,11 @@ pub async fn update_user(
 
     let new_role = body.role;
     let new_username = body.username.clone();
-    // Plan-11 step 3 cluster A: capture previous role + update + session
-    // invalidate via the adapter. update_user opens its own internal tx
-    // for the last-admin guard; the role-change session purge runs
-    // afterward inside a short tx (so a delete failure doesn't leave a
-    // user with the wrong role + stale sessions).
+    // Capture previous role + update + session invalidate via the
+    // adapter. update_user opens its own internal tx for the last-admin
+    // guard; the role-change session purge runs afterward inside a short
+    // tx (so a delete failure doesn't leave a user with the wrong role +
+    // stale sessions).
     let result: maestro_core::error::Result<maestro_core::db::models::User> = async {
         let previous_role = maestro_core::db::users::get_user_by_id(adapter, &id)
             .await
@@ -356,7 +352,7 @@ pub async fn unsuspend_user(
 }
 
 /// `POST /api/users/{id}/unlock` — clear all login-attempt rows for a user
-/// (admin only; plan-02 AC-3 G/W/T 3.8).
+/// (admin only).
 ///
 /// Deletes both `kind = 'password'` and `kind = 'recovery'` rows so the user's
 /// next login starts from a clean slate. Returns **204 No Content**.
@@ -375,7 +371,6 @@ pub async fn unlock_user(
     };
     let adapter = db.adapter();
 
-    // Plan-11 step 3 cluster A: users + login_attempts both on the adapter.
     let exists = maestro_core::db::users::get_user_by_id(adapter, &id)
         .await
         .ok()
@@ -499,10 +494,9 @@ pub async fn import_users(
     };
     let adapter = db.adapter();
 
-    // Plan-11 step 3 cluster A: users on the adapter. Validation pass
-    // (existence checks) uses the adapter directly; the insert pass
-    // runs in one explicit DbTransaction so all-or-nothing atomicity is
-    // preserved.
+    // Validation pass (existence checks) uses the adapter directly; the
+    // insert pass runs in one explicit DbTransaction so all-or-nothing
+    // atomicity is preserved.
     let result: maestro_core::error::Result<ImportSummary> = async {
         let mut to_create = Vec::new();
         let mut skipped = Vec::new();

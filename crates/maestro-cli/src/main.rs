@@ -40,7 +40,6 @@ use maestro_web::state::{
 /// Warnings are logged when (1) is provided but the user is missing or suspended,
 /// and when neither path resolves (the caller may log an additional summary).
 async fn resolve_poller_owner(db: &Database, cfg_username: Option<&str>) -> Option<String> {
-    // Plan-11 step 3 cluster A: users DAO on the adapter.
     let adapter = db.adapter();
     if let Some(username) = cfg_username {
         match maestro_core::db::users::get_user_by_username(adapter, username).await {
@@ -132,7 +131,7 @@ enum Commands {
         #[command(subcommand)]
         action: KeysAction,
     },
-    /// Task #47: read-only accessors over `[provisioning].install_commands`
+    /// Read-only accessors over `[provisioning].install_commands`
     /// for the docker entrypoint shell. The entrypoint can't parse TOML
     /// itself, so this subcommand exposes the canonical SHA and the
     /// command list in shell-safe form.
@@ -367,14 +366,13 @@ async fn run_github_app_token(config_path: &std::path::Path) -> ExitCode {
     }
 }
 
-/// `maestro keys reset` — Phase 2a (04_architecture.md §3.2, A5).
+/// `maestro keys reset` (04_architecture.md §3.2, A5).
 ///
 /// Clears every credential / audit / onboarding row and rewrites the master
 /// keyfile under `${data_dir}/secret.key`. Lossy by design: every user must
 /// re-paste their credentials afterwards.
 ///
-/// Refusal cases (non-zero exit):
-/// Task #48: read-only accessors over `[provisioning].install_commands`
+/// Read-only accessors over `[provisioning].install_commands`
 /// for the docker entrypoint shell. The entrypoint can't parse TOML
 /// itself, so this subcommand exposes the canonical SHA and the command
 /// list. Both write to stdout so the entrypoint can capture via
@@ -533,12 +531,12 @@ fn run_keys_reset(config_path: &std::path::Path, yes_i_am_sure: bool) -> ExitCod
     ExitCode::SUCCESS
 }
 
-/// Wipe every Phase 2a credential / audit / onboarding row. Caller has already
+/// Wipe every credential / audit / onboarding row. Caller has already
 /// opened the database and verified no workflows are in flight.
 ///
-/// Plan-11 step 3 cluster CLI: now goes through the agnostic adapter. The CLI
-/// is sync at the dispatch layer, so the call site spins up a one-shot
-/// current-thread runtime to drive the async transaction.
+/// Goes through the agnostic database adapter. The CLI is sync at the
+/// dispatch layer, so the call site spins up a one-shot current-thread
+/// runtime to drive the async transaction.
 async fn clear_credential_tables(
     db: &maestro_core::db::Database,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -635,19 +633,19 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("{msg}");
     }
 
-    // Plan-10: auto-polling is disabled in this build. Operators need a visible
+    // Auto-polling is disabled in this build. Operators need a visible
     // signal at startup; if they had `auto_polling = true` configured, the
     // override is louder still (warn vs info).
     if config.general.auto_polling {
         tracing::warn!(
             "[general] auto_polling = true is ignored: auto-polling is disabled \
-             in this build (plan-11 TODO: per-repo polling). Items must be added \
-             manually via the dashboard."
+             in this build (per-repo polling is not yet implemented). Items \
+             must be added manually via the dashboard."
         );
     } else {
         info!(
-            "Auto-polling is disabled in this build (plan-11 TODO: per-repo \
-             polling). Items must be added manually via the dashboard."
+            "Auto-polling is disabled in this build (per-repo polling is not \
+             yet implemented). Items must be added manually via the dashboard."
         );
     }
 
@@ -760,11 +758,11 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
     // Initialize the SQLite database for multi-user auth. This happens BEFORE
     // engine construction so the engine can thread the DB handle into the
-    // bootstrap driver for per-workspace `worktree_init_commands` overrides
-    // (plan-08), and BEFORE poller construction so we can resolve the
-    // poller-owner user_id and pass it into both pollers.
+    // bootstrap driver for per-workspace `worktree_init_commands` overrides,
+    // and BEFORE poller construction so we can resolve the poller-owner
+    // user_id and pass it into both pollers.
     let resolved_data_dir = maestro_core::workflow::snapshot::resolve_data_dir();
-    // Task #43: sweep orphan WorkerSecretsBundle directories from a prior
+    // Sweep orphan WorkerSecretsBundle directories from a prior
     // run (crash between TempDir creation and drop leaves them around).
     // Safe to run unconditionally — best-effort, no-op when the dir is
     // missing. Runs BEFORE the DB opens because it touches a sibling
@@ -785,7 +783,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             cfg.database.clone(),
         )
     };
-    // Plan-11: `MAESTRO_DATABASE_CONNECTION` env var overrides
+    // `MAESTRO_DATABASE_CONNECTION` env var overrides
     // `[database].connection` from config.toml. Useful for the
     // docker-compose.{postgres,mariadb}.yml overlays which set the URL
     // per-deployment without touching the user's checked-in config.
@@ -827,11 +825,11 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Plan-10: filesystem ↔ DB reconciliation must run AFTER DB open and
-    // BEFORE engine.restore_persisted_workflows(). Reviewer G2: otherwise
-    // restored workflows have no `repositories` row to look up by
-    // workspace_name and the workflow filter (Step 6) hides every legacy
-    // workflow from its owner's dashboard until an admin manually re-adds.
+    // Filesystem ↔ DB reconciliation must run AFTER DB open and
+    // BEFORE engine.restore_persisted_workflows(). Otherwise restored
+    // workflows have no `repositories` row to look up by workspace_name
+    // and the workflow filter hides every legacy workflow from its
+    // owner's dashboard until an admin manually re-adds.
     if let (Some(db), Some(data_dir)) = (db.as_ref(), resolved_data_dir.as_deref()) {
         let migrate_associations = config
             .read()
@@ -839,12 +837,12 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             .general
             .migrate_orphan_repo_associations;
 
-        // Plan-11 step 3: repositories DAO migrated to the agnostic
-        // adapter. No rusqlite MutexGuard needed for the reconciliation
-        // path — both helpers are async and take &DbAdapter directly.
+        // Repositories DAO uses the agnostic adapter — no rusqlite
+        // MutexGuard needed for the reconciliation path; both helpers
+        // are async and take &DbAdapter directly.
         let adapter = db.adapter();
 
-        // 3.1 Filesystem → `repositories` reconciliation.
+        // Filesystem → `repositories` reconciliation.
         match repo_reconcile::reconcile_repositories(
             adapter,
             maestro_core::workflow::snapshot::WORKSPACES_DIR,
@@ -854,13 +852,13 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             Ok(n) if n > 0 => info!(
                 count = n,
                 workspaces_dir = maestro_core::workflow::snapshot::WORKSPACES_DIR,
-                "Plan-10 reconciliation: registered repositories from on-disk clones"
+                "Reconciliation: registered repositories from on-disk clones"
             ),
             Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "Plan-10 reconciliation failed (continuing)"),
+            Err(e) => tracing::warn!(error = %e, "Repository reconciliation failed (continuing)"),
         }
 
-        // 3.2 Backfill `user_repositories` from restored snapshot workflows
+        // Backfill `user_repositories` from restored snapshot workflows
         // (gated; default on).
         if migrate_associations {
             match repo_reconcile::backfill_user_repositories_from_snapshots(adapter, data_dir)
@@ -868,11 +866,11 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             {
                 Ok(n) if n > 0 => info!(
                     count = n,
-                    "Backfilled user_repositories from restored workflow snapshots (plan-10)"
+                    "Backfilled user_repositories from restored workflow snapshots"
                 ),
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(error = %e, "Plan-10 association backfill failed (continuing)")
+                    tracing::warn!(error = %e, "Association backfill failed (continuing)")
                 }
             }
         } else {
@@ -883,20 +881,20 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        // 3.3 active_workspace file cleanup. The active-workspace concept is
-        // dead after plan-10; each workflow carries its own repo association.
+        // active_workspace file cleanup. The active-workspace concept is
+        // dead; each workflow carries its own repo association.
         let aw_path = data_dir.join("active_workspace");
         if aw_path.exists() {
             if let Ok(value) = std::fs::read_to_string(&aw_path) {
                 tracing::info!(
                     value = %value.trim(),
-                    "Removing dead `active_workspace` file (plan-10)"
+                    "Removing dead `active_workspace` file"
                 );
             }
             let _ = std::fs::remove_file(&aw_path);
         }
 
-        // 3.4 Deprecation warning for `[git] repo_path` when set and not
+        // Deprecation warning for `[git] repo_path` when set and not
         // matching any registered repository.
         let cfg_repo_path = config.read().await.git.repo_path.clone();
         if !cfg_repo_path.is_empty() && cfg_repo_path != "/workspace" {
@@ -915,15 +913,14 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         tracing::warn!(
-            "Skipping plan-10 reconciliation: no multi-user database available — \
+            "Skipping repository reconciliation: no multi-user database available — \
              repositories cannot be registered until the data dir is configured"
         );
     }
 
-    // Phase 2b.3: construct the GitAuthResolver here so we can attach it to
-    // the engine via `with_git_auth_resolver` BEFORE wrapping in Arc. The
-    // same resolver is later stored on AppState (line ~960) for the web
-    // layer.
+    // Construct the GitAuthResolver here so we can attach it to the
+    // engine via `with_git_auth_resolver` BEFORE wrapping in Arc. The
+    // same resolver is later stored on AppState for the web layer.
     let git_auth_resolver: Option<Arc<maestro_core::github::auth_resolver::GitAuthResolver>> =
         db.as_ref().map(|d| {
             Arc::new(maestro_core::github::auth_resolver::GitAuthResolver::new(
@@ -944,8 +941,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref resolver) = git_auth_resolver {
         engine = engine.with_git_auth_resolver(resolver.clone());
     }
-    // Phase 2b.3.x: wire the production GhClient so at-resume PAT
-    // revalidation can run. Tests inject a MockGhClient instead.
+    // Wire the production GhClient so at-resume PAT revalidation can
+    // run. Tests inject a MockGhClient instead.
     engine = engine.with_gh_client(Arc::new(maestro_core::auth::RealGhClient::new()));
     let engine = Arc::new(engine);
 
@@ -1049,9 +1046,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // is the only mutation we make to the system_status after collection.
     system_status.per_user_required = db.is_some();
 
-    // Phase 2a: recompute SystemStatus with the DB in scope so master-key
-    // warnings (master_key_unavailable, secret_key_world_readable) join the
-    // existing config-derived warnings. We do this AFTER the
+    // Recompute SystemStatus with the DB in scope so master-key
+    // warnings (master_key_unavailable, secret_key_world_readable) join
+    // the existing config-derived warnings. We do this AFTER the
     // `per_user_required` patch so the boot snapshot is complete.
     if let Some(ref db) = db {
         let refreshed = {
@@ -1063,16 +1060,16 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         let prior_per_user_required = system_status.per_user_required;
         system_status = refreshed;
         system_status.per_user_required = prior_per_user_required;
-        // Task #37 (Phase 2c): probe the config directory for write-ability so
-        // a silently-failed `chown /etc/maestro` in entrypoint.sh surfaces as a
-        // dashboard banner rather than a confused "saves don't persist" UX. The
-        // probe is non-destructive (tempfile created + dropped). Emits at
-        // critical severity so it survives `apply_user_warning_filter`.
+        // Probe the config directory for write-ability so a silently-failed
+        // `chown /etc/maestro` in entrypoint.sh surfaces as a dashboard banner
+        // rather than a confused "saves don't persist" UX. The probe is
+        // non-destructive (tempfile created + dropped). Emits at critical
+        // severity so it survives `apply_user_warning_filter`.
         if let Some(w) = docker_hooks::check_config_dir_writable(&cli.config) {
             tracing::warn!(
                 code = %w.code,
                 severity = %w.severity,
-                "Phase 2c boot warning: {}",
+                "Config dir boot warning: {}",
                 w.message
             );
             system_status.warnings.push(w);
@@ -1082,7 +1079,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 tracing::warn!(
                     code = %w.code,
                     severity = %w.severity,
-                    "Phase 2a boot warning: {}",
+                    "Boot warning: {}",
                     w.message
                 );
             }
@@ -1096,9 +1093,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // `db` was initialised above (before poller construction) so we could resolve
     // the poller owner. Move it into the AppState here.
 
-    // Phase 2b.2 / 2b.3: reuse the resolver we built above for the engine.
-    // The same Arc lives on both AppState (for HTTP-handler use) and the
-    // workflow engine (for driver-task use).
+    // Reuse the resolver we built above for the engine. The same Arc
+    // lives on both AppState (for HTTP-handler use) and the workflow
+    // engine (for driver-task use).
 
     let app_state = AppState::new(
         EngineState {
@@ -1108,8 +1105,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             system_status: std::sync::Arc::new(tokio::sync::RwLock::new(system_status)),
         },
         AuthState {
-            // Plan-07 slice 19: clone so the retention task below
-            // gets its own handle without depriving AuthState of one.
+            // Clone so the retention task below gets its own handle
+            // without depriving AuthState of one.
             db: db.clone(),
             gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
             git_auth_resolver,
@@ -1132,7 +1129,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             terminal_ports: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
-            // Task #42: hold per-workflow bundles alive for the lifetime of the
+            // Hold per-workflow bundles alive for the lifetime of the
             // detached editor containers. Cleared by the matching
             // close handlers and by workflow teardown.
             editor_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
@@ -1144,7 +1141,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             run_commands: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
-            // Task #42: hold per-workflow bundles alive for the lifetime of the
+            // Hold per-workflow bundles alive for the lifetime of the
             // detached run-command containers. Cleared by the matching
             // stop handlers and by workflow teardown.
             run_command_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
@@ -1182,8 +1179,8 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Plan-07 slice 19: hourly log-line retention purge. Skipped
-    // entirely when no DB is attached (legacy single-user mode).
+    // Hourly log-line retention purge. Skipped entirely when no DB is
+    // attached (legacy single-user mode).
     // Re-reads `work_item_log_retention_days` from config every
     // tick so operators can adjust at runtime via the config
     // watcher without a restart. `0` days disables the purge —

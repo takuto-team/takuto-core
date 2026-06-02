@@ -3,16 +3,15 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for AC-1 — WebSocket per-user event isolation.
+// Integration tests for WebSocket per-user event isolation.
 //
-// The full WS upgrade path requires a real TCP socket. Per the spec's
-// fallback in `tmp/plan-01-acceptance.md`, this test focuses on the
-// **filter logic** (`should_deliver_event`) and exercises it end-to-end
+// The full WS upgrade path requires a real TCP socket. This test focuses on
+// the **filter logic** (`should_deliver_event`) and exercises it end-to-end
 // against the live `WorkflowEngine` event bus so we have confidence the
 // wiring is correct.
 //
 // A full end-to-end test with `tokio_tungstenite` + `axum::serve` on an
-// ephemeral port is left to the Playwright E2E suite (see Task #7).
+// ephemeral port is left to the Playwright E2E suite.
 //
 // Verifies:
 //   - G/W/T 1.1: Cross-user isolation — when an event carrying alice's
@@ -61,14 +60,14 @@ fn filter_passes_event_for_owning_user() {
 
 #[test]
 fn filter_drops_event_targeted_at_other_user() {
-    // AC-1 G/W/T 1.1: bob must not see alice's events.
+    // Bob must not see alice's events.
     let evt = make_event("PROJ-A1", Some("alice-id"));
     assert!(!should_deliver_event(&evt, "bob-id"));
 }
 
 #[test]
 fn filter_passes_broadcast_event_to_everyone() {
-    // AC-1 G/W/T 1.2: `user_id == None` events reach every viewer
+    // `user_id == None` events reach every viewer
     // (e.g. `workflow_definitions_changed`).
     let evt = make_event("", None);
     assert!(should_deliver_event(&evt, "alice-id"));
@@ -78,9 +77,9 @@ fn filter_passes_broadcast_event_to_everyone() {
 
 #[test]
 fn filter_does_not_match_admin_role() {
-    // AC-1 G/W/T 1.4: admin does NOT bypass ownership — only `user_id` matters.
-    // (The filter does not consult the role at all; the test asserts the
-    // contract: a user named "admin" still cannot read alice's events.)
+    // Admin does NOT bypass ownership — only `user_id` matters. (The filter
+    // does not consult the role at all; the test asserts the contract: a
+    // user named "admin" still cannot read alice's events.)
     let evt = make_event("PROJ-A1", Some("alice-id"));
     assert!(!should_deliver_event(&evt, "admin-id"));
 }
@@ -129,7 +128,7 @@ async fn engine_broadcast_round_trips_user_id_through_filter() {
     );
 
     // Now emit a broadcast event (`user_id = None`) and confirm both filters
-    // pass it (AC-1 G/W/T 1.2).
+    // pass it.
     let broadcast_event = make_event("", None);
     event_tx
         .send(broadcast_event)

@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Per-user credentials (Phase 2 — auth-overhaul).
+ * Per-user credentials.
  *
  * Source of truth: tmp/multi-agents/04_architecture.md §3 + §4.4 +
  * 05_ux_design.md §2.2 / §2.3. Every entry point honours the in-memory mock
@@ -141,9 +141,9 @@ export async function setClaudeSession(claudeSessionJson: string): Promise<void>
 /**
  * DELETE /api/users/me/credentials/{provider} — hard delete.
  *
- * Task #39: an optional `kind` query parameter scopes the delete to a
- * single slot (api_key or cli_state). Omitting `kind` deletes every row
- * for `(user, provider)` — matches the backend's back-compat behaviour.
+ * An optional `kind` query parameter scopes the delete to a single slot
+ * (api_key or cli_state). Omitting `kind` deletes every row for
+ * `(user, provider)` — matches the backend's back-compat behaviour.
  */
 export async function deleteProviderCredential(
   provider: string,

@@ -5,8 +5,8 @@
  * Repo-selector banner shown at the top of `TicketDetailModal` when the
  * modal is opened to start a workflow (`showStartButton=true`). Three
  * rendering modes: zero repos → amber CTA link; one repo → read-only
- * label; many repos → dropdown. Extracted in Phase 5 step 2 (parallel)
- * alongside `StartWorkflowFooter` and `useStartWorkflow`.
+ * label; many repos → dropdown. Pairs with `StartWorkflowFooter` and
+ * `useStartWorkflow`.
  */
 
 import { Link } from "react-router-dom";

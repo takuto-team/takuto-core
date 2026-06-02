@@ -119,14 +119,14 @@ pub async fn stop_workflow(
     require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    // Task #42: stop_workflow tears the worker container down too; drop
-    // its bundle Arcs so the TempDir RAII fires once the engine's clones
+    // stop_workflow tears the worker container down too; drop its
+    // bundle Arcs so the TempDir RAII fires once the engine's clones
     // (if any) also release. We don't go through cleanup_run_commands
     // here because stop_workflow targets the agent worker, not editors
-    // or user-started run-commands — those have their own stop endpoints.
-    // But if the workflow was deleted/abandoned without close_editor
-    // firing, the editor_bundles entry can leak; clean it up
-    // defensively. Same for run_command_bundles.
+    // or user-started run-commands — those have their own stop
+    // endpoints. But if the workflow was deleted/abandoned without
+    // close_editor firing, the editor_bundles entry can leak; clean it
+    // up defensively. Same for run_command_bundles.
     {
         let mut eb = editor.editor_bundles.write().await;
         eb.remove(&id);
@@ -200,14 +200,14 @@ pub(super) async fn cleanup_run_commands(
         }
         drop(run_cmds);
         container::stop_all_run_commands(ticket_key).await;
-        // Task #42: drop every bundle Arc for this ticket's run-commands.
-        // Each entry's last strong reference here fires the bundle's
-        // TempDir RAII cleanup. Done AFTER the container stop so the
-        // mounted secret files survive the container's last read.
+        // Drop every bundle Arc for this ticket's run-commands. Each
+        // entry's last strong reference here fires the bundle's TempDir
+        // RAII cleanup. Done AFTER the container stop so the mounted
+        // secret files survive the container's last read.
         let mut bundles = run_command.run_command_bundles.write().await;
         bundles.retain(|(tk, _idx), _| tk != ticket_key);
     }
-    // Task #42: also drop the editor bundle for this ticket — delete /
-    // mark-done tear down both the editor and all run-commands at once.
+    // Also drop the editor bundle for this ticket — delete / mark-done
+    // tear down both the editor and all run-commands at once.
     editor.editor_bundles.write().await.remove(ticket_key);
 }

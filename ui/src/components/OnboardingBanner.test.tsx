@@ -2,10 +2,10 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Task #27 coverage — the per-warning-code "Set up" deep-link mapping.
+ * Coverage for the per-warning-code "Set up" deep-link mapping.
  *
- * Each row in the spec table from the task description gets a test here so
- * any regression on the mapping fails fast.
+ * Each row in the spec table gets a test here so any regression on the
+ * mapping fails fast.
  */
 
 import { describe, it, expect, afterEach } from "vitest";

@@ -4,8 +4,8 @@
 //! Forward a WebSocket upgrade to the upstream session listener.
 //!
 //! Token validation **must** happen before `forward_websocket` is called —
-//! that ordering is what satisfies GH-45 AC #7 (the 101 response is never
-//! emitted on an unknown token).
+//! that ordering ensures the 101 response is never emitted on an unknown
+//! token.
 
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
@@ -20,8 +20,8 @@ use super::proxy_forward::{
 use super::token_validator::not_found;
 
 /// Forward a WebSocket upgrade. The token has already been validated by
-/// `proxy_session` BEFORE entering this function — that ordering is what
-/// satisfies AC #7 (the 101 response is never emitted on an unknown token).
+/// `proxy_session` BEFORE entering this function — that ordering ensures
+/// the 101 response is never emitted on an unknown token.
 pub(super) async fn forward_websocket(
     mut req: Request<Body>,
     route: SessionRoute,

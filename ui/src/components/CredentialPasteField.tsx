@@ -2,8 +2,8 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Phase 2 paste field — shared between the Cursor / Claude / GitHub-PAT
- * panels. Renders a password-style input with a show/hide eye toggle, an
+ * Paste field — shared between the Cursor / Claude / GitHub-PAT panels.
+ * Renders a password-style input with a show/hide eye toggle, an
  * optional helper line, and a Save button. The parent owns the controlled
  * value and the submit handler; this component holds only the local
  * "revealed" toggle.

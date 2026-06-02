@@ -59,7 +59,7 @@ pub async fn start_run_command(
     dynamic_ports: usize,
     isolate_workspace: bool,
     extra_env: &[(&str, &str)],
-    // Phase 2b.3.x: optional per-workflow secrets bundle. Same semantics as
+    // Optional per-workflow secrets bundle. Same semantics as
     // `start_editor`'s `secrets_bundle` — when `Some`, tokens reach the
     // run-command container via tmpfs file mount, never `docker inspect`.
     secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
@@ -110,8 +110,8 @@ pub async fn start_run_command(
     let bundle_attached = secrets_bundle.is_some();
     for key in PASSTHROUGH_ENV {
         if bundle_attached && passthrough_is_bundled(key) {
-            // Phase 2b.3.x: the bundle owns this secret; suppress the
-            // ambient host value so `docker inspect` cannot leak it.
+            // The bundle owns this secret; suppress the ambient host
+            // value so `docker inspect` cannot leak it.
             continue;
         }
         if let Ok(val) = std::env::var(key)
@@ -134,7 +134,7 @@ pub async fn start_run_command(
         args.push(mount);
     }
 
-    // Phase 2b.3.x: attach the bundle mount + non-secret env vars.
+    // Attach the bundle mount + non-secret env vars.
     if let Some(b) = secrets_bundle {
         apply_secrets_bundle_to_args(&mut args, b);
     }

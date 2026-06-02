@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-02 AC-2 — `Secure` cookie flag with auto-detect.
+// Integration tests for the `Secure` cookie flag with auto-detect.
 //
 // Resolution rule (from `crates/maestro-web/src/auth.rs::resolve_cookie_secure`):
 //   1. Explicit `[web] cookie_secure = Some(v)` wins.
@@ -102,7 +102,7 @@ async fn cookie_secure_when_https_origin_present() {
     // We seed the allowlist with BOTH the test origin and the https origin.
     // `resolved_cors_origins()` only auto-fills the host/port-derived defaults
     // when the explicit list is empty — as soon as we set a single entry, we
-    // must include the test origin or CSRF (plan-02 AC-1) rejects the
+    // must include the test origin or CSRF rejects the
     // `Origin: http://localhost:8080` request with 403.
     let state = test_state_with_db();
     let _ = register_and_login(&state).await;

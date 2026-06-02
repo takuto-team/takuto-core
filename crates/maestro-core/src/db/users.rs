@@ -3,14 +3,11 @@
 
 //! User CRUD operations against the SQLite database.
 //!
-//! ### Plan-11 step 3 cluster A (this commit)
-//!
-//! Migrated to the agnostic [`DbAdapter`] alongside `credentials.rs` +
-//! `migration.rs`. All fns are `async`; reads take `&DbAdapter`, writes
-//! that need multi-statement atomicity (the last-admin guards + the
-//! first-user-becomes-admin race in `create_user`) open a short internal
-//! `DbTransaction` and commit before returning. No external caller needs
-//! to manage the transaction.
+//! All fns are `async` over the agnostic [`DbAdapter`]; reads take
+//! `&DbAdapter`, writes that need multi-statement atomicity (the
+//! last-admin guards + the first-user-becomes-admin race in `create_user`)
+//! open a short internal `DbTransaction` and commit before returning. No
+//! external caller needs to manage the transaction.
 
 use uuid::Uuid;
 

@@ -40,14 +40,13 @@ pub async fn list_workflows(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Json<Vec<WorkflowSummary>> {
     let cfg = cfg_state.config.read().await;
-    // Plan-10: workflow visibility is gated by the caller's `user_repositories`
+    // Workflow visibility is gated by the caller's `user_repositories`
     // associations. Build two HashSets in ONE batched query so the in-memory
     // filter below is O(1) per workflow.
     let (allowed_repo_ids, allowed_repo_names): (
         std::collections::HashSet<String>,
         std::collections::HashSet<String>,
     ) = if let Some(database) = auth_state.db.as_ref() {
-        // Plan-11 step 3: repositories DAO on the adapter.
         match maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id)
             .await
         {
@@ -150,12 +149,10 @@ pub async fn list_workflows(
         }
         out
     };
-    // Plan-07 slice 16: pre-fetch every work_items row for this
-    // user so the per-summary projection below can override pr_url,
-    // pr_merged, and branch_name with the DB-authoritative values
-    // (symmetric with slice 14's single-item `get_workflow`). One
-    // query for the whole list keeps this O(1) per workflow rather
-    // than O(N) DB round-trips.
+    // Pre-fetch every work_items row for this user so the per-summary
+    // projection below can override pr_url, pr_merged, and branch_name
+    // with the DB-authoritative values. One query for the whole list
+    // keeps this O(1) per workflow rather than O(N) DB round-trips.
     let db_pr_state: HashMap<String, (Option<String>, bool, Option<String>)> =
         if let Some(database) = auth_state.db.as_ref() {
             match maestro_core::db::work_items::list_work_items(
@@ -184,7 +181,7 @@ pub async fn list_workflows(
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        "Plan-07 slice 16: failed to batch-load work_items rows for PR-field cutover; falling back to HashMap values"
+                        "Failed to batch-load work_items rows for PR-field projection; falling back to in-memory map values"
                     );
                     HashMap::new()
                 }
@@ -193,9 +190,6 @@ pub async fn list_workflows(
             HashMap::new()
         };
 
-    // Plan-11 step 3: user_worktree_commands::get_run_commands_for_pairs
-    // migrated to the agnostic adapter. Direct async call from this
-    // handler.
     let run_commands_by_pair: HashMap<
         (String, String),
         Vec<maestro_core::db::user_worktree_commands::RunCommand>,
@@ -236,10 +230,8 @@ pub async fn list_workflows(
                 };
             let run_commands =
                 build_run_commands_status(configured_run_cmds, run_cmds_state.get(&w.ticket_key));
-            // Plan-07 slice 16: prefer DB values for these three
-            // scalars when a work_items row exists; fall back to
-            // the in-memory Workflow otherwise. Matches slice 14's
-            // single-item cutover semantics.
+            // Prefer DB values for these three scalars when a work_items
+            // row exists; fall back to the in-memory Workflow otherwise.
             let db_override = db_pr_state.get(&w.ticket_key);
             let (db_branch, db_pr_url, db_pr_merged) = match db_override {
                 Some((u, m, b)) => (
@@ -311,11 +303,11 @@ pub async fn list_workflows(
 }
 
 /// Per-user workflow counts for the dashboard summary bar.
-/// Plan-07 slice 13 — counts come from a DB GROUP-BY when a row
-/// exists for a given ticket_key, falling back to the HashMap for
-/// pre-plan-07 workflows that have not yet been backfilled. The two
-/// sources are merged by ticket_key (DB wins) so the same workflow
-/// is never double-counted during the transition.
+/// Counts come from a DB GROUP-BY when a row exists for a given
+/// ticket_key, falling back to the HashMap for legacy workflows that
+/// have not yet been backfilled. The two sources are merged by
+/// ticket_key (DB wins) so the same workflow is never double-counted
+/// during the transition.
 pub async fn workflow_counts(
     State(engine): State<EngineState>,
     State(auth_state): State<AuthState>,
@@ -340,7 +332,7 @@ pub async fn workflow_counts(
     }
 
     // ── HashMap fallback: only entries the DB didn't already
-    //    cover. Pre-plan-07 workflows still live only in memory.
+    //    cover. Legacy workflows still live only in memory.
     {
         let wf_arc = engine.engine.workflows_arc();
         let workflows = wf_arc.read().await;
@@ -409,16 +401,13 @@ pub async fn get_workflow(
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<WorkflowSummary>, StatusCode> {
     let cfg = cfg_state.config.read().await;
-    // Plan-10: visibility is gated by `require_workflow_access`, which checks
-    // both user_id ownership AND repo association. The legacy
-    // workspace_name-equals-current-workspace check is dropped because there
-    // is no longer a single "current workspace" — every workflow knows its
-    // own repo.
+    // Visibility is gated by `require_workflow_access`, which checks
+    // both user_id ownership AND repo association.
     require_workflow_access(&engine, &auth_state, &auth, &id).await?;
-    // Plan-07 slice 14: read the scalar PR fields from the DB row
-    // when one exists. Hooks (`update_pr_url`, etc.) write straight
-    // to work_items, so the DB is the freshest source for these
-    // three. Engine-derived fields stay on the HashMap path.
+    // Read the scalar PR fields from the DB row when one exists.
+    // Hooks (`update_pr_url`, etc.) write straight to work_items, so
+    // the DB is the freshest source for these three. Engine-derived
+    // fields stay on the HashMap path.
     let db_pr_state: Option<(Option<String>, bool, Option<String>)> =
         if let Some(database) = auth_state.db.as_ref() {
             match maestro_core::db::work_items::get_work_item_by_ticket_key(
@@ -490,7 +479,7 @@ pub async fn get_workflow(
         state: w.status_display(),
         started_at: w.started_at.to_rfc3339(),
         updated_at: w.updated_at.to_rfc3339(),
-        // Plan-07 slice 14: DB wins for these three when a row exists.
+        // DB wins for these three when a row exists.
         branch_name: match &db_pr_state {
             Some((_, _, Some(b))) => b.clone(),
             // DB row present but branch_name is NULL → DB is
@@ -544,11 +533,9 @@ pub async fn get_workflow(
             }
         },
         run_commands: {
-            // Per-user-per-workspace lookup of configured run commands (plan-09).
-            // Owner-less workflows, or workflows whose owner has no row, get an
-            // empty list (no buttons rendered on the card).
-            // Plan-11 step 3: user_worktree_commands::get migrated to
-            // the agnostic adapter. Direct async call.
+            // Per-user-per-workspace lookup of configured run commands.
+            // Owner-less workflows, or workflows whose owner has no row, get
+            // an empty list (no buttons rendered on the card).
             let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
                 match (w.user_id.as_deref(), auth_state.db.as_ref()) {
                     (Some(uid), Some(database)) => {
@@ -585,12 +572,10 @@ pub async fn get_workflow(
 
 /// Return the generated report markdown for a workflow (from `lore/reports/<key>_report.md` in the worktree).
 ///
-/// **Plan-07 slice 12 — DB is the primary source for `worktree_path`
-/// and `ticket_key`.** The route already gated access via
-/// `require_workflow_access`, so we read the full row without an
-/// additional visibility filter. The HashMap fallback covers
-/// workflows that pre-date the shadow-write (plan-07 step 6
-/// backfill will retire it).
+/// **DB is the primary source for `worktree_path` and `ticket_key`.**
+/// The route already gated access via `require_workflow_access`, so
+/// we read the full row without an additional visibility filter. The
+/// HashMap fallback covers workflows that pre-date the shadow-write.
 pub async fn get_workflow_report(
     State(engine): State<EngineState>,
     State(auth_state): State<AuthState>,

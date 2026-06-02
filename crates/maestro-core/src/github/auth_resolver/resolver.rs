@@ -95,8 +95,8 @@ impl GitAuthResolver {
         }
     }
 
-    /// Phase 2b.3.x: re-validate a user's PAT against the live `gh` shim at
-    /// workflow restore / resume time. Thin delegator to
+    /// Re-validate a user's PAT against the live `gh` shim at workflow
+    /// restore / resume time. Thin delegator to
     /// [`validator::revalidate_pat_for_workflow`] — see that fn for
     /// behaviour.
     pub async fn revalidate_pat_for_workflow(
@@ -108,7 +108,7 @@ impl GitAuthResolver {
         validator::revalidate_pat_for_workflow(self, user_id, gh, orgs).await
     }
 
-    /// Phase 2b.3: SSO-only revalidation. Thin delegator to
+    /// SSO-only revalidation. Thin delegator to
     /// [`validator::revalidate_sso`] — see that fn for behaviour.
     pub async fn revalidate_sso(
         &self,
@@ -131,7 +131,6 @@ impl GitAuthResolver {
     }
 
     pub(super) async fn user_has_pat(&self, user_id: &str) -> GitAuthResult<bool> {
-        // Plan-11 step 3 cluster B: github_credentials on the adapter.
         let row = github_credentials::find(self.db.adapter(), user_id)
             .await
             .map_err(|e| GitAuthError::Internal {
@@ -209,7 +208,6 @@ impl GitAuthResolver {
 
     async fn materialise_user_pat(&self, user_id: &str) -> GitAuthResult<GitToken> {
         let pat = self.unseal_user_pat(user_id).await?;
-        // Plan-11 step 3 cluster B: github_credentials::find on the adapter.
         let row = github_credentials::find(self.db.adapter(), user_id)
             .await
             .map_err(|e| GitAuthError::Internal {
@@ -220,15 +218,14 @@ impl GitAuthResolver {
                 action: "materialise_user_pat",
             })?;
         // user_github_credentials uses user_id as the PK; the
-        // `credential_row_id` we expose for Phase 2b.3's auth_pin is a
-        // stable derivation. None for now — there's no integer id col
-        // (the table is keyed by user_id). Phase 2b.3 redefines this
-        // field; for now we leave it None.
+        // `credential_row_id` we expose for auth_pin is a stable
+        // derivation. None for now — there's no integer id col
+        // (the table is keyed by user_id).
         let (login, row_id, last_used) = (row.github_login, None::<i64>, row.last_validated_at);
 
         // Audit "used" if this is the first use within ~60s. We co-opt
-        // `last_validated_at` as a debounce signal (Phase 2b.3 may switch
-        // this to a dedicated last_used_at column on user_github_credentials
+        // `last_validated_at` as a debounce signal (a dedicated
+        // last_used_at column on user_github_credentials would be cleaner
         // — TODO: blind spot, low priority).
         if audit::should_audit_first_use(last_used.as_deref()) {
             audit::record_first_use(&self.db, user_id).await;
@@ -238,7 +235,7 @@ impl GitAuthResolver {
         // TODO (blind spot B.16, Low): per-user override for primary email
         // when the user wants a real email rather than the GitHub no-reply.
         // Today we default to the no-reply form since we don't have a
-        // captured primary email column yet (Phase 2a deferred it).
+        // captured primary email column yet.
         let author_email = format!("{login}@users.noreply.github.com");
         Ok(GitToken {
             bearer: pat,
@@ -532,7 +529,7 @@ mod tests {
         GitAuthResolver::new(db, Some(Arc::new(mgr)))
     }
 
-    // ─── revalidate_pat_for_workflow (Phase 2b.3.x) ─────────────────────
+    // ─── revalidate_pat_for_workflow ────────────────────────────────────
     //
     // We need a `GhClient` mock here that the tests can swap between
     // happy and SSO-failure responses. The one in `pat_validation::tests`

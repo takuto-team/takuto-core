@@ -24,18 +24,17 @@ pub struct GithubIssueRow {
 pub struct ListIssuesQuery {
     /// Required. The `repositories.name` (or `workspace_name` — same value)
     /// the caller has on their dashboard. Issues are listed for that repo.
-    /// Without it we'd have to pick "the global repo" — a concept removed in
-    /// plan-10 — or list issues across every repo the caller has, which is
-    /// both slow and surprising.
+    /// Without it we'd have to pick "the global repo" (no longer a concept)
+    /// or list issues across every repo the caller has, which is both slow
+    /// and surprising.
     pub repository: Option<String>,
 }
 
 /// `GET /api/github/issues?repository=<name>` — returns open GitHub issues for
 /// the repository the caller has selected on their dashboard.
 ///
-/// Plan-10: the legacy "global active repo" model is gone. The caller must
-/// pass the repository name explicitly and must have it associated in
-/// `user_repositories` (403 otherwise).
+/// The caller must pass the repository name explicitly and must have it
+/// associated in `user_repositories` (403 otherwise).
 pub async fn list_github_issues(
     State(engine): State<EngineState>,
     State(auth_state): State<AuthState>,
@@ -59,7 +58,6 @@ pub async fn list_github_issues(
         ));
     };
 
-    // Plan-11 step 3: repositories DAO on the adapter.
     let adapter = db.adapter();
     let has = maestro_core::db::repositories::user_has(adapter, &auth.user_id, &repository)
         .await

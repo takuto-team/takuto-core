@@ -31,10 +31,10 @@ pub(crate) struct WorkflowPersistence {
     pub(crate) event_bus: Arc<WorkflowEventBus>,
     pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
     pub(crate) actions: Arc<dyn ExternalActions>,
-    /// Phase 2b.3: resolver for pin + bundle build on snapshot-restore.
+    /// Resolver for pin + bundle build on snapshot-restore.
     pub(crate) git_auth_resolver:
         Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
-    /// Phase 2b.3.x: GhClient for at-restore PAT revalidation. Defaults to
+    /// GhClient for at-restore PAT revalidation. Defaults to
     /// `None`; set by `WorkflowEngine::with_gh_client` (so tests can inject
     /// a mock without going through the real `gh` binary).
     pub(crate) gh_client: Option<Arc<dyn crate::auth::GhClient>>,
@@ -84,8 +84,8 @@ impl WorkflowPersistence {
         suppress_cancelled_as_error: Arc<AtomicBool>,
         db: Option<Database>,
     ) -> Result<usize> {
-        // Plan-10: snapshots live under `{data_dir}/workspaces/<name>/` and
-        // resolving the data dir no longer needs a repo path. The legacy
+        // Snapshots live under `{data_dir}/workspaces/<name>/` and resolving
+        // the data dir no longer needs a repo path. The legacy
         // `cfg.git.repo_path` fallback survives in `resolve_snapshot_dir` for
         // the back-compat single-workspace read path below.
         let legacy_repo_path = {
@@ -153,12 +153,10 @@ impl WorkflowPersistence {
                 .await
                 .insert(ticket_key.clone(), wf);
 
-            // Plan-07 slice 15 (step-6 backfill): also shadow-write
-            // the restored workflow into work_items so the DB-first
-            // read paths (slices 11/12/13/14) see it without
-            // needing the HashMap fallback. Idempotent — on a
-            // duplicate (workspace, ticket_key) row the inner
-            // helper logs WARN and continues, so restarts of an
+            // Shadow-write the restored workflow into work_items so the
+            // DB-first read paths see it without needing the HashMap
+            // fallback. Idempotent — on a duplicate (workspace, ticket_key)
+            // row the inner helper logs WARN and continues, so restarts of an
             // already-backfilled install are safe.
             {
                 let wf_arc = self.repository.inner_arc();
@@ -265,12 +263,12 @@ impl WorkflowPersistence {
                         let su = suppress.clone();
                         let ct = cancel_token.clone();
                         let db_clone = db.clone();
-                        // Phase 2b.3.x: revalidate the user's PAT at restore.
-                        // Best-effort: failure broadcasts an AuthWarning event
-                        // but does NOT block re-spawn (the workflow's next
-                        // git action will still fail loudly).
-                        // Done BEFORE binding the owned `resolver` for the
-                        // driver spawn — otherwise we'd borrow-then-move.
+                        // Revalidate the user's PAT at restore. Best-effort:
+                        // failure broadcasts an AuthWarning event but does
+                        // NOT block re-spawn (the workflow's next git action
+                        // will still fail loudly). Done BEFORE binding the
+                        // owned `resolver` for the driver spawn — otherwise
+                        // we'd borrow-then-move.
                         if let (Some(r), Some(gh)) =
                             (self.git_auth_resolver.as_ref(), self.gh_client.as_ref())
                         {
@@ -326,7 +324,7 @@ impl WorkflowPersistence {
                             }
                         }
 
-                        // Phase 2b.3: thread the resolver to the spawned driver.
+                        // Thread the resolver to the spawned driver.
                         let resolver = self.git_auth_resolver.clone();
                         tokio::spawn(async move {
                             drive_workflow_def(
@@ -451,10 +449,10 @@ impl WorkflowPersistence {
     }
 
     pub async fn git_worktree_prune(&self) {
-        // Plan-10: in the new model each workflow owns its repository path,
-        // and `mark_work_done`/`delete_workflow` prune via the per-workflow
-        // repo path. This blanket prune (called after the per-action remove)
-        // is informational and uses the deprecated global config path so it
+        // In the per-repo model each workflow owns its repository path, and
+        // `mark_work_done`/`delete_workflow` prune via the per-workflow repo
+        // path. This blanket prune (called after the per-action remove) is
+        // informational and uses the deprecated global config path so it
         // keeps working on legacy single-repo deployments. Best-effort.
         let repo_path = {
             let c = self.config.read().await;

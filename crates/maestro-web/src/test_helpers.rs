@@ -61,9 +61,9 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
         std::env::temp_dir(),
         Some(db.clone()),
     ));
-    // Phase 2b.2: build the resolver from the test DB. No App configured
-    // here — tests that need a Mode A / B fixture seed PAT rows directly
-    // and the resolver picks them up via the DB.
+    // Build the resolver from the test DB. No App configured here — tests
+    // that need a Mode A / B fixture seed PAT rows directly and the
+    // resolver picks them up via the DB.
     let git_auth_resolver = Some(Arc::new(
         maestro_core::github::auth_resolver::GitAuthResolver::new(db.clone(), None),
     ));
@@ -106,8 +106,8 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
 /// Origin header to attach to mutating requests in tests. Matches the
 /// auto-computed `cors_origins` allowlist of `WebConfig::default()`
 /// (host=`0.0.0.0`, port=8080 → `http://localhost:8080` is allowed). The CSRF
-/// middleware (plan-02 AC-1) rejects mutating requests whose `Origin` is not
-/// on the allowlist, so every test that POSTs/PUTs/DELETEs/PATCHes must
+/// middleware rejects mutating requests whose `Origin` is not on the
+/// allowlist, so every test that POSTs/PUTs/DELETEs/PATCHes must
 /// either send this header (when authenticated) or omit it (to assert that
 /// CSRF rejects the request).
 pub const TEST_ORIGIN: &str = "http://localhost:8080";

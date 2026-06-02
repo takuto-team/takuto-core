@@ -3,8 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Phase 2b.3 integration tests for auth-pin + worker secrets bundle.
-// Source: tmp/multi-agents/04_architecture.md §6 + §7.2.
+// Integration tests for auth-pin + worker secrets bundle.
 //
 // Bundle unit tests live in `crates/maestro-core/src/auth/bundle.rs::tests`;
 // these tests cover the snapshot back-compat invariants, the cross-snapshot
@@ -148,8 +147,6 @@ async fn pin_for_workflow_captures_active_provider_from_config() {
     // Seed user + claude credential.
     seed_user(&db, "u-pin").await;
     let sealed = seal(&mk, b"sk-ant-test").unwrap();
-    // Plan-11 step 3 cluster B: provider_credentials::upsert on the adapter
-    // inside a short transaction.
     {
         let adapter = db.adapter();
         let mut tx = adapter.begin().await.unwrap();

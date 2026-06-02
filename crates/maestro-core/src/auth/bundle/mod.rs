@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 2b.3 (04_architecture.md §6) — per-workflow worker secrets bundle.
+//! Per-workflow worker secrets bundle.
 //!
 //! Builds an opaque container of tmpfs-mounted secret files + non-secret
 //! env vars that the worker entrypoint sources, then deletes. The bundle's
@@ -15,8 +15,7 @@
 //! entrypoint `source`s each file into an env var then `rm`s the on-disk
 //! copy to shrink the blast radius if the worker is later compromised.
 //!
-//! Split into five files under §7 push-to-A audit (previously a single
-//! 1244-LOC `auth/bundle.rs`):
+//! Split into five files (previously a single 1244-LOC `auth/bundle.rs`):
 //! - `mod.rs`           — re-exports + full test suite
 //! - `types.rs`         — [`WorkerSecretsBundle`] struct + `SECRET_FILE_*` constants
 //! - `tempdir.rs`       — [`cleanup_orphan_secrets`] + per-bundle dir
@@ -122,9 +121,9 @@ mod tests {
         Arc::new(GitAuthResolver::new(db, None))
     }
 
-    /// Task #39: seed a cli_state row carrying a minimal valid Claude
-    /// session blob. Uses the test DB's master key so `seal()`/`open()`
-    /// round-trip cleanly.
+    /// Seed a cli_state row carrying a minimal valid Claude session blob.
+    /// Uses the test DB's master key so `seal()`/`open()` round-trip
+    /// cleanly.
     async fn seed_claude_cli_state(db: &Database, user_id: &str, json: &[u8]) {
         let mk = db.master_key().unwrap().key.clone();
         let sealed = seal(&mk, json).unwrap();
@@ -291,7 +290,7 @@ mod tests {
         assert!(pin.provider_credential_row_id.is_none());
     }
 
-    // ─── build_for_endpoint (Phase 2b.3.x) ────────────────────────────────
+    // ─── build_for_endpoint ──────────────────────────────────────────────
     //
     // The endpoint-side wrapper synthesizes an ephemeral pin internally.
     // It must behave identically to `build` for credential lookup, but
@@ -334,8 +333,7 @@ mod tests {
         assert!(err.to_string().contains("provider_credential_missing"));
     }
 
-    /// Phase 2b.3.x: `apply_secrets_bundle_to_args` (defined in
-    /// `container.rs`) must:
+    /// `apply_secrets_bundle_to_args` (defined in `container.rs`) must:
     ///   1. Bind-mount the bundle's host_dir RO at /run/maestro-secrets, AND
     ///   2. Copy every `extra_env` pair as `-e KEY=VALUE`, AND
     ///   3. NEVER write secret bytes into the argv (those live in tmpfs).
@@ -436,7 +434,7 @@ mod tests {
         assert!(s.contains("has_github_token"));
     }
 
-    // ─── Task #39: claude cli_state in bundle ────────────────────────────
+    // ─── claude cli_state in bundle ──────────────────────────────────────
 
     /// Minimal valid Claude session blob — three required oauthAccount
     /// keys + a couple of harmless extras the validator must ignore.
@@ -557,7 +555,7 @@ mod tests {
         );
     }
 
-    // ─── Task #43: data_dir-based secrets dir + cleanup ────────────────
+    // ─── data_dir-based secrets dir + cleanup ──────────────────────────
 
     /// Build a real Database backed by a temp data_dir (not in-memory) so
     /// `data_dir()` returns a real path the bundle can sit under.
@@ -754,7 +752,7 @@ mod tests {
         );
     }
 
-    /// Task #42: Arc-storage strategy proof. The route handlers stash an
+    /// Arc-storage strategy proof. The route handlers stash an
     /// `Arc<WorkerSecretsBundle>` clone in AppState so the bundle's
     /// `TempDir` outlives the route's stack scope. This test asserts the
     /// expected lifetime semantics: cloning the Arc does NOT trigger

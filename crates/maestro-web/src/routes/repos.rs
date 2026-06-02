@@ -1,10 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-10: workspace listing/switching and `POST /api/repos/clone` are hard
-//! deleted (decision #3). The previously admin-gated route handlers have moved
-//! out of this module entirely; what remains are the `pub(crate)` helpers
-//! reused by `routes/repositories.rs::POST /api/repositories` (clone-if-needed
+//! Workspace listing/switching and `POST /api/repos/clone` are hard
+//! deleted. The previously admin-gated route handlers have moved out of
+//! this module entirely; what remains are the `pub(crate)` helpers reused
+//! by `routes/repositories.rs::POST /api/repositories` (clone-if-needed
 //! flow) and the still-mounted `GET /api/github/repos` listing endpoint.
 
 use axum::Json;
@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use crate::state::{AuthState, EngineState};
 use maestro_core::workflow::snapshot::WORKSPACES_DIR;
 
-// ── GitHub repo listing (unchanged from plan-09) ─────────────────────────────
+// ── GitHub repo listing ─────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct GitHubRepoRow {
@@ -221,11 +221,10 @@ impl Drop for CloneGuard {
 /// authenticated caller (`Some` for user-driven clones via
 /// `POST /api/repositories`; `None` for poller / legacy paths).
 ///
-/// Phase 2b.2: when `user_id.is_some()` AND the `GitAuthResolver` is wired,
-/// we ask the resolver for a `GitAction::Clone` token (which picks App in
-/// Mode A/B and UserPat in Mode C per arch §4.2). Otherwise we fall back
-/// to the legacy `actions.get_gh_installation_token` + `gh repo clone`
-/// chain that pre-existed Phase 2b.2.
+/// When `user_id.is_some()` AND the `GitAuthResolver` is wired, we ask the
+/// resolver for a `GitAction::Clone` token (which picks App in Mode A/B
+/// and UserPat in Mode C per arch §4.2). Otherwise we fall back to the
+/// legacy `actions.get_gh_installation_token` + `gh repo clone` chain.
 ///
 /// This is the helper used by `routes/repositories.rs::POST /api/repositories`
 /// to perform the actual filesystem clone after the per-process lock has been

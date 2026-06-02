@@ -72,11 +72,11 @@ pub(super) async fn run_workflow_def_steps(
     cancel_token: &CancellationToken,
     log_writer: &Arc<WorkflowLogWriter>,
     agent_run_semaphore: &Arc<Semaphore>,
-    // Phase 2b.3 — passed through so the agent-step runner can rebuild a
-    // fresh `WorkerSecretsBundle`. `None` preserves the legacy
-    // `PASSTHROUGH_ENV` path. The pin is already on the workflow at this
-    // point (bootstrap wrote it); the rebuild is idempotent in the sense
-    // that it re-unseals the same DB rows the pin references.
+    // Passed through so the agent-step runner can rebuild a fresh
+    // `WorkerSecretsBundle`. `None` preserves the legacy `PASSTHROUGH_ENV`
+    // path. The pin is already on the workflow at this point (bootstrap
+    // wrote it); the rebuild is idempotent in the sense that it re-unseals
+    // the same DB rows the pin references.
     db: Option<&Database>,
     git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
 ) -> Result<()> {
@@ -130,13 +130,13 @@ pub(super) async fn run_workflow_def_steps(
         };
         let mut runner =
             ContainerRunner::new(ticket_key, worktree_path, &image).with_isolate_workspace();
-        // Phase 2b.3 (regression fix): the bootstrap runner gets a bundle
-        // attached but it goes out of scope when bootstrap returns. The
-        // *agent-step* runner constructed here is what actually spawns
-        // claude / cursor / codex / opencode, so it needs its own bundle
-        // — without it, `wrap_command` doesn't splice `BUNDLE_SOURCING_SH`
-        // and the agent CLI sees no `CLAUDE_CODE_OAUTH_TOKEN` /
-        // merged `.claude.json`, surfacing as "Not logged in".
+        // The bootstrap runner gets a bundle attached but it goes out of
+        // scope when bootstrap returns. The *agent-step* runner constructed
+        // here is what actually spawns claude / cursor / codex / opencode,
+        // so it needs its own bundle — without it, `wrap_command` doesn't
+        // splice `BUNDLE_SOURCING_SH` and the agent CLI sees no
+        // `CLAUDE_CODE_OAUTH_TOKEN` / merged `.claude.json`, surfacing as
+        // "Not logged in".
         if let Some(bundle) =
             try_attach_secrets_bundle(ticket_key, config, workflows, db, git_auth_resolver).await
         {
@@ -149,21 +149,21 @@ pub(super) async fn run_workflow_def_steps(
 
     let cfg = config.read().await;
     let timeout = cfg.agent.step_timeout_secs;
-    // Task #44: resolve via the sub-table-aware helper so an empty
+    // Resolve via the sub-table-aware helper so an empty
     // `[agent.providers.claude].model` in /admin/ai correctly omits
-    // `--model` from the agent argv. The pre-#44 code read the legacy
-    // flat `cfg.agent.model` directly — which still holds a migrated
-    // value even after the user blanks the sub-table field — and forced
-    // an outdated model (`claude-opus-4-6`) on every spawn, which custom
-    // proxies (pantheon) don't accept.
+    // `--model` from the agent argv. Reading the legacy flat
+    // `cfg.agent.model` directly would force an outdated model on every
+    // spawn (the flat field retains its migrated value even after the
+    // user blanks the sub-table field), which custom proxies (pantheon)
+    // don't accept.
     let claude_model = cfg.agent.effective_claude_model().map(str::to_string);
     let cursor_model_buf = cfg.agent.cursor_model.clone();
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
     let cursor_cli = cfg.agent.cursor_cli.clone();
-    // Phase 4: codex and opencode share the same shape as claude/cursor —
-    // a single sub-table per provider with an optional `model` string.
-    // Empty string means "use the CLI's default" (no `-m` flag emitted).
+    // Codex and opencode share the same shape as claude/cursor — a single
+    // sub-table per provider with an optional `model` string. Empty string
+    // means "use the CLI's default" (no `-m` flag emitted).
     let codex_model = {
         let m = cfg.agent.providers.codex.model.trim();
         if m.is_empty() { None } else { Some(m.to_string()) }
@@ -286,11 +286,11 @@ pub(super) async fn run_agent_step_sequence(
     // When true, each agent step prompt gets the report-generation injection suffix.
     // Pass `false` for the consolidation step (which already has its own dedicated prompt).
     inject_report: bool,
-    // Plan-07 step 4 slice 2: shadow-write state transitions into work_items.
+    // Shadow-write state transitions into work_items.
     db: Option<&Database>,
-    // Plan-07 step 4 slice 3: definition filename recorded on every
-    // step row so the DB can attribute steps back to their workflow
-    // definition file. `None` when steps run outside a definition run.
+    // Definition filename recorded on every step row so the DB can
+    // attribute steps back to their workflow definition file. `None` when
+    // steps run outside a definition run.
     def_filename: Option<&str>,
 ) -> Result<Option<String>> {
     let num_steps = steps.len();
@@ -350,7 +350,7 @@ pub(super) async fn run_agent_step_sequence(
 
                     let mut step_log = StepLog::new(step_label.clone());
                     broadcast_step_started(event_tx, ticket_key, &step_label, workflows).await;
-                    // Plan-07 step 4 slice 3: shadow-write step start.
+                    // Shadow-write step start.
                     let step_db_id = {
                         let work_item_id = {
                             let wf = workflows.read().await;
@@ -503,7 +503,7 @@ pub(super) async fn run_agent_step_sequence(
                     }
 
                     if cmd_failed && !is_last_run_of_outer_cycle {
-                        // Plan-07 step 4 slice 3: shadow-write step end (failed).
+                        // Shadow-write step end (failed).
                         super::driver::shadow_record_step_end(
                             db,
                             step_db_id,
@@ -522,10 +522,10 @@ pub(super) async fn run_agent_step_sequence(
                         return Err(AgentError::CommandStepFailed.into());
                     }
 
-                    // Plan-07 step 4 slice 3: shadow-write step end. The
-                    // status reflects the in-memory StepLog so a
-                    // last-run-of-outer-cycle failure (which does NOT
-                    // abort the workflow) still records as Failed.
+                    // Shadow-write step end. The status reflects the
+                    // in-memory StepLog so a last-run-of-outer-cycle
+                    // failure (which does NOT abort the workflow) still
+                    // records as Failed.
                     let final_status = match step_log.status {
                         crate::workflow::step::StepStatus::Success => {
                             crate::db::work_items::StepStatus::Success
@@ -558,7 +558,7 @@ pub(super) async fn run_agent_step_sequence(
                 // ── Agent step execution ────────────────────────────────────
                 let mut step_log = StepLog::new(step_label.clone());
                 broadcast_step_started(event_tx, ticket_key, &step_label, workflows).await;
-                // Plan-07 step 4 slice 3: shadow-write step start.
+                // Shadow-write step start.
                 let step_db_id = {
                     let work_item_id = {
                         let wf = workflows.read().await;
@@ -745,7 +745,7 @@ pub(super) async fn run_agent_step_sequence(
                         );
                         step_log.fail(e.to_string());
                         if !is_last_run_of_outer_cycle {
-                            // Plan-07 step 4 slice 3: shadow-write step end (failed).
+                            // Shadow-write step end (failed).
                             super::driver::shadow_record_step_end(
                                 db,
                                 step_db_id,
@@ -768,10 +768,10 @@ pub(super) async fn run_agent_step_sequence(
                     }
                 }
 
-                // Plan-07 step 4 slice 3: shadow-write step end. Map
-                // the in-memory StepLog status to the DB enum so a
-                // last-run-of-outer-cycle agent failure (which does
-                // NOT abort the workflow) still records as Failed.
+                // Shadow-write step end. Map the in-memory StepLog status
+                // to the DB enum so a last-run-of-outer-cycle agent
+                // failure (which does NOT abort the workflow) still
+                // records as Failed.
                 let final_status = match step_log.status {
                     crate::workflow::step::StepStatus::Success => {
                         crate::db::work_items::StepStatus::Success

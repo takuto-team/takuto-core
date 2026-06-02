@@ -72,7 +72,7 @@ pub(crate) const PASSTHROUGH_ENV: &[&str] = &[
 /// without leaking new public accessors on the struct. Reads exactly the
 /// `&ContainerRunner` fields it needs as plain arguments.
 ///
-/// Phase 2b.3: when `secrets_bundle` is `Some`, the legacy `PASSTHROUGH_ENV`
+/// When `secrets_bundle` is `Some`, the legacy `PASSTHROUGH_ENV`
 /// token forwarding is suppressed for the AI-provider auth env vars
 /// (`CLAUDE_CODE_OAUTH_TOKEN`, `CURSOR_API_KEY`, `GH_TOKEN`,
 /// `ANTHROPIC_BASE_URL`) — the worker entrypoint sources them from the
@@ -126,13 +126,13 @@ pub(crate) fn base_docker_args(
         args.push(mount);
     }
 
-    // Phase 2b.3: bundle-driven secret mount + non-secret env vars.
+    // Bundle-driven secret mount + non-secret env vars.
     if let Some(bundle) = secrets_bundle {
         // Bind-mount the per-workflow secrets dir read-only into the
         // worker. Path bytes ARE fine in `docker inspect`; secret bytes
         // are not.
-        // Task #43: translate the host-side path for DinD mode (no-op
-        // for local Docker). See `translate_path_for_dind`.
+        // Translate the host-side path for DinD mode (no-op for local
+        // Docker). See `translate_path_for_dind`.
         let src = translate_path_for_dind(bundle.host_dir());
         args.push("-v".into());
         args.push(format!(

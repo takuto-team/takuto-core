@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-02 AC-3 — per-IP rate limit and per-user lockout.
+// Integration tests for per-IP rate limit and per-user lockout.
 //
 // Covers the deterministic, in-process pieces of the spec:
 //   - G/W/T 3.1 smoke: 11 wrong-password POSTs from one "IP" → 11th is 429.

@@ -4,8 +4,7 @@
 //! GitHub PAT validation — translates raw `GhClient` responses into the
 //! typed outcomes the credential-save handler relies on.
 //!
-//! Source of truth: tmp/multi-agents/04_architecture.md §4.3 (PAT validation
-//! at save AND at workflow start — Phase 2b.1 ships the save half; A4).
+//! PAT validation runs at save AND at workflow start.
 //!
 //! Three steps:
 //!

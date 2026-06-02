@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Plan-10 integration test for the startup reconciliation pass.
+// Integration test for the startup reconciliation pass.
 //
 // Two passes are exercised against a real SQLite DB + a real on-disk fake
 // workspaces directory + a real snapshot file:
@@ -81,7 +81,7 @@ fn seed_snapshot_workflow(
     let rec = PersistedWorkflowRecord {
         id: uuid::Uuid::new_v4().to_string(),
         ticket_key: ticket_key.to_string(),
-        ticket_summary: "Snapshot for plan-10 backfill".into(),
+        ticket_summary: "Snapshot for backfill".into(),
         ticket_description: String::new(),
         ticket_type: "Task".into(),
         state: WorkflowState::Done,
@@ -146,10 +146,6 @@ async fn reconcile_then_backfill_e2e() {
 
     let workspaces_dir_str = workspaces_dir.to_str().expect("utf-8");
 
-    // Plan-11 step 3: repositories DAO + repo_reconcile helpers migrated
-    // to the agnostic adapter. The legacy `conn().lock()` pattern is
-    // replaced by `db.adapter()` async calls throughout. `create_user`
-    // (users DAO — still rusqlite) keeps its short conn-lock block.
     let adapter = db.adapter();
 
     // ── First pass: reconcile_repositories registers both clones. ──
@@ -245,7 +241,7 @@ async fn reconcile_then_backfill_e2e() {
 }
 
 /// Snapshots whose `workspace_name` doesn't match any registered repository
-/// are skipped silently — the backfill returns 0 and no row is added (AC-17).
+/// are skipped silently — the backfill returns 0 and no row is added.
 #[tokio::test]
 async fn backfill_skips_unmatched_workspaces() {
     let data_dir = fresh_data_dir("unmatched");

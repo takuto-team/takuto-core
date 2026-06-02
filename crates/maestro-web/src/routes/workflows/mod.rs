@@ -47,17 +47,15 @@ pub use steps::{StepDto, get_steps};
 /// Users can only act on workflows they created.
 ///
 /// Exposed `pub(crate)` so the ticket-action endpoints (`routes/tickets.rs`)
-/// can reuse the same NOT_FOUND-on-mismatch convention (AC-2).
+/// can reuse the same NOT_FOUND-on-mismatch convention.
 ///
-/// **Plan-07 slice 11 — DB is now the primary read source.** When a
-/// `work_items` row matches the ticket key we run the
-/// (user_id + repo association) check against the row directly,
-/// bypassing the in-memory `HashMap` entirely. The HashMap is
-/// consulted only as a transition fallback for workflows that
-/// existed before the shadow-write shipped and haven't been
-/// backfilled yet (plan-07 step 6). The legacy "no DB attached"
-/// short-circuit is preserved for the few test paths that build a
-/// state without a database.
+/// **DB is the primary read source.** When a `work_items` row matches
+/// the ticket key we run the (user_id + repo association) check against
+/// the row directly, bypassing the in-memory `HashMap` entirely. The
+/// HashMap is consulted only as a transition fallback for workflows that
+/// existed before the shadow-write shipped and haven't been backfilled
+/// yet. The legacy "no DB attached" short-circuit is preserved for the
+/// few test paths that build a state without a database.
 pub(crate) async fn require_workflow_access(
     engine: &EngineState,
     auth_state: &AuthState,
@@ -97,11 +95,10 @@ pub(crate) async fn require_workflow_access(
                 };
             }
             Ok(None) => {
-                // Row absent — fall through to HashMap. Pre-plan-07
-                // workflows live only in the in-memory map until
-                // step-6 backfills them. Remove this fallback after
-                // backfill ships and one release cycle confirms the
-                // logs are clean.
+                // Row absent — fall through to HashMap. Legacy workflows
+                // live only in the in-memory map until the backfill
+                // covers them. Remove this fallback after backfill ships
+                // and one release cycle confirms the logs are clean.
             }
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
         }
@@ -143,8 +140,8 @@ pub(crate) async fn require_workflow_access(
 
 
 
-/// Phase 2b.3.x: try to build a `WorkerSecretsBundle` for a side-channel
-/// container (browser editor, dev-server run command) tied to a workflow.
+/// Try to build a `WorkerSecretsBundle` for a side-channel container
+/// (browser editor, dev-server run command) tied to a workflow.
 /// Returns `None` whenever any precondition for the bundle isn't met (no
 /// resolver / no DB / no master key / no per-user credential and no
 /// shared-default fallback). The caller falls back to the legacy

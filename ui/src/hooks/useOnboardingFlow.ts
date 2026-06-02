@@ -30,8 +30,7 @@ export function useOnboardingFlow({ onBeforeNext }: FlowConfig = {}) {
   const completeWizard = useCallback(async () => {
     setCompleting(true);
     try {
-      // Phase 2 wires the actual server endpoint; in Phase 1 this is a
-      // best-effort call — the wizard still navigates home on 404 / 401.
+      // Best-effort call — the wizard still navigates home on 404 / 401.
       await apiPost("/api/onboarding/complete");
     } catch {
       // Swallow — server doesn't have to support the endpoint yet.

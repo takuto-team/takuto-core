@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Plan-10: per-user repository associations.
+ * Per-user repository associations.
  *
  * Replaces the legacy workspace switcher concept. Every user opts-in to repos
  * they care about; the on-disk clone is shared across users that have added

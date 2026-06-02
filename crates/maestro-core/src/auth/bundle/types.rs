@@ -20,18 +20,18 @@ pub const SECRET_FILE_CURSOR: &str = "cursor";
 pub const SECRET_FILE_CODEX: &str = "codex";
 pub const SECRET_FILE_OPENCODE: &str = "opencode";
 pub const SECRET_FILE_GH: &str = "gh";
-/// Task #39: Claude session-state file. Carries the contents of a paid /
-/// team Claude account's `~/.claude.json` (the OAuth `oauthAccount` block
-/// the CLI requires for "logged in"). When present alongside the api_key
-/// file, the worker `cp`s this onto `$HOME/.claude.json` before exec'ing
-/// the agent so Claude Code accepts the session.
+/// Claude session-state file. Carries the contents of a paid / team Claude
+/// account's `~/.claude.json` (the OAuth `oauthAccount` block the CLI
+/// requires for "logged in"). When present alongside the api_key file, the
+/// worker `cp`s this onto `$HOME/.claude.json` before exec'ing the agent
+/// so Claude Code accepts the session.
 pub const SECRET_FILE_CLAUDE_SESSION: &str = "claude_session.json";
 
-/// Task #43: filesystem location for per-workflow secret directories.
-/// Relative to the maestro `data_dir`. We deliberately don't expose this
-/// as a config knob — the path is referenced by the path-translation
-/// logic in `container.rs` (which swaps the data_dir prefix for the
-/// DinD-side equivalent), and that translation has to stay in lockstep.
+/// Filesystem location for per-workflow secret directories. Relative to
+/// the maestro `data_dir`. We deliberately don't expose this as a config
+/// knob — the path is referenced by the path-translation logic in
+/// `container.rs` (which swaps the data_dir prefix for the DinD-side
+/// equivalent), and that translation has to stay in lockstep.
 pub const SECRETS_DIR_REL: &str = "runtime/secrets";
 
 /// The end-product of `build_for_workflow`. Lives for the duration of the
@@ -46,7 +46,7 @@ pub struct WorkerSecretsBundle {
     /// this provider; the provider CLI then reads ambient
     /// `CLAUDE_CODE_OAUTH_TOKEN` / `CURSOR_API_KEY` from `/etc/maestro/env`).
     pub provider_secret_file: Option<PathBuf>,
-    /// Task #39: Claude only. Host-side path to the unsealed
+    /// Claude only. Host-side path to the unsealed
     /// `claude_session.json` blob (the user's `~/.claude.json` contents
     /// — `oauthAccount` block etc.). `Some` when a `kind=cli_state` row
     /// exists for `(user_id, "claude")`; `None` otherwise. Independent of
@@ -109,7 +109,7 @@ impl WorkerSecretsBundle {
         self._temp_dir.path()
     }
 
-    /// Phase 2b.3 (task #36): construct a stub bundle for unit tests that
+    /// Construct a stub bundle for unit tests that
     /// need to exercise the bundle-attached code paths without going
     /// through the full `build()` async + DB pipeline. The `_temp_dir`
     /// field is private to this module so callers in other crate modules

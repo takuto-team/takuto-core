@@ -43,7 +43,7 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", 
 http-body-util = "0.1"
 
 [dev-dependencies]
-# Phase 2b.1: the credentials integration test implements the
+# The credentials integration test implements the
 # `maestro_core::auth::GhClient` trait, which is `#[async_trait]`.
 async-trait = { workspace = true }
 # Self dev-dep — activates the `test-utils` feature during `cargo test`,

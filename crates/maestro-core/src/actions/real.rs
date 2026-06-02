@@ -20,10 +20,10 @@ use crate::github_app::GitHubAppTokenManager;
 use crate::process::{self, CommandOutput};
 
 pub struct RealActions {
-    /// Live config reference. Plan-10 dropped the implicit `cfg.git.repo_path`
-    /// reader (`self.repo_path()`); every method now receives the path
-    /// explicitly. The config is still held for future per-repo plumbing
-    /// (e.g. reading `git.remote`).
+    /// Live config reference. The implicit `cfg.git.repo_path` reader was
+    /// dropped — every method now receives the repo path explicitly. The
+    /// config is still held for future per-repo plumbing (e.g. reading
+    /// `git.remote`).
     config: Arc<RwLock<Config>>,
     git_remote: String,
     github_app: Option<Arc<GitHubAppTokenManager>>,

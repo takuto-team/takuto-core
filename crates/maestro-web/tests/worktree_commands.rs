@@ -3,16 +3,14 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-09 Step 5: per-user-per-workspace worktree
-// init + run command endpoints.
+// Integration tests for the per-user-per-workspace worktree init + run
+// command endpoints.
 //
 //   GET    /api/worktree-commands
 //   GET    /api/worktree-commands/_workspaces
 //   GET    /api/worktree-commands/{workspace}
 //   PUT    /api/worktree-commands/{workspace}
 //   DELETE /api/worktree-commands/{workspace}
-//
-// AC-3 / AC-5 / AC-6 / AC-9 — covered below.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -144,7 +142,7 @@ async fn delete_one(
 // Tests.
 // ---------------------------------------------------------------------------
 
-/// AC-6: non-admin users can PUT and GET their own data — the endpoint is
+/// Non-admin users can PUT and GET their own data — the endpoint is
 /// not admin-gated.
 #[tokio::test]
 async fn non_admin_can_put_and_get_their_own() {
@@ -170,7 +168,7 @@ async fn non_admin_can_put_and_get_their_own() {
     );
 }
 
-/// AC-5: User A cannot see, edit, or delete User B's commands.
+/// User A cannot see, edit, or delete User B's commands.
 ///   - Top-level GET returns only the caller's own rows.
 ///   - GET /{workspace} returns 404 against another user's workspace.
 #[tokio::test]
@@ -331,7 +329,7 @@ async fn _workspaces_includes_has_my_commands() {
 }
 
 // ---------------------------------------------------------------------------
-// Validation matrix (AC-9).
+// Validation matrix.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -483,10 +481,10 @@ async fn put_rejects_duplicate_run_names() {
 
 #[tokio::test]
 async fn put_accepts_empty_lists() {
-    // Plan-09: a row with both lists empty is a valid "I exist but have
-    // configured nothing yet" state. It's the same observable behaviour as
-    // having no row, but the row's presence is what `has_my_commands`
-    // reports back through `_workspaces`.
+    // A row with both lists empty is a valid "I exist but have configured
+    // nothing yet" state. It's the same observable behaviour as having no
+    // row, but the row's presence is what `has_my_commands` reports back
+    // through `_workspaces`.
     let state = test_state_with_db();
     let admin_cookie = register_and_login(&state).await;
 

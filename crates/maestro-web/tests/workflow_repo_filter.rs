@@ -1,8 +1,8 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-10 Step 6 — workflow visibility is scoped to the caller's
-//! `user_repositories` associations. The list endpoint must:
+//! Workflow visibility is scoped to the caller's `user_repositories`
+//! associations. The list endpoint must:
 //!
 //!   1. Show workflows whose `repository_id` is in the caller's added set.
 //!   2. Hide workflows on a repo the caller has dropped (or never added),
@@ -89,7 +89,6 @@ async fn seed_repository(
     local_path: &str,
     associate_with: &[&str],
 ) -> String {
-    // Plan-11 step 3: repositories DAO on the adapter.
     let db = state.auth().db.as_ref().expect("test state must have a DB");
     let adapter = db.adapter();
     let id = repositories::upsert(adapter, name, None, local_path, "main", None)

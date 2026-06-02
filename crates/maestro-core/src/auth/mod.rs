@@ -1,9 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 2a foundation — envelope encryption helpers and master key bootstrap.
-//!
-//! Source of truth: tmp/multi-agents/04_architecture.md §3.2.
+//! Envelope encryption helpers and master key bootstrap.
 //!
 //! Envelope scheme:
 //!
@@ -20,8 +18,8 @@
 //! - **Nonces**: 24 fresh random bytes per write (length-checked at deserialise
 //!   time).
 //!
-//! Phase 2a ships seal/open and the key bootstrap. Phase 2b adds the per-user
-//! credential CRUD that consumes these primitives.
+//! This module ships seal/open and the key bootstrap; the per-user credential
+//! CRUD layer consumes these primitives.
 
 pub mod bundle;
 pub mod error;

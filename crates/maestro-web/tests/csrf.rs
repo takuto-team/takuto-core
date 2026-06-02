@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-02 AC-1 — CSRF via Origin/Referer allowlist.
+// Integration tests for CSRF via Origin/Referer allowlist.
 //
 // The middleware MUST:
 //   - reject `POST/PUT/DELETE/PATCH` with a missing or unlisted `Origin` (or
@@ -14,13 +14,9 @@
 //     able to POST a login on behalf of the user.
 //
 // CSRF is the OUTERMOST middleware on `api_public`/`api_protected`, so it
-// rejects before the auth middleware (and before Dev B's per-IP rate-limit
+// rejects before the auth middleware (and before the per-IP rate-limit
 // layer on `/auth/login`). That lets these tests cover the rejection paths
-// without driving a full register-then-login flow (which depends on
-// teammate work — Dev B's `tower_governor` and Dev C's secure-cookie
-// resolution).
-//
-// See `tmp/plan-02-acceptance.md` AC-1 G/W/T 1.1–1.7.
+// without driving a full register-then-login flow.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

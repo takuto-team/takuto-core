@@ -6,9 +6,8 @@
  * modals the Dashboard page can show: picker, paste, no-jira, detail,
  * report. Exactly one is visible at any time.
  *
- * Phase 5 step 2 of Part B. Replaces the five independent
- * `useState<boolean>` / `useState<T | null>` slots in the pre-extracted
- * Dashboard.
+ * Replaces the previous five independent `useState<boolean>` /
+ * `useState<T | null>` slots in the Dashboard shell.
  *
  * Behaviour preserved verbatim:
  *   * `openDetail(ticket)` transitions picker→detail in a single

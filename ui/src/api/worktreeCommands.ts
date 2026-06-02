@@ -4,11 +4,11 @@
 /**
  * Worktree commands (per-user-per-workspace init + run commands).
  *
- * Plan-09: drops the admin-only `/api/admin/worktree-commands/*` endpoints in
- * favour of user-scoped `/api/worktree-commands/*` — each authenticated user
- * manages their own data only; admins have no special access. A single row
- * stores BOTH the init commands (Vec<string>) and the run commands
- * (Vec<{ name, command }>), so a single PUT updates both atomically.
+ * User-scoped `/api/worktree-commands/*` endpoints — each authenticated
+ * user manages their own data only; admins have no special access. A
+ * single row stores BOTH the init commands (Vec<string>) and the run
+ * commands (Vec<{ name, command }>), so a single PUT updates both
+ * atomically.
  */
 
 import { api, apiJson } from "./http";

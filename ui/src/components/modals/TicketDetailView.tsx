@@ -4,8 +4,8 @@
 /**
  * Read-only view of a ticket's markdown description. Renders the loading
  * placeholder while the description is in flight, or the rendered markdown
- * once it lands. Extracted in Phase 5 step 2 (parallel) — wrapper classes
- * preserved verbatim so the modal content area animates identically.
+ * once it lands. Wrapper classes preserved verbatim so the modal content
+ * area animates identically.
  */
 
 import { MarkdownPreview } from "../MarkdownPreview";

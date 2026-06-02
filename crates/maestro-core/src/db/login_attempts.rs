@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Persistent per-user login-attempt audit table (plan-02 AC-3).
+//! Persistent per-user login-attempt audit table.
 //!
 //! Every authentication attempt that resolves to a known `user_id` is
 //! recorded here. The web layer reads `failed_count_in_window` between
@@ -11,18 +11,15 @@
 //! Attempts against an **unknown** username are NOT recorded — otherwise
 //! the 429 / 401 boundary would let an attacker enumerate valid usernames.
 //!
-//! ### Plan-11 step 3 worked example
+//! ### DAO conventions
 //!
-//! This is the first DAO migrated to the backend-agnostic [`DbAdapter`]
-//! API (caller mandate, 2026-05-27). All five helpers are `async` and
-//! take `&DbAdapter`; SQL uses `?` placeholders (sqlx rewrites to `$N`
-//! for Postgres). The migration pattern here is the template the
-//! follow-on DAOs follow:
-//!   • take `&DbAdapter` (not `&rusqlite::Connection`);
-//!   • return `Result<T>` (the crate-wide envelope; `?` propagates the
+//! All five helpers are `async` and take `&DbAdapter`; SQL uses `?`
+//! placeholders (sqlx rewrites to `$N` for Postgres). Each DAO:
+//!   • takes `&DbAdapter` (not `&rusqlite::Connection`);
+//!   • returns `Result<T>` (the crate-wide envelope; `?` propagates the
 //!     adapter's `sqlx::Error` through `MaestroError::Sqlx`);
-//!   • use the typed `DbValue` constructors for bind params;
-//!   • do NOT mention `sqlx::sqlite::SqlitePool` / `PgPool` / `MySqlPool`.
+//!   • uses the typed `DbValue` constructors for bind params;
+//!   • does NOT mention `sqlx::sqlite::SqlitePool` / `PgPool` / `MySqlPool`.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -172,14 +169,11 @@ mod tests {
     use crate::db::pool::{DbBackend, DbPool};
     use sqlx::sqlite::SqlitePool;
 
-    /// Plan-11 step 3 test pattern: build a fresh in-memory SQLite
-    /// pool, apply the portable migration set, wrap in an adapter,
-    /// then seed the foreign-key target (users row) so login_attempts
-    /// inserts don't fail the FK constraint.
+    /// Build a fresh in-memory SQLite pool, apply the portable migration
+    /// set, wrap in an adapter, then seed the foreign-key target (users
+    /// row) so login_attempts inserts don't fail the FK constraint.
     ///
-    /// This pattern will be the template for every migrated DAO's
-    /// test setup. When the test rig in plan §10 step 4 lands,
-    /// parametrising over `DbBackend::{Sqlite,Postgres,MySql}` is a
+    /// Parametrising over `DbBackend::{Sqlite,Postgres,MySql}` is a
     /// one-line change at the top of this helper.
     async fn test_adapter_with_user() -> (DbAdapter, String) {
         let pool = SqlitePool::connect("sqlite::memory:")

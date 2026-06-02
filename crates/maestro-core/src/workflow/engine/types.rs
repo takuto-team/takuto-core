@@ -105,18 +105,18 @@ pub struct WorkflowEvent {
     /// Other event types omit this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_to: Option<String>,
-    /// Phase 1 (`event_type = "provider_changed"`): user IDs whose stored
-    /// credentials need re-capture after the switch. Empty in Phase 1 (the
-    /// per-user credential layer ships in Phase 2). Other event types omit.
+    /// (`event_type = "provider_changed"`): user IDs whose stored
+    /// credentials need re-capture after the switch. Other event types
+    /// omit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affected_users: Option<Vec<String>>,
-    /// Phase 2b.3.x (`event_type = "auth_warning"`): a stable error code
+    /// (`event_type = "auth_warning"`): a stable error code
     /// (`"sso_authorization_required"`, `"invalid_pat"`, …) the dashboard
     /// `switch()`es on. Other event types omit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_warning_code: Option<String>,
-    /// Phase 2b.3.x (`event_type = "auth_warning"`): human-readable message
-    /// for the dashboard banner. Never contains token bytes.
+    /// (`event_type = "auth_warning"`): human-readable message for the
+    /// dashboard banner. Never contains token bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_warning_message: Option<String>,
 }
@@ -170,22 +170,25 @@ pub struct Workflow {
     /// (the worktree was pre-created at ticket-add time but setup has not run yet).
     pub worktree_bootstrapped: bool,
     /// Name of the workspace (repo directory name under `/workspaces/`) this workflow belongs to.
-    /// Used for per-workspace snapshot isolation and dashboard filtering. Plan-10 keeps this
-    /// as a denormalised back-compat handle; `repository_id` is the durable identity.
+    /// Used for per-workspace snapshot isolation and dashboard filtering.
+    /// Kept as a denormalised back-compat handle; `repository_id` is the
+    /// durable identity.
     pub workspace_name: String,
-    /// FK to `repositories.id`. Plan-10: every new workflow is created against a repo the
-    /// caller has added, so this is `Some` for fresh workflows. `None` covers:
-    ///   * Snapshots restored from a pre-plan-10 build (back-fill happens in Dev A's
-    ///     `migrate_orphan_repo_associations` reconciliation step).
-    ///   * Workflows whose `workspace_name` does not match any registered `repositories`
-    ///     row (those stay hidden from the dashboard until an admin re-registers).
+    /// FK to `repositories.id`. Every new workflow is created against a repo
+    /// the caller has added, so this is `Some` for fresh workflows. `None`
+    /// covers:
+    ///   * Snapshots restored from older builds (back-fill happens in
+    ///     `migrate_orphan_repo_associations` reconciliation).
+    ///   * Workflows whose `workspace_name` does not match any registered
+    ///     `repositories` row (those stay hidden from the dashboard until
+    ///     an admin re-registers).
     pub repository_id: Option<String>,
     /// ID of the user who created this workflow. `None` for poller-created workflows
     /// (pre-multi-user) or workflows restored from older snapshots.
     pub user_id: Option<String>,
-    /// Phase 2b.3 (04_architecture.md §7.2): credentials pinned at the
-    /// workflow's first agent step. `None` for legacy (pre-Phase-2) workflows
-    /// and for fresh workflows that haven't reached their first step yet.
+    /// Credentials pinned at the workflow's first agent step. `None` for
+    /// legacy workflows and for fresh workflows that haven't reached
+    /// their first step yet.
     pub auth_pin: Option<crate::workflow::snapshot::AuthPin>,
 }
 
@@ -235,11 +238,11 @@ impl Workflow {
         }
     }
 
-    /// Plan-07 step 4 first slice — convert this in-memory Workflow into
-    /// the row shape the work_items table stores. The map is still the
-    /// truth-of-record; this conversion is used by the shadow-write
-    /// pass in `start_workflow` / `add_to_dashboard` so the DB has a
-    /// faithful row alongside every in-memory entry.
+    /// Convert this in-memory Workflow into the row shape the work_items
+    /// table stores. The map is still the truth-of-record; this
+    /// conversion is used by the shadow-write pass in `start_workflow` /
+    /// `add_to_dashboard` so the DB has a faithful row alongside every
+    /// in-memory entry.
     ///
     /// Lossy by design for fields that don't have a column yet
     /// (`steps_log`, `terminal_lines`, `workflow_def_runs`,
@@ -255,13 +258,11 @@ impl Workflow {
             ticket_key: self.ticket_key.clone(),
             workspace_name: self.workspace_name.clone(),
             user_id: self.user_id.clone(),
-            // Plan-07 slice 10: shadow-write the repo association so
-            // the DB row carries everything `require_workflow_access`
-            // consults.
+            // Shadow-write the repo association so the DB row carries
+            // everything `require_workflow_access` consults.
             repository_id: self.repository_id.clone(),
-            // `private` lives in plan-03's visibility model; default to
-            // public on every fresh insert until that flag lands on
-            // Workflow.
+            // `private` belongs to the visibility model; default to public
+            // on every fresh insert until that flag lands on Workflow.
             private: false,
             started_manually: self.started_manually,
             // Manual cap accounting is engine-internal today; pin to
@@ -412,8 +413,8 @@ pub(super) fn workflow_to_persisted_record(w: &Workflow) -> PersistedWorkflowRec
     }
 }
 
-/// Plan-07 step 4 first slice — split a `WorkflowState` into the
-/// `(state_kind, state_payload)` pair stored on `work_items`.
+/// Split a `WorkflowState` into the `(state_kind, state_payload)` pair
+/// stored on `work_items`.
 ///
 /// The payload is a JSON object carrying any variant data (e.g.
 /// `{"pass": 2}` for `AddressingTicket { pass: 2 }`, or

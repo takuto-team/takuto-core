@@ -5,10 +5,10 @@ declare const __APP_VERSION__: string;
 
 interface ImportMetaEnv {
   /**
-   * Phase 2 auth-overhaul flag — when `"true"` at vite build/dev time, the
-   * per-user credential API client routes through the in-memory mock layer
-   * (`src/api/mocks.ts`). Storybook stories also flip this on at runtime via
-   * `setMocksEnabled(true)` so the mock works regardless of the env var.
+   * When `"true"` at vite build/dev time, the per-user credential API client
+   * routes through the in-memory mock layer (`src/api/mocks.ts`). Storybook
+   * stories also flip this on at runtime via `setMocksEnabled(true)` so the
+   * mock works regardless of the env var.
    */
   readonly VITE_USE_MOCKS?: string;
 }

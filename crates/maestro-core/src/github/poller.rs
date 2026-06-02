@@ -164,7 +164,7 @@ impl GitHubPoller {
             };
 
             // Skip when no owner could be resolved at startup — creating an orphan
-            // workflow would hide it from every user's dashboard (per AC-4).
+            // workflow would hide it from every user's dashboard.
             let owner_id = match &self.resolved_owner_id {
                 Some(id) => id.clone(),
                 None => {
@@ -185,9 +185,9 @@ impl GitHubPoller {
                     Some(issue.body),
                     html_url,
                     Some(owner_id),
-                    // Plan-10: auto-polling is disabled; this code path is
+                    // Auto-polling is disabled; this code path is
                     // unreachable from normal startup. Leave repository_id
-                    // unset — plan-11 will plumb a per-repo association in.
+                    // unset — per-repo association is plumbed in later.
                     None,
                 )
                 .await

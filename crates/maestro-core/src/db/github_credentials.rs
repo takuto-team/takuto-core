@@ -3,8 +3,7 @@
 
 //! `user_github_credentials` table — row shape + CRUD.
 //!
-//! Phase 2a defined the shape; Phase 2b.1 grows the helpers consumed by the
-//! `POST /api/users/me/github-pat` endpoint.
+//! Helpers consumed by the `POST /api/users/me/github-pat` endpoint.
 //!
 //! **Wire-vs-column rename** — the JSON wire field is `attribute_commits`
 //! (per arch doc A3 — clarifies the v1 toggle is git author/committer
@@ -14,13 +13,13 @@
 //! `#[serde(rename = "attribute_commits")]` at the request-body boundary so
 //! the column name stays internal.
 //!
-//! ### Plan-11 step 3 cluster B (this commit)
+//! ### Adapter contract
 //!
-//! Migrated alongside provider_credentials + credential_audit. Writes
-//! (`upsert`, `delete`, `set_sign_commits`, `touch_last_validated`) take
-//! `&mut DbTransaction<'_>` because `routes/credentials.rs` co-commits
-//! them with `credential_audit::log_in_tx`. The lone read (`find`) takes
-//! `&DbAdapter` since it's called from many non-transactional sites.
+//! Writes (`upsert`, `delete`, `set_sign_commits`, `touch_last_validated`)
+//! take `&mut DbTransaction<'_>` because `routes/credentials.rs`
+//! co-commits them with `credential_audit::log_in_tx`. The lone read
+//! (`find`) takes `&DbAdapter` since it's called from many
+//! non-transactional sites.
 
 use crate::auth::SealedBlob;
 use crate::db::{DbAdapter, DbTransaction, DbValue};

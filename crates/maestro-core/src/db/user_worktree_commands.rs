@@ -1,11 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Per-user-per-workspace worktree settings (plan-09).
+//! Per-user-per-workspace worktree settings.
 //!
-//! Replaces plan-08's admin-scoped `workspace_commands` with a user-scoped
-//! table keyed by `(user_id, workspace_name)`. Each row holds BOTH command
-//! kinds in one record:
+//! User-scoped table keyed by `(user_id, workspace_name)`. Each row holds
+//! BOTH command kinds in one record:
 //!
 //! - `init_commands_json` — a JSON array of strings. Each entry is a single
 //!   `bash -lc` invocation run during worktree bootstrap.
@@ -17,31 +16,25 @@
 //! `(user, workspace)` lookup, atomic updates, and fewer endpoints. The
 //! application layer knows the schema for each column.
 //!
-//! `user_id` references `users(id) ON DELETE CASCADE` — removing a user wipes
-//! every row they configured (plan-09 AC-7).
+//! `user_id` references `users(id) ON DELETE CASCADE` — removing a user
+//! wipes every row they configured.
 //!
-//! ### Plan-11 step 3 (commit dc422de → 543606b → this commit)
-//!
-//! Third DAO migrated to the backend-agnostic [`DbAdapter`] API. Template
-//! is in `login_attempts.rs`; new patterns specific to this DAO:
+//! ### DAO conventions
 //!
 //! 1. **JSON columns**: encode/decode via `serde_json` at the DAO
-//!    boundary. The on-disk format is unchanged — TEXT column with
-//!    `[…]` JSON. Migrated form binds the encoded string via
-//!    `DbValue::Text` and re-parses on read.
+//!    boundary. The on-disk format is TEXT with `[…]` JSON. Binds the
+//!    encoded string via `DbValue::Text` and re-parses on read.
 //!
 //! 2. **Dynamic-arity bind**: `get_run_commands_for_pairs` accepts
 //!    `&[(&str, &str)]` and builds N `?` placeholders. The bind loop
-//!    walks the pairs vector — matches rusqlite's `params_from_iter`
-//!    pattern in shape; the adapter takes a `Vec<DbValue>` so we
+//!    walks the pairs vector — the adapter takes a `Vec<DbValue>` so we
 //!    convert each `&str` to `DbValue::Text` and `extend` into the
 //!    bind list.
 //!
 //! 3. **Hard vs soft JSON-decode failure**: `get` propagates a corrupt
 //!    JSON as `DbError::CommandsJsonDecode` (envelope error); the batched
 //!    `get_run_commands_for_pairs` logs at warn and omits the row so a
-//!    single corrupt entry doesn't poison the whole dashboard. Both
-//!    semantics preserved verbatim.
+//!    single corrupt entry doesn't poison the whole dashboard.
 
 use std::collections::HashMap;
 
@@ -133,7 +126,7 @@ pub async fn list_for_user(
 /// Backend support for the upsert clause: SQLite (≥ 3.24) and Postgres
 /// (≥ 9.5) use the same `INSERT ... ON CONFLICT(...) DO UPDATE SET col =
 /// excluded.col` form. MySQL uses `ON DUPLICATE KEY UPDATE` — when MySQL
-/// lands as a supported backend (plan §10 step 4), this fn will need a
+/// is added as a supported backend, this fn will need a
 /// `match adapter.backend()` branch.
 pub async fn upsert(
     adapter: &DbAdapter,
@@ -636,9 +629,8 @@ mod tests {
         assert!(get(&a, &alice, "frontend").await.unwrap().is_none());
     }
 
-    /// AC-7: deleting a user cascades to their `user_worktree_commands` rows.
-    /// We use a plain SQL DELETE here since the `users` DAO hasn't yet been
-    /// migrated; the FK cascade is what we're really testing.
+    /// Deleting a user cascades to their `user_worktree_commands` rows
+    /// — the FK cascade is what we're really testing.
     #[tokio::test]
     async fn fk_cascade_deletes_rows_on_user_delete() {
         let a = fresh_adapter().await;

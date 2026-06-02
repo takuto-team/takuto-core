@@ -3,18 +3,14 @@
 
 //! `credential_audit` table — row shape + CRUD.
 //!
-//! Phase 2a defined the table; Phase 2b.1 grows the insert + list helpers
-//! consumed by the credential endpoints.
+//! Insert + list helpers consumed by the credential endpoints.
 //!
-//! NOT to be confused with the general-purpose `audit_events` table reserved
-//! for plan-03 (different team, different concern: this one is per-credential,
-//! that one is per-user-action).
+//! NOT to be confused with the general-purpose `audit_events` table — this
+//! one is per-credential, that one is per-user-action.
 //!
-//! ### Plan-11 step 3 cluster B (this commit)
+//! ### Atomicity entry points
 //!
-//! Migrated alongside provider_credentials + github_credentials so the
-//! atomicity invariant ("credential write + audit row commit together")
-//! is preserved through the cutover. Two entry points exist for `log`:
+//! Two entry points exist for `log`:
 //!
 //! * [`log_in_tx`] — for `routes/credentials.rs`'s atomic write paths.
 //!   Takes `&mut DbTransaction<'_>` so the audit row co-commits with
@@ -153,8 +149,8 @@ pub async fn log_in_tx(
 }
 
 /// Pull recent audit rows for a single user, newest first. Used by the
-/// admin-only audit reader that lands in Phase 2b.2. `limit` is clamped to
-/// `[1, 1000]` so a curious caller can't OOM the process.
+/// admin-only audit reader. `limit` is clamped to `[1, 1000]` so a
+/// curious caller can't OOM the process.
 pub async fn list_for_user(
     adapter: &DbAdapter,
     user_id: &str,

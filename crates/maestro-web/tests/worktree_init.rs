@@ -3,19 +3,18 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-09 Step 3 (engine resolution of
-// `worktree_init_commands` from the workflow owner's per-user-per-workspace
-// DB row) and Step 4 (run-command surfacing on `WorkflowSummary` reads from
-// the same DB row).
+// Integration tests for engine resolution of `worktree_init_commands` from
+// the workflow owner's per-user-per-workspace DB row, and run-command
+// surfacing on `WorkflowSummary` reads from the same DB row.
 //
-// Acceptance criteria covered:
+// Scenarios covered:
 //
-//   * AC-3 — a user with no `user_worktree_commands` row runs zero init
-//            commands during bootstrap and has zero run-command buttons.
-//   * AC-4 — saving a row makes the next bootstrap use its init_commands,
-//            and the workflow card shows the run-command buttons.
-//   * AC-8 — `WorkflowSummary.run_commands` on the list endpoint reflects
-//            the workflow owner's DB row (not any global config).
+//   * A user with no `user_worktree_commands` row runs zero init commands
+//     during bootstrap and has zero run-command buttons.
+//   * Saving a row makes the next bootstrap use its init_commands, and the
+//     workflow card shows the run-command buttons.
+//   * `WorkflowSummary.run_commands` on the list endpoint reflects the
+//     workflow owner's DB row (not any global config).
 //
 // We test the resolution helper directly (`resolve_worktree_init_commands`)
 // instead of driving the full bootstrap pipeline because the latter requires
@@ -37,7 +36,7 @@ async fn make_user(db: &Database, username: &str) -> String {
         .id
 }
 
-/// AC-3: when there's no DB row for the workflow's `(user_id, workspace)`
+/// When there's no DB row for the workflow's `(user_id, workspace)`
 /// pair, the resolver returns an empty vec.
 #[tokio::test]
 async fn resolver_returns_empty_when_owner_has_no_row() {
@@ -52,21 +51,13 @@ async fn resolver_returns_empty_when_owner_has_no_row() {
     );
 }
 
-/// AC-4 / Step-3 happy path: when the owner has a row, the resolver returns
-/// its `init_commands` verbatim.
+/// Happy path: when the owner has a row, the resolver returns its
+/// `init_commands` verbatim.
 #[tokio::test]
 async fn resolver_returns_init_commands_from_owner_row() {
     let db = temp_db();
     let alice = make_user(&db, "alice").await;
 
-    // Plan-11 step 3: user_worktree_commands DAO migrated to the
-    // agnostic adapter (commit dc422de + this commit). The legacy
-    // `&conn` / spawn_blocking pattern is replaced with a direct
-    // `db.adapter()` async call. Both views point at the same
-    // on-disk maestro.db (Database::open is disk-backed via
-    // temp_db()), so the FK from user_worktree_commands.user_id →
-    // users.id is honored across the rusqlite write + the adapter
-    // read.
     user_worktree_commands::upsert(
         db.adapter(),
         &alice,
@@ -92,7 +83,7 @@ async fn resolver_returns_init_commands_from_owner_row() {
     );
 }
 
-/// AC-3 cont.: an orphan workflow (`user_id == None`) runs zero init commands,
+/// An orphan workflow (`user_id == None`) runs zero init commands,
 /// even if there's a row belonging to a different user for the same workspace.
 #[tokio::test]
 async fn resolver_returns_empty_when_workflow_has_no_user() {
@@ -119,7 +110,7 @@ async fn resolver_returns_empty_when_workflow_has_no_user() {
 
 /// Sanity: with no DB at all (`None`), the resolver returns an empty vec
 /// (matches the production behavior on deployments where the DB failed to
-/// open). There is no longer a global-default fallback (plan-09).
+/// open). There is no global-default fallback.
 #[tokio::test]
 async fn resolver_returns_empty_when_db_missing() {
     let resolved = resolve_worktree_init_commands(Some("user-alice"), "frontend", None).await;
@@ -130,7 +121,7 @@ async fn resolver_returns_empty_when_db_missing() {
     );
 }
 
-/// AC-8: user A's row never leaks into user B's resolution — even on the
+/// User A's row never leaks into user B's resolution — even on the
 /// same workspace.
 #[tokio::test]
 async fn resolver_isolates_owners() {
@@ -165,10 +156,10 @@ async fn resolver_isolates_owners() {
     assert_eq!(for_bob, vec!["echo bob".to_string()]);
 }
 
-/// AC-8 (run-command surfacing): the DB row stores both init and run
-/// commands; the run-command side is what `WorkflowSummary.run_commands`
-/// reflects. Owner has a row → run commands are exactly those in
-/// `row.run_commands`; owner has no row → empty.
+/// Run-command surfacing: the DB row stores both init and run commands;
+/// the run-command side is what `WorkflowSummary.run_commands` reflects.
+/// Owner has a row → run commands are exactly those in `row.run_commands`;
+/// owner has no row → empty.
 #[tokio::test]
 async fn run_commands_surface_from_owner_row() {
     let db = temp_db();
@@ -203,7 +194,7 @@ async fn run_commands_surface_from_owner_row() {
     assert!(missing.is_none(), "bob has no row → no run commands");
 }
 
-/// AC-8 (run-command surfacing, batched): the list-endpoint path uses
+/// Batched run-command surfacing: the list-endpoint path uses
 /// `get_run_commands_for_pairs` to batch-load run commands for every
 /// workflow on the dashboard in a single query. This is the same data
 /// that the per-workflow lookup returns — just batched.

@@ -4,8 +4,7 @@
 /**
  * Right-hand cluster of `TicketDetailModal`'s footer. Renders the
  * Cancel/Close/Discard button (label depends on mode) and the trailing
- * Confirm-AI-change / Add-to-Dashboard button when applicable.
- * Extracted in Phase 5 step 2 (parallel) alongside
+ * Confirm-AI-change / Add-to-Dashboard button when applicable. Pairs with
  * `StartWorkflowRepoBanner` and `useStartWorkflow`.
  *
  * The "Add to Dashboard" CTA is disabled until a repository is selected

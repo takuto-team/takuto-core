@@ -1,10 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-10: auto-polling is disabled in this build (decision #4).
+//! Auto-polling is disabled in this build.
 //!
 //! The global Jira/GitHub polling model is incompatible with per-user-per-repo
-//! repositories — re-enabling it is plan-11's job (per-repo polling). The
+//! repositories — re-enabling it requires per-repo polling. The
 //! `GET /api/polling` and `POST /api/polling/{pause,resume}` endpoints stay
 //! mounted but always report `paused: true` with an explicit reason string so
 //! the dashboard polling-status surface matches reality and operators are not
@@ -18,7 +18,7 @@ use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
 use crate::state::AuthState;
 
-/// Plan-10 no-op polling-status payload.
+/// No-op polling-status payload.
 ///
 /// `paused` is always `true`. `reason` is a fixed string so the UI can surface
 /// it verbatim without translating from an opaque code.
@@ -28,7 +28,7 @@ pub struct PollingStatus {
     pub reason: &'static str,
 }
 
-const DISABLED_REASON: &str = "auto-polling disabled in plan-10";
+const DISABLED_REASON: &str = "auto-polling disabled in this build";
 
 fn disabled() -> PollingStatus {
     PollingStatus {
@@ -88,7 +88,7 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["paused"], true);
-        assert_eq!(json["reason"], "auto-polling disabled in plan-10");
+        assert_eq!(json["reason"], "auto-polling disabled in this build");
     }
 
     #[tokio::test]
@@ -111,7 +111,7 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["paused"], true);
-        assert_eq!(json["reason"], "auto-polling disabled in plan-10");
+        assert_eq!(json["reason"], "auto-polling disabled in this build");
     }
 
     #[tokio::test]
@@ -134,6 +134,6 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["paused"], true);
-        assert_eq!(json["reason"], "auto-polling disabled in plan-10");
+        assert_eq!(json["reason"], "auto-polling disabled in this build");
     }
 }

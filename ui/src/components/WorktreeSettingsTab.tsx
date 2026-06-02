@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Plan-09 per-user-per-workspace Worktree Settings tab.
+ * Per-user-per-workspace Worktree Settings tab.
  *
  * - No admin gate, no global default. Each authenticated user manages their
  *   own rows; admins have no special access here.

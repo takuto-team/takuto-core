@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-11 step 8 follow-up — dialect-aware INSERT … upsert tail.
+//! Dialect-aware INSERT … upsert tail.
 //!
 //! `ON CONFLICT(col) DO UPDATE` is valid SQLite and Postgres syntax but
 //! MySQL/MariaDB doesn't accept it. MySQL spells the same operation as

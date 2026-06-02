@@ -16,20 +16,19 @@ pub struct AuthStatus {
     pub multi_user: bool,
     /// `true` when the database is available but has no users yet (first-user registration required).
     pub setup_required: bool,
-    /// Phase 0 (04_architecture.md §1.3): mirror of
-    /// `system_status.provider.selected` so the login page can render the
-    /// right provider-specific hint without a second round-trip.
+    /// Mirror of `system_status.provider.selected` so the login page can
+    /// render the right provider-specific hint without a second round-trip.
     pub provider_selected: String,
-    /// Phase 0: mirror of `system_status.github.mode`.
+    /// Mirror of `system_status.github.mode`.
     pub github_mode: String,
-    /// Phase 0: `true` when any critical warning exists in `system_status`.
-    /// The dashboard uses this to render the degraded-mode banner.
+    /// `true` when any critical warning exists in `system_status`. The
+    /// dashboard uses this to render the degraded-mode banner.
     pub degraded: bool,
-    /// Phase 2b.1: `true` when the caller is authenticated AND has an
-    /// active provider credential row for the deployment-wide active
-    /// provider. `false` for unauthenticated callers and for users who
-    /// haven't pasted any credential yet. Drives the per-user "set up your
-    /// provider" banner on the dashboard.
+    /// `true` when the caller is authenticated AND has an active provider
+    /// credential row for the deployment-wide active provider. `false`
+    /// for unauthenticated callers and for users who haven't pasted any
+    /// credential yet. Drives the per-user "set up your provider" banner
+    /// on the dashboard.
     pub provider_credential_present: bool,
 }
 
@@ -39,8 +38,9 @@ pub async fn auth_status(
     State(engine): State<EngineState>,
     headers: axum::http::HeaderMap,
 ) -> Json<AuthStatus> {
-    // Phase 1: system_status is mutable (refreshed after PUT /api/config/agent),
-    // so take a snapshot under the read lock and drop it before any other awaits.
+    // system_status is mutable (refreshed after PUT /api/config/agent),
+    // so take a snapshot under the read lock and drop it before any
+    // other awaits.
     let (provider_selected, github_mode, degraded) = {
         let s = engine.system_status.read().await;
         (
@@ -50,9 +50,9 @@ pub async fn auth_status(
         )
     };
 
-    // Phase 2b.1: optionally resolve the caller's identity to surface their
-    // per-user credential state. The endpoint stays public (no auth gate);
-    // an unauthenticated request reports `provider_credential_present:
+    // Optionally resolve the caller's identity to surface their per-user
+    // credential state. The endpoint stays public (no auth gate); an
+    // unauthenticated request reports `provider_credential_present:
     // false` and the rest of the fields exactly as before.
     let provider_credential_present = if let Some(ref db) = auth.db {
         let active_provider = provider_selected.clone();
@@ -62,8 +62,6 @@ pub async fn auth_status(
         if cookie.is_empty() {
             false
         } else {
-            // Plan-11 step 3 cluster Sessions: sessions + provider_credentials
-            // on the adapter.
             let adapter = db.adapter();
             let user_id = crate::auth::validate_db_session(adapter, &cookie).await;
             match user_id {
@@ -84,7 +82,6 @@ pub async fn auth_status(
     };
 
     if let Some(ref db) = auth.db {
-        // Plan-11 step 3 cluster A: users on the adapter.
         let count = maestro_core::db::users::count_users(db.adapter())
             .await
             .unwrap_or(0);

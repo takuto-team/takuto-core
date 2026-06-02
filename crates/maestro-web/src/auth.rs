@@ -72,16 +72,16 @@ pub fn clear_test_now_unix() {
 }
 
 pub const SESSION_COOKIE_NAME: &str = "maestro_session";
-/// Plan-02 AC-5: idle TTL — a session is rejected once it has been inactive
-/// for this long. Sliding-extended by the auth middleware on each authenticated
-/// request (gated by [`SESSION_EXTEND_THRESHOLD_SECS`] so the write rate stays
-/// bounded). Equivalent to ~24 hours.
+/// Idle TTL — a session is rejected once it has been inactive for this
+/// long. Sliding-extended by the auth middleware on each authenticated
+/// request (gated by [`SESSION_EXTEND_THRESHOLD_SECS`] so the write rate
+/// stays bounded). Equivalent to ~24 hours.
 pub const SESSION_IDLE_TTL_SECS: u64 = 60 * 60 * 24;
-/// Plan-02 AC-5: absolute TTL — sessions older than this are rejected even
-/// when actively used, forcing periodic re-authentication. ~30 days.
+/// Absolute TTL — sessions older than this are rejected even when actively
+/// used, forcing periodic re-authentication. ~30 days.
 pub const SESSION_ABSOLUTE_TTL_SECS: u64 = 60 * 60 * 24 * 30;
-/// Plan-02 AC-5: minimum interval between `last_seen_at` writes from the
-/// auth middleware. Prevents every authenticated request from issuing an
+/// Minimum interval between `last_seen_at` writes from the auth
+/// middleware. Prevents every authenticated request from issuing an
 /// `UPDATE` against the sessions row.
 pub const SESSION_EXTEND_THRESHOLD_SECS: u64 = 5 * 60;
 
@@ -267,13 +267,11 @@ pub fn now_unix() -> i64 {
 /// - `created_at_unix` — Unix seconds at creation; the absolute-TTL check
 ///   compares against this, so it must not be mutated for the lifetime of the
 ///   session. Sessions older than [`SESSION_ABSOLUTE_TTL_SECS`] are rejected
-///   and lazily deleted even when actively used (plan-02 AC-5 / G/W/T 5.7).
+///   and lazily deleted even when actively used.
 ///
-/// Plan-11 step 3 cluster Sessions: sessions table on the backend-agnostic
-/// adapter. `expires_at` stays as a TEXT/RFC3339 string to match the legacy
-/// schema (TEXT NOT NULL in `schema.rs`). The lexicographic ordering of
-/// RFC3339 strings matches chronological order, so comparisons in SQL and
-/// in Rust both work.
+/// `expires_at` stays as a TEXT/RFC3339 string to match the schema (TEXT
+/// NOT NULL in `schema.rs`). The lexicographic ordering of RFC3339 strings
+/// matches chronological order, so comparisons in SQL and in Rust both work.
 pub async fn create_db_session(
     adapter: &maestro_core::db::DbAdapter,
     user_id: &str,
@@ -314,7 +312,7 @@ pub async fn create_db_session(
 
 /// Validate a database session cookie and (when appropriate) slide its TTL forward.
 ///
-/// Plan-02 AC-5 semantics:
+/// Semantics:
 /// 1. If `now - created_at_unix > SESSION_ABSOLUTE_TTL_SECS` → **delete** the row
 ///    and return `None`. The session is past its absolute 30-day cap.
 /// 2. Else if the stored `expires_at` is in the past → return `None`. The
@@ -466,8 +464,6 @@ pub async fn authenticate_db_user(
     username: &str,
     password: &str,
 ) -> Option<maestro_core::db::models::User> {
-    // Plan-11 step 3 cluster A: users + credentials on the agnostic
-    // adapter. No spawn_blocking needed — direct async lookup + verify.
     let adapter = db.adapter();
     let user = match maestro_core::db::users::get_user_by_username(adapter, username).await {
         Ok(Some(u)) => u,
@@ -509,8 +505,6 @@ pub async fn dashboard_auth_middleware(
     if let Some(raw_cookie) = session_cookie_from_headers(request.headers())
         && raw_cookie.starts_with(DB_SESSION_PREFIX)
     {
-        // Plan-11 step 3 cluster Sessions: sessions table now on the
-        // agnostic adapter — no spawn_blocking hop needed.
         let adapter = db.adapter();
         let user_id = validate_db_session(adapter, raw_cookie).await;
         let auth_user = if let Some(uid) = user_id {

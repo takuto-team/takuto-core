@@ -1,13 +1,13 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 9 — `GET /work-items/{id}/steps`.
+//! `GET /work-items/{id}/steps`.
 //!
 //! Pure-read endpoint that returns the step history persisted in
-//! `work_item_steps` by the shadow-writes from slice 3. There is no
-//! in-memory analog (the engine keeps `Workflow.steps_log` but never
-//! exposed it as an endpoint), so this is additive — adding the route
-//! cannot regress any existing reader.
+//! `work_item_steps` by the shadow-writes. There is no in-memory analog
+//! (the engine keeps `Workflow.steps_log` but never exposed it as an
+//! endpoint), so this is additive — adding the route cannot regress any
+//! existing reader.
 
 use axum::Extension;
 use axum::Json;
@@ -58,7 +58,7 @@ impl From<work_items::StepRow> for StepDto {
 /// work item, ascending by sequence. Access is gated by the same
 /// `require_workflow_access` policy used by all other per-item
 /// endpoints; on a missing or unauthorised id the route returns
-/// `404 Not Found` (never 403, matching AC-2).
+/// `404 Not Found` (never 403).
 ///
 /// When the engine has no DB attached the route returns an empty
 /// array — same outcome as a work-item that has run zero steps.

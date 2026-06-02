@@ -13,8 +13,8 @@ import {
 import type { UserCredentialsStatus } from "../api/types";
 
 /**
- * Phase 2 stories: render the per-user credential page with the in-memory
- * mock layer. Each story seeds a fixture via `resetMocks()` so Storybook
+ * Stories that render the per-user credential page with the in-memory mock
+ * layer. Each story seeds a fixture via `resetMocks()` so Storybook
  * doesn't depend on a running backend. The `setMocksEnabled(true)`
  * decorator below also flips the runtime override regardless of whether
  * `VITE_USE_MOCKS` is set at storybook startup time.
@@ -212,7 +212,7 @@ export const ProviderMismatch: Story = {
   ],
 };
 
-// ── Task #40 — Claude session-state mode (kind=cli_state) ──
+// ── Claude session-state mode (kind=cli_state) ──
 
 export const ClaudeSessionOnly: Story = {
   name: "Claude — Session only (kind=cli_state, no API key)",

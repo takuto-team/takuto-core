@@ -25,7 +25,7 @@ use super::{build_editor_or_run_command_bundle, require_workflow_access};
 #[derive(Serialize)]
 pub struct OpenEditorResponse {
     /// Browser URL — `/s/<path-token>/?tkn=<connection-token>&folder=<...>`
-    /// when the shared-port proxy is in use (GH-45).
+    /// when the shared-port proxy is in use.
     pub url: String,
     /// Connection token for openvscode-server authentication.
     pub connection_token: String,
@@ -33,7 +33,7 @@ pub struct OpenEditorResponse {
     pub port_mappings: Vec<(u16, u16)>,
     /// 32-char hex CSPRNG path token registered in the shared-port proxy
     /// registry so `/s/<path_token>/...` routes to this editor's loopback
-    /// listener (GH-45 acceptance criterion #1, #5).
+    /// listener.
     pub path_token: String,
 }
 
@@ -85,18 +85,18 @@ pub async fn open_editor(
         .await
         .unwrap_or_else(|| "maestro:latest".to_string());
 
-    // Phase 2b.3.x: try to build a per-workflow secrets bundle so the
-    // browser editor's in-terminal `claude`/`cursor`/`gh` invocations see
-    // the same per-user credentials an agent step would. Falls back to the
-    // legacy passthrough silently when the resolver / DB / master key /
+    // Try to build a per-workflow secrets bundle so the browser editor's
+    // in-terminal `claude`/`cursor`/`gh` invocations see the same per-user
+    // credentials an agent step would. Falls back to the legacy
+    // passthrough silently when the resolver / DB / master key /
     // credential aren't available — the editor still works, just without
     // the per-user secret mount.
     let secrets_bundle: Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> =
         build_editor_or_run_command_bundle(&engine, &auth_state, &cfg_state, &id, &auth.user_id)
             .await;
 
-    // Task #42: persist the bundle Arc for the editor container's lifetime
-    // BEFORE we call into `start_editor`. The bind-mount on
+    // Persist the bundle Arc for the editor container's lifetime BEFORE
+    // we call into `start_editor`. The bind-mount on
     // `/run/maestro-secrets/` points at the bundle's `TempDir`; when the
     // `Arc` count hits zero the RAII fires and the host dir gets
     // `rm -rf`'d, leaving the still-running detached container pointing
@@ -151,7 +151,7 @@ pub async fn open_editor(
                 user_id: auth.user_id.clone(),
             }).await;
             let proxy_url = container::build_session_dynamic_port_url(&path_token);
-            // Plan-07 step 4 slice 6: shadow-write the static port row.
+            // Shadow-write the static port row.
             maestro_core::db::work_items::shadow_upsert_port_mapping(
                 engine.engine.db(),
                 &id,
@@ -220,9 +220,9 @@ pub async fn open_editor(
         if let Some(cancel_tok) = tracker_cancel {
             let registry = editor.path_token_registry.clone();
             let tracker_user_id = auth.user_id.clone();
-            // Plan-07 step 4 slice 7: clone the work_item_id + db
-            // into the spawned tracker so it can shadow-upsert
-            // Dynamic port rows as the scanner detects them.
+            // Clone the work_item_id + db into the spawned tracker so
+            // it can shadow-upsert Dynamic port rows as the scanner
+            // detects them.
             let tracker_wi = id.clone();
             let tracker_db = engine.engine.db().cloned();
             tokio::spawn(track_port_forwards(
@@ -238,13 +238,14 @@ pub async fn open_editor(
         }
     }
 
-    // GH-45: the editor container owns the path token (stored as a label and
+    // The editor container owns the path token (stored as a label and
     // used in `--server-base-path`). Register it in the in-memory proxy
-    // registry so the reverse proxy can route `/s/<path-token>/...` requests.
-    // `register_with_token` is idempotent — returns false if already present
-    // (e.g. from a previous `open_editor` call for a still-running container).
-    // Guard: pre-GH-45 containers lack the `maestro.path_token` label and
-    // return an empty string — skip registration to avoid a phantom entry.
+    // registry so the reverse proxy can route `/s/<path-token>/...`
+    // requests. `register_with_token` is idempotent — returns false if
+    // already present (e.g. from a previous `open_editor` call for a
+    // still-running container). Guard: legacy containers lack the
+    // `maestro.path_token` label and return an empty string — skip
+    // registration to avoid a phantom entry.
     let path_token = info.path_token.clone();
     if !path_token.is_empty() {
         let _ = editor
@@ -259,7 +260,7 @@ pub async fn open_editor(
                 },
             )
             .await;
-        // Plan-07 step 4 slice 6: shadow-write the editor port row.
+        // Shadow-write the editor port row.
         // The editor container is a 1:1 Docker forward so
         // `container_port == host_port == info.vscode_port`. The
         // proxy URL is the path-prefixed reverse-proxy route the
@@ -317,11 +318,12 @@ pub async fn close_editor(
     {
         return StatusCode::NOT_FOUND;
     }
-    // GH-45 AC #9: drop the path-token mapping BEFORE the port is torn down
-    // so any in-flight `/s/<token>/...` request gets a clean 404 instead of
-    // a hung connection or — worse — a successful upgrade right as the
-    // backend dies. Both editor and terminal entries for this ticket are
-    // removed because closing the editor implicitly tears down the terminal.
+    // Drop the path-token mapping BEFORE the port is torn down so any
+    // in-flight `/s/<token>/...` request gets a clean 404 instead of a
+    // hung connection or — worse — a successful upgrade right as the
+    // backend dies. Both editor and terminal entries for this ticket
+    // are removed because closing the editor implicitly tears down the
+    // terminal.
     let _ = editor.path_token_registry.remove_for_ticket(&id).await;
     // Cancel port scanner first so it doesn't try to scan a dying container.
     if let Some(token) = editor.editor_scanners.write().await.remove(&id) {
@@ -330,15 +332,15 @@ pub async fn close_editor(
     // Clean up dynamic forward tracking and terminal state.
     editor.dynamic_forwards.write().await.remove(&id);
     editor.terminal_ports.write().await.remove(&id);
-    // Task #42: drop the bundle Arc — last strong reference triggers the
+    // Drop the bundle Arc — last strong reference triggers the
     // TempDir RAII cleanup. Done AFTER stop_editor below so the secret
     // files stay on disk for the container's final teardown read.
     container::stop_editor(&id).await;
     editor.editor_bundles.write().await.remove(&id);
-    // Plan-07 step 4 slice 6: shadow-clean every port mapping for
-    // this work_item. Done after stop_editor (and after the in-
-    // memory path-token registry was cleared above) so the DB
-    // mirrors the post-close state with no stale forward rows.
+    // Shadow-clean every port mapping for this work_item. Done after
+    // stop_editor (and after the in-memory path-token registry was
+    // cleared above) so the DB mirrors the post-close state with no
+    // stale forward rows.
     maestro_core::db::work_items::shadow_delete_port_mappings_for_work_item(
         engine.engine.db(),
         &id,
@@ -350,14 +352,14 @@ pub async fn close_editor(
 #[derive(Serialize)]
 pub struct OpenTerminalResponse {
     /// Browser URL — `/s/<path-token>/<ttyd-token>/` when the shared-port
-    /// proxy is in use (GH-45).
+    /// proxy is in use.
     pub url: String,
     /// The raw authentication token (same value embedded in the URL path).
     /// Provided separately so programmatic consumers can use it independently.
     pub credential: String,
     /// 32-char hex CSPRNG path token registered in the shared-port proxy
     /// registry so `/s/<path_token>/<ttyd-token>/` routes to this terminal's
-    /// loopback listener (GH-45 acceptance criterion #1, #5).
+    /// loopback listener.
     pub path_token: String,
 }
 
@@ -375,8 +377,8 @@ pub async fn open_terminal(
         .map_err(|s| (s, "Workflow not found".into()))?;
     // Reuse existing terminal if already recorded in the in-memory map.
     if let Some((port, token)) = editor.terminal_ports.read().await.get(&id).cloned() {
-        // GH-45: re-use the existing path token if one is already registered
-        // for this terminal; otherwise register one now (covers the case of a
+        // Re-use the existing path token if one is already registered for
+        // this terminal; otherwise register one now (covers the case of a
         // terminal that was started before the proxy registry shipped).
         let path_token = match editor
             .path_token_registry
@@ -452,7 +454,7 @@ pub async fn open_terminal(
         .await
         .insert(id.clone(), (port, token.clone()));
 
-    // GH-45: register a fresh CSPRNG path token so the terminal is reachable
+    // Register a fresh CSPRNG path token so the terminal is reachable
     // only via `/s/<path-token>/<ttyd-token>/` on the dashboard origin.
     let path_token = editor
         .path_token_registry
@@ -488,9 +490,9 @@ pub async fn close_terminal(
     {
         return StatusCode::NOT_FOUND;
     }
-    // GH-45 AC #9: drop the terminal's path-token mapping BEFORE we tear
-    // down the listener, so any `/s/<token>/...` request mid-flight gets a
-    // clean 404 instead of a hung connection. Editor entries for the same
+    // Drop the terminal's path-token mapping BEFORE we tear down the
+    // listener, so any `/s/<token>/...` request mid-flight gets a clean
+    // 404 instead of a hung connection. Editor entries for the same
     // ticket are intentionally left alone so closing the terminal doesn't
     // also break the editor.
     let _ = editor

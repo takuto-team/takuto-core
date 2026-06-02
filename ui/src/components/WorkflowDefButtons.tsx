@@ -73,8 +73,8 @@ export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefres
 
   async function handleRun(def: WorkflowDefinition) {
     const state = runStates[def.filename] || "idle";
-    // Plan-07 §1: server-side route names use "definition" (canonical)
-    // for the work-item-scoped run endpoints.
+    // Server-side route names use "definition" (canonical) for the
+    // work-item-scoped run endpoints.
     const endpoint = state === "error" ? "retry-definition" : "run-definition";
     setLoadingDef(def.filename);
     try {

@@ -1,9 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-11 step 6 — SQLite → remote one-shot importer.
-//!
-//! Source: `tmp/plan-11-pluggable-database-backends.md` §8.
+//! SQLite → remote one-shot importer.
 //!
 //! ## When it runs
 //!

@@ -1,10 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 17 — `GET /api/work-items/{id}/log`.
-//! Pure-additive paged read of `work_item_log_lines`. Tests cover
-//! happy path, step_id filter, pagination, access control, and
-//! the "no DB / no rows" empty-array contract.
+//! `GET /api/work-items/{id}/log`.
+//! Paged read of `work_item_log_lines`. Tests cover happy path, step_id
+//! filter, pagination, access control, and the "no DB / no rows"
+//! empty-array contract.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -302,7 +302,7 @@ async fn get_log_paginates_with_limit_and_offset() {
     assert_eq!(page2[0]["content"], "c");
 }
 
-/// Non-owners get 404 (AC-2 convention), never 403.
+/// Non-owners get 404 (existence is not leaked), never 403.
 #[tokio::test]
 async fn get_log_returns_404_for_non_owner() {
     let state = test_state_with_db();

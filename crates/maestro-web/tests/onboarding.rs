@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Phase 0 integration tests for `GET /api/onboarding/status` and the three new
+// Integration tests for `GET /api/onboarding/status` and the three new
 // `GET /api/auth/status` fields (provider_selected, github_mode, degraded).
 // Source-of-truth contract: tmp/multi-agents/04_architecture.md §1.3.
 
@@ -169,8 +169,8 @@ async fn auth_status_reports_degraded_when_critical_warning_present() {
     );
 }
 
-/// T-ONB-001 (Phase 1, P0): on the very first POST /api/auth/register (zero
-/// users in the DB), the 201 response body includes `redirect_to: "/onboarding"`
+/// T-ONB-001: on the very first POST /api/auth/register (zero users in
+/// the DB), the 201 response body includes `redirect_to: "/onboarding"`
 /// so non-browser API consumers and the UI can both route the just-created
 /// admin to the 4-step onboarding wizard without hard-coding the path.
 #[tokio::test]
@@ -196,7 +196,7 @@ async fn register_first_admin_response_includes_redirect_to_onboarding() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["redirect_to"], "/onboarding");
-    // Other fields stay intact — adding the key must not regress Phase 0.
+    // Other fields stay intact — adding the key must not regress the existing schema.
     assert_eq!(json["username"], "admin");
     assert_eq!(json["role"], "admin");
     assert!(json["user_id"].is_string());
@@ -404,7 +404,6 @@ async fn register_admin_and_get_id(state: &AppState) -> (String, String) {
 /// key so the `seal()` envelope matches what production would produce.
 async fn seed_provider_credential(state: &AppState, user_id: &str, provider: &str) {
     let db = state.auth().db.clone().expect("test DB");
-    // Plan-11 step 3 cluster B: provider_credentials on the adapter.
     let mk = db.master_key().expect("test DB must have master key").key.clone();
     let sealed = maestro_core::auth::seal(&mk, b"sk-test-token").unwrap();
     let adapter = db.adapter();
@@ -424,7 +423,6 @@ async fn seed_provider_credential(state: &AppState, user_id: &str, provider: &st
 
 /// Insert a GitHub PAT row directly via the DB helper.
 async fn seed_github_credential(state: &AppState, user_id: &str) {
-    // Plan-11 step 3 cluster B: github_credentials on the adapter.
     let db = state.auth().db.as_ref().expect("test DB");
     let mk = db.master_key().expect("test DB master key").key.clone();
     let sealed = maestro_core::auth::seal(&mk, b"ghp_test_pat").unwrap();

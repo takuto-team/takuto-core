@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Phase 1 onboarding wizard — `/onboarding`.
+ * Onboarding wizard — `/onboarding`.
  *
  * Step shell + nav controls. Step bodies live in `./Onboarding/*.tsx`;
  * the wizard navigation state machine is in `../hooks/useOnboardingFlow`,
@@ -12,12 +12,11 @@
  * 4 steps per 04_architecture.md §9:
  *   1. Ticketing system  — read-only display (changes go through config.toml today)
  *   2. AI provider       — delegates to <ProviderForm> in AdminAiSettings (lifted)
- *   3. GitHub integration — read-only display (PAT capture is Phase 2)
- *   4. Your credentials   — placeholder card (Phase 2 wires per-user creds)
+ *   3. GitHub integration — read-only display
+ *   4. Your credentials   — placeholder card
  *
  * Each step has Skip / Back / Continue; the last step has Finish instead of
- * Continue. Skip writes nothing in Phase 1 — Phase 2 hooks
- * `POST /api/onboarding/skip` here. "Finish" calls
+ * Continue. Skip is a no-op today; "Finish" calls
  * `POST /api/onboarding/complete` and navigates back to the dashboard.
  */
 

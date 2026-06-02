@@ -3,8 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Phase 2b.2 integration tests for GitAuthResolver wiring on AppState.
-// Source: tmp/multi-agents/04_architecture.md §4.2.
+// Integration tests for GitAuthResolver wiring on AppState.
 //
 // These tests cover the *integration* of the resolver with AppState — the
 // resolver itself is exhaustively unit-tested in
@@ -195,8 +194,7 @@ async fn appstate_resolver_missing_every_action_errors_unauthenticated() {
 }
 
 // ---------------------------------------------------------------------------
-// AppState.git_auth_resolver: Phase 2b.2 wiring is present and is Some when
-// db is Some.
+// AppState.git_auth_resolver: wiring is present and is Some when db is Some.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -232,8 +230,8 @@ async fn seed_pat(
     sign_commits: bool,
     github_login: &str,
 ) {
-    // Plan-11 step 3 cluster B: github_credentials::upsert on the adapter,
-    // wrapped in a short transaction (matches the route's atomicity contract).
+    // Upsert via the adapter wrapped in a short transaction (matches the
+    // route's atomicity contract).
     let mk = db.master_key().expect("test mk").key.clone();
     let _ = MasterKey::from_bytes([0u8; 32]); // keep import used
     let sealed = seal(&mk, b"ghp_alice_pat").unwrap();

@@ -17,3 +17,20 @@ Read **`CODING_STANDARDS.md`** before writing any code. It defines the SOLID, Ru
 Whenever you implement changes that affect anything documented in `AGENTS.md` — workflow behavior, Claude integration, config schema, REST/WebSocket contracts, crate layout, Jira polling, or external action boundaries — **update `AGENTS.md` in the same task** so it stays correct.
 
 Skip updates only for changes that do not alter documented behavior (e.g. comments, trivial renames with no API impact).
+
+## Comments
+
+**Default to writing no comments.** Most code does not need a comment. A reader can already see what the code does; a well-named function or variable is worth more than a paragraph above it. Add a comment only when it carries information the reader cannot derive from the code itself: a hidden constraint, a subtle invariant, a workaround tied to a specific bug, or behavior that would genuinely surprise someone.
+
+**Never reference internal planning artifacts in code, log messages, error strings, or user-facing text.** That includes:
+
+- Plan documents (`Plan-NN`, `plan-NN`, `tmp/plan-XX-*.md`, etc.)
+- Slice / step / phase / wave numbers (`slice 14`, `step 4`, `Phase 2b.3`)
+- Issue or task identifiers (`Task #47`, `GH-45`, `AC-2`)
+- Wording like "as part of plan-07 step 6 the engine will…" — the code is the artifact, not the plan it came from
+
+Plans are scaffolding that exists only during a feature's incubation. The artifacts they leave behind in the source — comments, log lines, error messages, doc strings, UI copy — outlive the plans by years and become noise to everyone who reads the code afterwards. Describe what the code does and why, **not the planning history that produced it**.
+
+If you need to record context about a change, the commit message and the PR description are the right places. Do not smear them across the source tree.
+
+Apply the same rule to commit messages going forward when reasonable — the code itself should not require knowing what slice introduced it.

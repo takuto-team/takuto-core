@@ -71,7 +71,7 @@ impl KeyExtractor for LoginKeyExtractor {
 struct Assets;
 
 pub fn build_router(state: AppState) -> Router {
-    // Plan-02 AC-3 Layer A: per-IP rate limit on /auth/login + /auth/recover.
+    // Per-IP rate limit on /auth/login + /auth/recover.
     //
     // 10 requests per minute per source IP, burst 10. Returns 429 + a
     // `Retry-After` header on overflow. We deliberately scope this to the two
@@ -108,8 +108,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/status", get(routes::auth::auth_status))
         .route("/auth/logout", post(routes::auth::logout))
         .route("/auth/register", post(routes::auth::register))
-        // Phase 0 — structured SystemStatus for the degraded-mode dashboard
-        // banner. Public per AGENTS.md / 04_architecture.md §1.3 (no auth, no
+        // Structured SystemStatus for the degraded-mode dashboard banner.
+        // Public per AGENTS.md / 04_architecture.md §1.3 (no auth, no
         // CSRF gate beyond the safe-method short-circuit).
         .route(
             "/onboarding/status",
@@ -150,22 +150,22 @@ pub fn build_router(state: AppState) -> Router {
         .route("/users/{id}/suspend", post(routes::admin::suspend_user))
         .route("/users/{id}/unsuspend", post(routes::admin::unsuspend_user))
         .route("/users/{id}/unlock", post(routes::admin::unlock_user))
-        // Plan-07 step 1: REST surface renames "workflow" → "work item"
-        // in user-facing language. Both `/workflows/*` (deprecated) and
-        // `/work-items/*` (canonical) mount the same handlers for one
-        // minor release. External callers get a `X-Maestro-Deprecation`
-        // header on the legacy paths via `deprecation_header_middleware`
-        // below; the in-tree UI already uses the new paths.
+        // REST surface renames "workflow" → "work item" in user-facing
+        // language. Both `/workflows/*` (deprecated) and `/work-items/*`
+        // (canonical) mount the same handlers for one minor release.
+        // External callers get a `X-Maestro-Deprecation` header on the
+        // legacy paths via `deprecation_header_middleware` below; the
+        // in-tree UI already uses the new paths.
         .route("/workflows", get(routes::workflows::list_workflows))
         .route("/work-items", get(routes::workflows::list_workflows))
         .route("/workflows/counts", get(routes::workflows::workflow_counts))
         .route("/work-items/counts", get(routes::workflows::workflow_counts))
         .route("/workflows/{id}", get(routes::workflows::get_workflow))
         .route("/work-items/{id}", get(routes::workflows::get_workflow))
-        // Plan-07 slice 9: step history from work_item_steps.
+        // Step history from work_item_steps.
         .route("/workflows/{id}/steps", get(routes::workflows::get_steps))
         .route("/work-items/{id}/steps", get(routes::workflows::get_steps))
-        // Plan-07 slice 17: paged log lines from work_item_log_lines.
+        // Paged log lines from work_item_log_lines.
         .route("/workflows/{id}/log", get(routes::workflows::get_log))
         .route("/work-items/{id}/log", get(routes::workflows::get_log))
         .route(
@@ -326,9 +326,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/github/issues", get(routes::github::list_github_issues))
         .route("/github/repos", get(routes::repos::list_github_repos))
-        // Plan-10: per-user repository associations. Any authenticated user
-        // may add (cloning if necessary) or remove repos from their own
-        // dashboard; admin-only `force_purge` flag drops the repo for everyone.
+        // Per-user repository associations. Any authenticated user may add
+        // (cloning if necessary) or remove repos from their own dashboard;
+        // admin-only `force_purge` flag drops the repo for everyone.
         .route(
             "/repositories",
             get(routes::repositories::list_mine).post(routes::repositories::add),
@@ -355,16 +355,15 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/config", get(routes::config::get_config))
         .route("/config", put(routes::config::update_config))
-        // Phase 1 (04_architecture.md §2.3): admin-only patch of the
-        // [agent] section. Behind the same auth+CSRF stack as the existing
-        // PUT /api/config and gated additionally via require_admin_for in
-        // the handler.
+        // Admin-only patch of the [agent] section. Behind the same auth+CSRF
+        // stack as the existing PUT /api/config and gated additionally via
+        // require_admin_for in the handler.
         .route(
             "/config/agent",
             put(routes::config_agent::put_agent_config),
         )
         .route("/config/reload", post(routes::config::reload_config))
-        // Phase 2b.1: per-user credential surface (04_architecture.md §3).
+        // Per-user credential surface.
         .route(
             "/users/me/credentials",
             get(routes::credentials::get_my_credentials),
@@ -390,11 +389,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/polling", get(routes::polling::get_polling_status))
         .route("/polling/pause", post(routes::polling::pause_polling))
         .route("/polling/resume", post(routes::polling::resume_polling))
-        // Plan-09 Step 5: per-user-per-workspace init + run commands. No
-        // admin gate — every authenticated user manages their own rows
-        // and only their own (the URL never carries a `user_id`). The
-        // `_workspaces` route must be registered BEFORE the `{workspace}`
-        // parameter route so it doesn't get captured as a workspace name.
+        // Per-user-per-workspace init + run commands. No admin gate — every
+        // authenticated user manages their own rows and only their own (the
+        // URL never carries a `user_id`). The `_workspaces` route must be
+        // registered BEFORE the `{workspace}` parameter route so it doesn't
+        // get captured as a workspace name.
         .route(
             "/worktree-commands/_workspaces",
             get(routes::worktree_commands::list_workspaces_with_has_commands),
@@ -441,13 +440,13 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .nest("/api", api)
-        // Plan-07 step 1: tag responses on the legacy `/api/workflows/*`
-        // paths with `X-Maestro-Deprecation` so external callers know
-        // to switch to `/api/work-items/*` before the legacy paths are
-        // removed in the next minor release.
+        // Tag responses on the legacy `/api/workflows/*` paths with
+        // `X-Maestro-Deprecation` so external callers know to switch to
+        // `/api/work-items/*` before the legacy paths are removed in the
+        // next minor release.
         .layer(middleware::from_fn(deprecation_header_middleware))
         .route("/ws", get(routes::ws::ws_handler))
-        // GH-45: shared-port reverse proxy for editor and terminal sessions.
+        // Shared-port reverse proxy for editor and terminal sessions.
         // `any` so all HTTP methods AND WebSocket upgrades dispatch to the
         // same handler — `proxy_session` decides HTTP vs WS internally based
         // on the `Upgrade` / `Connection` headers. The `{*rest}` greedy

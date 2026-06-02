@@ -2,14 +2,10 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 //! `user_provider_credentials` table — row shape + CRUD.
 //!
-//! Phase 2a defined the table; Phase 2b.1 grows the insert / select /
-//! mark-inactive helpers consumed by the per-user credential endpoints in
-//! `crates/maestro-web/src/routes/credentials.rs`.
+//! Insert / select / mark-inactive helpers consumed by the per-user
+//! credential endpoints in `crates/maestro-web/src/routes/credentials.rs`.
 //!
-//! ### Plan-11 step 3 cluster B (this commit)
-//!
-//! Migrated to the agnostic adapter alongside credential_audit +
-//! github_credentials. Two API shapes:
+//! ### API shapes
 //!
 //! * **Reads** (`find_active`, `find_active_with_kind`,
 //!   `find_all_for_user`) take `&DbAdapter` — called from many
@@ -29,7 +25,7 @@ use crate::db::{DbAdapter, DbTransaction, DbValue};
 use crate::error::{MaestroError, Result};
 
 /// `kind` discriminator. v1 only writes `ApiKey`; the other two are reserved
-/// for Phase 2b (Claude OAuth) and a potential future Cursor CLI-state path.
+/// for Claude OAuth and a potential future Cursor CLI-state path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderCredentialKind {
@@ -56,8 +52,8 @@ pub struct ProviderCredentialRow {
     pub id: i64,
     pub user_id: String,
     /// `"claude" | "cursor" | "codex" | "opencode"`. Stored as a string for
-    /// forward compatibility (Phase 4's `AiAgentProvider` already enumerates
-    /// the values).
+    /// forward compatibility (`AiAgentProvider` already enumerates the
+    /// values).
     pub provider: String,
     pub kind: ProviderCredentialKind,
     /// AEAD-sealed plaintext (api key, oauth bearer, etc.).
@@ -235,13 +231,13 @@ const SELECT_COLS: &str = "id, user_id, provider, kind, ciphertext, nonce, wrapp
      metadata_json, inactive, last_validated_at, last_used_at, \
      created_at, updated_at, expires_at";
 
-/// Return ONE active (`inactive = 0`) row for `(user_id, provider)`. With
-/// task #39 Claude users can have both `api_key` and `cli_state` rows
+/// Return ONE active (`inactive = 0`) row for `(user_id, provider)`.
+/// Claude users can have both `api_key` and `cli_state` rows
 /// simultaneously, so the lookup is deterministic: prefer `api_key` first,
-/// then `cli_state`, then `oauth_token`. Existing callers that only need a
-/// presence probe ("does this user have ANY credential for this provider?")
-/// keep the same behaviour. Callers that need a specific kind use
-/// [`find_active_with_kind`].
+/// then `cli_state`, then `oauth_token`. Callers that only need a
+/// presence probe ("does this user have ANY credential for this
+/// provider?") keep the same behaviour. Callers that need a specific kind
+/// use [`find_active_with_kind`].
 pub async fn find_active(
     adapter: &DbAdapter,
     user_id: &str,
@@ -271,11 +267,11 @@ pub async fn find_active(
     row.map(|r| decode_row(&r)).transpose()
 }
 
-/// Task #39: return the single active row for `(user_id, provider, kind)`
-/// (or `None`). This is what the worker bundle uses to assemble the
-/// per-kind tmpfs files separately — one Claude user might have api_key
-/// only, cli_state only, or both, and the bundle builder needs to query
-/// each independently.
+/// Return the single active row for `(user_id, provider, kind)` (or
+/// `None`). This is what the worker bundle uses to assemble the per-kind
+/// tmpfs files separately — one Claude user might have api_key only,
+/// cli_state only, or both, and the bundle builder needs to query each
+/// independently.
 pub async fn find_active_with_kind(
     adapter: &DbAdapter,
     user_id: &str,
@@ -345,8 +341,8 @@ pub async fn delete(
     Ok(n > 0)
 }
 
-/// Task #39: hard-delete the single row for `(user_id, provider, kind)`,
-/// leaving any other-kind rows for the same `(user, provider)` intact.
+/// Hard-delete the single row for `(user_id, provider, kind)`, leaving
+/// any other-kind rows for the same `(user, provider)` intact.
 /// Drives the `DELETE /api/users/me/credentials/{provider}?kind=cli_state`
 /// flow so the UI can wipe just the session state without touching the
 /// api_key row (or vice versa).
@@ -370,9 +366,9 @@ pub async fn delete_with_kind(
     Ok(n > 0)
 }
 
-/// Mark every row for `(user_id, provider)` as `inactive = 1`. Phase 2b.2
-/// uses this when the deployment-wide provider switches (the old creds stay
-/// for audit / restore — see 04_architecture.md §2.4).
+/// Mark every row for `(user_id, provider)` as `inactive = 1`. Used when
+/// the deployment-wide provider switches (the old creds stay for audit /
+/// restore — see 04_architecture.md §2.4).
 pub async fn mark_inactive(adapter: &DbAdapter, user_id: &str, provider: &str) -> Result<()> {
     adapter
         .execute(

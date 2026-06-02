@@ -23,10 +23,10 @@ pub struct RegisterBody {
 
 /// Registration response containing recovery codes.
 ///
-/// Phase 1 (auth-overhaul, 06_qa_and_blind_spots.md §A.3 T-ONB-001): the
-/// just-created admin must land on the 4-step onboarding wizard, not the empty
-/// dashboard. The server advertises that next-hop in `redirect_to` so the UI
-/// (and any non-browser API consumers) don't have to hard-code the path.
+/// The just-created admin must land on the 4-step onboarding wizard, not
+/// the empty dashboard. The server advertises that next-hop in
+/// `redirect_to` so the UI (and any non-browser API consumers) don't have
+/// to hard-code the path.
 #[derive(Debug, Serialize)]
 struct RegisterResponse {
     user_id: String,
@@ -53,10 +53,9 @@ pub async fn register(
             .into_response();
     };
 
-    // Plan-11 step 3 cluster A: users + credentials on the agnostic
-    // adapter. The credential writes (store_password + generate_recovery_codes)
-    // co-commit via one transaction; create_user opens its own
-    // internal tx with the first-user-becomes-admin race guard.
+    // The credential writes (store_password + generate_recovery_codes)
+    // co-commit via one transaction; create_user opens its own internal
+    // tx with the first-user-becomes-admin race guard.
     let adapter = db.adapter();
     let username = body.username;
     let password = body.password;

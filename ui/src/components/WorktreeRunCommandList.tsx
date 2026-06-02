@@ -3,7 +3,7 @@
 
 /**
  * Ordered run-command list editor for the per-user-per-workspace Worktree
- * Settings tab (plan-09).
+ * Settings tab.
  *
  * Each row holds a `{ name, command }` pair:
  *   - `name`: short label rendered on the dashboard run-command button (e.g.

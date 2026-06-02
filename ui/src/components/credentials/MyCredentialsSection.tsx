@@ -173,10 +173,9 @@ export function MyCredentialsSection() {
             credentials={creds}
             onSave={async (body) => {
               try {
-                // Task #40: body is the discriminated request shape
-                // (`{ api_key }` or `{ kind: "cli_state",
-                // claude_session_json }`). The panel constructs the right
-                // body based on the active tab.
+                // Body is the discriminated request shape (`{ api_key }`
+                // or `{ kind: "cli_state", claude_session_json }`). The
+                // panel constructs the right body based on the active tab.
                 await setProviderCredential(activeProvider, body);
                 // Refresh the server state BEFORE toasting "connected" so
                 // the pill flips at the same instant the user sees the

@@ -14,22 +14,23 @@ use super::status_types::{
 
 /// Collect a structured `SystemStatus` snapshot. **Never returns `Err`** —
 /// every former hard error becomes a `severity = "critical"` warning. This is
-/// the Phase 0 replacement for `preflight()` and is what the dashboard reads
+/// the replacement for `preflight()` and is what the dashboard reads
 /// via `GET /api/onboarding/status`.
 ///
-/// Phase 2a (04_architecture.md §3.2): when a `Database` handle is provided,
-/// the helper also surfaces master-key warnings (`master_key_unavailable` and
-/// `secret_key_world_readable`) so the dashboard can render the degraded-mode
-/// banner before any credential CRUD endpoint is hit. Callers that don't have
-/// a DB in scope (e.g. the standalone `maestro preflight` CLI subcommand)
-/// pass `None` and get config-only warnings.
+/// When a `Database` handle is provided (04_architecture.md §3.2), the
+/// helper also surfaces master-key warnings (`master_key_unavailable` and
+/// `secret_key_world_readable`) so the dashboard can render the
+/// degraded-mode banner before any credential CRUD endpoint is hit.
+/// Callers that don't have a DB in scope (e.g. the standalone
+/// `maestro preflight` CLI subcommand) pass `None` and get config-only
+/// warnings.
 pub fn collect_system_status(config: &Config) -> SystemStatus {
     collect_system_status_with_db(config, None)
 }
 
-/// Task #37 (Phase 2c, deployment fix): probe the config directory for
-/// write-ability and return a `config_dir_not_writable` warning when the
-/// process can't atomically create a file there.
+/// Probe the config directory for write-ability and return a
+/// `config_dir_not_writable` warning when the process can't atomically
+/// create a file there.
 ///
 /// `ConfigWriter::write_atomic` writes a `.tmp` sibling then `rename(2)`s
 /// it over `config.toml`. POSIX `rename(2)` requires write on the *parent
@@ -79,7 +80,7 @@ pub fn check_config_dir_writable(config_path: &std::path::Path) -> Option<Struct
     }
 }
 
-/// Like [`collect_system_status`] but additionally emits Phase 2a master-key
+/// Like [`collect_system_status`] but additionally emits master-key
 /// warnings derived from the database's master-key state.
 pub fn collect_system_status_with_db(
     config: &Config,
@@ -87,9 +88,9 @@ pub fn collect_system_status_with_db(
 ) -> SystemStatus {
     let mut warnings: Vec<StructuredWarning> = Vec::new();
 
-    // Phase 2a: when a DB handle is provided, emit master-key warnings.
-    // These come first so the dashboard can render them at the top of the
-    // banner — they block per-user credential CRUD entirely.
+    // When a DB handle is provided, emit master-key warnings. These come
+    // first so the dashboard can render them at the top of the banner —
+    // they block per-user credential CRUD entirely.
     if let Some(db) = db {
         match db.master_key() {
             None => {
@@ -121,10 +122,11 @@ pub fn collect_system_status_with_db(
             },
         }
     } else {
-        // No App configured — fall back to host `gh` auth. The presence/validity
-        // of that auth is informational at this layer (Phase 2 introduces the
-        // per-user PAT). When the active host token is invalid we surface a
-        // critical warning instead of returning Err.
+        // No App configured — fall back to host `gh` auth. The
+        // presence/validity of that auth is informational at this layer
+        // (the per-user PAT is layered on top). When the active host
+        // token is invalid we surface a critical warning instead of
+        // returning Err.
         let token_exists = auth_cmd_ok("gh", &["auth", "token", "-h", "github.com"]);
         let mut token_valid = token_exists && auth_cmd_ok("gh", &["api", "user"]);
         // Recovery: if the active user has an expired token (common with GitHub
@@ -182,9 +184,9 @@ pub fn collect_system_status_with_db(
                 .ok()
                 .map(|v| !v.trim().is_empty())
                 .unwrap_or(false);
-            // Phase 1: prefer the [agent.providers.claude].base_url config
-            // value; fall back to the ANTHROPIC_BASE_URL env var the way
-            // setup scripts used to surface it.
+            // Prefer the [agent.providers.claude].base_url config value;
+            // fall back to the ANTHROPIC_BASE_URL env var the way setup
+            // scripts used to surface it.
             let custom_base_url = {
                 let cfg_url = config.agent.providers.claude.base_url.trim();
                 if !cfg_url.is_empty() {
@@ -244,9 +246,10 @@ pub fn collect_system_status_with_db(
                 }
             }
         }
-        // Phase 4: Codex and OpenCode have full adapters. The headless_capable
-        // flag mirrors claude/cursor — true when there's a CLI binary on PATH
-        // in the worker image (both are baked into the maestro image today).
+        // Codex and OpenCode have full adapters. The headless_capable
+        // flag mirrors claude/cursor — true when there's a CLI binary on
+        // PATH in the worker image (both are baked into the maestro
+        // image today).
         AiAgentProvider::Codex => ProviderStatus {
             selected: "codex".to_string(),
             deployment_default_credential_present: !std::env::var("OPENAI_API_KEY")
@@ -285,9 +288,10 @@ pub fn collect_system_status_with_db(
         github,
         provider,
         ticketing,
-        // Phase 0 ships pre-DB; populated by the caller when the DB is
-        // available (see `maestro-cli` `run_server`). Default `false` so the
-        // CLI's `preflight` subcommand gives a sensible standalone answer.
+        // This field ships pre-DB; populated by the caller when the DB
+        // is available (see `maestro-cli` `run_server`). Default `false`
+        // so the CLI's `preflight` subcommand gives a sensible
+        // standalone answer.
         per_user_required: false,
         warnings,
     }
@@ -302,7 +306,7 @@ pub fn check_acli_auth() -> bool {
 
 /// Verify required CLIs for the configured AI provider.
 ///
-/// **Deprecated** in favour of [`collect_system_status`] (Phase 0 soft-fail
+/// **Deprecated** in favour of [`collect_system_status`] (soft-fail
 /// model). Kept for one release for any external caller — internal callers
 /// should switch to `collect_system_status`, treat all results as informational,
 /// and let the dashboard render the degraded-mode banner.
@@ -348,7 +352,7 @@ pub fn preflight(config: &Config) -> Result<PreflightResult> {
 
 #[cfg(test)]
 mod system_status_tests {
-    //! Phase 0 unit tests — verify `collect_system_status` never returns Err
+    //! Unit tests — verify `collect_system_status` never returns Err
     //! and emits the right structured warnings for misconfigured providers.
     //!
     //! These tests manipulate process-global env vars (`HOME`,
@@ -586,7 +590,7 @@ mod system_status_tests {
         }
     }
 
-    // ── Task #37 (Phase 2c): config-dir writability probe ───────────────
+    // ── Config-dir writability probe ────────────────────────────────────
 
     /// Happy path: a freshly-created tempdir is writable → no warning.
     #[test]

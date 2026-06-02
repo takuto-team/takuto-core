@@ -51,12 +51,12 @@ export interface WorkflowSummary {
   definition_runs: Record<string, string>;
   /** Absolute path of the git worktree on disk. Absent while being pre-created in the background. */
   worktree_path?: string;
-  /** Name of the repository (workspace) the workflow belongs to. Plan-10.
-   *  Always present on the wire; may be empty string for legacy snapshots
-   *  that pre-date workspace_name being recorded. */
+  /** Name of the repository (workspace) the workflow belongs to. Always
+   *  present on the wire; may be empty string for legacy snapshots that
+   *  pre-date workspace_name being recorded. */
   workspace_name: string;
-  /** UUID of the repository row the workflow belongs to. Plan-10.
-   *  `None` for legacy snapshots not yet back-filled by reconciliation. */
+  /** UUID of the repository row the workflow belongs to. `None` for legacy
+   *  snapshots not yet back-filled by reconciliation. */
   repository_id?: string;
 }
 
@@ -342,7 +342,7 @@ export interface User {
 }
 
 // ---------------------------------------------------------------------------
-// Per-user credentials (Phase 2 — auth-overhaul).
+// Per-user credentials.
 //
 // Source of truth: tmp/multi-agents/04_architecture.md §3 (per-user provider
 // store) + §4 (GitHub auth resolver) + 05_ux_design.md §2.2 / §2.3.

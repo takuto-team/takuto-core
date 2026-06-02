@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Per-user REST endpoints for worktree init + run commands (plan-09 Step 5).
+//! Per-user REST endpoints for worktree init + run commands.
 //!
 //! Mounted under `/api/worktree-commands/*` (no admin prefix). Every handler
 //! reads `Extension<AuthenticatedUser>` and operates on `auth.user_id` ONLY —
@@ -361,9 +361,6 @@ pub async fn list_my_rows(
         .clone();
     let user_id = auth.user_id.clone();
 
-    // Plan-11 step 3: user_worktree_commands DAO migrated to the
-    // agnostic adapter. No spawn_blocking needed; the async fn is called
-    // directly from this handler's async context.
     let rows = user_worktree_commands::list_for_user(db.adapter(), &user_id)
         .await
         .map_err(db_error)?;
@@ -426,12 +423,10 @@ pub async fn put_my_row(
     let init_commands = body.init_commands.clone();
     let run_commands = body.run_commands.clone();
 
-    // Plan-11 step 3: upsert + read-back are two sequential adapter
-    // calls. Concurrent writes from the same user can interleave between
-    // them, but the read-back returns whatever's current — same race
-    // window the rusqlite path had (sequential calls under one MutexGuard
-    // are not stronger than two adapter calls; SQLite single-writer
-    // serializes them at the db level).
+    // Upsert + read-back are two sequential adapter calls. Concurrent
+    // writes from the same user can interleave between them, but the
+    // read-back returns whatever's current — SQLite's single-writer model
+    // serializes them at the db level.
     user_worktree_commands::upsert(
         db.adapter(),
         &user_id,
@@ -499,8 +494,8 @@ pub async fn delete_my_row(
     let user_id = auth.user_id.clone();
     let lookup_name = workspace.clone();
 
-    // Plan-11 step 3: read-then-delete is two adapter calls. Same
-    // race-window properties as the upsert path above.
+    // Read-then-delete is two adapter calls. Same race-window properties
+    // as the upsert path above.
     let prev = user_worktree_commands::get(db.adapter(), &user_id, &lookup_name)
         .await
         .map_err(db_error)?;
@@ -537,14 +532,13 @@ pub async fn delete_my_row(
 }
 
 /// `GET /api/worktree-commands/_workspaces` — repositories the caller has
-/// added (plan-10) augmented with `has_my_commands`.
+/// added, augmented with `has_my_commands`.
 ///
-/// Plan-09 listed every workspace on disk (filesystem scan). Plan-10 deletes
-/// the global workspace list and replaces it with per-user repositories
-/// (`db::repositories::list_for_user`). The wire shape keeps `name`,
-/// `html_url`, and `has_my_commands` so the existing UI keeps working; the
-/// old `active` field is dropped (there is no "active repo" concept after
-/// plan-10).
+/// The legacy filesystem-scan workspace list was replaced with per-user
+/// repositories (`db::repositories::list_for_user`). The wire shape keeps
+/// `name`, `html_url`, and `has_my_commands` so the existing UI keeps
+/// working; the old `active` field is dropped (there is no "active repo"
+/// concept anymore).
 pub async fn list_workspaces_with_has_commands(
     State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
@@ -556,8 +550,6 @@ pub async fn list_workspaces_with_has_commands(
         .clone();
     let user_id = auth.user_id.clone();
 
-    // Plan-11 step 3: both DAOs now on the agnostic adapter — the hybrid
-    // spawn_blocking from the onboarding template is no longer needed.
     let adapter = db.adapter();
     let repos = repositories::list_for_user(adapter, &user_id)
         .await

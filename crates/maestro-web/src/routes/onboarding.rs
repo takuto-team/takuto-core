@@ -1,8 +1,8 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 0 onboarding endpoint. Exposes the structured `SystemStatus`
-//! snapshot the dashboard renders the degraded-mode banner from.
+//! Onboarding endpoint. Exposes the structured `SystemStatus` snapshot the
+//! dashboard renders the degraded-mode banner from.
 //!
 //! Source-of-truth contract: `tmp/multi-agents/04_architecture.md §1.3`.
 //! The endpoint is **public** (no auth) so the dashboard can poll it before a
@@ -17,11 +17,11 @@ use maestro_core::docker_hooks::{StructuredWarning, SystemStatus};
 
 use crate::state::{AuthState, ConfigState, EngineState};
 
-/// Phase 2b.4: codes that the per-request filter may drop based on the
-/// calling user's stored credentials. Anything not on this list — platform
-/// issues like `master_key_unavailable`, `secret_key_world_readable`,
-/// `config_missing`, `acli_missing`, `provider_not_implemented`, etc. — is
-/// preserved as-is because those concern the deployment, not the user.
+/// Codes that the per-request filter may drop based on the calling user's
+/// stored credentials. Anything not on this list — platform issues like
+/// `master_key_unavailable`, `secret_key_world_readable`, `config_missing`,
+/// `acli_missing`, `provider_not_implemented`, etc. — is preserved as-is
+/// because those concern the deployment, not the user.
 fn warning_is_user_filterable(code: &str) -> bool {
     matches!(
         code,
@@ -74,14 +74,14 @@ pub struct UserOnboardingSummary {
 /// `GET /api/onboarding/status` — returns the current `SystemStatus` snapshot.
 ///
 /// Public endpoint (no auth required). The snapshot is captured at startup
-/// and refreshed in place by `PUT /api/config/agent` (Phase 1), so callers
-/// always see the latest provider / degraded state without a process restart.
+/// and refreshed in place by `PUT /api/config/agent`, so callers always see
+/// the latest provider / degraded state without a process restart.
 ///
-/// Phase 2b.1: when a session cookie is present and resolves to a user, the
-/// response additionally includes that user's `onboarding_state` row (or
-/// empty defaults), with `step_4_credentials` auto-flipping to "completed"
-/// if the user has at least one active provider credential row — saving the
-/// user a wizard click after they've already pasted their key.
+/// When a session cookie is present and resolves to a user, the response
+/// additionally includes that user's `onboarding_state` row (or empty
+/// defaults), with `step_4_credentials` auto-flipping to "completed" if the
+/// user has at least one active provider credential row — saving the user
+/// a wizard click after they've already pasted their key.
 pub async fn onboarding_status(
     State(auth): State<AuthState>,
     State(cfg_state): State<ConfigState>,
@@ -92,9 +92,9 @@ pub async fn onboarding_status(
 
     let active_provider = status.provider.selected.clone();
 
-    // Phase 2b.4: read the github-app-configured flag from live config (the
-    // cached SystemStatus also exposes `github.app_configured`, but reading
-    // the config here keeps the rule colocated with the rest of the
+    // Read the github-app-configured flag from live config (the cached
+    // SystemStatus also exposes `github.app_configured`, but reading the
+    // config here keeps the rule colocated with the rest of the
     // per-request filter logic and matches the source of truth that
     // `collect_system_status` itself consults).
     let github_app_configured = {
@@ -102,10 +102,10 @@ pub async fn onboarding_status(
         cfg.github.is_configured()
     };
 
-    // Phase 2b.4: per-request user resolution. The endpoint is public, so
-    // the cookie may be absent — in that case we keep the raw warnings
-    // (rule 4: "no filtering possible without a user"). When a cookie IS
-    // present and resolves to a user, we additionally:
+    // Per-request user resolution. The endpoint is public, so the cookie
+    // may be absent — in that case we keep the raw warnings (rule 4: "no
+    // filtering possible without a user"). When a cookie IS present and
+    // resolves to a user, we additionally:
     //   - drop the active provider's `<p>_not_authenticated` warning if
     //     the user has an active credential row for `p`;
     //   - drop `gh_auth_missing` if the GitHub App is configured (regardless
@@ -122,8 +122,6 @@ pub async fn onboarding_status(
         if cookie.is_empty() {
             (None, None)
         } else {
-            // Plan-11 step 3 cluster Sessions: sessions + onboarding +
-            // provider_credentials + github_credentials all on the adapter.
             let user_id = crate::auth::validate_db_session(db.adapter(), &cookie).await;
 
             let pre = if let Some(uid) = user_id {

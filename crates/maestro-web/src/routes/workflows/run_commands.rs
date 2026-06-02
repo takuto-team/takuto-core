@@ -53,13 +53,11 @@ pub async fn list_run_commands(
     let workspace_name = w.workspace_name.clone();
     drop(workflows);
 
-    // Per-user-per-workspace lookup (plan-09). Owner-less workflows return
-    // an empty list.
+    // Per-user-per-workspace lookup. Owner-less workflows return an
+    // empty list.
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
         match (owner_user_id.as_deref(), auth_state.db.as_ref()) {
             (Some(uid), Some(database)) => {
-                // Plan-11 step 3: user_worktree_commands::get migrated to
-                // the agnostic adapter. Direct async call from this handler.
                 maestro_core::db::user_worktree_commands::get(
                     database.adapter(),
                     uid,
@@ -108,8 +106,6 @@ pub async fn start_run_command(
     let configured: Vec<maestro_core::db::user_worktree_commands::RunCommand> =
         match (owner_user_id.as_deref(), auth_state.db.as_ref()) {
             (Some(uid), Some(database)) => {
-                // Plan-11 step 3: user_worktree_commands::get migrated to
-                // the agnostic adapter. Direct async call from this handler.
                 maestro_core::db::user_worktree_commands::get(
                     database.adapter(),
                     uid,
@@ -197,16 +193,16 @@ pub async fn start_run_command(
     let reserved_token = maestro_core::container::generate_session_path_token();
     let proxy_base = maestro_core::container::build_session_dynamic_port_url(&reserved_token);
 
-    // Phase 2b.3.x: same per-workflow bundle the editor uses — run-commands
-    // often `git push` / `gh` to publish preview deploys, so the GitHub
-    // side of the bundle is the value-add here.
+    // Same per-workflow bundle the editor uses — run-commands often
+    // `git push` / `gh` to publish preview deploys, so the GitHub side
+    // of the bundle is the value-add here.
     let secrets_bundle: Option<std::sync::Arc<maestro_core::auth::WorkerSecretsBundle>> =
         build_editor_or_run_command_bundle(&engine, &auth_state, &cfg, &id, &auth.user_id).await;
 
-    // Task #42: stash the bundle Arc keyed by (ticket, cmd_index). Same
-    // rationale as the editor branch: the run-command container is
-    // detached, so the route handler's stack scope can't be the sole
-    // owner of the bundle's `TempDir` lifetime.
+    // Stash the bundle Arc keyed by (ticket, cmd_index). Same rationale
+    // as the editor branch: the run-command container is detached, so
+    // the route handler's stack scope can't be the sole owner of the
+    // bundle's `TempDir` lifetime.
     if let Some(ref b) = secrets_bundle {
         let mut map = run_command.run_command_bundles.write().await;
         map.insert((ticket_key.clone(), index), b.clone());
@@ -279,9 +275,9 @@ pub async fn start_run_command(
         }
     });
 
-    // Plan-07 step 4 slice 8: clone the work_item_id + db so the
-    // spawned tracker can shadow-upsert RunCommand port rows
-    // alongside the in-memory registry mutation.
+    // Clone the work_item_id + db so the spawned tracker can
+    // shadow-upsert RunCommand port rows alongside the in-memory
+    // registry mutation.
     let tracker_wi = id.clone();
     let tracker_db = engine.engine.db().cloned();
     tokio::spawn(run_command_port_tracker(
@@ -298,10 +294,10 @@ pub async fn start_run_command(
         tracker_db,
     ));
 
-    // Plan-07 step 4 slice 5: shadow-write the run-command lifecycle.
-    // `id` is the work_item id (same as workflow.id); the container
-    // name is deterministic (`run_command_container_name`) so we
-    // record it as the `container_id` for cross-restart visibility.
+    // Shadow-write the run-command lifecycle. `id` is the work_item id
+    // (same as workflow.id); the container name is deterministic
+    // (`run_command_container_name`) so we record it as the
+    // `container_id` for cross-restart visibility.
     let container_name =
         maestro_core::container::run_command_container_name(&ticket_key, index);
     maestro_core::db::work_items::shadow_start_run_command_row(
@@ -359,19 +355,19 @@ pub async fn stop_run_command(
 
     // Stop the container
     container::stop_run_command(&ticket_key, index).await;
-    // Task #42: drop the bundle Arc — last strong reference fires the
-    // TempDir RAII cleanup. Done AFTER stop_run_command so the secret
-    // files stay on disk for the container's final teardown read.
+    // Drop the bundle Arc — last strong reference fires the TempDir
+    // RAII cleanup. Done AFTER stop_run_command so the secret files
+    // stay on disk for the container's final teardown read.
     run_command
         .run_command_bundles
         .write()
         .await
         .remove(&(ticket_key.clone(), index));
 
-    // Plan-07 step 4 slice 5: shadow-write the run-command stop.
-    // UPDATE-only — preserves the `started_at` set at start. A row
-    // that never landed (race / shadow-write failure at start) stays
-    // absent and this call no-ops.
+    // Shadow-write the run-command stop. UPDATE-only — preserves the
+    // `started_at` set at start. A row that never landed (race /
+    // shadow-write failure at start) stays absent and this call
+    // no-ops.
     maestro_core::db::work_items::shadow_finish_run_command_row(
         engine.engine.db(),
         &id,

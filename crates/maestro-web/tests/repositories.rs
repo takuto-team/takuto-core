@@ -3,20 +3,18 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-10 Step 5: per-user repository REST endpoints.
+// Integration tests for the per-user repository REST endpoints.
 //
 //   GET    /api/repositories
 //   GET    /api/repositories/_available
 //   POST   /api/repositories
 //   DELETE /api/repositories/{id}
 //
-// Covers ACs 1, 3, 6, 7, 8, 9, 10, 11, 16 and the URL-validation matrix from
-// plan-10 Step 4.2. Clone-side tests (AC-4, AC-5, AC-15) are unit-tested at
-// the validator level and excluded here — the real clone path shells out to
-// `git`/`gh` and requires network access, which makes it unfit for hermetic
-// integration tests. We exercise the `{repo_url}` branch up to the point of
-// the URL-already-known short-circuit (AC-5) and the URL-validation rejection
-// matrix.
+// Clone-side tests are unit-tested at the validator level and excluded
+// here — the real clone path shells out to `git`/`gh` and requires network
+// access, which makes it unfit for hermetic integration tests. We exercise
+// the `{repo_url}` branch up to the point of the URL-already-known
+// short-circuit and the URL-validation rejection matrix.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -185,7 +183,6 @@ async fn seed_repository(
     repo_url: Option<&str>,
     local_path: &str,
 ) -> String {
-    // Plan-11 step 3: repositories DAO on the adapter.
     let db = state.auth().db.as_ref().expect("db");
     maestro_core::db::repositories::upsert(
         db.adapter(),
@@ -277,7 +274,7 @@ async fn delete_repository(
 }
 
 // ---------------------------------------------------------------------------
-// AC-1 — empty state.
+// Empty state.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -341,7 +338,7 @@ async fn unauthenticated_caller_gets_401() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-2 / AC-3 / AC-10 — list, add, isolation.
+// List, add, isolation.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -443,10 +440,9 @@ async fn ac10_user_a_cannot_see_user_b_associations() {
 
 #[tokio::test]
 async fn ac6_non_admin_can_post_repositories_with_repository_id() {
-    // AC-6 is technically about cloning (any auth user). Cloning needs a real
-    // remote; we settle for verifying that `POST /api/repositories` with
-    // `repository_id` succeeds for a non-admin caller, which proves the route
-    // has no admin gate.
+    // Cloning needs a real remote; we settle for verifying that
+    // `POST /api/repositories` with `repository_id` succeeds for a
+    // non-admin caller, which proves the route has no admin gate.
     let (state, _tmp) = test_state_isolated();
     let admin_cookie = register_admin(&state).await;
     let alice_cookie = create_user_login(&state, &admin_cookie, "alice", "alicepassword1234").await;
@@ -459,7 +455,7 @@ async fn ac6_non_admin_can_post_repositories_with_repository_id() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-7 — last-user remove + on-disk purge.
+// Last-user remove + on-disk purge.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -492,7 +488,6 @@ async fn ac7_last_user_remove_purges_disk() {
     assert!(!local_path.exists(), "on-disk clone must be purged");
 
     // The DB row is gone.
-    // Plan-11 step 3: repositories DAO on the adapter.
     let db = state.auth().db.as_ref().unwrap();
     let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
     assert!(row.is_none(), "DB row must be deleted");
@@ -521,7 +516,6 @@ async fn ac9_non_last_user_remove_keeps_disk_and_row() {
 
     // On-disk + DB row preserved.
     assert!(local_path.exists(), "shared clone must NOT be purged");
-    // Plan-11 step 3: repositories DAO on the adapter.
     let db = state.auth().db.as_ref().unwrap();
     let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
     assert!(row.is_some(), "DB row must be preserved");
@@ -542,7 +536,7 @@ async fn delete_unknown_repository_returns_404_for_non_purge() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-8 — admin force_purge.
+// Admin force_purge.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -567,7 +561,6 @@ async fn ac8_admin_force_purge_drops_row_for_everyone() {
 
     // Filesystem + DB row + every association is gone.
     assert!(!local_path.exists());
-    // Plan-11 step 3: repositories DAO on the adapter.
     let db = state.auth().db.as_ref().unwrap();
     let row = maestro_core::db::repositories::get(db.adapter(), &r1).await.unwrap();
     assert!(row.is_none());
@@ -592,7 +585,7 @@ async fn ac8_non_admin_force_purge_returns_403() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-11 — user delete cascades to user_repositories (DB-level).
+// User delete cascades to user_repositories (DB-level).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -632,11 +625,11 @@ async fn ac11_user_delete_cascades_to_associations() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-16 — active workflow blocks delete.
+// Active workflow blocks delete.
 // ---------------------------------------------------------------------------
 
 /// Fetch the user_id of an existing username, directly from the DB. Used by
-/// the AC-16 tests to seed workflow snapshots with realistic user_ids.
+/// the active-workflow tests to seed workflow snapshots with realistic user_ids.
 async fn user_id_for(state: &AppState, username: &str) -> String {
     let db = state.auth().db.as_ref().expect("db required").clone();
     db.adapter()
@@ -650,7 +643,7 @@ async fn user_id_for(state: &AppState, username: &str) -> String {
         .expect("id text")
 }
 
-/// AC-16a: the caller's OWN active workflow on a repo blocks the caller's
+/// The caller's OWN active workflow on a repo blocks the caller's
 /// delete of that repo (the workflow's worktree would orphan).
 #[tokio::test]
 async fn ac16_callers_active_workflow_blocks_delete() {
@@ -747,7 +740,7 @@ async fn ac16_callers_active_workflow_blocks_delete() {
     }
 }
 
-/// AC-16b: ANOTHER user's active workflow on a repo MUST NOT block the
+/// ANOTHER user's active workflow on a repo MUST NOT block the
 /// caller's delete. The caller is just dropping their own association; the
 /// other user keeps theirs and their worktree stays valid.
 ///
@@ -846,7 +839,7 @@ async fn ac16_other_users_active_workflow_does_not_block_caller_delete() {
 }
 
 // ---------------------------------------------------------------------------
-// URL validation — Step 4.2.
+// URL validation.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -911,10 +904,10 @@ async fn oversize_repo_url_rejected_with_400() {
 
 #[tokio::test]
 async fn ac5_repo_url_already_known_short_circuits_clone_with_200() {
-    // Plan-10 AC-5: when the `repo_url` is already in `repositories`, the
-    // POST handler associates the caller (idempotent) and returns 200 — no
-    // clone runs. We can drive this without a real `git` because the
-    // existing-row branch executes before `do_clone`.
+    // When the `repo_url` is already in `repositories`, the POST handler
+    // associates the caller (idempotent) and returns 200 — no clone runs.
+    // We can drive this without a real `git` because the existing-row
+    // branch executes before `do_clone`.
     let (state, _tmp) = test_state_isolated();
     let cookie = register_admin(&state).await;
 
@@ -932,7 +925,7 @@ async fn ac5_repo_url_already_known_short_circuits_clone_with_200() {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrency — AC-15 (lock test via state.engine().clone_in_progress).
+// Concurrency — lock test via state.engine().clone_in_progress.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

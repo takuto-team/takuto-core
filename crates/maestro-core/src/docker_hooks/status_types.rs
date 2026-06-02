@@ -11,7 +11,7 @@ pub struct PreflightResult {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 0 — Structured SystemStatus (boot soft-fail)
+// Structured SystemStatus (boot soft-fail)
 // ---------------------------------------------------------------------------
 
 /// Snapshot of the deployment's boot-time auth + integration state.
@@ -43,7 +43,7 @@ pub struct SystemStatus {
 pub struct GitHubStatus {
     /// `"app"` when a GitHub App is configured; `"pat_required"` when the host
     /// has a personal `gh` auth that workflows can fall back to; `"missing"`
-    /// otherwise. Phase 2 will add the per-user PAT layer (FR-4.2).
+    /// otherwise. The per-user PAT layer (FR-4.2) supplements this.
     pub mode: String,
     pub app_configured: bool,
     pub app_id: Option<u64>,
@@ -54,7 +54,7 @@ pub struct GitHubStatus {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProviderStatus {
     /// `"claude" | "cursor" | "codex" | "opencode" | "none"`. All four
-    /// non-none values have runtime adapters as of Phase 4.
+    /// non-none values have runtime adapters.
     pub selected: String,
     /// `true` when a deployment-wide env-var credential is present
     /// (`CLAUDE_CODE_OAUTH_TOKEN` / `CURSOR_API_KEY`).
@@ -111,7 +111,7 @@ impl StructuredWarning {
     }
 
     /// Public `info`-severity constructor used by other crates (currently
-    /// `maestro-web`'s `config_agent` handler for the task #38
+    /// `maestro-web`'s `config_agent` handler for the
     /// `config_file_bind_mounted` diagnostic — a non-critical heads-up
     /// that the deployment is on the in-place write fallback). Kept
     /// public so the dashboard refresh path can push without going

@@ -3,9 +3,9 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for AC-3 — admin gates on shared-state endpoints.
+// Integration tests for admin gates on shared-state endpoints.
 //
-// For every route listed in `tmp/plan-01-acceptance.md` AC-3:
+// For every admin-gated route:
 //   - PUT  /api/config
 //   - POST /api/config/reload
 //   - POST /api/polling/pause
@@ -19,7 +19,7 @@
 //      than 403 — the handler is reached). Concretely most routes return
 //      200/202/204 on a happy path; a few return 4xx for unrelated reasons
 //      (missing config file, invalid body, missing workspace). What matters
-//      for AC-3 is only that the admin gate did not block the request.
+//      is only that the admin gate did not block the request.
 //
 // We also confirm the read-side endpoints (`GET /api/config`,
 // `GET /api/polling`) stay open to any authenticated user.
@@ -126,10 +126,9 @@ const ADMIN_GATED_ROUTES: &[Route] = &[
         path: "/api/polling/resume",
         body: None,
     },
-    // Plan-10: `/api/workspaces/switch` and `/api/repos/clone` are
-    // hard-deleted (decision #3). The cloning + add-repo flow is now the
-    // open-to-all `POST /api/repositories`; the legacy admin gates here are
-    // no longer applicable.
+    // `/api/workspaces/switch` and `/api/repos/clone` are hard-deleted. The
+    // cloning + add-repo flow is now the open-to-all `POST /api/repositories`;
+    // the legacy admin gates here are no longer applicable.
 ];
 
 fn build_request(route: &Route, cookie: &str) -> Request<Body> {

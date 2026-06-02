@@ -8,8 +8,8 @@ import type { TodoTicket, GitHubIssue } from "../../api/types";
 interface Props {
   ticketingSystem: string;
   /**
-   * Plan-10: the repo the caller has currently selected in the header
-   * picker. For GitHub mode, the picker fetches issues for THIS repo
+   * The repo the caller has currently selected in the header picker. For
+   * GitHub mode, the picker fetches issues for THIS repo
    * (`/api/github/issues?repository=<name>`). When `null` ("All
    * repositories" is selected), the picker shows a CTA asking the user to
    * pick a specific repo first — there's no per-repo aggregation in v1.

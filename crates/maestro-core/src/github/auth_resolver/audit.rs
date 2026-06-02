@@ -34,8 +34,8 @@ pub(super) fn should_audit_first_use(last_used: Option<&str>) -> bool {
 /// PAT use, and bump `last_validated_at` (which the resolver co-opts as the
 /// debounce flag).
 ///
-/// Plan-11 step 3 cluster B: both DAOs migrated to the agnostic adapter.
-/// Each call opens its own short transaction under the hood (sqlx-pool
+/// Both DAOs use the agnostic adapter. Each call opens its own short
+/// transaction under the hood (sqlx-pool
 /// connections serialize via SQLite's single-writer lock anyway), so the
 /// two writes are no longer literally co-committed in one transaction —
 /// audit emit is best-effort observability and a partial-success window

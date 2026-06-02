@@ -161,7 +161,7 @@ impl JiraPoller {
             );
 
             // Skip when no owner could be resolved at startup — creating an orphan
-            // workflow would hide it from every user's dashboard (per AC-4).
+            // workflow would hide it from every user's dashboard.
             let owner_id = match &self.resolved_owner_id {
                 Some(id) => id.clone(),
                 None => {
@@ -182,8 +182,8 @@ impl JiraPoller {
                     None,
                     None,
                     Some(owner_id),
-                    // Plan-10: auto-polling disabled; left unset until plan-11
-                    // wires per-repo polling.
+                    // Auto-polling disabled; left unset until per-repo polling
+                    // is wired in.
                     None,
                 )
                 .await

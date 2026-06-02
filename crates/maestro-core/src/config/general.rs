@@ -81,18 +81,18 @@ pub struct GeneralConfig {
     /// migration is requested.
     #[serde(default)]
     pub migrate_orphan_workflows: bool,
-    /// Plan-10: when `true` (default), startup reconciliation back-fills
+    /// When `true` (default), startup reconciliation back-fills
     /// `user_repositories` rows from restored snapshot workflows — every
     /// workflow whose `user_id` is set and whose `workspace_name` matches a
     /// registered repository's name gets a `(user_id, repository_id)`
-    /// association created so the dashboard list filter (Step 6) shows the
-    /// workflow to its owner. Set to `false` if the operator wants
-    /// pre-existing workflows to STAY hidden on their owner's dashboard until
-    /// the owner explicitly adds the repository.
+    /// association created so the dashboard list filter shows the workflow
+    /// to its owner. Set to `false` if the operator wants pre-existing
+    /// workflows to STAY hidden on their owner's dashboard until the owner
+    /// explicitly adds the repository.
     #[serde(default = "default_migrate_orphan_repo_associations")]
     pub migrate_orphan_repo_associations: bool,
-    /// Phase 2a (04_architecture.md §3.2): controls whether the server will
-    /// auto-generate `${data_dir}/secret.key` on first boot when neither
+    /// Controls whether the server will auto-generate
+    /// `${data_dir}/secret.key` on first boot when neither
     /// `MAESTRO_SECRET_KEY` nor an existing keyfile is present. Default
     /// **`true`** so single-tenant + fresh installs Just Work. Set to `false`
     /// in hardened environments where the operator wants to provision the
@@ -100,11 +100,10 @@ pub struct GeneralConfig {
     /// keyfile or env var is provided.
     #[serde(default = "default_allow_auto_generate_secret_key")]
     pub allow_auto_generate_secret_key: bool,
-    /// Plan-07 slice 19: how many days of `work_item_log_lines`
-    /// rows to keep before the retention task deletes them. `0`
-    /// disables retention (keep forever). Default `7` days, which
-    /// is enough to cover a long weekend of investigation without
-    /// growing the DB indefinitely.
+    /// How many days of `work_item_log_lines` rows to keep before the
+    /// retention task deletes them. `0` disables retention (keep forever).
+    /// Default `7` days, which is enough to cover a long weekend of
+    /// investigation without growing the DB indefinitely.
     #[serde(default = "default_work_item_log_retention_days")]
     pub work_item_log_retention_days: u32,
 }
@@ -176,7 +175,7 @@ impl Default for GeneralConfig {
     }
 }
 
-/// Task #47: tool-provisioning block. List of shell commands that run as
+/// Tool-provisioning block. List of shell commands that run as
 /// **root** in the maestro container at startup (before `setpriv` to the
 /// `maestro` user) to populate the shared `maestro-tools` Docker volume
 /// at `/opt/maestro-tools/bin`. The volume is bind-mounted **read-only**

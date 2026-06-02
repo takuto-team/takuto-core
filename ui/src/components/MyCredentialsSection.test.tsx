@@ -2,10 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Phase 2 regression guards.
- *
- * Two specific behaviors are non-negotiable per the architecture amendments
- * and the team-lead's dispatch:
+ * Regression guards for two non-negotiable behaviors:
  *
  *   A1 — The Cursor card MUST NOT mention ttyd / browser flows. Cursor is
  *        **API-key only** in v1 (per 04_architecture.md amendment A1).

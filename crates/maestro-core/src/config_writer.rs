@@ -14,7 +14,7 @@
 //! 5. `fs::rename` the temp file over the target (atomic on POSIX).
 //! 6. Release the lock.
 //!
-//! Write protocol (fallback — in-place write, task #38):
+//! Write protocol (fallback — in-place write):
 //! On `EBUSY` from step 5 (Docker single-file bind mounts hold the inode
 //! busy → POSIX `rename(2)` refuses to clobber it), the writer falls back
 //! to:
@@ -55,8 +55,8 @@ pub struct ConfigWriter {
     /// Epoch-millis timestamp of the last API-initiated write. The config
     /// watcher checks this to skip reload events triggered by its own writes.
     last_write_epoch_ms: Arc<AtomicU64>,
-    /// Task #38: latched `true` the first time `write_config` falls back to
-    /// the in-place path because `rename(2)` returned `EBUSY` (the
+    /// Latched `true` the first time `write_config` falls back to the
+    /// in-place path because `rename(2)` returned `EBUSY` (the
     /// bind-mounted-single-file case). Read by the dashboard refresh path
     /// to surface an info-level `config_file_bind_mounted` warning so
     /// admins know they're on the fallback. Never reset — the diagnosis
@@ -95,11 +95,11 @@ impl ConfigWriter {
         &self.last_write_epoch_ms
     }
 
-    /// Task #38: `true` once `write_config` has had to fall back to the
-    /// in-place write path (i.e. `config.toml` is bind-mounted as a single
-    /// file and atomic rename can't clobber it). The dashboard refresh
-    /// path checks this and emits an info-level `config_file_bind_mounted`
-    /// warning. The flag latches `true` for the process lifetime.
+    /// `true` once `write_config` has had to fall back to the in-place
+    /// write path (i.e. `config.toml` is bind-mounted as a single file and
+    /// atomic rename can't clobber it). The dashboard refresh path checks
+    /// this and emits an info-level `config_file_bind_mounted` warning.
+    /// The flag latches `true` for the process lifetime.
     pub fn used_inplace_fallback(&self) -> &Arc<AtomicBool> {
         &self.used_inplace_fallback
     }
@@ -207,7 +207,7 @@ impl ConfigWriter {
         Config::load(&self.config_path)
     }
 
-    /// Task #38 in-place fallback: truncate and rewrite `target` in place.
+    /// In-place fallback: truncate and rewrite `target` in place.
     /// Before rewriting, copy the existing content to `target.bak` so a
     /// power loss between `truncate` and `write_all` doesn't lose the
     /// previous valid config. The backup write is **best-effort** — when
@@ -402,7 +402,7 @@ step_timeout_secs = 600
         );
     }
 
-    // ─── Task #38: in-place fallback on EBUSY ───────────────────────────
+    // ─── In-place fallback on EBUSY ─────────────────────────────────────
 
     /// When `try_rename` returns synthetic EBUSY (forced via the test
     /// knob), `write_config` must take the in-place path: new contents

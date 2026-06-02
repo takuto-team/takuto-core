@@ -18,13 +18,12 @@
 //! over time without forced resets. Rehash failures are logged but never break
 //! the login (a successful verify always returns `Ok(true)`).
 //!
-//! ### Plan-11 step 3 cluster A (this commit)
+//! ### Adapter contract
 //!
-//! Migrated alongside `users.rs` + `migration.rs`. Reads take `&DbAdapter`;
-//! writes take `&mut DbTransaction<'_>` so the recover-flow (verify +
-//! consume + change_password + delete_user_sessions) commits atomically.
-//! Pure-crypto helpers (`hash_password`, `verify_password`, etc.) stay
-//! unchanged — they don't touch the DB.
+//! Reads take `&DbAdapter`; writes take `&mut DbTransaction<'_>` so the
+//! recover-flow (verify + consume + change_password + delete_user_sessions)
+//! commits atomically. Pure-crypto helpers (`hash_password`,
+//! `verify_password`, etc.) don't touch the DB.
 
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};

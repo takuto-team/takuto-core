@@ -1,6 +1,5 @@
--- Plan-11 step 2 — hand-translated port of MIGRATION_V2 (plan-02 auth
--- hardening: per-user login attempts + sliding-window / absolute-TTL
--- session columns).
+-- Auth hardening: per-user login attempts + sliding-window /
+-- absolute-TTL session columns.
 --
 -- Adds the `login_attempts` audit table and two new columns on the
 -- existing `sessions` row.

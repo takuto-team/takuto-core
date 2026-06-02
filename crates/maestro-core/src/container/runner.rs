@@ -33,11 +33,10 @@ pub struct ContainerRunner {
     /// When `true`, replace `/workspace:/workspace` with targeted mounts
     /// for the worktree, `.git`, and `.maestro` — see `super::volumes`.
     isolate_workspace: bool,
-    /// Phase 2b.3: optional per-workflow secrets bundle. When `Some`,
+    /// Optional per-workflow secrets bundle. When `Some`,
     /// `super::docker_args::base_docker_args` bind-mounts the bundle's
     /// tmpfs at `/run/maestro-secrets:ro` and `super::wrap_command`
     /// sources it. When `None`, ambient `PASSTHROUGH_ENV` carries tokens.
-    /// See `04_architecture.md §6`.
     secrets_bundle: Option<Arc<crate::auth::WorkerSecretsBundle>>,
 }
 
@@ -61,19 +60,19 @@ impl ContainerRunner {
         self
     }
 
-    /// Phase 2b.3: attach a per-workflow secrets bundle. The runner
-    /// bind-mounts the bundle's tmpfs at `/run/maestro-secrets:ro`,
-    /// sets `MAESTRO_AUTH_BUNDLE=1`, and exports the bundle's non-secret
-    /// env vars. Token bytes are NEVER passed via `-e`. See
-    /// `04_architecture.md §6` and `super::secrets_bundle`.
+    /// Attach a per-workflow secrets bundle. The runner bind-mounts the
+    /// bundle's tmpfs at `/run/maestro-secrets:ro`, sets
+    /// `MAESTRO_AUTH_BUNDLE=1`, and exports the bundle's non-secret env
+    /// vars. Token bytes are NEVER passed via `-e`. See
+    /// `super::secrets_bundle`.
     pub fn with_secrets_bundle(mut self, bundle: Arc<crate::auth::WorkerSecretsBundle>) -> Self {
         self.secrets_bundle = Some(bundle);
         self
     }
 
-    /// `true` when this runner has a Phase 2b.3 secrets bundle attached.
-    /// Callers consult this to log "legacy auth path" vs "bundle path"
-    /// without exposing the bundle itself.
+    /// `true` when this runner has a secrets bundle attached. Callers
+    /// consult this to log "legacy auth path" vs "bundle path" without
+    /// exposing the bundle itself.
     pub fn has_secrets_bundle(&self) -> bool {
         self.secrets_bundle.is_some()
     }
@@ -102,7 +101,7 @@ impl ContainerRunner {
         })
     }
 
-    /// Phase 2b.3: bundle's `extra_args` (provider sub-table). `None` when no bundle attached.
+    /// Bundle's `extra_args` (provider sub-table). `None` when no bundle attached.
     pub fn provider_extra_args(&self) -> Option<&[String]> {
         self.secrets_bundle.as_ref().map(|b| b.extra_args.as_slice())
     }

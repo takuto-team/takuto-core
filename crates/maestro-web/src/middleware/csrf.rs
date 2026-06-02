@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! CSRF protection via `Origin` / `Referer` allowlist (plan-02 AC-1).
+//! CSRF protection via `Origin` / `Referer` allowlist.
 //!
 //! Every state-changing request (`POST`/`PUT`/`DELETE`/`PATCH`) on the dashboard
 //! API must carry an `Origin` header that matches the configured CORS allowlist

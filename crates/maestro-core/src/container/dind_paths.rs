@@ -11,21 +11,20 @@
 
 use std::path::{Path, PathBuf};
 
-/// Task #43: env var name for the DinD-side mount prefix of the maestro
-/// `data_dir` volume. Defaults to `/shared-auth/maestro-data` (the
-/// standard `docker-compose.dind.yml` layout). Operators with a custom
-/// compose can override.
+/// Env var name for the DinD-side mount prefix of the maestro `data_dir`
+/// volume. Defaults to `/shared-auth/maestro-data` (the standard
+/// `docker-compose.dind.yml` layout). Operators with a custom compose can
+/// override.
 pub(crate) const DIND_DATA_PREFIX_ENV: &str = "MAESTRO_DIND_DATA_PREFIX";
 
-/// Task #43: maestro-side prefix of the data_dir bind mount. Hard-coded
+/// Maestro-side prefix of the data_dir bind mount. Hard-coded
 /// because `MAESTRO_HOME` / `HOME` is the canonical path baked into
 /// `docker/entrypoint.sh` and the compose volume mapping; if a deployment
 /// changes this they must also update the compose file and rebuild.
 pub(crate) const MAESTRO_DATA_DIR_HOST_PREFIX: &str = "/home/maestro/.maestro";
 
-/// Task #43: translate a maestro-side absolute path to its DinD-side
-/// equivalent. Used for the `WorkerSecretsBundle` bind-mount source —
-/// see the layered diagnosis in task #43.
+/// Translate a maestro-side absolute path to its DinD-side equivalent.
+/// Used for the `WorkerSecretsBundle` bind-mount source.
 ///
 /// When `DOCKER_HOST` is `tcp://...` (DinD mode), the daemon resolves
 /// bind-mount sources against its OWN filesystem, NOT maestro's. The
@@ -69,7 +68,7 @@ pub(crate) fn translate_path_for_dind_inner(
     }
 }
 
-/// Task #43: detect whether the docker daemon is on the OTHER end of a
+/// Detect whether the docker daemon is on the OTHER end of a
 /// network socket (i.e. DinD via `tcp://`) — in which case the daemon
 /// resolves bind-mount sources in its own filesystem, and maestro must
 /// translate paths. Distinct from [`super::is_dind_mode`] (which returns

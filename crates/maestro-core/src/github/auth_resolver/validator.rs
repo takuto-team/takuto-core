@@ -10,16 +10,16 @@
 //!
 //! - [`revalidate_pat_for_workflow`] runs `gh api user` + per-org SSO probe
 //!   and writes a `credential_audit` row on failure.
-//! - [`revalidate_sso`] is the SSO-only check Phase 2b.3 fires at workflow
-//!   start; other validation failures aren't fatal at this layer.
+//! - [`revalidate_sso`] is the SSO-only check fired at workflow start;
+//!   other validation failures aren't fatal at this layer.
 
 use crate::auth::{GhClient, PatValidationError};
 use crate::db::credential_audit::{self, CredentialAuditKind};
 
 use super::{GitAuthError, GitAuthResolver, GitAuthResult};
 
-/// Phase 2b.3.x: re-validate a user's PAT against the live `gh` shim at
-/// workflow restore / resume time. Returns `Ok(())` when:
+/// Re-validate a user's PAT against the live `gh` shim at workflow
+/// restore / resume time. Returns `Ok(())` when:
 /// - the user has no PAT row (App-only / Missing modes — the App side
 ///   handles its own token rotation via the background writer), OR
 /// - the PAT still validates against `gh api user` AND every org in
@@ -49,7 +49,7 @@ pub async fn revalidate_pat_for_workflow(
             PatValidationError::SsoAuthorizationRequired { .. } => "sso_authorization_required",
             PatValidationError::Transport(_) => "gh_transport_error",
         };
-        // Plan-11 step 3 cluster B: credential_audit on the adapter.
+        // credential_audit via the adapter.
         let _ = credential_audit::log(
             resolver.db().adapter(),
             user_id,
@@ -79,9 +79,8 @@ pub async fn revalidate_pat_for_workflow(
     }
 }
 
-/// Phase 2b.3 calls this at workflow start to re-check SSO authorisation
-/// for every org the workflow will touch. Phase 2b.2 only exposes it;
-/// the driver invocation lands later.
+/// Called at workflow start to re-check SSO authorisation for every org
+/// the workflow will touch.
 pub async fn revalidate_sso(
     resolver: &GitAuthResolver,
     user_id: &str,

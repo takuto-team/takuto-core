@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 2b.1 per-user credential endpoints. Source of truth:
+//! Per-user credential endpoints. Source of truth:
 //! tmp/multi-agents/04_architecture.md §3 (storage) + §4 (GitHub PAT).
 //!
 //! Endpoints (all `api_protected` — require a valid session cookie):
@@ -50,13 +50,13 @@ use crate::state::{AuthState, ConfigState};
 /// gzipped blob someone is trying to smuggle past the validator).
 const MAX_API_KEY_LEN: usize = 4096;
 
-/// Task #41: cap for `~/.claude.json` blobs accepted via the `kind=cli_state`
-/// flow. Bumped from 64 KiB (the original #39 cap) to **1 MiB** because real
-/// `.claude.json` files accumulate `tipsHistory`, `cachedGrowthBookFeatures`,
-/// startup-counter state, etc. over time and routinely exceed 64 KiB. The
-/// envelope-encryption layer handles any size (no AEAD ceiling); SQLite's
-/// BLOB column is unlimited. 1 MiB stays a sane upper bound — anything
-/// bigger is almost certainly a paste mistake (file path, dump, …).
+/// Cap for `~/.claude.json` blobs accepted via the `kind=cli_state` flow.
+/// Set to **1 MiB** because real `.claude.json` files accumulate
+/// `tipsHistory`, `cachedGrowthBookFeatures`, startup-counter state, etc.
+/// over time and routinely exceed 64 KiB. The envelope-encryption layer
+/// handles any size (no AEAD ceiling); SQLite's BLOB column is unlimited.
+/// 1 MiB stays a sane upper bound — anything bigger is almost certainly a
+/// paste mistake (file path, dump, …).
 const MAX_CLAUDE_SESSION_JSON_LEN: usize = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -65,12 +65,12 @@ const MAX_CLAUDE_SESSION_JSON_LEN: usize = 1024 * 1024;
 
 /// Returned by `GET /api/users/me/credentials`.
 ///
-/// Task #39: with Claude `kind=cli_state` shipping, one user can have BOTH
-/// an `api_key` row AND a `cli_state` row for the same provider. The
-/// response now carries a [`ProviderCredentialBundle`] (api_key +
-/// cli_state slots) instead of a single status — back-compat is preserved
-/// because old clients reading `provider.kind` / `provider.active` can
-/// still read those nested under `provider.api_key.*`.
+/// With Claude `kind=cli_state` shipping, one user can have BOTH an
+/// `api_key` row AND a `cli_state` row for the same provider. The response
+/// carries a [`ProviderCredentialBundle`] (api_key + cli_state slots)
+/// instead of a single status — back-compat is preserved because old
+/// clients reading `provider.kind` / `provider.active` can still read
+/// those nested under `provider.api_key.*`.
 #[derive(Debug, Serialize)]
 pub struct UserCredentialsStatus {
     /// `None` when the user has no row at all for the active provider.
@@ -80,7 +80,7 @@ pub struct UserCredentialsStatus {
     pub github: Option<GithubCredentialStatus>,
 }
 
-/// Task #39: per-provider credential bundle. One slot per `kind`. UI uses
+/// Per-provider credential bundle. One slot per `kind`. UI uses
 /// `provider.api_key.is_some()` and `provider.cli_state.is_some()` to
 /// render the two-pill state independently.
 #[derive(Debug, Serialize)]
@@ -135,19 +135,19 @@ pub struct ApiKeyBody {
     /// Forbidden when `kind = cli_state`.
     #[serde(default)]
     pub api_key: Option<String>,
-    /// Task #39: Claude `~/.claude.json` blob (full JSON string).
+    /// Claude `~/.claude.json` blob (full JSON string).
     /// Required when `kind = cli_state`. Forbidden otherwise.
     #[serde(default)]
     pub claude_session_json: Option<String>,
     /// Discriminator. `None` defaults to `"api_key"` for back-compat with
-    /// pre-task-#39 clients that only ever wrote bearer keys.
+    /// legacy clients that only ever wrote bearer keys.
     #[serde(default)]
     pub kind: Option<String>,
 }
 
-/// Task #39: `DELETE /api/users/me/credentials/{provider}?kind=cli_state`
-/// query string. `kind = None` (omitted) deletes EVERY row for
-/// `(user, provider)` (back-compat).
+/// `DELETE /api/users/me/credentials/{provider}?kind=cli_state` query
+/// string. `kind = None` (omitted) deletes EVERY row for `(user,
+/// provider)` (back-compat).
 #[derive(Debug, Deserialize, Default)]
 pub struct DeleteProviderCredentialQuery {
     #[serde(default)]
@@ -258,9 +258,6 @@ pub async fn get_my_credentials(
         let cfg = cfg_state.config.read().await;
         cfg.agent.provider.as_str().to_string()
     };
-    // Plan-11 step 3 cluster B: provider_credentials + github_credentials
-    // migrated to the agnostic adapter. Read paths drop spawn_blocking
-    // entirely; the route is pure async.
     let adapter = db.adapter();
     let user_id = &auth.user_id;
     let to_status = |row: provider_credentials::ProviderCredentialRow| ProviderCredentialStatus {
@@ -322,8 +319,8 @@ pub async fn get_my_credentials(
 
 /// `POST /api/users/me/credentials/{provider}` — paste/rotate a credential.
 ///
-/// Task #39: body grows two new fields. `kind` defaults to `"api_key"`
-/// when absent (back-compat). Validation matrix:
+/// Body carries `api_key`, `claude_session_json`, and `kind`. `kind`
+/// defaults to `"api_key"` when absent (back-compat). Validation matrix:
 ///
 ///   - `kind = "api_key"` → `api_key` field required, `claude_session_json`
 ///     forbidden. Any provider accepts this.
@@ -395,10 +392,9 @@ pub async fn post_provider_credential(
     })?;
     drop(master);
 
-    // Plan-11 step 3 cluster B: provider_credentials + credential_audit
-    // on the adapter. The atomicity invariant ("credential write + audit
-    // row commit together") is preserved by opening a single DbTransaction,
-    // doing both writes via the _in_tx variants, then commit.
+    // The atomicity invariant ("credential write + audit row commit
+    // together") is preserved by opening a single DbTransaction, doing
+    // both writes via the _in_tx variants, then commit.
     let metadata = serde_json::json!({ "kind": kind.as_str() }).to_string();
     let adapter = db.adapter();
     let outcome = {
@@ -419,7 +415,7 @@ pub async fn post_provider_credential(
             tracing::warn!(error = %e, "provider_credentials::upsert failed");
             err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
         })?;
-        // Task #39: the kind ("api_key" / "cli_state") is recorded in the
+        // The kind ("api_key" / "cli_state") is recorded in the
         // user_provider_credentials.metadata_json column above, NOT in
         // credential_audit (which has no metadata slot).
         credential_audit::log_in_tx(
@@ -457,7 +453,7 @@ pub async fn post_provider_credential(
     ))
 }
 
-/// Task #39: validate a Claude session-state JSON blob.
+/// Validate a Claude session-state JSON blob.
 ///
 /// Requirements (per Anthropic's `~/.claude.json` schema):
 ///   - Must parse as JSON.
@@ -476,9 +472,9 @@ fn validate_claude_session_blob(
         return Err(err(StatusCode::BAD_REQUEST, "claude_session_json_empty"));
     }
     if blob.len() > MAX_CLAUDE_SESSION_JSON_LEN {
-        // Task #41: human-readable hint pointing at the most common cause
-        // (pasted a file path or a stale dump). Stable code preserved for
-        // the UI's error-toast switch.
+        // Human-readable hint pointing at the most common cause (pasted
+        // a file path or a stale dump). Stable code preserved for the
+        // UI's error-toast switch.
         return Err(err_with(
             StatusCode::BAD_REQUEST,
             "claude_session_json_too_long",
@@ -511,10 +507,10 @@ fn validate_claude_session_blob(
 
 /// `DELETE /api/users/me/credentials/{provider}` — hard delete + audit row.
 ///
-/// Task #39: when `?kind=api_key` or `?kind=cli_state` is supplied, only
-/// that kind is wiped; the other-kind row stays intact. When `kind` is
-/// absent (legacy / "Wipe everything" UI), every row for `(user, provider)`
-/// is deleted (back-compat).
+/// When `?kind=api_key` or `?kind=cli_state` is supplied, only that kind
+/// is wiped; the other-kind row stays intact. When `kind` is absent
+/// (legacy / "Wipe everything" UI), every row for `(user, provider)` is
+/// deleted (back-compat).
 pub async fn delete_provider_credential(
     State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
@@ -534,7 +530,7 @@ pub async fn delete_provider_credential(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
         .clone();
 
-    // Plan-11 step 3 cluster B: atomic delete + audit via DbTransaction.
+    // Atomic delete + audit via DbTransaction.
     let adapter = db.adapter();
     let mut tx = adapter.begin().await.map_err(|e| {
         tracing::warn!(error = %e, "begin tx failed");
@@ -604,8 +600,8 @@ pub async fn post_github_pat(
         .expect("require_master_key gated db.is_some()")
         .clone();
 
-    // Phase 2b.1 does not yet parse remote URLs — pass an empty org list so
-    // the SSO check is a no-op until Phase 2b.2 wires it to [git].repo_path.
+    // No remote URL parsing yet — pass an empty org list so the SSO check
+    // is a no-op until a future iteration wires it to [git].repo_path.
     let orgs: Vec<String> = Vec::new();
 
     let validated = match validate_pat(auth_state.gh_client.as_ref(), &body.pat, &orgs).await {
@@ -613,8 +609,7 @@ pub async fn post_github_pat(
         Err(e) => {
             let code = e.code();
             // Audit-log the validation failure (best-effort — the bad
-            // PAT never reaches the seal layer). Plan-11 step 3 cluster
-            // B: on the adapter, fire-and-forget single statement.
+            // PAT never reaches the seal layer).
             let _ = credential_audit::log(
                 db.adapter(),
                 &auth.user_id,
@@ -662,7 +657,7 @@ pub async fn post_github_pat(
     let user_id = auth.user_id.clone();
     let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    // Plan-11 step 3 cluster B: atomic upsert + touch + audit via DbTransaction.
+    // Atomic upsert + touch + audit via DbTransaction.
     let adapter = db.adapter();
     // Pre-check (outside the tx) whether a row already exists so we
     // emit "rotated" vs "created" in the audit. Single read; the tx
@@ -741,7 +736,7 @@ pub async fn delete_github_pat(
         .clone();
     let user_id = auth.user_id.clone();
 
-    // Plan-11 step 3 cluster B: atomic delete + audit via DbTransaction.
+    // Atomic delete + audit via DbTransaction.
     let adapter = db.adapter();
     let mut tx = adapter.begin().await.map_err(|e| {
         tracing::warn!(error = %e, "begin tx failed");
@@ -792,7 +787,7 @@ pub async fn patch_github_attribution(
     let user_id = auth.user_id.clone();
     let value = body.sign_commits;
 
-    // Plan-11 step 3 cluster B: atomic set_sign_commits + audit via DbTransaction.
+    // Atomic set_sign_commits + audit via DbTransaction.
     let adapter = db.adapter();
     let mut tx = adapter.begin().await.map_err(|e| {
         tracing::warn!(error = %e, "begin tx failed");
@@ -848,7 +843,6 @@ pub async fn get_admin_github_status(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
         .clone();
 
-    // Plan-11 step 3 cluster B: github_credentials on the adapter.
     let row = github_credentials::find(db.adapter(), &target_user_id)
         .await
         .ok()

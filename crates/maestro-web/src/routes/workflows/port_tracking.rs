@@ -18,12 +18,11 @@ use crate::state::{DynamicForwardsMap, DynamicPortForward};
 /// map in sync for the given ticket.  Runs until `cancel` fires or the channel
 /// closes.
 ///
-/// `work_item_id` + `db` are Plan-07 step 4 slice 7 shadow-write
-/// inputs. When both are `Some`, every `port_forwarded` event also
-/// upserts a row into `work_item_port_mappings`; cleanup is handled
-/// by the bulk-delete in `close_editor`, so the unforward path
-/// stays unchanged. `None` on either preserves the pre-shadow
-/// behaviour (used by unit tests).
+/// `work_item_id` + `db` are shadow-write inputs. When both are
+/// `Some`, every `port_forwarded` event also upserts a row into
+/// `work_item_port_mappings`; cleanup is handled by the bulk-delete in
+/// `close_editor`, so the unforward path stays unchanged. `None` on
+/// either preserves the pre-shadow behaviour (used by unit tests).
 #[allow(clippy::too_many_arguments)]
 pub async fn track_port_forwards(
     ticket_key: String,
@@ -54,10 +53,10 @@ pub async fn track_port_forwards(
                                     user_id: user_id.clone(),
                                 }).await;
                                 let proxy_url = container::build_session_dynamic_port_url(&path_token);
-                                // Plan-07 step 4 slice 7: shadow-write the
-                                // scanner-detected Dynamic port row. Cleanup
-                                // is handled in bulk by `close_editor`, so
-                                // the unforward path below stays unchanged.
+                                // Shadow-write the scanner-detected Dynamic
+                                // port row. Cleanup is handled in bulk by
+                                // `close_editor`, so the unforward path
+                                // below stays unchanged.
                                 if let Some(ref wi) = work_item_id {
                                     maestro_core::db::work_items::shadow_upsert_port_mapping(
                                         db.as_ref(),
@@ -103,11 +102,10 @@ pub async fn track_port_forwards(
 /// Track port events for a single run command. Registers the reserved proxy
 /// token when a port is detected and cleans up on stop/unforward events.
 ///
-/// `work_item_id` + `db` are Plan-07 step 4 slice 8 shadow-write
-/// inputs. Same contract as [`track_port_forwards`]: every
-/// `run_command_port_forwarded` event upserts a `RunCommand` row
-/// (with `run_command_index = cmd_index`) into
-/// `work_item_port_mappings`; cleanup is bulk via `close_editor`,
+/// `work_item_id` + `db` are shadow-write inputs. Same contract as
+/// [`track_port_forwards`]: every `run_command_port_forwarded` event
+/// upserts a `RunCommand` row (with `run_command_index = cmd_index`)
+/// into `work_item_port_mappings`; cleanup is bulk via `close_editor`,
 /// so unforward / stopped paths stay unchanged.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_command_port_tracker(
@@ -151,11 +149,11 @@ pub(super) async fn run_command_port_tracker(
                                             user_id: user_id.clone(),
                                         },
                                     ).await;
-                                    // Plan-07 step 4 slice 8: shadow-write the
-                                    // scanner-detected run-command port row.
-                                    // run_command_index distinguishes this row
-                                    // from editor / dynamic-app rows under
-                                    // the same work_item.
+                                    // Shadow-write the scanner-detected
+                                    // run-command port row. run_command_index
+                                    // distinguishes this row from editor /
+                                    // dynamic-app rows under the same
+                                    // work_item.
                                     if let Some(ref wi) = work_item_id {
                                         maestro_core::db::work_items::shadow_upsert_port_mapping(
                                             db.as_ref(),
@@ -463,12 +461,11 @@ mod tests {
             .expect("task should not panic");
     }
 
-    /// Plan-07 step 4 slice 7 — when `track_port_forwards` is wired
-    /// with `Some(work_item_id)` + `Some(db)`, every detected port
-    /// also lands as a `Dynamic` row in `work_item_port_mappings`.
-    /// Unforward events DO NOT delete the row — cleanup is bulk via
-    /// `close_editor` (slice 6) so we deliberately do not test that
-    /// path here.
+    /// When `track_port_forwards` is wired with `Some(work_item_id)` +
+    /// `Some(db)`, every detected port also lands as a `Dynamic` row in
+    /// `work_item_port_mappings`. Unforward events DO NOT delete the
+    /// row — cleanup is bulk via `close_editor` so we deliberately do
+    /// not test that path here.
     #[tokio::test]
     async fn track_port_forwards_shadow_writes_dynamic_port_row() {
         use maestro_core::db::adapter::DbValue;
@@ -562,12 +559,12 @@ mod tests {
         let _ = handle.await;
     }
 
-    /// Plan-07 step 4 slice 8 — when `run_command_port_tracker` is
-    /// wired with `Some(work_item_id)` + `Some(db)`, every
-    /// `run_command_port_forwarded` event lands as a `RunCommand`
-    /// row with `run_command_index` set to this tracker's cmd_index.
-    /// Unforward / stopped events DO NOT delete the row — cleanup
-    /// is bulk via `close_editor` (slice 6).
+    /// When `run_command_port_tracker` is wired with
+    /// `Some(work_item_id)` + `Some(db)`, every
+    /// `run_command_port_forwarded` event lands as a `RunCommand` row
+    /// with `run_command_index` set to this tracker's cmd_index.
+    /// Unforward / stopped events DO NOT delete the row — cleanup is
+    /// bulk via `close_editor`.
     #[tokio::test]
     async fn run_command_port_tracker_shadow_writes_runcommand_row() {
         use maestro_core::db::adapter::DbValue;

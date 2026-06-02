@@ -1,6 +1,5 @@
--- Plan-11 step 2 — hand-translated port of MIGRATION_V1 from
--- crates/maestro-core/src/db/schema.rs. After plan-11 cluster Schema,
--- this is the canonical source of truth for the V1 shape.
+-- Initial schema: users, credentials, recovery. This file is the
+-- canonical source of truth for the V1 shape.
 --
 -- Portability rules applied:
 --   • TEXT PRIMARY KEY → VARCHAR(64) PRIMARY KEY (MySQL rejects TEXT PK)

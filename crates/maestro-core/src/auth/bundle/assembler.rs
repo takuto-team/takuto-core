@@ -53,13 +53,12 @@ pub async fn build(
         .key
         .clone();
 
-    // Task #43: create the host-side secrets dir under
-    // `${data_dir}/runtime/secrets/` (per arch doc §3.3) rather than the
-    // process `/tmp`. The maestro container shares `${data_dir}` with the
-    // DinD sidecar via a docker volume, so DinD can resolve the bind-mount
-    // source. `/tmp` is NOT shared — that's the bug task #43 closes.
-    // When `data_dir` is None (in-memory test DB), fall back to the
-    // process tempdir so unit tests still work.
+    // Create the host-side secrets dir under `${data_dir}/runtime/secrets/`
+    // (per arch doc §3.3) rather than the process `/tmp`. The maestro
+    // container shares `${data_dir}` with the DinD sidecar via a docker
+    // volume, so DinD can resolve the bind-mount source. `/tmp` is NOT
+    // shared. When `data_dir` is None (in-memory test DB), fall back to
+    // the process tempdir so unit tests still work.
     let dir = secrets_dir_for_db(db)?;
 
     // ── Provider secret (api_key) ────────────────────────────────────────
@@ -82,7 +81,7 @@ pub async fn build(
         .await?
     };
 
-    // ── Task #39: Claude `cli_state` row (optional, claude-only) ─────────
+    // ── Claude `cli_state` row (optional, claude-only) ──────────────────
     // Independent of `provider_secret_file`. When present, the worker
     // `cp`s the unsealed JSON onto `$HOME/.claude.json` so Claude Code
     // sees a populated `oauthAccount` block and accepts the session.
@@ -249,8 +248,8 @@ pub async fn build(
     })
 }
 
-/// Phase 2b.3.x — build a [`WorkerSecretsBundle`] from the user's **current**
-/// credentials (no workflow / no pin involved). Used by the ephemeral
+/// Build a [`WorkerSecretsBundle`] from the user's **current** credentials
+/// (no workflow / no pin involved). Used by the ephemeral
 /// runners that aren't part of a workflow auth-pin chain:
 ///
 /// - `improve_ticket` / `prompt_ticket` (one-shot Improve / Ask AI sessions)
@@ -288,8 +287,8 @@ pub async fn pin_for_workflow(
 ) -> Result<AuthPin> {
     let provider = config.agent.provider.as_str().to_string();
 
-    // Plan-11 step 3 cluster B: provider_credentials + github_credentials
-    // migrated to the agnostic adapter; no rusqlite MutexGuard.
+    // provider_credentials + github_credentials use the agnostic adapter;
+    // no rusqlite MutexGuard.
     let adapter = db.adapter();
     let (provider_credential_row_id, github_credential_row_id, github_mode) = {
         let p = provider_credentials::find_active(adapter, workflow_user_id, &provider)

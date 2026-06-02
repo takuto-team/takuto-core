@@ -24,9 +24,8 @@ pub async fn ws_handler(
     if let Some(raw_cookie) = session_cookie_from_headers(&headers)
         && raw_cookie.starts_with("db-")
     {
-        // Plan-11 step 3 cluster Sessions: sessions on the adapter.
-        // Validate the session AND capture the owning user_id so the WS event
-        // loop can filter per-user (AC-1: cross-user event isolation).
+        // Validate the session AND capture the owning user_id so the WS
+        // event loop can filter per-user (cross-user event isolation).
         let viewer_user_id = validate_db_session(db.adapter(), raw_cookie).await;
 
         let Some(viewer_user_id) = viewer_user_id else {
@@ -44,8 +43,7 @@ pub async fn ws_handler(
 ///
 /// Exposed for the integration test in `tests/ws_isolation.rs` so the filter
 /// can be exercised against the live engine event bus without standing up a
-/// real WebSocket upgrade. See `tmp/plan-01-acceptance.md` AC-1 for the
-/// behavioural contract.
+/// real WebSocket upgrade.
 pub fn should_deliver_event(evt: &WorkflowEvent, viewer_user_id: &str) -> bool {
     match evt.user_id.as_deref() {
         None => true,
@@ -67,9 +65,9 @@ async fn handle_socket(mut socket: WebSocket, engine: EngineState, viewer_user_i
             event = rx.recv() => {
                 match event {
                     Ok(evt) => {
-                        // AC-1: per-user isolation — drop events that target a
-                        // different user. `user_id == None` is a broadcast and
-                        // is delivered to every subscriber.
+                        // Per-user isolation — drop events that target a
+                        // different user. `user_id == None` is a broadcast
+                        // and is delivered to every subscriber.
                         if !should_deliver_event(&evt, &viewer_user_id) {
                             continue;
                         }

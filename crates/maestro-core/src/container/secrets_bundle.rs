@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 2b.3 `WorkerSecretsBundle` plumbing for `docker run` argv.
+//! `WorkerSecretsBundle` plumbing for `docker run` argv.
 //!
 //! Holds the helpers that splice the per-workflow bundle's tmpfs mount
 //! and non-secret env vars onto a `docker run` argv, plus the
@@ -11,8 +11,8 @@
 
 use super::dind_paths::translate_path_for_dind;
 
-/// Phase 2b.3.x: which `PASSTHROUGH_ENV` names a [`WorkerSecretsBundle`]
-/// takes over. **Single source of truth** — the env-var suppression
+/// Which `PASSTHROUGH_ENV` names a [`WorkerSecretsBundle`] takes over.
+/// **Single source of truth** — the env-var suppression
 /// loop in `docker_args::base_docker_args` and the `super::runner` /
 /// `super::editor` / `super::run_command` callers all consult
 /// [`passthrough_is_bundled`] which reads this list.
@@ -28,11 +28,10 @@ pub(crate) const SECRET_PASSTHROUGH: &[&str] = &[
     "GH_TOKEN",
 ];
 
-/// Phase 2b.3.x helper: which `PASSTHROUGH_ENV` names a
-/// [`WorkerSecretsBundle`] takes over. Must match
-/// [`super::docker_args::base_docker_args`]'s suppression list so callers
-/// outside `ContainerRunner` (e.g. `start_editor`, `start_run_command`,
-/// improve-ticket) keep the same threat model.
+/// Helper: which `PASSTHROUGH_ENV` names a [`WorkerSecretsBundle`] takes
+/// over. Must match [`super::docker_args::base_docker_args`]'s suppression
+/// list so callers outside `ContainerRunner` (e.g. `start_editor`,
+/// `start_run_command`, improve-ticket) keep the same threat model.
 pub(crate) fn passthrough_is_bundled(key: &str) -> bool {
     SECRET_PASSTHROUGH.contains(&key)
 }
@@ -44,7 +43,7 @@ pub(crate) fn passthrough_is_bundled(key: &str) -> bool {
 /// `$HOME=/home/maestro`, so this is the canonical lookup path.
 pub(crate) const OPENCODE_CONFIG_MOUNTPOINT: &str = "/home/maestro/.config/opencode";
 
-/// Phase 2b.3.x helper: append the bundle's mount (`/run/maestro-secrets:ro`)
+/// Helper: append the bundle's mount (`/run/maestro-secrets:ro`)
 /// and non-secret env vars (`MAESTRO_AUTH_BUNDLE`, base URLs,
 /// `GIT_AUTHOR_*`/`GIT_COMMITTER_*`) onto an in-flight `docker run` argv.
 /// Token bytes are NEVER added; they live in the bind-mounted tmpfs files.
@@ -57,7 +56,7 @@ pub(crate) fn apply_secrets_bundle_to_args(
     args: &mut Vec<String>,
     bundle: &crate::auth::WorkerSecretsBundle,
 ) {
-    // Task #43: translate maestro-side host path → DinD-side path. In
+    // Translate maestro-side host path → DinD-side path. In
     // DinD mode `docker run`'s `-v <src>` is resolved by the DinD daemon
     // in its own filesystem, which has the shared volume at a different
     // prefix. No-op in local-Docker mode.
@@ -87,7 +86,7 @@ pub(crate) fn apply_secrets_bundle_to_args(
 mod tests {
     use super::*;
 
-    /// Phase 2b.3.x: `passthrough_is_bundled` must match the exact set of
+    /// `passthrough_is_bundled` must match the exact set of
     /// env names the worker entrypoint sources from `/run/maestro-secrets`.
     /// If this list drifts from the entrypoint, tokens leak via `docker
     /// run -e` AND get sourced from tmpfs — duplicate exposure surface.

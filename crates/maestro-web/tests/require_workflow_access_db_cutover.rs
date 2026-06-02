@@ -1,10 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 11 — `require_workflow_access` cuts over to a
-//! DB-first read. These tests prove the cutover by intentionally
-//! diverging the DB row from the in-memory HashMap and observing
-//! that the response follows the DB.
+//! `require_workflow_access` is DB-first. These tests prove the path is
+//! consulted by intentionally diverging the DB row from the in-memory
+//! HashMap and observing that the response follows the DB.
 //!
 //! `require_workflow_access` is not exposed publicly, so we exercise
 //! it through `GET /api/work-items/{key}` which calls it as its
@@ -214,9 +213,8 @@ async fn db_row_wins_over_hashmap_on_ownership() {
     );
 }
 
-/// When no DB row exists, the route falls back to the HashMap.
-/// Pre-plan-07 workflows live only in memory until step-6 backfill;
-/// they must remain accessible to their owner during the transition.
+/// When no DB row exists, the route falls back to the HashMap. Legacy
+/// workflows that live only in memory must remain accessible to their owner.
 #[tokio::test]
 async fn hashmap_fallback_used_when_db_row_absent() {
     let state = test_state_with_db();

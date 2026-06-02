@@ -3,7 +3,7 @@
 
 // Copyright (C) 2026 Alexandre Obellianne
 //
-// Integration tests for plan-02 AC-6 — Defence-in-depth response headers.
+// Integration tests for defence-in-depth response headers.
 //
 // Verifies that the `security_headers_middleware` (outermost layer on the
 // top-level router) injects:
@@ -18,13 +18,10 @@
 // X-Frame-Options, and `Referrer-Policy` is overridden to `no-referrer`.
 //
 // The tests deliberately use the public `/api/auth/status` route (no session
-// cookie required) so they don't depend on the login flow being fully wired
-// up by teammate work (Dev B's rate-limit + Dev C's secure-cookie path).
+// cookie required) so they don't depend on the login flow being fully wired.
 // Headers are emitted by the outermost middleware regardless of response
 // status, so a 401 response is just as good as a 200 for assertions about
 // header presence.
-//
-// See `tmp/plan-02-acceptance.md` AC-6 G/W/T 6.1–6.6.
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};

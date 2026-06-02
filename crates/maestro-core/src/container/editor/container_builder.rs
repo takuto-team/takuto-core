@@ -87,11 +87,11 @@ pub async fn start_editor(
     startup_commands: &[String],
     git_editor: &str,
     isolate_workspace: bool,
-    // Phase 2b.3.x: optional per-workflow secrets bundle. When `Some`,
-    // secret PASSTHROUGH names are suppressed and the bundle's tmpfs
-    // directory is bind-mounted at `/run/maestro-secrets:ro`. Token bytes
-    // reach the editor's in-browser terminal via the file path, not
-    // `docker inspect`.
+    // Optional per-workflow secrets bundle. When `Some`, secret
+    // PASSTHROUGH names are suppressed and the bundle's tmpfs directory
+    // is bind-mounted at `/run/maestro-secrets:ro`. Token bytes reach the
+    // editor's in-browser terminal via the file path, not `docker
+    // inspect`.
     secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
 ) -> std::result::Result<EditorInfo, String> {
     let name = editor_container_name(ticket_key);
@@ -138,8 +138,8 @@ pub async fn start_editor(
     let bundle_attached = secrets_bundle.is_some();
     for key in PASSTHROUGH_ENV {
         if bundle_attached && passthrough_is_bundled(key) {
-            // Phase 2b.3.x: the bundle owns this secret; suppress the
-            // ambient host value so `docker inspect` cannot leak it.
+            // The bundle owns this secret; suppress the ambient host
+            // value so `docker inspect` cannot leak it.
             continue;
         }
         if let Ok(val) = std::env::var(key)
@@ -156,8 +156,8 @@ pub async fn start_editor(
         args.push(mount);
     }
 
-    // Phase 2b.3.x: attach the bundle AFTER the standard volumes so the
-    // bundle's `-v` and `-e` flags are colocated.
+    // Attach the bundle AFTER the standard volumes so the bundle's `-v`
+    // and `-e` flags are colocated.
     if let Some(b) = secrets_bundle {
         apply_secrets_bundle_to_args(&mut args, b);
     }

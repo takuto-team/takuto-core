@@ -61,8 +61,8 @@ pub struct UpdateDescriptionBody {
 /// Maximum allowed length for the ticket description in an improve request (100 KB).
 const MAX_IMPROVE_DESCRIPTION_LEN: usize = 100 * 1024;
 
-/// Plan-10: resolve the on-disk `local_path` of the repository associated with
-/// the workflow keyed by `ticket_key`. Falls back to `cfg.git.repo_path` when
+/// Resolve the on-disk `local_path` of the repository associated with the
+/// workflow keyed by `ticket_key`. Falls back to `cfg.git.repo_path` when
 /// the workflow has no `repository_id` (legacy snapshots) or when no DB is
 /// attached (test paths).
 async fn resolve_workflow_repo_path(
@@ -78,7 +78,6 @@ async fn resolve_workflow_repo_path(
             .map(|w| (w.repository_id.clone(), w.workspace_name.clone()))
             .unwrap_or_default()
     };
-    // Plan-11 step 3: repositories DAO on the adapter.
     if let Some(database) = auth_state.db.as_ref() {
         let adapter = database.adapter();
         if let Some(id) = repo_id.as_deref()
@@ -125,12 +124,12 @@ async fn run_description_session(
         let cfg = cfg_state.config.read().await;
         (
             cfg.agent.provider,
-            // Task #44: route only feeds `model` into the Claude branch
-            // (`AiAgentProvider::Claude` → `ClaudeSession::run_prompt`),
-            // so resolve via the sub-table-aware helper. Previously
-            // sourced from the legacy `cfg.agent.model` directly, which
-            // ignored an empty sub-table value and forced a stale
-            // migrated model on every improve/prompt invocation.
+            // Route only feeds `model` into the Claude branch
+            // (`AiAgentProvider::Claude` → `ClaudeSession::run_prompt`), so
+            // resolve via the sub-table-aware helper. Sourcing it from the
+            // legacy `cfg.agent.model` directly would ignore an empty
+            // sub-table value and force a stale migrated model on every
+            // improve/prompt invocation.
             cfg.agent.effective_claude_model().map(str::to_string),
             cfg.agent.cursor_cli.clone(),
             cfg.agent.cursor_model.clone(),
@@ -184,9 +183,9 @@ async fn run_description_session(
         let mut runner =
             ContainerRunner::new(&format!("improve-{ticket_key}"), &worktree, &image);
 
-        // Phase 2b.3.x: attach a per-request `WorkerSecretsBundle` so the
-        // ephemeral worker reads the caller's per-user provider key + GitHub
-        // token from tmpfs files instead of `docker run -e`. Falls back to
+        // Attach a per-request `WorkerSecretsBundle` so the ephemeral worker
+        // reads the caller's per-user provider key + GitHub token from
+        // tmpfs files instead of `docker run -e`. Falls back to
         // the legacy `PASSTHROUGH_ENV` path when:
         //   - master key unavailable (degraded mode), OR
         //   - user has no credential AND active provider's
@@ -352,7 +351,7 @@ pub async fn improve_ticket(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<ImproveTicketBody>,
 ) -> Result<Json<ImproveTicketResponse>, (StatusCode, String)> {
-    // AC-2: only the workflow owner may invoke this. The helper returns
+    // Only the workflow owner may invoke this. The helper returns
     // `NOT_FOUND` for both "missing" and "wrong owner" so existence is not
     // leaked across users.
     require_workflow_access(&engine, &auth_state, &auth, &key)
@@ -446,7 +445,7 @@ pub async fn prompt_ticket(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<PromptTicketBody>,
 ) -> Result<Json<PromptTicketResponse>, (StatusCode, String)> {
-    // AC-2: only the workflow owner may invoke this.
+    // Only the workflow owner may invoke this.
     require_workflow_access(&engine, &auth_state, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
@@ -515,12 +514,12 @@ pub async fn update_ticket_description(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<UpdateDescriptionBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    // AC-2: only the workflow owner may invoke this.
+    // Only the workflow owner may invoke this.
     require_workflow_access(&engine, &auth_state, &auth, &key)
         .await
         .map_err(|s| (s, String::new()))?;
-    // Plan-10: resolve the cwd for `gh` / `acli` from the workflow's
-    // repository_id rather than the global cfg.git.repo_path.
+    // Resolve the cwd for `gh` / `acli` from the workflow's repository_id
+    // rather than the global cfg.git.repo_path.
     let workflow_repo_path = resolve_workflow_repo_path(&engine, &auth_state, &cfg_state, &key).await;
     match cfg_state.ticketing_system {
         TicketingSystem::None => {
@@ -744,7 +743,7 @@ mod tests {
         );
         wf.ticket_description = description.to_string();
         // Tests below pass a matching AuthenticatedUser; tag the workflow with
-        // the same id so `require_workflow_access` passes (AC-2).
+        // the same id so `require_workflow_access` passes.
         wf.user_id = Some("test-user".to_string());
         engine
             .workflows_arc()
@@ -755,7 +754,7 @@ mod tests {
 
     /// Build an `AuthenticatedUser` matching the workflow owner used by
     /// `insert_workflow`. Tests need this because handlers now require the
-    /// `Extension<AuthenticatedUser>` extractor (AC-2 IDOR fix).
+    /// `Extension<AuthenticatedUser>` extractor (IDOR-safe).
     fn test_auth() -> AuthenticatedUser {
         AuthenticatedUser {
             user_id: "test-user".to_string(),
@@ -820,7 +819,7 @@ mod tests {
         assert_eq!(wf.ticket_summary, "New Summary");
     }
 
-    /// Saving a description for a non-existent workflow returns 404 (AC-2 G/W/T 2.5).
+    /// Saving a description for a non-existent workflow returns 404.
     /// The previous behaviour was a silent no-op success; after the IDOR fix the
     /// access guard rejects unknown keys identically to "wrong owner" so existence
     /// is not leaked across users.

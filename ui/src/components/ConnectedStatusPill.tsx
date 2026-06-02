@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Phase 2 status pill — small visual indicator above per-user credential
- * cards. Three states: connected (green), missing (amber), warning (red).
- * Driven by `state`, not the raw booleans, so callers stay readable
+ * Status pill — small visual indicator above per-user credential cards.
+ * Three states: connected (green), missing (amber), warning (red). Driven
+ * by `state`, not the raw booleans, so callers stay readable
  * (`state="missing"` is easier to scan than `connected=false && ...`).
  */
 

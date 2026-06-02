@@ -1,11 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Plan-07 slice 12 — `get_workflow_report` reads `worktree_path` +
-//! `ticket_key` from the work_items row. Tests prove the DB path is
-//! consulted by intentionally diverging the DB row's worktree_path
-//! from the HashMap's: the response must follow the DB row (or the
-//! HashMap when no row exists).
+//! `get_workflow_report` reads `worktree_path` + `ticket_key` from the
+//! work_items row. Tests prove the DB path is consulted by intentionally
+//! diverging the DB row's worktree_path from the HashMap's: the response
+//! must follow the DB row (or the HashMap when no row exists).
 
 use std::io::Write;
 
@@ -180,8 +179,8 @@ async fn report_reads_worktree_from_db_row_not_hashmap() {
 }
 
 /// HashMap fallback: when no DB row exists, the route still reads
-/// from the in-memory worktree path. Pre-plan-07 workflows must
-/// remain functional during the transition.
+/// from the in-memory worktree path. Legacy workflows without a
+/// work_items row must remain functional.
 #[tokio::test]
 async fn report_falls_back_to_hashmap_when_no_db_row() {
     let state = test_state_with_db();

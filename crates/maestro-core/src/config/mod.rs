@@ -69,20 +69,20 @@ pub struct Config {
     /// that runs against real users without an explicit `[dev]` opt-in.
     #[serde(default)]
     pub dev: DevConfig,
-    /// Task #47: admin-supplied tool installs that run at maestro startup
-    /// and populate the shared `maestro-tools` volume. See
+    /// Admin-supplied tool installs that run at maestro startup and
+    /// populate the shared `maestro-tools` volume. See
     /// [`ProvisioningConfig`].
     #[serde(default)]
     pub provisioning: ProvisioningConfig,
-    /// Plan-11: pluggable database backend. Empty/omitted → default
-    /// SQLite at `{data_dir}/maestro.db`; `postgres://…` / `mysql://…`
-    /// switches the deployment to that backend.
+    /// Pluggable database backend. Empty/omitted → default SQLite at
+    /// `{data_dir}/maestro.db`; `postgres://…` / `mysql://…` switches the
+    /// deployment to that backend.
     #[serde(default)]
     pub database: DatabaseConfig,
 }
 
 impl Config {
-    /// Task #47: canonical sha256 of the `[provisioning].install_commands`
+    /// Canonical sha256 of the `[provisioning].install_commands`
     /// list. The bytes hashed are the JSON-encoded array of commands
     /// (preserves order — the admin's order matters because a later
     /// command can depend on artifacts from an earlier one). Whitespace

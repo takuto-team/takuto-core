@@ -82,8 +82,8 @@ pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
         t += 1;
     }
 
-    // Worktree init commands are now per-user-per-workspace (plan-09); they
-    // are not factored into the bootstrap estimate any more. The agent step
+    // Worktree init commands are now per-user-per-workspace; they are not
+    // factored into the bootstrap estimate any more. The agent step
     // estimate below will cover them via the actual `steps_log` count.
 
     // For agent steps, use the current steps_log count as a lower bound.

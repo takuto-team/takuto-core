@@ -31,7 +31,7 @@ pub(crate) struct WorkflowLifecycle {
     pub(crate) jira_available: Arc<AtomicBool>,
     pub(crate) ticketing_system: TicketingSystem,
     pub(crate) workflows_dir: PathBuf,
-    /// Plan-10: used to look up `repositories.local_path` from a workflow's
+    /// Used to look up `repositories.local_path` from a workflow's
     /// `repository_id`. Optional only because some unit-test paths construct
     /// the engine without a DB.
     pub(crate) db: Option<Database>,
@@ -74,8 +74,8 @@ impl WorkflowLifecycle {
         repository_id: Option<String>,
     ) -> Result<String> {
         let jira = self.jira_available.load(Ordering::Relaxed);
-        // Plan-10: resolve workspace_name from the registered `repositories` row
-        // when `repository_id` is provided (the canonical path). Fall back to
+        // Resolve workspace_name from the registered `repositories` row when
+        // `repository_id` is provided (the canonical path). Fall back to
         // deriving it from `cfg.git.repo_path` for tests/dry-mode paths that
         // construct workflows without a DB or a repo association.
         let ws_name = resolve_workspace_name(
@@ -101,11 +101,10 @@ impl WorkflowLifecycle {
         // driver_started stays false until a def is started
         let id = workflow.id.clone();
 
-        // Plan-07 step 4 first slice: shadow-write the work_items row
-        // BEFORE we hand the Workflow off to the in-memory map (so the
-        // borrow stays valid). The map remains the truth-of-record;
-        // the DB row is dead weight today and gets refreshed by later
-        // slices when state transitions also persist.
+        // Shadow-write the work_items row BEFORE we hand the Workflow off
+        // to the in-memory map (so the borrow stays valid). The map
+        // remains the truth-of-record; the DB row is kept in sync by the
+        // subsequent state-transition writes.
         shadow_persist_work_item(self.db.as_ref(), &workflow).await;
 
         self.repository
@@ -175,9 +174,9 @@ impl WorkflowLifecycle {
         let id = workflow.id.clone();
         let user_id_for_emit = workflow.user_id.clone();
 
-        // Plan-07 step 4 first slice: shadow-write the work_items row
-        // BEFORE we hand the Workflow off to the in-memory map. See
-        // `start_workflow` for the same pattern + caveats.
+        // Shadow-write the work_items row BEFORE we hand the Workflow off
+        // to the in-memory map. See `start_workflow` for the same pattern
+        // + caveats.
         shadow_persist_work_item(self.db.as_ref(), &workflow).await;
 
         self.repository
@@ -299,7 +298,7 @@ impl WorkflowLifecycle {
         cancel_token.cancel();
         ContainerRunner::cleanup_for_ticket(ticket_key).await;
 
-        // Plan-10: resolve the workflow's repository path so worktree / branch
+        // Resolve the workflow's repository path so worktree / branch
         // operations target the right clone.
         let (repo_path, _base_branch) = super::driver::resolve_repo_for_ticket(
             ticket_key,
@@ -420,7 +419,7 @@ impl WorkflowLifecycle {
             )
         };
 
-        // Plan-10: resolve the per-workflow repo path.
+        // Resolve the per-workflow repo path.
         let (repo_path, _base_branch) = super::driver::resolve_repo_for_ticket(
             ticket_key,
             &self.repository.inner_arc(),
@@ -554,13 +553,12 @@ impl WorkflowLifecycle {
     }
 }
 
-/// Plan-07 step 4 first slice — best-effort shadow-write of a fresh
-/// Workflow into the `work_items` table.
+/// Best-effort shadow-write of a fresh Workflow into the `work_items`
+/// table.
 ///
 /// Truth-of-record is still the in-memory `HashMap<String, Workflow>`;
 /// this call exists so the DB row matches the map entry at insertion
-/// time. State transitions, log appends, and other updates do NOT yet
-/// touch the DB row — that's the next slice.
+/// time.
 ///
 /// Failures are logged at WARN and swallowed: a flaky DB must not
 /// block the dashboard or the poller. The work item is still in the
@@ -573,7 +571,7 @@ pub(super) async fn shadow_persist_work_item(db: Option<&Database>, workflow: &W
             work_item_id = %workflow.id,
             ticket_key = %workflow.ticket_key,
             error = %e,
-            "Plan-07 shadow-write of work_items row failed (in-memory state is unaffected)"
+            "Ushadow-write of work_items row failed (in-memory state is unaffected)"
         );
     }
 }
