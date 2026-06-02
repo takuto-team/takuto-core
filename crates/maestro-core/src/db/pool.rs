@@ -513,7 +513,7 @@ mod tests {
         let tuning = PoolTuning {
             max_connections: Some(4),
             acquire_timeout: Some(Duration::from_secs(10)),
-            idle_timeout: Some(Duration::from_secs(60)),
+            idle_timeout: Some(Duration::from_mins(1)),
         };
         let pool = connect("sqlite::memory:", &tuning)
             .await

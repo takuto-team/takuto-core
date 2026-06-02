@@ -193,13 +193,28 @@ pub(crate) fn translate_for_backend(sql: &str, backend: DbBackend) -> String {
             let s = s.replace("CREATE INDEX IF NOT EXISTS", "CREATE INDEX");
             let s = s.replace("DROP INDEX IF EXISTS", "DROP INDEX");
             // MySQL requires a prefix length when a TEXT/BLOB column
-            // participates in a key. `user_repositories.repo_url` is
-            // declared `TEXT NOT NULL` in the portable schema but joins
-            // the `UNIQUE(user_id, repo_url)` constraint, which MySQL
-            // rejects (error 1170). Widen the column to VARCHAR(512)
-            // for the MySQL pass so the UNIQUE is valid. SQLite and
-            // Postgres keep the original TEXT shape.
-            let s = s.replace("repo_url TEXT NOT NULL", "repo_url VARCHAR(512) NOT NULL");
+            // participates in a key. Several portable migrations
+            // declare ISO-timestamp / URL-shaped columns as `TEXT` for
+            // SQLite + Postgres simplicity but then index them or
+            // include them in a UNIQUE — MySQL rejects that with
+            // error 1170 unless we widen to VARCHAR. Each entry below
+            // covers exactly one (column, declaration) pair that
+            // appears in a key.
+            let s = s
+                .replace("repo_url TEXT NOT NULL", "repo_url VARCHAR(512) NOT NULL")
+                .replace(
+                    "expires_at TEXT NOT NULL",
+                    "expires_at VARCHAR(64) NOT NULL",
+                );
+            // `credential_audit.at` is a bare-name column — bare
+            // `str::replace` on "at TEXT NOT NULL DEFAULT ''" would
+            // also chew up "created_at TEXT NOT NULL DEFAULT ''" and
+            // friends, so anchor the match to a whole-word boundary.
+            let s = replace_whole_token(
+                &s,
+                "at TEXT NOT NULL DEFAULT ''",
+                "at VARCHAR(64) NOT NULL DEFAULT ''",
+            );
             // MySQL 8.0.13+ accepts `DEFAULT` on `TEXT` / `BLOB` / `JSON`
             // columns ONLY when the literal is wrapped in parentheses
             // (`DEFAULT ('...')`). The source files use the simpler
@@ -392,6 +407,56 @@ mod tests {
             got.contains("data BLOB NOT NULL"),
             "MySQL must keep BLOB, got: {got}"
         );
+    }
+
+    #[test]
+    fn translate_mysql_widens_text_columns_used_in_keys() {
+        // Three columns participate in indexes / UNIQUE constraints:
+        // `repo_url`, `expires_at`, and the bare `at` column on
+        // `credential_audit`. MySQL rejects TEXT in a key spec, so
+        // the transform widens them to VARCHAR. SQLite + Postgres
+        // keep TEXT.
+        let input = "\
+            CREATE TABLE user_repositories (\n\
+                repo_url TEXT NOT NULL,\n\
+                UNIQUE(user_id, repo_url)\n\
+            );\n\
+            CREATE TABLE sessions (\n\
+                expires_at TEXT NOT NULL\n\
+            );\n\
+            CREATE TABLE credential_audit (\n\
+                created_at TEXT NOT NULL DEFAULT '',\n\
+                updated_at TEXT NOT NULL DEFAULT '',\n\
+                at TEXT NOT NULL DEFAULT ''\n\
+            );\n";
+        let got = translate_for_backend(input, DbBackend::MySql);
+        assert!(got.contains("repo_url VARCHAR(512) NOT NULL"), "{got}");
+        assert!(got.contains("expires_at VARCHAR(64) NOT NULL"), "{got}");
+        // Defaults get wrapped in parens by the unconditional
+        // `wrap_text_defaults_for_mysql` pass, so the post-transform
+        // shape is `DEFAULT ('')`.
+        assert!(
+            got.contains("at VARCHAR(64) NOT NULL DEFAULT ('')"),
+            "the bare `at` column must be widened, got: {got}"
+        );
+        // The whole-word boundary check protects every other `_at`
+        // column — they must keep TEXT.
+        assert!(
+            got.contains("created_at TEXT NOT NULL DEFAULT ('')"),
+            "created_at must NOT be widened (boundary mismatch), got: {got}"
+        );
+        assert!(
+            got.contains("updated_at TEXT NOT NULL DEFAULT ('')"),
+            "updated_at must NOT be widened, got: {got}"
+        );
+
+        // SQLite + Postgres keep the original.
+        let sqlite = translate_for_backend(input, DbBackend::Sqlite);
+        assert!(sqlite.contains("repo_url TEXT NOT NULL"), "{sqlite}");
+        assert!(sqlite.contains("at TEXT NOT NULL DEFAULT ''"));
+        let pg = translate_for_backend(input, DbBackend::Postgres);
+        assert!(pg.contains("repo_url TEXT NOT NULL"), "{pg}");
+        assert!(pg.contains("at TEXT NOT NULL DEFAULT ''"));
     }
 
     #[test]

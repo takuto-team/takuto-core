@@ -272,7 +272,7 @@ pub(crate) async fn do_clone(
         .unwrap_or(std::path::Path::new(WORKSPACES_DIR));
 
     use std::time::Duration;
-    const CLONE_TIMEOUT: Duration = Duration::from_secs(600); // 10 minutes
+    const CLONE_TIMEOUT: Duration = Duration::from_mins(10);
 
     if let Some(token) = gh_token {
         // Use git clone with an inline credential helper that reads the token from
