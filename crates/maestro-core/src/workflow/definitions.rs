@@ -250,7 +250,7 @@ fn parse_workflow_file(path: &Path) -> std::result::Result<WorkflowYaml, String>
         Some("toml") => {
             toml::from_str(&content).map_err(|e| format!("Invalid TOML schema: {e}"))?
         }
-        _ => serde_yaml::from_str(&content).map_err(|e| format!("Invalid YAML schema: {e}"))?,
+        _ => serde_yaml_ng::from_str(&content).map_err(|e| format!("Invalid YAML schema: {e}"))?,
     };
 
     // Validate required fields
