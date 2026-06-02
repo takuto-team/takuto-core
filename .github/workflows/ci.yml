@@ -123,11 +123,11 @@ jobs:
         run: mkdir -p ui/dist && touch ui/dist/.gitkeep
 
       - name: cargo test --ignored (db migrations + CRUD against Postgres)
-        # Substring filter `postgres` matches the two Postgres-specific
-        # ignored tests; the MySQL ignored test stays skipped (it expects
-        # a `mysql://` URL we don't provide here). `--test-threads=1`
+        # `--skip mysql` drops the MySQL-only ignored tests (they hard-
+        # connect via `MySqlPool::connect` and would time out against
+        # our Postgres service container). `--test-threads=1`
         # serialises the migrator + CRUD tests against the shared DB.
-        run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 postgres
+        run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 --skip mysql
 
   db-mysql:
     # Plan-11 step 4 (MySQL leg): same idea as `db-postgres`, but spins
@@ -179,7 +179,9 @@ jobs:
         run: mkdir -p ui/dist && touch ui/dist/.gitkeep
 
       - name: cargo test --ignored (db migrations + CRUD against MySQL)
-        run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 mysql
+        # `--skip postgres` drops the Postgres-only ignored tests
+        # (they hard-connect via `PgPool::connect`).
+        run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 --skip postgres
 
   ui:
     name: UI (npm build)
