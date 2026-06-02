@@ -31,6 +31,18 @@ use super::dto::{
 };
 use super::require_workflow_access;
 
+/// Convert a Unix-seconds timestamp to RFC3339 with millisecond
+/// precision. Used to project `work_items` BIGINT timestamps into
+/// the same wire format the in-memory `Workflow` produces via
+/// `chrono::DateTime::to_rfc3339`. Out-of-range values fall back
+/// to the epoch — a value that far out should never appear in
+/// practice and the fallback keeps the JSON well-formed.
+fn unix_seconds_to_rfc3339(secs: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
+        .to_rfc3339()
+}
+
 pub async fn list_workflows(
     State(engine): State<EngineState>,
     State(auth_state): State<AuthState>,
@@ -150,10 +162,11 @@ pub async fn list_workflows(
         out
     };
     // Pre-fetch every work_items row for this user so the per-summary
-    // projection below can override pr_url, pr_merged, and branch_name
-    // with the DB-authoritative values. One query for the whole list
-    // keeps this O(1) per workflow rather than O(N) DB round-trips.
-    let db_pr_state: HashMap<String, (Option<String>, bool, Option<String>)> =
+    // projection below can override DB-authoritative fields (ticket
+    // metadata, PR/branch state, worktree path, timestamps). One
+    // query for the whole list keeps this O(1) per workflow rather
+    // than O(N) DB round-trips.
+    let db_rows: HashMap<String, maestro_core::db::work_items::WorkItemRow> =
         if let Some(database) = auth_state.db.as_ref() {
             match maestro_core::db::work_items::list_work_items(
                 database.adapter(),
@@ -171,17 +184,12 @@ pub async fn list_workflows(
             {
                 Ok(rows) => rows
                     .into_iter()
-                    .map(|r| {
-                        (
-                            r.ticket_key,
-                            (r.pr_url, r.pr_merged, r.branch_name),
-                        )
-                    })
+                    .map(|r| (r.ticket_key.clone(), r))
                     .collect(),
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        "Failed to batch-load work_items rows for PR-field projection; falling back to in-memory map values"
+                        "Failed to batch-load work_items rows; falling back to in-memory map values"
                     );
                     HashMap::new()
                 }
@@ -230,37 +238,69 @@ pub async fn list_workflows(
                 };
             let run_commands =
                 build_run_commands_status(configured_run_cmds, run_cmds_state.get(&w.ticket_key));
-            // Prefer DB values for these three scalars when a work_items
-            // row exists; fall back to the in-memory Workflow otherwise.
-            let db_override = db_pr_state.get(&w.ticket_key);
-            let (db_branch, db_pr_url, db_pr_merged) = match db_override {
-                Some((u, m, b)) => (
-                    match b {
-                        Some(s) => Some(s.clone()),
-                        // DB row present but branch is NULL → DB is
-                        // authoritative: report empty.
-                        None => Some(String::new()),
-                    },
-                    Some(u.clone()),
-                    Some(*m),
-                ),
-                None => (None, None, None),
+            // When a work_items row exists, prefer its values for
+            // every shadow-written scalar field. Engine-derived
+            // fields (state display, action flags, in-memory caches)
+            // stay on the Workflow path because they have no DB
+            // equivalent.
+            let row = db_rows.get(&w.ticket_key);
+            let ticket_summary = match row {
+                Some(r) => r.ticket_summary.clone().unwrap_or_default(),
+                None => w.ticket_summary.clone(),
+            };
+            let ticket_description = match row {
+                Some(r) => r.ticket_description.clone().unwrap_or_default(),
+                None => w.ticket_description.clone(),
+            };
+            let ticket_type = match row {
+                Some(r) => r.ticket_type.clone().unwrap_or_default(),
+                None => w.ticket_type.clone(),
+            };
+            let started_at_rfc = match row {
+                Some(r) => unix_seconds_to_rfc3339(r.started_at),
+                None => w.started_at.to_rfc3339(),
+            };
+            let updated_at_rfc = match row {
+                Some(r) => unix_seconds_to_rfc3339(r.updated_at),
+                None => w.updated_at.to_rfc3339(),
+            };
+            let branch_name = match row {
+                Some(r) => r.branch_name.clone().unwrap_or_default(),
+                None => w.branch_name.clone(),
+            };
+            let pr_url = match row {
+                Some(r) => r.pr_url.clone(),
+                None => w.pr_url.clone(),
+            };
+            let pr_merged = row.map(|r| r.pr_merged).unwrap_or(w.pr_merged);
+            // Worktree path filtered by on-disk existence — a path
+            // recorded in the row whose directory has been removed
+            // is no longer useful to render.
+            let worktree_path = match row {
+                Some(r) => r
+                    .worktree_path
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .filter(|p| p.exists())
+                    .and_then(|p| p.to_str().map(str::to_string)),
+                None => w
+                    .worktree_path
+                    .as_ref()
+                    .filter(|p| p.exists())
+                    .and_then(|p| p.to_str().map(str::to_string)),
             };
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
-                ticket_summary: w.ticket_summary.clone(),
-                ticket_description: w.ticket_description.clone(),
-                ticket_type: w.ticket_type.clone(),
+                ticket_summary,
+                ticket_description,
+                ticket_type,
                 state: w.status_display(),
-                started_at: w.started_at.to_rfc3339(),
-                updated_at: w.updated_at.to_rfc3339(),
-                branch_name: db_branch.unwrap_or_else(|| w.branch_name.clone()),
-                pr_url: match db_override {
-                    Some(_) => db_pr_url.unwrap_or(None),
-                    None => w.pr_url.clone(),
-                },
-                pr_merged: db_pr_merged.unwrap_or(w.pr_merged),
+                started_at: started_at_rfc,
+                updated_at: updated_at_rfc,
+                branch_name,
+                pr_url,
+                pr_merged,
                 steps_log: w.steps_log.clone(),
                 error: extract_error(&w.state),
                 terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
@@ -286,11 +326,7 @@ pub async fn list_workflows(
                 generate_report: cfg.general.generate_report,
                 has_report: has_report_file(w),
                 workflow_def_runs: workflow_def_runs_display(w),
-                worktree_path: w
-                    .worktree_path
-                    .as_ref()
-                    .filter(|p| p.exists())
-                    .and_then(|p| p.to_str().map(str::to_string)),
+                worktree_path,
                 user_id: w.user_id.clone(),
                 workspace_name: w.workspace_name.clone(),
                 repository_id: w.repository_id.clone(),
@@ -404,11 +440,12 @@ pub async fn get_workflow(
     // Visibility is gated by `require_workflow_access`, which checks
     // both user_id ownership AND repo association.
     require_workflow_access(&engine, &auth_state, &auth, &id).await?;
-    // Read the scalar PR fields from the DB row when one exists.
-    // Hooks (`update_pr_url`, etc.) write straight to work_items, so
-    // the DB is the freshest source for these three. Engine-derived
-    // fields stay on the HashMap path.
-    let db_pr_state: Option<(Option<String>, bool, Option<String>)> =
+    // Read the full work_items row when one exists. Every shadow-
+    // written scalar field gets projected from the row instead of
+    // the in-memory Workflow. Engine-derived fields (state display,
+    // action flags, in-memory caches) stay on the Workflow path —
+    // they have no DB equivalent.
+    let db_row: Option<maestro_core::db::work_items::WorkItemRow> =
         if let Some(database) = auth_state.db.as_ref() {
             match maestro_core::db::work_items::get_work_item_by_ticket_key(
                 database.adapter(),
@@ -416,8 +453,7 @@ pub async fn get_workflow(
             )
             .await
             {
-                Ok(Some(row)) => Some((row.pr_url, row.pr_merged, row.branch_name)),
-                Ok(None) => None,
+                Ok(row) => row,
                 Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
             }
         } else {
@@ -470,32 +506,47 @@ pub async fn get_workflow(
         }
         result
     };
+    let ticket_summary = match &db_row {
+        Some(r) => r.ticket_summary.clone().unwrap_or_default(),
+        None => w.ticket_summary.clone(),
+    };
+    let ticket_description = match &db_row {
+        Some(r) => r.ticket_description.clone().unwrap_or_default(),
+        None => w.ticket_description.clone(),
+    };
+    let ticket_type = match &db_row {
+        Some(r) => r.ticket_type.clone().unwrap_or_default(),
+        None => w.ticket_type.clone(),
+    };
+    let started_at_rfc = match &db_row {
+        Some(r) => unix_seconds_to_rfc3339(r.started_at),
+        None => w.started_at.to_rfc3339(),
+    };
+    let updated_at_rfc = match &db_row {
+        Some(r) => unix_seconds_to_rfc3339(r.updated_at),
+        None => w.updated_at.to_rfc3339(),
+    };
+    let branch_name = match &db_row {
+        Some(r) => r.branch_name.clone().unwrap_or_default(),
+        None => w.branch_name.clone(),
+    };
+    let pr_url = match &db_row {
+        Some(r) => r.pr_url.clone(),
+        None => w.pr_url.clone(),
+    };
+    let pr_merged = db_row.as_ref().map(|r| r.pr_merged).unwrap_or(w.pr_merged);
     Ok(Json(WorkflowSummary {
         id: w.id.clone(),
         ticket_key: w.ticket_key.clone(),
-        ticket_summary: w.ticket_summary.clone(),
-        ticket_description: w.ticket_description.clone(),
-        ticket_type: w.ticket_type.clone(),
+        ticket_summary,
+        ticket_description,
+        ticket_type,
         state: w.status_display(),
-        started_at: w.started_at.to_rfc3339(),
-        updated_at: w.updated_at.to_rfc3339(),
-        // DB wins for these three when a row exists.
-        branch_name: match &db_pr_state {
-            Some((_, _, Some(b))) => b.clone(),
-            // DB row present but branch_name is NULL → DB is
-            // authoritative; report empty (matches the HashMap's
-            // empty-string default for unset).
-            Some(_) => String::new(),
-            None => w.branch_name.clone(),
-        },
-        pr_url: match &db_pr_state {
-            Some((db_pr, _, _)) => db_pr.clone(),
-            None => w.pr_url.clone(),
-        },
-        pr_merged: match &db_pr_state {
-            Some((_, db_merged, _)) => *db_merged,
-            None => w.pr_merged,
-        },
+        started_at: started_at_rfc,
+        updated_at: updated_at_rfc,
+        branch_name,
+        pr_url,
+        pr_merged,
         steps_log: w.steps_log.clone(),
         error: extract_error(&w.state),
         terminal_lines: w.terminal_lines.iter().map(TerminalLineDto::from).collect(),
@@ -558,11 +609,19 @@ pub async fn get_workflow(
         generate_report: cfg.general.generate_report,
         has_report: has_report_file(w),
         workflow_def_runs: workflow_def_runs_display(w),
-        worktree_path: w
-            .worktree_path
-            .as_ref()
-            .filter(|p| p.exists())
-            .and_then(|p| p.to_str().map(str::to_string)),
+        worktree_path: match &db_row {
+            Some(r) => r
+                .worktree_path
+                .as_deref()
+                .map(std::path::Path::new)
+                .filter(|p| p.exists())
+                .and_then(|p| p.to_str().map(str::to_string)),
+            None => w
+                .worktree_path
+                .as_ref()
+                .filter(|p| p.exists())
+                .and_then(|p| p.to_str().map(str::to_string)),
+        },
         user_id: w.user_id.clone(),
         workspace_name: w.workspace_name.clone(),
         repository_id: w.repository_id.clone(),
