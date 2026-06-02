@@ -1108,7 +1108,9 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             system_status: std::sync::Arc::new(tokio::sync::RwLock::new(system_status)),
         },
         AuthState {
-            db,
+            // Plan-07 slice 19: clone so the retention task below
+            // gets its own handle without depriving AuthState of one.
+            db: db.clone(),
             gh_client: std::sync::Arc::new(maestro_core::auth::RealGhClient::new()),
             git_auth_resolver,
         },
@@ -1176,6 +1178,43 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 _ = snapshot_cancel.cancelled() => {
                     break;
                 }
+            }
+        }
+    });
+
+    // Plan-07 slice 19: hourly log-line retention purge. Skipped
+    // entirely when no DB is attached (legacy single-user mode).
+    // Re-reads `work_item_log_retention_days` from config every
+    // tick so operators can adjust at runtime via the config
+    // watcher without a restart. `0` days disables the purge —
+    // run_once is a clean no-op in that case.
+    let retention_db = db.clone();
+    let retention_config = config.clone();
+    let retention_cancel = cancel_token.clone();
+    let _retention_task = tokio::spawn(async move {
+        let Some(database) = retention_db else { return };
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        // Skip the immediate first tick — restarts shouldn't
+        // unconditionally hammer the DB before steady state.
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let retention_days = {
+                        retention_config.read().await.general.work_item_log_retention_days
+                    };
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    maestro_core::db::log_retention::run_once(
+                        &database,
+                        now_ms,
+                        retention_days,
+                    )
+                    .await;
+                }
+                _ = retention_cancel.cancelled() => break,
             }
         }
     });

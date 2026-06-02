@@ -18,6 +18,7 @@ pub mod credential_audit;
 pub mod credentials;
 pub mod error;
 pub mod github_credentials;
+pub mod log_retention;
 pub mod login_attempts;
 // Legacy rusqlite migration runner (versioned schema_migrations table).
 pub mod migration;

@@ -100,6 +100,13 @@ pub struct GeneralConfig {
     /// keyfile or env var is provided.
     #[serde(default = "default_allow_auto_generate_secret_key")]
     pub allow_auto_generate_secret_key: bool,
+    /// Plan-07 slice 19: how many days of `work_item_log_lines`
+    /// rows to keep before the retention task deletes them. `0`
+    /// disables retention (keep forever). Default `7` days, which
+    /// is enough to cover a long weekend of investigation without
+    /// growing the DB indefinitely.
+    #[serde(default = "default_work_item_log_retention_days")]
+    pub work_item_log_retention_days: u32,
 }
 
 fn default_migrate_orphan_repo_associations() -> bool {
@@ -108,6 +115,10 @@ fn default_migrate_orphan_repo_associations() -> bool {
 
 fn default_allow_auto_generate_secret_key() -> bool {
     true
+}
+
+fn default_work_item_log_retention_days() -> u32 {
+    7
 }
 
 fn default_workflow_definitions_dir() -> String {
@@ -160,6 +171,7 @@ impl Default for GeneralConfig {
             migrate_orphan_workflows: false,
             migrate_orphan_repo_associations: default_migrate_orphan_repo_associations(),
             allow_auto_generate_secret_key: default_allow_auto_generate_secret_key(),
+            work_item_log_retention_days: default_work_item_log_retention_days(),
         }
     }
 }
