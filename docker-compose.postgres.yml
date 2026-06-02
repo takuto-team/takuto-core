@@ -36,10 +36,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-maestro}
     volumes:
       - maestro-pg:/var/lib/postgresql/data
-    # Port not published by default — only maestro reaches it on the
-    # internal compose network. Uncomment for psql from the host.
-    # ports:
-    #   - "5432:5432"
+    ports:
+      - "5432:5432"
     healthcheck:
       # `pg_isready` checks the server is accepting connections. The
       # maestro startup probe (`SELECT 1` with a 5 s timeout) is gated
