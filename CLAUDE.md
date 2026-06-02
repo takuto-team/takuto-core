@@ -34,3 +34,14 @@ Plans are scaffolding that exists only during a feature's incubation. The artifa
 If you need to record context about a change, the commit message and the PR description are the right places. Do not smear them across the source tree.
 
 Apply the same rule to commit messages going forward when reasonable — the code itself should not require knowing what slice introduced it.
+
+## Migrations are immutable
+
+Once a migration file under `crates/maestro-core/migrations/` has been merged and applied to any environment, **never edit the file again — not even comments, whitespace, or trailing newlines**. sqlx stores a SHA256 checksum of each migration in `_sqlx_migrations` at apply time and refuses to boot when the on-disk content drifts (`migration X was previously applied but has been modified`).
+
+This rule overrides every other "scrub", "rename", or "tidy" instruction. If you find unwanted content in an applied migration:
+
+- Live with it — the file is part of the DB's contract, not the prose surface.
+- Or write a follow-up migration that does what you wanted (rename a column, drop an index) the proper way.
+
+The same prohibition applies to bulk find/replace tools, automated formatters, and agents: when sweeping comments, ticket references, or anything else across the tree, **exclude `crates/maestro-core/migrations/` from the sweep**.
