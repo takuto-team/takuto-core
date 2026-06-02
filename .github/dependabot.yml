@@ -1,0 +1,39 @@
+version: 2
+updates:
+  # Rust workspace: a single entry at the root covers the workspace
+  # manifest and every member crate under crates/*.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Roll non-breaking updates up into one PR; majors stay separate.
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Frontend dependencies live in the ui/ package.
+  - package-ecosystem: npm
+    directory: "/ui"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Keep GitHub Actions (including SHA-pinned uses) current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
