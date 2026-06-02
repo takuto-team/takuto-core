@@ -185,6 +185,9 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      - name: npm run lint
+        run: npm run lint
+
       - name: npm test
         run: npm test
 
