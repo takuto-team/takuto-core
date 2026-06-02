@@ -185,6 +185,13 @@ pub(crate) fn translate_for_backend(sql: &str, backend: DbBackend) -> String {
                 "INTEGER PRIMARY KEY AUTOINCREMENT",
                 "BIGINT AUTO_INCREMENT PRIMARY KEY",
             );
+            // `CREATE INDEX IF NOT EXISTS` / `DROP INDEX IF EXISTS` are
+            // SQLite + Postgres syntax; MySQL's CREATE INDEX grammar has
+            // no `IF [NOT] EXISTS` clause. Migrations run against a
+            // fresh schema in this test/CI path, so dropping the clause
+            // is safe — the index won't pre-exist.
+            let s = s.replace("CREATE INDEX IF NOT EXISTS", "CREATE INDEX");
+            let s = s.replace("DROP INDEX IF EXISTS", "DROP INDEX");
             // MySQL 8.0.13+ accepts `DEFAULT` on `TEXT` / `BLOB` / `JSON`
             // columns ONLY when the literal is wrapped in parentheses
             // (`DEFAULT ('...')`). The source files use the simpler
@@ -377,6 +384,23 @@ mod tests {
             got.contains("data BLOB NOT NULL"),
             "MySQL must keep BLOB, got: {got}"
         );
+    }
+
+    #[test]
+    fn translate_mysql_strips_index_if_not_exists() {
+        let input =
+            "CREATE INDEX IF NOT EXISTS idx_foo ON foo(bar);\nDROP INDEX IF EXISTS idx_bar;";
+        let got = translate_for_backend(input, DbBackend::MySql);
+        assert!(
+            got.contains("CREATE INDEX idx_foo ON foo(bar)"),
+            "MySQL must strip `IF NOT EXISTS` from CREATE INDEX, got: {got}"
+        );
+        assert!(
+            got.contains("DROP INDEX idx_bar"),
+            "MySQL must strip `IF EXISTS` from DROP INDEX, got: {got}"
+        );
+        assert!(!got.contains("IF NOT EXISTS"), "{got}");
+        assert!(!got.contains("IF EXISTS"), "{got}");
     }
 
     #[test]
@@ -624,11 +648,29 @@ mod tests {
     //   cargo test --lib db::migrate -- --ignored
     // with `DATABASE_URL=postgres://...` (or `mysql://...`) exported.
 
+    /// Skip the test body when `DATABASE_URL` is unset or points at a
+    /// different backend. Returns `true` when the test should proceed.
+    /// Lets the matrix CI run a single `cargo test --ignored` command
+    /// per job and have each test self-gate to the right backend
+    /// without relying on substring filters.
+    fn database_url_matches(expected_scheme: &str) -> Option<String> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        if url.starts_with(&format!("{expected_scheme}://")) {
+            Some(url)
+        } else {
+            eprintln!(
+                "skipping: DATABASE_URL scheme is not {expected_scheme}:// (got {url})"
+            );
+            None
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires DATABASE_URL=postgres://..."]
     async fn migrations_apply_clean_to_postgres() {
-        let url = std::env::var("DATABASE_URL")
-            .expect("set DATABASE_URL=postgres://... to run this test");
+        let Some(url) = database_url_matches("postgres") else {
+            return;
+        };
         let pool = sqlx::postgres::PgPool::connect(&url)
             .await
             .expect("connect");
@@ -644,8 +686,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires DATABASE_URL=mysql://..."]
     async fn migrations_apply_clean_to_mysql() {
-        let url =
-            std::env::var("DATABASE_URL").expect("set DATABASE_URL=mysql://... to run this test");
+        let Some(url) = database_url_matches("mysql") else {
+            return;
+        };
         let pool = sqlx::mysql::MySqlPool::connect(&url)
             .await
             .expect("connect");
@@ -679,8 +722,9 @@ mod tests {
         use crate::db::models::UserRole;
         use crate::db::{pool, users};
 
-        let url = std::env::var("DATABASE_URL")
-            .expect("set DATABASE_URL=postgres://... to run this test");
+        let Some(url) = database_url_matches("postgres") else {
+            return;
+        };
 
         let backend_pool = pool::connect(&url, &pool::PoolTuning::default())
             .await
@@ -761,8 +805,9 @@ mod tests {
         use crate::db::models::UserRole;
         use crate::db::{DbValue, importer, pool, repositories, users};
 
-        let url = std::env::var("DATABASE_URL")
-            .expect("set DATABASE_URL=postgres://... to run this test");
+        let Some(url) = database_url_matches("postgres") else {
+            return;
+        };
 
         let backend_pool = pool::connect(&url, &pool::PoolTuning::default())
             .await
@@ -900,8 +945,9 @@ mod tests {
         use crate::db::models::UserRole;
         use crate::db::{pool, users};
 
-        let url =
-            std::env::var("DATABASE_URL").expect("set DATABASE_URL=mysql://... to run this test");
+        let Some(url) = database_url_matches("mysql") else {
+            return;
+        };
 
         let backend_pool = pool::connect(&url, &pool::PoolTuning::default())
             .await
