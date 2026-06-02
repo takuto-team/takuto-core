@@ -19,8 +19,10 @@ jobs:
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
+            arch: amd64
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
+            arch: arm64
 
     steps:
       - name: Checkout
@@ -39,6 +41,50 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.DISTRIBUTION_GHCR_TOKEN }}
+
+      # Build the image into the local Docker daemon first so it can be scanned
+      # and an SBOM generated BEFORE anything is published. The matrix runner is
+      # native for its platform, so `load: true` works without emulation. The
+      # subsequent push-by-digest build is a cache hit on this layer set.
+      - name: Build image for scanning (load locally)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          tags: maestro:scan-${{ matrix.arch }}
+          build-args: |
+            MAESTRO_VERSION=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/morphet81/maestro-core
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      # Fail the release on any fixable HIGH/CRITICAL OS or library vulnerability.
+      # Because this runs before the push step (and `merge` needs this job), a
+      # vulnerable image never reaches a published tag.
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: maestro:scan-${{ matrix.arch }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: maestro:scan-${{ matrix.arch }}
+          format: spdx-json
+          output-file: maestro-${{ matrix.arch }}.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.arch }}
+          path: maestro-${{ matrix.arch }}.spdx.json
+          if-no-files-found: error
 
       - name: Build and push by digest
         id: build
