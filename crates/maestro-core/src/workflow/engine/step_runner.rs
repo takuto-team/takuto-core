@@ -52,6 +52,22 @@ use super::types::{TerminalLine, Workflow, WorkflowEvent};
 /// Maximum number of terminal lines stored per workflow for persistence.
 const TERMINAL_LINES_MAX: usize = 100;
 
+/// Signal to the step runner that this invocation is picking up
+/// after a pause/restart rather than starting from scratch.
+///
+/// When set, the first agent step prompt is replaced with a built-in
+/// "resume from where you left off" instruction. If `session_id` is
+/// also set, the underlying provider (Claude / Cursor / Codex /
+/// OpenCode) is invoked with `--resume <id>` so the agent picks up
+/// the same conversation. If the session id is unknown (e.g. the
+/// agent had not yet produced one when paused), the resume prompt
+/// is still emitted — the agent will reconstruct context from the
+/// worktree and the prompt instruction.
+#[derive(Debug, Clone, Default)]
+pub struct ResumeContext {
+    pub session_id: Option<String>,
+}
+
 /// Run the full step sequence for a workflow definition: build a fresh
 /// agent-step container, interpolate prompts with ticket context, and walk
 /// the `[steps]` list once (no outer-cycle loop is exposed by definition
@@ -79,6 +95,10 @@ pub(super) async fn run_workflow_def_steps(
     // the same DB rows the pin references.
     db: Option<&Database>,
     git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    // When `Some`, the run is a resume after a pause: the first agent
+    // step uses a built-in "resume" prompt and (if known) the
+    // recorded `session_id`. `None` means start from scratch.
+    resume: Option<ResumeContext>,
 ) -> Result<()> {
     let ticket = JiraTicket {
         key: ticket_key.to_string(),
@@ -197,6 +217,10 @@ pub(super) async fn run_workflow_def_steps(
             .unwrap_or_default()
     };
 
+    let (initial_session_id, is_resume) = match resume.as_ref() {
+        Some(ctx) => (ctx.session_id.clone(), true),
+        None => (None, false),
+    };
     let last_agent_output = run_agent_step_sequence(
         ticket_key,
         worktree_path,
@@ -220,8 +244,8 @@ pub(super) async fn run_workflow_def_steps(
         false, // do not skip prior successes — always run all steps
         config,
         &skill_paths,
-        None,  // no initial session id
-        false, // not a snapshot resume
+        initial_session_id,
+        is_resume,
         false, // no report injection
         db,
         Some(def_name),
@@ -296,7 +320,11 @@ pub(super) async fn run_agent_step_sequence(
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = initial_session_id;
     let mut last_agent_output: Option<String> = None;
-    let mut snapshot_resume_pending = is_snapshot_resume && claude_session_id.is_some();
+    // Resume the agent on the first step regardless of whether a
+    // session id is known. With a session id the agent picks up the
+    // same conversation via `--resume`; without one it still gets
+    // the resume prompt and reconstructs context from the worktree.
+    let mut snapshot_resume_pending = is_snapshot_resume;
 
     for outer in 1..=outer_loops {
         check_cancelled(cancel_token)?;

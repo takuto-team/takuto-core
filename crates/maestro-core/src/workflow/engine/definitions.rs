@@ -226,6 +226,7 @@ impl WorkflowDefinitionManager {
                 suppress,
                 db,
                 resolver,
+                None, // fresh start — not a resume
             )
             .await;
         });

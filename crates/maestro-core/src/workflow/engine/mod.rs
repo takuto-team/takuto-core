@@ -1603,6 +1603,130 @@ mod tests {
         );
     }
 
+    /// Resume restores the source state, picks up the recorded
+    /// session id, and clears the Paused state — proving the
+    /// pause→resume round-trip carries the session id the agent
+    /// needs to continue where it left off.
+    #[tokio::test]
+    async fn resume_workflow_carries_session_id_from_pause() {
+        use crate::workflow::engine::transitions::WorkflowTransitions;
+        use crate::workflow::state::WorkflowState;
+
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn ExternalActions> =
+            Arc::new(crate::actions::dry_run::DryRunActions::new(
+                "origin".into(),
+                None,
+            ));
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let workflows_dir = std::env::temp_dir().join(format!(
+            "maestro-engine-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+        let db = Database::open_in_memory().expect("open in-memory db");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u-1', 'a', 'admin')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+
+        let engine = WorkflowEngine::new_with_db(
+            config.clone(),
+            actions.clone(),
+            1,
+            jira_available.clone(),
+            TicketingSystem::None,
+            workflows_dir.clone(),
+            Some(db.clone()),
+        );
+
+        engine
+            .start_workflow(
+                "RES-1".into(),
+                "Resume test".into(),
+                false,
+                None,
+                None,
+                Some("u-1".into()),
+                None,
+            )
+            .await
+            .expect("start_workflow");
+
+        // Simulate the engine state at the moment of pause: workflow
+        // is mid-flight (AddressingTicket), the agent has produced a
+        // session id, and a def is recorded as Running.
+        {
+            let wf_arc = engine.workflows_arc();
+            let mut map = wf_arc.write().await;
+            let wf = map.get_mut("RES-1").expect("present");
+            wf.state = WorkflowState::AddressingTicket { pass: 1 };
+            wf.last_session_id = Some("session-abc-123".into());
+            wf.workflow_def_runs.insert(
+                "ship.toml".into(),
+                crate::workflow::definitions::WorkflowDefRunState::Running,
+            );
+        }
+
+        let transitions = WorkflowTransitions::new(
+            engine.repository.clone(),
+            engine.event_bus.clone(),
+            actions,
+            config,
+            engine.agent_run_semaphore.clone(),
+            engine.suppress_cancelled_as_error.clone(),
+            jira_available,
+            workflows_dir,
+            Some(db.clone()),
+        );
+        transitions
+            .pause_workflow("RES-1")
+            .await
+            .expect("pause_workflow");
+
+        // After pause: state is Paused, but `last_session_id` MUST
+        // survive — resume reads it.
+        {
+            let wf_arc = engine.workflows_arc();
+            let map = wf_arc.read().await;
+            let wf = map.get("RES-1").expect("present");
+            assert!(
+                matches!(wf.state, WorkflowState::Paused { .. }),
+                "expected Paused after pause"
+            );
+            assert_eq!(
+                wf.last_session_id.as_deref(),
+                Some("session-abc-123"),
+                "pause must preserve last_session_id so resume can pick it up"
+            );
+        }
+
+        transitions
+            .resume_workflow("RES-1")
+            .await
+            .expect("resume_workflow");
+
+        // After resume: state has been restored from source_state,
+        // and last_session_id is still there for the spawned driver
+        // to pass to the agent.
+        let wf_arc = engine.workflows_arc();
+        let map = wf_arc.read().await;
+        let wf = map.get("RES-1").expect("present");
+        assert!(
+            matches!(wf.state, WorkflowState::AddressingTicket { .. }),
+            "resume must restore the source state; got {:?}",
+            wf.state
+        );
+        assert_eq!(
+            wf.last_session_id.as_deref(),
+            Some("session-abc-123"),
+            "resume does not clear last_session_id — the driver consumes it"
+        );
+    }
+
     /// Round-trip the step shadow helpers. `shadow_record_step_start`
     /// returns an id which `shadow_record_step_end` resolves to the same
     /// row; the final row reflects the end-write's status, exit code, and

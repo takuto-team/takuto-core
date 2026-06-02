@@ -164,7 +164,7 @@ impl WorkflowTransitions {
     pub async fn resume_workflow(&self, ticket_key: &str) -> Result<()> {
         use crate::workflow::definitions::{WorkflowDefRunState, discover_workflows};
 
-        let (running_defs, worktree_path, cancel_token, shadow_state) = {
+        let (running_defs, worktree_path, cancel_token, shadow_state, resume_session_id) = {
             let wf_arc = self.repository.inner_arc();
             let mut workflows = wf_arc.write().await;
             let workflow = workflows
@@ -216,7 +216,14 @@ impl WorkflowTransitions {
                     workflow.current_step_label.clone(),
                     workflow.updated_at.timestamp(),
                 );
-                (running, wt, workflow.cancel_token.clone(), shadow)
+                // last_session_id is set by `run_agent_step_sequence` after
+                // every agent invocation, so on pause it carries the most
+                // recent session the agent ran. May be None when the pause
+                // arrived before any agent step produced a session id —
+                // the resume path handles that by falling back to the
+                // built-in resume prompt with no `--resume` flag.
+                let session = workflow.last_session_id.clone();
+                (running, wt, workflow.cancel_token.clone(), shadow, session)
             } else {
                 return Err(ConfigError::InvalidWorkflowState {
                     op: "resume",
@@ -330,10 +337,14 @@ impl WorkflowTransitions {
 
                 // Thread the resolver into the resumed driver task.
                 let resolver = self.git_auth_resolver.clone();
+                let resume_ctx = super::step_runner::ResumeContext {
+                    session_id: resume_session_id.clone(),
+                };
                 tokio::spawn(async move {
                     super::driver::drive_workflow_def(
                         ticket, def_owned, steps, wt, ts, td, tt, ec, ew, ea, et, ct, as_, su, db,
                         resolver,
+                        Some(resume_ctx),
                     )
                     .await;
                 });

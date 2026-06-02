@@ -62,6 +62,9 @@ pub(super) async fn drive_workflow_def(
     // credentials + build a `WorkerSecretsBundle`. `None` preserves the
     // legacy `PASSTHROUGH_ENV` behaviour.
     git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    // When `Some`, the run is a resume: the first agent step gets a
+    // built-in resume prompt and (if known) the recorded session id.
+    resume: Option<super::step_runner::ResumeContext>,
 ) {
     use crate::workflow::definitions::WorkflowDefRunState;
 
@@ -153,6 +156,7 @@ pub(super) async fn drive_workflow_def(
             &agent_run_semaphore,
             db.as_ref(),
             git_auth_resolver.as_ref(),
+            resume.clone(),
         )
         .await
     }

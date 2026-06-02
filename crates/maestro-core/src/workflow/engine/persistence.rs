@@ -180,6 +180,22 @@ impl WorkflowPersistence {
                 continue;
             }
 
+            // Paused workflows wait for an explicit Resume click — re-spawning a
+            // driver here would race with the one `resume_workflow` spawns when
+            // the user clicks Resume, since both share the workflow's
+            // cancel_token and both would compete for the worktree.
+            let is_paused = {
+                let wf_arc = self.repository.inner_arc();
+                let wf_map = wf_arc.read().await;
+                wf_map
+                    .get(&ticket_key)
+                    .is_some_and(|w| matches!(w.state, WorkflowState::Paused { .. }))
+            };
+            if is_paused {
+                info!(ticket = %ticket_key, "Restored Paused workflow (no driver — awaiting Resume)");
+                continue;
+            }
+
             let engine_config = self.config.clone();
             let engine_workflows = self.repository.inner_arc();
             let engine_actions = self.actions.clone();
@@ -344,6 +360,7 @@ impl WorkflowPersistence {
                                 su,
                                 db_clone,
                                 resolver,
+                                None, // restart restore — fresh start, not a resume
                             )
                             .await;
                         });
