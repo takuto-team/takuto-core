@@ -166,6 +166,8 @@ async fn git_worktree_remove(
 }
 
 #[cfg(unix)]
+// libc FFI: read effective uid/gid for the chown decision.
+#[allow(unsafe_code)]
 async fn chown_tree_to_effective_user_via_sudo(repo_path: &Path, path_str: &str) -> bool {
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };

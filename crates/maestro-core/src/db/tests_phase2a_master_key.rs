@@ -7,6 +7,8 @@
 //! `auth::master_key` unit tests.
 
 #![cfg(test)]
+// Test-only `std::env` mutation (unsafe in the 2024 edition); serialised via ENV_LOCK.
+#![allow(unsafe_code)]
 
 use std::sync::Mutex;
 use tempfile::tempdir;

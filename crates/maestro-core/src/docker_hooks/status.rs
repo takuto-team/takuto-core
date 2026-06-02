@@ -351,6 +351,8 @@ pub fn preflight(config: &Config) -> Result<PreflightResult> {
 }
 
 #[cfg(test)]
+// Test-only `std::env` mutation (unsafe in the 2024 edition); serialised via ENV_LOCK.
+#[allow(unsafe_code)]
 mod system_status_tests {
     //! Unit tests — verify `collect_system_status` never returns Err
     //! and emits the right structured warnings for misconfigured providers.

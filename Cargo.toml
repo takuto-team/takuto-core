@@ -89,6 +89,67 @@ libc = "0.2"
 maestro-core = { path = "crates/maestro-core" }
 maestro-web = { path = "crates/maestro-web" }
 
+# Single source of truth for lints across the workspace. Each crate opts in
+# with `[lints] workspace = true`.
+[workspace.lints.rust]
+# Audited libc/FFI sites carry a local `#[allow(unsafe_code)]` with a reason;
+# any new unsafe elsewhere is a hard error.
+unsafe_code = "deny"
+unused = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints with pre-existing hits are relaxed for now and ratcheted back
+# to "warn" as the code is cleaned up. New pedantic lints not listed here still
+# fire on new code. Remove an entry to re-enable that lint workspace-wide.
+doc_markdown = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+redundant_closure_for_method_calls = "allow"
+too_many_lines = "allow"
+ignored_unit_patterns = "allow"
+manual_let_else = "allow"
+map_unwrap_or = "allow"
+items_after_statements = "allow"
+uninlined_format_args = "allow"
+cast_possible_wrap = "allow"
+single_match_else = "allow"
+assigning_clones = "allow"
+missing_panics_doc = "allow"
+cast_possible_truncation = "allow"
+manual_string_new = "allow"
+cast_lossless = "allow"
+if_not_else = "allow"
+case_sensitive_file_extension_comparisons = "allow"
+format_push_string = "allow"
+return_self_not_must_use = "allow"
+match_same_arms = "allow"
+struct_excessive_bools = "allow"
+stable_sort_primitive = "allow"
+needless_pass_by_value = "allow"
+implicit_hasher = "allow"
+unused_async = "allow"
+needless_continue = "allow"
+used_underscore_binding = "allow"
+semicolon_if_nothing_returned = "allow"
+similar_names = "allow"
+explicit_iter_loop = "allow"
+needless_raw_string_hashes = "allow"
+missing_fields_in_debug = "allow"
+cast_sign_loss = "allow"
+ref_option = "allow"
+redundant_else = "allow"
+filter_map_next = "allow"
+elidable_lifetime_names = "allow"
+bool_to_int_with_if = "allow"
+unnecessary_literal_bound = "allow"
+cast_precision_loss = "allow"
+unreadable_literal = "allow"
+unused_self = "allow"
+trivially_copy_pass_by_ref = "allow"
+naive_bytecount = "allow"
+
 # Release profile — see lore/code-quality-principles.md §5 (the release build
 # is the standing configuration; do not override per-commit).
 #   strip = "symbols"   — drop symbol tables from the final binary.

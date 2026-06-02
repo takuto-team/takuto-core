@@ -289,6 +289,8 @@ pub fn keyfile_path(data_dir: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+// Test-only `std::env` mutation (unsafe in the 2024 edition); serialised via ENV_LOCK.
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use std::sync::Mutex;

@@ -459,6 +459,8 @@ fn parse_body_from_prompt(prompt: &str) -> String {
 // --- Tests ---
 
 #[cfg(test)]
+// Test-only `std::env` mutation (unsafe in the 2024 edition); serialised via the test lock.
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use std::sync::OnceLock as StdOnceLock;

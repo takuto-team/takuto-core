@@ -1,6 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+// libc FFI: Unix process-group setup (setpgid/setsid) and group-wide SIGKILL.
+#![allow(unsafe_code)]
+
 use std::path::Path;
 use std::process::Stdio;
 

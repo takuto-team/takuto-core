@@ -3,6 +3,9 @@
 
 //! Process-spawn primitives shared by every probe in `docker_hooks`.
 
+// libc FFI: detach a spawned child into its own process group and group-wide SIGKILL.
+#![allow(unsafe_code)]
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

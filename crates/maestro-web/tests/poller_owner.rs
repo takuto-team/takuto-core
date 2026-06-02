@@ -1,6 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+// Test-only `std::env` mutation (unsafe in the 2024 edition); serialised within the test.
+#![allow(unsafe_code)]
+
 // Copyright (C) 2026 Alexandre Obellianne
 //
 // Integration tests for poller workflow ownership and one-shot orphan

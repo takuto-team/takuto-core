@@ -2,6 +2,8 @@
 name = "maestro-web"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+publish = false
 
 [features]
 # `test-utils` exposes `crate::test_helpers` so external integration tests
@@ -52,3 +54,6 @@ async-trait = { workspace = true }
 # no `cfg(test)`) compile the module out per
 # lore/code-quality-principles.md §6.
 maestro-web = { path = ".", features = ["test-utils"] }
+
+[lints]
+workspace = true
