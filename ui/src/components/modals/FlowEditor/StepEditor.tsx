@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { EditableName } from "../../EditableName";
+import { TrashIcon } from "../../icons";
 import { improveText } from "../../../api/flows";
 
 /** A skill row in the editor — `argsText` is the raw comma-separated input. */
@@ -247,9 +248,11 @@ export function StepEditor({
             <button
               type="button"
               onClick={() => removeSkill(si)}
-              className="text-sm text-gray-500 hover:text-gray-300 cursor-pointer whitespace-nowrap"
+              title="Remove skill"
+              aria-label="Remove skill"
+              className="p-1 text-gray-500 hover:text-red-400 cursor-pointer flex-shrink-0"
             >
-              Rm
+              <TrashIcon />
             </button>
           </div>
         ))}
