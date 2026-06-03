@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use maestro_core::auth::AuthError;
 
-use crate::state::AuthState;
+use crate::state::{AuthState, ConfigState};
 
 /// Request body for first-user registration.
 #[derive(Debug, Deserialize)]
@@ -43,6 +43,7 @@ struct RegisterResponse {
 /// `auth.db` is `Some` and the users table is empty.
 pub async fn register(
     State(auth): State<AuthState>,
+    State(config): State<ConfigState>,
     Json(body): Json<RegisterBody>,
 ) -> impl IntoResponse {
     let Some(ref db) = auth.db else {
@@ -93,7 +94,11 @@ pub async fn register(
     .await;
 
     match result {
-        Ok(resp) => (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response(),
+        Ok(resp) => {
+            crate::routes::admin::seed_default_flows_best_effort(&config, adapter, &resp.user_id)
+                .await;
+            (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response()
+        }
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("already exist") || msg.contains("Registration is closed") {

@@ -87,6 +87,7 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
             ticketing_system: TicketingSystem::None,
             jira_available,
             preflight_error: None,
+            work_item_flow_defaults: Arc::new(Vec::new()),
         },
         EditorState {
             editor_scanners: Arc::new(RwLock::new(HashMap::new())),

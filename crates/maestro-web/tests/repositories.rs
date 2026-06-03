@@ -108,6 +108,7 @@ fn test_state_isolated() -> (AppState, TempDir) {
             ticketing_system: TicketingSystem::None,
             jira_available,
             preflight_error: None,
+            work_item_flow_defaults: std::sync::Arc::new(Vec::new()),
         },
         EditorState {
             editor_scanners: Arc::new(RwLock::new(std::collections::HashMap::new())),

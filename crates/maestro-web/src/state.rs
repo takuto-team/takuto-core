@@ -121,6 +121,24 @@ pub struct ConfigState {
     /// (e.g. `gh` not authenticated). Kept for one release as a fallback when
     /// the DB is unavailable; the UI should read `system_status` instead.
     pub preflight_error: Option<String>,
+    /// Default per-user work-item flows parsed once at startup from the
+    /// workflow definitions directory. Used to seed a `(user, workspace)`
+    /// row that has none and to satisfy the "Re-seed from defaults" action.
+    /// Read at request time but never mutated after construction.
+    pub work_item_flow_defaults: Arc<Vec<maestro_core::db::user_work_item_flows::UserFlow>>,
+}
+
+impl ConfigState {
+    /// Workspace name for the active repository, derived server-side from the
+    /// live config's `git.repo_path`. This is the single source of truth that
+    /// scopes every `/api/me/flows*` endpoint — there is no client-supplied
+    /// workspace parameter.
+    pub async fn active_workspace_name(&self) -> String {
+        let repo_path = self.config.read().await.git.repo_path.clone();
+        maestro_core::workflow::snapshot::workspace_name_from_repo_path(std::path::Path::new(
+            &repo_path,
+        ))
+    }
 }
 
 /// Editor session container state — all 5 are keyed by `ticket_key` and
@@ -330,10 +348,11 @@ mod tests {
         let cloned_gh = std::sync::Arc::clone(&auth_state.gh_client);
         assert!(std::sync::Arc::strong_count(&cloned_gh) >= 2);
 
-        // 3. ConfigState — 6 fields (config, config_path, config_writer,
-        //    ticketing_system, jira_available, preflight_error). The fixture
-        //    points `config_path` at `temp_dir()/config.toml`, ticketing at
-        //    `None`, and leaves writer / preflight empty.
+        // 3. ConfigState — 7 fields (config, config_path, config_writer,
+        //    ticketing_system, jira_available, preflight_error,
+        //    work_item_flow_defaults). The fixture points `config_path` at
+        //    `temp_dir()/config.toml`, ticketing at `None`, leaves writer /
+        //    preflight empty, and seeds an empty flow-defaults list.
         let config_state = <ConfigState as FromRef<AppState>>::from_ref(&state);
         assert_eq!(
             config_state
@@ -349,6 +368,7 @@ mod tests {
         assert!(!config_state.jira_available.load(Ordering::Relaxed));
         assert!(config_state.config_writer.is_none());
         assert!(config_state.preflight_error.is_none());
+        assert!(config_state.work_item_flow_defaults.is_empty());
         let _live_cfg = config_state.config.read().await;
 
         // 4. EditorState — 5 fields (editor_scanners, dynamic_forwards,

@@ -18,7 +18,7 @@ use maestro_core::db::models::{
 };
 
 use crate::auth::{AuthenticatedUser, session_cookie_from_headers, validate_db_session};
-use crate::state::AuthState;
+use crate::state::{AuthState, ConfigState};
 
 // ---------------------------------------------------------------------------
 // Admin authorisation helpers
@@ -119,6 +119,7 @@ struct CreateUserResponse {
 /// `POST /api/users` -- Create a new user (admin only).
 pub async fn create_user(
     State(auth): State<AuthState>,
+    State(config): State<ConfigState>,
     headers: HeaderMap,
     Json(body): Json<CreateUserRequest>,
 ) -> impl IntoResponse {
@@ -160,7 +161,10 @@ pub async fn create_user(
     .await;
 
     match result {
-        Ok(resp) => (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response(),
+        Ok(resp) => {
+            seed_default_flows_best_effort(&config, adapter, &resp.user.id).await;
+            (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response()
+        }
         Err(e) => {
             let msg = e.to_string();
             let status = if msg.contains("already exists") {
@@ -170,6 +174,38 @@ pub async fn create_user(
             };
             (status, Json(serde_json::json!({"error": msg}))).into_response()
         }
+    }
+}
+
+/// Seed the default work-item flows for a freshly-created user against the
+/// active workspace. Best-effort: a failure logs a warning and leaves the
+/// user's row absent, so they see the dashboard empty-state banner until they
+/// save a flow or re-seed.
+///
+/// This is the eager seed path. A workspace this misses (e.g. one the active
+/// repo switches to later) is still covered: the flow resolver lazily calls
+/// `seed_if_absent` and retries once when the DAO returns no row, so there is
+/// no need for a separate seed-on-workspace-switch hook.
+pub(crate) async fn seed_default_flows_best_effort(
+    config: &ConfigState,
+    adapter: &maestro_core::db::DbAdapter,
+    user_id: &str,
+) {
+    let workspace = config.active_workspace_name().await;
+    if let Err(e) = maestro_core::db::user_work_item_flows::seed_if_absent(
+        adapter,
+        user_id,
+        &workspace,
+        &config.work_item_flow_defaults,
+    )
+    .await
+    {
+        tracing::warn!(
+            user_id = %user_id,
+            workspace = %workspace,
+            error = %e,
+            "Failed to seed default work-item flows for new user (continuing)"
+        );
     }
 }
 
@@ -625,6 +661,7 @@ mod tests {
                 ticketing_system: TicketingSystem::None,
                 jira_available,
                 preflight_error: None,
+                work_item_flow_defaults: std::sync::Arc::new(Vec::new()),
             },
             EditorState {
                 editor_scanners: Arc::new(RwLock::new(HashMap::new())),

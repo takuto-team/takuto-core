@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::{AgentStepConfig, SkillRef, StepAvailability};
+use crate::db::user_work_item_flows::{UserFlow, UserFlowStep};
 
 // ── YAML schema types ───────────────────────────────────────────────────────
 
@@ -561,6 +562,117 @@ pub fn topological_order(workflows: &[DiscoveredWorkflow]) -> Vec<String> {
     order
 }
 
+// ── Seed defaults for per-user flows ─────────────────────────────────────────
+
+/// Parse the workflow definitions directory into the default per-user flow
+/// list used to seed new `(user, workspace)` rows.
+///
+/// Each valid discovered workflow maps 1:1 to a [`UserFlow`]: the file's
+/// `name` becomes the flow name and its agent steps become the flow's steps.
+/// The per-user schema deliberately omits the legacy `repeat`, `when`, and
+/// command-only step forms, so those are dropped (with a warning) at parse
+/// time:
+///
+/// - **command-only steps** are skipped; a step with no agent prompt has no
+///   place in the user-flow schema.
+/// - **`repeat` / `when`** on a kept agent step are discarded (the resulting
+///   flow always runs unconditionally with `repeat = 1`).
+/// - a file whose steps are *all* command-only contributes no flow at all.
+///
+/// `depends_on` in the source files references other files by **filename**;
+/// [`UserFlow::depends_on`] references sibling flows by **name**, so each
+/// dependency is rewritten to the target flow's name. A dependency that does
+/// not resolve to a kept flow (missing, or pointing at a skipped command-only
+/// file) is dropped with a warning.
+pub fn default_flows_from_dir(dir: &Path) -> Vec<UserFlow> {
+    let discovered = discover_workflows(dir).workflows;
+
+    // First pass: convert each valid workflow whose agent steps survive into a
+    // flow, recording filename → flow-name so dependencies can be rewritten.
+    let mut flows: Vec<(String, UserFlow)> = Vec::new();
+    for wf in discovered.iter().filter(|w| w.valid) {
+        let steps = agent_steps_to_flow_steps(&wf.steps, &wf.filename);
+        if steps.is_empty() {
+            warn!(
+                workflow = %wf.filename,
+                "Skipping workflow with no agent steps when seeding default flows"
+            );
+            continue;
+        }
+        flows.push((
+            wf.filename.clone(),
+            UserFlow {
+                name: wf.name.clone(),
+                depends_on: wf.depends_on.clone(),
+                steps,
+            },
+        ));
+    }
+
+    // filename → flow name, for every flow that survived the first pass.
+    let filename_to_name: HashMap<&str, &str> = flows
+        .iter()
+        .map(|(filename, flow)| (filename.as_str(), flow.name.as_str()))
+        .collect();
+
+    // Second pass: rewrite each dependency (a source filename) to the target
+    // flow's name, dropping any that no longer resolve to a kept flow.
+    flows
+        .iter()
+        .map(|(filename, flow)| {
+            let depends_on = flow
+                .depends_on
+                .iter()
+                .filter_map(|dep| match filename_to_name.get(dep.as_str()) {
+                    Some(name) => Some((*name).to_string()),
+                    None => {
+                        warn!(
+                            workflow = %filename,
+                            dropped_dependency = %dep,
+                            "Dropping default-flow dependency that does not resolve to a kept flow"
+                        );
+                        None
+                    }
+                })
+                .collect();
+            UserFlow {
+                name: flow.name.clone(),
+                depends_on,
+                steps: flow.steps.clone(),
+            }
+        })
+        .collect()
+}
+
+/// Convert the agent steps of a discovered workflow into [`UserFlowStep`]s,
+/// dropping command-only steps and the legacy `repeat` / `when` fields.
+fn agent_steps_to_flow_steps(steps: &[AgentStepConfig], filename: &str) -> Vec<UserFlowStep> {
+    let mut out = Vec::new();
+    for step in steps {
+        if step.is_command_step() {
+            warn!(
+                workflow = %filename,
+                step = %step.name,
+                "Dropping command-only step when seeding default flows"
+            );
+            continue;
+        }
+        if step.repeat != 1 || step.when != StepAvailability::Always {
+            warn!(
+                workflow = %filename,
+                step = %step.name,
+                "Dropping 'repeat'/'when' from default-flow step (unsupported in user-flow schema)"
+            );
+        }
+        out.push(UserFlowStep {
+            name: step.name.clone(),
+            prompt: step.prompt.clone(),
+            skills: step.skills.clone(),
+        });
+    }
+    out
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -943,5 +1055,174 @@ steps:
         assert_eq!(wf.steps[0].when, StepAvailability::Ticketing);
         assert_eq!(wf.steps[1].when, StepAvailability::NoTicketing);
         assert_eq!(wf.steps[2].when, StepAvailability::Always);
+    }
+
+    // ── default_flows_from_dir ────────────────────────────────────────────
+
+    #[test]
+    fn default_flows_empty_dir_yields_no_flows() {
+        let dir = create_temp_dir();
+        assert!(default_flows_from_dir(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn default_flows_maps_agent_steps_and_drops_repeat_when() {
+        let dir = create_temp_dir();
+        fs::write(
+            dir.path().join("implement.toml"),
+            r#"
+name = "Implement Ticket"
+[[steps]]
+name = "Code it"
+prompt = "Implement the feature"
+repeat = 3
+when = "ticketing"
+skills = [{ name = "address-ticket", args = ["--headless"] }]
+"#,
+        )
+        .unwrap();
+
+        let flows = default_flows_from_dir(dir.path());
+        assert_eq!(flows.len(), 1);
+        let flow = &flows[0];
+        assert_eq!(flow.name, "Implement Ticket");
+        assert!(flow.depends_on.is_empty());
+        assert_eq!(flow.steps.len(), 1);
+        assert_eq!(flow.steps[0].name, "Code it");
+        assert_eq!(flow.steps[0].prompt, "Implement the feature");
+        // repeat / when are not part of the user-flow schema.
+        assert_eq!(flow.steps[0].skills.len(), 1);
+        assert_eq!(flow.steps[0].skills[0].name, "address-ticket");
+        assert_eq!(flow.steps[0].skills[0].args, vec!["--headless"]);
+    }
+
+    #[test]
+    fn default_flows_skips_command_only_steps_and_files() {
+        let dir = create_temp_dir();
+        // A flow with one command step and one agent step → keeps only the
+        // agent step.
+        fs::write(
+            dir.path().join("mixed.toml"),
+            r#"
+name = "Mixed"
+[[steps]]
+name = "Lint"
+commands = ["npm run lint"]
+[[steps]]
+name = "Think"
+prompt = "do agent work"
+"#,
+        )
+        .unwrap();
+        // A flow with only command steps → skipped entirely.
+        fs::write(
+            dir.path().join("buildonly.toml"),
+            r#"
+name = "Build Only"
+[[steps]]
+name = "Build"
+commands = ["cargo build"]
+"#,
+        )
+        .unwrap();
+
+        let flows = default_flows_from_dir(dir.path());
+        assert_eq!(flows.len(), 1, "command-only file must be skipped");
+        let mixed = &flows[0];
+        assert_eq!(mixed.name, "Mixed");
+        assert_eq!(mixed.steps.len(), 1, "command step must be dropped");
+        assert_eq!(mixed.steps[0].name, "Think");
+    }
+
+    #[test]
+    fn default_flows_rewrites_dependency_filename_to_flow_name() {
+        let dir = create_temp_dir();
+        fs::write(
+            dir.path().join("implement_ticket.toml"),
+            r#"
+name = "Implement Ticket"
+[[steps]]
+name = "Code"
+prompt = "do it"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("merge_base.toml"),
+            r#"
+name = "Merge Base Branch"
+depends_on = ["implement_ticket"]
+[[steps]]
+name = "Merge"
+prompt = "merge base"
+"#,
+        )
+        .unwrap();
+
+        let flows = default_flows_from_dir(dir.path());
+        let merge = flows
+            .iter()
+            .find(|f| f.name == "Merge Base Branch")
+            .expect("merge flow present");
+        // The source `depends_on` is a filename; it must be rewritten to the
+        // target flow's name so the user-flow graph is name-based.
+        assert_eq!(merge.depends_on, vec!["Implement Ticket".to_string()]);
+    }
+
+    #[test]
+    fn default_flows_drops_dependency_on_skipped_file() {
+        let dir = create_temp_dir();
+        // Command-only file → skipped, so any dependency on it is dropped.
+        fs::write(
+            dir.path().join("setup.toml"),
+            r#"
+name = "Setup"
+[[steps]]
+name = "Init"
+commands = ["echo init"]
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("work.toml"),
+            r#"
+name = "Work"
+depends_on = ["setup"]
+[[steps]]
+name = "Do"
+prompt = "do work"
+"#,
+        )
+        .unwrap();
+
+        let flows = default_flows_from_dir(dir.path());
+        assert_eq!(flows.len(), 1);
+        let work = &flows[0];
+        assert_eq!(work.name, "Work");
+        assert!(
+            work.depends_on.is_empty(),
+            "dependency on a skipped command-only file must be dropped"
+        );
+    }
+
+    #[test]
+    fn default_flows_output_passes_validation() {
+        let dir = create_temp_dir();
+        fs::write(
+            dir.path().join("a.toml"),
+            "name = \"Flow A\"\n[[steps]]\nname = \"s\"\nprompt = \"p\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("b.toml"),
+            "name = \"Flow B\"\ndepends_on = [\"a\"]\n[[steps]]\nname = \"s\"\nprompt = \"p\"\n",
+        )
+        .unwrap();
+
+        let flows = default_flows_from_dir(dir.path());
+        // The seeded defaults must satisfy the same validator the REST layer
+        // applies to user-submitted lists.
+        crate::db::user_work_item_flows::validate_user_flows(&flows)
+            .expect("seeded defaults must be valid");
     }
 }

@@ -750,6 +750,12 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             &c.general.workflow_definitions_dir,
         )
     };
+    // Parse the default per-user work-item flows once at startup. Shared by
+    // the startup seeding backfill below and the web layer (seeding new users,
+    // the "Re-seed from defaults" action).
+    let work_item_flow_defaults = Arc::new(
+        maestro_core::workflow::definitions::default_flows_from_dir(&workflows_dir),
+    );
     // Initialize the SQLite database for multi-user auth. This happens BEFORE
     // engine construction so the engine can thread the DB handle into the
     // bootstrap driver for per-workspace `worktree_init_commands` overrides,
@@ -868,6 +874,40 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                  user_repositories backfill; existing workflows will be invisible until each user \
                  re-adds the repository from the dashboard"
             );
+        }
+
+        // Seed default work-item flows for every existing user against the
+        // active workspace, idempotently. Runs before the HTTP listener
+        // accepts traffic so the first dashboard load already sees flows for
+        // the currently-selected workspace. Best-effort: a failure logs a
+        // warning and the user falls back to the empty-state banner.
+        let active_workspace = maestro_core::workflow::snapshot::workspace_name_from_repo_path(
+            std::path::Path::new(&config.read().await.git.repo_path),
+        );
+        match maestro_core::db::users::list_users(adapter).await {
+            Ok(users) => {
+                for user in &users {
+                    if let Err(e) = maestro_core::db::user_work_item_flows::seed_if_absent(
+                        adapter,
+                        &user.id,
+                        &active_workspace,
+                        &work_item_flow_defaults,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            user_id = %user.id,
+                            workspace = %active_workspace,
+                            error = %e,
+                            "Failed to seed default work-item flows (continuing)"
+                        );
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                "Failed to list users for work-item flow seeding (continuing)"
+            ),
         }
 
         // active_workspace file cleanup. The active-workspace concept is
@@ -1107,6 +1147,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             ticketing_system,
             jira_available: jira_available.clone(),
             preflight_error,
+            work_item_flow_defaults: work_item_flow_defaults.clone(),
         },
         EditorState {
             editor_scanners: std::sync::Arc::new(tokio::sync::RwLock::new(
