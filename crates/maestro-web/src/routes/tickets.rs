@@ -100,8 +100,10 @@ async fn resolve_workflow_repo_path(
 ///
 /// Reads the workflow's `description_session_id` to resume the shared conversation, then
 /// writes the new session ID back so the next call continues in the same context.
-/// Falls back gracefully when the ticket has no associated workflow in the map.
-async fn run_description_session(
+/// Falls back gracefully when the ticket has no associated workflow in the map — for
+/// non-ticket improve callers (e.g. flow step-prompt improvement) pass any unique key;
+/// the workflow lookup returns `None` and the session runs fresh each time.
+pub(crate) async fn run_description_session(
     engine: &EngineState,
     auth_state: &AuthState,
     cfg_state: &ConfigState,

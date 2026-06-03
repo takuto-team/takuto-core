@@ -10,7 +10,9 @@
  * separators on every keystroke.
  */
 
+import { useEffect, useRef, useState } from "react";
 import { EditableName } from "../../EditableName";
+import { improveText } from "../../../api/flows";
 
 /** A skill row in the editor — `argsText` is the raw comma-separated input. */
 export interface SkillDraft {
@@ -23,6 +25,14 @@ export interface StepDraft {
   name: string;
   prompt: string;
   skills: SkillDraft[];
+}
+
+const IMPROVE_TIMEOUT_SECS = 300;
+
+function formatCountdown(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 interface StepEditorProps {
@@ -58,6 +68,70 @@ export function StepEditor({
     onChange({ ...step, skills: step.skills.filter((_, si) => si !== i) });
   };
 
+  const [improving, setImproving] = useState(false);
+  const [improveError, setImproveError] = useState<string | null>(null);
+  const [originalPrompt, setOriginalPrompt] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState(IMPROVE_TIMEOUT_SECS);
+  const abortRef = useRef<AbortController | null>(null);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startCountdown = () => {
+    setCountdown(IMPROVE_TIMEOUT_SECS);
+    if (tickRef.current) clearInterval(tickRef.current);
+    tickRef.current = setInterval(() => {
+      setCountdown((p) => Math.max(0, p - 1));
+    }, 1000);
+  };
+
+  const stopCountdown = () => {
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+  };
+
+  const handleImprove = async () => {
+    if (step.prompt.trim() === "" || improving) return;
+    const snapshot = step.prompt;
+    setImproving(true);
+    setImproveError(null);
+    startCountdown();
+    abortRef.current = new AbortController();
+    try {
+      const improved = await improveText(snapshot, abortRef.current.signal);
+      setOriginalPrompt(snapshot);
+      onChange({ ...step, prompt: improved });
+    } catch (e) {
+      if (e instanceof Error && e.name !== "AbortError") {
+        setImproveError(e.message || "Improve request failed");
+      }
+    } finally {
+      setImproving(false);
+      stopCountdown();
+      abortRef.current = null;
+    }
+  };
+
+  const handleCancelImprove = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setImproving(false);
+    stopCountdown();
+  };
+
+  const handleRevert = () => {
+    if (originalPrompt === null) return;
+    onChange({ ...step, prompt: originalPrompt });
+    setOriginalPrompt(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+  }, []);
+
   return (
     <div
       draggable={draggable}
@@ -71,8 +145,22 @@ export function StepEditor({
         onDrop();
       }}
       onDragEnd={onDragEnd}
-      className={`border border-gray-800 rounded-lg bg-gray-950 p-3 space-y-2 ${isDragging ? "opacity-40" : ""}`}
+      className={`relative border border-gray-800 rounded-lg bg-gray-950 p-3 space-y-2 ${isDragging ? "opacity-40" : ""}`}
     >
+      {improving && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-900/85 backdrop-blur-sm rounded-lg">
+          <div className="w-6 h-6 border-2 border-gray-600 border-t-purple-400 rounded-full animate-spin" />
+          <p className="mt-3 text-sm text-gray-300">Improving prompt…</p>
+          <p className="mt-1 text-xs text-gray-500">{formatCountdown(countdown)}</p>
+          <button
+            type="button"
+            onClick={handleCancelImprove}
+            className="mt-3 text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <span
           className={`text-gray-600 select-none ${draggable ? "cursor-grab" : "cursor-default"}`}
@@ -107,6 +195,26 @@ export function StepEditor({
           placeholder="Text sent verbatim to the agent for this step."
           className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-200 focus:outline-none focus:border-blue-500 resize-y"
         />
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={handleImprove}
+            disabled={improving || step.prompt.trim() === ""}
+            className="text-xs px-3 py-1 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {improving ? "Improving…" : "Improve with AI"}
+          </button>
+          {originalPrompt !== null && !improving && (
+            <button
+              type="button"
+              onClick={handleRevert}
+              className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+            >
+              Revert
+            </button>
+          )}
+          {improveError && <span className="text-xs text-red-400">{improveError}</span>}
+        </div>
       </div>
 
       <div className="space-y-1.5">

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use maestro_core::db::user_work_item_flows::{self, UserFlow};
 
 use crate::auth::AuthenticatedUser;
-use crate::state::{AuthState, ConfigState};
+use crate::state::{AuthState, ConfigState, EngineState};
 
 /// Response shape shared by all three endpoints: the caller's flow list plus
 /// the workspace it is scoped to. An empty `flows` array is a valid response —
@@ -169,4 +169,77 @@ pub async fn reseed_my_flows(
     );
 
     Ok(Json(FlowsResponse { flows, workspace }))
+}
+
+const IMPROVE_PROMPT_SYSTEM_PROMPT: &str = "\
+You are a technical writer who improves prompts that will be sent to a coding agent. \
+Output ONLY the improved prompt, in Markdown, with no preamble or commentary. \
+Make it clearer, more actionable, and more precise. Keep the original intent intact.";
+
+/// Hard cap on the user-supplied text in an improve request (100 KB), mirroring
+/// the ticket-description improve path.
+const MAX_IMPROVE_PROMPT_LEN: usize = 100 * 1024;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImprovePromptBody {
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImprovePromptResponse {
+    pub improved_text: String,
+}
+
+/// `POST /api/me/text/improve` — improve an arbitrary chunk of user-authored
+/// text (currently used for flow step prompts) via the configured AI agent.
+/// Mirrors the `improve_ticket` pipeline but without a workflow context: each
+/// call runs a fresh session in an ephemeral worker container.
+pub async fn improve_prompt(
+    State(engine): State<EngineState>,
+    State(auth): State<AuthState>,
+    State(config): State<ConfigState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(body): Json<ImprovePromptBody>,
+) -> Result<Json<ImprovePromptResponse>, (StatusCode, String)> {
+    if body.text.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_string()));
+    }
+    if body.text.len() > MAX_IMPROVE_PROMPT_LEN {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "Text exceeds maximum allowed length ({} bytes, limit {})",
+                body.text.len(),
+                MAX_IMPROVE_PROMPT_LEN,
+            ),
+        ));
+    }
+
+    // Synthetic key: the `run_description_session` helper uses it only to look
+    // up an optional resume session and to name the ephemeral container. The
+    // workflow map will return `None` for an unknown key, so each improve call
+    // runs a fresh session.
+    let synthetic_key = format!("flow-prompt-{}", uuid::Uuid::new_v4());
+    let prompt = format!(
+        "Improve the following prompt that will be sent to a coding agent. \
+Make it clearer, more actionable, and more precise. Keep the original intent intact.\n\n\
+**Current prompt:**\n{}",
+        body.text,
+    );
+
+    let output = crate::routes::tickets::run_description_session(
+        &engine,
+        &auth,
+        &config,
+        &synthetic_key,
+        &user.user_id,
+        &prompt,
+        Some(IMPROVE_PROMPT_SYSTEM_PROMPT),
+    )
+    .await?;
+
+    Ok(Json(ImprovePromptResponse {
+        improved_text: output.trim().to_string(),
+    }))
 }

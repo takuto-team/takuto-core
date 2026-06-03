@@ -413,6 +413,7 @@ pub fn build_router(state: AppState) -> Router {
             get(routes::me_flows::get_my_flows).put(routes::me_flows::put_my_flows),
         )
         .route("/me/flows/reseed", post(routes::me_flows::reseed_my_flows))
+        .route("/me/text/improve", post(routes::me_flows::improve_prompt))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             dashboard_auth_middleware,

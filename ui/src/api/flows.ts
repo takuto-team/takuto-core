@@ -115,3 +115,24 @@ export async function reseedMyFlows(): Promise<UserFlowsResponse> {
   }
   return res.json();
 }
+
+/**
+ * POST /api/me/text/improve — run a headless AI session to improve a chunk of
+ * user-authored text (currently used for flow step prompts). Returns the
+ * improved text. Supports cancellation via the optional `AbortSignal`.
+ */
+export async function improveText(text: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch("/api/me/text/improve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ text }),
+    signal,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `HTTP ${res.status}`);
+  }
+  const data = (await res.json()) as { improved_text: string };
+  return data.improved_text;
+}
