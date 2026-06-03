@@ -1,0 +1,126 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import { fn } from "storybook/test";
+import { FlowEditorModal } from "../components/modals/FlowEditorModal";
+import type { UserFlow } from "../api/flows";
+
+const implement: UserFlow = {
+  name: "implement_ticket",
+  depends_on: [],
+  steps: [
+    {
+      name: "Implement",
+      prompt:
+        "Implement the changes described in the ticket. Do not commit; a follow-up step handles commits.",
+      skills: [],
+    },
+    {
+      name: "Review",
+      prompt:
+        "Review your changes against `{base_branch}`. Address any genuine findings; leave a # TODO for anything out of scope.",
+      skills: [],
+    },
+  ],
+};
+
+const review: UserFlow = {
+  name: "review_changes",
+  depends_on: ["implement_ticket"],
+  steps: [
+    {
+      name: "Code review",
+      prompt: "Walk the diff against `{base_branch}` and call out issues, with severity labels.",
+      skills: [{ name: "review-rubric", args: ["--strict"] }],
+    },
+  ],
+};
+
+const createPr: UserFlow = {
+  name: "create_pr",
+  depends_on: ["review_changes"],
+  steps: [
+    {
+      name: "Open PR",
+      prompt: "Open a pull request targeting `{base_branch}` with a conventional-commit title.",
+      skills: [{ name: "create-pr", args: ["--no-draft"] }],
+    },
+  ],
+};
+
+const sampleFlows: UserFlow[] = [implement, review, createPr];
+
+const noopSubmit = async () => {};
+const failingSubmit = async () => {
+  throw new Error("This name is already taken by another flow in this workspace.");
+};
+
+const meta = {
+  title: "Modals/FlowEditorModal",
+  component: FlowEditorModal,
+  parameters: {
+    layout: "fullscreen",
+    backgrounds: {
+      default: "dark",
+      values: [{ name: "dark", value: "#030712" }],
+    },
+  },
+  tags: ["autodocs"],
+  args: {
+    flows: sampleFlows,
+    editIndex: null,
+    onSubmit: fn(noopSubmit),
+    onClose: fn(),
+  },
+} satisfies Meta<typeof FlowEditorModal>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+export const AddFlow: Story = {
+  name: "Add — fresh draft",
+};
+
+export const EditFlow: Story = {
+  name: "Edit — pre-populated",
+  args: {
+    editIndex: 0,
+  },
+};
+
+export const EditMultiStepWithSkills: Story = {
+  name: "Edit — multi-step + skills",
+  args: {
+    editIndex: 2,
+  },
+};
+
+const cycleSetup: UserFlow[] = [
+  { ...implement, depends_on: ["create_pr"] },
+  review,
+  createPr,
+];
+
+export const CycleSetup: Story = {
+  name: "Cycle warning visible",
+  args: {
+    flows: cycleSetup,
+    editIndex: 0,
+  },
+};
+
+export const ServerRejects: Story = {
+  name: "Server rejection on save",
+  args: {
+    editIndex: 0,
+    onSubmit: fn(failingSubmit),
+  },
+};
+
+export const SingleStepEmptyFlows: Story = {
+  name: "Add — no siblings to depend on",
+  args: {
+    flows: [],
+  },
+};
