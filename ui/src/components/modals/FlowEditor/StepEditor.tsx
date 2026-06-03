@@ -71,7 +71,7 @@ export function StepEditor({
         onDrop();
       }}
       onDragEnd={onDragEnd}
-      className={`border border-gray-700 rounded-lg bg-gray-800 p-3 space-y-2 ${isDragging ? "opacity-40" : ""}`}
+      className={`border border-gray-800 rounded-lg bg-gray-950 p-3 space-y-2 ${isDragging ? "opacity-40" : ""}`}
     >
       <div className="flex items-center gap-2">
         <span
