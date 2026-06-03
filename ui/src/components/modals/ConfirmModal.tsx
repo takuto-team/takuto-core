@@ -6,9 +6,10 @@ interface Props {
   message: string;
   onConfirm: () => void;
   onCancel: () => void;
+  confirmLabel?: string;
 }
 
-export function ConfirmModal({ title, message, onConfirm, onCancel }: Props) {
+export function ConfirmModal({ title, message, onConfirm, onCancel, confirmLabel = "Confirm" }: Props) {
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div
@@ -28,7 +29,7 @@ export function ConfirmModal({ title, message, onConfirm, onCancel }: Props) {
             onClick={onConfirm}
             className="text-sm px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-500 cursor-pointer"
           >
-            Confirm
+            {confirmLabel}
           </button>
         </div>
       </div>

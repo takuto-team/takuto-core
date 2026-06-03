@@ -10,6 +10,7 @@ import { SecurityTab } from "../components/SecurityTab";
 import { WorktreeSettingsTab } from "../components/WorktreeSettingsTab";
 import { MyRepositoriesTab } from "../components/MyRepositoriesTab";
 import { AiSettingsTab } from "../components/AiSettingsTab";
+import { FlowsTab } from "../components/FlowsTab";
 
 interface Props {
   onLogout: () => void;
@@ -23,6 +24,7 @@ const ALL_TABS = [
   "Users",
   "My Repositories",
   "Worktree Settings",
+  "Flows",
 ] as const;
 type Tab = (typeof ALL_TABS)[number];
 
@@ -164,6 +166,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
     if (slug === "ai") return "AI Settings";
     if (slug === "repositories") return "My Repositories";
     if (slug === "worktree") return "Worktree Settings";
+    if (slug === "Flows" || slug === "flows") return "Flows";
     if (slug === "users" && isAdmin) return "Users";
     if (slug === "security") return "Security";
     return tabs[0];
@@ -219,6 +222,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
         {tab === "Users" && <UsersTabConnected />}
         {tab === "My Repositories" && <MyRepositoriesTab isAdmin={isAdmin} />}
         {tab === "Worktree Settings" && <WorktreeSettingsTab />}
+        {tab === "Flows" && <FlowsTab />}
       </main>
     </div>
   );
