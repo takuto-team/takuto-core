@@ -1,8 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useEffect, useState } from "react";
 import type { UserFlow } from "../api/flows";
 import { FlowEditor } from "./FlowEditor";
+import { EditableName } from "./EditableName";
 
 interface FlowCardProps {
   flow: UserFlow;
@@ -39,6 +41,17 @@ export function FlowCard({
   onDrop,
   onDragEnd,
 }: FlowCardProps) {
+  // Draft name is only meaningful while expanded; reset to the saved value on
+  // every (re-)expansion or when the underlying flow's name changes. Cancel
+  // therefore discards rename edits automatically.
+  const [nameDraft, setNameDraft] = useState(flow.name);
+  const [nameError, setNameError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setNameDraft(flow.name);
+    setNameError(null);
+  }, [flow.name, expanded]);
+
   return (
     <div
       draggable={draggable && !expanded}
@@ -69,7 +82,16 @@ export function FlowCard({
           ⠿
         </span>
 
-        <span className="text-sm font-medium text-gray-200 truncate">{flow.name}</span>
+        {expanded ? (
+          <EditableName
+            value={nameDraft}
+            onChange={setNameDraft}
+            placeholder="Untitled flow"
+            textClassName="text-sm font-medium"
+          />
+        ) : (
+          <span className="text-sm font-medium text-gray-200 truncate">{flow.name}</span>
+        )}
 
         <span className="text-xs text-gray-500 whitespace-nowrap">
           {stepCountLabel(flow.steps.length)}
@@ -127,11 +149,17 @@ export function FlowCard({
         </span>
       </button>
 
+      {expanded && nameError && (
+        <p className="px-4 pt-2 text-sm text-red-400">{nameError}</p>
+      )}
+
       {expanded && (
         <div id={`flow-${index}-editor`}>
           <FlowEditor
             flows={flows}
             editIndex={index}
+            name={nameDraft}
+            onNameError={setNameError}
             onSubmit={onSubmit}
             onCancel={onCancelEdit}
           />

@@ -2,9 +2,11 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Coverage for the inline flow editor. The editor owns the client-side mirror
- * of the backend validator (unique name, unique slug, dependency cycles,
- * >= 1 step) and submits the whole list on save.
+ * Coverage for the inline flow editor. The editor owns the dependency-cycle
+ * check, the steps repeater, the >= 1 step + per-step rules, and the save
+ * action. Name + slug validation is surfaced to the parent via `onNameError`
+ * (the parent — FlowCard or FlowsTab — renders the editable name in the
+ * card header).
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -22,38 +24,42 @@ function flow(name: string, depends_on: string[] = []): UserFlow {
 
 afterEach(() => cleanup());
 
-describe("FlowEditor — name validation", () => {
-  it("surfaces an inline error when the name collides with another flow", () => {
+describe("FlowEditor — name validation surfaced upward", () => {
+  it("reports a collision via onNameError", () => {
+    const onNameError = vi.fn();
     render(
       <FlowEditor
         flows={[flow("Build")]}
         editIndex={null}
+        name="Build"
+        onNameError={onNameError}
         onSubmit={vi.fn()}
         onCancel={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText(/lint_and_test/i), {
-      target: { value: "Build" },
-    });
-    expect(screen.getByText(/a flow named "Build" already exists/i)).toBeTruthy();
+    expect(onNameError).toHaveBeenLastCalledWith(
+      expect.stringMatching(/a flow named "Build" already exists/i),
+    );
     expect(
       (screen.getByRole("button", { name: /create flow/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
-  it("detects a slug collision between two distinct names", () => {
+  it("reports a slug collision between two distinct names via onNameError", () => {
+    const onNameError = vi.fn();
     render(
       <FlowEditor
         flows={[flow("Implement Ticket")]}
         editIndex={null}
+        name="implement-ticket"
+        onNameError={onNameError}
         onSubmit={vi.fn()}
         onCancel={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText(/lint_and_test/i), {
-      target: { value: "implement-ticket" },
-    });
-    expect(screen.getByText(/both become "implement-ticket"/i)).toBeTruthy();
+    expect(onNameError).toHaveBeenLastCalledWith(
+      expect.stringMatching(/both become "implement-ticket"/i),
+    );
     expect(
       (screen.getByRole("button", { name: /create flow/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -62,11 +68,11 @@ describe("FlowEditor — name validation", () => {
 
 describe("FlowEditor — dependency cycle", () => {
   it("warns and blocks save when a new dependency closes a cycle", () => {
-    // B already depends on A. Editing A and making it depend on B closes the loop.
     render(
       <FlowEditor
         flows={[flow("A"), flow("B", ["A"])]}
         editIndex={0}
+        name="A"
         onSubmit={vi.fn()}
         onCancel={vi.fn()}
       />,
@@ -83,7 +89,15 @@ describe("FlowEditor — dependency cycle", () => {
 
 describe("FlowEditor — steps repeater", () => {
   it("adds and removes step rows; the last remaining step cannot be removed", () => {
-    render(<FlowEditor flows={[]} editIndex={null} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    render(
+      <FlowEditor
+        flows={[]}
+        editIndex={null}
+        name="x"
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
     expect(screen.getAllByRole("button", { name: /^remove$/i })).toHaveLength(1);
     expect((screen.getByRole("button", { name: /^remove$/i }) as HTMLButtonElement).disabled).toBe(
       true,
@@ -99,10 +113,17 @@ describe("FlowEditor — steps repeater", () => {
   });
 
   it("renames a step in place via the click-to-edit header", () => {
-    render(<FlowEditor flows={[]} editIndex={null} onSubmit={vi.fn()} onCancel={vi.fn()} />);
-    // Empty step starts as "Untitled step"; the header is a button that swaps to an input.
+    render(
+      <FlowEditor
+        flows={[]}
+        editIndex={null}
+        name="x"
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /untitled step/i }));
-    const headerInput = screen.getByPlaceholderText(/cargo fmt/i);
+    const headerInput = screen.getByPlaceholderText(/untitled step/i);
     fireEvent.change(headerInput, { target: { value: "lint" } });
     fireEvent.keyDown(headerInput, { key: "Enter" });
     expect(screen.getByRole("button", { name: "lint" })).toBeTruthy();
@@ -117,17 +138,14 @@ describe("FlowEditor — save", () => {
       <FlowEditor
         flows={[flow("Build")]}
         editIndex={null}
+        name="Deploy"
         onSubmit={onSubmit}
         onCancel={onCancel}
       />,
     );
 
-    fireEvent.change(screen.getByPlaceholderText(/lint_and_test/i), {
-      target: { value: "Deploy" },
-    });
-    // Step name lives in a click-to-edit header — open it before typing.
     fireEvent.click(screen.getByRole("button", { name: /untitled step/i }));
-    fireEvent.change(screen.getByPlaceholderText(/cargo fmt/i), {
+    fireEvent.change(screen.getByPlaceholderText(/untitled step/i), {
       target: { value: "ship it" },
     });
     fireEvent.change(screen.getByPlaceholderText(/sent verbatim/i), {

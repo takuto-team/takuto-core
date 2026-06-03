@@ -603,7 +603,7 @@ pub fn default_flows_from_dir(dir: &Path) -> Vec<UserFlow> {
         flows.push((
             wf.filename.clone(),
             UserFlow {
-                name: wf.name.clone(),
+                name: prettify_name(&wf.name),
                 depends_on: wf.depends_on.clone(),
                 steps,
             },
@@ -730,6 +730,17 @@ pub fn user_flows_to_discovered(flows: &[UserFlow]) -> Vec<DiscoveredWorkflow> {
 
 /// Convert the agent steps of a discovered workflow into [`UserFlowStep`]s,
 /// dropping command-only steps and the legacy `repeat` / `when` fields.
+/// Humanise a seeded name: replace underscores with spaces and uppercase the
+/// first character. Idempotent on already-pretty names.
+fn prettify_name(raw: &str) -> String {
+    let spaced = raw.replace('_', " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 fn agent_steps_to_flow_steps(steps: &[AgentStepConfig], filename: &str) -> Vec<UserFlowStep> {
     let mut out = Vec::new();
     for step in steps {
@@ -749,7 +760,7 @@ fn agent_steps_to_flow_steps(steps: &[AgentStepConfig], filename: &str) -> Vec<U
             );
         }
         out.push(UserFlowStep {
-            name: step.name.clone(),
+            name: prettify_name(&step.name),
             prompt: step.prompt.clone(),
             skills: step.skills.clone(),
         });
@@ -1399,5 +1410,27 @@ prompt = "do work"
         // applies to user-submitted lists.
         crate::db::user_work_item_flows::validate_user_flows(&flows)
             .expect("seeded defaults must be valid");
+    }
+
+    #[test]
+    fn default_flows_prettify_seeded_names() {
+        let dir = create_temp_dir();
+        fs::write(
+            dir.path().join("lint.toml"),
+            "name = \"implement_ticket\"\n[[steps]]\nname = \"run_lint\"\nprompt = \"p\"\n",
+        )
+        .unwrap();
+
+        let flows = default_flows_from_dir(dir.path());
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].name, "Implement ticket");
+        assert_eq!(flows[0].steps[0].name, "Run lint");
+    }
+
+    #[test]
+    fn prettify_name_is_idempotent_on_already_pretty_names() {
+        assert_eq!(prettify_name("Implement Ticket"), "Implement Ticket");
+        assert_eq!(prettify_name("Lint and test"), "Lint and test");
+        assert_eq!(prettify_name(""), "");
     }
 }

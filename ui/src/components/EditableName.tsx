@@ -1,0 +1,82 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
+import { useEffect, useRef, useState } from "react";
+
+interface EditableNameProps {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder: string;
+  /** Tailwind classes for the rendered text / input (sizing, weight). */
+  textClassName: string;
+  /** Optional click-to-rename tooltip override. */
+  title?: string;
+}
+
+/**
+ * A name surface that is a clickable label in display mode and swaps to an
+ * inline `<input>` on click. Used in the flow card row and in each step's
+ * header so the user can rename in place without a separate field.
+ *
+ * Click events stop propagating so this can sit inside an outer button (the
+ * card row that toggles expand/collapse) without triggering it.
+ */
+export function EditableName({
+  value,
+  onChange,
+  placeholder,
+  textClassName,
+  title,
+}: EditableNameProps) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => setEditing(false)}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === "Escape") {
+            e.preventDefault();
+            e.currentTarget.blur();
+          }
+        }}
+        placeholder={placeholder}
+        className={`${textClassName} min-w-0 bg-gray-950 border border-blue-500 rounded px-2 py-0.5 text-gray-200 focus:outline-none`}
+      />
+    );
+  }
+
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={(e) => {
+        e.stopPropagation();
+        setEditing(true);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          setEditing(true);
+        }
+      }}
+      title={title ?? "Click to rename"}
+      className={`${textClassName} truncate text-left rounded px-1 -mx-1 hover:bg-gray-800 cursor-pointer ${
+        value.trim() === "" ? "text-gray-500 italic" : "text-gray-300"
+      }`}
+    >
+      {value.trim() === "" ? placeholder : value}
+    </span>
+  );
+}

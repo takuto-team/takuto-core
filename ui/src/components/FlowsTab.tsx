@@ -24,6 +24,7 @@ import { getMyFlows, putMyFlows, reseedMyFlows, MAX_FLOWS, type UserFlow } from 
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { FlowCard } from "./FlowCard";
 import { FlowEditor } from "./FlowEditor";
+import { EditableName } from "./EditableName";
 
 /** `expanded` selects an existing index, the literal "new" for the draft card, or none. */
 type Expanded = number | "new" | null;
@@ -39,6 +40,8 @@ export function FlowsTab() {
   const [confirmReseed, setConfirmReseed] = useState(false);
   const [expanded, setExpanded] = useState<Expanded>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [newFlowName, setNewFlowName] = useState("");
+  const [newFlowNameError, setNewFlowNameError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -131,7 +134,15 @@ export function FlowsTab() {
   };
 
   const addFlow = () => {
+    setNewFlowName("");
+    setNewFlowNameError(null);
     setExpanded("new");
+  };
+
+  const cancelNewFlow = () => {
+    setExpanded(null);
+    setNewFlowName("");
+    setNewFlowNameError(null);
   };
 
   const atCap = flows.length >= MAX_FLOWS;
@@ -230,14 +241,27 @@ export function FlowsTab() {
 
             {expanded === "new" && (
               <div className="border border-blue-700/60 rounded-lg bg-gray-950">
-                <div className="px-3 py-2.5 text-sm text-gray-400 italic border-b border-gray-800">
-                  New flow
+                <div className="flex items-center gap-3 px-3 py-2.5 border-b border-gray-800">
+                  <span className="text-gray-600 select-none" aria-hidden="true">
+                    ⠿
+                  </span>
+                  <EditableName
+                    value={newFlowName}
+                    onChange={setNewFlowName}
+                    placeholder="Untitled flow"
+                    textClassName="text-sm font-medium"
+                  />
                 </div>
+                {newFlowNameError && (
+                  <p className="px-4 pt-2 text-sm text-red-400">{newFlowNameError}</p>
+                )}
                 <FlowEditor
                   flows={flows}
                   editIndex={null}
+                  name={newFlowName}
+                  onNameError={setNewFlowNameError}
                   onSubmit={handleEditorSubmit}
-                  onCancel={() => setExpanded(null)}
+                  onCancel={cancelNewFlow}
                 />
               </div>
             )}

@@ -22,6 +22,10 @@ import { DependsOnSelect } from "./modals/FlowEditor/DependsOnSelect";
 interface FlowEditorProps {
   flows: UserFlow[];
   editIndex: number | null;
+  /** Current draft name, owned by the parent so the card header can render it. */
+  name: string;
+  /** Surface client-side name validation upward (parent shows the error near the header). */
+  onNameError?: (err: string | null) => void;
   onSubmit: (next: UserFlow[]) => Promise<void>;
   onCancel: () => void;
 }
@@ -70,10 +74,16 @@ function splitArgs(text: string): string[] {
 
 const blankStep = (): StepDraft => ({ name: "", prompt: "", skills: [] });
 
-export function FlowEditor({ flows, editIndex, onSubmit, onCancel }: FlowEditorProps) {
+export function FlowEditor({
+  flows,
+  editIndex,
+  name,
+  onNameError,
+  onSubmit,
+  onCancel,
+}: FlowEditorProps) {
   const editing = editIndex !== null ? flows[editIndex] : null;
 
-  const [name, setName] = useState(editing?.name ?? "");
   const [dependsOn, setDependsOn] = useState<string[]>(editing?.depends_on ?? []);
   const [steps, setSteps] = useState<StepDraft[]>(
     editing && editing.steps.length > 0
@@ -121,6 +131,10 @@ export function FlowEditor({ flows, editIndex, onSubmit, onCancel }: FlowEditorP
     }
     return null;
   }, [trimmedName, slug, otherNames, otherFlows]);
+
+  useEffect(() => {
+    if (onNameError) onNameError(nameError);
+  }, [nameError, onNameError]);
 
   const cycleError = useMemo(() => {
     if (trimmedName === "" || nameError) return null;
@@ -203,19 +217,6 @@ export function FlowEditor({ flows, editIndex, onSubmit, onCancel }: FlowEditorP
       className="border-t border-gray-800 px-4 py-4 space-y-5 bg-gray-900 rounded-b-lg"
       onKeyDown={handleKeyDown}
     >
-      <div>
-        <label className="block text-sm text-gray-400 mb-1">Name</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. lint_and_test"
-          autoFocus
-          className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
-        />
-        {nameError && <p className="text-sm text-red-400 mt-1">{nameError}</p>}
-      </div>
-
       <div>
         <label className="block text-sm text-gray-400 mb-1">Depends on</label>
         <DependsOnSelect options={otherNames} selected={dependsOn} onChange={setDependsOn} />

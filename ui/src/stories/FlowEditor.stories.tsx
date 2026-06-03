@@ -70,6 +70,7 @@ const meta = {
   args: {
     flows: sampleFlows,
     editIndex: null,
+    name: "",
     onSubmit: fn(noopSubmit),
     onCancel: fn(),
   },
@@ -80,12 +81,14 @@ type Story = StoryObj<typeof meta>;
 
 export const AddFlow: Story = {
   name: "Add — fresh draft",
+  args: { name: "lint_and_test" },
 };
 
 export const EditFlow: Story = {
   name: "Edit — pre-populated",
   args: {
     editIndex: 0,
+    name: "implement_ticket",
   },
 };
 
@@ -93,6 +96,7 @@ export const EditMultiStepWithSkills: Story = {
   name: "Edit — multi-step + skills",
   args: {
     editIndex: 2,
+    name: "create_pr",
   },
 };
 
@@ -107,6 +111,7 @@ export const CycleSetup: Story = {
   args: {
     flows: cycleSetup,
     editIndex: 0,
+    name: "implement_ticket",
   },
 };
 
@@ -114,6 +119,7 @@ export const ServerRejects: Story = {
   name: "Server rejection on save",
   args: {
     editIndex: 0,
+    name: "implement_ticket",
     onSubmit: fn(failingSubmit),
   },
 };
@@ -122,5 +128,6 @@ export const NoSiblings: Story = {
   name: "Add — no siblings to depend on",
   args: {
     flows: [],
+    name: "first_flow",
   },
 };
