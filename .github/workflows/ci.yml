@@ -41,16 +41,18 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      # Swatinem/rust-cache uses (rustc version + Cargo.lock + job name) as
+      # the cache key, prunes stale intermediate artifacts so the cache
+      # doesn't bloat over time, and restore-falls-back across lockfile
+      # bumps. The previous actions/cache config invalidated on every
+      # Cargo.lock change, which forced a cold build on most PRs.
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@6887963ccf37a9ddcd8c5fa4baeb3e1e5fd61fa1 # v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          tool: cargo-nextest
 
       - name: cargo fmt --all -- --check
         run: cargo fmt --all -- --check
@@ -62,14 +64,17 @@ jobs:
       - name: Create empty ui/dist for rust-embed
         run: mkdir -p ui/dist && touch ui/dist/.gitkeep
 
-      - name: cargo build --workspace --all-targets
-        run: cargo build --workspace --all-targets --locked
-
+      # clippy with `--all-targets` compiles every test/example/bench,
+      # which warms the same artifacts cargo-nextest needs below. A
+      # separate `cargo build` step was just paying the link cost twice.
       - name: cargo clippy --workspace --all-targets -- -D warnings
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: cargo test --workspace
-        run: cargo test --workspace --locked
+      # cargo-nextest parallelises test execution per-process (libtest
+      # serialises per-thread), retries flakies, and skips doc-tests
+      # (this workspace has none, only `text`/`ignore` code fences).
+      - name: cargo nextest run --workspace
+        run: cargo nextest run --workspace --locked --no-fail-fast
 
       - name: cargo doc --workspace --no-deps
         run: cargo doc --workspace --no-deps --locked
@@ -108,16 +113,8 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
 
       - name: Create empty ui/dist for rust-embed
         run: mkdir -p ui/dist && touch ui/dist/.gitkeep
@@ -164,16 +161,8 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
 
       - name: Create empty ui/dist for rust-embed
         run: mkdir -p ui/dist && touch ui/dist/.gitkeep
