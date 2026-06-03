@@ -56,7 +56,7 @@ MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.
 # Docker image registry for push targets.
 REGISTRY ?= ghcr.io/morphet81/maestro
 
-.PHONY: help build build-local start stop auth test logs logs-maestro ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64
+.PHONY: help build build-local start stop auth test logs logs-maestro ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full
 .DEFAULT_GOAL := help
 
 help: ## Show this help
@@ -333,3 +333,9 @@ clean-dind: ## Clean up DinD dangling images and volumes
 	echo "DinD cleanup complete. Run 'make load-worker' to reload maestro:latest if needed."
 
 restart: stop start ## Restart (stop + start)
+
+check: ## Run the same gates CI runs (fast subset — no network/docker)
+	./scripts/preflight.sh
+
+check-full: ## Run all CI gates including gitleaks, cargo-deny, cargo-audit, npm audit
+	./scripts/preflight.sh --full
