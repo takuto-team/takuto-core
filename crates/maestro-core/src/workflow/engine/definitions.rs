@@ -65,16 +65,55 @@ impl WorkflowDefinitionManager {
         self.git_auth_resolver = Some(resolver);
     }
 
-    /// Start running a specific workflow definition for a ticket.
-    pub async fn start_workflow_def(&self, ticket_key: &str, def_name: &str) -> Result<()> {
-        use crate::workflow::definitions::{
-            WorkflowDefRunState, are_dependencies_met, discover_workflows,
+    /// Resolve the runnable definition set for a ticket's workflow.
+    ///
+    /// When a DB and a user identity are available the set is the user's
+    /// per-workspace flows (`resolve_user_flows`); `override_user` (the
+    /// authenticated caller from the route) takes precedence over the
+    /// workflow's stored owner, falling back to it for internal callers that
+    /// pass `None`. Deployments without a DB or a user fall back to the
+    /// directory-discovered TOML definitions.
+    pub(crate) async fn resolve_definitions(
+        &self,
+        ticket_key: &str,
+        override_user: Option<&str>,
+    ) -> Vec<crate::workflow::definitions::DiscoveredWorkflow> {
+        let (wf_user, workspace) = {
+            let wf_arc = self.repository.inner_arc();
+            let map = wf_arc.read().await;
+            map.get(ticket_key)
+                .map(|w| (w.user_id.clone(), w.workspace_name.clone()))
+                .unwrap_or((None, String::new()))
         };
+        let user = override_user.map(|s| s.to_string()).or(wf_user);
+        match (self.db.as_ref(), user) {
+            (Some(db), Some(uid)) if !workspace.is_empty() => {
+                let defaults =
+                    crate::workflow::definitions::default_flows_from_dir(&self.workflows_dir);
+                crate::workflow::definitions::resolve_user_flows(db, &uid, &workspace, &defaults)
+                    .await
+            }
+            _ => crate::workflow::definitions::discover_workflows(&self.workflows_dir).workflows,
+        }
+    }
 
-        // Discover workflow definitions from the workflows directory
-        let discovery = discover_workflows(&self.workflows_dir);
-        let def = discovery
-            .workflows
+    /// Start running a specific workflow definition for a ticket.
+    ///
+    /// `user_id` is the authenticated caller from the route handler; internal
+    /// callers (dependency auto-advance, retry-all-errors) pass `None` and the
+    /// definition set resolves against the workflow's stored owner.
+    pub async fn start_workflow_def(
+        &self,
+        ticket_key: &str,
+        def_name: &str,
+        user_id: Option<&str>,
+    ) -> Result<()> {
+        use crate::workflow::definitions::{WorkflowDefRunState, are_dependencies_met};
+
+        // Resolve the runnable definition set (the user's flows, or TOML
+        // discovery when no DB/user is available).
+        let definitions = self.resolve_definitions(ticket_key, user_id).await;
+        let def = definitions
             .iter()
             .find(|w| w.filename == def_name)
             .ok_or_else(|| ConfigError::DefinitionNotFound {
@@ -132,7 +171,7 @@ impl WorkflowDefinitionManager {
         };
 
         // Check dependencies
-        if !are_dependencies_met(def_name, &discovery.workflows, &run_states) {
+        if !are_dependencies_met(def_name, &definitions, &run_states) {
             return Err(ConfigError::DefinitionDependenciesNotMet {
                 def_name: def_name.to_string(),
             }
@@ -234,7 +273,12 @@ impl WorkflowDefinitionManager {
     }
 
     /// Reset a workflow definition run from Error to Idle and start it again.
-    pub async fn retry_workflow_def(&self, ticket_key: &str, def_name: &str) -> Result<()> {
+    pub async fn retry_workflow_def(
+        &self,
+        ticket_key: &str,
+        def_name: &str,
+        user_id: Option<&str>,
+    ) -> Result<()> {
         use crate::workflow::definitions::WorkflowDefRunState;
 
         // Reset the state from Error to Idle
@@ -269,7 +313,7 @@ impl WorkflowDefinitionManager {
             }
         }
 
-        self.start_workflow_def(ticket_key, def_name).await
+        self.start_workflow_def(ticket_key, def_name, user_id).await
     }
 
     /// Start a background task that periodically scans the workflows directory for changes

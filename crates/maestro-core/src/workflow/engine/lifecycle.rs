@@ -1,6 +1,5 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -30,7 +29,6 @@ pub(crate) struct WorkflowLifecycle {
     pub(crate) config: Arc<RwLock<Config>>,
     pub(crate) jira_available: Arc<AtomicBool>,
     pub(crate) ticketing_system: TicketingSystem,
-    pub(crate) workflows_dir: PathBuf,
     /// Used to look up `repositories.local_path` from a workflow's
     /// `repository_id`. Optional only because some unit-test paths construct
     /// the engine without a DB.
@@ -46,7 +44,6 @@ impl WorkflowLifecycle {
         config: Arc<RwLock<Config>>,
         jira_available: Arc<AtomicBool>,
         ticketing_system: TicketingSystem,
-        workflows_dir: PathBuf,
         db: Option<Database>,
     ) -> Self {
         Self {
@@ -56,7 +53,6 @@ impl WorkflowLifecycle {
             config,
             jira_available,
             ticketing_system,
-            workflows_dir,
             db,
         }
     }
@@ -109,17 +105,23 @@ impl WorkflowLifecycle {
             .await
             .insert(ticket_key.clone(), workflow);
 
-        // Auto-start all dep-free dynamic workflow definitions
-        let discovery = crate::workflow::definitions::discover_workflows(&self.workflows_dir);
-        let dep_free_defs: Vec<String> = discovery
-            .workflows
+        // Auto-start all dep-free workflow definitions. The set is the
+        // owner's per-workspace flows (resolved from the just-inserted
+        // workflow's user_id + workspace), falling back to TOML discovery
+        // when no DB/user is available.
+        let dep_free_defs: Vec<String> = definitions
+            .resolve_definitions(&ticket_key, None)
+            .await
             .iter()
             .filter(|d| d.valid && d.depends_on.is_empty())
             .map(|d| d.filename.clone())
             .collect();
 
         for def_name in dep_free_defs {
-            if let Err(e) = definitions.start_workflow_def(&ticket_key, &def_name).await {
+            if let Err(e) = definitions
+                .start_workflow_def(&ticket_key, &def_name, None)
+                .await
+            {
                 warn!(
                     ticket = %ticket_key,
                     def = %def_name,

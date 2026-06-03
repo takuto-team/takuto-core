@@ -202,10 +202,10 @@ impl WorkflowPersistence {
             let suppress = suppress_cancelled_as_error.clone();
 
             {
-                use crate::workflow::definitions::{WorkflowDefRunState, discover_workflows};
+                use crate::workflow::definitions::WorkflowDefRunState;
 
                 // Find defs that were running when the server stopped, and re-spawn their drivers.
-                let (running_def_names, wt, ts, td, tt) = {
+                let (running_def_names, wt, ts, td, tt, wf_user_id, wf_workspace) = {
                     let wf_arc = self.repository.inner_arc();
                     let wf_map = wf_arc.read().await;
                     let w = wf_map.get(&ticket_key);
@@ -230,7 +230,9 @@ impl WorkflowPersistence {
                             )
                         })
                         .unwrap_or_default();
-                    (running, worktree, ts, td, tt)
+                    let user_id = w.and_then(|w| w.user_id.clone());
+                    let workspace = w.map(|w| w.workspace_name.clone()).unwrap_or_default();
+                    (running, worktree, ts, td, tt, user_id, workspace)
                 };
 
                 if running_def_names.is_empty() {
@@ -238,10 +240,34 @@ impl WorkflowPersistence {
                     continue;
                 }
 
-                let discovery = discover_workflows(workflows_dir);
+                // Re-resolve the owner's flows for this workspace. When a DB +
+                // user identity is available the running def slugs are matched
+                // against the user's current flows, so a since-renamed/deleted
+                // flow surfaces a typed `flow_no_longer_exists` error below.
+                // Without a DB/user we fall back to TOML discovery.
+                let resolved_from_user_flows =
+                    db.is_some() && wf_user_id.is_some() && !wf_workspace.is_empty();
+                let defs: Vec<crate::workflow::definitions::DiscoveredWorkflow> =
+                    match (db.as_ref(), wf_user_id.as_deref()) {
+                        (Some(database), Some(uid)) if !wf_workspace.is_empty() => {
+                            let defaults =
+                                crate::workflow::definitions::default_flows_from_dir(workflows_dir);
+                            crate::workflow::definitions::resolve_user_flows(
+                                database,
+                                uid,
+                                &wf_workspace,
+                                &defaults,
+                            )
+                            .await
+                        }
+                        _ => {
+                            crate::workflow::definitions::discover_workflows(workflows_dir)
+                                .workflows
+                        }
+                    };
 
                 for def_name in running_def_names {
-                    if let Some(def) = discovery.workflows.iter().find(|d| d.filename == def_name) {
+                    if let Some(def) = defs.iter().find(|d| d.filename == def_name) {
                         if wt.is_none() {
                             warn!(
                                 ticket = %ticket_key,
@@ -359,10 +385,22 @@ impl WorkflowPersistence {
                             .await;
                         });
                     } else {
+                        // The running def's slug no longer resolves to a flow.
+                        // When resolved from the user's flow list this means the
+                        // flow was renamed or deleted — surface the typed
+                        // `flow_no_longer_exists` reason so the card shows a
+                        // clear error and the user can trigger a fresh run.
+                        let message = if resolved_from_user_flows {
+                            "flow_no_longer_exists: this flow was renamed or deleted; \
+                             trigger it again from the work-item card to start a fresh run"
+                        } else {
+                            "Def file not found after restart"
+                        };
                         warn!(
                             ticket = %ticket_key,
                             def = %def_name,
-                            "Running def not found in workflows dir after restart"
+                            resolved_from_user_flows,
+                            "Running def no longer resolves after restart"
                         );
                         let wf_arc = self.repository.inner_arc();
                         let mut wf_map = wf_arc.write().await;
@@ -370,7 +408,7 @@ impl WorkflowPersistence {
                             w.workflow_def_runs.insert(
                                 def_name.clone(),
                                 WorkflowDefRunState::Error {
-                                    message: "Def file not found after restart".into(),
+                                    message: message.to_string(),
                                 },
                             );
                         }
@@ -480,6 +518,143 @@ impl WorkflowPersistence {
                 "git worktree prune finished with non-zero status"
             ),
             Err(e) => warn!(error = %e, "git worktree prune failed"),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::actions::dry_run::DryRunActions;
+    use crate::actions::traits::ExternalActions;
+    use crate::config::{Config, TicketingSystem};
+    use crate::db::Database;
+    use crate::db::user_work_item_flows::{self, UserFlow, UserFlowStep};
+    use crate::workflow::definitions::WorkflowDefRunState;
+    use crate::workflow::engine::WorkflowEngine;
+    use crate::workflow::snapshot::{PersistedWorkflowRecord, write_all_workspace_snapshots};
+    use crate::workflow::state::WorkflowState;
+
+    /// Serializes the few tests that mutate `MAESTRO_DATA_DIR`, since the env
+    /// is process-global and `resolve_data_dir()` reads it.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn one_flow(name: &str) -> UserFlow {
+        UserFlow {
+            name: name.to_string(),
+            depends_on: Vec::new(),
+            steps: vec![UserFlowStep {
+                name: "step".to_string(),
+                prompt: "do it".to_string(),
+                skills: Vec::new(),
+            }],
+        }
+    }
+
+    /// A workflow whose snapshot recorded a `Running` def under the slug
+    /// `implement-ticket`, restored after the user renamed that flow away,
+    /// surfaces `flow_no_longer_exists` on the card instead of resuming.
+    #[tokio::test]
+    async fn restore_marks_renamed_flow_as_no_longer_existing() {
+        let _guard = ENV_LOCK.lock().await;
+
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let workflows_dir = tempfile::tempdir().expect("workflows dir");
+        // SAFETY: env mutation is serialized by ENV_LOCK; this is the only
+        // test in the crate that sets MAESTRO_DATA_DIR.
+        unsafe {
+            std::env::set_var("MAESTRO_DATA_DIR", data_dir.path());
+        }
+
+        let db = Database::open_in_memory().expect("in-memory db");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u1', 'alice', 'user')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+        // The user's current flow list no longer contains "Implement Ticket"
+        // (it was renamed to "Implement Feature").
+        user_work_item_flows::set(db.adapter(), "u1", "ws", &[one_flow("Implement Feature")])
+            .await
+            .expect("set flows");
+
+        // Snapshot a workflow that had `implement-ticket` running at shutdown.
+        let now = chrono::Utc::now();
+        let record = PersistedWorkflowRecord {
+            id: "wf-1".to_string(),
+            ticket_key: "TICK-1".to_string(),
+            ticket_summary: "summary".to_string(),
+            ticket_description: "desc".to_string(),
+            ticket_type: "Task".to_string(),
+            state: WorkflowState::Reviewing,
+            started_at: now,
+            updated_at: now,
+            steps_log: Vec::new(),
+            branch_name: "feature/tick-1".to_string(),
+            worktree_path: None,
+            pr_url: None,
+            pr_merged: false,
+            terminal_lines: Vec::new(),
+            current_step_label: None,
+            started_manually: false,
+            jira_available: false,
+            last_session_id: None,
+            description_session_id: None,
+            ticketing_system: TicketingSystem::None,
+            ticket_url: None,
+            driver_started: true,
+            workflow_def_runs: HashMap::from([(
+                "implement-ticket".to_string(),
+                WorkflowDefRunState::Running,
+            )]),
+            worktree_bootstrapped: true,
+            workspace_name: "ws".to_string(),
+            repository_id: None,
+            user_id: Some("u1".to_string()),
+            auth_pin: None,
+        };
+        write_all_workspace_snapshots(data_dir.path(), &[record]).expect("write snapshot");
+
+        let config = std::sync::Arc::new(tokio::sync::RwLock::new(Config::default()));
+        let actions: std::sync::Arc<dyn ExternalActions> =
+            std::sync::Arc::new(DryRunActions::new("origin".to_string(), None));
+        let engine = WorkflowEngine::new_with_db(
+            config,
+            actions,
+            1,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            TicketingSystem::None,
+            workflows_dir.path().to_path_buf(),
+            Some(db.clone()),
+        );
+
+        engine.restore_persisted_workflows().await.expect("restore");
+
+        let state = {
+            let wf_arc = engine.workflows_arc();
+            let map = wf_arc.read().await;
+            map.get("TICK-1")
+                .and_then(|w| w.workflow_def_runs.get("implement-ticket").cloned())
+                .expect("def-run state present")
+        };
+
+        match state {
+            WorkflowDefRunState::Error { message } => {
+                assert!(
+                    message.contains("flow_no_longer_exists"),
+                    "expected flow_no_longer_exists, got: {message}"
+                );
+            }
+            other => panic!("expected Error state, got {other:?}"),
+        }
+
+        // SAFETY: serialized by ENV_LOCK (still held).
+        unsafe {
+            std::env::remove_var("MAESTRO_DATA_DIR");
         }
     }
 }

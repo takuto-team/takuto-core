@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::{AgentStepConfig, SkillRef, StepAvailability};
+use crate::db::Database;
 use crate::db::user_work_item_flows::{UserFlow, UserFlowStep};
 
 // ── YAML schema types ───────────────────────────────────────────────────────
@@ -644,6 +645,89 @@ pub fn default_flows_from_dir(dir: &Path) -> Vec<UserFlow> {
         .collect()
 }
 
+/// Resolve the set of runnable workflow definitions for a user in a workspace.
+///
+/// This is the single runtime source of truth — there is **no** TOML fallback
+/// at request time. The DAO result drives the outcome:
+/// - `Some(flows)` → build a [`DiscoveredWorkflow`] per flow.
+/// - `None` (never seeded for this workspace) → seed from `defaults`, then
+///   retry once. This is the lazy-seed path that covers any workspace the
+///   eager seeders missed, so no separate seed-on-switch hook is needed.
+/// - `Some(vec![])` (user emptied their list) → an empty set; the dashboard
+///   renders its empty-state banner.
+///
+/// A database error logs a warning and yields an empty set rather than
+/// propagating — the dashboard degrades to the empty state instead of 500ing.
+pub async fn resolve_user_flows(
+    db: &Database,
+    user_id: &str,
+    workspace: &str,
+    defaults: &[UserFlow],
+) -> Vec<DiscoveredWorkflow> {
+    let adapter = db.adapter();
+    let flows = match crate::db::user_work_item_flows::get(adapter, user_id, workspace).await {
+        Ok(Some(flows)) => flows,
+        Ok(None) => {
+            if let Err(e) = crate::db::user_work_item_flows::seed_if_absent(
+                adapter, user_id, workspace, defaults,
+            )
+            .await
+            {
+                warn!(user_id, workspace, error = %e, "Lazy-seed of default flows failed");
+            }
+            crate::db::user_work_item_flows::get(adapter, user_id, workspace)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        }
+        Err(e) => {
+            warn!(user_id, workspace, error = %e, "Failed to load user flows");
+            return Vec::new();
+        }
+    };
+    user_flows_to_discovered(&flows)
+}
+
+/// Convert a validated user flow list into [`DiscoveredWorkflow`]s.
+///
+/// `filename` is the flow's stable slug (also the `workflow_def_runs` key);
+/// `depends_on` names are mapped to their slugs so dependency gating and cycle
+/// detection share the TOML path's filename-keyed logic. `validate_dependencies`
+/// recomputes `valid` / `error` so the UI renders the same disabled / lock
+/// treatment as discovered TOML workflows.
+pub fn user_flows_to_discovered(flows: &[UserFlow]) -> Vec<DiscoveredWorkflow> {
+    let mut out: Vec<DiscoveredWorkflow> = flows
+        .iter()
+        .map(|f| DiscoveredWorkflow {
+            filename: f.slug(),
+            name: f.name.clone(),
+            steps: f
+                .steps
+                .iter()
+                .map(|s| AgentStepConfig {
+                    name: s.name.clone(),
+                    prompt: s.prompt.clone(),
+                    repeat: 1,
+                    skills: s.skills.clone(),
+                    resume_previous: false,
+                    when: StepAvailability::Always,
+                    commands: Vec::new(),
+                })
+                .collect(),
+            depends_on: f
+                .depends_on
+                .iter()
+                .map(|d| crate::db::user_work_item_flows::slugify(d))
+                .collect(),
+            valid: true,
+            error: None,
+        })
+        .collect();
+    validate_dependencies(&mut out);
+    out
+}
+
 /// Convert the agent steps of a discovered workflow into [`UserFlowStep`]s,
 /// dropping command-only steps and the legacy `repeat` / `when` fields.
 fn agent_steps_to_flow_steps(steps: &[AgentStepConfig], filename: &str) -> Vec<UserFlowStep> {
@@ -1203,6 +1287,97 @@ prompt = "do work"
             work.depends_on.is_empty(),
             "dependency on a skipped command-only file must be dropped"
         );
+    }
+
+    // ── resolver ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn user_flows_to_discovered_maps_slugs_and_dep_slugs() {
+        use crate::db::user_work_item_flows::{UserFlow, UserFlowStep};
+        let flows = vec![
+            UserFlow {
+                name: "Implement Ticket".to_string(),
+                depends_on: Vec::new(),
+                steps: vec![UserFlowStep {
+                    name: "code".to_string(),
+                    prompt: "p".to_string(),
+                    skills: Vec::new(),
+                }],
+            },
+            UserFlow {
+                name: "Merge Base Branch".to_string(),
+                depends_on: vec!["Implement Ticket".to_string()],
+                steps: vec![UserFlowStep {
+                    name: "merge".to_string(),
+                    prompt: "p".to_string(),
+                    skills: Vec::new(),
+                }],
+            },
+        ];
+        let discovered = user_flows_to_discovered(&flows);
+        let merge = discovered
+            .iter()
+            .find(|d| d.filename == "merge-base-branch")
+            .expect("slugged filename");
+        assert!(merge.valid);
+        // Dependency name is mapped to the upstream flow's slug.
+        assert_eq!(merge.depends_on, vec!["implement-ticket".to_string()]);
+        assert_eq!(merge.steps.len(), 1);
+        assert_eq!(merge.steps[0].repeat, 1);
+        assert!(!merge.steps[0].is_command_step());
+    }
+
+    #[tokio::test]
+    async fn resolve_user_flows_seeds_when_absent_then_reflects_list() {
+        use crate::db::Database;
+        use crate::db::user_work_item_flows::{self, UserFlow, UserFlowStep};
+
+        let db = Database::open_in_memory().expect("in-memory db");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u1', 'a', 'user')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+
+        let defaults = vec![UserFlow {
+            name: "Default Flow".to_string(),
+            depends_on: Vec::new(),
+            steps: vec![UserFlowStep {
+                name: "s".to_string(),
+                prompt: "p".to_string(),
+                skills: Vec::new(),
+            }],
+        }];
+
+        // No row yet → lazy-seeds from defaults.
+        let resolved = resolve_user_flows(&db, "u1", "ws", &defaults).await;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].filename, "default-flow");
+
+        // After the user replaces their list, the resolver reflects it (the
+        // old slug is gone — the condition that drives flow_no_longer_exists).
+        user_work_item_flows::set(
+            db.adapter(),
+            "u1",
+            "ws",
+            &[UserFlow {
+                name: "Renamed Flow".to_string(),
+                depends_on: Vec::new(),
+                steps: vec![UserFlowStep {
+                    name: "s".to_string(),
+                    prompt: "p".to_string(),
+                    skills: Vec::new(),
+                }],
+            }],
+        )
+        .await
+        .expect("set flows");
+        let resolved = resolve_user_flows(&db, "u1", "ws", &defaults).await;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].filename, "renamed-flow");
+        assert!(resolved.iter().all(|d| d.filename != "default-flow"));
     }
 
     #[test]

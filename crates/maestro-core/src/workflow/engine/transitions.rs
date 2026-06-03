@@ -586,7 +586,10 @@ impl WorkflowTransitions {
 
         // Re-start each error def via start_workflow_def (handles bootstrap if needed).
         for def_name in error_defs {
-            if let Err(e) = definitions.start_workflow_def(ticket_key, &def_name).await {
+            if let Err(e) = definitions
+                .start_workflow_def(ticket_key, &def_name, None)
+                .await
+            {
                 warn!(ticket = %ticket_key, def = %def_name, error = %e, "Failed to restart error def");
             }
         }

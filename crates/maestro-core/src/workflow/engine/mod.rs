@@ -139,7 +139,6 @@ impl WorkflowEngine {
             config.clone(),
             jira_available.clone(),
             ticketing_system,
-            workflows_dir.clone(),
             db.clone(),
         );
 
@@ -491,16 +490,29 @@ impl WorkflowEngine {
     }
 
     /// Start running a specific workflow definition for a ticket.
-    pub async fn start_workflow_def(&self, ticket_key: &str, def_name: &str) -> Result<()> {
+    ///
+    /// `user_id` is the authenticated caller; pass `None` from internal callers
+    /// to resolve the definition set against the workflow's stored owner.
+    pub async fn start_workflow_def(
+        &self,
+        ticket_key: &str,
+        def_name: &str,
+        user_id: Option<&str>,
+    ) -> Result<()> {
         self.definitions
-            .start_workflow_def(ticket_key, def_name)
+            .start_workflow_def(ticket_key, def_name, user_id)
             .await
     }
 
     /// Reset a workflow definition run from Error to Idle and start it again.
-    pub async fn retry_workflow_def(&self, ticket_key: &str, def_name: &str) -> Result<()> {
+    pub async fn retry_workflow_def(
+        &self,
+        ticket_key: &str,
+        def_name: &str,
+        user_id: Option<&str>,
+    ) -> Result<()> {
         self.definitions
-            .retry_workflow_def(ticket_key, def_name)
+            .retry_workflow_def(ticket_key, def_name, user_id)
             .await
     }
 

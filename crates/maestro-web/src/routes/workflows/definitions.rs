@@ -8,20 +8,34 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 
-use maestro_core::workflow::definitions::{DiscoveredWorkflow, discover_workflows};
+use maestro_core::workflow::definitions::{DiscoveredWorkflow, resolve_user_flows};
 
 use crate::auth::AuthenticatedUser;
-use crate::state::{AuthState, EngineState};
+use crate::state::{AuthState, ConfigState, EngineState};
 
 use super::require_workflow_access;
 
-/// List all discovered workflow definitions from the workflows directory.
+/// List the authenticated user's runnable workflow definitions for the active
+/// workspace. Resolves through the per-user flow store (lazy-seeding from the
+/// TOML defaults when the user has no row yet); there is no TOML fallback at
+/// request time beyond that seed.
 pub async fn list_workflow_definitions(
-    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    State(config): State<ConfigState>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Json<Vec<DiscoveredWorkflow>> {
-    let dir = engine.engine.workflows_dir().to_path_buf();
-    let result = discover_workflows(&dir);
-    Json(result.workflows)
+    let Some(db) = auth_state.db.as_ref() else {
+        return Json(Vec::new());
+    };
+    let workspace = config.active_workspace_name().await;
+    let flows = resolve_user_flows(
+        db,
+        &auth.user_id,
+        &workspace,
+        &config.work_item_flow_defaults,
+    )
+    .await;
+    Json(flows)
 }
 
 /// Start a specific workflow definition for a ticket.
@@ -36,7 +50,7 @@ pub async fn run_workflow_def(
         .map_err(|s| (s, "Workflow not found".into()))?;
     engine
         .engine
-        .start_workflow_def(&id, &def_name)
+        .start_workflow_def(&id, &def_name, Some(&auth.user_id))
         .await
         .map(|()| StatusCode::ACCEPTED)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
@@ -54,7 +68,7 @@ pub async fn retry_workflow_def(
         .map_err(|s| (s, "Workflow not found".into()))?;
     engine
         .engine
-        .retry_workflow_def(&id, &def_name)
+        .retry_workflow_def(&id, &def_name, Some(&auth.user_id))
         .await
         .map(|()| StatusCode::ACCEPTED)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
