@@ -244,6 +244,30 @@ async fn put_with_21_flows_returns_400() {
 }
 
 #[tokio::test]
+async fn put_with_nul_byte_returns_structured_400() {
+    let (state, cookie) = state_with_defaults().await;
+
+    // A NUL byte passes structural validation but is rejected by the DAO; the
+    // handler must still return the same structured {error, kind} shape.
+    let payload = json!({ "flows": [flow("Bad\u{0}Name", &[])] });
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::put("/api/me/flows")
+                .header("Content-Type", "application/json")
+                .header("Origin", TEST_ORIGIN)
+                .header("Cookie", &cookie)
+                .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert_eq!(body["kind"], "nul_byte", "structured body: {body}");
+}
+
+#[tokio::test]
 async fn reseed_overwrites_with_defaults() {
     let (state, cookie) = state_with_defaults().await;
 

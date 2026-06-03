@@ -44,13 +44,18 @@ fn db(auth: &AuthState) -> Result<maestro_core::db::Database, (StatusCode, Strin
 }
 
 /// Map an internal db error to a response. A NUL byte is the caller's fault
-/// (bad payload) → 400; everything else is a server fault → 500.
+/// (bad payload) → 400 with the same `{error, kind}` structured body as every
+/// other validation failure; everything else is a server fault → 500.
 fn db_error(e: maestro_core::error::MaestroError) -> (StatusCode, String) {
     if let maestro_core::error::MaestroError::Db(maestro_core::db::DbError::NulByte { field }) = &e
     {
         return (
             StatusCode::BAD_REQUEST,
-            format!("{field} contains a NUL byte"),
+            serde_json::json!({
+                "error": format!("{field} contains a NUL byte"),
+                "kind": "nul_byte",
+            })
+            .to_string(),
         );
     }
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
