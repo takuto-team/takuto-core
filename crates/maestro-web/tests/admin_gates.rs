@@ -46,7 +46,7 @@ async fn create_and_login_regular_user(
 ) -> String {
     // Create the user as admin.
     let app = build_router(state.clone());
-    let body = format!(r#"{{"username":"{username}","password":"{password}","role":"user"}}"#,);
+    let body = format!(r#"{{"username":"{username}","password":"{password}","role":"user"}}"#);
     let resp = app
         .oneshot(
             Request::post("/api/users")

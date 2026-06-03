@@ -25,7 +25,7 @@ use maestro_web::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with
 async fn create_and_login_user(state: &AppState, admin_cookie: &str, username: &str) -> String {
     let app = build_router(state.clone());
     let body =
-        format!(r#"{{"username":"{username}","password":"testpassword1234","role":"user"}}"#,);
+        format!(r#"{{"username":"{username}","password":"testpassword1234","role":"user"}}"#);
     let resp = app
         .oneshot(
             Request::post("/api/users")

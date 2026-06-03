@@ -373,6 +373,6 @@ mod tests {
         //    Both maps empty in the fixture.
         let run_command_state = <RunCommandState as FromRef<AppState>>::from_ref(&state);
         assert_eq!(run_command_state.run_commands.read().await.len(), 0);
-        assert_eq!(run_command_state.run_command_bundles.read().await.len(), 0,);
+        assert_eq!(run_command_state.run_command_bundles.read().await.len(), 0);
     }
 }
