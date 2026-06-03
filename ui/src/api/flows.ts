@@ -70,9 +70,10 @@ export function slugify(name: string): string {
 
 /**
  * Structured validation failure surfaced by PUT / reseed. `kind` is one of the
- * backend's typed reasons (`dependency_cycle`, `too_many_flows`,
- * `duplicate_name`, `duplicate_slug`, `empty_name`, `empty_step_prompt`,
- * `unknown_dependency`, `empty_skill_name`, `nul_byte`).
+ * backend's typed reasons: `too_many_flows`, `empty_flow_name`,
+ * `duplicate_flow_name`, `duplicate_slug`, `empty_slug`, `no_steps`,
+ * `empty_step_name`, `empty_step_prompt`, `empty_skill_name`,
+ * `unknown_dependency`, `dependency_cycle`, and `nul_byte`.
  */
 export class UserFlowsError extends Error {
   readonly kind: string;
