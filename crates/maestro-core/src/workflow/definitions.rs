@@ -742,7 +742,13 @@ fn prettify_name(raw: &str) -> String {
 }
 
 fn agent_steps_to_flow_steps(steps: &[AgentStepConfig], filename: &str) -> Vec<UserFlowStep> {
+    // Dedup step names within a flow, keeping the first occurrence. The
+    // shipped TOMLs use `when = "ticketing"` / `when = "no_ticketing"` to
+    // branch a single conceptual step into two declarations; the user-flow
+    // schema has no `when`, so without this collapse the seeded list would
+    // show "Implement ticket" twice in a row before "Review changes".
     let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for step in steps {
         if step.is_command_step() {
             warn!(
@@ -759,8 +765,18 @@ fn agent_steps_to_flow_steps(steps: &[AgentStepConfig], filename: &str) -> Vec<U
                 "Dropping 'repeat'/'when' from default-flow step (unsupported in user-flow schema)"
             );
         }
+        let pretty = prettify_name(&step.name);
+        let key = pretty.to_lowercase();
+        if !seen.insert(key) {
+            warn!(
+                workflow = %filename,
+                step = %step.name,
+                "Skipping duplicate step name when seeding default flows; first occurrence wins"
+            );
+            continue;
+        }
         out.push(UserFlowStep {
-            name: prettify_name(&step.name),
+            name: pretty,
             prompt: step.prompt.clone(),
             skills: step.skills.clone(),
         });
@@ -1432,5 +1448,29 @@ prompt = "do work"
         assert_eq!(prettify_name("Implement Ticket"), "Implement Ticket");
         assert_eq!(prettify_name("Lint and test"), "Lint and test");
         assert_eq!(prettify_name(""), "");
+    }
+
+    #[test]
+    fn default_flows_dedup_when_branched_steps_keeping_the_first() {
+        // Mirrors the shape of `implement_ticket.example.toml`: two
+        // "Implement ticket" declarations branched on `when`, followed by
+        // "Review changes". The seeded flow must collapse the duplicates
+        // so "Review changes" lands at position 2, not 3.
+        let dir = create_temp_dir();
+        fs::write(
+            dir.path().join("impl.toml"),
+            "name = \"Implement Ticket\"\n\
+             [[steps]]\nname = \"Implement ticket\"\nprompt = \"no-ticketing form\"\nwhen = \"no_ticketing\"\n\
+             [[steps]]\nname = \"Implement ticket\"\nprompt = \"ticketing form\"\nwhen = \"ticketing\"\n\
+             [[steps]]\nname = \"Review changes\"\nprompt = \"review\"\n",
+        )
+        .unwrap();
+
+        let flows = default_flows_from_dir(dir.path());
+        assert_eq!(flows.len(), 1);
+        let step_names: Vec<_> = flows[0].steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(step_names, vec!["Implement ticket", "Review changes"]);
+        // The first occurrence wins, so the no-ticketing prompt is what survived.
+        assert_eq!(flows[0].steps[0].prompt, "no-ticketing form");
     }
 }
