@@ -19,7 +19,7 @@
  *   flow just collapses the editor without writing.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { getMyFlows, putMyFlows, reseedMyFlows, MAX_FLOWS, type UserFlow } from "../api/flows";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { FlowCard } from "./FlowCard";
@@ -40,6 +40,13 @@ export function FlowsTab() {
   const [confirmReseed, setConfirmReseed] = useState(false);
   const [expanded, setExpanded] = useState<Expanded>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  /** The list position (0..N) where a dropped card would land, used to draw the blue indicator line. */
+  const [dragInsertIndex, setDragInsertIndex] = useState<number | null>(null);
+  // Mirror the two drag indices into refs because `handleDrop` reads them
+  // synchronously inside the drop event and the React state from the
+  // intervening dragStart / dragOver events may not have committed yet.
+  const dragIndexRef = useRef<number | null>(null);
+  const dragInsertRef = useRef<number | null>(null);
   const [newFlowName, setNewFlowName] = useState("");
   const [newFlowNameError, setNewFlowNameError] = useState<string | null>(null);
 
@@ -124,13 +131,23 @@ export function FlowsTab() {
     }
   };
 
-  const handleDrop = (targetIndex: number) => {
-    const from = dragIndex;
+  const handleDrop = () => {
+    const from = dragIndexRef.current;
+    const insertAt = dragInsertRef.current;
+    dragIndexRef.current = null;
+    dragInsertRef.current = null;
     setDragIndex(null);
-    if (from === null || from === targetIndex) return;
+    setDragInsertIndex(null);
+    // No-op if the user drops the card back on its current spot (either
+    // position immediately above or immediately below itself).
+    if (from === null || insertAt === null) return;
+    if (insertAt === from || insertAt === from + 1) return;
     const next = [...flows];
     const [moved] = next.splice(from, 1);
-    next.splice(targetIndex, 0, moved);
+    // Indices above `from` shift down by one after the splice removes the
+    // dragged item, so compensate when the insertion was above the old spot.
+    const adjusted = insertAt > from ? insertAt - 1 : insertAt;
+    next.splice(adjusted, 0, moved);
     setExpanded(null);
     submitList(next).catch(() => {
       /* error already surfaced */
@@ -228,25 +245,52 @@ export function FlowsTab() {
       ) : (
         <>
           <div className={`space-y-2 ${saving ? "opacity-50 pointer-events-none" : ""}`}>
-            {flows.map((flow, i) => (
-              <FlowCard
-                key={flow.name}
-                flow={flow}
-                flows={flows}
-                index={i}
-                expanded={expanded === i}
-                draggable={!saving}
-                isDragging={dragIndex === i}
-                onToggleExpand={() => toggleExpand(i)}
-                onDelete={() => setConfirmDelete(i)}
-                onSubmit={handleEditorSubmit}
-                onInlineRename={(newName) => handleInlineRename(i, newName)}
-                onCancelEdit={() => setExpanded(null)}
-                onDragStart={() => setDragIndex(i)}
-                onDrop={() => handleDrop(i)}
-                onDragEnd={() => setDragIndex(null)}
-              />
-            ))}
+            {flows.map((flow, i) => {
+              const showLineBefore =
+                dragIndex !== null &&
+                dragInsertIndex === i &&
+                i !== dragIndex &&
+                i !== dragIndex + 1;
+              return (
+                <Fragment key={flow.name}>
+                  {showLineBefore && <div className="h-0.5 bg-blue-500 rounded-full" />}
+                  <FlowCard
+                    flow={flow}
+                    flows={flows}
+                    index={i}
+                    expanded={expanded === i}
+                    draggable={!saving}
+                    isDragging={dragIndex === i}
+                    onToggleExpand={() => toggleExpand(i)}
+                    onDelete={() => setConfirmDelete(i)}
+                    onSubmit={handleEditorSubmit}
+                    onInlineRename={(newName) => handleInlineRename(i, newName)}
+                    onCancelEdit={() => setExpanded(null)}
+                    onDragStart={() => {
+                      dragIndexRef.current = i;
+                      setDragIndex(i);
+                    }}
+                    onDragOverCard={(before) => {
+                      const idx = before ? i : i + 1;
+                      dragInsertRef.current = idx;
+                      setDragInsertIndex(idx);
+                    }}
+                    onDrop={handleDrop}
+                    onDragEnd={() => {
+                      dragIndexRef.current = null;
+                      dragInsertRef.current = null;
+                      setDragIndex(null);
+                      setDragInsertIndex(null);
+                    }}
+                  />
+                </Fragment>
+              );
+            })}
+            {dragIndex !== null &&
+              dragInsertIndex === flows.length &&
+              dragIndex !== flows.length - 1 && (
+                <div className="h-0.5 bg-blue-500 rounded-full" />
+              )}
 
             {expanded === "new" && (
               <div className="border border-blue-700/60 rounded-lg bg-gray-950">

@@ -63,11 +63,24 @@ describe("FlowsTab", () => {
     render(<FlowsTab />);
     await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
 
-    // Drag "Bravo" (index 1) and drop it onto "Alpha" (index 0).
+    // Drag "Bravo" (index 1) over the top half of "Alpha" (index 0) and drop.
+    // The blue-line indicator computes insertion position from the cursor Y
+    // relative to the target's bounding box. jsdom's `fireEvent.dragOver`
+    // strips `clientY`, so dispatch a MouseEvent directly (its init carries
+    // clientY through to React's SyntheticEvent).
     const bravo = cardFor("Bravo");
     const alpha = cardFor("Alpha");
+    Object.defineProperty(alpha, "getBoundingClientRect", {
+      value: () => ({
+        top: 0, left: 0, right: 0, bottom: 100, width: 0, height: 100, x: 0, y: 0,
+        toJSON: () => ({}),
+      }),
+    });
+
     fireEvent.dragStart(bravo, { dataTransfer: { effectAllowed: "" } });
-    fireEvent.dragOver(alpha, { dataTransfer: {} });
+    alpha.dispatchEvent(
+      new MouseEvent("dragover", { bubbles: true, cancelable: true, clientY: 10 }),
+    );
     fireEvent.drop(alpha, { dataTransfer: {} });
 
     await waitFor(() => expect(putBodies.length).toBe(1));

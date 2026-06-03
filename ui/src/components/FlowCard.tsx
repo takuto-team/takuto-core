@@ -20,6 +20,12 @@ interface FlowCardProps {
   onInlineRename: (newName: string) => Promise<void>;
   onCancelEdit: () => void;
   onDragStart: () => void;
+  /**
+   * Fired continuously while another card is dragged over this one.
+   * `before === true` when the cursor is in the top half of the card
+   * (insert above), `false` for the bottom half (insert below).
+   */
+  onDragOverCard: (before: boolean) => void;
   onDrop: () => void;
   onDragEnd: () => void;
 }
@@ -41,6 +47,7 @@ export function FlowCard({
   onInlineRename,
   onCancelEdit,
   onDragStart,
+  onDragOverCard,
   onDrop,
   onDragEnd,
 }: FlowCardProps) {
@@ -62,7 +69,11 @@ export function FlowCard({
         e.dataTransfer.effectAllowed = "move";
         onDragStart();
       }}
-      onDragOver={(e) => e.preventDefault()}
+      onDragOver={(e) => {
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        onDragOverCard(e.clientY < rect.top + rect.height / 2);
+      }}
       onDrop={(e) => {
         e.preventDefault();
         onDrop();
