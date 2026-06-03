@@ -8,19 +8,25 @@
  *   for the active workspace; the workspace name comes from the
  *   `GET /api/me/flows` response, not a selector — switching workspace happens
  *   elsewhere and this tab reflects whatever is active.
- * - The whole list is read and written atomically: add, delete, reorder, and
- *   re-seed all resolve to a single PUT (or reseed POST) that replaces the row.
+ * - The whole list is read and written atomically: add, delete, reorder,
+ *   inline edits, and re-seed all resolve to a single PUT (or reseed POST)
+ *   that replaces the row.
  * - An empty list (`flows: []`) is a deliberate user state, distinct from
  *   "never seeded" (which the backend resolves before the UI ever sees it).
+ * - Only one flow can be expanded at a time. Expanding a flow shows an inline
+ *   editor; the "Add flow" button appends a draft card that opens directly
+ *   into the editor. Cancelling the draft drops it; cancelling an existing
+ *   flow just collapses the editor without writing.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { getMyFlows, putMyFlows, reseedMyFlows, MAX_FLOWS, type UserFlow } from "../api/flows";
 import { ConfirmModal } from "./modals/ConfirmModal";
-import { FlowEditorModal } from "./modals/FlowEditorModal";
 import { FlowCard } from "./FlowCard";
+import { FlowEditor } from "./FlowEditor";
 
-type EditorTarget = number | "new" | null;
+/** `expanded` selects an existing index, the literal "new" for the draft card, or none. */
+type Expanded = number | "new" | null;
 
 export function FlowsTab() {
   const [flows, setFlows] = useState<UserFlow[]>([]);
@@ -31,7 +37,7 @@ export function FlowsTab() {
   const [actionError, setActionError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [confirmReseed, setConfirmReseed] = useState(false);
-  const [editorTarget, setEditorTarget] = useState<EditorTarget>(null);
+  const [expanded, setExpanded] = useState<Expanded>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   const load = useCallback(() => {
@@ -50,7 +56,7 @@ export function FlowsTab() {
     load();
   }, [load]);
 
-  const persist = useCallback(
+  const submitList = useCallback(
     async (next: UserFlow[]) => {
       const prev = flows;
       setSaving(true);
@@ -63,6 +69,7 @@ export function FlowsTab() {
       } catch (e) {
         setFlows(prev);
         setActionError(String((e as Error).message || e));
+        throw e;
       } finally {
         setSaving(false);
       }
@@ -70,17 +77,31 @@ export function FlowsTab() {
     [flows],
   );
 
+  const handleEditorSubmit = useCallback(
+    async (next: UserFlow[]) => {
+      await submitList(next);
+      setExpanded(null);
+    },
+    [submitList],
+  );
+
   const handleDelete = async () => {
     if (confirmDelete === null) return;
     const idx = confirmDelete;
     setConfirmDelete(null);
-    await persist(flows.filter((_, i) => i !== idx));
+    if (expanded === idx) setExpanded(null);
+    try {
+      await submitList(flows.filter((_, i) => i !== idx));
+    } catch {
+      /* error already surfaced by submitList */
+    }
   };
 
   const handleReseed = async () => {
     setConfirmReseed(false);
     setSaving(true);
     setActionError("");
+    setExpanded(null);
     try {
       const res = await reseedMyFlows();
       setFlows(res.flows);
@@ -99,7 +120,18 @@ export function FlowsTab() {
     const next = [...flows];
     const [moved] = next.splice(from, 1);
     next.splice(targetIndex, 0, moved);
-    persist(next);
+    setExpanded(null);
+    submitList(next).catch(() => {
+      /* error already surfaced */
+    });
+  };
+
+  const toggleExpand = (i: number) => {
+    setExpanded((prev) => (prev === i ? null : i));
+  };
+
+  const addFlow = () => {
+    setExpanded("new");
   };
 
   const atCap = flows.length >= MAX_FLOWS;
@@ -108,8 +140,8 @@ export function FlowsTab() {
   const addButton = (
     <button
       type="button"
-      onClick={() => setEditorTarget("new")}
-      disabled={atCap || saving}
+      onClick={addFlow}
+      disabled={atCap || saving || expanded === "new"}
       title={capTooltip}
       className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
     >
@@ -158,7 +190,7 @@ export function FlowsTab() {
             Retry
           </button>
         </p>
-      ) : flows.length === 0 ? (
+      ) : flows.length === 0 && expanded !== "new" ? (
         <div className="flex justify-center py-8">
           <div className="border border-gray-800 rounded-lg bg-gray-950 p-6 max-w-md text-center space-y-4">
             <p className="text-sm text-gray-400">
@@ -181,15 +213,34 @@ export function FlowsTab() {
               <FlowCard
                 key={flow.name}
                 flow={flow}
+                flows={flows}
+                index={i}
+                expanded={expanded === i}
                 draggable={!saving}
                 isDragging={dragIndex === i}
-                onEdit={() => setEditorTarget(i)}
+                onToggleExpand={() => toggleExpand(i)}
                 onDelete={() => setConfirmDelete(i)}
+                onSubmit={handleEditorSubmit}
+                onCancelEdit={() => setExpanded(null)}
                 onDragStart={() => setDragIndex(i)}
                 onDrop={() => handleDrop(i)}
                 onDragEnd={() => setDragIndex(null)}
               />
             ))}
+
+            {expanded === "new" && (
+              <div className="border border-blue-700/60 rounded-lg bg-gray-950">
+                <div className="px-3 py-2.5 text-sm text-gray-400 italic border-b border-gray-800">
+                  New flow
+                </div>
+                <FlowEditor
+                  flows={flows}
+                  editIndex={null}
+                  onSubmit={handleEditorSubmit}
+                  onCancel={() => setExpanded(null)}
+                />
+              </div>
+            )}
           </div>
 
           {actionError && <p className="text-sm text-red-400">{actionError}</p>}
@@ -218,19 +269,6 @@ export function FlowsTab() {
           confirmLabel="Re-seed"
           onConfirm={handleReseed}
           onCancel={() => setConfirmReseed(false)}
-        />
-      )}
-
-      {editorTarget !== null && (
-        <FlowEditorModal
-          flows={flows}
-          editIndex={editorTarget === "new" ? null : editorTarget}
-          onSubmit={async (next) => {
-            const res = await putMyFlows(next);
-            setFlows(res.flows);
-            setWorkspace(res.workspace);
-          }}
-          onClose={() => setEditorTarget(null)}
         />
       )}
     </div>

@@ -2,26 +2,28 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Add / Edit a single flow. Save submits the *entire* list (this flow inserted
- * or replaced) so the row is written atomically, matching the backend's
- * replace-the-row contract.
+ * Inline editor body for a single flow. Rendered inside an expanded `FlowCard`
+ * (existing flow) or inside the "new draft" card the Add button appends to
+ * the list. Save submits the entire flow list with this flow either replaced
+ * (`editIndex` set) or appended (`editIndex === null`), matching the
+ * backend's replace-the-row contract.
  *
  * Validation mirrors the backend `validate_user_flows`: unique name, unique
  * slug, >= 1 step, per-step name + prompt, per-skill name, and no dependency
- * cycle. Client checks are UX-only — the server re-validates and any reason the
- * client missed surfaces as a structured error above the footer.
+ * cycle. Client checks are UX-only — the server re-validates and any reason
+ * the client missed surfaces as a structured error above the footer.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { slugify, type UserFlow } from "../../api/flows";
-import { StepEditor, type SkillDraft, type StepDraft } from "./FlowEditor/StepEditor";
-import { DependsOnSelect } from "./FlowEditor/DependsOnSelect";
+import { slugify, type UserFlow } from "../api/flows";
+import { StepEditor, type SkillDraft, type StepDraft } from "./modals/FlowEditor/StepEditor";
+import { DependsOnSelect } from "./modals/FlowEditor/DependsOnSelect";
 
-interface FlowEditorModalProps {
+interface FlowEditorProps {
   flows: UserFlow[];
   editIndex: number | null;
   onSubmit: (next: UserFlow[]) => Promise<void>;
-  onClose: () => void;
+  onCancel: () => void;
 }
 
 /** Three-colour DFS cycle detection by flow name — a port of the backend's. */
@@ -68,7 +70,7 @@ function splitArgs(text: string): string[] {
 
 const blankStep = (): StepDraft => ({ name: "", prompt: "", skills: [] });
 
-export function FlowEditorModal({ flows, editIndex, onSubmit, onClose }: FlowEditorModalProps) {
+export function FlowEditor({ flows, editIndex, onSubmit, onCancel }: FlowEditorProps) {
   const editing = editIndex !== null ? flows[editIndex] : null;
 
   const [name, setName] = useState(editing?.name ?? "");
@@ -86,12 +88,12 @@ export function FlowEditorModal({ flows, editIndex, onSubmit, onClose }: FlowEdi
   const [serverError, setServerError] = useState("");
   const [dragStep, setDragStep] = useState<number | null>(null);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const lastStepRef = useRef<HTMLDivElement | null>(null);
   const prevStepCountRef = useRef(steps.length);
 
   useEffect(() => {
-    if (steps.length > prevStepCountRef.current && scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    if (steps.length > prevStepCountRef.current && lastStepRef.current?.scrollIntoView) {
+      lastStepRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
     prevStepCountRef.current = steps.length;
   }, [steps.length]);
@@ -181,7 +183,6 @@ export function FlowEditorModal({ flows, editIndex, onSubmit, onClose }: FlowEdi
     setServerError("");
     try {
       await onSubmit(next);
-      onClose();
     } catch (e) {
       setServerError(String((e as Error).message || e));
       setSaving(false);
@@ -189,9 +190,8 @@ export function FlowEditorModal({ flows, editIndex, onSubmit, onClose }: FlowEdi
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape" && !saving) {
-      onClose();
-    } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
       handleSave();
     }
   };
@@ -199,94 +199,74 @@ export function FlowEditorModal({ flows, editIndex, onSubmit, onClose }: FlowEdi
   const lastStep = steps.length === 1;
 
   return (
-    <div className="modal-backdrop" onClick={() => !saving && onClose()} onKeyDown={handleKeyDown}>
-      <div
-        className="bg-gray-900 border border-gray-700 rounded-xl max-w-2xl w-full mx-4 max-h-[85vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <h3 className="text-lg font-medium text-white">
-            {editIndex === null ? "Add flow" : "Edit flow"}
-          </h3>
+    <div className="border-t border-gray-800 px-4 py-4 space-y-5" onKeyDown={handleKeyDown}>
+      <div>
+        <label className="block text-sm text-gray-400 mb-1">Name</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. lint_and_test"
+          autoFocus
+          className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
+        />
+        {nameError && <p className="text-sm text-red-400 mt-1">{nameError}</p>}
+      </div>
+
+      <div>
+        <label className="block text-sm text-gray-400 mb-1">Depends on</label>
+        <DependsOnSelect options={otherNames} selected={dependsOn} onChange={setDependsOn} />
+        {cycleError && <p className="text-sm text-amber-400 mt-1">{cycleError}</p>}
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm text-gray-400">Steps</label>
           <button
             type="button"
-            onClick={() => !saving && onClose()}
-            className="text-gray-500 hover:text-gray-300 cursor-pointer"
-            aria-label="Close"
+            onClick={addStep}
+            className="text-sm text-blue-400 hover:text-blue-300 cursor-pointer"
           >
-            &times;
+            + Add step
           </button>
         </div>
-
-        <div ref={scrollRef} className="overflow-y-auto flex-1 p-4 space-y-5">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. lint_and_test"
-              autoFocus
-              className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
+        {steps.map((step, i) => (
+          <div key={i} ref={i === steps.length - 1 ? lastStepRef : undefined}>
+            <StepEditor
+              index={i}
+              step={step}
+              canRemove={!lastStep}
+              draggable={steps.length > 1}
+              isDragging={dragStep === i}
+              onChange={(next) => setStep(i, next)}
+              onRemove={() => removeStep(i)}
+              onDragStart={() => setDragStep(i)}
+              onDrop={() => dropStep(i)}
+              onDragEnd={() => setDragStep(null)}
             />
-            {nameError && <p className="text-sm text-red-400 mt-1">{nameError}</p>}
           </div>
+        ))}
+      </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Depends on</label>
-            <DependsOnSelect options={otherNames} selected={dependsOn} onChange={setDependsOn} />
-            {cycleError && <p className="text-sm text-amber-400 mt-1">{cycleError}</p>}
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-sm text-gray-400">Steps</label>
-              <button
-                type="button"
-                onClick={addStep}
-                className="text-sm text-blue-400 hover:text-blue-300 cursor-pointer"
-              >
-                + Add step
-              </button>
-            </div>
-            {steps.map((step, i) => (
-              <StepEditor
-                key={i}
-                index={i}
-                step={step}
-                canRemove={!lastStep}
-                draggable={steps.length > 1}
-                isDragging={dragStep === i}
-                onChange={(next) => setStep(i, next)}
-                onRemove={() => removeStep(i)}
-                onDragStart={() => setDragStep(i)}
-                onDrop={() => dropStep(i)}
-                onDragEnd={() => setDragStep(null)}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div className="p-4 border-t border-gray-800 space-y-2">
-          {serverError && <p className="text-sm text-red-400">{serverError}</p>}
-          <div className="flex justify-end gap-3">
-            <button
-              type="button"
-              onClick={() => !saving && onClose()}
-              disabled={saving}
-              className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={!canSave}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {saving ? "Saving…" : editIndex === null ? "Create flow" : "Save flow"}
-            </button>
-          </div>
+      <div className="space-y-2 pt-2 border-t border-gray-800">
+        {serverError && <p className="text-sm text-red-400">{serverError}</p>}
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => !saving && onCancel()}
+            disabled={saving}
+            className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!canSave}
+            className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {saving ? "Saving…" : editIndex === null ? "Create flow" : "Save flow"}
+          </button>
         </div>
       </div>
     </div>

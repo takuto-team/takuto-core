@@ -6,8 +6,8 @@
  *
  * Works on editor-local draft shapes: a skill's `args` is kept as the raw
  * comma-separated text the user types and split into the wire `args` array
- * only at save time (in FlowEditorModal). Keeping it as text here avoids
- * losing partially-typed separators on every keystroke.
+ * only at save time. Keeping it as text here avoids losing partially-typed
+ * separators on every keystroke.
  */
 
 /** A skill row in the editor — `argsText` is the raw comma-separated input. */

@@ -1,15 +1,20 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useState } from "react";
 import type { UserFlow } from "../api/flows";
+import { FlowEditor } from "./FlowEditor";
 
 interface FlowCardProps {
   flow: UserFlow;
+  flows: UserFlow[];
+  index: number;
+  expanded: boolean;
   draggable: boolean;
   isDragging: boolean;
-  onEdit: () => void;
+  onToggleExpand: () => void;
   onDelete: () => void;
+  onSubmit: (next: UserFlow[]) => Promise<void>;
+  onCancelEdit: () => void;
   onDragStart: () => void;
   onDrop: () => void;
   onDragEnd: () => void;
@@ -19,26 +24,24 @@ function stepCountLabel(n: number): string {
   return n === 1 ? "1 step" : `${n} steps`;
 }
 
-function firstLine(prompt: string): string {
-  const line = prompt.split("\n", 1)[0] ?? "";
-  return line.trim();
-}
-
 export function FlowCard({
   flow,
+  flows,
+  index,
+  expanded,
   draggable,
   isDragging,
-  onEdit,
+  onToggleExpand,
   onDelete,
+  onSubmit,
+  onCancelEdit,
   onDragStart,
   onDrop,
   onDragEnd,
 }: FlowCardProps) {
-  const [expanded, setExpanded] = useState(false);
-
   return (
     <div
-      draggable={draggable}
+      draggable={draggable && !expanded}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = "move";
         onDragStart();
@@ -51,9 +54,15 @@ export function FlowCard({
       onDragEnd={onDragEnd}
       className={`border border-gray-800 rounded-lg bg-gray-950 ${isDragging ? "opacity-40" : ""}`}
     >
-      <div className="flex items-center gap-3 px-3 py-2.5">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        aria-expanded={expanded}
+        aria-controls={`flow-${index}-editor`}
+        className="flex items-center gap-3 px-3 py-2.5 w-full text-left cursor-pointer hover:bg-gray-900/50 rounded-lg"
+      >
         <span
-          className={`text-gray-600 select-none ${draggable ? "cursor-grab" : "cursor-default"}`}
+          className={`text-gray-600 select-none ${draggable && !expanded ? "cursor-grab" : "cursor-default"}`}
           title="Drag to reorder"
           aria-hidden="true"
         >
@@ -81,28 +90,29 @@ export function FlowCard({
           </span>
         )}
 
-        <div className="ml-auto flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onEdit}
-            className="text-sm text-gray-400 hover:text-gray-200 cursor-pointer"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
+        <span className="ml-auto flex items-center gap-3">
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete();
+              }
+            }}
             className="text-sm text-red-500/70 hover:text-red-400 cursor-pointer"
           >
             Delete
-          </button>
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-gray-500 hover:text-gray-300 cursor-pointer"
+          </span>
+          <span
+            className="text-gray-500"
             title={expanded ? "Collapse" : "Expand"}
-            aria-label={expanded ? "Collapse steps" : "Expand steps"}
-            aria-expanded={expanded}
+            aria-hidden="true"
           >
             <svg
               className={`w-4 h-4 transition-transform ${expanded ? "rotate-180" : ""}`}
@@ -113,34 +123,18 @@ export function FlowCard({
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
-          </button>
-        </div>
-      </div>
+          </span>
+        </span>
+      </button>
 
       {expanded && (
-        <div className="border-t border-gray-800 px-3 py-2.5 space-y-2">
-          {flow.steps.map((step, i) => (
-            <div key={`${step.name}-${i}`} className="text-sm">
-              <div className="flex items-baseline gap-2 min-w-0">
-                <span className="text-gray-500 whitespace-nowrap">{i + 1}.</span>
-                <span className="text-gray-300 font-medium whitespace-nowrap">{step.name}</span>
-                <span className="text-gray-500 font-mono text-xs truncate">{firstLine(step.prompt)}</span>
-              </div>
-              {step.skills.length > 0 && (
-                <div className="ml-5 mt-1 flex items-center gap-1 flex-wrap">
-                  <span className="text-xs text-gray-600">skills:</span>
-                  {step.skills.map((skill, si) => (
-                    <span
-                      key={`${skill.name}-${si}`}
-                      className="bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded text-xs"
-                    >
-                      {skill.name}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+        <div id={`flow-${index}-editor`}>
+          <FlowEditor
+            flows={flows}
+            editIndex={index}
+            onSubmit={onSubmit}
+            onCancel={onCancelEdit}
+          />
         </div>
       )}
     </div>

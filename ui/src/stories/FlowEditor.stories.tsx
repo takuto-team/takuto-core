@@ -3,7 +3,7 @@
 
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { fn } from "storybook/test";
-import { FlowEditorModal } from "../components/modals/FlowEditorModal";
+import { FlowEditor } from "../components/FlowEditor";
 import type { UserFlow } from "../api/flows";
 
 const implement: UserFlow = {
@@ -57,10 +57,10 @@ const failingSubmit = async () => {
 };
 
 const meta = {
-  title: "Modals/FlowEditorModal",
-  component: FlowEditorModal,
+  title: "Components/FlowEditor",
+  component: FlowEditor,
   parameters: {
-    layout: "fullscreen",
+    layout: "padded",
     backgrounds: {
       default: "dark",
       values: [{ name: "dark", value: "#030712" }],
@@ -71,9 +71,9 @@ const meta = {
     flows: sampleFlows,
     editIndex: null,
     onSubmit: fn(noopSubmit),
-    onClose: fn(),
+    onCancel: fn(),
   },
-} satisfies Meta<typeof FlowEditorModal>;
+} satisfies Meta<typeof FlowEditor>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -118,7 +118,7 @@ export const ServerRejects: Story = {
   },
 };
 
-export const SingleStepEmptyFlows: Story = {
+export const NoSiblings: Story = {
   name: "Add — no siblings to depend on",
   args: {
     flows: [],
