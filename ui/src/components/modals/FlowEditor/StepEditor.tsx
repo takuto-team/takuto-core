@@ -10,6 +10,8 @@
  * separators on every keystroke.
  */
 
+import { useEffect, useRef, useState } from "react";
+
 /** A skill row in the editor — `argsText` is the raw comma-separated input. */
 export interface SkillDraft {
   name: string;
@@ -24,7 +26,6 @@ export interface StepDraft {
 }
 
 interface StepEditorProps {
-  index: number;
   step: StepDraft;
   canRemove: boolean;
   draggable: boolean;
@@ -37,7 +38,6 @@ interface StepEditorProps {
 }
 
 export function StepEditor({
-  index,
   step,
   canRemove,
   draggable,
@@ -48,6 +48,13 @@ export function StepEditor({
   onDrop,
   onDragEnd,
 }: StepEditorProps) {
+  const [editingName, setEditingName] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (editingName) nameInputRef.current?.focus();
+  }, [editingName]);
+
   const setSkill = (i: number, next: SkillDraft) => {
     onChange({ ...step, skills: step.skills.map((s, si) => (si === i ? next : s)) });
   };
@@ -81,7 +88,34 @@ export function StepEditor({
         >
           ⠿
         </span>
-        <span className="text-sm font-medium text-gray-300">Step {index + 1}</span>
+        {editingName ? (
+          <input
+            ref={nameInputRef}
+            type="text"
+            value={step.name}
+            onChange={(e) => onChange({ ...step, name: e.target.value })}
+            onBlur={() => setEditingName(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "Escape") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+            placeholder="e.g. cargo fmt"
+            className="flex-1 min-w-0 bg-gray-950 border border-blue-500 rounded px-2 py-0.5 text-sm font-medium text-gray-200 focus:outline-none"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditingName(true)}
+            title="Click to rename"
+            className={`text-sm font-medium truncate text-left rounded px-1 -mx-1 hover:bg-gray-800 cursor-pointer ${
+              step.name.trim() === "" ? "text-gray-500 italic" : "text-gray-300"
+            }`}
+          >
+            {step.name.trim() === "" ? "Untitled step" : step.name}
+          </button>
+        )}
         <button
           type="button"
           onClick={onRemove}
@@ -91,17 +125,6 @@ export function StepEditor({
         >
           Remove
         </button>
-      </div>
-
-      <div>
-        <label className="block text-xs text-gray-500 mb-1">Step name</label>
-        <input
-          type="text"
-          value={step.name}
-          onChange={(e) => onChange({ ...step, name: e.target.value })}
-          placeholder="e.g. cargo fmt"
-          className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
-        />
       </div>
 
       <div>

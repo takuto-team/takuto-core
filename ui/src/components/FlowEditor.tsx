@@ -236,7 +236,6 @@ export function FlowEditor({ flows, editIndex, onSubmit, onCancel }: FlowEditorP
         {steps.map((step, i) => (
           <div key={i} ref={i === steps.length - 1 ? lastStepRef : undefined}>
             <StepEditor
-              index={i}
               step={step}
               canRemove={!lastStep}
               draggable={steps.length > 1}

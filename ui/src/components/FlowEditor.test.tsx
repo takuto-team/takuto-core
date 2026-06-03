@@ -84,18 +84,28 @@ describe("FlowEditor — dependency cycle", () => {
 describe("FlowEditor — steps repeater", () => {
   it("adds and removes step rows; the last remaining step cannot be removed", () => {
     render(<FlowEditor flows={[]} editIndex={null} onSubmit={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getAllByText(/^Step \d+$/)).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^remove$/i })).toHaveLength(1);
     expect((screen.getByRole("button", { name: /^remove$/i }) as HTMLButtonElement).disabled).toBe(
       true,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /add step/i }));
-    expect(screen.getAllByText(/^Step \d+$/)).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^remove$/i })).toHaveLength(2);
 
     const removeButtons = screen.getAllByRole("button", { name: /^remove$/i });
     expect((removeButtons[0] as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(removeButtons[0]);
-    expect(screen.getAllByText(/^Step \d+$/)).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^remove$/i })).toHaveLength(1);
+  });
+
+  it("renames a step in place via the click-to-edit header", () => {
+    render(<FlowEditor flows={[]} editIndex={null} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    // Empty step starts as "Untitled step"; the header is a button that swaps to an input.
+    fireEvent.click(screen.getByRole("button", { name: /untitled step/i }));
+    const headerInput = screen.getByPlaceholderText(/cargo fmt/i);
+    fireEvent.change(headerInput, { target: { value: "lint" } });
+    fireEvent.keyDown(headerInput, { key: "Enter" });
+    expect(screen.getByRole("button", { name: "lint" })).toBeTruthy();
   });
 });
 
@@ -115,6 +125,8 @@ describe("FlowEditor — save", () => {
     fireEvent.change(screen.getByPlaceholderText(/lint_and_test/i), {
       target: { value: "Deploy" },
     });
+    // Step name lives in a click-to-edit header — open it before typing.
+    fireEvent.click(screen.getByRole("button", { name: /untitled step/i }));
     fireEvent.change(screen.getByPlaceholderText(/cargo fmt/i), {
       target: { value: "ship it" },
     });
