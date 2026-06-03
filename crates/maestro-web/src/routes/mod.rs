@@ -8,6 +8,7 @@ pub mod config_agent;
 pub mod credentials;
 pub mod github;
 pub mod jira;
+pub mod me_flows;
 pub mod onboarding;
 pub mod polling;
 pub mod repos;

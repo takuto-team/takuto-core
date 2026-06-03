@@ -406,6 +406,13 @@ pub fn build_router(state: AppState) -> Router {
                 .put(routes::worktree_commands::put_my_row)
                 .delete(routes::worktree_commands::delete_my_row),
         )
+        // Per-user-per-workspace work-item flows. Workspace is derived
+        // server-side from the active config — no `{workspace}` segment.
+        .route(
+            "/me/flows",
+            get(routes::me_flows::get_my_flows).put(routes::me_flows::put_my_flows),
+        )
+        .route("/me/flows/reseed", post(routes::me_flows::reseed_my_flows))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             dashboard_auth_middleware,

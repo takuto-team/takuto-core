@@ -134,6 +134,26 @@ pub enum FlowValidationError {
     DependencyCycle { flow: String },
 }
 
+impl FlowValidationError {
+    /// Stable machine-readable discriminator for the REST error body, so
+    /// clients can branch on the failure kind without parsing the message.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::TooManyFlows { .. } => "too_many_flows",
+            Self::EmptyFlowName => "empty_flow_name",
+            Self::DuplicateFlowName { .. } => "duplicate_flow_name",
+            Self::DuplicateSlug { .. } => "duplicate_slug",
+            Self::EmptySlug { .. } => "empty_slug",
+            Self::NoSteps { .. } => "no_steps",
+            Self::EmptyStepName { .. } => "empty_step_name",
+            Self::EmptyStepPrompt { .. } => "empty_step_prompt",
+            Self::EmptySkillName { .. } => "empty_skill_name",
+            Self::UnknownDependency { .. } => "unknown_dependency",
+            Self::DependencyCycle { .. } => "dependency_cycle",
+        }
+    }
+}
+
 /// Validate a proposed flow list. Enforces the cap, unique names, unique
 /// slugs, per-flow/step required fields, dependency references, and the
 /// absence of dependency cycles.
