@@ -109,7 +109,7 @@ export function StepEditor({
         <textarea
           value={step.prompt}
           onChange={(e) => onChange({ ...step, prompt: e.target.value })}
-          rows={4}
+          rows={10}
           placeholder="Text sent verbatim to the agent for this step."
           className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-200 focus:outline-none focus:border-blue-500 resize-y"
         />
