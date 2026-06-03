@@ -76,6 +76,7 @@ export function FlowCard({
       }}
       onDrop={(e) => {
         e.preventDefault();
+        e.stopPropagation();
         onDrop();
       }}
       onDragEnd={onDragEnd}

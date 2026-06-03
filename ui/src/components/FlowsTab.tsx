@@ -244,7 +244,20 @@ export function FlowsTab() {
         </div>
       ) : (
         <>
-          <div className={`space-y-2 ${saving ? "opacity-50 pointer-events-none" : ""}`}>
+          <div
+            className={`space-y-2 ${saving ? "opacity-50 pointer-events-none" : ""}`}
+            onDragOver={(e) => {
+              // Allow drop anywhere in the list (including the gaps between
+              // cards where the blue insertion line sits). The actual insert
+              // position was already set by the last card-level dragOver.
+              if (dragIndexRef.current !== null) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              if (dragIndexRef.current === null) return;
+              e.preventDefault();
+              handleDrop();
+            }}
+          >
             {flows.map((flow, i) => {
               const showLineBefore =
                 dragIndex !== null &&
