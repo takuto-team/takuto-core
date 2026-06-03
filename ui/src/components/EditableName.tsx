@@ -51,11 +51,17 @@ export function EditableName({
         }}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
+          // The input may sit inside a `<button>` (the collapsed flow row).
+          // Native buttons activate on Space and Enter, so every keystroke
+          // must be stopped from bubbling — otherwise typing a space would
+          // toggle the card instead of inserting the space.
+          e.stopPropagation();
           if (e.key === "Enter" || e.key === "Escape") {
             e.preventDefault();
             e.currentTarget.blur();
           }
         }}
+        onKeyUp={(e) => e.stopPropagation()}
         placeholder={placeholder}
         className={`${textClassName} min-w-0 bg-gray-950 border border-blue-500 rounded px-2 py-0.5 text-gray-200 focus:outline-none`}
       />
