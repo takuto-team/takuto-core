@@ -33,9 +33,18 @@ export function EditableName({
 }: EditableNameProps) {
   const [editing, setEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const escapingRef = useRef(false);
+  const originalRef = useRef(value);
 
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
+    if (editing) {
+      originalRef.current = value;
+      inputRef.current?.focus();
+    }
+    // Intentionally re-snapshot `value` only when entering edit mode so
+    // mid-edit prop changes don't move the revert target. Escape always
+    // restores the value the field had when the user clicked into it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
 
   if (editing) {
@@ -47,6 +56,12 @@ export function EditableName({
         onChange={(e) => onChange(e.target.value)}
         onBlur={() => {
           setEditing(false);
+          if (escapingRef.current) {
+            escapingRef.current = false;
+            // Revert: parent value goes back to what it was at edit-start.
+            if (value !== originalRef.current) onChange(originalRef.current);
+            return;
+          }
           if (onCommit) onCommit(value);
         }}
         onClick={(e) => e.stopPropagation()}
@@ -56,8 +71,12 @@ export function EditableName({
           // must be stopped from bubbling — otherwise typing a space would
           // toggle the card instead of inserting the space.
           e.stopPropagation();
-          if (e.key === "Enter" || e.key === "Escape") {
+          if (e.key === "Enter") {
             e.preventDefault();
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            escapingRef.current = true;
             e.currentTarget.blur();
           }
         }}

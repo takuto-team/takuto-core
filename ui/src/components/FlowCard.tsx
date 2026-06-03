@@ -98,33 +98,24 @@ export function FlowCard({
           ⠿
         </span>
 
-        {expanded ? (
-          <EditableName
-            value={nameDraft}
-            onChange={setNameDraft}
-            placeholder="Untitled flow"
-            textClassName="text-sm font-medium"
-          />
-        ) : (
-          <EditableName
-            value={nameDraft}
-            onChange={setNameDraft}
-            onCommit={async (next) => {
-              const trimmed = next.trim();
-              if (trimmed === "" || trimmed === flow.name) {
-                setNameDraft(flow.name);
-                return;
-              }
-              try {
-                await onInlineRename(trimmed);
-              } catch {
-                setNameDraft(flow.name);
-              }
-            }}
-            placeholder="Untitled flow"
-            textClassName="text-sm font-medium"
-          />
-        )}
+        <EditableName
+          value={nameDraft}
+          onChange={setNameDraft}
+          onCommit={async (next) => {
+            const trimmed = next.trim();
+            if (trimmed === "" || trimmed === flow.name) {
+              setNameDraft(flow.name);
+              return;
+            }
+            try {
+              await onInlineRename(trimmed);
+            } catch {
+              setNameDraft(flow.name);
+            }
+          }}
+          placeholder="Untitled flow"
+          textClassName="text-sm font-medium"
+        />
 
         <span className="text-xs text-gray-500 whitespace-nowrap">
           {stepCountLabel(flow.steps.length)}
