@@ -199,7 +199,10 @@ export function FlowEditor({ flows, editIndex, onSubmit, onCancel }: FlowEditorP
   const lastStep = steps.length === 1;
 
   return (
-    <div className="border-t border-gray-800 px-4 py-4 space-y-5" onKeyDown={handleKeyDown}>
+    <div
+      className="border-t border-gray-800 px-4 py-4 space-y-5 bg-gray-900 rounded-b-lg"
+      onKeyDown={handleKeyDown}
+    >
       <div>
         <label className="block text-sm text-gray-400 mb-1">Name</label>
         <input
