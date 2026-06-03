@@ -88,6 +88,14 @@ export function FlowsTab() {
     [submitList],
   );
 
+  const handleInlineRename = useCallback(
+    async (index: number, newName: string) => {
+      const next = flows.map((f, i) => (i === index ? { ...f, name: newName } : f));
+      await submitList(next);
+    },
+    [flows, submitList],
+  );
+
   const handleDelete = async () => {
     if (confirmDelete === null) return;
     const idx = confirmDelete;
@@ -232,6 +240,7 @@ export function FlowsTab() {
                 onToggleExpand={() => toggleExpand(i)}
                 onDelete={() => setConfirmDelete(i)}
                 onSubmit={handleEditorSubmit}
+                onInlineRename={(newName) => handleInlineRename(i, newName)}
                 onCancelEdit={() => setExpanded(null)}
                 onDragStart={() => setDragIndex(i)}
                 onDrop={() => handleDrop(i)}

@@ -6,6 +6,8 @@ import { useEffect, useRef, useState } from "react";
 interface EditableNameProps {
   value: string;
   onChange: (next: string) => void;
+  /** Fired when the user finishes editing (blur or Enter). Use for inline persist. */
+  onCommit?: (value: string) => void;
   placeholder: string;
   /** Tailwind classes for the rendered text / input (sizing, weight). */
   textClassName: string;
@@ -24,6 +26,7 @@ interface EditableNameProps {
 export function EditableName({
   value,
   onChange,
+  onCommit,
   placeholder,
   textClassName,
   title,
@@ -42,7 +45,10 @@ export function EditableName({
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onBlur={() => setEditing(false)}
+        onBlur={() => {
+          setEditing(false);
+          if (onCommit) onCommit(value);
+        }}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === "Escape") {
