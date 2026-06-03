@@ -70,9 +70,22 @@ export function FlowCard({
       onDragEnd={onDragEnd}
       className={`border border-gray-800 rounded-lg bg-gray-950 ${isDragging ? "opacity-40" : ""}`}
     >
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onToggleExpand}
+        onKeyDown={(e) => {
+          // Activate only when focus is on the row itself; if a child (the
+          // inline name input) is focused, let it consume the key. This is
+          // why the row is a `<div role="button">` rather than a real
+          // `<button>` — a native button activates on Space regardless of
+          // which descendant holds focus, breaking inline name editing.
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggleExpand();
+          }
+        }}
         aria-expanded={expanded}
         aria-controls={`flow-${index}-editor`}
         className="flex items-center gap-3 px-3 py-2.5 w-full text-left cursor-pointer hover:bg-gray-900/50 rounded-lg"
@@ -167,7 +180,7 @@ export function FlowCard({
             </svg>
           </span>
         </span>
-      </button>
+      </div>
 
       {expanded && nameError && (
         <p className="px-4 pt-2 text-sm text-red-400">{nameError}</p>
