@@ -34,6 +34,9 @@ SECURITY_ASSESSMENT_CONTAINER.md
 # tmp folder
 /tmp
 
+# DB dumps from `make backup-postgres` / `make backup-mariadb`
+/dump/
+
 # Gitleaks scan reports (the .gitleaks.toml config itself is tracked)
 gitleak-report.json
 

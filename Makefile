@@ -56,7 +56,10 @@ MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.
 # Docker image registry for push targets.
 REGISTRY ?= ghcr.io/morphet81/maestro
 
-.PHONY: help build build-local start stop auth test logs logs-maestro ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full
+.PHONY: help build build-local start stop auth test logs logs-maestro ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full backup-postgres backup-mariadb
+
+# Output directory for `backup-postgres` / `backup-mariadb`. Gitignored.
+DUMP_DIR ?= dump
 .DEFAULT_GOAL := help
 
 help: ## Show this help
@@ -339,3 +342,33 @@ check: ## Run the same gates CI runs (fast subset — no network/docker)
 
 check-full: ## Run all CI gates including gitleaks, cargo-deny, cargo-audit, npm audit
 	./scripts/preflight.sh --full
+
+# ── DB backups ────────────────────────────────────────────────────────
+# Both targets stream the dump from the running DB container through
+# gzip on the host into a timestamped file under `$(DUMP_DIR)/`. The
+# corresponding `BACKEND=...` stack must already be running (e.g.
+# `make start BACKEND=postgres`).
+
+backup-postgres: ## Dump the Postgres DB to dump/postgres-<timestamp>.sql.gz
+	@mkdir -p $(DUMP_DIR)
+	@TIMESTAMP=$$(date +%Y%m%d-%H%M%S); \
+	OUT="$(DUMP_DIR)/postgres-$$TIMESTAMP.sql.gz"; \
+	PGUSER=$${POSTGRES_USER:-maestro}; \
+	PGDB=$${POSTGRES_DB:-maestro}; \
+	echo "Dumping Postgres ($$PGDB as $$PGUSER) -> $$OUT"; \
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.postgres.yml exec -T postgres \
+	  pg_dump --clean --if-exists -U "$$PGUSER" -d "$$PGDB" \
+	  | gzip > "$$OUT"; \
+	echo "Backup complete: $$OUT ($$(du -h "$$OUT" | cut -f1))"
+
+backup-mariadb: ## Dump the MariaDB DB to dump/mariadb-<timestamp>.sql.gz
+	@mkdir -p $(DUMP_DIR)
+	@TIMESTAMP=$$(date +%Y%m%d-%H%M%S); \
+	OUT="$(DUMP_DIR)/mariadb-$$TIMESTAMP.sql.gz"; \
+	ROOT_PASS=$${MARIADB_ROOT_PASSWORD:-root}; \
+	DB=$${MARIADB_DATABASE:-maestro}; \
+	echo "Dumping MariaDB ($$DB as root) -> $$OUT"; \
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.mariadb.yml exec -T -e MYSQL_PWD="$$ROOT_PASS" mariadb \
+	  mariadb-dump --single-transaction --add-drop-table -u root "$$DB" \
+	  | gzip > "$$OUT"; \
+	echo "Backup complete: $$OUT ($$(du -h "$$OUT" | cut -f1))"
