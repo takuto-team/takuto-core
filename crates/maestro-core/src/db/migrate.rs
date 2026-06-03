@@ -215,6 +215,15 @@ pub(crate) fn translate_for_backend(sql: &str, backend: DbBackend) -> String {
                 "at TEXT NOT NULL DEFAULT ''",
                 "at VARCHAR(64) NOT NULL DEFAULT ''",
             );
+            // `key` is a MySQL reserved word — bare use as a column
+            // identifier triggers a syntax error. SQLite + Postgres
+            // accept it bare, so the source files leave it unquoted;
+            // MySQL needs the backtick form. Quote only the column
+            // declaration site (the lone declaration form we ship).
+            let s = s.replace(
+                "    key VARCHAR(64) PRIMARY KEY NOT NULL",
+                "    `key` VARCHAR(64) PRIMARY KEY NOT NULL",
+            );
             // MySQL 8.0.13+ accepts `DEFAULT` on `TEXT` / `BLOB` / `JSON`
             // columns ONLY when the literal is wrapped in parentheses
             // (`DEFAULT ('...')`). The source files use the simpler
@@ -474,6 +483,24 @@ mod tests {
         );
         assert!(!got.contains("IF NOT EXISTS"), "{got}");
         assert!(!got.contains("IF EXISTS"), "{got}");
+    }
+
+    #[test]
+    fn translate_mysql_backticks_reserved_key_column() {
+        // `key` is a MySQL reserved word. The source migration uses it
+        // bare (valid on SQLite + Postgres). MySQL must see the
+        // backticked form on the column declaration.
+        let input = "CREATE TABLE IF NOT EXISTS system_metadata (\n    key VARCHAR(64) PRIMARY KEY NOT NULL,\n    value TEXT NOT NULL,\n    updated_at BIGINT NOT NULL\n);";
+        let got = translate_for_backend(input, DbBackend::MySql);
+        assert!(
+            got.contains("`key` VARCHAR(64) PRIMARY KEY NOT NULL"),
+            "MySQL must backtick the `key` column, got: {got}"
+        );
+        // SQLite and Postgres keep the bare form.
+        let sqlite = translate_for_backend(input, DbBackend::Sqlite);
+        assert!(sqlite.contains("    key VARCHAR(64) PRIMARY KEY NOT NULL"));
+        let pg = translate_for_backend(input, DbBackend::Postgres);
+        assert!(pg.contains("    key VARCHAR(64) PRIMARY KEY NOT NULL"));
     }
 
     #[test]

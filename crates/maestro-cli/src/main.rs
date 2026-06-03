@@ -1153,7 +1153,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Periodic workflow snapshot syncer (every minute)
     let snapshot_task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut interval = tokio::time::interval(std::time::Duration::from_mins(1));
         loop {
             tokio::select! {
                 _ = interval.tick() => {
@@ -1179,7 +1179,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let retention_cancel = cancel_token.clone();
     let _retention_task = tokio::spawn(async move {
         let Some(database) = retention_db else { return };
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        let mut interval = tokio::time::interval(std::time::Duration::from_hours(1));
         // Skip the immediate first tick — restarts shouldn't
         // unconditionally hammer the DB before steady state.
         interval.tick().await;

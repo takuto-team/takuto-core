@@ -12,8 +12,13 @@ COPY VERSION /VERSION
 RUN npm run build
 
 # Stage 1b: Build Rust binary
-# Renovate-managed digest, refresh weekly (audit 2026-05-21 §3.5 — pin all bases by @sha256).
-FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS builder
+# The CI `rust` job uses `dtolnay/rust-toolchain@stable` and enforces
+# `clippy::duration_suboptimal_units`, which insists on `Duration::from_mins`
+# / `Duration::from_hours` — both stabilized in Rust 1.91. The Dockerfile
+# must keep up with the workspace's stable-Rust floor or `cargo build`
+# rejects those calls during the container smoke build.
+# TODO: re-pin by @sha256 once Renovate is wired up (audit 2026-05-21 §3.5).
+FROM rust:1-bookworm AS builder
 
 WORKDIR /app
 # Without this, Cargo hides progress in non-TTY Docker builds — looks hung for many minutes.

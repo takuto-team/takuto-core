@@ -88,14 +88,23 @@ pub fn legacy_sqlite_exists(data_dir: &Path) -> bool {
     data_dir.join("maestro.db").is_file()
 }
 
+/// Backend-specific spelling of the `key` column. MySQL reserves the
+/// bare word and requires backticks; SQLite and Postgres accept it
+/// unquoted. See the matching migration transform in `migrate.rs`.
+fn key_col(backend: DbBackend) -> &'static str {
+    match backend {
+        DbBackend::MySql => "`key`",
+        DbBackend::Sqlite | DbBackend::Postgres => "key",
+    }
+}
+
 /// Read the target's `system_metadata.import_complete` row. `true` means
 /// the importer has already run successfully and must not re-run.
 pub async fn import_already_complete(adapter: &DbAdapter) -> Result<bool, sqlx::Error> {
+    let key = key_col(adapter.backend());
+    let sql = format!("SELECT 1 FROM system_metadata WHERE {key} = 'import_complete'");
     let row = adapter
-        .query_optional(
-            "SELECT 1 FROM system_metadata WHERE key = 'import_complete'",
-            vec![],
-        )
+        .query_optional(&sql, vec![])
         .await
         .map_err(|e| match e {
             super::adapter::DbError::Sqlx { source } => source,
@@ -124,9 +133,10 @@ async fn mark_import_complete(
     // import_source_path (with the path as `value`). Both share the
     // `updated_at` column. Dialect-aware upsert tail keeps the call
     // sites identical across SQLite / Postgres / MySQL.
-    let tail = super::upsert::build_update_tail(tx.backend(), &["key"], &["value", "updated_at"]);
+    let key = key_col(tx.backend());
+    let tail = super::upsert::build_update_tail(tx.backend(), &[key], &["value", "updated_at"]);
     let sql_complete = format!(
-        "INSERT INTO system_metadata (key, value, updated_at) \
+        "INSERT INTO system_metadata ({key}, value, updated_at) \
          VALUES ('import_complete', ?, ?) {tail}"
     );
     tx.execute(
@@ -136,7 +146,7 @@ async fn mark_import_complete(
     .await
     .map_err(to_sqlx_err)?;
     let sql_path = format!(
-        "INSERT INTO system_metadata (key, value, updated_at) \
+        "INSERT INTO system_metadata ({key}, value, updated_at) \
          VALUES ('import_source_path', ?, ?) {tail}"
     );
     tx.execute(&sql_path, vec![DbValue::Text(path_str), DbValue::I64(now)])
