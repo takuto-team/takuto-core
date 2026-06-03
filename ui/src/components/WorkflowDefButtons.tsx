@@ -1,10 +1,12 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useState } from "react";
-import { apiPost } from "../api/client";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import type { WorkflowDefinition } from "../api/types";
-import { useToast } from "../hooks/useToast";
+import { useRunWorkflowDef } from "../hooks/useRunWorkflowDef";
+import { topoSort, runStateOf, depsAreMet, unmetDeps } from "./workflowDefState";
+import { StartFlowModal } from "./modals/StartFlowModal";
 import { SpinnerIcon, CheckIcon, XIcon, LockIcon } from "./icons";
 
 interface WorkflowDefButtonsProps {
@@ -16,167 +18,184 @@ interface WorkflowDefButtonsProps {
   mainRunning?: boolean;
 }
 
-/** Topological sort of definitions based on depends_on. Falls back to alphabetical. */
-function topoSort(defs: WorkflowDefinition[]): WorkflowDefinition[] {
-  const byFile = new Map<string, WorkflowDefinition>();
-  for (const d of defs) byFile.set(d.filename, d);
+/**
+ * Collapse the inline button row to a single "Start flow" button when the
+ * buttons would not fit the available width. An always-rendered, off-screen
+ * measurer holds the full inline set so the measurement is stable regardless
+ * of whether we are currently collapsed (no flip-flop). A one-frame flicker on
+ * first paint is acceptable.
+ */
+function useOverflowCollapse(signature: string) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const measurerRef = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
-  const sorted: WorkflowDefinition[] = [];
-  const visited = new Set<string>();
-  const visiting = new Set<string>();
-  let hasCycle = false;
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const measurer = measurerRef.current;
+    if (!wrap || !measurer || typeof ResizeObserver === "undefined") return;
+    const measure = () => setCollapsed(measurer.scrollWidth > wrap.clientWidth);
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [signature]);
 
-  function visit(d: WorkflowDefinition) {
-    if (visited.has(d.filename)) return;
-    if (visiting.has(d.filename)) {
-      hasCycle = true;
-      return;
-    }
-    visiting.add(d.filename);
-    for (const dep of d.depends_on) {
-      const depDef = byFile.get(dep);
-      if (depDef) visit(depDef);
-    }
-    visiting.delete(d.filename);
-    visited.add(d.filename);
-    sorted.push(d);
-  }
-
-  for (const d of defs) visit(d);
-
-  if (hasCycle) {
-    return [...defs].sort((a, b) => a.name.localeCompare(b.name));
-  }
-  return sorted;
+  return { wrapRef, measurerRef, collapsed };
 }
 
-export function WorkflowDefButtons({ definitions, runStates, ticketKey, onRefresh, mainRunning }: WorkflowDefButtonsProps) {
-  const { showToast } = useToast();
-  const [loadingDef, setLoadingDef] = useState<string | null>(null);
+export function WorkflowDefButtons({
+  definitions,
+  runStates,
+  ticketKey,
+  onRefresh,
+  mainRunning,
+}: WorkflowDefButtonsProps) {
+  const { run, loadingDef } = useRunWorkflowDef(ticketKey, onRefresh);
+  const [modalOpen, setModalOpen] = useState(false);
 
   const validDefs = definitions.filter((d) => d.valid);
-  if (validDefs.length === 0) return null;
-
   const sorted = topoSort(validDefs);
+  const signature = sorted.map((d) => d.name).join("|");
+  const { wrapRef, measurerRef, collapsed } = useOverflowCollapse(signature);
 
-  function depsAreMet(def: WorkflowDefinition): boolean {
-    return def.depends_on.every((dep) => runStates[dep] === "completed");
-  }
+  function renderButton(def: WorkflowDefinition) {
+    const state = runStateOf(def, runStates);
+    const met = depsAreMet(def, runStates);
+    const isLoading = loadingDef === def.filename;
 
-  function unmetDeps(def: WorkflowDefinition): string[] {
-    const defsByFile = new Map<string, WorkflowDefinition>();
-    for (const d of definitions) defsByFile.set(d.filename, d);
-    return def.depends_on
-      .filter((dep) => runStates[dep] !== "completed")
-      .map((dep) => defsByFile.get(dep)?.name || dep);
-  }
-
-  async function handleRun(def: WorkflowDefinition) {
-    const state = runStates[def.filename] || "idle";
-    // Server-side route names use "definition" (canonical) for the
-    // work-item-scoped run endpoints.
-    const endpoint = state === "error" ? "retry-definition" : "run-definition";
-    setLoadingDef(def.filename);
-    try {
-      const res = await apiPost(
-        `/api/work-items/${encodeURIComponent(ticketKey)}/${endpoint}/${encodeURIComponent(def.filename)}`
+    if (state === "running") {
+      return (
+        <span
+          key={def.filename}
+          className="action-btn wf-btn-primary opacity-75 cursor-default inline-flex items-center justify-between gap-2"
+        >
+          {def.name} <SpinnerIcon />
+        </span>
       );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `Failed to ${endpoint}`);
-      }
-      onRefresh();
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Action failed");
-    } finally {
-      setLoadingDef(null);
     }
+
+    if (state === "completed") {
+      return (
+        <span
+          key={def.filename}
+          className="action-btn wf-btn-success cursor-default inline-flex items-center gap-1"
+        >
+          <CheckIcon /> {def.name}
+        </span>
+      );
+    }
+
+    if (state === "error") {
+      if (mainRunning) {
+        return (
+          <span
+            key={def.filename}
+            className="action-btn wf-btn-danger opacity-50 cursor-not-allowed inline-flex items-center gap-1"
+          >
+            <XIcon /> {def.name}
+          </span>
+        );
+      }
+      return (
+        <button
+          key={def.filename}
+          className="action-btn wf-btn-danger inline-flex items-center gap-1"
+          onClick={() => run(def, state)}
+          disabled={isLoading}
+          title="Click to retry"
+        >
+          {isLoading ? <SpinnerIcon /> : <XIcon />} {def.name}
+        </button>
+      );
+    }
+
+    // idle state
+    if (!met || mainRunning) {
+      const waiting = !met ? unmetDeps(def, definitions, runStates) : [];
+      return (
+        <span
+          key={def.filename}
+          className="action-btn wf-btn-secondary opacity-50 cursor-not-allowed inline-flex items-center gap-1"
+          title={!met ? `Waiting for: ${waiting.join(", ")}` : undefined}
+        >
+          {!met && <LockIcon />} {def.name}
+        </span>
+      );
+    }
+
+    return (
+      <button
+        key={def.filename}
+        className="action-btn wf-btn-primary inline-flex items-center gap-1"
+        onClick={() => run(def, state)}
+        disabled={isLoading}
+      >
+        {isLoading ? <SpinnerIcon /> : null} {def.name}
+      </button>
+    );
   }
 
-  return (
+  const section = (body: React.ReactNode) => (
     <>
       <div className="border-t border-gray-800/60" />
       <div>
         <div className="text-xs text-gray-500 mb-1.5">Workflows</div>
-        <div className="flex flex-wrap gap-2">
-          {sorted.map((def) => {
-            const state = runStates[def.filename] || "idle";
-            const met = depsAreMet(def);
-            const isLoading = loadingDef === def.filename;
-
-            if (state === "running") {
-              return (
-                <span
-                  key={def.filename}
-                  className="action-btn wf-btn-primary opacity-75 cursor-default inline-flex items-center justify-between gap-2"
-                >
-                  {def.name} <SpinnerIcon />
-                </span>
-              );
-            }
-
-            if (state === "completed") {
-              return (
-                <span
-                  key={def.filename}
-                  className="action-btn wf-btn-success cursor-default inline-flex items-center gap-1"
-                >
-                  <CheckIcon /> {def.name}
-                </span>
-              );
-            }
-
-            if (state === "error") {
-              if (mainRunning) {
-                return (
-                  <span
-                    key={def.filename}
-                    className="action-btn wf-btn-danger opacity-50 cursor-not-allowed inline-flex items-center gap-1"
-                  >
-                    <XIcon /> {def.name}
-                  </span>
-                );
-              }
-              return (
-                <button
-                  key={def.filename}
-                  className="action-btn wf-btn-danger inline-flex items-center gap-1"
-                  onClick={() => handleRun(def)}
-                  disabled={isLoading}
-                  title="Click to retry"
-                >
-                  {isLoading ? <SpinnerIcon /> : <XIcon />} {def.name}
-                </button>
-              );
-            }
-
-            // idle state
-            if (!met || mainRunning) {
-              const waiting = !met ? unmetDeps(def) : [];
-              return (
-                <span
-                  key={def.filename}
-                  className="action-btn wf-btn-secondary opacity-50 cursor-not-allowed inline-flex items-center gap-1"
-                  title={!met ? `Waiting for: ${waiting.join(", ")}` : undefined}
-                >
-                  {!met && <LockIcon />} {def.name}
-                </span>
-              );
-            }
-
-            return (
-              <button
-                key={def.filename}
-                className="action-btn wf-btn-primary inline-flex items-center gap-1"
-                onClick={() => handleRun(def)}
-                disabled={isLoading}
-              >
-                {isLoading ? <SpinnerIcon /> : null} {def.name}
-              </button>
-            );
-          })}
-        </div>
+        {body}
       </div>
+    </>
+  );
+
+  // Empty resolved flow list: the user cleared every flow for this workspace.
+  if (definitions.length === 0) {
+    return section(
+      <p className="text-sm text-gray-500">
+        No flows configured.{" "}
+        <Link to="/config?tab=Flows" className="text-blue-400 hover:text-blue-300">
+          Configure flows &rarr;
+        </Link>
+      </p>,
+    );
+  }
+
+  const canCollapse = collapsed && sorted.length >= 2;
+
+  return (
+    <>
+      {section(
+        <div ref={wrapRef} className="relative">
+          <div
+            ref={measurerRef}
+            aria-hidden="true"
+            inert
+            className="absolute left-0 top-0 invisible pointer-events-none flex gap-2 w-max"
+          >
+            {sorted.map(renderButton)}
+          </div>
+
+          {canCollapse ? (
+            <button
+              type="button"
+              className="action-btn wf-btn-primary inline-flex items-center gap-1"
+              onClick={() => setModalOpen(true)}
+            >
+              Start flow
+            </button>
+          ) : (
+            <div className="flex flex-wrap gap-2">{sorted.map(renderButton)}</div>
+          )}
+        </div>,
+      )}
+
+      {modalOpen && (
+        <StartFlowModal
+          definitions={definitions}
+          runStates={runStates}
+          ticketKey={ticketKey}
+          onRefresh={onRefresh}
+          mainRunning={mainRunning}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
     </>
   );
 }

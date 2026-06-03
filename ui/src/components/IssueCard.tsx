@@ -268,16 +268,15 @@ export function IssueCard({
           )}
         </div>
 
-        {/* Always-visible sections */}
-        {workflowDefs.length > 0 && (
-          <WorkflowDefButtons
-            definitions={workflowDefs}
-            runStates={w.definition_runs || {}}
-            ticketKey={w.ticket_key}
-            onRefresh={onRefresh}
-            mainRunning={isActive}
-          />
-        )}
+        {/* Always-visible sections. WorkflowDefButtons renders the empty-state
+            banner itself when the resolved flow list is empty. */}
+        <WorkflowDefButtons
+          definitions={workflowDefs}
+          runStates={w.definition_runs || {}}
+          ticketKey={w.ticket_key}
+          onRefresh={onRefresh}
+          mainRunning={isActive}
+        />
         {w.run_commands && w.run_commands.length > 0 && (
           <RunCommands ticketKey={w.ticket_key} commands={w.run_commands} withLoading={withLoading} />
         )}
