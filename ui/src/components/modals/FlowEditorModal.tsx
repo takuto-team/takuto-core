@@ -12,7 +12,7 @@
  * client missed surfaces as a structured error above the footer.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { slugify, type UserFlow } from "../../api/flows";
 import { StepEditor, type SkillDraft, type StepDraft } from "./FlowEditor/StepEditor";
 import { DependsOnSelect } from "./FlowEditor/DependsOnSelect";
@@ -85,6 +85,16 @@ export function FlowEditorModal({ flows, editIndex, onSubmit, onClose }: FlowEdi
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState("");
   const [dragStep, setDragStep] = useState<number | null>(null);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevStepCountRef = useRef(steps.length);
+
+  useEffect(() => {
+    if (steps.length > prevStepCountRef.current && scrollRef.current) {
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    }
+    prevStepCountRef.current = steps.length;
+  }, [steps.length]);
 
   const otherFlows = useMemo(
     () => flows.filter((_, i) => i !== editIndex),
@@ -208,7 +218,7 @@ export function FlowEditorModal({ flows, editIndex, onSubmit, onClose }: FlowEdi
           </button>
         </div>
 
-        <div className="overflow-y-auto flex-1 p-4 space-y-5">
+        <div ref={scrollRef} className="overflow-y-auto flex-1 p-4 space-y-5">
           <div>
             <label className="block text-sm text-gray-400 mb-1">Name</label>
             <input
