@@ -41,6 +41,33 @@ export interface UserFlowsResponse {
 /** Hard cap enforced server-side and mirrored client-side for instant feedback. */
 export const MAX_FLOWS = 20;
 
+/** Maximum length of a flow's kebab-case slug (mirrors the backend constant). */
+const MAX_SLUG_LEN = 64;
+
+/**
+ * Lower-case, kebab-case, length-capped slug for a flow name. This is a
+ * verbatim port of the backend `slugify` so the editor can detect slug
+ * collisions client-side with the same result the server produces (the slug
+ * is the `workflow_def_runs` key, so two flows must never share one).
+ */
+export function slugify(name: string): string {
+  let out = "";
+  let prevDash = false;
+  for (const ch of name) {
+    if (/[A-Za-z0-9]/.test(ch)) {
+      out += ch.toLowerCase();
+      prevDash = false;
+    } else if (!prevDash) {
+      out += "-";
+      prevDash = true;
+    }
+  }
+  const trimmed = out.replace(/^-+/, "").replace(/-+$/, "");
+  let slug = Array.from(trimmed).slice(0, MAX_SLUG_LEN).join("");
+  slug = slug.replace(/-+$/, "");
+  return slug;
+}
+
 /**
  * Structured validation failure surfaced by PUT / reseed. `kind` is one of the
  * backend's typed reasons (`dependency_cycle`, `too_many_flows`,

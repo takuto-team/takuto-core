@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getMyFlows, putMyFlows, reseedMyFlows, MAX_FLOWS, type UserFlow } from "../api/flows";
 import { ConfirmModal } from "./modals/ConfirmModal";
+import { FlowEditorModal } from "./modals/FlowEditorModal";
 import { FlowCard } from "./FlowCard";
 
 type EditorTarget = number | "new" | null;
@@ -221,26 +222,16 @@ export function FlowsTab() {
       )}
 
       {editorTarget !== null && (
-        <div className="modal-backdrop" onClick={() => setEditorTarget(null)}>
-          <div
-            className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-md w-full mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-medium text-white mb-2">
-              {editorTarget === "new" ? "Add flow" : `Edit flow — ${flows[editorTarget]?.name ?? ""}`}
-            </h3>
-            <p className="text-sm text-gray-400 mb-6">The flow editor is not available yet.</p>
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => setEditorTarget(null)}
-                className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <FlowEditorModal
+          flows={flows}
+          editIndex={editorTarget === "new" ? null : editorTarget}
+          onSubmit={async (next) => {
+            const res = await putMyFlows(next);
+            setFlows(res.flows);
+            setWorkspace(res.workspace);
+          }}
+          onClose={() => setEditorTarget(null)}
+        />
       )}
     </div>
   );
