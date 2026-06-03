@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { FlowsTab } from "../components/FlowsTab";
 import type { UserFlow, UserFlowsResponse } from "../api/flows";
 
@@ -18,11 +18,15 @@ type FetchMock = {
 /**
  * Decorator that patches `window.fetch` for /api/me/flows* while the story is
  * mounted, so the un-prop-driven FlowsTab can render without a real backend.
+ *
+ * The patch is installed in a `useState` initializer rather than `useEffect`
+ * because child effects fire before parent effects on mount — so an effect-
+ * based patch lands too late and FlowsTab's initial GET hits the real fetch.
  */
 function withFlowsMock(mock: FetchMock) {
   return function Decorator(Story: () => React.ReactNode) {
-    useEffect(() => {
-      const realFetch = window.fetch;
+    const [realFetch] = useState(() => {
+      const original = window.fetch;
       const state: { workspace: string; flows: UserFlow[] } = {
         workspace: mock.workspace,
         flows: mock.flows.map((f) => ({ ...f })),
@@ -64,13 +68,18 @@ function withFlowsMock(mock: FetchMock) {
             );
           }
         }
-        return realFetch(input as RequestInfo, init);
+        return original(input as RequestInfo, init);
       }) as typeof window.fetch;
 
+      return original;
+    });
+
+    useEffect(() => {
       return () => {
         window.fetch = realFetch;
       };
-    }, []);
+    }, [realFetch]);
+
     return <Story />;
   };
 }
