@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::Utc;
 use tokio_util::sync::CancellationToken;
@@ -137,6 +138,13 @@ pub struct Workflow {
     pub pr_url: Option<String>,
     pub pr_merged: bool,
     pub cancel_token: CancellationToken,
+    /// Serialises worktree-create attempts for this workflow. Held by the
+    /// background `prepare_worktree_for_ticket` task at ticket-add time and
+    /// by `bootstrap_new_workflow` when the user starts a flow def, so the
+    /// two cannot fight over the same on-disk path. Non-persistent — a
+    /// fresh lock is created on restart (the snapshot path goes through
+    /// `PersistedWorkflowRecord`, which does not carry this field).
+    pub worktree_lock: Arc<tokio::sync::Mutex<()>>,
     /// Recent terminal output lines for persistence across page reloads.
     pub terminal_lines: Vec<TerminalLine>,
     /// Human-readable agent step label for the dashboard (e.g. `Implement (cycle 2/3, run 1/1)`).
@@ -219,6 +227,7 @@ impl Workflow {
             pr_url: None,
             pr_merged: false,
             cancel_token: CancellationToken::new(),
+            worktree_lock: Arc::new(tokio::sync::Mutex::new(())),
             terminal_lines: Vec::new(),
             current_step_label: None,
             started_manually,
@@ -346,6 +355,7 @@ impl Workflow {
             pr_url: rec.pr_url,
             pr_merged: rec.pr_merged,
             cancel_token: CancellationToken::new(),
+            worktree_lock: Arc::new(tokio::sync::Mutex::new(())),
             terminal_lines: rec
                 .terminal_lines
                 .into_iter()

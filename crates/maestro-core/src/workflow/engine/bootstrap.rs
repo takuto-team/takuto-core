@@ -66,13 +66,19 @@ pub(super) async fn prepare_worktree_for_ticket(
     }
 
     // Use "Task" as the default item type at add time (Jira details not fetched yet).
-    let item_type = {
+    let (item_type, worktree_lock) = {
         let wf = workflows.read().await;
-        wf.get(ticket_key)
-            .map(|w| w.ticket_type.clone())
-            .unwrap_or_else(|| "Task".to_string())
+        match wf.get(ticket_key) {
+            Some(w) => (w.ticket_type.clone(), w.worktree_lock.clone()),
+            None => return, // Workflow was removed before the task started.
+        }
     };
     let branch_name = git::worktree::branch_name_for_ticket(ticket_key, &item_type);
+
+    // Hold the per-workflow lock for the duration of create_worktree. If
+    // `bootstrap_new_workflow` fires concurrently, it acquires the same
+    // lock and waits, then sees our completed worktree_path.
+    let _guard = worktree_lock.lock().await;
 
     match actions
         .create_worktree(&repo_path, &branch_name, &base_branch)
@@ -319,7 +325,22 @@ pub(super) async fn bootstrap_new_workflow(
     .await;
     check_cancelled(cancel_token)?;
 
+    // Acquire the per-workflow worktree lock before checking / creating, so
+    // we serialise with any in-flight `prepare_worktree_for_ticket` task.
+    // Holding the lock for the whole Step 2 prevents a concurrent pre-create
+    // from clobbering the path we (or the pre-create) is producing.
+    let worktree_lock = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).map(|w| w.worktree_lock.clone())
+    };
+    let _worktree_guard = if let Some(lock) = worktree_lock {
+        Some(lock.lock_owned().await)
+    } else {
+        None
+    };
+
     // Check whether a worktree was already pre-created when the ticket was added.
+    // Re-read AFTER taking the lock so we observe any pre-create that just finished.
     let pre_created = {
         let wf = workflows.read().await;
         wf.get(ticket_key).and_then(|w| {

@@ -560,6 +560,7 @@ mod tests {
             pr_url: None,
             pr_merged: false,
             cancel_token: CancellationToken::new(),
+            worktree_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             terminal_lines: Vec::new(),
             current_step_label,
             started_manually: false,
