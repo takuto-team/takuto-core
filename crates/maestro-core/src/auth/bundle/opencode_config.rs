@@ -95,8 +95,8 @@ pub(super) fn write_opencode_config(
         }
         .into());
     }
-    let model_trim = model.trim();
-    if model_trim.is_empty() {
+    let model_trim_raw = model.trim();
+    if model_trim_raw.is_empty() {
         return Err(ConfigError::Operational {
             op: "opencode_config_shim",
             detail: "model is empty — validator should have caught this; \
@@ -106,6 +106,15 @@ pub(super) fn write_opencode_config(
         }
         .into());
     }
+    // OpenCode's `-m` flag wants `<providerId>/<modelId>` and splits on the
+    // FIRST slash. Maestro always names the provider `self_hosted`, so the
+    // key under `provider.self_hosted.models{}` must be the trailing
+    // model-id without the provider prefix. Users routinely paste the full
+    // `self_hosted/<model>` form (it's what they pass to `-m` too); strip
+    // the leading `self_hosted/` here so both forms produce the same file.
+    let model_trim = model_trim_raw
+        .strip_prefix(&format!("{SELF_HOSTED_PROVIDER_ID}/"))
+        .unwrap_or(model_trim_raw);
 
     // Resolve apiKey. `Some([])` is treated as "no bearer" — an
     // explicitly-empty saved bearer carries no meaning for any

@@ -129,10 +129,27 @@ async fn run_opencode_session(
     match result {
         Ok(output) => {
             if !output.success() {
+                // opencode often surfaces the *real* failure as a JSON
+                // `type=error` event on stdout (provider auth, model not
+                // found, upstream LM Studio / Ollama context overflow, …)
+                // and prints only generic startup noise to stderr. If we
+                // can pull a structured error out of stdout, prefer it —
+                // otherwise fall back to the stderr tail. Take a larger
+                // tail too: opencode's first-run sqlite migration eats 3
+                // of the 8 lines we used to capture, leaving room for
+                // almost no real diagnostic.
+                let stdout_err = first_opencode_error(&output.stdout);
+                let stderr_tail =
+                    output.stderr.lines().rev().take(40).collect::<Vec<_>>();
+                let stderr_tail = stderr_tail.iter().rev().copied().collect::<Vec<_>>().join("\n");
+                let detail = match stdout_err {
+                    Some(msg) => format!("{msg}\n--- stderr tail ---\n{stderr_tail}"),
+                    None => stderr_tail,
+                };
                 return Err(AgentError::NonZeroExit {
                     provider: AiAgentProvider::OpenCode,
                     exit_code: output.exit_code,
-                    stderr_tail: output.stderr.lines().take(8).collect::<Vec<_>>().join("\n"),
+                    stderr_tail: detail,
                 }
                 .into());
             }
@@ -184,13 +201,31 @@ fn build_opencode_args(
         "--format".to_string(),
         "json".to_string(),
         "--dangerously-skip-permissions".to_string(),
+        // Stream opencode's internal logs to stderr so a failure surfaces
+        // the real reason (provider not found, upstream OpenAI-compat
+        // server error, context overflow, …) instead of just the boot-time
+        // sqlite-migration noise the parser sees today.
+        "--print-logs".to_string(),
+        "--log-level".to_string(),
+        "WARN".to_string(),
     ];
 
     if let Some(m) = model
         && !m.is_empty()
     {
+        // OpenCode's `-m` flag wants `<providerId>/<modelId>` and Maestro's
+        // synthesised `opencode.json` always names the provider
+        // `self_hosted`. Accept the model in either form — `qwen/x` or
+        // `self_hosted/qwen/x` — by always prepending the prefix when it
+        // isn't already there. Matches the symmetric strip in
+        // `write_opencode_config`.
+        let with_provider = if m.starts_with("self_hosted/") {
+            m.to_string()
+        } else {
+            format!("self_hosted/{m}")
+        };
         args.push("-m".to_string());
-        args.push(m.to_string());
+        args.push(with_provider);
     }
 
     if let Some(sid) = resume_session_id
@@ -352,9 +387,19 @@ mod tests {
 
     #[test]
     fn opencode_args_include_model_when_non_empty() {
-        let args = build_opencode_args("prompt", Some("anthropic/claude-opus-4-7"), None);
+        // Bare model id gets the synthesised `self_hosted/` provider prefix
+        // so it matches the key in the materialised opencode.json.
+        let args = build_opencode_args("prompt", Some("qwen/qwen2.5-vl-7b"), None);
         assert!(args.contains(&"-m".to_string()));
-        assert!(args.contains(&"anthropic/claude-opus-4-7".to_string()));
+        assert!(args.contains(&"self_hosted/qwen/qwen2.5-vl-7b".to_string()));
+    }
+
+    #[test]
+    fn opencode_args_keep_existing_self_hosted_prefix() {
+        // User config that already has the prefix must NOT get double-prefixed.
+        let args = build_opencode_args("prompt", Some("self_hosted/qwen/foo"), None);
+        assert!(args.contains(&"self_hosted/qwen/foo".to_string()));
+        assert!(!args.contains(&"self_hosted/self_hosted/qwen/foo".to_string()));
     }
 
     #[test]
