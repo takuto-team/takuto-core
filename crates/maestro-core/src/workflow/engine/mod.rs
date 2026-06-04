@@ -561,6 +561,7 @@ mod tests {
             pr_merged: false,
             cancel_token: CancellationToken::new(),
             worktree_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            current_def_total_steps: None,
             terminal_lines: Vec::new(),
             current_step_label,
             started_manually: false,

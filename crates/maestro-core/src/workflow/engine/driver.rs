@@ -70,6 +70,24 @@ pub(super) async fn drive_workflow_def(
 
     info!(ticket = %ticket_key, def = %def_name, "Workflow definition driver started");
 
+    // Lock the dashboard progress denominator for this run. Without this,
+    // `dashboard_progress::estimated_step_total` infers the total from
+    // `steps_log.len() + 2`, so the displayed "k/N" denominator grows as
+    // the run progresses. Cache the def's actual step count plus a
+    // bootstrap estimate (which we cannot resolve exactly here — init
+    // commands etc. live behind a DB lookup — but a sensible upper bound
+    // keeps the bar stable for the whole run).
+    {
+        let mut wf = workflows.write().await;
+        if let Some(workflow) = wf.get_mut(&ticket_key) {
+            let bootstrap_est: u32 = if workflow.jira_available { 3 } else { 1 };
+            let mise_est: u32 = 1;
+            let agent_steps = u32::try_from(steps.len()).unwrap_or(u32::MAX);
+            workflow.current_def_total_steps =
+                Some(bootstrap_est + mise_est + agent_steps + 1);
+        }
+    }
+
     // Workflow logs live under `{data_dir}/logs/<TICKET>.log` so they are
     // independent of the repository (there is no global active repo any
     // more). Fall back to a writable temp dir if the data dir cannot be

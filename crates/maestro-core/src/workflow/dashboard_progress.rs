@@ -69,6 +69,14 @@ fn in_flight_partial_credit(w: &Workflow) -> bool {
 /// we estimate the total from bootstrap steps + the number of already-logged steps +
 /// a small buffer for remaining work.
 pub fn estimated_step_total(w: &Workflow, cfg: &Config) -> u32 {
+    // When the driver has cached the total for the running def, trust it —
+    // the heuristic below derives the total from `steps_log.len()` and
+    // therefore drifts upward as the run progresses, which is exactly what
+    // the dashboard's "k/N" denominator should not do.
+    if let Some(t) = w.current_def_total_steps {
+        return t.max(1);
+    }
+
     // Bootstrap steps:
     // Assign + Retrieve only run when Jira (acli) is available — GitHub Issues skips them.
     // Jira: 3 steps (Assign + Retrieve + Worktree). GitHub/none: 1 step (Worktree only).
@@ -136,6 +144,7 @@ mod tests {
             pr_merged: false,
             cancel_token: CancellationToken::new(),
             worktree_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            current_def_total_steps: None,
             terminal_lines: Vec::new(),
             current_step_label: None,
             started_manually: false,

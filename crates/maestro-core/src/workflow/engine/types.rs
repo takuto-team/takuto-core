@@ -145,6 +145,14 @@ pub struct Workflow {
     /// fresh lock is created on restart (the snapshot path goes through
     /// `PersistedWorkflowRecord`, which does not carry this field).
     pub worktree_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Total step count for the currently-running flow definition (bootstrap
+    /// estimate + agent steps + the trailing "Workflow complete" row).
+    /// Set by `drive_workflow_def` before steps execute and used by
+    /// `dashboard_progress::estimated_step_total`, so the progress bar's
+    /// denominator stays stable across the run instead of growing every
+    /// time a step gets logged. `None` until a def starts (e.g. for a
+    /// Pending workflow that has never been clicked).
+    pub current_def_total_steps: Option<u32>,
     /// Recent terminal output lines for persistence across page reloads.
     pub terminal_lines: Vec<TerminalLine>,
     /// Human-readable agent step label for the dashboard (e.g. `Implement (cycle 2/3, run 1/1)`).
@@ -228,6 +236,7 @@ impl Workflow {
             pr_merged: false,
             cancel_token: CancellationToken::new(),
             worktree_lock: Arc::new(tokio::sync::Mutex::new(())),
+            current_def_total_steps: None,
             terminal_lines: Vec::new(),
             current_step_label: None,
             started_manually,
@@ -356,6 +365,7 @@ impl Workflow {
             pr_merged: rec.pr_merged,
             cancel_token: CancellationToken::new(),
             worktree_lock: Arc::new(tokio::sync::Mutex::new(())),
+            current_def_total_steps: None,
             terminal_lines: rec
                 .terminal_lines
                 .into_iter()
