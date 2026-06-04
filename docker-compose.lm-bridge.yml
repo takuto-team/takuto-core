@@ -1,0 +1,67 @@
+# Bridge from Maestro workers to a host-mac model server (LM Studio, Ollama, etc.).
+#
+# Why this exists:
+#   Docker Desktop 4.34+ ships a gVisor-based network stack as the default and
+#   only honours `host.docker.internal` on the **default** bridge network.
+#   Containers on user-defined bridges (like Maestro's `maestro-core_default`)
+#   AND containers nested inside DinD CANNOT reach `host.docker.internal`,
+#   which makes a host-mac LM Studio unreachable from the Maestro workers.
+#
+# What this overlay does:
+#   Adds a tiny socat sidecar (`lm-bridge`) attached to BOTH the default
+#   docker bridge AND `maestro-core_default`:
+#     - The default-bridge side reaches `host.docker.internal:${LM_PORT}` and
+#       forwards to LM Studio.
+#     - The compose-network side gives the DinD-nested workers a reachable
+#       target (workers can route into `maestro-core_default` via DinD's
+#       outbound NAT, which we have verified end-to-end).
+#
+# Usage:
+#   make start BACKEND=postgres LM_BRIDGE=1
+#   (or layer the file manually:
+#    docker compose -f docker-compose.yml -f docker-compose.dind.yml \
+#                   -f docker-compose.postgres.yml -f docker-compose.lm-bridge.yml up -d)
+#
+#   Then in Configuration → AI Settings → OpenCode → Base URL set:
+#     http://lm-bridge:1234/v1            (when MAESTRO_DNS=1 patches workers — todo)
+#   Or use the pinned IP directly:
+#     http://172.20.0.250:1234/v1
+#
+#   The lm-bridge service forwards to LM_HOST_PORT on host.docker.internal,
+#   so any OpenAI-compatible server bound to all interfaces on the host
+#   works (LM Studio "Serve on Local Network", Ollama, vLLM, …).
+
+services:
+  lm-bridge:
+    image: alpine/socat:1.8.0.0
+    container_name: maestro-lm-bridge
+    restart: unless-stopped
+    # socat: listen on tcp/1234 on every attached interface, fork per
+    # connection, forward to host.docker.internal:${LM_HOST_PORT}. The
+    # outbound only succeeds because lm-bridge is also attached to the
+    # implicit Docker `bridge` network — Docker Desktop's gVisor stack
+    # only forwards `host.docker.internal` correctly on that one network.
+    command:
+      - "-d"
+      - "TCP-LISTEN:1234,fork,reuseaddr"
+      - "TCP:host.docker.internal:${LM_HOST_PORT:-1234}"
+    networks:
+      # The Maestro compose network: where DinD-nested workers can reach
+      # this sidecar. Pinned IP so the OpenCode base_url can be stable.
+      default:
+        ipv4_address: 172.20.0.250
+    # The default Docker bridge attachment (which is what actually lets
+    # `host.docker.internal` resolve to the host under gVisor) is added
+    # post-start by `make start` because compose can't put a service on
+    # both a user-defined network and the legacy `bridge` network in one
+    # shot (docker rejects scoped aliases on the legacy bridge).
+
+networks:
+  default:
+    name: maestro-core_default
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1

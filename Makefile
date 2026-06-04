@@ -49,6 +49,18 @@ COMPOSE_FILES += -f docker-compose.mariadb.yml
 else ifneq ($(BACKEND),sqlite)
 $(error BACKEND must be one of: sqlite, postgres, mariadb (got '$(BACKEND)'))
 endif
+# Set LM_BRIDGE=1 to add a small socat sidecar that lets DinD-nested
+# workers reach a self-hosted model server (LM Studio / Ollama / vLLM)
+# on the host Mac. Docker Desktop's gVisor network stack breaks the
+# direct `host.docker.internal` path for both DinD AND user-defined
+# bridges; the sidecar lives on both the default bridge (where
+# host.docker.internal works) and the maestro-core compose network
+# (where workers can reach it). See
+# docs/troubleshooting-self-hosted-models.md for the full diagnosis.
+LM_BRIDGE ?= 0
+ifeq ($(LM_BRIDGE),1)
+COMPOSE_FILES += -f docker-compose.lm-bridge.yml
+endif
 
 # Resolve the actual image name for the maestro service (compose may prefix with project name).
 MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
@@ -71,6 +83,11 @@ help: ## Show this help
 	@echo "           e.g. \033[36mmake start BACKEND=postgres\033[0m"
 	@echo "                \033[36mmake restart BACKEND=mariadb\033[0m"
 	@echo "                \033[36mmake logs BACKEND=postgres\033[0m"
+	@echo ""
+	@echo "  \033[1mLM bridge\033[0m  set LM_BRIDGE=1 to add the host-mac model-server bridge"
+	@echo "           (needed when pointing OpenCode at LM Studio / Ollama on the Mac"
+	@echo "           — Docker Desktop's gVisor stack blocks the direct host path)"
+	@echo "           e.g. \033[36mmake start BACKEND=postgres LM_BRIDGE=1\033[0m"
 	@echo ""
 	@echo "  \033[1mTargets\033[0m"
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -112,6 +129,11 @@ start: ## Start Maestro + DinD sidecar
 	$(COMPOSE) $(COMPOSE_FILES) up -d || (echo "ERROR: Failed to start containers. Run 'make logs' for details." >&2; exit 1)
 ifeq ($(DIND),1)
 	@$(MAKE) --no-print-directory load-worker
+endif
+ifeq ($(LM_BRIDGE),1)
+	@echo "Attaching lm-bridge to the default Docker bridge (gVisor host path)..."
+	@$(_ENGINE) network connect bridge maestro-lm-bridge 2>/dev/null || true
+	@echo "lm-bridge ready at 172.20.0.250:1234 (forwards to host.docker.internal:$${LM_HOST_PORT:-1234})"
 endif
 
 stop: ## Stop and remove containers

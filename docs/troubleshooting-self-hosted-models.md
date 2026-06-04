@@ -186,43 +186,71 @@ docker exec <maestro-container> sh -c 'curl -v -m 3 http://<mac-LAN-IP>:1234/v1/
 
 If all five of those check out, the issue is the gVisor stack.
 
-### Fix
+### Fix: the `lm-bridge` socat sidecar
 
-In order of preference:
+Docker Desktop 4.34+ defaulted to gVisor and we have empirically
+confirmed that the **`vpnkit` switch no longer takes effect on
+4.70** — the `defaults write com.docker.docker NetworkMode` knob is
+read but the VM is launched with `--networkType gvisor` regardless.
+Restarting Docker Desktop / disconnecting VPNs do not change this.
 
-1. **Restart Docker Desktop**. Quit from the menu bar → wait a few
-   seconds → relaunch. This rebuilds the gateway and resolves the
-   problem in most cases without changing the network mode.
+The only Docker Desktop quirk that we can rely on is this: **the
+default `bridge` network IS forwarded to the host correctly** under
+gVisor; user-defined networks and DinD-nested networks are not.
 
-2. **Disconnect VPNs / WARP / Tailscale exit nodes**, then restart
-   Docker Desktop. Active `utun*` tunnels routinely steal the routes
-   the gVisor stack expects.
+So the supported workaround in Maestro is a tiny socat container
+attached to BOTH networks:
 
-3. **Switch the Docker Desktop VM back to vpnkit networking**
-   (legacy, but stable on macOS). The setting lives under
-   Settings → Resources → Network in older Docker Desktop builds; on
-   newer builds where the option is hidden, set it via defaults
-   from a terminal:
+- the default `bridge` network — so it can actually reach
+  `host.docker.internal:<port>` on the Mac;
+- the Maestro compose network — so DinD-nested workers can route to
+  it (DinD's outbound NAT into the compose network was verified
+  end-to-end).
 
-   ```bash
-   defaults write com.docker.docker NetworkMode -string "vpnkit"
-   ```
-
-   then quit and relaunch Docker Desktop.
-
-4. **Reset Docker Desktop to factory defaults** (Settings →
-   Troubleshoot → Reset to factory defaults). This loses your custom
-   resource limits but rebuilds the network stack from scratch.
-
-### One-line smoke test once Docker Desktop is healthy
+It ships as `docker-compose.lm-bridge.yml` plus a single Makefile
+flag:
 
 ```bash
-docker run --rm alpine sh -c \
-  'apk add -q curl && curl -m 3 http://host.docker.internal:1234/v1/models'
+make start BACKEND=postgres LM_BRIDGE=1
 ```
 
-If this prints LM Studio's model list, Maestro's worker containers
-will reach LM Studio too.
+That brings up `maestro-lm-bridge` (image `alpine/socat:1.8.0.0`)
+with a **pinned IP of `172.20.0.250`** on the Maestro compose
+network. It forwards TCP/1234 → `host.docker.internal:${LM_HOST_PORT:-1234}`.
+
+Then in **Configuration → AI Settings → OpenCode**, set the
+**Base URL** to:
+
+```
+http://172.20.0.250:1234/v1
+```
+
+instead of `http://host.docker.internal:1234/v1`. Everything else in
+this guide (model prefix, `allow_shared_default`, LM Studio bind)
+stays the same.
+
+If your LM Studio listens on a non-default port, set the env var
+before `make start`:
+
+```bash
+LM_HOST_PORT=11434 make start BACKEND=postgres LM_BRIDGE=1
+```
+
+(`11434` is the Ollama default.)
+
+### One-line smoke test once `LM_BRIDGE=1` is up
+
+```bash
+docker exec maestro-core-dind-1 docker run --rm --entrypoint /bin/bash \
+  maestro:latest -c \
+  'exec 3<>/dev/tcp/172.20.0.250/1234;
+   printf "GET /v1/models HTTP/1.0\r\nHost: x\r\n\r\n" >&3;
+   timeout 5 cat <&3 | head -5'
+```
+
+A `200 OK` followed by JSON means the worker path is healthy. From
+there, any flow that goes through the OpenCode session will reach
+LM Studio cleanly.
 
 ---
 
