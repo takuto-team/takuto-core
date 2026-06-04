@@ -20,7 +20,14 @@
  */
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { getMyFlows, putMyFlows, reseedMyFlows, MAX_FLOWS, type UserFlow } from "../api/flows";
+import {
+  getMyFlows,
+  putMyFlows,
+  reseedMyFlows,
+  propagateRename,
+  MAX_FLOWS,
+  type UserFlow,
+} from "../api/flows";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { FlowCard } from "./FlowCard";
 import { FlowEditor } from "./FlowEditor";
@@ -97,7 +104,10 @@ export function FlowsTab() {
 
   const handleInlineRename = useCallback(
     async (index: number, newName: string) => {
-      const next = flows.map((f, i) => (i === index ? { ...f, name: newName } : f));
+      const oldName = flows[index]?.name;
+      const renamed = flows.map((f, i) => (i === index ? { ...f, name: newName } : f));
+      const next =
+        oldName === undefined ? renamed : propagateRename(renamed, oldName, newName);
       await submitList(next);
     },
     [flows, submitList],

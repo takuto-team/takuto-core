@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { slugify, type UserFlow } from "../api/flows";
+import { slugify, propagateRename, type UserFlow } from "../api/flows";
 import { StepEditor, type SkillDraft, type StepDraft } from "./modals/FlowEditor/StepEditor";
 import { DependsOnSelect } from "./modals/FlowEditor/DependsOnSelect";
 
@@ -191,8 +191,19 @@ export function FlowEditor({
   const handleSave = async () => {
     if (!canSave) return;
     const flow = buildFlow();
+    // If the save is renaming this flow, rewrite every other flow's
+    // `depends_on` to use the new name — otherwise the server rejects with
+    // `unknown_dependency` because the dependents still point at the old
+    // name. The inline-rename path does the same; this covers the case
+    // where the user changed the name in the header and clicked Save Flow
+    // without first blurring the input.
+    const oldName = editIndex !== null ? flows[editIndex]?.name : undefined;
+    const base =
+      oldName !== undefined && oldName !== flow.name
+        ? propagateRename(flows, oldName, flow.name)
+        : flows;
     const next =
-      editIndex === null ? [...flows, flow] : flows.map((f, i) => (i === editIndex ? flow : f));
+      editIndex === null ? [...base, flow] : base.map((f, i) => (i === editIndex ? flow : f));
     setSaving(true);
     setServerError("");
     try {

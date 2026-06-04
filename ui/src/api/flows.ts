@@ -69,6 +69,28 @@ export function slugify(name: string): string {
 }
 
 /**
+ * Return a new list with every `depends_on` reference to `oldName` rewritten
+ * to `newName`. Used by the rename code paths so that renaming a flow that
+ * other flows depend on doesn't leave them pointing at a non-existent name
+ * (which the server's validator rejects with `unknown_dependency`).
+ *
+ * Pure data manipulation; does not mutate the input. Returns the same array
+ * (reference unchanged) when the names are equal so callers don't pay a
+ * needless clone for the no-rename case.
+ */
+export function propagateRename(
+  flows: UserFlow[],
+  oldName: string,
+  newName: string,
+): UserFlow[] {
+  if (oldName === newName) return flows;
+  return flows.map((f) => ({
+    ...f,
+    depends_on: f.depends_on.map((d) => (d === oldName ? newName : d)),
+  }));
+}
+
+/**
  * Structured validation failure surfaced by PUT / reseed. `kind` is one of the
  * backend's typed reasons: `too_many_flows`, `empty_flow_name`,
  * `duplicate_flow_name`, `duplicate_slug`, `empty_slug`, `no_steps`,
