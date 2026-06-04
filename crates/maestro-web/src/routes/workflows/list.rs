@@ -270,15 +270,20 @@ pub async fn list_workflows(
                 Some(r) => unix_seconds_to_rfc3339(r.updated_at),
                 None => w.updated_at.to_rfc3339(),
             };
-            let branch_name = match row {
-                Some(r) => r.branch_name.clone().unwrap_or_default(),
-                None => w.branch_name.clone(),
-            };
-            let pr_url = match row {
-                Some(r) => r.pr_url.clone(),
-                None => w.pr_url.clone(),
-            };
-            let pr_merged = row.map(|r| r.pr_merged).unwrap_or(w.pr_merged);
+            // Prefer the DB shadow-row, but fall back to the in-memory
+            // value when the DB column is empty/null. The shadow-write to
+            // `work_items` can lag behind the engine (e.g. FK violations on
+            // a sibling write block the row update entirely), and serving
+            // the stale empty value hides PR links and branch names on the
+            // dashboard for runs that actually completed cleanly in memory.
+            let branch_name = row
+                .and_then(|r| r.branch_name.as_deref().filter(|s| !s.is_empty()).map(str::to_string))
+                .unwrap_or_else(|| w.branch_name.clone());
+            let pr_url = row
+                .and_then(|r| r.pr_url.as_deref().filter(|s| !s.is_empty()).map(str::to_string))
+                .or_else(|| w.pr_url.clone());
+            // pr_merged is a flag, not a value, so true OR'd from either source.
+            let pr_merged = row.map(|r| r.pr_merged).unwrap_or(false) || w.pr_merged;
             // Worktree path filtered by on-disk existence — a path
             // recorded in the row whose directory has been removed
             // is no longer useful to render.
@@ -546,15 +551,17 @@ pub async fn get_workflow(
         Some(r) => unix_seconds_to_rfc3339(r.updated_at),
         None => w.updated_at.to_rfc3339(),
     };
-    let branch_name = match &db_row {
-        Some(r) => r.branch_name.clone().unwrap_or_default(),
-        None => w.branch_name.clone(),
-    };
-    let pr_url = match &db_row {
-        Some(r) => r.pr_url.clone(),
-        None => w.pr_url.clone(),
-    };
-    let pr_merged = db_row.as_ref().map(|r| r.pr_merged).unwrap_or(w.pr_merged);
+    // See the list endpoint above: prefer a non-empty DB value, but fall
+    // back to the in-memory workflow when the shadow-row lags behind.
+    let branch_name = db_row
+        .as_ref()
+        .and_then(|r| r.branch_name.as_deref().filter(|s| !s.is_empty()).map(str::to_string))
+        .unwrap_or_else(|| w.branch_name.clone());
+    let pr_url = db_row
+        .as_ref()
+        .and_then(|r| r.pr_url.as_deref().filter(|s| !s.is_empty()).map(str::to_string))
+        .or_else(|| w.pr_url.clone());
+    let pr_merged = db_row.as_ref().map(|r| r.pr_merged).unwrap_or(false) || w.pr_merged;
     Ok(Json(WorkflowSummary {
         id: w.id.clone(),
         ticket_key: w.ticket_key.clone(),
