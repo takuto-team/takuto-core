@@ -139,9 +139,13 @@ async fn run_opencode_session(
                 // of the 8 lines we used to capture, leaving room for
                 // almost no real diagnostic.
                 let stdout_err = first_opencode_error(&output.stdout);
-                let stderr_tail =
-                    output.stderr.lines().rev().take(40).collect::<Vec<_>>();
-                let stderr_tail = stderr_tail.iter().rev().copied().collect::<Vec<_>>().join("\n");
+                let stderr_tail = output.stderr.lines().rev().take(40).collect::<Vec<_>>();
+                let stderr_tail = stderr_tail
+                    .iter()
+                    .rev()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 let detail = match stdout_err {
                     Some(msg) => format!("{msg}\n--- stderr tail ---\n{stderr_tail}"),
                     None => stderr_tail,

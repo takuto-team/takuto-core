@@ -83,8 +83,7 @@ pub(super) async fn drive_workflow_def(
             let bootstrap_est: u32 = if workflow.jira_available { 3 } else { 1 };
             let mise_est: u32 = 1;
             let agent_steps = u32::try_from(steps.len()).unwrap_or(u32::MAX);
-            workflow.current_def_total_steps =
-                Some(bootstrap_est + mise_est + agent_steps + 1);
+            workflow.current_def_total_steps = Some(bootstrap_est + mise_est + agent_steps + 1);
         }
     }
 
@@ -302,6 +301,20 @@ pub(super) async fn drive_workflow_def(
                             message: e.to_string(),
                         },
                     );
+                    // Also move the workflow's own state to Error so the
+                    // dashboard card badge reflects the failure. Without
+                    // this the card stays on its last in-progress label
+                    // (e.g. "Running agent steps") even though the
+                    // definition run has failed — only the per-definition
+                    // button goes red. Don't clobber a state that is
+                    // already terminal (a concurrent stop/done wins).
+                    if !w.state.is_terminal() {
+                        let source = w.state.clone();
+                        w.state = WorkflowState::Error {
+                            source_state: Box::new(source),
+                            message: e.to_string(),
+                        };
+                    }
                     w.updated_at = Utc::now();
                 }
             }

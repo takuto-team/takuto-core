@@ -338,8 +338,10 @@ fn humanize_opencode_output(raw: &str) -> Option<String> {
         "error" => {
             // opencode's error shape varies by source. Try the documented
             // fields first, then walk a few known-deeper paths emitted by
-            // the OpenAI-compat adapter (LM Studio / Ollama / vLLM wrap
-            // their errors as `error.data.error` and `error.cause.error`).
+            // the OpenAI-compat adapter. LM Studio / Ollama / vLLM errors
+            // arrive as `error.data.message` (the actual upstream string),
+            // sometimes `error.data.error`, and the SDK's own failures as
+            // `error.cause.message`.
             let msg = value
                 .get("message")
                 .and_then(|v| v.as_str())
@@ -347,6 +349,13 @@ fn humanize_opencode_output(raw: &str) -> Option<String> {
                     value
                         .get("error")
                         .and_then(|e| e.get("message"))
+                        .and_then(|v| v.as_str())
+                })
+                .or_else(|| {
+                    value
+                        .get("error")
+                        .and_then(|e| e.get("data"))
+                        .and_then(|d| d.get("message"))
                         .and_then(|v| v.as_str())
                 })
                 .or_else(|| {
@@ -365,6 +374,9 @@ fn humanize_opencode_output(raw: &str) -> Option<String> {
                 })
                 .or_else(|| value.get("error").and_then(|v| v.as_str()))
                 .unwrap_or("unknown error");
+            // The upstream message is often JSON-string-quoted ("\"…\"") —
+            // strip one layer of surrounding quotes for a cleaner line.
+            let msg = msg.trim().trim_matches('"');
             Some(format!("OpenCode error: {msg}"))
         }
         _ => None,

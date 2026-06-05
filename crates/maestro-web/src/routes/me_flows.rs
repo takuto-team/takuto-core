@@ -203,7 +203,10 @@ pub async fn improve_prompt(
     Json(body): Json<ImprovePromptBody>,
 ) -> Result<Json<ImprovePromptResponse>, (StatusCode, String)> {
     if body.text.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "text must not be empty".to_string(),
+        ));
     }
     if body.text.len() > MAX_IMPROVE_PROMPT_LEN {
         return Err((

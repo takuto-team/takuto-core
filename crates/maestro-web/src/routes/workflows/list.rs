@@ -277,10 +277,20 @@ pub async fn list_workflows(
             // the stale empty value hides PR links and branch names on the
             // dashboard for runs that actually completed cleanly in memory.
             let branch_name = row
-                .and_then(|r| r.branch_name.as_deref().filter(|s| !s.is_empty()).map(str::to_string))
+                .and_then(|r| {
+                    r.branch_name
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
                 .unwrap_or_else(|| w.branch_name.clone());
             let pr_url = row
-                .and_then(|r| r.pr_url.as_deref().filter(|s| !s.is_empty()).map(str::to_string))
+                .and_then(|r| {
+                    r.pr_url
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
                 .or_else(|| w.pr_url.clone());
             // pr_merged is a flag, not a value, so true OR'd from either source.
             let pr_merged = row.map(|r| r.pr_merged).unwrap_or(false) || w.pr_merged;
@@ -555,11 +565,21 @@ pub async fn get_workflow(
     // back to the in-memory workflow when the shadow-row lags behind.
     let branch_name = db_row
         .as_ref()
-        .and_then(|r| r.branch_name.as_deref().filter(|s| !s.is_empty()).map(str::to_string))
+        .and_then(|r| {
+            r.branch_name
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| w.branch_name.clone());
     let pr_url = db_row
         .as_ref()
-        .and_then(|r| r.pr_url.as_deref().filter(|s| !s.is_empty()).map(str::to_string))
+        .and_then(|r| {
+            r.pr_url
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
         .or_else(|| w.pr_url.clone());
     let pr_merged = db_row.as_ref().map(|r| r.pr_merged).unwrap_or(false) || w.pr_merged;
     Ok(Json(WorkflowSummary {
