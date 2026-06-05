@@ -42,6 +42,10 @@ pub struct PutAgentConfigRequest {
     pub available_providers: Option<Vec<String>>,
     #[serde(default)]
     pub providers: Option<ProvidersPatch>,
+    /// Share one agent conversation across all steps in a flow (each step
+    /// resumes the prior step's session) vs. a fresh session per step.
+    #[serde(default)]
+    pub share_conversation_across_steps: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,6 +247,9 @@ pub async fn put_agent_config(
         }
         if let Some(list) = patch.available_providers {
             config.agent.available_providers = list;
+        }
+        if let Some(share) = patch.share_conversation_across_steps {
+            config.agent.share_conversation_across_steps = share;
         }
         if let Some(providers_patch) = patch.providers {
             if let Some(p) = providers_patch.claude {

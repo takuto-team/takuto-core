@@ -143,6 +143,7 @@ AI provider for `prompt`-bearing workflow steps.
 | `cursor_model` | `"Auto"` | string | Cursor Agent `--model`. `"Auto"` (any case) or empty = automatic model selection. |
 | `step_timeout_secs` | `1800` | int | Per-step timeout in seconds. Applies to all providers. |
 | `model` | `""` | string | Model override (e.g. `"claude-opus-4-6"`, `"claude-sonnet-4-6"`). Empty = provider default. |
+| `share_conversation_across_steps` | `false` | bool | Share one agent conversation across a flow's steps (each step resumes the previous step's session) vs. a fresh session per step. Editable from Configuration → AI Settings. |
 
 ---
 

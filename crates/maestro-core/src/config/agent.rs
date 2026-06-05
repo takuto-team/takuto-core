@@ -118,6 +118,20 @@ pub struct AgentConfig {
     /// providers (`["claude", "cursor", "codex", "opencode"]`).
     #[serde(default = "default_available_providers")]
     pub available_providers: Vec<String>,
+    /// When `true`, every step in a flow shares ONE agent conversation:
+    /// each step resumes the prior step's session, so the agent carries
+    /// full context forward (it remembers what it implemented when it
+    /// reviews, etc.). When `false` (default), each step runs in a fresh
+    /// session with no memory of earlier steps — the historical behavior,
+    /// and safer for weaker models that get confused by long transcripts.
+    /// A per-step `resume_previous = true` still forces resume regardless
+    /// of this global setting.
+    #[serde(default = "default_share_conversation")]
+    pub share_conversation_across_steps: bool,
+}
+
+pub(super) fn default_share_conversation() -> bool {
+    false
 }
 
 pub(super) fn default_available_providers() -> Vec<String> {
@@ -270,6 +284,7 @@ impl Default for AgentConfig {
             model: String::new(),
             providers: AgentProvidersConfig::default(),
             available_providers: default_available_providers(),
+            share_conversation_across_steps: default_share_conversation(),
         }
     }
 }

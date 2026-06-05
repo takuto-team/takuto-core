@@ -186,6 +186,8 @@ File logging: `WorkflowLogWriter` writes under `{repo_path}/logs/<TICKET>.log`.
 
 `[agent] provider` in config: **`claude`** (default), **`cursor`**, **`codex`**, or **`opencode`**. Each provider has its own sub-table at `[agent.providers.<name>]` (`model`, `base_url`, `extra_args`, `allow_shared_default`; Cursor swaps `base_url` for `cli`; Codex adds `provider_name`). Legacy flat keys (`cursor_cli`, `cursor_model`, `model`) are migrated into the sub-tables on `Config::load` for one release.
 
+**`[agent] share_conversation_across_steps`** (default **`false`**): controls whether the steps of a single flow run as one shared agent conversation or independent sessions. When `false`, `run_agent_step_sequence` passes `resume_id = None` for each first-run step (fresh session, no memory of earlier steps) — the historical behavior. When `true`, a step after the first resumes the prior step's session id (`--resume` / `-s`), so the agent carries full context forward. A per-step `resume_previous = true` forces resume regardless. Editable via **`PUT /api/config/agent`** (the `share_conversation_across_steps` field) and the Configuration → AI Settings toggle.
+
 ### Claude Code
 
 `crates/maestro-core/src/claude/session.rs` spawns **`claude`** with `--dangerously-skip-permissions`, `--print`, `--verbose`, `-p`, `--output-format stream-json`, optional `--resume`, optional `--model`.

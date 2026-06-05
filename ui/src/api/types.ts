@@ -156,6 +156,7 @@ export interface AgentConfig {
   available_providers: AgentProviderId[];
   step_timeout_secs?: number;
   improve_timeout_secs?: number;
+  share_conversation_across_steps?: boolean;
   providers: AgentProvidersConfig;
   /** Forward-compat for unknown fields surfaced by older / newer servers. */
   [key: string]: unknown;
@@ -184,6 +185,7 @@ export interface AgentProvidersConfigPatch {
 export interface AgentConfigPatch {
   provider?: AgentProviderId;
   available_providers?: AgentProviderId[];
+  share_conversation_across_steps?: boolean;
   providers?: AgentProvidersConfigPatch;
 }
 

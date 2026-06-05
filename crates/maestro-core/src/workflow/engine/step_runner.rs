@@ -336,6 +336,10 @@ pub(super) async fn run_agent_step_sequence(
     let num_steps = steps.len();
     let mut claude_session_id: Option<String> = initial_session_id;
     let mut last_agent_output: Option<String> = None;
+    // When enabled, steps after the first resume the prior step's session so
+    // the whole flow is one conversation. Read once per flow run; a mid-run
+    // config change applies to the next run, not this one.
+    let share_conversation = config.read().await.agent.share_conversation_across_steps;
     // Resume the agent on the first step regardless of whether a
     // session id is known. With a session id the agent picks up the
     // same conversation via `--resume`; without one it still gets
@@ -675,8 +679,13 @@ pub(super) async fn run_agent_step_sequence(
                 let (final_effective_prompt, resume_id) = if r > 1 {
                     // Repeat runs within the same step always resume
                     (effective_prompt, claude_session_id.as_deref())
-                } else if step.resume_previous {
-                    // Explicitly opted in to resuming the prior step's session
+                } else if step.resume_previous
+                    || (share_conversation && claude_session_id.is_some())
+                {
+                    // Resume the prior step's session — either the step opted
+                    // in explicitly (`resume_previous`), or the deployment has
+                    // share-conversation-across-steps enabled and a prior
+                    // session exists (i.e. this is not the first step).
                     (effective_prompt, claude_session_id.as_deref())
                 } else if snapshot_resume_pending {
                     // Resuming after container restart — the prior session has the full

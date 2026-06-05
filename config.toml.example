@@ -146,6 +146,12 @@ cursor_model = "Auto"
 step_timeout_secs = 1800
 # Model override (e.g., "claude-opus-4-6", "claude-sonnet-4-6"). Empty = provider default.
 model = ""
+# Share one agent conversation across all steps in a flow. When true, each step
+# resumes the previous step's session (the agent remembers what it implemented
+# when it reviews). When false (default), every step runs in a fresh session —
+# safer for smaller local models that get confused by long shared transcripts.
+# Editable from Configuration > AI Settings.
+share_conversation_across_steps = false
 
 [docker]
 # build_commands: optional `bash -c` steps during image build (see MAESTRO_BUILD_CONFIG in docker-compose).
