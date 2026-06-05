@@ -257,6 +257,7 @@ impl WorkflowLifecycle {
         persistence: &WorkflowPersistence,
     ) -> Result<()> {
         let (
+            workflow_id,
             worktree_path,
             cancel_token,
             branch_name,
@@ -280,6 +281,7 @@ impl WorkflowLifecycle {
                 .into());
             }
             (
+                w.id.clone(),
                 w.worktree_path.clone(),
                 w.cancel_token.clone(),
                 w.branch_name.clone(),
@@ -349,6 +351,23 @@ impl WorkflowLifecycle {
 
         self.repository.inner_arc().write().await.remove(ticket_key);
 
+        // Remove the DB-side work_items row (children cascade via ON DELETE
+        // CASCADE). Without this the row lingers and the UNIQUE
+        // (workspace_name, ticket_key) index makes re-adding the same ticket
+        // collide — the INSERT fails and the dashboard keeps serving the
+        // stale prior run. A re-add must be a brand-new run.
+        if let Some(db) = self.db.as_ref()
+            && let Err(e) =
+                crate::db::work_items::delete_work_item(db.adapter(), &workflow_id).await
+        {
+            warn!(
+                ticket = %ticket_key,
+                work_item_id = %workflow_id,
+                error = %e,
+                "Failed to delete work_items row on delete (re-add may collide)"
+            );
+        }
+
         if let Err(e) = persistence.sync().await {
             warn!(ticket = %ticket_key, error = %e, "Failed to sync workflow snapshot after delete");
         }
@@ -390,7 +409,7 @@ impl WorkflowLifecycle {
             )
         };
 
-        let (worktree_path, branch_name, owner_user_id) = {
+        let (workflow_id, worktree_path, branch_name, owner_user_id) = {
             let wf_arc = self.repository.inner_arc();
             let wf = wf_arc.read().await;
             let w = wf
@@ -407,6 +426,7 @@ impl WorkflowLifecycle {
                 .into());
             }
             (
+                w.id.clone(),
                 w.worktree_path.clone(),
                 w.branch_name.clone(),
                 w.user_id.clone(),
@@ -500,6 +520,20 @@ impl WorkflowLifecycle {
         let workflow_removed = jira_ok && worktree_ok;
         if workflow_removed {
             self.repository.inner_arc().write().await.remove(ticket_key);
+
+            // Drop the DB row so a later re-add of the same ticket is a
+            // fresh run (children cascade). Mirrors delete_workflow.
+            if let Some(db) = self.db.as_ref()
+                && let Err(e) =
+                    crate::db::work_items::delete_work_item(db.adapter(), &workflow_id).await
+            {
+                warn!(
+                    ticket = %ticket_key,
+                    work_item_id = %workflow_id,
+                    error = %e,
+                    "Failed to delete work_items row on mark-done (re-add may collide)"
+                );
+            }
             broadcast_event(WorkflowEvent {
                 event_type: "work_item_removed".to_string(),
                 workflow_id: String::new(),
