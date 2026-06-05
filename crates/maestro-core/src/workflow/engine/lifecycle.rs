@@ -351,20 +351,26 @@ impl WorkflowLifecycle {
 
         self.repository.inner_arc().write().await.remove(ticket_key);
 
-        // Remove the DB-side work_items row (children cascade via ON DELETE
-        // CASCADE). Without this the row lingers and the UNIQUE
-        // (workspace_name, ticket_key) index makes re-adding the same ticket
-        // collide — the INSERT fails and the dashboard keeps serving the
-        // stale prior run. A re-add must be a brand-new run.
+        // Soft-delete the DB row: stamp `deleted_at` so the run survives as
+        // history but drops out of every live query. The row used to stay
+        // fully live, so the UNIQUE (workspace_name, ticket_key) index made
+        // re-adding the same ticket collide on INSERT and the dashboard kept
+        // serving the stale run. With soft-delete + the dropped unique index,
+        // a re-add is a brand-new row / fresh run and the old run is retained,
+        // flagged deleted.
         if let Some(db) = self.db.as_ref()
-            && let Err(e) =
-                crate::db::work_items::delete_work_item(db.adapter(), &workflow_id).await
+            && let Err(e) = crate::db::work_items::soft_delete_work_item(
+                db.adapter(),
+                &workflow_id,
+                Utc::now().timestamp(),
+            )
+            .await
         {
             warn!(
                 ticket = %ticket_key,
                 work_item_id = %workflow_id,
                 error = %e,
-                "Failed to delete work_items row on delete (re-add may collide)"
+                "Failed to soft-delete work_items row on delete (re-add may collide)"
             );
         }
 
@@ -521,17 +527,22 @@ impl WorkflowLifecycle {
         if workflow_removed {
             self.repository.inner_arc().write().await.remove(ticket_key);
 
-            // Drop the DB row so a later re-add of the same ticket is a
-            // fresh run (children cascade). Mirrors delete_workflow.
+            // Soft-delete the DB row so a later re-add of the same ticket is
+            // a fresh run while this completed run is retained as history.
+            // Mirrors delete_workflow.
             if let Some(db) = self.db.as_ref()
-                && let Err(e) =
-                    crate::db::work_items::delete_work_item(db.adapter(), &workflow_id).await
+                && let Err(e) = crate::db::work_items::soft_delete_work_item(
+                    db.adapter(),
+                    &workflow_id,
+                    Utc::now().timestamp(),
+                )
+                .await
             {
                 warn!(
                     ticket = %ticket_key,
                     work_item_id = %workflow_id,
                     error = %e,
-                    "Failed to delete work_items row on mark-done (re-add may collide)"
+                    "Failed to soft-delete work_items row on mark-done (re-add may collide)"
                 );
             }
             broadcast_event(WorkflowEvent {

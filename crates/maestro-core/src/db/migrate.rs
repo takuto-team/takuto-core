@@ -94,6 +94,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "user_work_item_flows",
         sql: include_str!("../../migrations/20260603000001_user_work_item_flows.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_605_000_001,
+        description: "work_items_soft_delete",
+        sql: include_str!("../../migrations/20260605000001_work_items_soft_delete.sql"),
+    },
 ];
 
 /// A `sqlx::migrate::MigrationSource` impl that resolves the embedded
@@ -197,6 +202,15 @@ pub(crate) fn translate_for_backend(sql: &str, backend: DbBackend) -> String {
             // is safe — the index won't pre-exist.
             let s = s.replace("CREATE INDEX IF NOT EXISTS", "CREATE INDEX");
             let s = s.replace("DROP INDEX IF EXISTS", "DROP INDEX");
+            // MySQL's `DROP INDEX` requires an `ON <table>` clause (unlike
+            // SQLite / Postgres which key on the globally-unique index name).
+            // The generic strip above leaves `DROP INDEX <name>;`; rewrite the
+            // one such statement we ship to the MySQL form. Targeted by exact
+            // text so it can't accidentally match a future statement.
+            let s = s.replace(
+                "DROP INDEX idx_work_items_workspace_key;",
+                "DROP INDEX idx_work_items_workspace_key ON work_items;",
+            );
             // MySQL requires a prefix length when a TEXT/BLOB column
             // participates in a key. Several portable migrations
             // declare ISO-timestamp / URL-shaped columns as `TEXT` for
@@ -612,9 +626,9 @@ mod tests {
     fn embedded_migration_count() {
         // V1..V6 from the legacy schema.rs port, V7 = importer's
         // system_metadata, V8 = work_items, V9 = repository_id on
-        // work_items, V10 = per-user work-item flows. Bump when adding
-        // new migrations.
-        assert_eq!(MIGRATIONS.len(), 10);
+        // work_items, V10 = per-user work-item flows, V11 = work_items
+        // soft-delete. Bump when adding new migrations.
+        assert_eq!(MIGRATIONS.len(), 11);
     }
 
     #[test]
@@ -724,8 +738,8 @@ mod tests {
             .await
             .expect("count rows");
         assert_eq!(
-            count.0, 10,
-            "expected 10 applied migrations recorded by sqlx, got {}",
+            count.0, 11,
+            "expected 11 applied migrations recorded by sqlx, got {}",
             count.0
         );
     }

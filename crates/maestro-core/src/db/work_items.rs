@@ -510,7 +510,7 @@ pub async fn get_access_fields_by_ticket_key(
     let row = adapter
         .query_optional(
             "SELECT user_id, repository_id, workspace_name \
-             FROM work_items WHERE ticket_key = ? \
+             FROM work_items WHERE ticket_key = ? AND deleted_at IS NULL \
              ORDER BY started_at DESC LIMIT 1",
             vec![DbValue::Text(ticket_key.to_string())],
         )
@@ -538,9 +538,10 @@ pub async fn list_user_state_kinds(
     let rows = adapter
         .query_all(
             "SELECT ticket_key, state_kind FROM work_items wi \
-             WHERE wi.user_id = ? AND wi.started_at = ( \
+             WHERE wi.user_id = ? AND wi.deleted_at IS NULL AND wi.started_at = ( \
                  SELECT MAX(wi2.started_at) FROM work_items wi2 \
                  WHERE wi2.ticket_key = wi.ticket_key AND wi2.user_id = wi.user_id \
+                       AND wi2.deleted_at IS NULL \
              )",
             vec![DbValue::Text(user_id.to_string())],
         )
@@ -571,7 +572,10 @@ pub async fn get_work_item_by_ticket_key(
     adapter: &DbAdapter,
     ticket_key: &str,
 ) -> Result<Option<WorkItemRow>> {
-    let sql = format!("{SELECT_WORK_ITEM} WHERE ticket_key = ? ORDER BY started_at DESC LIMIT 1");
+    let sql = format!(
+        "{SELECT_WORK_ITEM} WHERE ticket_key = ? AND deleted_at IS NULL \
+         ORDER BY started_at DESC LIMIT 1"
+    );
     let row = adapter
         .query_optional(&sql, vec![DbValue::Text(ticket_key.to_string())])
         .await?;
@@ -610,7 +614,8 @@ pub async fn list_work_items(
     q: &WorkItemListQuery,
 ) -> Result<Vec<WorkItemRow>> {
     let mut sql = String::from(SELECT_WORK_ITEM);
-    let mut where_clauses: Vec<String> = Vec::new();
+    // Soft-deleted runs are history — never surfaced in the live list.
+    let mut where_clauses: Vec<String> = vec!["deleted_at IS NULL".to_string()];
     let mut params: Vec<DbValue> = Vec::new();
 
     if let Some(ws) = q.workspace_name.as_ref() {
@@ -815,6 +820,22 @@ pub async fn delete_work_item(adapter: &DbAdapter, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Soft-delete a work item: stamp `deleted_at` with `now` (Unix seconds) so
+/// the row drops out of every live query but survives as run history. Child
+/// rows (steps, definition runs, log lines) are intentionally retained — they
+/// belong to the historical run. Re-adding the same ticket inserts a fresh
+/// row; the soft-deleted one no longer collides because the UNIQUE
+/// (workspace_name, ticket_key) index was dropped in the soft-delete migration.
+pub async fn soft_delete_work_item(adapter: &DbAdapter, id: &str, now: i64) -> Result<()> {
+    adapter
+        .execute(
+            "UPDATE work_items SET deleted_at = ? WHERE id = ?",
+            vec![DbValue::I64(now), DbValue::Text(id.to_string())],
+        )
+        .await?;
+    Ok(())
+}
+
 // ── counts ───────────────────────────────────────────────────────────────
 
 /// Aggregate counts by `state_kind` across either a single workspace or
@@ -828,11 +849,12 @@ pub async fn count_by_state(
     let (sql, params): (&str, Vec<DbValue>) = match workspace_name {
         Some(ws) => (
             "SELECT state_kind, COUNT(*) FROM work_items \
-             WHERE workspace_name = ? GROUP BY state_kind",
+             WHERE workspace_name = ? AND deleted_at IS NULL GROUP BY state_kind",
             vec![DbValue::Text(ws.to_string())],
         ),
         None => (
-            "SELECT state_kind, COUNT(*) FROM work_items GROUP BY state_kind",
+            "SELECT state_kind, COUNT(*) FROM work_items \
+             WHERE deleted_at IS NULL GROUP BY state_kind",
             Vec::new(),
         ),
     };
@@ -1719,19 +1741,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_duplicate_workspace_ticket_fails() {
+    async fn duplicate_workspace_ticket_allowed_after_soft_delete_migration() {
+        // The soft-delete migration dropped the UNIQUE (workspace, ticket)
+        // index so a soft-deleted run and a fresh re-add coexist. Two rows
+        // with the same (workspace, ticket) must now BOTH insert.
         let a = fresh_adapter().await;
         seed_user(&a, "u-alice", "alice").await;
         insert_work_item(&a, &sample_row("wi-1", "PROJ-1", Some("u-alice")))
             .await
             .unwrap();
-        let err = insert_work_item(&a, &sample_row("wi-2", "PROJ-1", Some("u-alice")))
+        insert_work_item(&a, &sample_row("wi-2", "PROJ-1", Some("u-alice")))
             .await
-            .err();
+            .expect("duplicate (workspace, ticket) must be allowed post-migration");
+    }
+
+    #[tokio::test]
+    async fn soft_deleted_row_drops_out_of_lookup_and_re_add_wins() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-alice", "alice").await;
+        // First run.
+        let mut first = sample_row("wi-1", "PROJ-1", Some("u-alice"));
+        first.started_at = 100;
+        insert_work_item(&a, &first).await.unwrap();
+        // Soft-delete it.
+        soft_delete_work_item(&a, "wi-1", 150).await.unwrap();
+        // Lookup must now miss the deleted row.
         assert!(
-            err.is_some(),
-            "second insert with same (workspace, ticket) must fail UNIQUE"
+            get_work_item_by_ticket_key(&a, "PROJ-1")
+                .await
+                .unwrap()
+                .is_none(),
+            "soft-deleted run must not be returned by the live lookup"
         );
+        // Re-add (new run) inserts cleanly and becomes the live row.
+        let mut second = sample_row("wi-2", "PROJ-1", Some("u-alice"));
+        second.started_at = 200;
+        insert_work_item(&a, &second).await.unwrap();
+        let live = get_work_item_by_ticket_key(&a, "PROJ-1")
+            .await
+            .unwrap()
+            .expect("re-added run must be live");
+        assert_eq!(live.id, "wi-2", "the fresh run must win the lookup");
     }
 
     #[tokio::test]
