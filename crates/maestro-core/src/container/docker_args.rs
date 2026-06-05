@@ -12,7 +12,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use super::dind_paths::translate_path_for_dind;
 use super::secrets_bundle::SECRET_PASSTHROUGH;
 use super::volumes::build_volume_args;
 
@@ -126,24 +125,13 @@ pub(crate) fn base_docker_args(
         args.push(mount);
     }
 
-    // Bundle-driven secret mount + non-secret env vars.
+    // Bundle-driven secret mounts + non-secret env vars. Single source of
+    // truth in `apply_secrets_bundle_to_args` — it mounts the secrets root,
+    // the OpenCode config staging dir (when the bundle carries one), and
+    // copies `extra_env`. An earlier inline copy of this logic here silently
+    // missed the OpenCode mount, which broke every self-hosted OpenCode run.
     if let Some(bundle) = secrets_bundle {
-        // Bind-mount the per-workflow secrets dir read-only into the
-        // worker. Path bytes ARE fine in `docker inspect`; secret bytes
-        // are not.
-        // Translate the host-side path for DinD mode (no-op for local
-        // Docker). See `translate_path_for_dind`.
-        let src = translate_path_for_dind(bundle.host_dir());
-        args.push("-v".into());
-        args.push(format!(
-            "{}:{}:ro",
-            src.to_string_lossy(),
-            crate::auth::WORKER_SECRETS_MOUNTPOINT,
-        ));
-        for (k, v) in &bundle.extra_env {
-            args.push("-e".into());
-            args.push(format!("{k}={v}"));
-        }
+        super::secrets_bundle::apply_secrets_bundle_to_args(&mut args, bundle);
     }
 
     args.push("-w".into());
