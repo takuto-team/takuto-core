@@ -294,17 +294,7 @@ export function AiProviderSettingsSection() {
       )}
       {!loading && !error && (
         <>
-          <ProviderForm
-            selectedProvider={selectedProvider}
-            onSelectProvider={handleSelectProvider}
-            draft={draft}
-            onDraftChange={setDraft}
-            availableProviders={availableProviders}
-            onToggleAvailable={toggleAvailable}
-            onSave={handleSave}
-            saving={saving}
-          />
-          <section className="flex items-start gap-2 mt-4 pt-4 border-t border-gray-800">
+          <section className="flex items-start gap-2 mb-4 pb-4 border-b border-gray-800">
             <input
               id="share-conversation-input"
               type="checkbox"
@@ -319,10 +309,20 @@ export function AiProviderSettingsSection() {
                 carries full context forward (it remembers what it implemented when
                 it reviews). When off (default), every step runs in a fresh session
                 with no memory of earlier steps — safer for smaller local models.
-                Save with the provider form's Save button.
+                Applies to all providers. Save with the button below.
               </p>
             </label>
           </section>
+          <ProviderForm
+            selectedProvider={selectedProvider}
+            onSelectProvider={handleSelectProvider}
+            draft={draft}
+            onDraftChange={setDraft}
+            availableProviders={availableProviders}
+            onToggleAvailable={toggleAvailable}
+            onSave={handleSave}
+            saving={saving}
+          />
         </>
       )}
 
