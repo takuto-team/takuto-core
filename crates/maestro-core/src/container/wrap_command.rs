@@ -84,11 +84,20 @@ pub(crate) const BUNDLE_SOURCING_SH: &str = concat!(
     r#" rm -f /run/maestro-secrets/codex 2>/dev/null || true;"#,
     r#" fi;"#,
     // OpenCode self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md):
-    // No /run/maestro-secrets/opencode handling — OpenCode reads its
-    // provider config from /home/maestro/.config/opencode/opencode.json,
-    // mounted by the bundle's opencode_config_dir. The previous
-    // ANTHROPIC_API_KEY mapping was the wrong-tool footgun (use the
-    // Claude provider for Anthropic) and is intentionally absent.
+    // No /run/maestro-secrets/opencode handling — the provider config is
+    // a file, not an env var. The bundle's opencode_config_dir is staged
+    // read-only at /run/maestro-opencode-config and copied into the
+    // user's writable ~/.config/opencode below: opencode writes a
+    // .gitignore into its config dir at startup and aborts config loading
+    // when that write fails, so a direct RO mount at the lookup path
+    // breaks every run. The previous ANTHROPIC_API_KEY mapping was the
+    // wrong-tool footgun (use the Claude provider for Anthropic) and is
+    // intentionally absent.
+    r#" if [ -f /run/maestro-opencode-config/opencode.json ]; then"#,
+    r#" mkdir -p "$HOME/.config/opencode";"#,
+    r#" cp /run/maestro-opencode-config/opencode.json "$HOME/.config/opencode/opencode.json" || true;"#,
+    r#" chmod 600 "$HOME/.config/opencode/opencode.json" 2>/dev/null || true;"#,
+    r#" fi;"#,
     // Claude session-state (`~/.claude.json`). The bundle ships ONLY the
     // keys the user pasted (typically just `oauthAccount` for team-plan
     // users on a custom proxy). A naive `cp` would wipe whatever the

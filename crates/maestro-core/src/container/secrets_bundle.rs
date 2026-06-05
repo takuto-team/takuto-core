@@ -36,12 +36,17 @@ pub(crate) fn passthrough_is_bundled(key: &str) -> bool {
     SECRET_PASSTHROUGH.contains(&key)
 }
 
-/// In-container mount point for the OpenCode self-hosted init-shim's
+/// In-container RO staging mount for the OpenCode self-hosted init-shim's
 /// config dir (spec `lore/audits/2026-05-27-opencode-self-hosted-spec.md`).
-/// OpenCode reads `opencode.json` from `$XDG_CONFIG_HOME/opencode/` or
-/// `~/.config/opencode/`; the worker container's `maestro` user has
-/// `$HOME=/home/maestro`, so this is the canonical lookup path.
-pub(crate) const OPENCODE_CONFIG_MOUNTPOINT: &str = "/home/maestro/.config/opencode";
+///
+/// NOT mounted directly at `~/.config/opencode`: opencode writes a
+/// `.gitignore` into its config dir at startup and aborts config loading
+/// entirely when that write fails — a read-only mount there surfaces as
+/// `ProviderModelNotFoundError` on every run. The bundle is staged here
+/// read-only instead, and the `BUNDLE_SOURCING_SH` preamble copies
+/// `opencode.json` into the user's writable `~/.config/opencode/` before
+/// the agent starts (same pattern as `claude_session.json`).
+pub(crate) const OPENCODE_CONFIG_MOUNTPOINT: &str = "/run/maestro-opencode-config";
 
 /// Helper: append the bundle's mount (`/run/maestro-secrets:ro`)
 /// and non-secret env vars (`MAESTRO_AUTH_BUNDLE`, base URLs,
@@ -106,13 +111,17 @@ mod tests {
         assert!(!passthrough_is_bundled("")); // empty must not match
     }
 
-    /// OpenCode self-hosted spec (2026-05-27 §3): the OpenCode mountpoint
-    /// is the maestro user's XDG config dir. If the worker image ever
-    /// runs as a different user, this needs to move; locking it here so
-    /// any drift surfaces in CI.
+    /// The OpenCode bundle is staged read-only OUTSIDE the XDG config dir.
+    /// opencode writes a `.gitignore` into its config dir at startup and
+    /// aborts config loading when the write fails, so the staging mount
+    /// must never sit at `~/.config/opencode` directly — the
+    /// `BUNDLE_SOURCING_SH` preamble copies the file into the writable
+    /// location instead. Locking both properties here so drift surfaces
+    /// in CI.
     #[test]
-    fn opencode_config_mountpoint_is_in_xdg_config_home() {
-        assert_eq!(OPENCODE_CONFIG_MOUNTPOINT, "/home/maestro/.config/opencode");
+    fn opencode_config_mountpoint_is_a_staging_dir_not_xdg() {
+        assert_eq!(OPENCODE_CONFIG_MOUNTPOINT, "/run/maestro-opencode-config");
+        assert!(!OPENCODE_CONFIG_MOUNTPOINT.starts_with("/home/"));
     }
 
     /// `apply_secrets_bundle_to_args` must emit a `-v <translated>:/run/maestro-secrets:ro`
