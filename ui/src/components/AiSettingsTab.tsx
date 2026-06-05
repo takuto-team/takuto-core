@@ -20,6 +20,7 @@
  */
 
 import { AiProviderSettingsSection } from "./AiProviderSettingsSection";
+import { ShareConversationSwitch } from "./admin/ShareConversationSwitch";
 import { MyCredentialsSection } from "./MyCredentialsSection";
 
 interface Props {
@@ -30,6 +31,7 @@ export function AiSettingsTab({ isAdmin }: Props) {
   return (
     <div className="flex flex-col gap-10">
       {isAdmin && <AiProviderSettingsSection />}
+      {isAdmin && <ShareConversationSwitch />}
       <MyCredentialsSection />
     </div>
   );

@@ -158,7 +158,6 @@ export function AiProviderSettingsSection() {
   const [selectedProvider, setSelectedProvider] = useState<AgentProviderId>("claude");
   const [draft, setDraft] = useState<ProviderDraft>(EMPTY_DRAFT);
   const [availableProviders, setAvailableProviders] = useState<AgentProviderId[]>([]);
-  const [shareConversation, setShareConversation] = useState(false);
   // Provider-switch confirm modal (05_ux_design.md §2.6).
   const [pendingProviderSwitch, setPendingProviderSwitch] = useState<{
     from: AgentProviderId;
@@ -180,7 +179,6 @@ export function AiProviderSettingsSection() {
             ? (agent.available_providers as AgentProviderId[])
             : V1_PROVIDERS,
         );
-        setShareConversation(agent.share_conversation_across_steps === true);
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
@@ -218,11 +216,10 @@ export function AiProviderSettingsSection() {
     const patch: AgentConfigPatch = {
       provider: selectedProvider,
       available_providers: availableProviders,
-      share_conversation_across_steps: shareConversation,
       providers: patchFromDraft(selectedProvider, draft),
     };
     return patch;
-  }, [selectedProvider, availableProviders, shareConversation, draft]);
+  }, [selectedProvider, availableProviders, draft]);
 
   const persist = useCallback(
     async (patch: AgentConfigPatch) => {
@@ -293,37 +290,16 @@ export function AiProviderSettingsSection() {
         <p className="text-sm text-red-400">Could not load config: {error}</p>
       )}
       {!loading && !error && (
-        <>
-          <section className="flex items-start gap-2 mb-4 pb-4 border-b border-gray-800">
-            <input
-              id="share-conversation-input"
-              type="checkbox"
-              checked={shareConversation}
-              onChange={(e) => setShareConversation(e.target.checked)}
-              className="mt-0.5 accent-blue-500"
-            />
-            <label htmlFor="share-conversation-input" className="text-xs text-gray-300">
-              Share one conversation across a flow's steps
-              <p className="text-gray-500 mt-0.5">
-                When on, each step resumes the previous step's session, so the agent
-                carries full context forward (it remembers what it implemented when
-                it reviews). When off (default), every step runs in a fresh session
-                with no memory of earlier steps — safer for smaller local models.
-                Applies to all providers. Save with the button below.
-              </p>
-            </label>
-          </section>
-          <ProviderForm
-            selectedProvider={selectedProvider}
-            onSelectProvider={handleSelectProvider}
-            draft={draft}
-            onDraftChange={setDraft}
-            availableProviders={availableProviders}
-            onToggleAvailable={toggleAvailable}
-            onSave={handleSave}
-            saving={saving}
-          />
-        </>
+        <ProviderForm
+          selectedProvider={selectedProvider}
+          onSelectProvider={handleSelectProvider}
+          draft={draft}
+          onDraftChange={setDraft}
+          availableProviders={availableProviders}
+          onToggleAvailable={toggleAvailable}
+          onSave={handleSave}
+          saving={saving}
+        />
       )}
 
       {pendingProviderSwitch && (
