@@ -118,14 +118,35 @@ impl PrMergePoller {
                         pr = format!("{owner_repo}#{pr_number}"),
                         "PR merged — updating workflow"
                     );
-                    // Update the workflow's pr_merged flag.
-                    {
+                    // Update the workflow's pr_merged flag (in memory) and
+                    // persist it to the work_items row so the DB stays
+                    // authoritative for the dashboard.
+                    let persist = {
                         let wf_arc = self.engine.workflows_arc();
                         let mut workflows = wf_arc.write().await;
                         if let Some(wf) = workflows.get_mut(&ticket_key) {
                             wf.pr_merged = true;
                             wf.updated_at = chrono::Utc::now();
+                            Some((wf.id.clone(), wf.updated_at.timestamp()))
+                        } else {
+                            None
                         }
+                    };
+                    if let (Some(db), Some((work_item_id, updated_at))) =
+                        (self.engine.db(), persist)
+                        && let Err(e) = crate::db::work_items::update_pr_merged(
+                            db.adapter(),
+                            &work_item_id,
+                            true,
+                            updated_at,
+                        )
+                        .await
+                    {
+                        warn!(
+                            ticket = %ticket_key,
+                            error = %e,
+                            "Shadow-write of work_items pr_merged failed (in-memory flag is unaffected)"
+                        );
                     }
                     // Broadcast the state change so the dashboard picks it up.
                     let (state_line, owner_user_id) = {

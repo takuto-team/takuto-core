@@ -11,12 +11,46 @@
 //! before handing them to sqlx's migration runner.
 //!
 //! Why one source file per migration rather than per-backend subdirectories:
-//! the per-backend differences land entirely on three textual rules
-//! (`BLOB`/`BYTEA`, two `AUTOINCREMENT` shapes). A regex transform keeps
-//! the migrations file count low and the diffs reviewable. If a future
-//! migration grows backend-specific syntax the transformer cannot express,
-//! per-backend files committed under `migrations/{backend}/` remain an
-//! option — that decision is deferred.
+//! the per-backend differences are a small, closed set of textual rewrites
+//! (`BLOB`→`BYTEA`, the `AUTOINCREMENT` shapes, MySQL's `IF NOT EXISTS` /
+//! TEXT-in-key / reserved-word / TEXT-default quirks — see
+//! [`translate_for_backend`]). A single portable source per migration keeps
+//! the file count low and the diffs reviewable.
+//!
+//! ## The regex-transform ceiling
+//!
+//! This `str::replace` / whole-token approach is deliberately *not* a SQL
+//! parser. It works only while the per-backend delta stays expressible as
+//! a handful of context-free textual substitutions. **Stop extending the
+//! transformer and switch to per-backend migration files (committed under
+//! `migrations/{backend}/` and selected by [`DbBackend`] at resolve time)
+//! the first time any of these is true:**
+//!
+//!   1. **A rule needs to understand SQL structure** — e.g. it must know
+//!      which table/column a token belongs to, balance parentheses, or skip
+//!      a match inside a string literal or comment. The token guards here
+//!      (`replace_whole_token`, the quote-scan in
+//!      `wrap_text_defaults_for_mysql`) are already at the edge of what is
+//!      safe without a real lexer.
+//!   2. **The backends diverge in DDL shape, not just spelling** — a
+//!      statement one backend needs but another forbids, a different column
+//!      count, or a constraint that must be split across statements. Textual
+//!      rewriting cannot add or remove statements safely.
+//!   3. **A single migration accumulates more than a couple of
+//!      backend-specific rewrites of its own** — at that point the portable
+//!      source is no longer readable as "the schema" and the per-file diff
+//!      stops being reviewable; an explicit per-backend file is clearer.
+//!   4. **A rewrite would change bytes for a backend that already applied
+//!      the migration** — migrations are checksummed and immutable once
+//!      applied (see `CLAUDE.md`). New backend-specific syntax must land in a
+//!      *new* migration or a per-backend file, never by editing the rules
+//!      that feed an already-shipped version.
+//!
+//! Until one of those trips, the transform stays. When one does, the
+//! per-backend-file layout is the documented next step — keep the
+//! `DialectAwareMigrationSource` seam (it already dispatches on
+//! [`DbBackend`]) and have `resolve` pick the per-backend file instead of
+//! running the transform.
 
 use std::borrow::Cow;
 use std::future::Future;

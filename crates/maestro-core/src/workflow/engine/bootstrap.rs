@@ -104,16 +104,29 @@ pub(super) async fn prepare_worktree_for_ticket(
                 "Worktree pre-created at ticket-add time"
             );
 
-            let (workflow_id, owner_user_id) = {
+            let (workflow_id, owner_user_id, updated_at) = {
                 let mut wf = workflows.write().await;
                 if let Some(w) = wf.get_mut(ticket_key) {
                     w.worktree_path = Some(worktree_path.clone());
                     w.branch_name = branch_name.clone();
-                    (w.id.clone(), w.user_id.clone())
+                    w.updated_at = Utc::now();
+                    (w.id.clone(), w.user_id.clone(), w.updated_at.timestamp())
                 } else {
                     return; // Workflow was removed before task finished.
                 }
             };
+
+            // Persist branch + worktree path atomically — the initial INSERT
+            // recorded both empty (the worktree had not been created yet).
+            let wt_str = worktree_path.display().to_string();
+            super::driver::shadow_persist_branch_and_worktree(
+                db,
+                &workflow_id,
+                &branch_name,
+                Some(wt_str.as_str()),
+                updated_at,
+            )
+            .await;
 
             let _ = event_tx.send(WorkflowEvent {
                 event_type: "work_item_updated".to_string(),
@@ -391,12 +404,29 @@ pub(super) async fn bootstrap_new_workflow(
             .create_worktree(&repo_path, &branch_name, &base_branch)
             .await?;
 
-        {
+        let branch_persist = {
             let mut wf = workflows.write().await;
             if let Some(workflow) = wf.get_mut(ticket_key) {
                 workflow.branch_name = branch_name.clone();
                 workflow.worktree_path = Some(worktree_path.clone());
+                workflow.updated_at = Utc::now();
+                Some((workflow.id.clone(), workflow.updated_at.timestamp()))
+            } else {
+                None
             }
+        };
+        // Persist branch + worktree path atomically — the initial INSERT
+        // recorded both empty (the worktree had not been created yet).
+        if let Some((work_item_id, updated_at)) = branch_persist {
+            let wt_str = worktree_path.display().to_string();
+            super::driver::shadow_persist_branch_and_worktree(
+                db,
+                &work_item_id,
+                &branch_name,
+                Some(wt_str.as_str()),
+                updated_at,
+            )
+            .await;
         }
 
         step_log.output.push(format!("Branch: {branch_name}"));
@@ -504,6 +534,10 @@ pub(super) async fn bootstrap_new_workflow(
             log_writer,
             workflows,
             shell_stream_provider,
+            // Bootstrap shell output is not an agent session — guardrail off.
+            0,
+            Arc::new(std::sync::Mutex::new(None)),
+            CancellationToken::new(),
         );
         let mise_result = if let Some(ref runner) = container_runner {
             let (prog, docker_args) = runner.wrap_command("mise", &["install"]);
@@ -599,6 +633,10 @@ pub(super) async fn bootstrap_new_workflow(
                 log_writer,
                 workflows,
                 shell_stream_provider,
+                // Pre-workflow shell output is not an agent session — guardrail off.
+                0,
+                Arc::new(std::sync::Mutex::new(None)),
+                CancellationToken::new(),
             );
             let run_result = if let Some(ref runner) = container_runner {
                 let (prog, docker_args) = runner.wrap_shell_command(cmd);

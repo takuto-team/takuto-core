@@ -6,6 +6,8 @@ mod browse_url;
 pub mod client;
 pub mod error;
 pub mod poller;
+pub mod source;
 
 pub use browse_url::ticket_browse_url;
 pub use error::JiraError;
+pub use source::{RealJiraSourceFactory, TicketLister, TicketListerFactory, TicketReader};

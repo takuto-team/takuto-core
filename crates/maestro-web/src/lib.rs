@@ -7,6 +7,7 @@ pub mod routes;
 pub mod server;
 pub mod session_registry;
 pub mod state;
+pub mod ts_bindings;
 
 // Gated out of release builds — see lore/code-quality-principles.md §6
 // ("Test scaffolding does not ship in the production crate surface").

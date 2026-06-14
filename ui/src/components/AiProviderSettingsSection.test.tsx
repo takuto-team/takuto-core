@@ -10,6 +10,7 @@ import {
   cleanup,
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   AiProviderSettingsSection,
   ProviderSwitchConfirm,
@@ -111,13 +112,18 @@ describe("ProviderSwitchConfirm", () => {
 // ---------------------------------------------------------------------------
 
 function renderAdminPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  });
   return render(
-    <ToastProvider>
-      <MemoryRouter>
-        <AiProviderSettingsSection />
-        <ToastContainer />
-      </MemoryRouter>
-    </ToastProvider>,
+    <QueryClientProvider client={queryClient}>
+      <ToastProvider>
+        <MemoryRouter>
+          <AiProviderSettingsSection />
+          <ToastContainer />
+        </MemoryRouter>
+      </ToastProvider>
+    </QueryClientProvider>,
   );
 }
 

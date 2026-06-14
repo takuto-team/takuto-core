@@ -2,16 +2,13 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Regression guards for two non-negotiable behaviors:
+ * Regression guard for a non-negotiable behavior:
  *
  *   A1 — The Cursor card MUST NOT mention ttyd / browser flows. Cursor is
  *        **API-key only** in v1 (per 04_architecture.md amendment A1).
- *   A3 — The per-user toggle MUST be **"Attribute commits to me"**, NOT
- *        "Sign commits". v1 does NOT do GPG/SSH cryptographic signing.
  *
- * Both guards live here as standalone tests so any future renderer change
- * (component split, copy tweak, third-party library swap) trips them
- * immediately.
+ * The GitHub-panel guards (A3 "Attribute commits", #29 pill, #31 no-remove)
+ * moved with the panel to `credentials/GitHubCredentialsSection.test.tsx`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -197,106 +194,11 @@ describe("MyCredentialsSection — wire-format regression (#28)", () => {
   });
 });
 
-describe("MyCredentialsSection — wire-format regression #29 (GitHub side)", () => {
-  it("renders 'Connected' on the GitHub card when github = { login, scopes, attribute_commits, last_validated_at } (real wire shape)", async () => {
-    stubAuthStatus("claude", "app_plus_pat");
-    // Hard-coded from `routes/credentials.rs::GithubCredentialStatus` (no
-    // `has_pat`, no `mode`). The presence of the row means hasPat = true;
-    // the effective mode comes from /api/auth/status::github_mode.
-    resetMocks({
-      provider: null,
-      github: {
-        login: "alice",
-        scopes: ["repo", "read:org"],
-        attribute_commits: true,
-        last_validated_at: "2026-05-19T08:00:00Z",
-      },
-    });
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
-    });
-    // Scope to the GitHub section so we don't pick up the AI card's pill.
-    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
-    expect(ghSection).toBeTruthy();
-    expect(within(ghSection!).getByText(/^Connected$/i)).toBeTruthy();
-    expect(within(ghSection!).queryByText(/^Not connected$/i)).toBeNull();
-    // The login should also be surfaced — confirms the panel rendered the
-    // PAT-present branch, not the "no PAT" CTA.
-    expect(within(ghSection!).getByText(/alice/)).toBeTruthy();
-  });
-
-  it("renders 'Not connected' on the GitHub card when github = null in PAT-only mode", async () => {
-    // Mode C: no shared App, no user PAT → must show "Not connected".
-    stubAuthStatus("claude", "pat_only");
-    resetMocks({
-      provider: null,
-      github: null,
-    });
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
-    });
-    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
-    expect(within(ghSection!).getByText(/^Not connected$/i)).toBeTruthy();
-  });
-
-  it("renders 'Connected' (App-only path) when github = null but mode is 'app'", async () => {
-    // Mode A: shared App handles everything → the pill should still read
-    // "Connected" because Maestro can talk to GitHub via the App. This
-    // preserves the pre-existing logic in describeMode().
-    stubAuthStatus("claude", "app");
-    resetMocks({
-      provider: null,
-      github: null,
-    });
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
-    });
-    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
-    expect(within(ghSection!).getByText(/^Connected$/i)).toBeTruthy();
-  });
-});
-
-describe("MyCredentialsSection — A3 regression (Attribute commits, not Sign commits)", () => {
-  it("renders the toggle as 'Attribute commits to me' and never says 'Sign commits'", async () => {
-    stubAuthStatus("claude", "app_plus_pat");
-    resetMocks({
-      provider: null,
-      // Wire shape: no `has_pat`, no `mode` — see #29.
-      github: {
-        login: "alice",
-        scopes: ["repo"],
-        attribute_commits: true,
-        last_validated_at: "2026-05-19T08:00:00Z",
-      },
-    });
-    renderPage();
-
-    // The label is what the screen reader will pick up via for/id linkage.
-    const toggle = await waitFor(() =>
-      screen.getByLabelText(/attribute commits to me/i),
-    );
-    expect(toggle).toBeTruthy();
-
-    // Belt-and-braces: the entire body must not contain "Sign commits" or
-    // "GPG sign" anywhere — copy or aria-label.
-    const body = document.body.textContent ?? "";
-    expect(/sign commits/i.test(body)).toBe(false);
-    expect(/gpg sign/i.test(body)).toBe(false);
-    expect(/ssh sign/i.test(body)).toBe(false);
-  });
-});
-
 // ---------------------------------------------------------------------------
-// #31 issue A + B — Rotate / Disconnect / Remove-PAT buttons removed.
+// #31 issue A — Rotate / Disconnect buttons removed from the AI card.
 // ---------------------------------------------------------------------------
 
-describe("MyCredentialsSection — #31 issue A + B: no Rotate / Disconnect / Remove-PAT buttons", () => {
+describe("MyCredentialsSection — #31 issue A: no Rotate / Disconnect buttons", () => {
   it("AI provider card never renders Rotate or Disconnect buttons (connected state)", async () => {
     stubAuthStatus("claude");
     resetMocks({
@@ -323,31 +225,6 @@ describe("MyCredentialsSection — #31 issue A + B: no Rotate / Disconnect / Rem
     // The single "Replace" / "Save" button must still exist.
     const saveBtn = within(aiSection!).getByRole("button", { name: /^(save|replace)$/i });
     expect(saveBtn).toBeTruthy();
-  });
-
-  it("GitHub card never renders a 'Remove PAT' button (even when a PAT is saved)", async () => {
-    stubAuthStatus("claude", "app_plus_pat");
-    resetMocks({
-      provider: null,
-      github: {
-        login: "alice",
-        scopes: ["repo"],
-        attribute_commits: true,
-        last_validated_at: "2026-05-19T08:00:00Z",
-      },
-    });
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
-    });
-    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
-    expect(
-      within(ghSection!).queryByRole("button", { name: /remove pat/i }),
-    ).toBeNull();
-    expect(
-      within(ghSection!).queryByRole("button", { name: /^disconnect$/i }),
-    ).toBeNull();
   });
 });
 

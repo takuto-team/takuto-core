@@ -132,6 +132,15 @@ lsof -nP -iTCP -sTCP:LISTEN | grep 1234
 
 ## 4. Docker Desktop networkType matters: gVisor breaks `host.docker.internal` on some Macs
 
+> **When you need the `LM_BRIDGE` workaround in this section:** only when
+> your model server runs **on the host Mac** (LM Studio / Ollama / vLLM)
+> **and** Docker Desktop uses the gVisor network stack (the 4.34+ default).
+> You do **not** need it for cloud providers (Claude/Codex or any reachable
+> API URL), nor for a model server running **as a container inside the
+> Maestro compose network** — in that case point OpenCode's base URL at the
+> service name (e.g. `http://lm-studio:1234/v1`) and skip `LM_BRIDGE`
+> entirely.
+
 This is the failure mode that bit us last and the hardest to
 diagnose, because **all of the configuration above can be correct**
 and connections still time out.

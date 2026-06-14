@@ -60,6 +60,8 @@ pub struct GitHubIssue {
     pub summary: String,
     pub body: String,
     pub html_url: String,
+    /// Label names attached to the issue (used by the polling label filter).
+    pub labels: Vec<String>,
 }
 
 /// Translate a raw `gh api` error message into a user-friendly string.
@@ -154,11 +156,23 @@ pub async fn fetch_open_issues(
                         .and_then(|u| u.as_str())
                         .unwrap_or("")
                         .to_string();
+                    let labels = v
+                        .get("labels")
+                        .and_then(|l| l.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|lbl| {
+                                    lbl.get("name").and_then(|n| n.as_str()).map(String::from)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
                     Some(GitHubIssue {
                         key: format!("GH-{number}"),
                         summary: title,
                         body,
                         html_url,
+                        labels,
                     })
                 })
                 .collect::<Vec<_>>()

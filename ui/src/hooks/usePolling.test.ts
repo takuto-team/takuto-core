@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { usePolling } from "./usePolling";
+import { createQueryWrapper } from "../test/queryWrapper";
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
@@ -28,7 +29,7 @@ describe("usePolling", () => {
   it("fetches initial polling state", async () => {
     mockFetchResponses({ status: 200, body: { paused: true } });
 
-    const { result } = renderHook(() => usePolling());
+    const { result } = renderHook(() => usePolling(), { wrapper: createQueryWrapper().wrapper });
 
     // Wait for the useEffect to settle
     await vi.waitFor(() => {
@@ -43,7 +44,7 @@ describe("usePolling", () => {
       { status: 200, ok: true }                   // toggle POST
     );
 
-    const { result } = renderHook(() => usePolling());
+    const { result } = renderHook(() => usePolling(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.paused).toBe(true);
@@ -57,7 +58,9 @@ describe("usePolling", () => {
       method: "POST",
       credentials: "same-origin",
     });
-    expect(result.current.paused).toBe(false);
+    await vi.waitFor(() => {
+      expect(result.current.paused).toBe(false);
+    });
   });
 
   it("toggle() calls /api/polling/pause when not paused", async () => {
@@ -68,7 +71,7 @@ describe("usePolling", () => {
       return new Response(null, { status: 200 });
     });
 
-    const { result } = renderHook(() => usePolling());
+    const { result } = renderHook(() => usePolling(), { wrapper: createQueryWrapper().wrapper });
 
     // Flush the initial fetch promise chain
     await act(async () => {
@@ -85,7 +88,9 @@ describe("usePolling", () => {
       method: "POST",
       credentials: "same-origin",
     });
-    expect(result.current.paused).toBe(true);
+    await vi.waitFor(() => {
+      expect(result.current.paused).toBe(true);
+    });
   });
 
   it("sets toggling=true during toggle and false after", async () => {
@@ -94,7 +99,7 @@ describe("usePolling", () => {
       { status: 200, ok: true }
     );
 
-    const { result } = renderHook(() => usePolling());
+    const { result } = renderHook(() => usePolling(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.toggling).toBe(false);

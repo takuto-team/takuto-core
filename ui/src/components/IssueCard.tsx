@@ -1,28 +1,19 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useCallback, useState } from "react";
 import type { WorkflowDefinition, WorkflowSummary } from "../api/types";
 import type { TerminalState } from "../hooks/useWorkflows";
-import { useIssueCardActions } from "../hooks/useIssueCardActions";
-import { useToast } from "../hooks/useToast";
+import { useIssueCardController } from "../hooks/useIssueCardController";
 import { ConnectionOverlay } from "./ConnectionOverlay";
 import { DeleteIconButton } from "./DeleteIconButton";
-import { EditorTerminalMenu } from "./IssueCard/EditorTerminalMenu";
-import { PortMappingsMenu } from "./IssueCard/PortMappingsMenu";
-import { Label } from "./Label";
-import { PauseIconButton } from "./PauseIconButton";
-import { ProgressBar } from "./ProgressBar";
-import { RestartIconButton } from "./RestartIconButton";
-import { ResumeIconButton } from "./ResumeIconButton";
+import { IssueCardFooter } from "./IssueCard/IssueCardFooter";
+import { IssueCardHeader } from "./IssueCard/IssueCardHeader";
+import { IssueCardModals } from "./IssueCard/IssueCardModals";
+import { IssueCardProgress } from "./IssueCard/IssueCardProgress";
+import { buildIssueCardView } from "./IssueCard/issueCardView";
 import { RunCommands } from "./RunCommands";
-import { StatusBadge, getStatusInfo } from "./StatusBadge";
-import { StopIconButton } from "./StopIconButton";
 import { WorkflowDefButtons } from "./WorkflowDefButtons";
-import { ClockIcon, ExternalLinkIcon, TerminalIcon } from "./icons";
-import { ConfirmModal } from "./modals/ConfirmModal";
-import { ConsoleOutputModal } from "./modals/ConsoleOutputModal";
-import { DeleteConfirmModal } from "./modals/DeleteConfirmModal";
+import { ExternalLinkIcon, TerminalIcon } from "./icons";
 
 interface Props {
   workflow: WorkflowSummary;
@@ -34,23 +25,6 @@ interface Props {
   onReport: (ticketKey: string) => void;
 }
 
-function progressInfo(w: WorkflowSummary) {
-  const pct = Math.max(0, Math.min(100, Math.round(w.progress_percent || 0)));
-  const total = w.progress_steps_total > 0 ? Math.floor(w.progress_steps_total) : 0;
-  const filled = total > 0 ? Math.min(total, Math.round((pct * total) / 100)) : 0;
-  return { pct, total, filled };
-}
-
-function formatDuration(start: Date, end: Date): string {
-  const secs = Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
 export function IssueCard({
   workflow: w,
   terminalState: ts,
@@ -60,147 +34,36 @@ export function IssueCard({
   onShowDescription,
   onReport,
 }: Props) {
-  const [loading, setLoading] = useState<false | "generic" | string>(false);
-  const [confirm, setConfirm] = useState<{ action: string; label: string; fn: () => Promise<void> } | null>(null);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [consoleOpen, setConsoleOpen] = useState(false);
-  const [openMenu, setOpenMenu] = useState<"port" | "editor" | "terminal" | null>(null);
-  const { showToast } = useToast();
-
-  const { doAction, openEditor, openTerminal, closeEditor } = useIssueCardActions(w.ticket_key);
-
-  const status = getStatusInfo(w.state, w.can_start);
-  const { pct, total, filled } = progressInfo(w);
-  const prUrl = w.pr_url?.trim() || "";
-  const isTerminal = ["Completed", "Error", "Stopped"].includes(status.label);
-  const isPending = status.label === "Pending" && w.can_start;
-  const isPreparingWorktree = isPending && !!w.branch_name && !w.worktree_path;
-  const isActive = status.label === "Running" || status.label === "Paused";
-
-  const duration =
-    isTerminal &&
-    status.label !== "Error" &&
-    status.label !== "Completed" &&
-    status.label !== "Stopped" &&
-    w.started_at &&
-    w.updated_at
-      ? formatDuration(new Date(w.started_at), new Date(w.updated_at))
-      : null;
-
-  const withLoading = useCallback(
-    async (fn: () => Promise<void>, message?: string) => {
-      setLoading(message || "generic");
-      try {
-        await fn();
-        onRefresh();
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : "Action failed");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [onRefresh, showToast],
-  );
-
-  const confirmAction = (label: string, action: string, fn: () => Promise<void>) => {
-    setConfirm({ action, label, fn });
-  };
-
-  // Step display
-  let stepLabel = "Current step";
-  if (status.label === "Completed") stepLabel = "Completed";
-  else if (status.label === "Error") stepLabel = "Failed at step";
-  else if (status.label === "Paused") stepLabel = "Paused at step";
-  else if (status.label === "Stopped") stepLabel = "Stopped at step";
-  else if (isPending) stepLabel = "Added to dashboard";
-
-  let stateDisplay = w.state;
-  if (status.label === "Completed") stateDisplay = "All steps passed";
-  if (status.label === "Error" && w.state.startsWith("Error:")) stateDisplay = w.state.replace("Error: ", "");
-  if (total > 0) stateDisplay += ` (${filled}/${total})`;
-
-  const borderClass =
-    status.color === "red"
-      ? "border-red-500/30 hover:border-red-500/40"
-      : status.color === "yellow"
-        ? "border-yellow-500/30 hover:border-yellow-500/40"
-        : "border-gray-800 hover:border-gray-700";
-
-  // Effective terminal state — for completed workflows, use API terminal_lines if no live state
-  const effectiveTs =
-    ts ??
-    (isTerminal && w.terminal_lines?.length > 0
-      ? { stepName: w.state, lines: w.terminal_lines, completed: true }
-      : undefined);
-  const hasTerminalLines = effectiveTs && effectiveTs.lines.length > 0;
-
-  const mergedPorts: [number, string][] = (() => {
-    const dynPorts = new Set(dynamicForwards.map(([cp]) => cp));
-    return [
-      ...(w.editor_port_mappings || []).filter(([cp]) => !dynPorts.has(cp)),
-      ...dynamicForwards,
-    ];
-  })();
+  const view = buildIssueCardView(w, ts, dynamicForwards);
+  const ctl = useIssueCardController(w.ticket_key, onRefresh);
+  const showMarkDone =
+    (w.ticketing_system === "jira" || w.ticketing_system === "github") && w.can_mark_done;
 
   return (
     <>
       <div
-        className={`work-item-card border ${borderClass} transition-colors ${
-          status.label === "Stopped" ? "opacity-60 hover:opacity-80" : ""
+        className={`work-item-card border ${view.borderClass} transition-colors ${
+          view.status.label === "Stopped" ? "opacity-60 hover:opacity-80" : ""
         } relative`}
       >
-        {loading && (
+        {ctl.loading && (
           <div className="absolute inset-0 bg-gray-900/90 z-10 flex items-center justify-center rounded-xl">
-            {loading !== "generic" ? (
-              <ConnectionOverlay message={loading as string} />
+            {ctl.loading !== "generic" ? (
+              <ConnectionOverlay message={ctl.loading} />
             ) : (
               <span className="text-sm text-gray-400">Working...</span>
             )}
           </div>
         )}
 
-        {/* Delete button — top-right corner */}
         {w.can_delete && (
           <div className="absolute top-1 right-1 translate-x-1/2 -translate-y-1/2 z-10">
-            <DeleteIconButton onClick={() => setDeleteConfirmOpen(true)} />
+            <DeleteIconButton onClick={ctl.onRequestDelete} />
           </div>
         )}
 
-        {/* Header: ticket key + status badge + PR links */}
-        <div className="flex items-center justify-between gap-3 min-w-0">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            {w.issue_url || w.jira_browse_url ? (
-              <a
-                href={w.issue_url || w.jira_browse_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono text-base font-medium text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
-              >
-                {w.ticket_key}
-              </a>
-            ) : (
-              <span className="font-mono text-base font-medium text-blue-400">{w.ticket_key}</span>
-            )}
-            {w.workspace_name && (
-              <span
-                className="text-[11px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700 shrink-0 truncate max-w-32"
-                title={`Repository: ${w.workspace_name}`}
-              >
-                {w.workspace_name}
-              </span>
-            )}
-            <StatusBadge status={status} />
-          </div>
-          {prUrl && (
-            <div className="flex-shrink-0">
-              <Label variant={w.pr_merged ? "purple" : "info"} href={prUrl}>
-                PR #{prUrl.match(/\/(\d+)\/?$/)?.[1] ?? ""}
-              </Label>
-            </div>
-          )}
-        </div>
+        <IssueCardHeader workflow={w} status={view.status} prUrl={view.prUrl} />
 
-        {/* Summary + Show details */}
         <div className="flex items-center justify-between gap-4 min-w-0">
           <span className="text-sm font-medium text-white truncate min-w-0">{w.ticket_summary}</span>
           <button
@@ -211,83 +74,45 @@ export function IssueCard({
           </button>
         </div>
 
-        {/* Progress frame */}
-        <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative h-[80px] flex flex-col justify-center">
-          {isPreparingWorktree ? (
-            <div className="flex items-center leading-none gap-2 text-xs text-gray-500">
-              <span className="inline-block w-2 h-2 rounded-full bg-gray-500 animate-pulse flex-shrink-0" />
-              Preparing worktree&hellip;
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-gray-500">{stepLabel}</div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`flex items-center leading-none gap-1 text-xs text-gray-400 ${
-                      !duration ? "invisible" : ""
-                    }`}
-                  >
-                    <ClockIcon />
-                    <span className="font-mono">{duration ?? "0s"}</span>
-                  </span>
-                  {w.has_report && (
-                    <button
-                      onClick={() => onReport(w.ticket_key)}
-                      className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
-                      title="View work item report"
-                    >
-                      Show Report
-                    </button>
-                  )}
-                  {(status.label === "Error" || status.label === "Completed" || status.label === "Stopped") && (
-                    <RestartIconButton onClick={() => withLoading(doAction("retry"))} />
-                  )}
-                  {(status.label === "Error" || status.label === "Stopped") && w.can_resume_from_error && (
-                    <ResumeIconButton
-                      onClick={() => withLoading(doAction("resume-from-error"))}
-                      title="Retry from last failure"
-                    />
-                  )}
-                  {isActive && status.label === "Running" && (
-                    <PauseIconButton onClick={() => withLoading(doAction("pause"))} />
-                  )}
-                  {isActive && status.label === "Paused" && (
-                    <ResumeIconButton onClick={() => withLoading(doAction("resume"))} />
-                  )}
-                  {isActive && (
-                    <StopIconButton onClick={() => confirmAction("Stop", "stop", doAction("stop"))} />
-                  )}
-                </div>
-              </div>
-              <div className="text-sm font-mono text-gray-300 mt-0.5">{stateDisplay}</div>
-              <div className="mt-2">
-                <ProgressBar pct={pct} total={total} filled={filled} color={status.color} />
-              </div>
-            </>
-          )}
-        </div>
+        <IssueCardProgress
+          status={view.status}
+          stepLabel={view.stepLabel}
+          stateDisplay={view.stateDisplay}
+          pct={view.pct}
+          total={view.total}
+          filled={view.filled}
+          duration={view.duration}
+          isPreparingWorktree={view.isPreparingWorktree}
+          isActive={view.isActive}
+          hasReport={w.has_report}
+          canResumeFromError={w.can_resume_from_error}
+          onRetry={ctl.onRetry}
+          onResumeFromError={ctl.onResumeFromError}
+          onPause={ctl.onPause}
+          onResume={ctl.onResume}
+          onStop={ctl.onStop}
+          onReport={() => onReport(w.ticket_key)}
+        />
 
-        {/* Always-visible sections. WorkflowDefButtons renders the empty-state
-            banner itself when the resolved flow list is empty. */}
+        {/* WorkflowDefButtons renders the empty-state banner itself when the flow list is empty. */}
         <WorkflowDefButtons
           definitions={workflowDefs}
           runStates={w.definition_runs || {}}
           ticketKey={w.ticket_key}
           onRefresh={onRefresh}
-          mainRunning={isActive}
+          mainRunning={view.isActive}
         />
         {w.run_commands && w.run_commands.length > 0 && (
-          <RunCommands ticketKey={w.ticket_key} commands={w.run_commands} withLoading={withLoading} />
+          <RunCommands ticketKey={w.ticket_key} commands={w.run_commands} withLoading={ctl.withLoading} />
         )}
 
         {/* Console output button — always visible, disabled until workflow has run */}
         <div className="border-t border-gray-800/60" />
         <button
-          onClick={hasTerminalLines ? () => setConsoleOpen(true) : undefined}
-          disabled={!hasTerminalLines}
+          onClick={view.hasTerminalLines ? ctl.onShowConsole : undefined}
+          disabled={!view.hasTerminalLines}
           className={`flex items-center leading-none gap-1 text-xs transition-colors ${
-            hasTerminalLines
+            view.hasTerminalLines
               ? "text-gray-500 hover:text-gray-300 cursor-pointer"
               : "text-gray-700 cursor-not-allowed"
           }`}
@@ -296,72 +121,33 @@ export function IssueCard({
           Show console output
         </button>
 
-        {/* Bottom-right icons: editor, terminal, port mappings */}
-        {(mergedPorts.length > 0 || w.can_open_editor) && (
-          <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2">
-            {w.can_open_editor && (
-              <EditorTerminalMenu
-                kind="editor"
-                url={w.editor_url}
-                isMenuOpen={openMenu === "editor"}
-                onToggleMenu={(open) => setOpenMenu(open ? "editor" : null)}
-                onStart={() => withLoading(openEditor, "Setting up a secure connection to an editor")}
-                onStop={() => withLoading(closeEditor)}
-              />
-            )}
-            {w.can_open_editor && (
-              <EditorTerminalMenu
-                kind="terminal"
-                url={w.terminal_url}
-                isMenuOpen={openMenu === "terminal"}
-                onToggleMenu={(open) => setOpenMenu(open ? "terminal" : null)}
-                onStart={() => withLoading(openTerminal, "Setting up a secure connection to a terminal")}
-                onStop={() => withLoading(closeEditor)}
-              />
-            )}
-            <PortMappingsMenu
-              ports={mergedPorts}
-              isMenuOpen={openMenu === "port"}
-              onToggleMenu={(open) => setOpenMenu(open ? "port" : null)}
-            />
-          </div>
-        )}
+        <IssueCardFooter
+          canOpenEditor={w.can_open_editor}
+          editorUrl={w.editor_url}
+          terminalUrl={w.terminal_url}
+          ports={view.mergedPorts}
+          openMenu={ctl.openMenu}
+          onSetMenu={ctl.setOpenMenu}
+          onOpenEditor={ctl.onOpenEditor}
+          onOpenTerminal={ctl.onOpenTerminal}
+          onCloseEditor={ctl.onCloseEditor}
+        />
       </div>
 
-      {confirm && (
-        <ConfirmModal
-          title={confirm.label}
-          message={`Are you sure you want to ${confirm.action} work item ${w.ticket_key}?`}
-          onConfirm={() => {
-            setConfirm(null);
-            withLoading(confirm.fn);
-          }}
-          onCancel={() => setConfirm(null)}
-        />
-      )}
-
-      {consoleOpen && effectiveTs && (
-        <ConsoleOutputModal state={effectiveTs} onClose={() => setConsoleOpen(false)} />
-      )}
-
-      {deleteConfirmOpen && (
-        <DeleteConfirmModal
-          ticketKey={w.ticket_key}
-          showMarkDone={(w.ticketing_system === "jira" || w.ticketing_system === "github") && w.can_mark_done}
-          onMarkDoneAndDelete={() => {
-            setDeleteConfirmOpen(false);
-            withLoading(async () => {
-              await doAction("mark-done")();
-              await doAction("delete")();
-            });
-          }}
-          onDelete={() => {
-            setDeleteConfirmOpen(false);
-            withLoading(doAction("delete"));
-          }}
-          onCancel={() => setDeleteConfirmOpen(false)}
-        />
-      )}
+      <IssueCardModals
+        ticketKey={w.ticket_key}
+        showMarkDone={showMarkDone}
+        confirm={ctl.confirm}
+        consoleState={view.effectiveTs}
+        consoleOpen={ctl.consoleOpen}
+        deleteOpen={ctl.deleteOpen}
+        onConfirm={ctl.onConfirm}
+        onConfirmCancel={ctl.onConfirmCancel}
+        onConsoleClose={ctl.onConsoleClose}
+        onMarkDoneAndDelete={ctl.onMarkDoneAndDelete}
+        onDelete={ctl.onDelete}
+        onDeleteCancel={ctl.onDeleteCancel}
+      />
     </>
   );
 }

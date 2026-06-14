@@ -57,6 +57,25 @@ impl WorkflowRepository {
         self.workflows.read().await.values().cloned().collect()
     }
 
+    /// Reassign every workflow whose `user_id` is `None` to `owner_id`.
+    /// Returns the number migrated. Idempotent: a no-op on a clean map.
+    pub async fn reassign_orphans_to_owner(&self, owner_id: &str) -> usize {
+        let mut workflows = self.workflows.write().await;
+        let mut migrated = 0usize;
+        for w in workflows.values_mut() {
+            if w.user_id.is_none() {
+                tracing::warn!(
+                    ticket = %w.ticket_key,
+                    new_owner = %owner_id,
+                    "Migrating orphan workflow to resolved poller owner"
+                );
+                w.user_id = Some(owner_id.to_string());
+                migrated += 1;
+            }
+        }
+        migrated
+    }
+
     // ── Count queries (used by WorkflowEngine public API) ──────────────────
 
     pub async fn count_all(&self) -> usize {
@@ -78,6 +97,22 @@ impl WorkflowRepository {
             .await
             .values()
             .filter(|w| w.state.occupies_concurrency_slot())
+            .count()
+    }
+
+    /// Count workflows that occupy a concurrency slot, optionally scoped to a
+    /// single owner. `user_id = None` counts globally; `Some(id)` counts only
+    /// workflows whose `user_id` matches.
+    pub async fn count_occupying_slot_for_user(&self, user_id: Option<&str>) -> usize {
+        self.workflows
+            .read()
+            .await
+            .values()
+            .filter(|w| w.state.occupies_concurrency_slot())
+            .filter(|w| match user_id {
+                Some(id) => w.user_id.as_deref() == Some(id),
+                None => true,
+            })
             .count()
     }
 

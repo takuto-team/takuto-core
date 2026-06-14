@@ -360,6 +360,14 @@ pub fn build_router(state: AppState) -> Router {
         // stack as the existing PUT /api/config and gated additionally via
         // require_admin_for in the handler.
         .route("/config/agent", put(routes::config_agent::put_agent_config))
+        // Admin-only patch of the [polling] section (auto-start flow,
+        // parallel-item caps, per-system filtering, jira.item_types).
+        .route(
+            "/config/polling",
+            put(routes::config_polling::put_polling_config),
+        )
+        // Admin-only patch of the [jira] section (filters + prompt-context policy).
+        .route("/config/jira", put(routes::config_jira::put_jira_config))
         .route("/config/reload", post(routes::config::reload_config))
         // Per-user credential surface.
         .route(

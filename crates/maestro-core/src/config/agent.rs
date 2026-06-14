@@ -90,26 +90,13 @@ impl fmt::Display for AiAgentProvider {
 pub struct AgentConfig {
     #[serde(default)]
     pub provider: AiAgentProvider,
-    /// **Deprecated (Phase 1)**: legacy top-level Cursor CLI binary. Moved to
-    /// `[agent.providers.cursor].cli`. Still parsed for one release; migrated
-    /// at load time and overwritten on next save (see `Config::load`).
-    #[serde(default = "super::agent_legacy::default_cursor_cli")]
-    pub cursor_cli: String,
-    /// **Deprecated (Phase 1)**: legacy top-level Cursor model. Moved to
-    /// `[agent.providers.cursor].model`. Migrated at load time.
-    #[serde(default = "super::agent_legacy::default_cursor_model")]
-    pub cursor_model: String,
     /// Timeout per agent session (applies to all providers).
     #[serde(default = "default_step_timeout")]
     pub step_timeout_secs: u64,
     /// Timeout in seconds for "Improve with AI" / "Prompt ticket" sessions. Default 300.
     #[serde(default = "default_improve_timeout")]
     pub improve_timeout_secs: u64,
-    /// **Deprecated (Phase 1)**: legacy top-level model. Moved to
-    /// `[agent.providers.<active>].model`. Migrated at load time.
-    #[serde(default)]
-    pub model: String,
-    /// Phase 1: per-provider sub-tables (`[agent.providers.<name>]`). Defaults
+    /// Per-provider sub-tables (`[agent.providers.<name>]`). Defaults
     /// are used when the TOML section is missing.
     #[serde(default)]
     pub providers: AgentProvidersConfig,
@@ -128,10 +115,23 @@ pub struct AgentConfig {
     /// of this global setting.
     #[serde(default = "default_share_conversation")]
     pub share_conversation_across_steps: bool,
+    /// No-progress guardrail: abort an agent step when its humanized output
+    /// repeats the same substantive line this many times in a row — the
+    /// signature of a weak model looping on a failing action (e.g. a `git
+    /// push` it can't fix). The step fails into `Error` instead of churning
+    /// until `step_timeout_secs`. Session-lifecycle lines ("… session
+    /// initialized/completed") are excluded so a healthy multi-turn run isn't
+    /// tripped. `0` disables the guardrail. Default `8`.
+    #[serde(default = "default_max_repeated_output_lines")]
+    pub max_repeated_output_lines: u32,
 }
 
 pub(super) fn default_share_conversation() -> bool {
     false
+}
+
+pub(super) fn default_max_repeated_output_lines() -> u32 {
+    8
 }
 
 pub(super) fn default_available_providers() -> Vec<String> {
@@ -151,7 +151,7 @@ pub struct AgentProvidersConfig {
     pub claude: AgentProviderConfig,
     pub cursor: CursorProviderConfig,
     pub codex: CodexProviderConfig,
-    pub opencode: AgentProviderConfig,
+    pub opencode: OpenCodeProviderConfig,
 }
 
 /// Generic provider sub-table (Claude, OpenCode, future Gemini).
@@ -174,18 +174,87 @@ pub struct AgentProviderConfig {
     pub allow_shared_default: bool,
 }
 
+/// Default self-hosted context window (tokens) when the admin doesn't set one.
+/// Sized for the 7B-class coder models Maestro's LM Studio recipe documents
+/// (e.g. `qwen2.5-coder-7b-instruct` loaded at 32k) — a value that works out of
+/// the box without forcing the operator to know their model's window.
+pub const DEFAULT_OPENCODE_CONTEXT_LIMIT: u32 = 32_768;
+
+/// Default max output (tokens) per response for the same class of model.
+pub const DEFAULT_OPENCODE_OUTPUT_LIMIT: u32 = 8_192;
+
+// Serde `default` fns for `Option<u32>` fields must return `Option<u32>`, so the
+// wrap is required by the field type even though it is always `Some`.
+#[allow(clippy::unnecessary_wraps)]
+fn default_opencode_context_limit() -> Option<u32> {
+    Some(DEFAULT_OPENCODE_CONTEXT_LIMIT)
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn default_opencode_output_limit() -> Option<u32> {
+    Some(DEFAULT_OPENCODE_OUTPUT_LIMIT)
+}
+
+/// OpenCode provider sub-table — diverges from the generic shape because the
+/// self-hosted endpoint carries no models.dev metadata, so OpenCode cannot
+/// auto-discover the context/output window of the model behind the
+/// OpenAI-compatible server. These two limits are written into the
+/// `models.<id>.limit` block of the synthesised `opencode.json` so OpenCode
+/// knows how much context it has to work with (see the OpenCode "Custom /
+/// self-hosted provider" docs). They default to the documented coder-model
+/// window ([`DEFAULT_OPENCODE_CONTEXT_LIMIT`] / [`DEFAULT_OPENCODE_OUTPUT_LIMIT`]);
+/// `None` (set explicitly via the dashboard) omits the `limit` block and lets
+/// OpenCode fall back to its own guess.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCodeProviderConfig {
+    /// Model id served by the endpoint (the `models.<id>` key, and the
+    /// `<model>` half of OpenCode's `-m <provider>/<model>` argv).
+    #[serde(default)]
+    pub model: String,
+    /// OpenAI-compatible base URL of the self-hosted server (required).
+    #[serde(default)]
+    pub base_url: String,
+    /// Extra CLI flags, validated against [`DENIED_EXTRA_ARG_FLAGS`].
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    /// Let users without a personal credential fall back to the
+    /// deployment-default bearer. Default OFF.
+    #[serde(default)]
+    pub allow_shared_default: bool,
+    /// Maximum context window (tokens) the model behind the endpoint
+    /// supports. Defaults to [`DEFAULT_OPENCODE_CONTEXT_LIMIT`]; `None`
+    /// omits the key. Emitted as `models.<id>.limit.context`.
+    #[serde(default = "default_opencode_context_limit")]
+    pub context_limit: Option<u32>,
+    /// Maximum output (tokens) per response. Defaults to
+    /// [`DEFAULT_OPENCODE_OUTPUT_LIMIT`]; `None` omits the key. Emitted as
+    /// `models.<id>.limit.output`.
+    #[serde(default = "default_opencode_output_limit")]
+    pub output_limit: Option<u32>,
+}
+
+impl Default for OpenCodeProviderConfig {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            base_url: String::new(),
+            extra_args: Vec::new(),
+            allow_shared_default: false,
+            context_limit: default_opencode_context_limit(),
+            output_limit: default_opencode_output_limit(),
+        }
+    }
+}
+
 /// Cursor provider sub-table — diverges from the generic shape because it
 /// carries a CLI binary name and **no** `base_url` (amendment A1: Cursor's
 /// CLI does not support custom endpoints).
 ///
 /// All fields default to **empty / false** (not the runtime defaults like
-/// `"agent"` and `"Auto"`). The "empty" sentinel is meaningful: at load time
-/// `migrate_legacy_flat_fields` only copies the legacy `[agent].cursor_cli`
-/// into the sub-table when this field is empty, and `effective_cursor_cli`
-/// falls back to the legacy field's `default_cursor_cli()` when the
-/// sub-table is empty. This lets us distinguish "operator did not configure
-/// the sub-table at all" from "operator explicitly set `cli = \"\"`" (the
-/// latter is a config error caught by `validate`).
+/// `"agent"` and `"Auto"`). The "empty" sentinel is meaningful: an empty
+/// `cli` resolves to the `"agent"` default via [`AgentConfig::effective_cursor_cli`],
+/// while an explicit `cli = ""` set alongside `provider = "cursor"` is a
+/// config error caught by `validate`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CursorProviderConfig {
     #[serde(default)]
@@ -277,43 +346,55 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             provider: AiAgentProvider::default(),
-            cursor_cli: super::agent_legacy::default_cursor_cli(),
-            cursor_model: super::agent_legacy::default_cursor_model(),
             step_timeout_secs: default_step_timeout(),
             improve_timeout_secs: default_improve_timeout(),
-            model: String::new(),
             providers: AgentProvidersConfig::default(),
             available_providers: default_available_providers(),
             share_conversation_across_steps: default_share_conversation(),
+            max_repeated_output_lines: default_max_repeated_output_lines(),
         }
     }
 }
 
 impl AgentConfig {
-    /// Return the effective Claude model name, resolving in precedence
-    /// order:
-    /// 1. `[agent.providers.claude].model` (canonical location, written
-    ///    by `PUT /api/config/agent`).
-    /// 2. `[agent].model` (legacy flat field — kept one release for
-    ///    back-compat; populated by migration of old `config.toml`).
-    /// 3. `None` — let `claude` choose its own default model.
+    /// Return the effective Claude model name from
+    /// `[agent.providers.claude].model`, or `None` when unset/blank.
     ///
     /// Returning `Option` (not `&str` with a hardcoded fallback) is
-    /// deliberate: when both fields are empty/blank the caller MUST omit
+    /// deliberate: when the field is empty/blank the caller MUST omit
     /// the `--model` arg entirely, otherwise pantheon-style proxies that
     /// don't support older opus-4-6/4-7 reject the request. Unlike
     /// Cursor (where the CLI requires `--model`), Claude is happy to run
     /// without one and pick its own current default.
     pub fn effective_claude_model(&self) -> Option<&str> {
         let sub = self.providers.claude.model.trim();
-        if !sub.is_empty() {
-            return Some(&self.providers.claude.model);
+        if sub.is_empty() {
+            None
+        } else {
+            Some(&self.providers.claude.model)
         }
-        let legacy = self.model.trim();
-        if !legacy.is_empty() {
-            return Some(&self.model);
+    }
+
+    /// Return the effective Cursor CLI binary: the `[agent.providers.cursor].cli`
+    /// value when non-empty, else the `"agent"` default.
+    pub fn effective_cursor_cli(&self) -> &str {
+        let sub = self.providers.cursor.cli.trim();
+        if sub.is_empty() {
+            "agent"
+        } else {
+            &self.providers.cursor.cli
         }
-        None
+    }
+
+    /// Return the effective Cursor model: the `[agent.providers.cursor].model`
+    /// value when non-empty, else the `"Auto"` default.
+    pub fn effective_cursor_model(&self) -> &str {
+        let sub = self.providers.cursor.model.trim();
+        if sub.is_empty() {
+            "Auto"
+        } else {
+            &self.providers.cursor.model
+        }
     }
 
     /// Return the effective OpenCode model name from `[agent.providers.opencode].model`.
@@ -508,68 +589,52 @@ mod tests {
         assert!(!step.is_command_step());
     }
 
-    // ─── effective_claude_model precedence ──────────────────────────────
+    // ─── effective_claude_model resolution ──────────────────────────────
 
-    fn agent_cfg(legacy: &str, sub: &str) -> AgentConfig {
-        let mut cfg = AgentConfig {
-            model: legacy.to_string(),
-            ..AgentConfig::default()
-        };
+    fn agent_cfg(sub: &str) -> AgentConfig {
+        let mut cfg = AgentConfig::default();
         cfg.providers.claude.model = sub.to_string();
         cfg
     }
 
-    /// T-MODEL-RESOLVE-001: sub-table set, legacy set → sub-table wins.
+    /// Sub-table set → that value is used.
     #[test]
-    fn effective_claude_model_subtable_wins_over_legacy() {
-        let cfg = agent_cfg("legacy-old-model", "sub-new-model");
-        assert_eq!(cfg.effective_claude_model(), Some("sub-new-model"));
-    }
-
-    /// T-MODEL-RESOLVE-002: sub-table empty, legacy set → legacy used
-    /// (one-release back-compat for users still on the migrated layout).
-    #[test]
-    fn effective_claude_model_falls_back_to_legacy_when_subtable_empty() {
-        let cfg = agent_cfg("legacy-model", "");
-        assert_eq!(cfg.effective_claude_model(), Some("legacy-model"));
-    }
-
-    /// T-MODEL-RESOLVE-003: sub-table set, legacy empty → sub-table used.
-    #[test]
-    fn effective_claude_model_subtable_used_when_legacy_empty() {
-        let cfg = agent_cfg("", "sub-model");
+    fn effective_claude_model_uses_subtable_value() {
+        let cfg = agent_cfg("sub-model");
         assert_eq!(cfg.effective_claude_model(), Some("sub-model"));
     }
 
-    /// T-MODEL-RESOLVE-004: both empty → None (omit `--model` arg). This
-    /// is the actual task #44 fix surface — pantheon-style proxies that
-    /// don't recognise the older migrated models need `--model` omitted
-    /// so claude picks a default the proxy DOES support.
+    /// Empty sub-table → None (omit `--model` arg) so pantheon-style
+    /// proxies that don't recognise older models let claude pick a default
+    /// the proxy DOES support.
     #[test]
-    fn effective_claude_model_returns_none_when_both_empty() {
-        let cfg = agent_cfg("", "");
+    fn effective_claude_model_returns_none_when_empty() {
+        let cfg = agent_cfg("");
         assert_eq!(cfg.effective_claude_model(), None);
     }
 
-    /// T-MODEL-RESOLVE-005: sub-table whitespace-only → treated as empty.
-    /// Matches the trim semantics of the existing `effective_cursor_*`
-    /// helpers so a user pasting "   " into the dashboard input still
-    /// resolves to None / legacy.
+    /// Whitespace-only sub-table → treated as empty (None). Matches the
+    /// trim semantics of the `effective_cursor_*` helpers.
     #[test]
     fn effective_claude_model_treats_whitespace_subtable_as_empty() {
-        let cfg = agent_cfg("legacy", "   ");
-        assert_eq!(
-            cfg.effective_claude_model(),
-            Some("legacy"),
-            "whitespace-only sub-table must fall through to legacy"
-        );
+        let cfg = agent_cfg("   ");
+        assert_eq!(cfg.effective_claude_model(), None);
+    }
 
-        let cfg = agent_cfg("   ", "   ");
-        assert_eq!(
-            cfg.effective_claude_model(),
-            None,
-            "all-whitespace must resolve to None"
-        );
+    /// `effective_cursor_cli` / `effective_cursor_model` fall back to the
+    /// `"agent"` / `"Auto"` defaults when the sub-table is empty, and return
+    /// the configured value otherwise.
+    #[test]
+    fn effective_cursor_accessors_fall_back_to_defaults() {
+        let cfg = AgentConfig::default();
+        assert_eq!(cfg.effective_cursor_cli(), "agent");
+        assert_eq!(cfg.effective_cursor_model(), "Auto");
+
+        let mut cfg = AgentConfig::default();
+        cfg.providers.cursor.cli = "agent-custom".into();
+        cfg.providers.cursor.model = "gpt-4.1".into();
+        assert_eq!(cfg.effective_cursor_cli(), "agent-custom");
+        assert_eq!(cfg.effective_cursor_model(), "gpt-4.1");
     }
 
     /// effective_opencode_model: set → Some.
@@ -589,5 +654,34 @@ mod tests {
         assert_eq!(cfg.effective_opencode_model(), None);
         cfg.providers.opencode.model = "   ".into();
         assert_eq!(cfg.effective_opencode_model(), None);
+    }
+
+    /// OpenCode context/output limits default to the documented coder-model
+    /// window — both via `Default` and via serde when the TOML omits them —
+    /// and round-trip through TOML when set explicitly.
+    #[test]
+    fn opencode_limits_default_to_coder_window_and_round_trip() {
+        let cfg = AgentConfig::default();
+        assert_eq!(
+            cfg.providers.opencode.context_limit,
+            Some(DEFAULT_OPENCODE_CONTEXT_LIMIT)
+        );
+        assert_eq!(
+            cfg.providers.opencode.output_limit,
+            Some(DEFAULT_OPENCODE_OUTPUT_LIMIT)
+        );
+
+        // Sub-table present but limits omitted → serde defaults apply.
+        let omitted: OpenCodeProviderConfig =
+            toml::from_str("model = \"m\"\nbase_url = \"http://lm:1234/v1\"\n").unwrap();
+        assert_eq!(omitted.context_limit, Some(DEFAULT_OPENCODE_CONTEXT_LIMIT));
+        assert_eq!(omitted.output_limit, Some(DEFAULT_OPENCODE_OUTPUT_LIMIT));
+
+        // Explicit values override the defaults.
+        let toml = "model = \"qwen2.5-coder\"\nbase_url = \"http://lm:1234/v1\"\n\
+                    context_limit = 16000\noutput_limit = 4096\n";
+        let parsed: OpenCodeProviderConfig = toml::from_str(toml).unwrap();
+        assert_eq!(parsed.context_limit, Some(16000));
+        assert_eq!(parsed.output_limit, Some(4096));
     }
 }

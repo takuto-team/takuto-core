@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useAuth } from "./useAuth";
+import { createQueryWrapper } from "../test/queryWrapper";
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
@@ -29,7 +30,7 @@ describe("useAuth", () => {
       return new Response("", { status: 404 });
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -52,7 +53,7 @@ describe("useAuth", () => {
       return new Response("", { status: 404 });
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -70,7 +71,7 @@ describe("useAuth", () => {
       return new Response("", { status: 404 });
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -96,7 +97,7 @@ describe("useAuth", () => {
       return new Response("", { status: 404 });
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -110,7 +111,11 @@ describe("useAuth", () => {
     });
 
     expect(success).toBe(true);
-    expect(result.current.loggedIn).toBe(true);
+    // `loggedIn` flips inside the login mutation's onSuccess (after the
+    // follow-up /api/auth/me); await the cache propagation.
+    await vi.waitFor(() => {
+      expect(result.current.loggedIn).toBe(true);
+    });
     // Verify fetch was called with the right args
     expect(fetch).toHaveBeenCalledWith("/api/auth/login", expect.objectContaining({
       method: "POST",
@@ -148,7 +153,7 @@ describe("useAuth", () => {
       return new Response("", { status: 404 });
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper: createQueryWrapper().wrapper });
 
     // Give checkAuth time to fire the /api/auth/status + /api/config
     // fetches and reach the fetchMe() call. We loop until fetchMe has
@@ -196,7 +201,7 @@ describe("useAuth", () => {
       return new Response("", { status: 404 });
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.loggedIn).toBe(true);
@@ -206,7 +211,9 @@ describe("useAuth", () => {
       await result.current.logout();
     });
 
-    expect(result.current.loggedIn).toBe(false);
+    await vi.waitFor(() => {
+      expect(result.current.loggedIn).toBe(false);
+    });
     expect(fetch).toHaveBeenCalledWith("/api/auth/logout", expect.objectContaining({
       method: "POST",
     }));

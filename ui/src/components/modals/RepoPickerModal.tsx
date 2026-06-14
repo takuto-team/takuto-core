@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { apiJson } from "../../api/client";
+import { surfaceError } from "../../utils/surfaceError";
 import type { GitHubRepo, Workspace } from "../../api/types";
 
 interface Props {
@@ -36,7 +37,7 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
   useEffect(() => {
     apiJson<Workspace[]>("/api/workspaces")
       .then((ws) => setCheckedOut(new Set(ws.map((w) => w.name))))
-      .catch(() => {});
+      .catch((e) => surfaceError(e, "Couldn't load checked-out repositories"));
   }, []);
 
   // Debounced search (also fires immediately on mount with initial empty search)

@@ -67,6 +67,16 @@ pub enum AgentError {
     /// `hint` is a pinned per-provider auth diagnostic selected at the call site.
     #[error("Agent step failed — {hint}")]
     AgentStepAborted { hint: &'static str },
+
+    /// The step was aborted by the no-progress guardrail: the agent repeated
+    /// the same output line `count` times in a row without making progress
+    /// (typically a weak model retrying a failing action in a loop). Fails the
+    /// step into Error rather than letting it churn until the wall-clock
+    /// timeout. `line` is the repeated text (truncated) for diagnosis.
+    #[error(
+        "Agent step aborted — no progress: repeated the same output {count} times (\"{line}\")"
+    )]
+    NoProgressLoop { count: u32, line: String },
 }
 
 #[cfg(test)]
@@ -111,10 +121,17 @@ mod tests {
                 },
                 "Agent step failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli",
             ),
+            (
+                AgentError::NoProgressLoop {
+                    count: 8,
+                    line: "It seems there is an issue with pushing the branch.".to_string(),
+                },
+                "Agent step aborted — no progress: repeated the same output 8 times (\"It seems there is an issue with pushing the branch.\")",
+            ),
         ];
         // Drift detection: if a new variant is added without updating this test,
         // `cases.len()` will be stale and the assertion below trips.
-        assert_eq!(cases.len(), 6);
+        assert_eq!(cases.len(), 7);
         for (err, expected) in cases {
             assert_eq!(format!("{err}"), expected, "Display mismatch for {err:?}");
         }
@@ -142,8 +159,12 @@ mod tests {
             },
             AgentError::CommandStepFailed,
             AgentError::AgentStepAborted { hint: "hint" },
+            AgentError::NoProgressLoop {
+                count: 8,
+                line: "loop".to_string(),
+            },
         ];
-        assert_eq!(cases.len(), 6);
+        assert_eq!(cases.len(), 7);
         for err in cases {
             let outer: MaestroError = err.into();
             assert!(

@@ -5,11 +5,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { MemoryRouter } from "react-router-dom";
 import { MyCredentialsSection } from "../components/MyCredentialsSection";
 import { ToastProvider } from "../hooks/useToast";
-import {
-  resetMocks,
-  setMocksEnabled,
-  setNextFailure,
-} from "../api/mocks";
+import { resetMocks, setMocksEnabled } from "../api/mocks";
 import type { UserCredentialsStatus } from "../api/types";
 
 /**
@@ -125,70 +121,7 @@ export const CodexPhase4Placeholder: Story = {
   ],
 };
 
-/* ── GitHub modes ── */
-
-export const GitHubAppOnly: Story = {
-  name: "GitHub — Mode A (App only)",
-  decorators: [
-    withMocks({
-      provider: null,
-      // Wire-format note: a missing PAT is `github: null` per
-      // routes/credentials.rs::UserCredentialsStatus (Option<...>). The
-      // page reads the effective mode from /api/auth/status::github_mode.
-      github: null,
-    }),
-  ],
-};
-
-export const GitHubAppPlusPat: Story = {
-  name: "GitHub — Mode B (App + PAT)",
-  decorators: [
-    withMocks({
-      provider: null,
-      // Wire-format note: `mode` lives on /api/auth/status, not here.
-      github: {
-        login: "alice-gh",
-        scopes: ["repo", "read:org"],
-        attribute_commits: true,
-        last_validated_at: new Date().toISOString(),
-      },
-    }),
-  ],
-};
-
-export const GitHubPatOnly: Story = {
-  name: "GitHub — Mode C (PAT only)",
-  decorators: [
-    withMocks({
-      provider: null,
-      github: {
-        login: "alice-gh",
-        scopes: ["repo"],
-        attribute_commits: false,
-        last_validated_at: new Date().toISOString(),
-      },
-    }),
-  ],
-};
-
-/* ── Forced-failure stories ── */
-
-export const SsoRequiredToast: Story = {
-  name: "GitHub SSO required (toast on next save)",
-  decorators: [
-    withMocks(
-      {
-        provider: null,
-        github: null,
-      },
-      () =>
-        setNextFailure({
-          kind: "sso_required",
-          orgUrl: "https://github.com/orgs/acme/sso",
-        }),
-    ),
-  ],
-};
+/* ── Provider mismatch ── */
 
 export const ProviderMismatch: Story = {
   name: "Provider mismatch banner (admin set Cursor, user has Claude)",

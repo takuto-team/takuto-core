@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
+use ts_rs::TS;
 
 use crate::error::Result;
 use crate::jira::JiraError;
@@ -29,7 +30,8 @@ pub struct LinkedItem {
 }
 
 /// Dashboard manual-start detail modal: Jira description as Markdown (ADF converted when needed).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(rename = "TicketPreview", export_to = "TicketPreview.ts")]
 pub struct TicketDescriptionPreview {
     pub key: String,
     pub summary: String,
@@ -616,6 +618,22 @@ fn parse_linked_item(json_str: &str) -> Result<LinkedItem> {
             .to_string(),
         link_type: String::new(),
     })
+}
+
+#[cfg(test)]
+mod ts_bindings {
+    use super::*;
+
+    /// Regenerate `ui/src/api/generated/TicketPreview.ts`. The output dir is
+    /// resolved from the crate manifest so it is CWD-independent; CI diffs the
+    /// directory (see the `ts-types-drift` job).
+    #[test]
+    fn export_ticket_preview() {
+        let out =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/src/api/generated");
+        std::fs::create_dir_all(&out).expect("create generated dir");
+        TicketDescriptionPreview::export_all_to(&out).expect("export TicketPreview");
+    }
 }
 
 #[cfg(test)]

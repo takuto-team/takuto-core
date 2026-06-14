@@ -41,6 +41,12 @@ unrelated that warrants attention, add a # TODO comment inline with a one-line e
 
 If the description lacks details, you may refer to the main branch which contains the existing
 codebase; patterns and business logic implemented there may be reused.
+
+FINDING FILES: The file paths in the ticket may be stale or wrong — do NOT assume them. Locate each
+file yourself with the glob/grep tools from the worktree root, and use the exact path the search
+returns. Make every change by calling the edit/write tools — never just describe a change in prose.
+You are headless: never ask for file paths or wait for input; if a file isn't where you expected,
+search for it and continue.
 """
 when = "no_ticketing"
 repeat = 1
@@ -63,6 +69,12 @@ explanation and move on.
 
 If the ticket lacks details, you may refer to the main branch which contains the existing
 codebase; patterns and business logic implemented there may be reused.
+
+FINDING FILES: The file paths in the ticket may be stale or wrong — do NOT assume them. Locate each
+file yourself with the glob/grep tools from the worktree root, and use the exact path the search
+returns. Make every change by calling the edit/write tools — never just describe a change in prose.
+You are headless: never ask for file paths or wait for input; if a file isn't where you expected,
+search for it and continue.
 """
 when = "ticketing"
 repeat = 1
@@ -93,12 +105,18 @@ repeat = 2
 [[steps]]
 name = "Commit changes"
 prompt = """
-Review all uncommitted changes and organize them into logical, meaningful commits.
-For each commit: stage only the relevant files, write a concise conventional commit message
-(e.g. feat:, fix:, refactor:, chore:), and commit.
-Do not squash unrelated changes into a single commit.
-When done, print a summary of the commits made.
-Do not create a PR.
+Commit the work in this worktree into logical, conventional commits.
+
+1. Run `git status` / `git diff` to see what changed.
+2. `git add` the files that implement this ticket and commit them with concise conventional
+   messages (e.g. feat:, fix:, refactor:, chore:). One commit or a few logical ones — do not
+   squash unrelated changes into a single commit.
+3. If some changes look unrelated to the ticket, leave them unstaged and uncommitted.
+
+NEVER discard or revert work: do NOT run `git checkout`, `git restore`, `git reset`, `git clean`,
+or `git stash`. Your only job in this step is to create commits, never to remove changes.
+
+When done, print `git log --oneline` of the commits you made. Do not create a PR.
 """
 repeat = 1
 

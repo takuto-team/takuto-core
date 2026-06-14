@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
+use ts_rs::TS;
 
 use maestro_core::container::ContainerRunner;
 use maestro_core::jira::ticket_browse_url;
@@ -13,7 +14,8 @@ use maestro_core::workflow::engine::{TerminalLine, Workflow};
 use maestro_core::workflow::state::WorkflowState;
 use maestro_core::workflow::step::StepLog;
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(rename = "TerminalLine", export_to = "TerminalLine.ts")]
 pub struct TerminalLineDto {
     pub text: String,
     pub stream: String,
@@ -28,7 +30,8 @@ impl From<&TerminalLine> for TerminalLineDto {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export_to = "WorkflowSummary.ts")]
 pub struct WorkflowSummary {
     pub id: String,
     pub ticket_key: String,
@@ -95,13 +98,18 @@ pub struct WorkflowSummary {
     /// name until a future engine refactor renames
     /// `Workflow.workflow_def_runs` → `WorkItem.definition_runs`).
     #[serde(rename = "definition_runs")]
+    // ts-rs renders `HashMap<K, V>` with optional values (`{ [k]?: V }`); pin
+    // it to `Record<string, string>` so consumers keep the prior shape.
+    #[ts(rename = "definition_runs", type = "Record<string, string>")]
     pub workflow_def_runs: HashMap<String, String>,
     /// Absolute path of the git worktree on disk, if it exists.
     /// `None` while the worktree is still being pre-created in the background.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub worktree_path: Option<String>,
     /// ID of the user who created this workflow. `None` for legacy/poller workflows.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub user_id: Option<String>,
     /// Name of the repository (`repositories.name`) this workflow runs
     /// against. Powers the per-card repo badge on the dashboard. Always
@@ -110,10 +118,12 @@ pub struct WorkflowSummary {
     /// FK to `repositories.id`. `None` for legacy snapshots not yet
     /// back-filled by the startup reconciliation.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub repository_id: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(rename = "WorkflowCounts", export_to = "WorkflowCounts.ts")]
 pub struct WorkflowCountsResponse {
     pub running: u32,
     pub completed: u32,
@@ -122,7 +132,8 @@ pub struct WorkflowCountsResponse {
 }
 
 /// Status of a single run command.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export_to = "RunCommandStatus.ts")]
 pub struct RunCommandStatus {
     /// Index of the command in the `[[run_commands]]` config array.
     pub index: usize,
@@ -240,6 +251,28 @@ pub(super) fn build_run_commands_status(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod ts_bindings {
+    use super::*;
+    use ts_rs::TS;
+
+    /// Regenerate the committed `ui/src/api/generated/*.ts` mirror of these
+    /// DTOs. `export_all_to` also emits each transitive dependency
+    /// (`StepLog`, `StepStatus`, …) into the same directory. CI re-runs this
+    /// and `git diff --exit-code`s the directory, so a Rust DTO change that
+    /// isn't reflected in committed TS fails the build. See
+    /// `crates/maestro-web/src/ts_bindings.rs` for the shared output path.
+    #[test]
+    fn export_workflow_dtos() {
+        let out = crate::ts_bindings::generated_dir();
+        std::fs::create_dir_all(&out).expect("create generated dir");
+        WorkflowSummary::export_all_to(&out).expect("export WorkflowSummary");
+        WorkflowCountsResponse::export_all_to(&out).expect("export WorkflowCounts");
+        RunCommandStatus::export_all_to(&out).expect("export RunCommandStatus");
+        TerminalLineDto::export_all_to(&out).expect("export TerminalLine");
+    }
 }
 
 #[cfg(test)]

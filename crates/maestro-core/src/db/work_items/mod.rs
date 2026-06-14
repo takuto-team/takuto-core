@@ -25,9 +25,6 @@
 
 use std::str::FromStr;
 
-use crate::db::{DbAdapter, DbValue};
-use crate::error::Result;
-
 // ── Enums ────────────────────────────────────────────────────────────────
 
 /// State-machine variants stored in `work_items.state_kind`.
@@ -437,1143 +434,25 @@ impl StateCounts {
     }
 }
 
-// ── work_items: read ─────────────────────────────────────────────────────
 
-const SELECT_WORK_ITEM: &str = "SELECT \
-    id, ticket_key, workspace_name, user_id, private, started_manually, \
-    counts_toward_manual_cap, driver_started, jira_available, \
-    ticket_summary, ticket_description, ticket_type, ticket_url, acceptance_criteria, \
-    base_branch, branch_name, worktree_path, pr_url, pr_merged, \
-    last_session_id, state_kind, state_payload, current_step_label, \
-    created_at, started_at, updated_at, repository_id \
-    FROM work_items";
+mod def_runs;
+mod logs;
+mod ports;
+mod run_commands;
+mod state;
+mod steps;
 
-fn decode_work_item(r: &crate::db::DbRow) -> Result<WorkItemRow> {
-    let state_kind_s = r.get_text(20)?;
-    let state_kind = WorkItemStateKind::from_str(&state_kind_s).map_err(|e| {
-        crate::error::MaestroError::Db(crate::db::DbError::Adapter(
-            crate::db::adapter::DbError::Sqlx {
-                source: sqlx::Error::Configuration(e.into()),
-            },
-        ))
-    })?;
-    Ok(WorkItemRow {
-        id: r.get_text(0)?,
-        ticket_key: r.get_text(1)?,
-        workspace_name: r.get_text(2)?,
-        user_id: r.get_text_opt(3)?,
-        // Appended at column 26 to keep the
-        // pre-existing positional indexes stable.
-        repository_id: r.get_text_opt(26)?,
-        private: r.get_i64(4)? != 0,
-        started_manually: r.get_i64(5)? != 0,
-        counts_toward_manual_cap: r.get_i64(6)? != 0,
-        driver_started: r.get_i64(7)? != 0,
-        jira_available: r.get_i64(8)? != 0,
-        ticket_summary: r.get_text_opt(9)?,
-        ticket_description: r.get_text_opt(10)?,
-        ticket_type: r.get_text_opt(11)?,
-        ticket_url: r.get_text_opt(12)?,
-        acceptance_criteria: r.get_text_opt(13)?,
-        base_branch: r.get_text_opt(14)?,
-        branch_name: r.get_text_opt(15)?,
-        worktree_path: r.get_text_opt(16)?,
-        pr_url: r.get_text_opt(17)?,
-        pr_merged: r.get_i64(18)? != 0,
-        last_session_id: r.get_text_opt(19)?,
-        state_kind,
-        state_payload: r.get_text_opt(21)?,
-        current_step_label: r.get_text_opt(22)?,
-        created_at: r.get_i64(23)?,
-        started_at: r.get_i64(24)?,
-        updated_at: r.get_i64(25)?,
-    })
-}
-
-/// Fetch a single work item by id, with the caller's visibility predicate
-/// applied. Returns `Ok(None)` both when the row doesn't exist and when
-/// it exists but the caller can't see it — callers that need to
-/// distinguish "missing" from "forbidden" should fetch admin-side first.
-/// Focused getter for the three fields `require_workflow_access`
-/// consults, keyed by `ticket_key`. The route's path id is the
-/// ticket_key (matches the in-memory map key), not the row's `id`
-/// column (a UUID). We pick the most-recently started row when more
-/// than one matches — only one workflow is active per ticket_key at a
-/// time but historical rows from prior runs can accumulate.
-///
-/// Returns `None` when no row matches; caller falls back to the
-/// in-memory HashMap.
-pub async fn get_access_fields_by_ticket_key(
-    adapter: &DbAdapter,
-    ticket_key: &str,
-) -> Result<Option<(Option<String>, Option<String>, String)>> {
-    let row = adapter
-        .query_optional(
-            "SELECT user_id, repository_id, workspace_name \
-             FROM work_items WHERE ticket_key = ? AND deleted_at IS NULL \
-             ORDER BY started_at DESC LIMIT 1",
-            vec![DbValue::Text(ticket_key.to_string())],
-        )
-        .await?;
-    let Some(r) = row else { return Ok(None) };
-    Ok(Some((
-        r.get_text_opt(0)?,
-        r.get_text_opt(1)?,
-        r.get_text(2)?,
-    )))
-}
-
-/// Project (ticket_key, state_kind) for every work item owned by
-/// `user_id`. Used by `workflow_counts` to aggregate by state without
-/// pulling full rows.
-///
-/// Returns one entry per ticket_key — when historical duplicates
-/// exist, the most-recently-started one wins. This matches the
-/// in-memory HashMap's one-row-per-ticket-key invariant so the
-/// HashMap fallback merges cleanly.
-pub async fn list_user_state_kinds(
-    adapter: &DbAdapter,
-    user_id: &str,
-) -> Result<Vec<(String, WorkItemStateKind)>> {
-    let rows = adapter
-        .query_all(
-            "SELECT ticket_key, state_kind FROM work_items wi \
-             WHERE wi.user_id = ? AND wi.deleted_at IS NULL AND wi.started_at = ( \
-                 SELECT MAX(wi2.started_at) FROM work_items wi2 \
-                 WHERE wi2.ticket_key = wi.ticket_key AND wi2.user_id = wi.user_id \
-                       AND wi2.deleted_at IS NULL \
-             )",
-            vec![DbValue::Text(user_id.to_string())],
-        )
-        .await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let ticket_key = r.get_text(0)?;
-        let state_s = r.get_text(1)?;
-        let state_kind = WorkItemStateKind::from_str(&state_s).map_err(|e| {
-            crate::error::MaestroError::Db(crate::db::DbError::Adapter(
-                crate::db::adapter::DbError::Sqlx {
-                    source: sqlx::Error::Configuration(e.into()),
-                },
-            ))
-        })?;
-        out.push((ticket_key, state_kind));
-    }
-    Ok(out)
-}
-
-/// Full-row fetch keyed by ticket_key. No visibility filter — callers
-/// must run their own policy check (the route layer's
-/// `require_workflow_access` already does so as the first action on
-/// every endpoint that uses this). Picks the most-recently-started row
-/// when historical duplicates exist, mirroring
-/// [`get_access_fields_by_ticket_key`].
-pub async fn get_work_item_by_ticket_key(
-    adapter: &DbAdapter,
-    ticket_key: &str,
-) -> Result<Option<WorkItemRow>> {
-    let sql = format!(
-        "{SELECT_WORK_ITEM} WHERE ticket_key = ? AND deleted_at IS NULL \
-         ORDER BY started_at DESC LIMIT 1"
-    );
-    let row = adapter
-        .query_optional(&sql, vec![DbValue::Text(ticket_key.to_string())])
-        .await?;
-    let Some(row) = row else { return Ok(None) };
-    Ok(Some(decode_work_item(&row)?))
-}
-
-pub async fn get_work_item(
-    adapter: &DbAdapter,
-    id: &str,
-    caller_user_id: Option<&str>,
-    caller_is_admin: bool,
-) -> Result<Option<WorkItemRow>> {
-    let sql = format!("{SELECT_WORK_ITEM} WHERE id = ?");
-    let row = adapter
-        .query_optional(&sql, vec![DbValue::Text(id.to_string())])
-        .await?;
-    let Some(row) = row else { return Ok(None) };
-    let item = decode_work_item(&row)?;
-    if !caller_can_see(
-        &item,
-        caller_user_id,
-        caller_is_admin,
-        /* include_team_visible= */ false,
-    ) {
-        return Ok(None);
-    }
-    Ok(Some(item))
-}
-
-/// List work items visible to the caller, ordered by `started_at DESC`
-/// then `id DESC` (stable tie-break). See [`WorkItemListQuery`] for
-/// the visibility predicate.
-pub async fn list_work_items(
-    adapter: &DbAdapter,
-    q: &WorkItemListQuery,
-) -> Result<Vec<WorkItemRow>> {
-    let mut sql = String::from(SELECT_WORK_ITEM);
-    // Soft-deleted runs are history — never surfaced in the live list.
-    let mut where_clauses: Vec<String> = vec!["deleted_at IS NULL".to_string()];
-    let mut params: Vec<DbValue> = Vec::new();
-
-    if let Some(ws) = q.workspace_name.as_ref() {
-        where_clauses.push("workspace_name = ?".to_string());
-        params.push(DbValue::Text(ws.clone()));
-    }
-
-    if let Some(filter) = q.state_filter.as_ref()
-        && !filter.is_empty()
-    {
-        let placeholders = vec!["?"; filter.len()].join(", ");
-        where_clauses.push(format!("state_kind IN ({placeholders})"));
-        for k in filter {
-            params.push(DbValue::Text(k.as_str().to_string()));
-        }
-    }
-
-    // Visibility predicate. `caller_is_admin` short-circuits at the SQL
-    // level so the planner doesn't fan out the OR branches needlessly.
-    if !q.caller_is_admin {
-        let caller = q.caller_user_id.clone();
-        match (caller.as_ref(), q.include_team_visible) {
-            (Some(uid), true) => {
-                where_clauses.push("(user_id = ? OR private = 0)".to_string());
-                params.push(DbValue::Text(uid.clone()));
-            }
-            (Some(uid), false) => {
-                where_clauses.push("user_id = ?".to_string());
-                params.push(DbValue::Text(uid.clone()));
-            }
-            (None, true) => {
-                where_clauses.push("private = 0".to_string());
-            }
-            (None, false) => {
-                // No caller, no admin, no team-visible — nothing is
-                // visible. Short-circuit to an empty result.
-                return Ok(Vec::new());
-            }
-        }
-    }
-
-    if !where_clauses.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&where_clauses.join(" AND "));
-    }
-    sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?");
-    params.push(DbValue::I64(q.limit.into()));
-    params.push(DbValue::I64(q.offset.into()));
-
-    let rows = adapter.query_all(&sql, params).await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        out.push(decode_work_item(r)?);
-    }
-    Ok(out)
-}
-
-fn caller_can_see(
-    item: &WorkItemRow,
-    caller_user_id: Option<&str>,
-    caller_is_admin: bool,
-    include_team_visible: bool,
-) -> bool {
-    if caller_is_admin {
-        return true;
-    }
-    let Some(uid) = caller_user_id else {
-        return include_team_visible && !item.private;
-    };
-    if item.user_id.as_deref() == Some(uid) {
-        return true;
-    }
-    include_team_visible && !item.private
-}
-
-// ── work_items: write ────────────────────────────────────────────────────
-
-/// Insert a fresh work item. Caller is responsible for generating the
-/// UUID `id` and supplying timestamps. Returns an error on UNIQUE
-/// violation against `(workspace_name, ticket_key)`.
-pub async fn insert_work_item(adapter: &DbAdapter, row: &WorkItemRow) -> Result<()> {
-    adapter
-        .execute(
-            "INSERT INTO work_items (\
-                id, ticket_key, workspace_name, user_id, private, started_manually, \
-                counts_toward_manual_cap, driver_started, jira_available, \
-                ticket_summary, ticket_description, ticket_type, ticket_url, acceptance_criteria, \
-                base_branch, branch_name, worktree_path, pr_url, pr_merged, \
-                last_session_id, state_kind, state_payload, current_step_label, \
-                created_at, started_at, updated_at, repository_id\
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            vec![
-                DbValue::Text(row.id.clone()),
-                DbValue::Text(row.ticket_key.clone()),
-                DbValue::Text(row.workspace_name.clone()),
-                DbValue::TextOpt(row.user_id.clone()),
-                DbValue::I64(row.private.into()),
-                DbValue::I64(row.started_manually.into()),
-                DbValue::I64(row.counts_toward_manual_cap.into()),
-                DbValue::I64(row.driver_started.into()),
-                DbValue::I64(row.jira_available.into()),
-                DbValue::TextOpt(row.ticket_summary.clone()),
-                DbValue::TextOpt(row.ticket_description.clone()),
-                DbValue::TextOpt(row.ticket_type.clone()),
-                DbValue::TextOpt(row.ticket_url.clone()),
-                DbValue::TextOpt(row.acceptance_criteria.clone()),
-                DbValue::TextOpt(row.base_branch.clone()),
-                DbValue::TextOpt(row.branch_name.clone()),
-                DbValue::TextOpt(row.worktree_path.clone()),
-                DbValue::TextOpt(row.pr_url.clone()),
-                DbValue::I64(row.pr_merged.into()),
-                DbValue::TextOpt(row.last_session_id.clone()),
-                DbValue::Text(row.state_kind.as_str().to_string()),
-                DbValue::TextOpt(row.state_payload.clone()),
-                DbValue::TextOpt(row.current_step_label.clone()),
-                DbValue::I64(row.created_at),
-                DbValue::I64(row.started_at),
-                DbValue::I64(row.updated_at),
-                DbValue::TextOpt(row.repository_id.clone()),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Update a work item's state-machine kind + payload + current-step
-/// label. `updated_at` is bumped automatically to `now`.
-pub async fn update_work_item_state(
-    adapter: &DbAdapter,
-    id: &str,
-    state_kind: WorkItemStateKind,
-    state_payload: Option<&str>,
-    current_step_label: Option<&str>,
-    now: i64,
-) -> Result<()> {
-    adapter
-        .execute(
-            "UPDATE work_items SET \
-                state_kind = ?, state_payload = ?, current_step_label = ?, updated_at = ? \
-             WHERE id = ?",
-            vec![
-                DbValue::Text(state_kind.as_str().to_string()),
-                DbValue::TextOpt(state_payload.map(str::to_string)),
-                DbValue::TextOpt(current_step_label.map(str::to_string)),
-                DbValue::I64(now),
-                DbValue::Text(id.to_string()),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Update the per-work-item PR URL (set by the GitHub PR-create hook).
-pub async fn update_pr_url(
-    adapter: &DbAdapter,
-    id: &str,
-    pr_url: Option<&str>,
-    now: i64,
-) -> Result<()> {
-    adapter
-        .execute(
-            "UPDATE work_items SET pr_url = ?, updated_at = ? WHERE id = ?",
-            vec![
-                DbValue::TextOpt(pr_url.map(str::to_string)),
-                DbValue::I64(now),
-                DbValue::Text(id.to_string()),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Update the per-work-item `pr_merged` flag (set by the PR merge poller).
-pub async fn update_pr_merged(
-    adapter: &DbAdapter,
-    id: &str,
-    pr_merged: bool,
-    now: i64,
-) -> Result<()> {
-    adapter
-        .execute(
-            "UPDATE work_items SET pr_merged = ?, updated_at = ? WHERE id = ?",
-            vec![
-                DbValue::I64(pr_merged.into()),
-                DbValue::I64(now),
-                DbValue::Text(id.to_string()),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Hard-delete a work item. CASCADE on the child tables wipes
-/// steps, definition runs, log lines, port mappings, and run commands.
-pub async fn delete_work_item(adapter: &DbAdapter, id: &str) -> Result<()> {
-    adapter
-        .execute(
-            "DELETE FROM work_items WHERE id = ?",
-            vec![DbValue::Text(id.to_string())],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Soft-delete a work item: stamp `deleted_at` with `now` (Unix seconds) so
-/// the row drops out of every live query but survives as run history. Child
-/// rows (steps, definition runs, log lines) are intentionally retained — they
-/// belong to the historical run. Re-adding the same ticket inserts a fresh
-/// row; the soft-deleted one no longer collides because the UNIQUE
-/// (workspace_name, ticket_key) index was dropped in the soft-delete migration.
-pub async fn soft_delete_work_item(adapter: &DbAdapter, id: &str, now: i64) -> Result<()> {
-    adapter
-        .execute(
-            "UPDATE work_items SET deleted_at = ? WHERE id = ?",
-            vec![DbValue::I64(now), DbValue::Text(id.to_string())],
-        )
-        .await?;
-    Ok(())
-}
-
-// ── counts ───────────────────────────────────────────────────────────────
-
-/// Aggregate counts by `state_kind` across either a single workspace or
-/// the whole deployment. Scope is admin-only — there's no per-caller
-/// filter; counts feed the dashboard summary tiles which are themselves
-/// access-gated upstream.
-pub async fn count_by_state(
-    adapter: &DbAdapter,
-    workspace_name: Option<&str>,
-) -> Result<StateCounts> {
-    let (sql, params): (&str, Vec<DbValue>) = match workspace_name {
-        Some(ws) => (
-            "SELECT state_kind, COUNT(*) FROM work_items \
-             WHERE workspace_name = ? AND deleted_at IS NULL GROUP BY state_kind",
-            vec![DbValue::Text(ws.to_string())],
-        ),
-        None => (
-            "SELECT state_kind, COUNT(*) FROM work_items \
-             WHERE deleted_at IS NULL GROUP BY state_kind",
-            Vec::new(),
-        ),
-    };
-    let rows = adapter.query_all(sql, params).await?;
-    let mut counts = StateCounts::default();
-    for r in &rows {
-        let k_s = r.get_text(0)?;
-        let n = r.get_i64(1)? as u64;
-        if let Ok(k) = WorkItemStateKind::from_str(&k_s) {
-            counts.add(k, n);
-        }
-    }
-    Ok(counts)
-}
-
-// ── work_item_steps ──────────────────────────────────────────────────────
-
-const SELECT_STEP: &str = "SELECT \
-    id, work_item_id, sequence, name, definition_filename, status, \
-    started_at, ended_at, exit_code, error_message \
-    FROM work_item_steps";
-
-fn decode_step(r: &crate::db::DbRow) -> Result<StepRow> {
-    let status_s = r.get_text(5)?;
-    let status = StepStatus::from_str(&status_s).map_err(|e| {
-        crate::error::MaestroError::Db(crate::db::DbError::Adapter(
-            crate::db::adapter::DbError::Sqlx {
-                source: sqlx::Error::Configuration(e.into()),
-            },
-        ))
-    })?;
-    Ok(StepRow {
-        id: r.get_i64(0)?,
-        work_item_id: r.get_text(1)?,
-        sequence: r.get_i64(2)?,
-        name: r.get_text(3)?,
-        definition_filename: r.get_text_opt(4)?,
-        status,
-        started_at: r.get_i64(6)?,
-        ended_at: r.get_i64_opt(7)?,
-        // `exit_code` is INTEGER NULL — read as i64_opt and downcast.
-        exit_code: r.get_i64_opt(8)?.map(|v| v as i32),
-        error_message: r.get_text_opt(9)?,
-    })
-}
-
-/// Record the start of a step. Computes the next `sequence` for the
-/// work item under a single round-trip via `SELECT MAX(sequence) + 1`.
-/// Returns the autoincrement `id` for later [`record_step_end`].
-///
-/// Note: not atomic against concurrent step starts on the same work
-/// item — that's fine, the engine never starts two steps in parallel
-/// on the same item.
-pub async fn record_step_start(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    name: &str,
-    definition_filename: Option<&str>,
-    started_at: i64,
-) -> Result<i64> {
-    // Next sequence = (MAX(sequence) + 1) for this work item, or 0 if none.
-    let row = adapter
-        .query_one(
-            "SELECT COALESCE(MAX(sequence), -1) + 1 FROM work_item_steps WHERE work_item_id = ?",
-            vec![DbValue::Text(work_item_id.to_string())],
-        )
-        .await?;
-    let next_seq = row.get_i64(0)?;
-
-    // Insert. We use a separate SELECT-by-(work_item_id, sequence) to
-    // recover the autoincrement id rather than a RETURNING clause —
-    // RETURNING is Postgres/SQLite but not pre-8.0.21 MySQL.
-    adapter
-        .execute(
-            "INSERT INTO work_item_steps \
-                (work_item_id, sequence, name, definition_filename, status, started_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-            vec![
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::I64(next_seq),
-                DbValue::Text(name.to_string()),
-                DbValue::TextOpt(definition_filename.map(str::to_string)),
-                DbValue::Text(StepStatus::Running.as_str().to_string()),
-                DbValue::I64(started_at),
-            ],
-        )
-        .await?;
-    let id_row = adapter
-        .query_one(
-            "SELECT id FROM work_item_steps WHERE work_item_id = ? AND sequence = ?",
-            vec![
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::I64(next_seq),
-            ],
-        )
-        .await?;
-    Ok(id_row.get_i64(0)?)
-}
-
-/// Finish a step — set the status, optional exit code, optional error
-/// message, and `ended_at`.
-pub async fn record_step_end(
-    adapter: &DbAdapter,
-    step_id: i64,
-    status: StepStatus,
-    exit_code: Option<i32>,
-    error_message: Option<&str>,
-    ended_at: i64,
-) -> Result<()> {
-    adapter
-        .execute(
-            "UPDATE work_item_steps SET \
-                status = ?, exit_code = ?, error_message = ?, ended_at = ? \
-             WHERE id = ?",
-            vec![
-                DbValue::Text(status.as_str().to_string()),
-                DbValue::I32Opt(exit_code),
-                DbValue::TextOpt(error_message.map(str::to_string)),
-                DbValue::I64(ended_at),
-                DbValue::I64(step_id),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// List steps for a work item, sequence-ascending.
-pub async fn list_steps(adapter: &DbAdapter, work_item_id: &str) -> Result<Vec<StepRow>> {
-    let sql = format!("{SELECT_STEP} WHERE work_item_id = ? ORDER BY sequence ASC");
-    let rows = adapter
-        .query_all(&sql, vec![DbValue::Text(work_item_id.to_string())])
-        .await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        out.push(decode_step(r)?);
-    }
-    Ok(out)
-}
-
-// ── work_item_definition_runs ────────────────────────────────────────────
-
-/// Upsert the per-(work-item, definition) run state. Idempotent.
-pub async fn upsert_definition_run(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    definition_filename: &str,
-    state: DefRunState,
-    error_message: Option<&str>,
-    started_at: Option<i64>,
-    ended_at: Option<i64>,
-) -> Result<()> {
-    let tail = super::upsert::build_update_tail(
-        adapter.backend(),
-        &["work_item_id", "definition_filename"],
-        &["state", "error_message", "started_at", "ended_at"],
-    );
-    let sql = format!(
-        "INSERT INTO work_item_definition_runs \
-            (work_item_id, definition_filename, state, error_message, started_at, ended_at) \
-         VALUES (?, ?, ?, ?, ?, ?) {tail}"
-    );
-    adapter
-        .execute(
-            &sql,
-            vec![
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::Text(definition_filename.to_string()),
-                DbValue::Text(state.as_str().to_string()),
-                DbValue::TextOpt(error_message.map(str::to_string)),
-                DbValue::I64Opt(started_at),
-                DbValue::I64Opt(ended_at),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Mark a (work-item, definition) pair as Running with `started_at`.
-/// Idempotent — re-running clears any prior `error_message` /
-/// `ended_at` so a fresh run looks fresh in the DB row even when the
-/// caller previously transitioned through Error.
-pub async fn start_definition_run(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    definition_filename: &str,
-    started_at: i64,
-) -> Result<()> {
-    upsert_definition_run(
-        adapter,
-        work_item_id,
-        definition_filename,
-        DefRunState::Running,
-        None,
-        Some(started_at),
-        None,
-    )
-    .await
-}
-
-/// Transition an existing (work-item, definition) row to its final
-/// state. UPDATE-only so we never overwrite `started_at` set by the
-/// matching [`start_definition_run`]; if no prior row exists, this is
-/// a silent no-op (0 rows affected). The shadow-write contract
-/// requires that a missing start row never break the engine.
-pub async fn finish_definition_run(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    definition_filename: &str,
-    state: DefRunState,
-    error_message: Option<&str>,
-    ended_at: i64,
-) -> Result<()> {
-    adapter
-        .execute(
-            "UPDATE work_item_definition_runs SET \
-                state = ?, error_message = ?, ended_at = ? \
-             WHERE work_item_id = ? AND definition_filename = ?",
-            vec![
-                DbValue::Text(state.as_str().to_string()),
-                DbValue::TextOpt(error_message.map(str::to_string)),
-                DbValue::I64(ended_at),
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::Text(definition_filename.to_string()),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// List all definition runs for a work item.
-pub async fn list_definition_runs(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-) -> Result<Vec<DefinitionRunRow>> {
-    let rows = adapter
-        .query_all(
-            "SELECT work_item_id, definition_filename, state, error_message, started_at, ended_at \
-             FROM work_item_definition_runs WHERE work_item_id = ? \
-             ORDER BY definition_filename ASC",
-            vec![DbValue::Text(work_item_id.to_string())],
-        )
-        .await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let state_s = r.get_text(2)?;
-        let state = DefRunState::from_str(&state_s).map_err(|e| {
-            crate::error::MaestroError::Db(crate::db::DbError::Adapter(
-                crate::db::adapter::DbError::Sqlx {
-                    source: sqlx::Error::Configuration(e.into()),
-                },
-            ))
-        })?;
-        out.push(DefinitionRunRow {
-            work_item_id: r.get_text(0)?,
-            definition_filename: r.get_text(1)?,
-            state,
-            error_message: r.get_text_opt(3)?,
-            started_at: r.get_i64_opt(4)?,
-            ended_at: r.get_i64_opt(5)?,
-        });
-    }
-    Ok(out)
-}
-
-// ── work_item_log_lines ──────────────────────────────────────────────────
-
-/// Append a batch of log lines. Wrapped in a single transaction so a
-/// burst from one step lands atomically — partial failure rolls back
-/// the whole batch and the caller can retry.
-///
-/// Empty batches are a no-op (no transaction overhead).
-pub async fn append_log_lines(adapter: &DbAdapter, batch: &[LogLineInsert]) -> Result<()> {
-    if batch.is_empty() {
-        return Ok(());
-    }
-    let mut tx = adapter.begin().await?;
-    for l in batch {
-        tx.execute(
-            "INSERT INTO work_item_log_lines \
-                (work_item_id, step_id, stream, content, emitted_at) \
-             VALUES (?, ?, ?, ?, ?)",
-            vec![
-                DbValue::Text(l.work_item_id.clone()),
-                DbValue::I64Opt(l.step_id),
-                DbValue::Text(l.stream.as_str().to_string()),
-                DbValue::Text(l.content.clone()),
-                DbValue::I64(l.emitted_at),
-            ],
-        )
-        .await?;
-    }
-    tx.commit().await?;
-    Ok(())
-}
-
-/// Fetch log lines for a work item, oldest-first, with optional
-/// per-step filtering and pagination.
-pub async fn fetch_log_lines(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    paging: LogPaging,
-) -> Result<Vec<LogLine>> {
-    let mut sql = String::from(
-        "SELECT id, work_item_id, step_id, stream, content, emitted_at \
-         FROM work_item_log_lines WHERE work_item_id = ?",
-    );
-    let mut params = vec![DbValue::Text(work_item_id.to_string())];
-    if let Some(step_id) = paging.step_id {
-        sql.push_str(" AND step_id = ?");
-        params.push(DbValue::I64(step_id));
-    }
-    sql.push_str(" ORDER BY emitted_at ASC, id ASC LIMIT ? OFFSET ?");
-    params.push(DbValue::I64(paging.limit.into()));
-    params.push(DbValue::I64(paging.offset.into()));
-
-    let rows = adapter.query_all(&sql, params).await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let stream_s = r.get_text(3)?;
-        let stream = LogStream::from_str(&stream_s).map_err(|e| {
-            crate::error::MaestroError::Db(crate::db::DbError::Adapter(
-                crate::db::adapter::DbError::Sqlx {
-                    source: sqlx::Error::Configuration(e.into()),
-                },
-            ))
-        })?;
-        out.push(LogLine {
-            id: r.get_i64(0)?,
-            work_item_id: r.get_text(1)?,
-            step_id: r.get_i64_opt(2)?,
-            stream,
-            content: r.get_text(4)?,
-            emitted_at: r.get_i64(5)?,
-        });
-    }
-    Ok(out)
-}
-
-/// Delete log lines older than `cutoff_emitted_at` (unix milliseconds).
-/// Used by the retention runner (plan §5).
-pub async fn purge_log_lines_older_than(
-    adapter: &DbAdapter,
-    cutoff_emitted_at: i64,
-) -> Result<u64> {
-    let affected = adapter
-        .execute(
-            "DELETE FROM work_item_log_lines WHERE emitted_at < ?",
-            vec![DbValue::I64(cutoff_emitted_at)],
-        )
-        .await?;
-    Ok(affected)
-}
-
-// ── work_item_port_mappings ──────────────────────────────────────────────
-
-/// Insert or update a port mapping. Composite uniqueness on
-/// `(work_item_id, container_port, kind)` is enforced in app code via
-/// "delete then insert" (the schema has a surrogate `id` PK; uniqueness
-/// would require a partial index with `COALESCE(run_command_index, -1)`
-/// which is awkward cross-backend).
-#[allow(clippy::too_many_arguments)]
-pub async fn upsert_port_mapping(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    container_port: i32,
-    host_port: i32,
-    proxy_url: &str,
-    path_token: &str,
-    kind: PortMappingKind,
-    run_command_index: Option<i32>,
-    created_at: i64,
-) -> Result<()> {
-    // Wipe any existing mapping for this (work_item, port, kind).
-    adapter
-        .execute(
-            "DELETE FROM work_item_port_mappings \
-             WHERE work_item_id = ? AND container_port = ? AND kind = ?",
-            vec![
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::I32(container_port),
-                DbValue::Text(kind.as_str().to_string()),
-            ],
-        )
-        .await?;
-    adapter
-        .execute(
-            "INSERT INTO work_item_port_mappings \
-                (work_item_id, container_port, host_port, proxy_url, path_token, kind, \
-                 run_command_index, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            vec![
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::I32(container_port),
-                DbValue::I32(host_port),
-                DbValue::Text(proxy_url.to_string()),
-                DbValue::Text(path_token.to_string()),
-                DbValue::Text(kind.as_str().to_string()),
-                DbValue::I32Opt(run_command_index),
-                DbValue::I64(created_at),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Delete a specific port mapping.
-pub async fn delete_port_mapping(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    container_port: i32,
-    kind: PortMappingKind,
-) -> Result<()> {
-    adapter
-        .execute(
-            "DELETE FROM work_item_port_mappings \
-             WHERE work_item_id = ? AND container_port = ? AND kind = ?",
-            vec![
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::I32(container_port),
-                DbValue::Text(kind.as_str().to_string()),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Delete every port mapping for a work item, regardless of kind.
-/// Used at editor close to wipe the editor + static + dynamic
-/// rows in one shot; cheaper than per-(port, kind) deletes and
-/// avoids leaking rows when a route handler forgot one.
-pub async fn delete_port_mappings_for_work_item(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-) -> Result<()> {
-    adapter
-        .execute(
-            "DELETE FROM work_item_port_mappings WHERE work_item_id = ?",
-            vec![DbValue::Text(work_item_id.to_string())],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Shadow-write a port-mapping registration. Wraps
-/// [`upsert_port_mapping`] with the standard shadow contract: `None`
-/// `db` short-circuits, errors WARN and never propagate.
-#[allow(clippy::too_many_arguments)]
-pub async fn shadow_upsert_port_mapping(
-    db: Option<&crate::db::Database>,
-    work_item_id: &str,
-    container_port: i32,
-    host_port: i32,
-    proxy_url: &str,
-    path_token: &str,
-    kind: PortMappingKind,
-    run_command_index: Option<i32>,
-    created_at_unix: i64,
-) {
-    let Some(db) = db else { return };
-    if let Err(e) = upsert_port_mapping(
-        db.adapter(),
-        work_item_id,
-        container_port,
-        host_port,
-        proxy_url,
-        path_token,
-        kind,
-        run_command_index,
-        created_at_unix,
-    )
-    .await
-    {
-        tracing::warn!(
-            work_item_id,
-            container_port,
-            host_port,
-            kind = %kind.as_str(),
-            error = %e,
-            "Ushadow-write of port mapping upsert failed (route handler progress unaffected)"
-        );
-    }
-}
-
-/// Shadow-clean every port mapping for a work item. Used at editor
-/// close so the DB row mirrors the in-memory `path_token_registry`
-/// cleanup.
-pub async fn shadow_delete_port_mappings_for_work_item(
-    db: Option<&crate::db::Database>,
-    work_item_id: &str,
-) {
-    let Some(db) = db else { return };
-    if let Err(e) = delete_port_mappings_for_work_item(db.adapter(), work_item_id).await {
-        tracing::warn!(
-            work_item_id,
-            error = %e,
-            "Ushadow-clean of port mappings failed (route handler progress unaffected)"
-        );
-    }
-}
-
-/// List all port mappings for a work item.
-pub async fn list_port_mappings(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-) -> Result<Vec<PortMappingRow>> {
-    let rows = adapter
-        .query_all(
-            "SELECT id, work_item_id, container_port, host_port, proxy_url, path_token, \
-                    kind, run_command_index, created_at \
-             FROM work_item_port_mappings WHERE work_item_id = ? \
-             ORDER BY kind ASC, container_port ASC",
-            vec![DbValue::Text(work_item_id.to_string())],
-        )
-        .await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let kind_s = r.get_text(6)?;
-        let kind = PortMappingKind::from_str(&kind_s).map_err(|e| {
-            crate::error::MaestroError::Db(crate::db::DbError::Adapter(
-                crate::db::adapter::DbError::Sqlx {
-                    source: sqlx::Error::Configuration(e.into()),
-                },
-            ))
-        })?;
-        out.push(PortMappingRow {
-            id: r.get_i64(0)?,
-            work_item_id: r.get_text(1)?,
-            container_port: r.get_i64(2)? as i32,
-            host_port: r.get_i64(3)? as i32,
-            proxy_url: r.get_text(4)?,
-            path_token: r.get_text(5)?,
-            kind,
-            run_command_index: r.get_i64_opt(7)?.map(|v| v as i32),
-            created_at: r.get_i64(8)?,
-        });
-    }
-    Ok(out)
-}
-
-// ── work_item_run_commands ───────────────────────────────────────────────
-
-/// Upsert run-command state for a (work_item, command_index) pair.
-#[allow(clippy::too_many_arguments)]
-pub async fn upsert_run_command(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    command_index: i32,
-    name: &str,
-    running: bool,
-    container_id: Option<&str>,
-    started_at: Option<i64>,
-    ended_at: Option<i64>,
-) -> Result<()> {
-    let tail = super::upsert::build_update_tail(
-        adapter.backend(),
-        &["work_item_id", "command_index"],
-        &["name", "running", "container_id", "started_at", "ended_at"],
-    );
-    let sql = format!(
-        "INSERT INTO work_item_run_commands \
-            (work_item_id, command_index, name, running, container_id, started_at, ended_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) {tail}"
-    );
-    adapter
-        .execute(
-            &sql,
-            vec![
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::I32(command_index),
-                DbValue::Text(name.to_string()),
-                DbValue::I64(running.into()),
-                DbValue::TextOpt(container_id.map(str::to_string)),
-                DbValue::I64Opt(started_at),
-                DbValue::I64Opt(ended_at),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Mark a (work_item, command_index) run-command pair as Running
-/// with `started_at`. Idempotent — re-running clears any prior
-/// `ended_at` so a restarted command looks freshly started in the
-/// DB row even when the caller previously stopped it.
-pub async fn start_run_command_row(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    command_index: i32,
-    name: &str,
-    container_id: Option<&str>,
-    started_at: i64,
-) -> Result<()> {
-    upsert_run_command(
-        adapter,
-        work_item_id,
-        command_index,
-        name,
-        true,
-        container_id,
-        Some(started_at),
-        None,
-    )
-    .await
-}
-
-/// Transition an existing run-command row to stopped. UPDATE-only
-/// so we never overwrite the `started_at` set by
-/// [`start_run_command_row`]; a missing row is a silent no-op so
-/// race conditions between the route handler and the DB cannot
-/// surface as user-visible errors.
-pub async fn finish_run_command_row(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-    command_index: i32,
-    ended_at: i64,
-) -> Result<()> {
-    adapter
-        .execute(
-            "UPDATE work_item_run_commands SET \
-                running = 0, ended_at = ? \
-             WHERE work_item_id = ? AND command_index = ?",
-            vec![
-                DbValue::I64(ended_at),
-                DbValue::Text(work_item_id.to_string()),
-                DbValue::I32(command_index),
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-/// Shadow-write the start of a run-command container. Marks the
-/// (work_item, command_index) row as Running with `started_at` set and
-/// `container_id` populated. Failures (and `None` `db`) log at WARN
-/// and never propagate — the container has already started; the
-/// secondary store catching up is best-effort.
-pub async fn shadow_start_run_command_row(
-    db: Option<&crate::db::Database>,
-    work_item_id: &str,
-    command_index: i32,
-    name: &str,
-    container_id: Option<&str>,
-    started_at_unix: i64,
-) {
-    let Some(db) = db else { return };
-    if let Err(e) = start_run_command_row(
-        db.adapter(),
-        work_item_id,
-        command_index,
-        name,
-        container_id,
-        started_at_unix,
-    )
-    .await
-    {
-        tracing::warn!(
-            work_item_id,
-            command_index,
-            error = %e,
-            "Ushadow-write of run-command start failed (route handler progress unaffected)"
-        );
-    }
-}
-
-/// Shadow-write the stop of a run-command container. UPDATE-only: an
-/// absent row stays absent so an out-of-order stop (e.g. stop fires
-/// before the start row landed) silently no-ops rather than producing
-/// an inconsistent row.
-pub async fn shadow_finish_run_command_row(
-    db: Option<&crate::db::Database>,
-    work_item_id: &str,
-    command_index: i32,
-    ended_at_unix: i64,
-) {
-    let Some(db) = db else { return };
-    if let Err(e) =
-        finish_run_command_row(db.adapter(), work_item_id, command_index, ended_at_unix).await
-    {
-        tracing::warn!(
-            work_item_id,
-            command_index,
-            error = %e,
-            "Ushadow-write of run-command finish failed (route handler progress unaffected)"
-        );
-    }
-}
-
-/// List run commands for a work item, command-index-ascending.
-pub async fn list_run_commands(
-    adapter: &DbAdapter,
-    work_item_id: &str,
-) -> Result<Vec<RunCommandRow>> {
-    let rows = adapter
-        .query_all(
-            "SELECT work_item_id, command_index, name, running, container_id, \
-                    started_at, ended_at \
-             FROM work_item_run_commands WHERE work_item_id = ? \
-             ORDER BY command_index ASC",
-            vec![DbValue::Text(work_item_id.to_string())],
-        )
-        .await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        out.push(RunCommandRow {
-            work_item_id: r.get_text(0)?,
-            command_index: r.get_i64(1)? as i32,
-            name: r.get_text(2)?,
-            running: r.get_i64(3)? != 0,
-            container_id: r.get_text_opt(4)?,
-            started_at: r.get_i64_opt(5)?,
-            ended_at: r.get_i64_opt(6)?,
-        });
-    }
-    Ok(out)
-}
+pub use def_runs::*;
+pub use logs::*;
+pub use ports::*;
+pub use run_commands::*;
+pub use state::*;
+pub use steps::*;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::DbValue;
     use crate::db::adapter::DbAdapter;
     use crate::db::migrate::DialectAwareMigrationSource;
     use crate::db::pool::{DbBackend, DbPool};
@@ -1719,6 +598,139 @@ mod tests {
             .unwrap()
             .expect("must exist");
         assert_eq!(fetched, row);
+    }
+
+    /// Regression for the stale "Show PR" button: the work_items row is
+    /// INSERTed at creation with an empty branch / PR URL, and nothing updated
+    /// them afterwards — so the DB row stayed NULL for a completed run's PR. A
+    /// sibling step write failing (the scenario commit 9336fcd worked around)
+    /// must NOT prevent the PR fields from landing on the row, because they are
+    /// written by independent `id`-keyed UPDATEs. This test proves the row is
+    /// reliably updated post-insert.
+    #[tokio::test]
+    async fn pr_fields_persist_to_row_after_insert_independent_of_step_writes() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-alice", "alice").await;
+        insert_work_item(&a, &sample_row("wi-1", "PROJ-1", Some("u-alice")))
+            .await
+            .unwrap();
+
+        // The freshly-inserted row has no branch / PR — the stale state the UI
+        // fallback used to paper over.
+        let before = get_work_item(&a, "wi-1", None, true)
+            .await
+            .unwrap()
+            .expect("row exists");
+        assert!(before.branch_name.is_none());
+        assert!(before.pr_url.is_none());
+        assert!(!before.pr_merged);
+
+        // A sibling step write targeting a non-existent parent (the FK-violation
+        // scenario) is best-effort and must not block the PR-field updates that
+        // follow. We ignore its outcome exactly as the engine's shadow helpers
+        // swallow such failures.
+        let _ = record_step_start(&a, "wi-DOES-NOT-EXIST", "ghost step", None, 1_700_000_100).await;
+
+        // The engine learns these as the run progresses; persist each.
+        update_branch_name(&a, "wi-1", Some("feat/proj-1"), 1_700_000_200)
+            .await
+            .unwrap();
+        update_pr_url(
+            &a,
+            "wi-1",
+            Some("https://github.com/example/repo/pull/7"),
+            1_700_000_300,
+        )
+        .await
+        .unwrap();
+        update_pr_merged(&a, "wi-1", true, 1_700_000_400)
+            .await
+            .unwrap();
+
+        let after = get_work_item(&a, "wi-1", None, true)
+            .await
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(after.branch_name.as_deref(), Some("feat/proj-1"));
+        assert_eq!(
+            after.pr_url.as_deref(),
+            Some("https://github.com/example/repo/pull/7")
+        );
+        assert!(after.pr_merged);
+    }
+
+    /// `update_work_item_branch_and_worktree` writes BOTH columns in one
+    /// statement (cutover invariant I2 — no torn branch-new + worktree-NULL
+    /// row), and crucially persists `worktree_path`, which the prior
+    /// branch-only write never did.
+    #[tokio::test]
+    async fn branch_and_worktree_update_sets_both_columns() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-alice", "alice").await;
+        insert_work_item(&a, &sample_row("wi-1", "PROJ-1", Some("u-alice")))
+            .await
+            .unwrap();
+
+        // Fresh row: both empty.
+        let before = get_work_item(&a, "wi-1", None, true)
+            .await
+            .unwrap()
+            .expect("row exists");
+        assert!(before.branch_name.is_none());
+        assert!(before.worktree_path.is_none());
+
+        update_work_item_branch_and_worktree(
+            &a,
+            "wi-1",
+            Some("feat/proj-1"),
+            Some("/tmp/wt/proj-1"),
+            1_700_000_500,
+        )
+        .await
+        .unwrap();
+
+        let after = get_work_item(&a, "wi-1", None, true)
+            .await
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(after.branch_name.as_deref(), Some("feat/proj-1"));
+        assert_eq!(after.worktree_path.as_deref(), Some("/tmp/wt/proj-1"));
+        assert_eq!(after.updated_at, 1_700_000_500);
+    }
+
+    /// `update_work_item_pr_url_and_state` writes the PR URL AND the state
+    /// columns in one statement (cutover invariant I2), so the "finished —
+    /// here is the PR" event lands atomically: never pr-new + state-old.
+    #[tokio::test]
+    async fn pr_url_and_state_update_sets_both_atomically() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-alice", "alice").await;
+        insert_work_item(&a, &sample_row("wi-1", "PROJ-1", Some("u-alice")))
+            .await
+            .unwrap();
+
+        update_work_item_pr_url_and_state(
+            &a,
+            "wi-1",
+            Some("https://github.com/example/repo/pull/9"),
+            WorkItemStateKind::Done,
+            None,
+            None,
+            1_700_000_600,
+        )
+        .await
+        .unwrap();
+
+        let after = get_work_item(&a, "wi-1", None, true)
+            .await
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(
+            after.pr_url.as_deref(),
+            Some("https://github.com/example/repo/pull/9")
+        );
+        assert_eq!(after.state_kind, WorkItemStateKind::Done);
+        assert_eq!(after.updated_at, 1_700_000_600);
     }
 
     #[tokio::test]

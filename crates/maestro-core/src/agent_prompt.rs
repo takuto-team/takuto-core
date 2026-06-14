@@ -66,14 +66,21 @@ pub fn headless_instructions_suffix(provider: AiAgentProvider) -> &'static str {
              `.maestro/outcome.toml` with `pr_url = \"<url>\"`. \
              Maestro aligns git commits with `gh` and requests the same account as PR reviewer when a URL is recorded (may fail if that account opened the PR)."
         }
-        // Phase 1: Codex and OpenCode are config-only placeholders; the
-        // driver refuses to start a workflow against them, so this suffix
-        // is never actually appended. Keep a generic headless guidance
-        // string here so callers that pre-render templates don't panic.
+        // Codex and OpenCode (wired since Phase 4). These adapters often run
+        // smaller / self-hosted models, so the suffix is explicit about the
+        // two things weak models get wrong in headless mode: looping on a
+        // failing command, and forgetting to record the PR URL.
         AiAgentProvider::Codex | AiAgentProvider::OpenCode => {
-            "IMPORTANT: Fully automated headless run — no human operator. \
-             Do not ask questions or wait for user input. \
-             Implement changes autonomously and exit when complete."
+            "IMPORTANT: You are running in fully automated headless mode with no human operator. \
+             Do not ask questions or wait for user input. Implement changes, fix issues, and \
+             complete the task autonomously, then exit. \
+             Maestro ends the workflow when your session exits successfully — there is no separate engine step after the agent. \
+             NEVER run the same command more than twice. If a command fails twice (e.g. `git push`), \
+             STOP retrying it: read the error, try ONE different fix, and if that also fails, exit and \
+             report the error in your final message. Do not loop on a failing action. \
+             If you open a pull request, record its URL so the dashboard can link it: print one line \
+             exactly `MAESTRO_PR_URL: <url>` before exiting, or write `.maestro/outcome.toml` in the \
+             worktree with `pr_url = \"<url>\"`."
         }
     }
 }
@@ -125,5 +132,24 @@ mod tests {
         let s = headless_instructions_suffix(AiAgentProvider::Cursor);
         assert!(!s.is_empty());
         assert!(s.contains("headless"));
+    }
+
+    #[test]
+    fn headless_opencode_codex_suffix_has_antiloop_and_pr_url() {
+        for p in [AiAgentProvider::OpenCode, AiAgentProvider::Codex] {
+            let s = headless_instructions_suffix(p);
+            assert!(s.contains("headless"), "{p}");
+            // Anti-limbo-loop guidance.
+            assert!(
+                s.contains("NEVER run the same command more than twice"),
+                "{p} suffix must carry the anti-loop rule"
+            );
+            // PR URL recording (was missing — the whole reason the dashboard
+            // couldn't link OpenCode PRs).
+            assert!(
+                s.contains("MAESTRO_PR_URL"),
+                "{p} suffix must record the PR URL"
+            );
+        }
     }
 }

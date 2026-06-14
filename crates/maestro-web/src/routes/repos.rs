@@ -12,18 +12,35 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
+use ts_rs::TS;
 
 use crate::state::{AuthState, EngineState};
 use maestro_core::workflow::snapshot::WORKSPACES_DIR;
 
 // ── GitHub repo listing ─────────────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(rename = "GitHubRepo", export_to = "GitHubRepo.ts")]
 pub struct GitHubRepoRow {
     pub full_name: String,
     pub description: String,
     pub private: bool,
     pub html_url: String,
+}
+
+#[cfg(test)]
+mod ts_bindings {
+    use super::*;
+    use ts_rs::TS;
+
+    /// Regenerate the committed `ui/src/api/generated/GitHubRepo.ts` mirror.
+    /// CI diffs the directory; see `crates/maestro-web/src/ts_bindings.rs`.
+    #[test]
+    fn export_github_repo() {
+        let out = crate::ts_bindings::generated_dir();
+        std::fs::create_dir_all(&out).expect("create generated dir");
+        GitHubRepoRow::export_all_to(&out).expect("export GitHubRepo");
+    }
 }
 
 #[derive(Deserialize)]

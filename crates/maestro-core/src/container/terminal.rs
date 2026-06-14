@@ -45,11 +45,13 @@ pub async fn start_terminal(
     let shell_cmd = r#"[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a
 # Source the centralized GitHub App token so gh CLI and git operations authenticate.
 if [ -f "$HOME/.config/gh/gh-app-token" ]; then
-  export GH_TOKEN="$(cat "$HOME/.config/gh/gh-app-token")"
-  # Configure git credential helper to use the token file (editor containers
-  # don't inherit the main container's ~/.gitconfig).
+  # Don't clobber a per-user PAT the bundle already put in GH_TOKEN — only
+  # fall back to the App-token file when GH_TOKEN is unset.
+  export GH_TOKEN="${GH_TOKEN:-$(cat "$HOME/.config/gh/gh-app-token")}"
+  # Configure git credential helper (editor containers don't inherit the main
+  # container's ~/.gitconfig). GH_TOKEN-first so a PAT overrides the App token.
   git config --global credential.https://github.com.helper \
-    '!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo "password=$(cat $HOME/.config/gh/gh-app-token 2>/dev/null || echo $GH_TOKEN)"; }; f' 2>/dev/null
+    '!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo "password=${GH_TOKEN:-$(cat $HOME/.config/gh/gh-app-token 2>/dev/null)}"; }; f' 2>/dev/null
 fi
 # Make ~/.claude.json persistent by symlinking into the shared volume.
 if [ ! -L "$HOME/.claude.json" ]; then

@@ -1,9 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! `workflow_counts` aggregates over the DB, with the in-memory HashMap as
-//! a fallback. Each entry is keyed by ticket_key and the DB row wins when
-//! both sources have data — so a workflow never double-counts.
+//! `workflow_counts` mirrors the dashboard grid: it counts the caller's
+//! in-memory workflows in repositories they've added (same source + same repo
+//! gate as `list_workflows`), tallying the live in-memory state. DB rows that
+//! are not on the dashboard never inflate the summary bar.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -11,6 +12,7 @@ use tower::ServiceExt;
 
 use maestro_core::config::TicketingSystem;
 use maestro_core::db::adapter::DbValue;
+use maestro_core::db::repositories;
 use maestro_core::workflow::engine::Workflow;
 use maestro_core::workflow::state::WorkflowState;
 
@@ -27,7 +29,51 @@ async fn user_id_for(state: &AppState, username: &str) -> String {
     user.id
 }
 
-async fn seed_db_row(state: &AppState, ticket_key: &str, user_id: &str, state_kind: &str) {
+/// Create a repository and associate it with the user so workflows in it pass
+/// the grid's visibility gate. Returns the repo id.
+async fn seed_repo(state: &AppState, name: &str, user_id: &str) -> String {
+    let db = state.engine().engine.db().expect("db");
+    let id = repositories::upsert(db.adapter(), name, None, "/tmp/ws", "main", None)
+        .await
+        .expect("repo upsert");
+    repositories::add_for_user(db.adapter(), user_id, &id)
+        .await
+        .expect("add_for_user");
+    id
+}
+
+/// Insert an in-memory workflow tagged with the given owner + repository.
+async fn seed_map(
+    state: &AppState,
+    ticket_key: &str,
+    user_id: &str,
+    repo_id: &str,
+    wf_state: WorkflowState,
+) {
+    let mut wf = Workflow::new(
+        ticket_key.to_string(),
+        "Summary".into(),
+        false,
+        false,
+        TicketingSystem::None,
+        None,
+        "ws".into(),
+    );
+    wf.user_id = Some(user_id.to_string());
+    wf.repository_id = Some(repo_id.to_string());
+    wf.state = wf_state;
+    state
+        .engine()
+        .engine
+        .workflows_arc()
+        .write()
+        .await
+        .insert(ticket_key.to_string(), wf);
+}
+
+/// Insert a DB-only work_items row (no in-memory workflow). Such a row is NOT
+/// on the dashboard and must not be counted.
+async fn seed_db_only_row(state: &AppState, ticket_key: &str, user_id: &str, state_kind: &str) {
     let db = state.engine().engine.db().expect("db");
     db.adapter()
         .execute(
@@ -45,27 +91,6 @@ async fn seed_db_row(state: &AppState, ticket_key: &str, user_id: &str, state_ki
         )
         .await
         .expect("insert work_items row");
-}
-
-async fn seed_map(state: &AppState, ticket_key: &str, user_id: &str, wf_state: WorkflowState) {
-    let mut wf = Workflow::new(
-        ticket_key.to_string(),
-        "Summary".into(),
-        false,
-        false,
-        TicketingSystem::None,
-        None,
-        "ws".into(),
-    );
-    wf.user_id = Some(user_id.to_string());
-    wf.state = wf_state;
-    state
-        .engine()
-        .engine
-        .workflows_arc()
-        .write()
-        .await
-        .insert(ticket_key.to_string(), wf);
 }
 
 async fn fetch_counts(state: &AppState, cookie: &str) -> serde_json::Value {
@@ -86,83 +111,161 @@ async fn fetch_counts(state: &AppState, cookie: &str) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// DB rows alone drive the counts when the HashMap is empty.
+/// Counts reflect the in-memory workflows the grid shows; Pending is not
+/// counted in any active bucket.
 #[tokio::test]
-async fn counts_come_from_db_when_hashmap_empty() {
+async fn counts_come_from_in_memory_map() {
     let state = test_state_with_db();
     let alice_cookie = register_and_login(&state).await;
     let alice_id = user_id_for(&state, "admin").await;
+    let repo = seed_repo(&state, "ws", &alice_id).await;
 
-    seed_db_row(&state, "T-DONE-1", &alice_id, "done").await;
-    seed_db_row(&state, "T-DONE-2", &alice_id, "done").await;
-    seed_db_row(&state, "T-RUNNING", &alice_id, "addressing_ticket").await;
-    seed_db_row(&state, "T-PAUSED", &alice_id, "paused").await;
-    seed_db_row(&state, "T-ERROR", &alice_id, "error").await;
-    // Pending must NOT be counted (matches legacy behaviour).
-    seed_db_row(&state, "T-PENDING", &alice_id, "pending").await;
+    seed_map(&state, "T-DONE-1", &alice_id, &repo, WorkflowState::Done).await;
+    seed_map(&state, "T-DONE-2", &alice_id, &repo, WorkflowState::Done).await;
+    seed_map(
+        &state,
+        "T-RUNNING",
+        &alice_id,
+        &repo,
+        WorkflowState::AddressingTicket { pass: 1 },
+    )
+    .await;
+    seed_map(
+        &state,
+        "T-PAUSED",
+        &alice_id,
+        &repo,
+        WorkflowState::Paused {
+            source_state: Box::new(WorkflowState::AddressingTicket { pass: 1 }),
+        },
+    )
+    .await;
+    seed_map(
+        &state,
+        "T-ERROR",
+        &alice_id,
+        &repo,
+        WorkflowState::Error {
+            source_state: Box::new(WorkflowState::AddressingTicket { pass: 1 }),
+            message: "boom".into(),
+        },
+    )
+    .await;
+    // Stopped is reported in the "errors" bucket.
+    seed_map(
+        &state,
+        "T-STOPPED",
+        &alice_id,
+        &repo,
+        WorkflowState::Stopped,
+    )
+    .await;
+    // Pending must NOT be counted in any bucket.
+    seed_map(
+        &state,
+        "T-PENDING",
+        &alice_id,
+        &repo,
+        WorkflowState::Pending,
+    )
+    .await;
 
     let v = fetch_counts(&state, &alice_cookie).await;
     assert_eq!(v["completed"], 2);
     assert_eq!(v["running"], 1);
     assert_eq!(v["paused"], 1);
-    assert_eq!(v["errors"], 1);
+    assert_eq!(v["errors"], 2, "Error + Stopped both land in errors");
 }
 
-/// HashMap fills in when the DB has nothing for this user.
+/// The reported bug: a DB work_items row with no in-memory workflow is NOT on
+/// the dashboard and must NOT inflate the counters.
 #[tokio::test]
-async fn counts_fall_back_to_hashmap_when_db_empty() {
+async fn counts_ignore_db_only_rows_not_on_dashboard() {
     let state = test_state_with_db();
     let alice_cookie = register_and_login(&state).await;
     let alice_id = user_id_for(&state, "admin").await;
+    let repo = seed_repo(&state, "ws", &alice_id).await;
 
-    seed_map(&state, "T-A", &alice_id, WorkflowState::Done).await;
-    seed_map(&state, "T-B", &alice_id, WorkflowState::Stopped).await; // counts as error
+    // One real card on the dashboard…
     seed_map(
         &state,
-        "T-C",
+        "T-RUNNING",
         &alice_id,
+        &repo,
         WorkflowState::AddressingTicket { pass: 1 },
     )
     .await;
+    // …and stale DB-only rows that are NOT in the map (e.g. another workspace
+    // or a not-restored terminal row). These must be ignored.
+    seed_db_only_row(&state, "T-GHOST-ERR-1", &alice_id, "error").await;
+    seed_db_only_row(&state, "T-GHOST-ERR-2", &alice_id, "error").await;
+    seed_db_only_row(&state, "T-GHOST-DONE", &alice_id, "done").await;
 
     let v = fetch_counts(&state, &alice_cookie).await;
-    assert_eq!(v["completed"], 1);
-    assert_eq!(v["errors"], 1);
-    assert_eq!(v["running"], 1);
+    assert_eq!(v["running"], 1, "the one in-memory card counts");
+    assert_eq!(v["errors"], 0, "stale DB-only error rows must NOT count");
+    assert_eq!(v["completed"], 0);
     assert_eq!(v["paused"], 0);
 }
 
-/// When both sources have the SAME ticket_key, the DB row wins and
-/// the workflow is counted exactly once. This is the load-bearing
-/// no-double-count assertion.
+/// A workflow in a repository the caller has NOT added is not visible on the
+/// grid, so it is not counted either.
 #[tokio::test]
-async fn counts_dedupe_by_ticket_key_db_wins() {
+async fn counts_exclude_workflows_in_unadded_repos() {
     let state = test_state_with_db();
     let alice_cookie = register_and_login(&state).await;
     let alice_id = user_id_for(&state, "admin").await;
+    let added = seed_repo(&state, "ws", &alice_id).await;
 
-    // HashMap says Done, DB says Paused. DB must win → +1 paused, 0 completed.
-    seed_map(&state, "T-DUP", &alice_id, WorkflowState::Done).await;
-    seed_db_row(&state, "T-DUP", &alice_id, "paused").await;
+    // Create a second repo but do NOT add it to alice.
+    let db = state.engine().engine.db().expect("db");
+    let other = repositories::upsert(db.adapter(), "other-ws", None, "/tmp/other", "main", None)
+        .await
+        .expect("repo upsert");
+
+    seed_map(&state, "T-VISIBLE", &alice_id, &added, WorkflowState::Done).await;
+    // The hidden workflow lives in the unadded repo AND carries that repo's
+    // workspace_name, so neither the repository_id gate nor the name-fallback
+    // makes it visible.
+    {
+        let mut wf = Workflow::new(
+            "T-HIDDEN".to_string(),
+            "Summary".into(),
+            false,
+            false,
+            TicketingSystem::None,
+            None,
+            "other-ws".into(),
+        );
+        wf.user_id = Some(alice_id.clone());
+        wf.repository_id = Some(other.clone());
+        wf.state = WorkflowState::Error {
+            source_state: Box::new(WorkflowState::AddressingTicket { pass: 1 }),
+            message: "boom".into(),
+        };
+        state
+            .engine()
+            .engine
+            .workflows_arc()
+            .write()
+            .await
+            .insert("T-HIDDEN".to_string(), wf);
+    }
 
     let v = fetch_counts(&state, &alice_cookie).await;
-    assert_eq!(
-        v["completed"], 0,
-        "HashMap's Done must be overridden by DB's Paused"
-    );
-    assert_eq!(v["paused"], 1, "DB row wins on dedupe");
-    assert_eq!(v["running"], 0);
-    assert_eq!(v["errors"], 0);
+    assert_eq!(v["completed"], 1);
+    assert_eq!(v["errors"], 0, "workflow in an unadded repo must not count");
 }
 
-/// Other users' rows are never counted, regardless of source.
+/// Other users' workflows are never counted.
 #[tokio::test]
 async fn counts_scope_to_caller_only() {
     let state = test_state_with_db();
     let alice_cookie = register_and_login(&state).await;
     let alice_id = user_id_for(&state, "admin").await;
+    let repo = seed_repo(&state, "ws", &alice_id).await;
 
-    // Seed a second user so the FK on work_items.user_id is satisfied.
+    // Seed a second user and associate them with the same repo.
     let db = state.engine().engine.db().expect("db");
     db.adapter()
         .execute(
@@ -171,13 +274,15 @@ async fn counts_scope_to_caller_only() {
         )
         .await
         .expect("seed bob");
+    repositories::add_for_user(db.adapter(), "bob-uid", &repo)
+        .await
+        .expect("add bob");
 
-    // Seed a row for bob; counts for alice must exclude it.
-    seed_db_row(&state, "T-BOB", "bob-uid", "done").await;
-    seed_db_row(&state, "T-ALICE", &alice_id, "done").await;
+    seed_map(&state, "T-ALICE", &alice_id, &repo, WorkflowState::Done).await;
+    seed_map(&state, "T-BOB", "bob-uid", &repo, WorkflowState::Done).await;
 
     let v = fetch_counts(&state, &alice_cookie).await;
-    assert_eq!(v["completed"], 1);
+    assert_eq!(v["completed"], 1, "only alice's workflow counts");
     assert_eq!(v["running"], 0);
     assert_eq!(v["paused"], 0);
     assert_eq!(v["errors"], 0);

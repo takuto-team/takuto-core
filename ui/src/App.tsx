@@ -10,6 +10,7 @@ import { Setup } from "./pages/Setup";
 import { Config } from "./pages/Config";
 import { useAuth } from "./hooks/useAuth";
 import { ToastProvider, ToastContainer } from "./hooks/useToast";
+import { QueryErrorToaster } from "./components/QueryErrorToaster";
 
 /**
  * Belt-and-braces admin route guard. Kept around for any future admin-only
@@ -104,6 +105,7 @@ export function App() {
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <QueryErrorToaster />
       <ToastContainer />
     </ToastProvider>
   );

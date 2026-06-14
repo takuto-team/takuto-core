@@ -17,6 +17,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 serde_yaml_ng = "0.10"
+# Rust -> TypeScript type generation for the dashboard wire DTOs. The
+# `#[derive(TS)]` impls compile into normal builds; co-located `#[cfg(test)]`
+# `export_all_to` tests (run under `cargo test`) write the committed
+# `ui/src/api/generated/` files that a CI drift check diffs against.
+# `default-features = false` drops `serde-compat` (its parser warns on
+# `skip_serializing_if`, breaking the zero-warning bar) — serde behavior the
+# DTOs rely on is mirrored with explicit `#[ts(...)]` attributes instead.
+ts-rs = { version = "10", default-features = false }
 
 # Logging
 tracing = "0.1"

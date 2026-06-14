@@ -5,12 +5,30 @@ import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 import type { RepositoryRow } from "../api/client";
 
+/**
+ * Every configuration tab, surfaced directly in the header menu (no
+ * intermediate "Configuration" entry). `slug` matches the `?tab=` deep links
+ * Config.tsx resolves; `adminOnly` mirrors its admin-gated tabs.
+ */
+const CONFIG_MENU_TABS: { label: string; slug: string; adminOnly?: boolean }[] = [
+  { label: "Security", slug: "security" },
+  { label: "AI Settings", slug: "ai" },
+  { label: "GitHub", slug: "github" },
+  { label: "Users", slug: "users", adminOnly: true },
+  { label: "Item Polling", slug: "polling", adminOnly: true },
+  { label: "My Repositories", slug: "repositories" },
+  { label: "Worktree Settings", slug: "worktree" },
+  { label: "Flows", slug: "flows" },
+];
+
 interface Props {
   connected: boolean;
   authEnabled: boolean;
   githubAppConfigured: boolean;
   githubAppInstallationId?: number;
   githubAppName?: string | null;
+  /** Admin gate for the admin-only configuration tabs in the menu. */
+  isAdmin?: boolean;
   onLogout: () => void;
   /**
    * The user's added repositories. When the list is non-empty the header
@@ -46,6 +64,7 @@ export function Header({
   githubAppConfigured,
   githubAppInstallationId,
   githubAppName,
+  isAdmin = false,
   onLogout,
   repos,
   activeRepoName,
@@ -86,7 +105,7 @@ export function Header({
 
   return (
     <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
           <div className="flex items-center gap-3">
             <span className="text-lg font-bold tracking-tight text-white">Maestro</span>
@@ -197,40 +216,27 @@ export function Header({
                 </svg>
               </button>
               {menuOpen && (
-                <div className="absolute right-0 mt-1 w-44 bg-gray-900 border border-gray-700 rounded-lg shadow-lg py-1 z-50">
-                  <Link
-                    to="/config.html"
-                    className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    Configuration
-                  </Link>
-                  <Link
-                    to="/config.html?tab=repositories"
-                    className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    My Repositories
-                  </Link>
-                  {/* Consolidated "AI Settings" — per-user credentials are
-                      visible to every signed-in user; admin-only provider
-                      configuration appears inside the same tab for admins.
-                      Server enforces 403 on the underlying PUT
-                      /api/config/agent endpoint (04_architecture.md §2.3). */}
-                  <Link
-                    to="/config.html?tab=ai"
-                    className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    AI Settings
-                  </Link>
-                  {authEnabled && (
-                    <button
-                      onClick={() => { setMenuOpen(false); onLogout(); }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
+                <div className="absolute right-0 mt-1 w-52 bg-gray-900 border border-gray-700 rounded-lg shadow-lg py-1 z-50">
+                  {CONFIG_MENU_TABS.filter((t) => !t.adminOnly || isAdmin).map((t) => (
+                    <Link
+                      key={t.slug}
+                      to={`/config.html?tab=${t.slug}`}
+                      className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                      onClick={() => setMenuOpen(false)}
                     >
-                      Log out
-                    </button>
+                      {t.label}
+                    </Link>
+                  ))}
+                  {authEnabled && (
+                    <>
+                      <div className="my-1 border-t border-gray-800" />
+                      <button
+                        onClick={() => { setMenuOpen(false); onLogout(); }}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
+                      >
+                        Log out
+                      </button>
+                    </>
                   )}
                 </div>
               )}

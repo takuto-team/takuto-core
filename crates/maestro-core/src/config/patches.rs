@@ -16,32 +16,6 @@ impl Config {
     ) -> Result<()> {
         let mut applied = false;
 
-        if let Some(ref w) = patch.web {
-            let touched = w.dashboard_username.is_some() || w.dashboard_password.is_some();
-            if !touched {
-                return Err(ConfigError::Validation {
-                    section: "web",
-                    field: "patch",
-                    detail: "must include dashboard_username and/or dashboard_password".to_string(),
-                }
-                .into());
-            }
-            applied = true;
-            if let Some(ref u) = w.dashboard_username {
-                self.web.dashboard_username = u.clone();
-            }
-            if let Some(ref p) = w.dashboard_password {
-                if p.is_empty()
-                    && !self.web.dashboard_username.trim().is_empty()
-                    && !self.web.dashboard_password.is_empty()
-                {
-                    // preserve existing secret when UI omits password
-                } else {
-                    self.web.dashboard_password = p.clone();
-                }
-            }
-        }
-
         if let Some(ref g) = patch.general {
             let touched = g.max_concurrent_workflows.is_some() || g.max_active_workflows.is_some();
             if !touched {
@@ -66,8 +40,7 @@ impl Config {
             return Err(ConfigError::Validation {
                 section: "runtime",
                 field: "patch",
-                detail: "empty patch: include \"web\" and/or \"general\" with at least one field"
-                    .to_string(),
+                detail: "empty patch: include \"general\" with at least one field".to_string(),
             }
             .into());
         }

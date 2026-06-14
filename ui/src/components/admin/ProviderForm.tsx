@@ -36,6 +36,10 @@ export interface ProviderDraft {
   /** One arg per line — converted to `string[]` on save. */
   extra_args_text: string;
   allow_shared_default: boolean;
+  /** OpenCode-only: max context window (tokens). Empty = let OpenCode choose. */
+  context_limit: string;
+  /** OpenCode-only: max output (tokens) per response. Empty = let OpenCode choose. */
+  output_limit: string;
 }
 
 export const EMPTY_DRAFT: ProviderDraft = {
@@ -45,6 +49,8 @@ export const EMPTY_DRAFT: ProviderDraft = {
   provider_name: "",
   extra_args_text: "",
   allow_shared_default: false,
+  context_limit: "",
+  output_limit: "",
 };
 
 interface ProviderFormProps {
@@ -217,6 +223,50 @@ export function ProviderForm({
           </p>
         )}
       </section>
+
+      {/* OpenCode-only token limits (self-hosted models carry no models.dev
+          metadata, so OpenCode can't auto-discover the window). */}
+      {selectedProvider === "opencode" && (
+        <section className="flex flex-col gap-2">
+          <p className="text-xs text-gray-400">Token limits (optional)</p>
+          <div className="flex gap-4">
+            <div className="flex flex-col gap-1 flex-1">
+              <label htmlFor="context-limit-input" className="text-xs text-gray-500">
+                Context window
+              </label>
+              <input
+                id="context-limit-input"
+                type="number"
+                min={1}
+                value={draft.context_limit}
+                onChange={(e) => update({ context_limit: e.target.value })}
+                placeholder="32768"
+                className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
+              />
+            </div>
+            <div className="flex flex-col gap-1 flex-1">
+              <label htmlFor="output-limit-input" className="text-xs text-gray-500">
+                Max output
+              </label>
+              <input
+                id="output-limit-input"
+                type="number"
+                min={1}
+                value={draft.output_limit}
+                onChange={(e) => update({ output_limit: e.target.value })}
+                placeholder="8192"
+                className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-gray-500">
+            Tokens. Tells OpenCode the window of your self-hosted model so it
+            tracks remaining context (it can't look this up for a local
+            endpoint). Leave blank to let OpenCode choose. Match your server's
+            loaded context length (e.g. LM Studio's per-model setting).
+          </p>
+        </section>
+      )}
 
       {/* Extra args */}
       <section className="flex flex-col gap-2">

@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useWorkflows } from "./useWorkflows";
+import { createQueryWrapper } from "../test/queryWrapper";
 import type { WorkflowSummary, WorkflowEvent } from "../api/types";
 
 function makeWorkflow(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary {
@@ -22,6 +23,8 @@ function makeWorkflow(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary
     steps_log: [],
     error: null,
     terminal_lines: [],
+    can_address_pr_comments: false,
+    can_merge_base: false,
     can_mark_done: false,
     can_delete: false,
     can_start: false,
@@ -67,7 +70,7 @@ describe("useWorkflows", () => {
     const wf2 = makeWorkflow({ ticket_key: "TEST-2", id: "uuid-2" });
     mockFetchWorkflows([wf1, wf2]);
 
-    const { result } = renderHook(() => useWorkflows());
+    const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(Object.keys(result.current.workflows)).toHaveLength(2);
@@ -82,7 +85,7 @@ describe("useWorkflows", () => {
     const wf1 = makeWorkflow({ ticket_key: "TEST-1", progress_percent: 25 });
     mockFetchWorkflows([wf1]);
 
-    const { result } = renderHook(() => useWorkflows());
+    const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.workflows["TEST-1"]).toBeDefined();
@@ -100,14 +103,18 @@ describe("useWorkflows", () => {
       result.current.handleEvent(event);
     });
 
-    expect(result.current.workflows["TEST-1"].progress_percent).toBe(75);
+    // The local patch lands via `queryClient.setQueryData`; the observing
+    // `useQuery` re-renders on the next microtask, so await the propagation.
+    await vi.waitFor(() => {
+      expect(result.current.workflows["TEST-1"].progress_percent).toBe(75);
+    });
   });
 
   it("workflow_removed event removes the entry", async () => {
     const wf1 = makeWorkflow({ ticket_key: "TEST-1" });
     mockFetchWorkflows([wf1]);
 
-    const { result } = renderHook(() => useWorkflows());
+    const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.workflows["TEST-1"]).toBeDefined();
@@ -129,7 +136,7 @@ describe("useWorkflows", () => {
   it("port_forwarded event triggers re-fetch", async () => {
     mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1", editor_port_mappings: [] })]);
 
-    const { result } = renderHook(() => useWorkflows());
+    const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.workflows["TEST-1"]).toBeDefined();
@@ -157,7 +164,7 @@ describe("useWorkflows", () => {
   it("port_unforwarded event triggers re-fetch", async () => {
     mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1", editor_port_mappings: [[3000, "/s/abc123/"]] })]);
 
-    const { result } = renderHook(() => useWorkflows());
+    const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.dynamicForwards["TEST-1"]).toEqual([[3000, "/s/abc123/"]]);
@@ -184,36 +191,45 @@ describe("useWorkflows", () => {
 
   it("new keys from refetch are appended, not re-sorted", async () => {
     const wf1 = makeWorkflow({ ticket_key: "TEST-1" });
-    const fetchFn = fetch as ReturnType<typeof vi.fn>;
-    // First fetch: only TEST-1
-    fetchFn.mockResolvedValueOnce(
-      new Response(JSON.stringify([wf1]), { status: 200 })
-    );
+    const wf2 = makeWorkflow({ ticket_key: "TEST-2", id: "uuid-2" });
+    // URL-aware mock: the list query and the counts query both fire on mount,
+    // so a positional `mockResolvedValueOnce` would race. `listBody` is the
+    // controllable work-items response; counts is constant.
+    let listBody: WorkflowSummary[] = [wf1];
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
+      if (url === "/api/work-items") {
+        return new Response(JSON.stringify(listBody), { status: 200 });
+      }
+      if (url === "/api/work-items/counts") {
+        return new Response(
+          JSON.stringify({ running: 0, completed: 0, errors: 0, paused: 0 }),
+          { status: 200 }
+        );
+      }
+      return new Response("[]", { status: 200 });
+    });
 
-    const { result } = renderHook(() => useWorkflows());
+    const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.orderKeys).toEqual(["TEST-1"]);
     });
 
-    // Second fetch: TEST-1 + TEST-2
-    const wf2 = makeWorkflow({ ticket_key: "TEST-2", id: "uuid-2" });
-    fetchFn.mockResolvedValueOnce(
-      new Response(JSON.stringify([wf1, wf2]), { status: 200 })
-    );
-
+    // Second fetch: TEST-1 + TEST-2 — TEST-2 should be appended, not re-sorted.
+    listBody = [wf1, wf2];
     await act(async () => {
       await result.current.fetchWorkflows();
     });
 
-    // TEST-2 should be appended
-    expect(result.current.orderKeys).toEqual(["TEST-1", "TEST-2"]);
+    await vi.waitFor(() => {
+      expect(result.current.orderKeys).toEqual(["TEST-1", "TEST-2"]);
+    });
   });
 
   it("step_output appends terminal lines", async () => {
     mockFetchWorkflows([makeWorkflow({ ticket_key: "TEST-1" })]);
 
-    const { result } = renderHook(() => useWorkflows());
+    const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
       expect(result.current.workflows["TEST-1"]).toBeDefined();

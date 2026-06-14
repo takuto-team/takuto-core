@@ -5,6 +5,7 @@ use axum::Json;
 use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::auth::AuthenticatedUser;
 use crate::state::{AuthState, EngineState};
@@ -12,12 +13,27 @@ use crate::state::{AuthState, EngineState};
 // Re-export so tickets.rs can import via `crate::routes::github::parse_github_repo`.
 pub use maestro_core::github::parse_github_repo;
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(rename = "GitHubIssue", export_to = "GitHubIssue.ts")]
 pub struct GithubIssueRow {
     pub key: String,
     pub summary: String,
     pub body: String,
     pub url: String,
+}
+
+#[cfg(test)]
+mod ts_bindings {
+    use super::*;
+    use ts_rs::TS;
+
+    /// Regenerate `ui/src/api/generated/GitHubIssue.ts` (CI diffs the dir).
+    #[test]
+    fn export_github_issue() {
+        let out = crate::ts_bindings::generated_dir();
+        std::fs::create_dir_all(&out).expect("create generated dir");
+        GithubIssueRow::export_all_to(&out).expect("export GitHubIssue");
+    }
 }
 
 #[derive(Deserialize)]

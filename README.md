@@ -174,10 +174,13 @@ port = 8080
 ```
 
 > Maestro uses a multi-user database for authentication — on first boot the
-> dashboard prompts you to create the initial admin account. The legacy
-> single-user keys `[web] dashboard_username` / `dashboard_password` still
-> exist but are deprecated; leave them empty in new deployments. See
+> dashboard prompts you to create the initial admin account. See
 > [Multi-user model](#multi-user-model).
+>
+> **Upgrading?** The legacy single-user keys `[web] dashboard_username` /
+> `dashboard_password` have been **removed**. If your old `config.toml` still
+> contains them they are silently ignored — create your admin account on the
+> first-boot setup page (or `POST /api/auth/register`) instead.
 
 Put secrets in `maestro.env` (never in `config.toml`):
 ```bash
@@ -221,7 +224,7 @@ For each ticket (or manual entry):
 
 1. **Assign** — ticket moved to "In Progress" in Jira / GitHub *(skipped in no-ticketing mode)*
 2. **Worktree** — new git branch from your configured base branch
-3. **Install** — runs `pre_install` commands then `install` (e.g. `npm ci`) in the worktree
+3. **Worktree init** — runs your per-workspace init commands (e.g. `npm ci`) in the worktree, configured in **Configuration → Worktree Settings**
 4. **Agent steps** — one or more AI sessions using your TOML workflow definition; each step has a prompt with ticket context injected
 5. **Done** — dashboard shows PR URL (from `.maestro/outcome.toml` or `MAESTRO_PR_URL:` in agent output)
 
@@ -294,8 +297,7 @@ A few keys you'll touch first:
 | `[general] ticketing_system` | `"none"` | `"jira"`, `"github"`, or `"none"` — drives the poller and the **+** picker. |
 | `[general] max_concurrent_workflows` | `1` | Parallel install/agent sessions. Tune to your host. |
 | `[git] base_branch` | `"main"` | Branch worktrees are created from. |
-| `[agent] provider` | `"claude"` | `"claude"` or `"cursor"`. |
-| `[agent] model` | `""` | Model override (empty = provider default). |
+| `[agent] provider` | `"claude"` | `"claude"`, `"cursor"`, `"codex"`, or `"opencode"`. Per-provider model/endpoint lives in `[agent.providers.<name>]` — edit from Configuration → AI Settings. |
 | `[web] host` / `port` | `"0.0.0.0"` / `8080` | Dashboard bind address. |
 | `[network] extra_egress_hosts` 🔒 | `[]` | Extra domains permitted through the egress firewall. |
 
@@ -376,7 +378,7 @@ See **[docs/extending-maestro.md](docs/extending-maestro.md)** for:
 Each workflow can spawn an isolated VS Code container (via [openvscode-server](https://github.com/gitpod-io/openvscode-server)) with the workflow's worktree mounted. Click **"Open editor"** on any workflow card.
 
 Inside the editor:
-- Project tools from `.mise.toml` or `[commands] install` are available
+- Project tools from `.mise.toml` or your **Worktree Settings** init commands are available
 - Application ports from `[editor] ports` are pre-mapped as clickable dashboard links
 - **Dynamic ports** — if `[editor] dynamic_ports > 0` (default `10`), a background scanner auto-forwards new listening ports via socat every 3 seconds
 - **Web terminal** — click **"Open terminal"** for a browser-based shell (ttyd) inside the editor container
@@ -397,6 +399,31 @@ make load-worker   # load the Maestro image into DinD so worker containers start
 ```
 
 Each workflow's install and agent steps then run in ephemeral Docker containers — preventing port conflicts and filesystem side-effects between concurrent workflows.
+
+---
+
+## Self-hosted model server bridge (optional)
+
+**You only need this when running a local model server on the host machine.** If you use the OpenCode provider against a model server (LM Studio, Ollama, vLLM, …) running **on your host Mac**, Docker Desktop 4.34+'s gVisor network stack blocks the worker containers from reaching `host.docker.internal`. Add the bridge so the workers can reach the host:
+
+```bash
+make start BACKEND=postgres LM_BRIDGE=1
+# Ollama (port 11434) or any non-default port:
+LM_HOST_PORT=11434 make start BACKEND=postgres LM_BRIDGE=1
+```
+
+This starts a small `socat` sidecar (`maestro-lm-bridge`) at a fixed address. Then in **Configuration → AI Settings → OpenCode → Base URL** set:
+
+```
+http://172.20.0.250:1234/v1
+```
+
+**You do NOT need `LM_BRIDGE` if:**
+
+- you use a **cloud provider** (Claude, Codex, or any reachable API URL), or
+- your model server runs **as a container inside the Maestro compose network** — reach it directly by service name (e.g. `http://lm-studio:1234/v1`).
+
+See [`docs/troubleshooting-self-hosted-models.md`](docs/troubleshooting-self-hosted-models.md) for the full diagnosis and a smoke test.
 
 ---
 
@@ -458,7 +485,7 @@ export CLAUDE_CODE_OAUTH_TOKEN="your-token"
 export GH_TOKEN="github_pat_..."
 ```
 
-Only `export VAR=value` syntax is supported. Use `pre_install` in `config.toml` for setup commands.
+Only `export VAR=value` syntax is supported. For per-workspace setup commands, use **Configuration → Worktree Settings** in the dashboard.
 
 ---
 
@@ -492,10 +519,16 @@ Allowed by default:
 podman run --rm -v maestro_aws-config:/data -v ~/.aws:/src:ro alpine cp -r /src/. /data/
 ```
 
-```toml
-[commands]
-pre_install = ["aws codeartifact login --tool npm --repository REPO --domain DOMAIN --domain-owner OWNER_ID"]
+Add the `codeartifact login` step to your per-workspace init commands in
+**Configuration → Worktree Settings**:
 
+```
+aws codeartifact login --tool npm --repository REPO --domain DOMAIN --domain-owner OWNER_ID
+```
+
+and allow the registry host through the egress firewall in `config.toml`:
+
+```toml
 [network]
 extra_egress_hosts = ["yourcompany-123456.d.codeartifact.region.amazonaws.com"]
 ```

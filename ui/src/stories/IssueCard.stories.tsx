@@ -22,6 +22,8 @@ const baseWorkflow: WorkflowSummary = {
   steps_log: [],
   error: null,
   terminal_lines: [],
+  can_address_pr_comments: false,
+  can_merge_base: false,
   can_mark_done: false,
   can_delete: true,
   can_start: true,

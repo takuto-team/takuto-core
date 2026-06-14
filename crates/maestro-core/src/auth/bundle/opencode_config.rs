@@ -78,11 +78,18 @@ struct OpenCodeConfig {
 ///
 /// `bearer = None` (or `Some([])`) renders as `apiKey = "lm-studio"` per
 /// [`DEFAULT_DUMMY_API_KEY`].
+///
+/// `context_limit` / `output_limit` (tokens), when `Some(n > 0)`, populate the
+/// `models.<id>.limit` block so OpenCode knows the window of a self-hosted
+/// model it can't look up on models.dev. `None` (or `Some(0)`, defensively)
+/// omits the field, letting OpenCode fall back to its own default.
 pub(super) fn write_opencode_config(
     dir: &Path,
     base_url: &str,
     model: &str,
     bearer: Option<&[u8]>,
+    context_limit: Option<u32>,
+    output_limit: Option<u32>,
 ) -> Result<PathBuf> {
     let base_url_trim = base_url.trim();
     if base_url_trim.is_empty() {
@@ -138,8 +145,24 @@ pub(super) fn write_opencode_config(
     // shape matches the OpenCode schema byte-for-byte. The Vercel
     // AI-SDK adapter expects `npm`, `name`, `options{baseURL,apiKey}`
     // and `models{<id>{}}`.
+    // Build the per-model entry. A `limit` block is emitted only when at
+    // least one positive limit is supplied; otherwise the entry stays `{}`
+    // (the documented "let OpenCode decide" shape). `Some(0)` is treated as
+    // unset defensively — the config validator already rejects it.
+    let mut model_entry = Map::new();
+    let mut limit = Map::new();
+    if let Some(c) = context_limit.filter(|&n| n > 0) {
+        limit.insert("context".to_string(), Value::from(c));
+    }
+    if let Some(o) = output_limit.filter(|&n| n > 0) {
+        limit.insert("output".to_string(), Value::from(o));
+    }
+    if !limit.is_empty() {
+        model_entry.insert("limit".to_string(), Value::Object(limit));
+    }
+
     let mut models = Map::new();
-    models.insert(model_trim.to_string(), json!({}));
+    models.insert(model_trim.to_string(), Value::Object(model_entry));
 
     let mut provider_entry = Map::new();
     provider_entry.insert("npm".to_string(), Value::String(NPM_ADAPTER.to_string()));
@@ -198,6 +221,8 @@ mod tests {
             "http://lm-studio:1234/v1",
             "lmstudio/qwen3-coder",
             Some(b"user-bearer-token"),
+            None,
+            None,
         )
         .expect("write opencode.json");
         assert!(path.ends_with(OPENCODE_CONFIG_FILENAME));
@@ -211,6 +236,51 @@ mod tests {
         assert_eq!(provider["options"]["apiKey"], "user-bearer-token");
         // Model id keys the `models` map.
         assert!(provider["models"]["lmstudio/qwen3-coder"].is_object());
+        // No limits supplied → no `limit` block.
+        assert!(provider["models"]["lmstudio/qwen3-coder"]["limit"].is_null());
+    }
+
+    /// Both limits supplied → `models.<id>.limit` carries `context` + `output`.
+    #[test]
+    fn writes_config_with_limit_block_when_both_limits_set() {
+        let dir = TempDir::new().unwrap();
+        let path = write_opencode_config(
+            dir.path(),
+            "http://lm-studio:1234/v1",
+            "lmstudio/qwen3-coder",
+            None,
+            Some(32768),
+            Some(8192),
+        )
+        .unwrap();
+        let v = read_and_parse(&path);
+        let limit =
+            &v["provider"][SELF_HOSTED_PROVIDER_ID]["models"]["lmstudio/qwen3-coder"]["limit"];
+        assert_eq!(limit["context"], 32768);
+        assert_eq!(limit["output"], 8192);
+    }
+
+    /// Only one limit set → `limit` block carries just that key. A `Some(0)`
+    /// is treated as unset (defence in depth).
+    #[test]
+    fn writes_config_with_partial_limit_and_ignores_zero() {
+        let dir = TempDir::new().unwrap();
+        let path = write_opencode_config(
+            dir.path(),
+            "http://lm-studio:1234/v1",
+            "lmstudio/qwen3-coder",
+            None,
+            Some(16000),
+            Some(0),
+        )
+        .unwrap();
+        let v = read_and_parse(&path);
+        let entry = &v["provider"][SELF_HOSTED_PROVIDER_ID]["models"]["lmstudio/qwen3-coder"];
+        assert_eq!(entry["limit"]["context"], 16000);
+        assert!(
+            entry["limit"]["output"].is_null(),
+            "Some(0) must be omitted"
+        );
     }
 
     /// No bearer (None) → apiKey defaults to the LM Studio dummy.
@@ -221,6 +291,8 @@ mod tests {
             dir.path(),
             "http://lm-studio:1234/v1",
             "lmstudio/qwen3-coder",
+            None,
+            None,
             None,
         )
         .unwrap();
@@ -242,6 +314,8 @@ mod tests {
             "http://lm-studio:1234/v1",
             "lmstudio/qwen3-coder",
             Some(&[]),
+            None,
+            None,
         )
         .unwrap();
         let v = read_and_parse(&path);
@@ -255,7 +329,7 @@ mod tests {
     #[test]
     fn empty_base_url_returns_typed_error() {
         let dir = TempDir::new().unwrap();
-        let err = write_opencode_config(dir.path(), "", "lmstudio/qwen3-coder", None)
+        let err = write_opencode_config(dir.path(), "", "lmstudio/qwen3-coder", None, None, None)
             .expect_err("empty base_url must error");
         assert!(
             err.to_string().contains("base_url is empty"),
@@ -267,8 +341,9 @@ mod tests {
     #[test]
     fn whitespace_base_url_returns_typed_error() {
         let dir = TempDir::new().unwrap();
-        let err = write_opencode_config(dir.path(), "   ", "lmstudio/qwen3-coder", None)
-            .expect_err("whitespace base_url must error");
+        let err =
+            write_opencode_config(dir.path(), "   ", "lmstudio/qwen3-coder", None, None, None)
+                .expect_err("whitespace base_url must error");
         assert!(err.to_string().contains("base_url is empty"));
     }
 
@@ -276,7 +351,7 @@ mod tests {
     #[test]
     fn empty_model_returns_typed_error() {
         let dir = TempDir::new().unwrap();
-        let err = write_opencode_config(dir.path(), "http://lm:1234/v1", "", None)
+        let err = write_opencode_config(dir.path(), "http://lm:1234/v1", "", None, None, None)
             .expect_err("empty model must error");
         assert!(err.to_string().contains("model is empty"));
     }
@@ -292,6 +367,8 @@ mod tests {
             "http://lm:1234/v1",
             "lmstudio/qwen3-coder",
             Some(bad),
+            None,
+            None,
         )
         .expect_err("non-UTF-8 bearer must error");
         assert!(err.to_string().contains("not valid UTF-8"));
@@ -310,6 +387,8 @@ mod tests {
             "http://lm-studio:1234/v1",
             "lmstudio/qwen3-coder",
             Some(b"k"),
+            None,
+            None,
         )
         .unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;

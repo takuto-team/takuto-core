@@ -58,8 +58,7 @@ fn test_defaults() {
     assert!(config.general.auto_polling);
     assert_eq!(config.general.poll_interval_secs, 60);
     assert_eq!(config.web.port, 8080);
-    assert!(!config.web.dashboard_auth_enabled());
-    assert_eq!(config.agent.cursor_model, "Auto");
+    assert_eq!(config.agent.effective_cursor_model(), "Auto");
     assert_eq!(config.git.remote, "origin");
 }
 
@@ -176,10 +175,14 @@ fn runtime_patch_empty_top_level_errors() {
 }
 
 #[test]
-fn runtime_patch_web_empty_subobject_errors() {
-    let mut c = Config::default();
-    let patch: RuntimeDashboardConfigPatch = serde_json::from_str(r#"{"web":{}}"#).unwrap();
-    assert!(c.apply_runtime_dashboard_patch(patch).is_err());
+fn runtime_patch_web_field_now_unknown() {
+    // `web` is no longer an accepted top-level patch key.
+    let err = serde_json::from_str::<RuntimeDashboardConfigPatch>(r#"{"web":{}}"#).unwrap_err();
+    let s = err.to_string();
+    assert!(
+        s.contains("unknown field") || s.contains("Unknown field"),
+        "expected unknown field error: {s}"
+    );
 }
 
 // -- CORS origin tests --
@@ -438,7 +441,10 @@ fn generate_report_false_when_omitted() {
 // ─── Phase 1: provider sub-tables, migration, validation ─────────────
 
 #[test]
-fn load_migrates_legacy_cursor_cli_to_subtable() {
+fn load_ignores_legacy_flat_agent_keys() {
+    // The removed flat `[agent]` keys (cursor_cli / cursor_model / model) are
+    // now unknown fields: a config still carrying them loads cleanly and the
+    // keys are inert (the sub-tables keep their defaults).
     let toml = r#"
 [general]
 poll_interval_secs = 30
@@ -461,16 +467,16 @@ cursor_model = "gpt-4.1"
 model = "claude-3-5"
 "#;
     let cfg = Config::load_from_str(toml).expect("load");
-    assert_eq!(cfg.agent.providers.cursor.cli, "agent-custom");
-    assert_eq!(cfg.agent.providers.cursor.model, "gpt-4.1");
-    // `agent.model` migrates into the **active** provider's sub-table.
-    assert_eq!(cfg.agent.providers.cursor.model, "gpt-4.1");
+    assert!(cfg.agent.providers.cursor.cli.is_empty());
+    assert!(cfg.agent.providers.cursor.model.is_empty());
+    assert!(cfg.agent.providers.claude.model.is_empty());
+    // Effective accessors fall back to their hard-coded defaults.
+    assert_eq!(cfg.agent.effective_cursor_cli(), "agent");
+    assert_eq!(cfg.agent.effective_cursor_model(), "Auto");
 }
 
 #[test]
-fn load_with_subtable_does_not_overwrite_explicit_sub_value() {
-    // When both the legacy field and the sub-table value are set, the
-    // sub-table wins (migration is "fill if empty").
+fn load_reads_cursor_sub_table_values() {
     let toml = r#"
 [general]
 poll_interval_secs = 30
@@ -488,13 +494,13 @@ port = 8080
 
 [agent]
 provider = "cursor"
-cursor_cli = "legacy-agent"
 
 [agent.providers.cursor]
 cli = "sub-table-agent"
 "#;
     let cfg = Config::load_from_str(toml).expect("load");
     assert_eq!(cfg.agent.providers.cursor.cli, "sub-table-agent");
+    assert_eq!(cfg.agent.effective_cursor_cli(), "sub-table-agent");
 }
 
 /// T-CFG-002 (Phase 1, P1): a non-empty `[agent.providers.cursor].base_url`
@@ -771,4 +777,120 @@ fn provisioning_sha_preserves_inner_whitespace() {
     let a = config_with_provisioning(&["cmd  --flag  value"]);
     let b = config_with_provisioning(&["cmd --flag value"]);
     assert_ne!(a.provisioning_sha(), b.provisioning_sha());
+}
+
+// ─── [polling] section ──────────────────────────────────────────────
+
+#[test]
+fn polling_defaults_are_empty_and_unlimited() {
+    let cfg = Config::default();
+    assert!(cfg.polling.auto_start_flow.is_empty());
+    assert_eq!(cfg.polling.max_parallel_items, 0);
+    assert!(!cfg.polling.max_parallel_per_user);
+    assert!(cfg.polling.jira.summary_keywords.is_empty());
+    assert!(cfg.polling.github.labels.is_empty());
+    assert!(cfg.polling.github.title_keywords.is_empty());
+}
+
+#[test]
+fn polling_omitted_in_toml_uses_defaults() {
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(valid_config_toml().as_bytes()).unwrap();
+    let cfg = Config::load(f.path()).unwrap();
+    assert!(cfg.polling.auto_start_flow.is_empty());
+    assert_eq!(cfg.polling.max_parallel_items, 0);
+}
+
+#[test]
+fn polling_round_trips_through_toml() {
+    let mut cfg = Config::default();
+    cfg.polling.auto_start_flow = "implement-ticket".to_string();
+    cfg.polling.max_parallel_items = 5;
+    cfg.polling.max_parallel_per_user = true;
+    cfg.polling.jira.summary_keywords = vec!["crash".into(), "urgent".into()];
+    cfg.polling.github.labels = vec!["bug".into()];
+    cfg.polling.github.title_keywords = vec!["panic".into()];
+
+    let serialized = cfg.to_toml_string().expect("serialize");
+    let parsed: Config = toml::from_str(&serialized).expect("re-parse");
+
+    assert_eq!(parsed.polling.auto_start_flow, "implement-ticket");
+    assert_eq!(parsed.polling.max_parallel_items, 5);
+    assert!(parsed.polling.max_parallel_per_user);
+    assert_eq!(
+        parsed.polling.jira.summary_keywords,
+        vec!["crash", "urgent"]
+    );
+    assert_eq!(parsed.polling.github.labels, vec!["bug"]);
+    assert_eq!(parsed.polling.github.title_keywords, vec!["panic"]);
+}
+
+#[test]
+fn validate_rejects_blank_jira_summary_keyword() {
+    let mut cfg = Config::default();
+    cfg.polling.jira.summary_keywords = vec!["ok".into(), "   ".into()];
+    let err = cfg.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("summary_keywords"),
+        "expected summary_keywords error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_blank_github_label() {
+    let mut cfg = Config::default();
+    cfg.polling.github.labels = vec!["".into()];
+    let err = cfg.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("labels"),
+        "expected labels error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_blank_github_title_keyword() {
+    let mut cfg = Config::default();
+    cfg.polling.github.title_keywords = vec!["\t".into()];
+    let err = cfg.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("title_keywords"),
+        "expected title_keywords error: {err}"
+    );
+}
+
+#[test]
+fn validate_accepts_non_empty_polling_filters() {
+    let mut cfg = Config::default();
+    cfg.polling.auto_start_flow = "anything".into();
+    cfg.polling.max_parallel_items = 0; // 0 = unlimited is valid
+    cfg.polling.jira.summary_keywords = vec!["crash".into()];
+    cfg.polling.github.labels = vec!["bug".into()];
+    cfg.polling.github.title_keywords = vec!["panic".into()];
+    assert!(cfg.validate().is_ok());
+}
+
+#[test]
+fn matches_any_keyword_empty_list_matches_everything() {
+    assert!(matches_any_keyword("anything at all", &[]));
+}
+
+#[test]
+fn matches_any_keyword_is_case_insensitive_substring() {
+    let kws = vec!["Crash".to_string()];
+    assert!(matches_any_keyword("App CRASHED on launch", &kws));
+    assert!(matches_any_keyword("crash report", &kws));
+    assert!(!matches_any_keyword("everything is fine", &kws));
+}
+
+#[test]
+fn matches_any_keyword_any_of_many() {
+    let kws = vec!["bug".to_string(), "urgent".to_string()];
+    assert!(matches_any_keyword("URGENT: fix login", &kws));
+    assert!(!matches_any_keyword("nice to have", &kws));
+}
+
+#[test]
+fn matches_any_keyword_trims_keywords() {
+    let kws = vec!["  crash  ".to_string()];
+    assert!(matches_any_keyword("a crash happened", &kws));
 }

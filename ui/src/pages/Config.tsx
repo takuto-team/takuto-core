@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { apiJson, api } from "../api/client";
+import { surfaceError } from "../utils/surfaceError";
 import type { User } from "../api/types";
 import { UsersTab } from "../components/UsersTab";
 import { SecurityTab } from "../components/SecurityTab";
@@ -11,6 +12,8 @@ import { WorktreeSettingsTab } from "../components/WorktreeSettingsTab";
 import { MyRepositoriesTab } from "../components/MyRepositoriesTab";
 import { AiSettingsTab } from "../components/AiSettingsTab";
 import { FlowsTab } from "../components/FlowsTab";
+import { ItemPollingSettingsSection } from "../components/admin/ItemPollingSettingsSection";
+import { GitHubCredentialsSection } from "../components/credentials/GitHubCredentialsSection";
 
 interface Props {
   onLogout: () => void;
@@ -21,7 +24,9 @@ interface Props {
 const ALL_TABS = [
   "Security",
   "AI Settings",
+  "GitHub",
   "Users",
+  "Item Polling",
   "My Repositories",
   "Worktree Settings",
   "Flows",
@@ -40,7 +45,7 @@ function UsersTabConnected() {
     setLoading(true);
     apiJson<User[]>("/api/users")
       .then(setUsers)
-      .catch(() => {})
+      .catch((e) => surfaceError(e, "Couldn't load users"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -152,9 +157,11 @@ function SecurityTabConnected() {
 // ---------------------------------------------------------------------------
 
 export function Config({ onLogout, authEnabled, isAdmin }: Props) {
-  // Admin-only tabs: "Users". "Worktree Settings" and "My Repositories"
-  // are user-facing — no admin gate; each user manages their own data.
-  const tabs = ALL_TABS.filter((t) => (t === "Users" ? isAdmin : true));
+  // Admin-only tabs: "Users", "Item Polling". "Worktree Settings" and
+  // "My Repositories" are user-facing — no admin gate; each user manages their
+  // own data.
+  const adminOnlyTabs: Tab[] = ["Users", "Item Polling"];
+  const tabs = ALL_TABS.filter((t) => (adminOnlyTabs.includes(t) ? isAdmin : true));
 
   // Allow direct deep-linking via `?tab=<slug>` (used by Header, redirects
   // from legacy /admin/ai and /me/credentials routes, and OnboardingBanner
@@ -164,10 +171,12 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
     const params = new URLSearchParams(window.location.search);
     const slug = params.get("tab");
     if (slug === "ai") return "AI Settings";
+    if (slug === "github") return "GitHub";
     if (slug === "repositories") return "My Repositories";
     if (slug === "worktree") return "Worktree Settings";
     if (slug === "Flows" || slug === "flows") return "Flows";
     if (slug === "users" && isAdmin) return "Users";
+    if ((slug === "polling" || slug === "item-polling") && isAdmin) return "Item Polling";
     if (slug === "security") return "Security";
     return tabs[0];
   })();
@@ -176,7 +185,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
   return (
     <div className="min-h-screen">
       <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="w-full px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-14">
             <Link
               to="/"
@@ -199,7 +208,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
 
       {/* Tab bar */}
       <div className="border-b border-gray-800">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-6">
+        <div className="w-full px-4 sm:px-6 lg:px-8 flex gap-6">
           {tabs.map((t) => (
             <button
               key={t}
@@ -216,10 +225,12 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
         </div>
       </div>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="w-full px-4 sm:px-6 lg:px-8 py-8">
         {tab === "Security" && <SecurityTabConnected />}
         {tab === "AI Settings" && <AiSettingsTab isAdmin={!!isAdmin} />}
+        {tab === "GitHub" && <GitHubCredentialsSection />}
         {tab === "Users" && <UsersTabConnected />}
+        {tab === "Item Polling" && isAdmin && <ItemPollingSettingsSection />}
         {tab === "My Repositories" && <MyRepositoriesTab isAdmin={isAdmin} />}
         {tab === "Worktree Settings" && <WorktreeSettingsTab />}
         {tab === "Flows" && <FlowsTab />}

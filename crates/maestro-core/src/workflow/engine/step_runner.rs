@@ -41,7 +41,7 @@ use crate::workflow::log_writer::WorkflowLogWriter;
 use crate::workflow::outcome::resolve_pr_url;
 use crate::workflow::state::WorkflowState;
 use crate::workflow::step::{StepLog, StepStatus};
-use crate::workflow::stream_humanize::humanize_agent_stream_line;
+use crate::workflow::stream_humanize::{humanize_agent_stream_line, is_session_lifecycle_line};
 
 use super::auth_pin::try_attach_secrets_bundle;
 use super::driver::{
@@ -169,18 +169,14 @@ pub(super) async fn run_workflow_def_steps(
 
     let cfg = config.read().await;
     let timeout = cfg.agent.step_timeout_secs;
-    // Resolve via the sub-table-aware helper so an empty
-    // `[agent.providers.claude].model` in /admin/ai correctly omits
-    // `--model` from the agent argv. Reading the legacy flat
-    // `cfg.agent.model` directly would force an outdated model on every
-    // spawn (the flat field retains its migrated value even after the
-    // user blanks the sub-table field), which custom proxies (pantheon)
-    // don't accept.
+    // Resolve via the accessor so an empty `[agent.providers.claude].model`
+    // in /admin/ai correctly omits `--model` from the agent argv — custom
+    // proxies (pantheon) reject an outdated forced model.
     let claude_model = cfg.agent.effective_claude_model().map(str::to_string);
-    let cursor_model_buf = cfg.agent.cursor_model.clone();
+    let cursor_model_buf = cfg.agent.effective_cursor_model().to_string();
     let cursor_model_pass = cursor_model_for_cli(&cursor_model_buf);
     let ai_stream_provider = cfg.agent.provider;
-    let cursor_cli = cfg.agent.cursor_cli.clone();
+    let cursor_cli = cfg.agent.effective_cursor_cli().to_string();
     // Codex and opencode share the same shape as claude/cursor — a single
     // sub-table per provider with an optional `model` string. Empty string
     // means "use the CLI's default" (no `-m` flag emitted).
@@ -263,23 +259,30 @@ pub(super) async fn run_workflow_def_steps(
     info!(ticket = %ticket_key, def = %def_name, "Workflow definition steps completed");
 
     // Extract PR URL from outcome.toml or MAESTRO_PR_URL marker in agent output,
-    // then transition the workflow to Done.
+    // then transition the workflow to Done. PR URL + terminal state are one
+    // logical event, so when a PR URL is present both columns are written in a
+    // single atomic, fail-loud statement (cutover invariants I2 + I4); the
+    // no-PR path uses the plain (also fail-loud) terminal transition.
     let resolved = resolve_pr_url(worktree_path, last_agent_output.as_deref());
-    if let Some(ref url) = resolved {
-        let mut wf = workflows.write().await;
-        if let Some(w) = wf.get_mut(ticket_key) {
-            w.pr_url = Some(url.clone());
+    match resolved.as_deref() {
+        Some(url) => {
+            super::driver::transition_to_done_with_pr_url(
+                workflows, event_tx, ticket_key, url, config, db,
+            )
+            .await;
+        }
+        None => {
+            transition(
+                workflows,
+                event_tx,
+                ticket_key,
+                WorkflowState::Done,
+                config,
+                db,
+            )
+            .await;
         }
     }
-    transition(
-        workflows,
-        event_tx,
-        ticket_key,
-        WorkflowState::Done,
-        config,
-        db,
-    )
-    .await;
 
     Ok(())
 }
@@ -338,8 +341,15 @@ pub(super) async fn run_agent_step_sequence(
     let mut last_agent_output: Option<String> = None;
     // When enabled, steps after the first resume the prior step's session so
     // the whole flow is one conversation. Read once per flow run; a mid-run
-    // config change applies to the next run, not this one.
-    let share_conversation = config.read().await.agent.share_conversation_across_steps;
+    // config change applies to the next run, not this one. The no-progress
+    // guardrail threshold is read on the same pass.
+    let (share_conversation, max_repeated_output_lines) = {
+        let c = config.read().await;
+        (
+            c.agent.share_conversation_across_steps,
+            c.agent.max_repeated_output_lines,
+        )
+    };
     // Resume the agent on the first step regardless of whether a
     // session id is known. With a session id the agent picks up the
     // same conversation via `--resume`; without one it still gets
@@ -429,6 +439,8 @@ pub(super) async fn run_agent_step_sequence(
                         r,
                         step_repeat
                     );
+                    // Command steps don't run an agent session, so the
+                    // no-progress guardrail is disabled here (threshold 0).
                     let line_tx = spawn_output_relay(
                         event_tx,
                         ticket_key,
@@ -436,6 +448,9 @@ pub(super) async fn run_agent_step_sequence(
                         log_writer,
                         workflows,
                         ai_stream_provider,
+                        0,
+                        Arc::new(std::sync::Mutex::new(None)),
+                        CancellationToken::new(),
                     );
 
                     let total_cmds = step.commands.len();
@@ -716,6 +731,12 @@ pub(super) async fn run_agent_step_sequence(
                     r,
                     step_repeat
                 );
+                // The relay and the agent session share a cancel token so the
+                // no-progress guardrail can abort the session, plus a signal
+                // the runner inspects afterwards to distinguish a loop-abort
+                // from a user pause/stop.
+                let step_cancel = cancel_token.child_token();
+                let loop_signal: LoopSignal = Arc::new(std::sync::Mutex::new(None));
                 let line_tx = spawn_output_relay(
                     event_tx,
                     ticket_key,
@@ -723,13 +744,16 @@ pub(super) async fn run_agent_step_sequence(
                     log_writer,
                     workflows,
                     ai_stream_provider,
+                    max_repeated_output_lines,
+                    loop_signal.clone(),
+                    step_cancel.clone(),
                 );
 
                 let session_result: Result<(String, String)> = match ai_stream_provider {
                     AiAgentProvider::Claude => ClaudeSession::run_prompt(
                         worktree_path,
                         &full_prompt,
-                        cancel_token.child_token(),
+                        step_cancel.child_token(),
                         timeout,
                         Some(line_tx),
                         claude_model,
@@ -743,7 +767,7 @@ pub(super) async fn run_agent_step_sequence(
                         cursor_cli,
                         worktree_path,
                         &full_prompt,
-                        cancel_token.child_token(),
+                        step_cancel.child_token(),
                         timeout,
                         Some(line_tx),
                         Some(cursor_model_pass),
@@ -755,7 +779,7 @@ pub(super) async fn run_agent_step_sequence(
                     AiAgentProvider::Codex => CodexSession::run_prompt(
                         worktree_path,
                         &full_prompt,
-                        cancel_token.child_token(),
+                        step_cancel.child_token(),
                         timeout,
                         Some(line_tx),
                         codex_model,
@@ -767,7 +791,7 @@ pub(super) async fn run_agent_step_sequence(
                     AiAgentProvider::OpenCode => OpenCodeSession::run_prompt(
                         worktree_path,
                         &full_prompt,
-                        cancel_token.child_token(),
+                        step_cancel.child_token(),
                         timeout,
                         Some(line_tx),
                         opencode_model,
@@ -777,6 +801,38 @@ pub(super) async fn run_agent_step_sequence(
                     .await
                     .map(|s| (s.session_id, s.output)),
                 };
+
+                // No-progress guardrail fired: the relay cancelled the session
+                // because the agent looped. Take precedence over the session's
+                // (likely `Cancelled`) result and fail the step into Error —
+                // this is NOT a user pause, so it must abort the workflow with
+                // a diagnostic rather than silently re-run on resume. Extract
+                // the signal into a local first so the std-Mutex guard is not
+                // held across the awaits below.
+                let loop_info = loop_signal.lock().ok().and_then(|mut g| g.take());
+                if let Some((count, line)) = loop_info {
+                    warn!(
+                        ticket = %ticket_key,
+                        step = %step.name,
+                        run = r,
+                        count,
+                        "Agent step aborted — no-progress loop"
+                    );
+                    step_log.fail(format!(
+                        "No-progress loop: repeated the same output {count} times (\"{line}\")"
+                    ));
+                    super::driver::shadow_record_step_end(
+                        db,
+                        step_db_id,
+                        crate::db::work_items::StepStatus::Failed,
+                        None,
+                        step_log.error.as_deref(),
+                        chrono::Utc::now().timestamp(),
+                    )
+                    .await;
+                    add_step_log(workflows, ticket_key, step_log).await;
+                    return Err(AgentError::NoProgressLoop { count, line }.into());
+                }
 
                 match session_result {
                     Ok((session_id, output)) => {
@@ -978,6 +1034,24 @@ pub(super) async fn broadcast_step_completed(
     });
 }
 
+/// Shared no-progress signal between the output relay and the step runner.
+/// The relay sets `Some((count, repeated_line))` and cancels the session token
+/// when the agent loops; the runner reads it after the session ends and fails
+/// the step into `Error`. `std::sync::Mutex` (not tokio) because it is only
+/// ever locked for the duration of a `take`/`replace`, never across `.await`.
+pub(super) type LoopSignal = Arc<std::sync::Mutex<Option<(u32, String)>>>;
+
+/// Normalize a humanized line for repetition comparison: trim, lowercase, and
+/// collapse internal whitespace so cosmetically-different-but-identical lines
+/// still match.
+fn normalize_signal_line(line: &str) -> String {
+    line.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_output_relay(
     event_tx: &broadcast::Sender<WorkflowEvent>,
     ticket_key: &str,
@@ -985,6 +1059,12 @@ pub(super) fn spawn_output_relay(
     log_writer: &Arc<WorkflowLogWriter>,
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     stream_provider: AiAgentProvider,
+    // No-progress guardrail. `0` disables detection. When the same substantive
+    // (non-lifecycle) line repeats this many times in a row, `loop_signal` is
+    // set and `step_cancel` is cancelled to abort the agent session.
+    max_repeated_output_lines: u32,
+    loop_signal: LoopSignal,
+    step_cancel: CancellationToken,
 ) -> tokio::sync::mpsc::UnboundedSender<OutputLine> {
     let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<OutputLine>();
     let event_tx = event_tx.clone();
@@ -998,6 +1078,10 @@ pub(super) fn spawn_output_relay(
         // ticket → user is stable for the workflow's lifetime, so caching avoids
         // a read lock per output line.
         let owner_user_id = user_id_for_ticket(&workflows, &ticket_key).await;
+        // No-progress detector state: the last substantive line and how many
+        // times in a row it has repeated.
+        let mut last_signal: Option<String> = None;
+        let mut repeat_count: u32 = 0;
         while let Some(line) = line_rx.recv().await {
             // Always write raw output to log file
             log_writer
@@ -1032,7 +1116,7 @@ pub(super) fn spawn_output_relay(
                     timestamp: Utc::now(),
                     error: None,
                     step_name: Some(step_name.clone()),
-                    output_line: Some(display_text),
+                    output_line: Some(display_text.clone()),
                     stream: Some(line.stream),
                     progress_percent: None,
                     progress_steps_total: None,
@@ -1047,6 +1131,36 @@ pub(super) fn spawn_output_relay(
                     }
                     Err(_) => {
                         warn!(step = %step_name, "step_output broadcast: no receivers");
+                    }
+                }
+
+                // ── No-progress guardrail ───────────────────────────────────
+                // Count consecutive repeats of the same substantive line.
+                // Lifecycle markers ("… session initialized/completed") are
+                // skipped so a healthy multi-turn run (which re-emits them
+                // every turn) is never tripped; only genuine output stalls —
+                // a model retrying the same failing action verbatim — trip it.
+                if max_repeated_output_lines > 0 && !is_session_lifecycle_line(&display_text) {
+                    let norm = normalize_signal_line(&display_text);
+                    if !norm.is_empty() {
+                        if last_signal.as_deref() == Some(norm.as_str()) {
+                            repeat_count += 1;
+                        } else {
+                            last_signal = Some(norm);
+                            repeat_count = 1;
+                        }
+                        if repeat_count >= max_repeated_output_lines {
+                            warn!(
+                                step = %step_name,
+                                count = repeat_count,
+                                "No-progress loop detected — cancelling agent session"
+                            );
+                            if let Ok(mut g) = loop_signal.lock() {
+                                *g = Some((repeat_count, display_text.clone()));
+                            }
+                            step_cancel.cancel();
+                            break;
+                        }
                     }
                 }
             }
@@ -1113,4 +1227,128 @@ pub(super) async fn close_github_issue(
 
     info!(ticket = %ticket_key, issue = %issue_number, owner_repo = %owner_repo, "GitHub issue closed");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_signal_line_trims_collapses_and_lowercases() {
+        assert_eq!(
+            normalize_signal_line("  It Seems   There  is\tan ISSUE "),
+            "it seems there is an issue"
+        );
+    }
+
+    /// The OpenCode limbo from the field report: `step_start` (a lifecycle
+    /// line) interleaved with the same assistant text every turn. The
+    /// detector must ignore the lifecycle line, count the repeated text, and
+    /// fire — setting the signal and cancelling the session token — once the
+    /// threshold is hit.
+    #[tokio::test]
+    async fn relay_detects_opencode_push_limbo_loop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_writer = Arc::new(WorkflowLogWriter::new(dir.path(), "GH-4").await);
+        let workflows: Arc<RwLock<HashMap<String, Workflow>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let (event_tx, _rx) = broadcast::channel(256);
+        let loop_signal: LoopSignal = Arc::new(std::sync::Mutex::new(None));
+        let step_cancel = CancellationToken::new();
+
+        let threshold = 8;
+        let line_tx = spawn_output_relay(
+            &event_tx,
+            "GH-4",
+            "Create PR",
+            &log_writer,
+            &workflows,
+            AiAgentProvider::OpenCode,
+            threshold,
+            loop_signal.clone(),
+            step_cancel.clone(),
+        );
+
+        let step_start =
+            r#"{"type":"step_start","sessionID":"ses_x","part":{"type":"step-start"}}"#;
+        let text = r#"{"type":"text","part":{"type":"text","text":"It seems there is an issue with pushing the branch. Let's try bypassing pre-push checks first."}}"#;
+        // 20 turns of (lifecycle line, same text) — well past the threshold.
+        for _ in 0..20 {
+            let _ = line_tx.send(OutputLine {
+                content: step_start.to_string(),
+                stream: "stdout".to_string(),
+            });
+            let _ = line_tx.send(OutputLine {
+                content: text.to_string(),
+                stream: "stdout".to_string(),
+            });
+        }
+        drop(line_tx);
+
+        // The relay cancels the token when it trips; wait for that.
+        tokio::time::timeout(std::time::Duration::from_secs(5), step_cancel.cancelled())
+            .await
+            .expect("relay must cancel the session token on a no-progress loop");
+
+        let signal = loop_signal.lock().unwrap().take();
+        let (count, line) = signal.expect("loop signal must be set");
+        assert!(
+            count >= threshold,
+            "count {count} should reach threshold {threshold}"
+        );
+        assert!(
+            line.contains("issue with pushing the branch"),
+            "repeated line: {line}"
+        );
+    }
+
+    /// A healthy multi-turn run re-emits the lifecycle line every turn but the
+    /// substantive output differs each turn — the detector must NOT fire.
+    #[tokio::test]
+    async fn relay_does_not_trip_on_varied_output() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_writer = Arc::new(WorkflowLogWriter::new(dir.path(), "GH-9").await);
+        let workflows: Arc<RwLock<HashMap<String, Workflow>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let (event_tx, _rx) = broadcast::channel(256);
+        let loop_signal: LoopSignal = Arc::new(std::sync::Mutex::new(None));
+        let step_cancel = CancellationToken::new();
+
+        let line_tx = spawn_output_relay(
+            &event_tx,
+            "GH-9",
+            "Implement",
+            &log_writer,
+            &workflows,
+            AiAgentProvider::OpenCode,
+            8,
+            loop_signal.clone(),
+            step_cancel.clone(),
+        );
+
+        let step_start =
+            r#"{"type":"step_start","sessionID":"ses_y","part":{"type":"step-start"}}"#;
+        for i in 0..30 {
+            let _ = line_tx.send(OutputLine {
+                content: step_start.to_string(),
+                stream: "stdout".to_string(),
+            });
+            let text = format!(
+                r#"{{"type":"text","part":{{"type":"text","text":"Editing file number {i} now."}}}}"#
+            );
+            let _ = line_tx.send(OutputLine {
+                content: text,
+                stream: "stdout".to_string(),
+            });
+        }
+        drop(line_tx);
+
+        // Give the relay time to drain; it must NOT cancel.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !step_cancel.is_cancelled(),
+            "varied output must not trip the no-progress guardrail"
+        );
+        assert!(loop_signal.lock().unwrap().is_none());
+    }
 }

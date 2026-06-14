@@ -18,10 +18,7 @@ pub mod importer;
 pub mod log_retention;
 pub mod login_attempts;
 pub mod upsert;
-// Legacy rusqlite migration runner (versioned schema_migrations table).
-pub mod migration;
-// sqlx-based migration source with per-backend dialect transforms. Lives
-// alongside `migration.rs`.
+// sqlx-based migration source with per-backend dialect transforms.
 pub mod migrate;
 pub mod models;
 pub mod onboarding;

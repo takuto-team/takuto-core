@@ -10,7 +10,6 @@
 use serde::{Deserialize, Serialize};
 
 mod agent;
-mod agent_legacy;
 pub mod database;
 pub mod error;
 mod general;
@@ -18,6 +17,7 @@ mod git;
 mod jira;
 mod load;
 mod patches;
+mod polling;
 mod runtime;
 mod template;
 mod web;
@@ -27,18 +27,18 @@ pub use error::ConfigError;
 
 pub use agent::{
     AgentConfig, AgentProviderConfig, AgentProvidersConfig, AgentStepConfig, AiAgentProvider,
-    CodexProviderConfig, CursorProviderConfig, DENIED_EXTRA_ARG_FLAGS, SkillRef, StepAvailability,
-    cursor_model_for_cli, validate_extra_args,
+    CodexProviderConfig, CursorProviderConfig, DENIED_EXTRA_ARG_FLAGS, OpenCodeProviderConfig,
+    SkillRef, StepAvailability, cursor_model_for_cli, validate_extra_args,
 };
 pub use general::{DevConfig, DockerConfig, GeneralConfig, ProvisioningConfig, TicketingSystem};
 pub use git::{GitConfig, GitHubAppConfig};
 pub use jira::{JiraConfig, LinkedItemsPromptMode};
 pub use load::{detect_legacy_command_keys, resolve_config_relative_path};
+pub use polling::{PollingConfig, PollingGitHubFilter, PollingJiraFilter, matches_any_keyword};
 pub use runtime::{EditorConfig, NetworkConfig, TerminalConfig};
 pub use template::{interpolate_agent_prompt, interpolate_command_template};
 pub use web::{
-    GeneralConcurrencyPatch, RuntimeDashboardConfigPatch, WebConfig, WebLoginPatch,
-    validate_cors_origin,
+    GeneralConcurrencyPatch, RuntimeDashboardConfigPatch, WebConfig, validate_cors_origin,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -77,6 +77,10 @@ pub struct Config {
     /// deployment to that backend.
     #[serde(default)]
     pub database: DatabaseConfig,
+    /// Admin-tunable item-polling policy (auto-start flow, parallel-item caps,
+    /// per-system filtering). Read live by the Jira / GitHub pollers.
+    #[serde(default)]
+    pub polling: PollingConfig,
 }
 
 impl Config {

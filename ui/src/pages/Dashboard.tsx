@@ -148,7 +148,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         connected={connected} authEnabled={authEnabled}
         githubAppConfigured={githubAppConfigured}
         githubAppInstallationId={githubAppInstallationId}
-        githubAppName={config?.github_app_name} onLogout={onLogout}
+        githubAppName={config?.github_app_name} isAdmin={isAdmin} onLogout={onLogout}
         repos={myRepos ?? []} activeRepoName={activeRepoName}
         onSelectRepo={setActiveRepoName}
       />
@@ -162,7 +162,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
           Dry mode is enabled &mdash; Jira/GitHub side effects are skipped
         </div>
       )}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
+      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
         <SummaryStats counts={counts} />
         {hasAnyRepo === false ? (
           <div className="text-center py-16">

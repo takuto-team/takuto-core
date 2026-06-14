@@ -1,71 +1,47 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-export interface TerminalLine {
-  text: string;
-  stream: string;
-}
+// ===========================================================================
+// DRIFT-PROTECTION BOUNDARY — read before editing.
+//
+// This file has TWO halves:
+//
+// 1. GENERATED (re-exported just below): mirrored from the Rust DTOs by ts-rs
+//    into `./generated/*.ts`. These are drift-protected — the `ts-types-drift`
+//    CI job regenerates and fails if the committed TS differs from the Rust
+//    source of truth. Do NOT hand-edit the generated files or re-declare these
+//    shapes here. To change one, edit the Rust DTO (e.g.
+//    `crates/maestro-web/src/routes/workflows/dto.rs`) and run
+//    `./scripts/generate-ts-types.sh`, then commit the regenerated files.
+//      Generated set: WorkflowSummary, RunCommandStatus, TerminalLine,
+//      WorkflowCounts, StepLog, StepStatus, GitHubRepo, GitHubIssue,
+//      TodoTicket, TicketPreview.
+//
+// 2. HAND-WRITTEN (everything else below): NOT drift-protected — kept manual on
+//    purpose, for one of two reasons:
+//    a) Shape can't be mirrored cleanly: `ConfigResponse`, every `*Patch` body,
+//       and the `AgentConfig`/provider family use loose `[key: string]: unknown`
+//       forward-compat shapes and (for ConfigResponse) mirror a
+//       `#[serde(flatten)]` over the whole Rust `Config` tree, which ts-rs
+//       cannot reproduce without breaking those consumers. `WorkflowEvent` must
+//       stay a FLAT optional-field struct (consumers branch on `event_type` as a
+//       plain string) — do NOT let ts-rs emit a tagged union for it without
+//       refactoring useWorkflows.handleEvent.
+//    b) Generating would break a consumer (stop-on-fallout): `PollingStatus`
+//       would gain a required `reason` field, breaking the `{ paused }`
+//       optimistic-update literal in usePolling.ts.
+//    Other response types (AuthStatus, SystemStatus, MarkDoneOutcome,
+//    WorkflowDefinition, Open*Response, Improve/PromptResponse, Workspace,
+//    User, credentials) are simply still hand-synced; migrating each is
+//    mechanical (a `#[derive(TS)]` + a co-located `ts_bindings` export test +
+//    a re-export here) where it maps cleanly.
+// ===========================================================================
 
-export interface StepLog {
-  name: string;
-  status: string;
-  started_at?: string;
-  completed_at?: string;
-  error?: string;
-}
-
-export interface WorkflowSummary {
-  id: string;
-  ticket_key: string;
-  ticket_summary: string;
-  ticket_description: string;
-  ticket_type: string;
-  state: string;
-  started_at: string;
-  updated_at: string;
-  branch_name: string;
-  pr_url: string | null;
-  pr_merged: boolean;
-  steps_log: StepLog[];
-  error: string | null;
-  terminal_lines: TerminalLine[];
-  can_mark_done: boolean;
-  can_delete: boolean;
-  can_start: boolean;
-  progress_percent: number;
-  progress_steps_total: number;
-  started_manually: boolean;
-  counts_toward_manual_cap: boolean;
-  jira_browse_url: string;
-  issue_url: string | null;
-  can_open_editor: boolean;
-  editor_url: string | null;
-  editor_port_mappings: [number, string][];
-  jira_available: boolean;
-  ticketing_system: string;
-  can_resume_from_error: boolean;
-  terminal_url: string | null;
-  run_commands: RunCommandStatus[];
-  generate_report: boolean;
-  has_report: boolean;
-  definition_runs: Record<string, string>;
-  /** Absolute path of the git worktree on disk. Absent while being pre-created in the background. */
-  worktree_path?: string;
-  /** Name of the repository (workspace) the workflow belongs to. Always
-   *  present on the wire; may be empty string for legacy snapshots that
-   *  pre-date workspace_name being recorded. */
-  workspace_name: string;
-  /** UUID of the repository row the workflow belongs to. `None` for legacy
-   *  snapshots not yet back-filled by reconciliation. */
-  repository_id?: string;
-}
-
-export interface RunCommandStatus {
-  index: number;
-  name: string;
-  running: boolean;
-  forwarded_port: [number, string] | null;
-}
+export type { TerminalLine } from "./generated/TerminalLine";
+export type { StepLog } from "./generated/StepLog";
+export type { StepStatus } from "./generated/StepStatus";
+export type { WorkflowSummary } from "./generated/WorkflowSummary";
+export type { RunCommandStatus } from "./generated/RunCommandStatus";
 
 export interface WorkflowEvent {
   event_type: string;
@@ -136,6 +112,12 @@ export interface AgentCodexConfig extends AgentProviderConfigBase {
 
 export interface AgentOpenCodeConfig extends AgentProviderConfigBase {
   base_url: string;
+  /**
+   * Self-hosted-only token limits written into `models.<id>.limit` of the
+   * synthesised `opencode.json`. `null`/absent = let OpenCode choose.
+   */
+  context_limit?: number | null;
+  output_limit?: number | null;
 }
 
 export interface AgentGeminiConfig extends AgentProviderConfigBase {
@@ -156,6 +138,9 @@ export interface AgentConfig {
   available_providers: AgentProviderId[];
   step_timeout_secs?: number;
   improve_timeout_secs?: number;
+  /** No-progress guardrail: consecutive identical output lines that abort a
+   *  step. `0` disables the guardrail. */
+  max_repeated_output_lines?: number;
   share_conversation_across_steps?: boolean;
   providers: AgentProvidersConfig;
   /** Forward-compat for unknown fields surfaced by older / newer servers. */
@@ -186,7 +171,78 @@ export interface AgentConfigPatch {
   provider?: AgentProviderId;
   available_providers?: AgentProviderId[];
   share_conversation_across_steps?: boolean;
+  /** Per-step agent timeout (seconds). Server enforces a floor. */
+  step_timeout_secs?: number;
+  /** Timeout for the "improve description" call (seconds). Server floor. */
+  improve_timeout_secs?: number;
+  /** No-progress guardrail line count; `0` disables it. Server floor. */
+  max_repeated_output_lines?: number;
   providers?: AgentProvidersConfigPatch;
+}
+
+/**
+ * The `[polling]` section as surfaced by `GET /api/config`. Jira item *types*
+ * are not duplicated here — they live at `config.jira.item_types`.
+ */
+export interface PollingConfig {
+  auto_start_flow: string;
+  max_parallel_items: number;
+  max_parallel_per_user: boolean;
+  jira: { summary_keywords: string[] };
+  github: { labels: string[]; title_keywords: string[] };
+}
+
+/**
+ * Patch body for `PUT /api/config/polling`. Every field is optional
+ * (replace-on-present; arrays replace wholesale). The top-level `item_types`
+ * patches `config.jira.item_types` — the generic `PUT /api/config` allowlist
+ * cannot carry it.
+ */
+export interface ItemPollingConfigPatch {
+  auto_start_flow?: string;
+  max_parallel_items?: number;
+  max_parallel_per_user?: boolean;
+  jira?: { summary_keywords?: string[] };
+  github?: { labels?: string[]; title_keywords?: string[] };
+  item_types?: string[];
+  /** Patches [general] poll_interval_secs; server enforces a >= 10 floor. */
+  poll_interval_secs?: number;
+  /** Enable/disable item polling. Patches [general] auto_polling and flips the
+   *  live polling_paused flag immediately. */
+  auto_polling?: boolean;
+  /** [general] cap on manual starts occupying a slot at once; `0` = unlimited. */
+  max_concurrent_manual_workflows?: number;
+  /** [general] how often the PR-merge poller checks GitHub (seconds). */
+  pr_merge_poll_interval_secs?: number;
+  /** [general] default for whether workflows generate an end-of-run report. */
+  generate_report?: boolean;
+  /** [general] days of work-item logs to retain; `0` = keep forever. */
+  work_item_log_retention_days?: number;
+}
+
+/** One of the three linked-issue inclusion modes for `linked_items_in_prompt`. */
+export type LinkedItemsInPrompt = "full" | "summary_only" | "omit";
+
+/**
+ * Patch body for `PUT /api/config/jira` — the Jira-context portion of the
+ * `[jira]` section. Every field is optional (replace-on-present; arrays
+ * replace wholesale). Mirrors `agentConfig.ts` / `itemPollingConfig.ts`: a
+ * single PUT returns the fresh redacted `ConfigResponse` (with `persisted` /
+ * `persist_warning`).
+ */
+export interface JiraConfigPatch {
+  /** How linked issues are embedded in `{ticket_context}`. */
+  linked_items_in_prompt?: LinkedItemsInPrompt;
+  /** Byte cap on the main ticket description in context; `0` = unlimited. */
+  ticket_context_max_description_bytes?: number;
+  /** Byte cap on each linked-issue description in context; `0` = unlimited. */
+  linked_issue_description_max_bytes?: number;
+  /** Extra JQL appended to the poller query. Empty string clears it. */
+  jql_filter?: string;
+  /** Status the "Mark as Done" transition targets (default "Done"). */
+  done_status?: string;
+  /** Jira project keys the poller pulls from. Replaces the list wholesale. */
+  project_keys?: string[];
 }
 
 export interface ConfigResponse {
@@ -195,7 +251,12 @@ export interface ConfigResponse {
     max_concurrent_workflows: number;
     max_active_workflows: number;
     max_concurrent_manual_workflows: number;
+    poll_interval_secs: number;
+    auto_polling: boolean;
     ticketing_system: string;
+    pr_merge_poll_interval_secs?: number;
+    generate_report?: boolean;
+    work_item_log_retention_days?: number;
     [key: string]: unknown;
   };
   /**
@@ -211,6 +272,14 @@ export interface ConfigResponse {
   jira: {
     project_keys: string[];
     site: string;
+    /** Issue types the Jira poller pulls. Patched via PUT /api/config/polling. */
+    item_types?: string[];
+    /** Jira-context fields patched via PUT /api/config/jira. */
+    linked_items_in_prompt?: LinkedItemsInPrompt;
+    ticket_context_max_description_bytes?: number;
+    linked_issue_description_max_bytes?: number;
+    jql_filter?: string;
+    done_status?: string;
     [key: string]: unknown;
   };
   github: {
@@ -219,6 +288,11 @@ export interface ConfigResponse {
     app_name?: string;
     [key: string]: unknown;
   };
+  /**
+   * Admin-tunable polling policy (the `[polling]` section). Optional because a
+   * pre-feature server omits it; the Item Polling tab falls back to defaults.
+   */
+  polling?: PollingConfig;
   web: {
     dashboard_username: string;
     [key: string]: unknown;
@@ -260,19 +334,9 @@ export interface Workspace {
   active: boolean;
 }
 
-export interface WorkflowCounts {
-  running: number;
-  completed: number;
-  errors: number;
-  paused: number;
-}
+export type { WorkflowCounts } from "./generated/WorkflowCounts";
 
-export interface GitHubRepo {
-  full_name: string;
-  description: string;
-  private: boolean;
-  html_url: string;
-}
+export type { GitHubRepo } from "./generated/GitHubRepo";
 
 export interface PollingStatus {
   paused: boolean;
@@ -483,23 +547,9 @@ export interface PatchGithubSettingsRequest {
   attribute_commits: boolean;
 }
 
-export interface TodoTicket {
-  key: string;
-  summary: string;
-}
-
-export interface TicketPreview {
-  key: string;
-  summary: string;
-  description_markdown: string;
-}
-
-export interface GitHubIssue {
-  key: string;
-  summary: string;
-  body: string;
-  url: string;
-}
+export type { TodoTicket } from "./generated/TodoTicket";
+export type { TicketPreview } from "./generated/TicketPreview";
+export type { GitHubIssue } from "./generated/GitHubIssue";
 
 export interface OpenEditorResponse {
   url: string;

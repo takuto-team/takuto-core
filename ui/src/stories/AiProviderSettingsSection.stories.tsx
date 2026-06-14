@@ -81,6 +81,8 @@ const EMPTY: ProviderDraft = {
   provider_name: "",
   extra_args_text: "",
   allow_shared_default: false,
+  context_limit: "",
+  output_limit: "",
 };
 
 /* ── ProviderForm variants ── */

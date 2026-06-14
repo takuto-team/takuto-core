@@ -19,7 +19,7 @@ use tracing::{info, warn};
 
 use maestro_core::config::{
     AgentProviderConfig, AiAgentProvider, CodexProviderConfig, CursorProviderConfig,
-    validate_extra_args,
+    OpenCodeProviderConfig, validate_extra_args,
 };
 use maestro_core::docker_hooks::collect_system_status_with_db;
 use maestro_core::workflow::engine::WorkflowEvent;
@@ -46,6 +46,17 @@ pub struct PutAgentConfigRequest {
     /// resumes the prior step's session) vs. a fresh session per step.
     #[serde(default)]
     pub share_conversation_across_steps: Option<bool>,
+    /// Timeout per agent session, in seconds. `Config::validate` enforces the
+    /// `>= 1` floor.
+    #[serde(default)]
+    pub step_timeout_secs: Option<u64>,
+    /// Timeout for "Improve with AI" / "Prompt ticket" sessions, in seconds.
+    #[serde(default)]
+    pub improve_timeout_secs: Option<u64>,
+    /// No-progress guardrail: abort a step after this many consecutive
+    /// repeated output lines. `0` disables the guardrail.
+    #[serde(default)]
+    pub max_repeated_output_lines: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,7 +69,7 @@ pub struct ProvidersPatch {
     #[serde(default)]
     pub codex: Option<CodexProviderPatch>,
     #[serde(default)]
-    pub opencode: Option<AgentProviderPatch>,
+    pub opencode: Option<OpenCodeProviderPatch>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +96,41 @@ pub struct CursorProviderPatch {
     pub extra_args: Option<Vec<String>>,
     #[serde(default)]
     pub allow_shared_default: Option<bool>,
+}
+
+/// OpenCode patch — the generic fields plus the two self-hosted-only token
+/// limits. The limits use a "double option" so the request can express three
+/// distinct intents: absent (leave alone), `null` (clear back to default), or
+/// a number (set). A plain `Option<u32>` cannot distinguish absent from
+/// `null`, which the dashboard form needs to clear a previously-set limit.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenCodeProviderPatch {
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub extra_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub allow_shared_default: Option<bool>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub context_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub output_limit: Option<Option<u32>>,
+}
+
+/// Deserialize a present-but-maybe-null field into `Some(inner)` so callers
+/// can tell "key omitted" (`None`) from "key explicitly null" (`Some(None)`).
+// The three-way distinction is the whole point here, so the nested Option is
+// intentional rather than a smell.
+#[allow(clippy::option_option)]
+fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::deserialize(de)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +197,29 @@ fn apply_codex_patch(target: &mut CodexProviderConfig, patch: CodexProviderPatch
     }
     if let Some(v) = patch.allow_shared_default {
         target.allow_shared_default = v;
+    }
+}
+
+fn apply_opencode_patch(target: &mut OpenCodeProviderConfig, patch: OpenCodeProviderPatch) {
+    if let Some(v) = patch.model {
+        target.model = v;
+    }
+    if let Some(v) = patch.base_url {
+        target.base_url = v;
+    }
+    if let Some(v) = patch.extra_args {
+        target.extra_args = v;
+    }
+    if let Some(v) = patch.allow_shared_default {
+        target.allow_shared_default = v;
+    }
+    // `Some(inner)` = field was present (inner may be None to clear);
+    // outer `None` = field omitted, leave the stored value untouched.
+    if let Some(v) = patch.context_limit {
+        target.context_limit = v;
+    }
+    if let Some(v) = patch.output_limit {
+        target.output_limit = v;
     }
 }
 
@@ -251,6 +320,15 @@ pub async fn put_agent_config(
         if let Some(share) = patch.share_conversation_across_steps {
             config.agent.share_conversation_across_steps = share;
         }
+        if let Some(v) = patch.step_timeout_secs {
+            config.agent.step_timeout_secs = v;
+        }
+        if let Some(v) = patch.improve_timeout_secs {
+            config.agent.improve_timeout_secs = v;
+        }
+        if let Some(v) = patch.max_repeated_output_lines {
+            config.agent.max_repeated_output_lines = v;
+        }
         if let Some(providers_patch) = patch.providers {
             if let Some(p) = providers_patch.claude {
                 apply_generic_patch(&mut config.agent.providers.claude, p);
@@ -262,7 +340,7 @@ pub async fn put_agent_config(
                 apply_codex_patch(&mut config.agent.providers.codex, p);
             }
             if let Some(p) = providers_patch.opencode {
-                apply_generic_patch(&mut config.agent.providers.opencode, p);
+                apply_opencode_patch(&mut config.agent.providers.opencode, p);
             }
         }
 
@@ -368,4 +446,241 @@ pub async fn put_agent_config(
         persisted,
         persist_warning,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The OpenCode limits are tri-state: absent (leave alone), `null`
+    /// (clear), or a number (set). `double_option` is what makes the first
+    /// two distinguishable.
+    #[test]
+    fn opencode_limit_double_option_distinguishes_absent_null_and_value() {
+        // Absent → outer None (leave alone).
+        let p: OpenCodeProviderPatch = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(p.context_limit, None);
+        assert_eq!(p.output_limit, None);
+
+        // Explicit null → Some(None) (clear).
+        let p: OpenCodeProviderPatch =
+            serde_json::from_value(serde_json::json!({ "context_limit": null })).unwrap();
+        assert_eq!(p.context_limit, Some(None));
+
+        // Number → Some(Some(n)) (set).
+        let p: OpenCodeProviderPatch =
+            serde_json::from_value(serde_json::json!({ "context_limit": 32768 })).unwrap();
+        assert_eq!(p.context_limit, Some(Some(32768)));
+    }
+
+    #[test]
+    fn apply_opencode_patch_sets_clears_and_leaves_limits() {
+        let mut cfg = OpenCodeProviderConfig {
+            context_limit: Some(8192),
+            output_limit: Some(4096),
+            ..Default::default()
+        };
+
+        // Omitted → unchanged; set output to a new value.
+        apply_opencode_patch(
+            &mut cfg,
+            OpenCodeProviderPatch {
+                model: None,
+                base_url: None,
+                extra_args: None,
+                allow_shared_default: None,
+                context_limit: None,
+                output_limit: Some(Some(16000)),
+            },
+        );
+        assert_eq!(
+            cfg.context_limit,
+            Some(8192),
+            "omitted must leave unchanged"
+        );
+        assert_eq!(cfg.output_limit, Some(16000), "Some(Some) must set");
+
+        // Explicit null clears.
+        apply_opencode_patch(
+            &mut cfg,
+            OpenCodeProviderPatch {
+                model: None,
+                base_url: None,
+                extra_args: None,
+                allow_shared_default: None,
+                context_limit: Some(None),
+                output_limit: None,
+            },
+        );
+        assert_eq!(cfg.context_limit, None, "Some(None) must clear");
+        assert_eq!(cfg.output_limit, Some(16000), "untouched on this call");
+    }
+
+    /// Unknown keys in the opencode patch are rejected (deny_unknown_fields).
+    #[test]
+    fn opencode_patch_rejects_unknown_fields() {
+        let r: Result<OpenCodeProviderPatch, _> =
+            serde_json::from_value(serde_json::json!({ "bogus": 1 }));
+        assert!(r.is_err());
+    }
+
+    /// The step-guardrail fields parse into the typed request body.
+    #[test]
+    fn step_guardrail_fields_parse() {
+        let p: PutAgentConfigRequest = serde_json::from_value(serde_json::json!({
+            "step_timeout_secs": 600,
+            "improve_timeout_secs": 120,
+            "max_repeated_output_lines": 0,
+        }))
+        .unwrap();
+        assert_eq!(p.step_timeout_secs, Some(600));
+        assert_eq!(p.improve_timeout_secs, Some(120));
+        assert_eq!(p.max_repeated_output_lines, Some(0));
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use crate::server::build_router;
+    use crate::state::AppState;
+    use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+    async fn create_and_login_user(state: &AppState, admin_cookie: &str) -> String {
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::post("/api/users")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", admin_cookie)
+                    .body(Body::from(
+                        r#"{"username":"viewer","password":"viewerpass1234"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let app = build_router(state.clone());
+        let login = app
+            .oneshot(
+                Request::post("/api/auth/login")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .body(Body::from(
+                        r#"{"username":"viewer","password":"viewerpass1234"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::NO_CONTENT);
+        let set_cookie = login
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        set_cookie.split(';').next().unwrap().trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn put_agent_step_guardrails_persist() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::put("/api/config/agent")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"step_timeout_secs":900,"improve_timeout_secs":240,"max_repeated_output_lines":12}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["agent"]["step_timeout_secs"], 900);
+        assert_eq!(json["agent"]["improve_timeout_secs"], 240);
+        assert_eq!(json["agent"]["max_repeated_output_lines"], 12);
+
+        let cfg = state.config.config.read().await;
+        assert_eq!(cfg.agent.step_timeout_secs, 900);
+        assert_eq!(cfg.agent.improve_timeout_secs, 240);
+        assert_eq!(cfg.agent.max_repeated_output_lines, 12);
+    }
+
+    #[tokio::test]
+    async fn put_agent_step_timeout_zero_returns_400() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::put("/api/config/agent")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(r#"{"step_timeout_secs":0}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn put_agent_unknown_field_returns_400() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::put("/api/config/agent")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(r#"{"bogus":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn put_agent_non_admin_returns_403() {
+        let state = test_state_with_db();
+        let admin_cookie = register_and_login(&state).await;
+        let user_cookie = create_and_login_user(&state, &admin_cookie).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::put("/api/config/agent")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &user_cookie)
+                    .body(Body::from(r#"{"step_timeout_secs":600}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
 }

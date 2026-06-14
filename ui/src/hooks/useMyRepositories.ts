@@ -18,7 +18,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listMyRepositories, type RepositoryRow } from "../api/client";
+import { queryKeys } from "../api/queryClient";
 
 const ACTIVE_REPO_KEY = "maestro.activeRepoName";
 
@@ -31,13 +33,19 @@ export interface UseMyRepositoriesResult {
 }
 
 export function useMyRepositories(): UseMyRepositoriesResult {
-  const [myRepos, setMyRepos] = useState<RepositoryRow[] | null>(null);
+  const queryClient = useQueryClient();
+  const { data, isError } = useQuery({
+    queryKey: queryKeys.repositories,
+    queryFn: listMyRepositories,
+  });
+  // `null` is the loading sentinel (no data yet); a fetch error resolves to
+  // an empty list so the empty-state CTA renders instead of a permanent
+  // spinner — matching the pre-Query `.catch(() => setMyRepos([]))`.
+  const myRepos: RepositoryRow[] | null = data ?? (isError ? [] : null);
 
   const refresh = useCallback(() => {
-    listMyRepositories()
-      .then(setMyRepos)
-      .catch(() => setMyRepos([]));
-  }, []);
+    queryClient.invalidateQueries({ queryKey: queryKeys.repositories });
+  }, [queryClient]);
 
   const [activeRepoName, setActiveRepoNameState] = useState<string | null>(() => {
     try {
@@ -70,10 +78,6 @@ export function useMyRepositories(): UseMyRepositoriesResult {
       setActiveRepoName(myRepos[0].name);
     }
   }, [myRepos, activeRepoName, setActiveRepoName]);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
 
   const hasAnyRepo = myRepos === null ? null : myRepos.length > 0;
   return { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName, refresh };

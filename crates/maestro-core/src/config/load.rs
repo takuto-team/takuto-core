@@ -72,9 +72,6 @@ impl Config {
         warn_legacy_command_keys(toml_content);
         let mut config: Config = toml::from_str(toml_content)?;
         config.web.normalize_cors_origins();
-        // Phase 1: migrate legacy flat [agent] keys into the new sub-tables
-        // before validation so validation sees the post-migration shape.
-        config.agent.migrate_legacy_flat_fields();
         config.validate()?;
         Ok(config)
     }
@@ -88,8 +85,6 @@ impl Config {
         warn_legacy_command_keys(&content);
         let mut config: Config = toml::from_str(&content)?;
         config.web.normalize_cors_origins();
-        // Phase 1: migrate legacy flat [agent] keys into the new sub-tables.
-        config.agent.migrate_legacy_flat_fields();
         config.validate()?;
         Ok(config)
     }
@@ -154,37 +149,6 @@ impl Config {
             .into());
         }
 
-        let du = self.web.dashboard_username.trim();
-        let dp = self.web.dashboard_password.as_str();
-        let has_u = !du.is_empty();
-        let has_p = !dp.is_empty();
-        if has_u != has_p {
-            return Err(ConfigError::Validation {
-                section: "web",
-                field: "dashboard_username/dashboard_password",
-                detail: "set both, or leave both empty (no dashboard auth)".to_string(),
-            }
-            .into());
-        }
-        const MAX_DASHBOARD_USER_LEN: usize = 256;
-        const MAX_DASHBOARD_PASSWORD_LEN: usize = 4096;
-        if du.len() > MAX_DASHBOARD_USER_LEN {
-            return Err(ConfigError::Validation {
-                section: "web",
-                field: "dashboard_username",
-                detail: format!("exceeds {MAX_DASHBOARD_USER_LEN} bytes (trimmed)"),
-            }
-            .into());
-        }
-        if dp.len() > MAX_DASHBOARD_PASSWORD_LEN {
-            return Err(ConfigError::Validation {
-                section: "web",
-                field: "dashboard_password",
-                detail: format!("exceeds {MAX_DASHBOARD_PASSWORD_LEN} bytes"),
-            }
-            .into());
-        }
-
         // Validate CORS origins (normalization is done by `normalize_cors_origins` before validate).
         for (i, origin) in self.web.cors_origins.iter().enumerate() {
             if let Err(msg) = validate_cors_origin(origin) {
@@ -221,9 +185,7 @@ impl Config {
             return Err(ConfigError::Validation {
                 section: "agent",
                 field: "providers.cursor.cli",
-                detail:
-                    "must be set (or legacy agent.cursor_cli) when agent.provider is \"cursor\""
-                        .to_string(),
+                detail: "must be set when agent.provider is \"cursor\"".to_string(),
             }
             .into());
         }
@@ -277,6 +239,31 @@ impl Config {
             }
         }
 
+        // OpenCode context/output limits, when present, must be positive — a
+        // zero-token window is nonsensical and would emit an invalid `limit`
+        // block into the worker's opencode.json. Validated regardless of the
+        // active provider so a stored 0 surfaces at save time.
+        if self.agent.providers.opencode.context_limit == Some(0) {
+            return Err(ConfigError::Validation {
+                section: "agent.providers.opencode",
+                field: "context_limit",
+                detail: "opencode_context_limit_positive: context_limit must be \
+                         greater than 0 (leave unset to let OpenCode choose)"
+                    .to_string(),
+            }
+            .into());
+        }
+        if self.agent.providers.opencode.output_limit == Some(0) {
+            return Err(ConfigError::Validation {
+                section: "agent.providers.opencode",
+                field: "output_limit",
+                detail: "opencode_output_limit_positive: output_limit must be \
+                         greater than 0 (leave unset to let OpenCode choose)"
+                    .to_string(),
+            }
+            .into());
+        }
+
         // Phase 1 (04_architecture.md §0 D10): deny-list every provider's
         // `extra_args` against Maestro-owned flags, regardless of which
         // provider is currently active. Operators commonly switch providers
@@ -302,6 +289,41 @@ impl Config {
                 detail: "must be a non-empty remote name (e.g. origin)".to_string(),
             }
             .into());
+        }
+
+        // Polling filters: reject empty / whitespace-only entries so a stray
+        // `""` cannot silently degrade a filter into match-everything. No
+        // validation on `auto_start_flow` (slug resolved per-workspace/user at
+        // runtime) or `max_parallel_items` (`0` = unlimited is valid).
+        for kw in &self.polling.jira.summary_keywords {
+            if kw.trim().is_empty() {
+                return Err(ConfigError::Validation {
+                    section: "polling.jira",
+                    field: "summary_keywords",
+                    detail: "entries must be non-empty (remove blank keywords)".to_string(),
+                }
+                .into());
+            }
+        }
+        for label in &self.polling.github.labels {
+            if label.trim().is_empty() {
+                return Err(ConfigError::Validation {
+                    section: "polling.github",
+                    field: "labels",
+                    detail: "entries must be non-empty (remove blank labels)".to_string(),
+                }
+                .into());
+            }
+        }
+        for kw in &self.polling.github.title_keywords {
+            if kw.trim().is_empty() {
+                return Err(ConfigError::Validation {
+                    section: "polling.github",
+                    field: "title_keywords",
+                    detail: "entries must be non-empty (remove blank keywords)".to_string(),
+                }
+                .into());
+            }
         }
 
         // GitHub App: if any field is set, validate consistency (all-or-nothing for required fields).
@@ -357,7 +379,6 @@ impl Config {
     /// Copy for JSON API responses: strips secrets (never expose via `GET /api/config`).
     pub fn redacted_for_api_clone(&self) -> Self {
         let mut c = self.clone();
-        c.web.dashboard_password.clear();
         c.github.app_private_key.clear();
         c.github.app_private_key_path.clear();
         // `[database].connection` may carry a password

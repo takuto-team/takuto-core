@@ -79,7 +79,7 @@ pub async fn start_manual_workflow(
         }
     };
 
-    let max_manual = {
+    let (max_manual, max_parallel_items, max_parallel_per_user) = {
         let cfg_guard = cfg.config.read().await;
         if jira_on && cfg_guard.jira.project_keys.is_empty() {
             return Err((
@@ -87,7 +87,11 @@ pub async fn start_manual_workflow(
                 "No Jira project keys configured".into(),
             ));
         }
-        cfg_guard.general.max_concurrent_manual_workflows
+        (
+            cfg_guard.general.max_concurrent_manual_workflows,
+            cfg_guard.polling.max_parallel_items,
+            cfg_guard.polling.max_parallel_per_user,
+        )
     };
 
     {
@@ -133,6 +137,26 @@ pub async fn start_manual_workflow(
                 StatusCode::CONFLICT,
                 format!(
                     "Maximum concurrent manual items ({max_manual}) reached; complete, stop, or delete a manual item first"
+                ),
+            ));
+        }
+    }
+
+    // `[polling] max_parallel_items` is an independent ceiling on items
+    // occupying a concurrency slot (per-user when `max_parallel_per_user`,
+    // else global). Reuses the existing 409 → toast path on the dashboard.
+    if max_parallel_items > 0 {
+        let scope = if max_parallel_per_user {
+            Some(auth.user_id.as_str())
+        } else {
+            None
+        };
+        let in_use = engine.engine.active_item_count(scope).await;
+        if in_use >= max_parallel_items as usize {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "Maximum parallel items ({max_parallel_items}) reached; complete, stop, or delete an item first"
                 ),
             ));
         }
@@ -185,10 +209,15 @@ pub async fn start_manual_workflow(
                 .iter()
                 .max_by_key(|r| r.created_at)
                 .map(|r| r.id.clone())
-                // SAFETY: `user_repos.is_empty()` is rejected with 400
-                // above, so the iterator has at least one element and
-                // `max_by_key` returns `Some`.
-                .expect("user_repos.is_empty() returned 400 above"),
+                // `user_repos.is_empty()` is rejected with 400 above, so the
+                // iterator is non-empty and `max_by_key` returns `Some`. The
+                // `?` keeps the impossible case off the handler's panic path.
+                .ok_or_else(|| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "no repository available after non-empty check".to_string(),
+                    )
+                })?,
         };
         Some(chosen_id)
     } else {
@@ -215,4 +244,122 @@ pub async fn start_manual_workflow(
         workflow_id,
         ticket_key,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use crate::server::build_router;
+    use crate::state::AppState;
+    use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+    async fn user_id_for(state: &AppState, username: &str) -> String {
+        let db = state.auth.db.as_ref().expect("db");
+        maestro_core::db::users::get_user_by_username(db.adapter(), username)
+            .await
+            .expect("query user")
+            .expect("user exists")
+            .id
+    }
+
+    /// Seed a slot-occupying (Pending) workflow owned by `owner_id`.
+    async fn seed_item(state: &AppState, ticket_key: &str, owner_id: &str) {
+        state
+            .engine
+            .engine
+            .start_workflow(
+                ticket_key.to_string(),
+                "seeded".to_string(),
+                false,
+                None,
+                None,
+                Some(owner_id.to_string()),
+                None,
+            )
+            .await
+            .expect("seed start_workflow");
+    }
+
+    fn start_manual_request(cookie: &str) -> Request<Body> {
+        Request::post("/api/workflows/start-manual")
+            .header("Content-Type", "application/json")
+            .header("Origin", TEST_ORIGIN)
+            .header("Cookie", cookie)
+            .body(Body::from(
+                r#"{"ticket_key":"NEW-1","ticket_summary":"new item"}"#,
+            ))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn manual_start_409_when_global_parallel_cap_reached() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let admin_id = user_id_for(&state, "admin").await;
+
+        {
+            let mut cfg = state.config.config.write().await;
+            cfg.polling.max_parallel_items = 1;
+            cfg.polling.max_parallel_per_user = false;
+        }
+        seed_item(&state, "SEED-1", &admin_id).await;
+
+        let app = build_router(state);
+        let resp = app.oneshot(start_manual_request(&cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn manual_start_409_when_per_user_parallel_cap_reached() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let admin_id = user_id_for(&state, "admin").await;
+
+        {
+            let mut cfg = state.config.config.write().await;
+            cfg.polling.max_parallel_items = 1;
+            cfg.polling.max_parallel_per_user = true;
+        }
+        // An item owned by the caller (admin) fills the caller's single slot.
+        seed_item(&state, "SEED-1", &admin_id).await;
+
+        let app = build_router(state);
+        let resp = app.oneshot(start_manual_request(&cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn manual_start_per_user_cap_ignores_other_users_items() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        // A second user owns the only slot-occupying item.
+        let other_id = "other-user";
+        {
+            let db = state.auth.db.as_ref().unwrap();
+            db.adapter()
+                .execute(
+                    "INSERT INTO users (id, username, role) VALUES (?, 'other', 'user')",
+                    vec![other_id.into()],
+                )
+                .await
+                .expect("seed other user");
+        }
+        {
+            let mut cfg = state.config.config.write().await;
+            cfg.polling.max_parallel_items = 1;
+            cfg.polling.max_parallel_per_user = true;
+        }
+        seed_item(&state, "SEED-1", other_id).await;
+
+        // The admin has zero items, so the per-user parallel cap does NOT fire;
+        // the request proceeds past it and is rejected later for having no repo
+        // (400), proving the cap counted only the caller's items.
+        let app = build_router(state);
+        let resp = app.oneshot(start_manual_request(&cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
 }

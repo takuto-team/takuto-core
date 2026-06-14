@@ -24,6 +24,18 @@ pub fn extract_session_id_from_ndjson(raw: &str) -> Option<String> {
     None
 }
 
+/// `true` when a humanized line is a per-turn session-lifecycle marker
+/// ("… session initialized" / "… session completed" / "Session completed.")
+/// rather than substantive agent output. The no-progress guardrail excludes
+/// these from its repetition count: they recur every turn even in a healthy
+/// multi-turn run, so counting them would false-trip the detector. Matched on
+/// the stable suffixes every provider's humanizer emits (see the `*_line`
+/// producers in this file).
+pub fn is_session_lifecycle_line(line: &str) -> bool {
+    let l = line.trim().trim_end_matches('.').to_ascii_lowercase();
+    l.ends_with("session initialized") || l.ends_with("session completed")
+}
+
 pub fn humanize_agent_stream_line(provider: AiAgentProvider, raw: &str) -> Option<String> {
     match provider {
         AiAgentProvider::Claude => humanize_claude_output(raw),
@@ -626,6 +638,29 @@ mod tests {
         let line = opencode_humanize(raw).expect("must surface");
         assert!(line.starts_with("OpenCode error:"), "{line}");
         assert!(line.contains("no provider"), "{line}");
+    }
+
+    #[test]
+    fn session_lifecycle_lines_recognized_across_providers() {
+        // Excluded from the no-progress repetition count.
+        for l in [
+            "OpenCode session initialized",
+            "OpenCode session completed",
+            "Claude Code session initialized",
+            "Codex session completed",
+            "Cursor Agent session completed.",
+            "Session completed.",
+        ] {
+            assert!(is_session_lifecycle_line(l), "should be lifecycle: {l}");
+        }
+        // Substantive output must NOT be treated as lifecycle.
+        for l in [
+            "It seems there is an issue with pushing the branch.",
+            "$ git push origin feat/gh-4",
+            "Cursor Agent initialized (gpt-5)",
+        ] {
+            assert!(!is_session_lifecycle_line(l), "should be substantive: {l}");
+        }
     }
 
     #[test]

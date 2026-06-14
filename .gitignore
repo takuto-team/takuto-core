@@ -27,6 +27,7 @@ SECURITY_ASSESSMENT_CONTAINER.md
 # React dashboard build output and dependencies
 /ui/node_modules/
 /ui/dist/
+/ui/storybook-static/
 
 # Distribution repository (nested git repo)
 /maestro-releases/

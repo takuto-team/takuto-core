@@ -11,11 +11,6 @@ pub struct WebConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
-    /// When **both** `dashboard_username` and `dashboard_password` are set, the dashboard API and WebSocket require a signed session cookie (see `POST /api/auth/login`). Password is never returned by `GET /api/config`.
-    #[serde(default)]
-    pub dashboard_username: String,
-    #[serde(default)]
-    pub dashboard_password: String,
     /// Allowed CORS origins (e.g. `["http://localhost:8080", "https://maestro.example.com"]`).
     /// When empty (default), auto-computed from `host` and `port`.
     /// Startup-only — not patchable via `PUT /api/config`.
@@ -36,11 +31,6 @@ pub struct WebConfig {
 }
 
 impl WebConfig {
-    /// `true` when username (trimmed) and password are both non-empty.
-    pub fn dashboard_auth_enabled(&self) -> bool {
-        !self.dashboard_username.trim().is_empty() && !self.dashboard_password.is_empty()
-    }
-
     /// Normalize `cors_origins` in place: strip default ports (:80 for http, :443 for https).
     /// Invalid entries are kept unchanged so that `Config::validate()` can report them as errors.
     /// Call this before `Config::validate()` so validation sees the canonical form.
@@ -157,8 +147,6 @@ impl Default for WebConfig {
         Self {
             host: default_host(),
             port: default_port(),
-            dashboard_username: String::new(),
-            dashboard_password: String::new(),
             cors_origins: Vec::new(),
             cookie_secure: None,
             kick_other_sessions_on_login: default_kick_other_sessions(),
@@ -171,18 +159,7 @@ impl Default for WebConfig {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeDashboardConfigPatch {
     #[serde(default)]
-    pub web: Option<WebLoginPatch>,
-    #[serde(default)]
     pub general: Option<GeneralConcurrencyPatch>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WebLoginPatch {
-    #[serde(default)]
-    pub dashboard_username: Option<String>,
-    #[serde(default)]
-    pub dashboard_password: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

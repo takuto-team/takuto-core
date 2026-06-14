@@ -1,77 +1,136 @@
-# --- Workflow definitions ---
+# =============================================================================
+# Maestro configuration
+# =============================================================================
+#
+# This file has two kinds of settings:
+#
+#   • REQUIRED (bootstrap) — needed before the database and dashboard exist, or
+#     applied only at startup. Hand-edit these before the first boot.
+#
+#   • OPTIONAL / UI-managed — have a sane default and are normally edited from
+#     the dashboard's Configuration screens (the UI writes changes back here, so
+#     this file stays the store). A value set here is just a deploy-time default;
+#     keys editable in the UI are tagged `# Managed in Configuration → <tab>`.
+#
 # All workflow step definitions live in TOML files in the workflows/ directory.
-# Copy workflows/*.example.toml → e.g. workflows/implement_ticket.toml (gitignored).
-# Each definition file has top-level `name`, optional `depends_on`, and [[steps]] entries.
-# See workflows/implement_ticket.example.toml for the full format.
+# Copy workflows/*.example.toml → e.g. workflows/implement_ticket.toml
+# (gitignored). Each definition file has top-level `name`, optional `depends_on`,
+# and [[steps]] entries. See workflows/implement_ticket.example.toml.
+#
+# Worktree init commands and dashboard run/stop buttons are per-user and stored
+# in the database — edit them via Configuration → Worktree Settings, not here.
 
-# Worktree init commands and run commands are now per-user, configured
-# via the dashboard's Configuration → Worktree Settings tab. Any stale
-# `[commands]` or `[[run_commands]]` entries in this file are ignored at
-# load time (a startup warning is logged so you notice).
+
+# =============================================================================
+# REQUIRED — bootstrap settings (hand-edit before first boot)
+# =============================================================================
 
 [general]
-dry_mode = false
 # Ticketing system that drives workflow automation.
 # "none"   — no ticketing integration; start workflows manually from the dashboard (default).
 # "jira"   — poll Jira for To Do tickets; requires Atlassian CLI (acli) auth (run make setup).
 # "github" — poll GitHub Issues from the git remote; no Atlassian auth required.
 ticketing_system = "none"
-# Set to false to start with Jira polling paused (same as dashboard **Pause polling**). Use **Resume polling** after startup to pick up To Do tickets without editing config again.
-# auto_polling = false
+# Logging verbosity: trace | debug | info | warn | error. Startup/restart only.
+log_level = "info"
+# Docker image for isolated workflow containers. Default: auto-detected from this Maestro instance.
+# worker_image = "maestro:latest"
+# Path scanned for *.toml workflow definitions, resolved relative to this file. Startup/restart only.
+# workflow_definitions_dir = "workflows"
+# When true (default), the server auto-generates {data_dir}/secret.key on first
+# boot if neither MAESTRO_SECRET_KEY nor an existing keyfile is present. Set to
+# false in hardened environments where the key is provisioned out of band.
+# allow_auto_generate_secret_key = true
+# Skip real Jira/GitHub side effects (no assigns, transitions, or pushes); local
+# work still runs. Deploy-time only (also available as CLI --dry-run).
+# dry_mode = false
+# When true, snapshot workflows with no owner (pre-multi-user orphans) are
+# reassigned to the resolved poller owner at startup. Default false.
+# migrate_orphan_workflows = false
+# When true (default), startup reconciliation re-associates restored workflows
+# with their owner's registered repository. Set false to require manual re-add.
+# migrate_orphan_repo_associations = true
+
+# --- UI-managed [general] keys (deploy-time defaults; edit in the UI) ---
+# Enable/disable polling and the poll cadence.
+# Managed in Configuration → Item Polling.
+# auto_polling = true
 poll_interval_secs = 60
 # Interval (seconds) for polling GitHub to check whether workflow PRs have been merged. 0 disables.
+# Managed in Configuration → Item Polling.
 pr_merge_poll_interval_secs = 60
 # Concurrent install / agent sessions (semaphore across workflows).
+# Managed in Configuration → Item Polling.
 max_concurrent_workflows = 1
 # Max workflows still listed on the dashboard (every visible row, including **Done**, paused, stopped, error).
 # Jira poller will not start new tickets while at this limit. Use **0** to mirror max_concurrent_workflows.
+# Managed in Configuration → Item Polling.
 max_active_workflows = 0
 # Dashboard **+** manual starts: max such workflows that are not **Done**, **Stopped**, or **Error** at once. **0** = no limit.
+# Managed in Configuration → Item Polling.
 # max_concurrent_manual_workflows = 2
 # When true, each agent step appends findings to lore/reports/<item-key>_report.md
-# and a final consolidation step produces a polished summary. The Report button
-# on the dashboard shows the result. Default: false (no report overhead).
+# and a final consolidation step produces a polished summary. Default false.
+# Managed in Configuration → Item Polling.
 # generate_report = false
+# Days of work-item log lines to retain before cleanup. 0 = keep forever. Default 7.
+# Managed in Configuration → Item Polling.
+# work_item_log_retention_days = 7
 # Username of the user who owns workflows created automatically by the Jira/GitHub poller.
 # When unset, the lexicographically-first non-suspended admin is used. When set but the
 # named user is missing or suspended, a warning is logged and the admin fallback applies.
 # When neither resolves, polling-created workflows are skipped entirely.
 # poller_owner_username = "alice"
-# When true, workflows restored from snapshot with no owner (e.g. pre-multi-user orphans)
-# are reassigned to the resolved poller owner at startup so they appear on that user's
-# dashboard. Default false — orphans remain invisible until an explicit migration.
-# migrate_orphan_workflows = false
-# Plan-10: when true (default), startup reconciliation creates a `user_repositories`
-# association for every restored snapshot workflow that has a `user_id` and whose
-# `workspace_name` matches a registered repository — so workflows that pre-date
-# plan-10's per-user repo model stay visible on their owner's dashboard. Set to
-# false to require each user to explicitly re-add the repository from the
-# dashboard's My Repositories tab before their old workflows reappear.
-# migrate_orphan_repo_associations = true
-log_level = "info"
-# Docker image for isolated workflow containers. Default: auto-detected from this Maestro instance.
-# worker_image = "maestro:latest"
-
-[jira]
-project_keys = ["PROJ"]
-item_types = ["Task", "Bug"]
-# Transition name for dashboard **Mark as Done** (must match your Jira workflow)
-done_status = "Done"
-# Optional: AND-merged into the dashboard **+** manual ticket picker JQL (e.g. board filter fragment) — Epics are always excluded there.
-jql_filter = ""
-# Host or https:// URL (token auth, egress, and Jira link in PR body; empty → jira.atlassian.net)
-site = "yourcompany.atlassian.net"
-email = "you@company.com"
-# linked_items_in_prompt = "full"   # full | summary_only | omit — linked issue text in {ticket_context}
-# ticket_context_max_description_bytes = 100000   # 0 = unlimited
-# linked_issue_description_max_bytes = 32000    # 0 = unlimited (when mode is full)
-# acli_allowed_extra_prefixes = []   # advanced: extra allowed acli argv prefix lines (tokens per line)
 
 [git]
 base_branch = "main"
 # Git remote for fetch, worktree base ref, and push (default: origin)
 remote = "origin"
 repo_path = "/workspace"
+
+[web]
+host = "0.0.0.0"
+port = 8080
+# Allowed CORS origins. When empty (default), auto-computed from host and port
+# (e.g. http://localhost:8080 when host is 0.0.0.0).
+# Set explicitly when behind a reverse proxy or TLS terminator:
+#   cors_origins = ["https://maestro.example.com"]
+# Multiple origins are supported (e.g. for dev + production access):
+#   cors_origins = ["http://localhost:8080", "https://maestro.example.com"]
+# Startup-only — not changeable via PUT /api/config. Requires restart.
+cors_origins = []
+# Controls the `Secure` flag on the session cookie. When unset (default),
+# Maestro auto-detects: the flag is set when any `cors_origins` entry is
+# `https://…` OR when the inbound request carries `X-Forwarded-Proto: https`
+# (so a TLS-terminating reverse proxy is enough). Set explicitly to `true`
+# to force the flag on (e.g. when terminating TLS in front of Maestro without
+# advertising `X-Forwarded-Proto`), or to `false` for local plain-HTTP testing.
+# cookie_secure = true
+# Whether a successful login deletes all prior sessions for the same user.
+# Default `true` — security-first single-session enforcement. Set to `false`
+# if you want long-lived multi-client sessions (e.g. desktop + mobile).
+# Note: idle session TTL is 24 h, absolute TTL is 30 days regardless of this
+# setting. After 5 failed login or recovery attempts in 10 min the account
+# is temporarily locked (admin can clear via POST /api/users/{id}/unlock).
+# Per-IP rate limit on /api/auth/login and /api/auth/recover is 10 / min.
+# kick_other_sessions_on_login = true
+
+[jira]
+# Host or https:// URL (token auth, egress, and Jira link in PR body; empty → jira.atlassian.net)
+site = "yourcompany.atlassian.net"
+email = "you@company.com"
+# --- UI-managed [jira] keys (deploy-time defaults; edit in the UI) ---
+# Managed in Configuration → Item Polling.
+project_keys = ["PROJ"]
+item_types = ["Task", "Bug"]
+# Transition name for dashboard **Mark as Done** (must match your Jira workflow)
+done_status = "Done"
+# Optional: AND-merged into the dashboard **+** manual ticket picker JQL (e.g. board filter fragment) — Epics are always excluded there.
+jql_filter = ""
+# linked_items_in_prompt = "full"   # full | summary_only | omit — linked issue text in {ticket_context}
+# ticket_context_max_description_bytes = 100000   # 0 = unlimited
+# linked_issue_description_max_bytes = 32000    # 0 = unlimited (when mode is full)
+# acli_allowed_extra_prefixes = []   # advanced: extra allowed acli argv prefix lines (tokens per line)
 
 # --- GitHub App authentication (optional) ---
 # When configured, Maestro authenticates as a GitHub App bot identity instead
@@ -104,54 +163,131 @@ repo_path = "/workspace"
 # Set to ["*"] to allow ALL gh subcommands (disables the gh allowlist entirely).
 # gh_allowed_extra_prefixes = []
 
-[web]
-host = "0.0.0.0"
-port = 8080
-# Dashboard sign-in at /login.html when both are non-empty (HttpOnly session cookie). Leave "" to disable auth.
-# GET /api/config never returns dashboard_password. Use strong unique values in production.
-dashboard_username = ""
-dashboard_password = ""
-# Allowed CORS origins. When empty (default), auto-computed from host and port
-# (e.g. http://localhost:8080 when host is 0.0.0.0).
-# Set explicitly when behind a reverse proxy or TLS terminator:
-#   cors_origins = ["https://maestro.example.com"]
-# Multiple origins are supported (e.g. for dev + production access):
-#   cors_origins = ["http://localhost:8080", "https://maestro.example.com"]
-# Startup-only — not changeable via PUT /api/config. Requires restart.
-cors_origins = []
-# Controls the `Secure` flag on the session cookie. When unset (default),
-# Maestro auto-detects: the flag is set when any `cors_origins` entry is
-# `https://…` OR when the inbound request carries `X-Forwarded-Proto: https`
-# (so a TLS-terminating reverse proxy is enough). Set explicitly to `true`
-# to force the flag on (e.g. when terminating TLS in front of Maestro without
-# advertising `X-Forwarded-Proto`), or to `false` for local plain-HTTP testing.
-# cookie_secure = true
-# Whether a successful login deletes all prior sessions for the same user.
-# Default `true` — security-first single-session enforcement. Set to `false`
-# if you want long-lived multi-client sessions (e.g. desktop + mobile).
-# Note: idle session TTL is 24 h, absolute TTL is 30 days regardless of this
-# setting. After 5 failed login or recovery attempts in 10 min the account
-# is temporarily locked (admin can clear via POST /api/users/{id}/unlock).
-# Per-IP rate limit on /api/auth/login and /api/auth/recover is 10 / min.
-# kick_other_sessions_on_login = true
+# --- External database backend ---
+#
+# By default, Maestro stores users, sessions, credentials, and audit data in a
+# local SQLite file at {data_dir}/maestro.db. For multi-instance deployments
+# (or operators who want to centralise auth state in their existing DB), the
+# [database] block points Maestro at PostgreSQL, MySQL, or MariaDB.
+#
+# Leaving the section out (or `connection = ""`) keeps the current SQLite
+# behaviour — zero-config default.
+#
+# Restart-only: `PUT /api/config` will not patch this section. Backend changes
+# require a process restart, same policy as `web.host` / `web.port`.
+#
+# [database]
+# # Connection URL. Empty / omitted → SQLite at {data_dir}/maestro.db.
+# # Supported schemes:
+# #   sqlite://path/to/file.db
+# #   postgres://user:pw@host:5432/db
+# #   postgresql://user:pw@host:5432/db   (alias)
+# #   mysql://user:pw@host:3306/db        (covers MariaDB)
+# # `GET /api/config` redacts the password component before returning.
+# connection = "postgres://maestro:s3cret@db.example:5432/maestro"
+#
+# # Pool tuning (all optional). Defaults: 10 conns, 30 s acquire timeout,
+# # 10 min idle timeout.
+# # max_connections = 10
+# # acquire_timeout_secs = 30
+# # idle_timeout_secs = 600
+#
+# # When true (default), startup runs a 5 s `SELECT 1` probe against the
+# # configured backend and aborts if the database is unreachable. When false,
+# # an unreachable backend logs a warning and falls back to local SQLite for
+# # the current process (recovery path).
+# # fail_fast = true
+#
+# # When true (default) and a legacy {data_dir}/maestro.db exists AND the
+# # remote target has no `system_metadata.import_complete` row, perform a
+# # one-shot copy of every user-data table inside a single transaction at
+# # startup. Sessions are marked expired post-import so users re-authenticate.
+# # Subsequent restarts skip the import (the marker row is the gate). Operators
+# # who want to redo the import can `DELETE FROM system_metadata WHERE key =
+# # 'import_complete'` against the target — there is no CLI for it on purpose.
+# # import_from_sqlite = true
+
+
+# =============================================================================
+# OPTIONAL / UI-managed — seed a deploy-time default; normally edited in the UI
+# =============================================================================
 
 [agent]
-# AI tool for implement / review / fix steps: "claude" (Claude Code CLI) or "cursor" (Cursor Agent CLI).
+# All [agent] keys are editable from Configuration → AI Settings.
+# AI tool for implement / review / fix steps: "claude", "cursor", "codex", or "opencode".
 provider = "claude"
-# Executable for Cursor Agent (default: `agent` from https://cursor.com/install ). Only used when provider = "cursor".
-cursor_cli = "agent"
-# Cursor Agent --model. "Auto" (default) uses automatic model selection; set a concrete id to pin.
-cursor_model = "Auto"
 # Timeout per agent session in seconds (applies to all providers).
 step_timeout_secs = 1800
-# Model override (e.g., "claude-opus-4-6", "claude-sonnet-4-6"). Empty = provider default.
-model = ""
 # Share one agent conversation across all steps in a flow. When true, each step
 # resumes the previous step's session (the agent remembers what it implemented
 # when it reviews). When false (default), every step runs in a fresh session —
 # safer for smaller local models that get confused by long shared transcripts.
-# Editable from Configuration > AI Settings.
 share_conversation_across_steps = false
+# No-progress guardrail: abort an agent step when its output repeats the same
+# substantive line this many times in a row — the signature of a weak model
+# looping on a failing action (e.g. a `git push` it can't fix). The step fails
+# into Error instead of churning until step_timeout_secs. Session-lifecycle
+# lines ("… initialized/completed") are excluded so healthy multi-turn runs
+# aren't tripped. 0 disables. Default 8.
+max_repeated_output_lines = 8
+
+# Per-provider sub-tables. Each provider keeps its own model / endpoint / args.
+# Managed in Configuration → AI Settings.
+# [agent.providers.cursor]
+# cli = "agent"          # Cursor Agent executable (from https://cursor.com/install)
+# model = "Auto"         # "Auto" = automatic model selection; or pin a concrete id
+
+# OpenCode (self-hosted, OpenAI-compatible endpoints like LM Studio / Ollama /
+# vLLM). Only used when provider = "opencode".
+# [agent.providers.opencode]
+# # Model id served by your endpoint (the `<model>` in `-m self_hosted/<model>`).
+# model = "qwen2.5-coder-7b-instruct"
+# # OpenAI-compatible base URL of the model server (required).
+# base_url = "http://lm-studio:1234/v1"
+# # Token limits for the self-hosted model. OpenCode can't look these up for a
+# # local endpoint, so set them to match your server's loaded context length;
+# # this lets OpenCode track remaining context. Default to a 7B-class coder
+# # window (context 32768 / output 8192) when omitted — override to match your
+# # model, or set to clear from the dashboard to let OpenCode guess.
+# context_limit = 32768
+# output_limit = 8192
+
+# --- Item polling policy ---
+# Shapes what the Jira/GitHub pollers auto-add, which flow they auto-start, and
+# how many items run in parallel. Read live by the pollers each cycle (no restart).
+# Managed in Configuration → Item Polling (PUT /api/config/polling).
+[polling]
+# Slug of the single flow to auto-start for each polled item.
+# Empty (default) = start ALL dependency-free flows (legacy behavior).
+# A slug that does not match any dependency-free flow logs a warning and starts
+# nothing (the item is still added to the dashboard so you notice).
+auto_start_flow = ""
+# Cap on items occupying a concurrency slot at once. 0 = unlimited.
+# The poller takes the tighter of this and the legacy max_active_workflows;
+# manual starts enforce it as an independent 409 ceiling (alongside
+# max_concurrent_manual_workflows).
+max_parallel_items = 0
+# When true, max_parallel_items is counted per workflow owner; false = global.
+max_parallel_per_user = false
+
+# Jira poller filter. Empty list = no filter. Jira item TYPES are configured
+# under [jira] item_types (not duplicated here).
+[polling.jira]
+# Case-insensitive ANY-substring match against the ticket summary.
+# Blank/whitespace-only entries are rejected at save time.
+summary_keywords = []
+
+# GitHub poller filter. Empty list = no filter.
+[polling.github]
+# Exact label membership, ANY match (issue kept if it carries any listed label).
+labels = []
+# Case-insensitive ANY-substring match against the issue title.
+title_keywords = []
+
+
+# =============================================================================
+# ADVANCED HOOKS — bootstrap / deploy-time (most deployments leave defaults)
+# =============================================================================
 
 [docker]
 # build_commands: optional `bash -c` steps during image build (see MAESTRO_BUILD_CONFIG in docker-compose).
@@ -237,7 +373,7 @@ extra_egress_hosts = []
 # Use only in trusted environments; `extra_egress_hosts` is ignored when this is enabled.
 # allow_all_https = false
 
-# ─── [provisioning] — admin-installed tools (task #48) ──────────────────
+# ─── [provisioning] — admin-installed tools ─────────────────────────────
 #
 # Shell commands that install tools into the shared `maestro-tools`
 # Docker volume on maestro startup. The volume is bind-mounted READ-ONLY
@@ -295,50 +431,6 @@ install_commands = [
   # Install AWS CLI v2 (removed from the bake — admin opts in here):
   #   '[ -f "$MAESTRO_TOOLS_BIN/aws" ] || (curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/aws.zip && unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install --bin-dir "$MAESTRO_TOOLS_BIN" --install-dir "$MAESTRO_TOOLS_BIN/aws-cli" --update && rm -rf /tmp/aws*)',
 ]
-
-# --- External database backend (plan-11) ---
-#
-# By default, Maestro stores users, sessions, credentials, and audit data in a
-# local SQLite file at {data_dir}/maestro.db. For multi-instance deployments
-# (or operators who want to centralise auth state in their existing DB), the
-# [database] block points Maestro at PostgreSQL, MySQL, or MariaDB.
-#
-# Leaving the section out (or `connection = ""`) keeps the current SQLite
-# behaviour — zero-config default.
-#
-# Restart-only: `PUT /api/config` will not patch this section. Backend changes
-# require a process restart, same policy as `web.host` / `web.port`.
-#
-# [database]
-# # Connection URL. Empty / omitted → SQLite at {data_dir}/maestro.db.
-# # Supported schemes:
-# #   sqlite://path/to/file.db
-# #   postgres://user:pw@host:5432/db
-# #   postgresql://user:pw@host:5432/db   (alias)
-# #   mysql://user:pw@host:3306/db        (covers MariaDB)
-# # `GET /api/config` redacts the password component before returning.
-# connection = "postgres://maestro:s3cret@db.example:5432/maestro"
-#
-# # Pool tuning (all optional). Defaults: 10 conns, 30 s acquire timeout,
-# # 10 min idle timeout.
-# # max_connections = 10
-# # acquire_timeout_secs = 30
-# # idle_timeout_secs = 600
-#
-# # When true (default), startup runs a 5 s `SELECT 1` probe against the
-# # configured backend and aborts if the database is unreachable. When false,
-# # an unreachable backend logs a warning and falls back to local SQLite for
-# # the current process (recovery path).
-# # fail_fast = true
-#
-# # When true (default) and a legacy {data_dir}/maestro.db exists AND the
-# # remote target has no `system_metadata.import_complete` row, perform a
-# # one-shot copy of every user-data table inside a single transaction at
-# # startup. Sessions are marked expired post-import so users re-authenticate.
-# # Subsequent restarts skip the import (the marker row is the gate). Operators
-# # who want to redo the import can `DELETE FROM system_metadata WHERE key =
-# # 'import_complete'` against the target — there is no CLI for it on purpose.
-# # import_from_sqlite = true
 
 # --- Dev-only knobs (leave commented in production) ---
 # When `mock_agent = true`, ClaudeSession::run_prompt and CursorSession::run_prompt

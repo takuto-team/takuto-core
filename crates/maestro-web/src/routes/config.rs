@@ -221,34 +221,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_config_does_not_return_dashboard_password() {
-        let state = test_state_with_db();
-        let cookie = register_and_login(&state).await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::get("/api/config")
-                    .header("Cookie", &cookie)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let password = json
-            .pointer("/web/dashboard_password")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        assert!(
-            password.is_empty(),
-            "dashboard_password must be redacted, got: {password}"
-        );
-    }
-
-    #[tokio::test]
     async fn put_config_valid_patch_updates_value() {
         let state = test_state_with_db();
         let cookie = register_and_login(&state).await;
@@ -294,40 +266,6 @@ mod tests {
             .unwrap();
         // deny_unknown_fields on RuntimeDashboardConfigPatch should reject "jira".
         assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    }
-
-    #[tokio::test]
-    async fn put_config_empty_password_preserves_existing() {
-        let state = test_state_with_db();
-        let cookie = register_and_login(&state).await;
-
-        // Set a legacy dashboard password in the in-memory config so the test
-        // can verify it is preserved when an empty string is sent.
-        {
-            let mut cfg = state.config.config.write().await;
-            cfg.web.dashboard_password = "supersecret".to_string();
-        }
-
-        // Send a PUT that updates the username but sends empty password.
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::put("/api/config")
-                    .header("Content-Type", "application/json")
-                    .header("Origin", "http://localhost:8080")
-                    .header("Cookie", &cookie)
-                    .body(Body::from(
-                        r#"{"web":{"dashboard_username":"admin","dashboard_password":""}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        // Verify the password was preserved (not cleared).
-        let cfg = state.config.config.read().await;
-        assert_eq!(cfg.web.dashboard_password, "supersecret");
     }
 
     #[tokio::test]

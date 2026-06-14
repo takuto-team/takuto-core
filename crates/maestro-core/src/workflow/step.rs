@@ -3,18 +3,24 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "StepLog.ts")]
 pub struct StepLog {
     pub step_name: String,
+    /// RFC3339 timestamp on the wire (serde serializes `DateTime<Utc>` as a string).
+    #[ts(type = "string")]
     pub started_at: DateTime<Utc>,
+    #[ts(type = "string | null")]
     pub completed_at: Option<DateTime<Utc>>,
     pub status: StepStatus,
     pub output: Vec<String>,
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "StepStatus.ts")]
 pub enum StepStatus {
     Running,
     Success,

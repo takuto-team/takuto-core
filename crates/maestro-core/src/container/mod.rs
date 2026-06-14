@@ -27,6 +27,7 @@ pub(crate) mod port_scanner;
 pub(crate) mod reap;
 pub(crate) mod run_command;
 pub(crate) mod runner;
+pub mod runtime;
 pub(crate) mod secrets_bundle;
 pub(crate) mod terminal;
 pub(crate) mod volumes;
@@ -49,6 +50,7 @@ pub use run_command::{
     run_run_command_port_scanner, start_run_command, stop_all_run_commands, stop_run_command,
 };
 pub use runner::ContainerRunner;
+pub use runtime::{ContainerRuntime, DockerRuntime};
 pub use terminal::{
     find_running_terminal, parse_terminal_auth_from_pgrep, start_terminal, stop_terminal,
 };

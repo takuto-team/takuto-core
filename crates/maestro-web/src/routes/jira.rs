@@ -7,16 +7,32 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::Serialize;
+use ts_rs::TS;
 
 use maestro_core::jira::client::{JiraClient, TicketDescriptionPreview};
 
 use crate::state::ConfigState;
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(rename = "TodoTicket", export_to = "TodoTicket.ts")]
 pub struct TodoTicketRow {
     pub key: String,
     pub summary: String,
     pub item_type: String,
+}
+
+#[cfg(test)]
+mod ts_bindings {
+    use super::*;
+    use ts_rs::TS;
+
+    /// Regenerate `ui/src/api/generated/TodoTicket.ts` (CI diffs the dir).
+    #[test]
+    fn export_todo_ticket() {
+        let out = crate::ts_bindings::generated_dir();
+        std::fs::create_dir_all(&out).expect("create generated dir");
+        TodoTicketRow::export_all_to(&out).expect("export TodoTicket");
+    }
 }
 
 /// All **To Do** issues for configured projects (every issue type), backlog order — for the manual-start picker.

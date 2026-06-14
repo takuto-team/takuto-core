@@ -503,17 +503,136 @@ pub(super) async fn transition(
     }
 }
 
-/// Best-effort shadow-write of a state transition into the `work_items`
-/// row.
+/// Finalize a workflow to `Done` **and** record its PR URL as one atomic
+/// event.
 ///
-/// Truth-of-record is the in-memory `HashMap<String, Workflow>` (the
-/// caller has already mutated it). This call exists so the DB row's
-/// `state_kind`, `state_payload`, `current_step_label`, and
-/// `updated_at` track the in-memory state.
+/// The PR URL resolution + terminal transition are a single logical mutation;
+/// this writes both columns in one statement so a crash can't tear them
+/// (cutover invariant I2), and — because `Done` is a terminal state — the
+/// write is fail-loud (retried, then logged at ERROR on persistent failure)
+/// per invariant I4. Mirrors `transition()`'s in-memory mutation + WS event;
+/// use it only on the PR-resolved finalization path (the no-PR path keeps
+/// `transition(Done)`).
+pub(super) async fn transition_to_done_with_pr_url(
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    event_tx: &broadcast::Sender<WorkflowEvent>,
+    ticket_key: &str,
+    pr_url: &str,
+    config: &Arc<RwLock<Config>>,
+    db: Option<&Database>,
+) {
+    info!(ticket = ticket_key, "Transitioning workflow to Done (with PR URL)");
+
+    let updated = {
+        let mut wf = workflows.write().await;
+        if let Some(workflow) = wf.get_mut(ticket_key) {
+            workflow.pr_url = Some(pr_url.to_string());
+            workflow.current_step_label = None;
+            workflow.state = WorkflowState::Done;
+            workflow.updated_at = Utc::now();
+            Some((
+                workflow.id.clone(),
+                workflow.status_display(),
+                workflow.user_id.clone(),
+                workflow.updated_at.timestamp(),
+            ))
+        } else {
+            None
+        }
+    };
+    let Some((id, display, owner_user_id, updated_at)) = updated else {
+        return;
+    };
+
+    if let Some(db) = db {
+        let (state_kind, state_payload) =
+            crate::workflow::engine::types::state_to_kind_and_payload(&WorkflowState::Done);
+        let result = retry_durable_write(|| {
+            crate::db::work_items::update_work_item_pr_url_and_state(
+                db.adapter(),
+                &id,
+                Some(pr_url),
+                state_kind,
+                state_payload.as_deref(),
+                None,
+                updated_at,
+            )
+        })
+        .await;
+        if let Err(e) = result {
+            error!(
+                work_item_id = %id,
+                error = %e,
+                "Durable write of Done + PR URL failed after retries — \
+                 the DB row is behind the in-memory state"
+            );
+        }
+    }
+
+    let dash = progress_dashboard_fields_for_ticket(workflows, config, ticket_key).await;
+    let _ = event_tx.send(WorkflowEvent {
+        event_type: "work_item_updated".to_string(),
+        workflow_id: id,
+        ticket_key: ticket_key.to_string(),
+        state: display,
+        timestamp: Utc::now(),
+        error: None,
+        step_name: None,
+        output_line: None,
+        stream: None,
+        progress_percent: dash.map(|(p, _)| p),
+        progress_steps_total: dash.map(|(_, t)| t),
+        forwarded_port: None,
+        pr_merged: None,
+        user_id: owner_user_id,
+        ..Default::default()
+    });
+}
+
+/// Attempts for a fail-loud durable write (terminal state transitions and
+/// the initial `work_items` insert). A transient DB blip usually clears
+/// within a retry; a persistent failure is logged at ERROR — never silently
+/// swallowed — so a broken DB-as-source-of-truth invariant is observable
+/// (cutover invariant I4).
+pub(crate) const DURABLE_WRITE_ATTEMPTS: u32 = 3;
+const DURABLE_WRITE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Retry a durable (state-defining) DB write up to [`DURABLE_WRITE_ATTEMPTS`]
+/// times, with a short delay between attempts. Returns the final error if
+/// every attempt fails. Used only for writes that must not be silently
+/// swallowed (cutover invariant I4): terminal state transitions and the
+/// initial `work_items` insert. Advisory writes (ports, branch, PR-only
+/// updates) keep the best-effort WARN path.
+pub(crate) async fn retry_durable_write<F, Fut>(mut op: F) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let mut attempt = 1u32;
+    loop {
+        match op().await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt >= DURABLE_WRITE_ATTEMPTS => return Err(e),
+            Err(_) => {
+                attempt += 1;
+                tokio::time::sleep(DURABLE_WRITE_RETRY_DELAY).await;
+            }
+        }
+    }
+}
+
+/// Shadow-write a state transition into the `work_items` row.
 ///
-/// Failures log at WARN and are swallowed — a flaky DB must not stall
-/// engine progress. The map mutation already happened; the row will
-/// catch up on the next transition.
+/// The in-memory `HashMap<String, Workflow>` is the live cache (the caller
+/// has already mutated it); this call keeps the authoritative DB row's
+/// `state_kind`, `state_payload`, `current_step_label`, and `updated_at` in
+/// step with it.
+///
+/// **Terminal transitions (`Done`/`Error`/`Stopped`) are fail-loud** (cutover
+/// invariant I4): the write is retried and, if it still fails, logged at
+/// ERROR rather than swallowed — a map-only terminal state that the DB never
+/// recorded would silently diverge. Non-terminal transitions stay best-effort
+/// (WARN): the row catches up on the next transition.
 pub(crate) async fn shadow_persist_state_change(
     db: Option<&Database>,
     work_item_id: &str,
@@ -524,21 +643,68 @@ pub(crate) async fn shadow_persist_state_change(
     let Some(db) = db else { return };
     let (state_kind, state_payload) =
         crate::workflow::engine::types::state_to_kind_and_payload(new_state);
-    if let Err(e) = crate::db::work_items::update_work_item_state(
+    let write = || {
+        crate::db::work_items::update_work_item_state(
+            db.adapter(),
+            work_item_id,
+            state_kind,
+            state_payload.as_deref(),
+            current_step_label,
+            updated_at_unix,
+        )
+    };
+    if new_state.is_terminal() {
+        if let Err(e) = retry_durable_write(write).await {
+            tracing::error!(
+                work_item_id,
+                state_kind = %state_kind.as_str(),
+                error = %e,
+                "Durable write of terminal work_items state failed after retries — \
+                 the DB row is behind the in-memory state"
+            );
+        }
+    } else if let Err(e) = write().await {
+        tracing::warn!(
+            work_item_id,
+            state_kind = %state_kind.as_str(),
+            error = %e,
+            "Shadow-write of work_items state failed (in-memory state is unaffected)"
+        );
+    }
+}
+
+/// Best-effort shadow-write of the branch name **and** worktree path into the
+/// `work_items` row, in one atomic statement.
+///
+/// The engine learns both during bootstrap (after `create_worktree`), long
+/// after the row's initial INSERT (where both are empty). Writing them
+/// together keeps the row internally consistent if a crash interrupts
+/// bootstrap (cutover invariant I2) and makes `worktree_path` durable for the
+/// DB-first restore path. Keyed by `work_item_id`; failures log at WARN and
+/// are swallowed — these are advisory fields, not state-defining (I4), so
+/// engine progress is never blocked by the secondary store.
+pub(crate) async fn shadow_persist_branch_and_worktree(
+    db: Option<&Database>,
+    work_item_id: &str,
+    branch_name: &str,
+    worktree_path: Option<&str>,
+    updated_at_unix: i64,
+) {
+    let Some(db) = db else { return };
+    let branch = (!branch_name.is_empty()).then_some(branch_name);
+    if let Err(e) = crate::db::work_items::update_work_item_branch_and_worktree(
         db.adapter(),
         work_item_id,
-        state_kind,
-        state_payload.as_deref(),
-        current_step_label,
+        branch,
+        worktree_path,
         updated_at_unix,
     )
     .await
     {
         tracing::warn!(
             work_item_id,
-            state_kind = %state_kind.as_str(),
             error = %e,
-            "Ushadow-write of work_items state failed (in-memory state is unaffected)"
+            "Shadow-write of work_items branch/worktree failed (in-memory state is unaffected)"
         );
     }
 }
@@ -707,5 +873,54 @@ pub(super) async fn wait_if_paused(
                 // Check again
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// A durable write that fails transiently then succeeds within the retry
+    /// bound resolves to `Ok` — a flaky DB blip does not surface as a failure.
+    #[tokio::test]
+    async fn retry_durable_write_succeeds_after_transient_failures() {
+        let calls = Cell::new(0u32);
+        let result = retry_durable_write(|| {
+            calls.set(calls.get() + 1);
+            let n = calls.get();
+            async move {
+                if n < DURABLE_WRITE_ATTEMPTS {
+                    Err(MaestroError::Timeout(0))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await;
+        assert!(result.is_ok(), "a write that succeeds within the bound must be Ok");
+        assert_eq!(calls.get(), DURABLE_WRITE_ATTEMPTS);
+    }
+
+    /// When every attempt fails, the error is RETURNED so the caller can log
+    /// it at ERROR — the fail-loud guarantee for terminal-state writes and the
+    /// initial insert. It is never silently swallowed.
+    #[tokio::test]
+    async fn retry_durable_write_surfaces_persistent_failure() {
+        let calls = Cell::new(0u32);
+        let result = retry_durable_write(|| {
+            calls.set(calls.get() + 1);
+            async move { Err::<(), _>(MaestroError::Timeout(0)) }
+        })
+        .await;
+        assert!(
+            result.is_err(),
+            "a persistently-failing durable write must surface the error, not swallow it"
+        );
+        assert_eq!(
+            calls.get(),
+            DURABLE_WRITE_ATTEMPTS,
+            "must exhaust the retry bound before giving up"
+        );
     }
 }

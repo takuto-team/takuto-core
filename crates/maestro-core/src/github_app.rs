@@ -39,6 +39,24 @@ pub use error::GitHubAppError;
 /// both the main Maestro container and worker containers.
 pub const TOKEN_FILE_PATH: &str = "/home/maestro/.config/gh/gh-app-token";
 
+/// Inner script for the HTTPS `github.com` git credential helper, shared by
+/// every container that needs `git push`/`fetch` to authenticate without a
+/// prompt (main container, editor/terminal containers, and agent-step
+/// workers).
+///
+/// Precedence is **`$GH_TOKEN` first, App-token file second**. `GH_TOKEN`
+/// carries the per-workflow token the resolver chose (`token_for` returns a
+/// user PAT over the App for pushes when the user opted into commit
+/// attribution); the App-token file is the deployment-wide fallback. The
+/// reverse order — used previously — let the App-token file silently shadow a
+/// user's PAT whenever the file existed, so a provided PAT was never used.
+pub fn git_credential_helper_script() -> String {
+    format!(
+        "!f() {{ echo protocol=https; echo host=github.com; echo username=x-access-token; \
+         echo \"password=${{GH_TOKEN:-$(cat {TOKEN_FILE_PATH} 2>/dev/null)}}\"; }}; f"
+    )
+}
+
 /// How often the background task checks the token expiry (seconds).
 const TOKEN_REFRESH_POLL_SECS: u64 = 300; // 5 minutes
 
@@ -357,15 +375,13 @@ impl GitHubAppTokenManager {
         cwd: &Path,
         cancel: CancellationToken,
     ) -> Result<()> {
-        // Install a git credential helper that reads the token from the shared file
-        // written by the background token service. Falls back to $GH_TOKEN env var
-        // for local development without the token file.
+        // Install a git credential helper that reads the per-workflow token from
+        // $GH_TOKEN (a user PAT when the resolver chose one, else the App token),
+        // falling back to the shared token file written by the background token
+        // service. See [`git_credential_helper_script`] for the precedence.
         // We do NOT use `gh auth setup-git` because it requires an active `gh` session
         // (gh auth login), which is intentionally skipped when a GitHub App is configured.
-        let helper = format!(
-            "!f() {{ echo protocol=https; echo host=github.com; echo username=x-access-token; \
-             echo \"password=$(cat {TOKEN_FILE_PATH} 2>/dev/null || echo $GH_TOKEN)\"; }}; f"
-        );
+        let helper = git_credential_helper_script();
         let helper = helper.as_str();
         let cred_out = crate::process::run_command(
             "git",

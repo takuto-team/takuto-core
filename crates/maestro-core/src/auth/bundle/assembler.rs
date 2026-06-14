@@ -123,6 +123,8 @@ pub async fn build(
         // through. The shim itself surfaces a typed error if so.
         let url = config.agent.providers.opencode.base_url.clone();
         let model = config.agent.providers.opencode.model.clone();
+        let context_limit = config.agent.providers.opencode.context_limit;
+        let output_limit = config.agent.providers.opencode.output_limit;
 
         // Unseal the user's bearer to plaintext bytes (no on-disk secret
         // file — the bearer is embedded in opencode.json directly).
@@ -150,7 +152,14 @@ pub async fn build(
                 },
             )?;
         }
-        write_opencode_config(&cfg_dir, &url, &model, bearer.as_deref())?;
+        write_opencode_config(
+            &cfg_dir,
+            &url,
+            &model,
+            bearer.as_deref(),
+            context_limit,
+            output_limit,
+        )?;
         Some(cfg_dir)
     } else {
         None

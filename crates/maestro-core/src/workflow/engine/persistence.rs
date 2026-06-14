@@ -23,7 +23,7 @@ use crate::workflow::state::WorkflowState;
 use super::driver::drive_workflow_def;
 use super::event_bus::WorkflowEventBus;
 use super::repository::WorkflowRepository;
-use super::types::{Workflow, workflow_to_persisted_record};
+use super::types::{TerminalLine, Workflow, workflow_to_persisted_record};
 
 pub(crate) struct WorkflowPersistence {
     pub(crate) repository: Arc<WorkflowRepository>,
@@ -95,8 +95,53 @@ impl WorkflowPersistence {
 
         info!(
             data_dir = %data_dir.display(),
-            "Loading workflow snapshots from all workspaces"
+            "Restoring workflows: DB-first, snapshot fallback"
         );
+
+        // Phase A — DB-first restore (cutover invariant I3). Rebuild the
+        // in-memory cache from the authoritative `work_items` table; runtime
+        // handles (cancel_token, worktree_lock) are created fresh by
+        // `from_work_item_row`. `from_db` records the ticket_keys the DB owns
+        // so the snapshot pass below can apply DB-wins precedence.
+        let mut from_db: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        if let Some(database) = db.as_ref() {
+            match crate::db::work_items::list_all_for_restore(database.adapter()).await {
+                Ok(rows) => {
+                    for row in rows {
+                        let ticket_key = row.ticket_key.clone();
+                        let row_id = row.id.clone();
+                        let def_runs = crate::db::work_items::list_definition_runs(
+                            database.adapter(),
+                            &row.id,
+                        )
+                        .await
+                        .unwrap_or_default();
+                        let wf = Workflow::from_work_item_row(row, def_runs);
+                        // Rows arrive started_at-ASC, so a later row for the same
+                        // ticket_key (cross-workspace) is the more recent one and
+                        // wins; name the dropped row so the clobber is observable.
+                        if let Some(prev) = from_db.insert(ticket_key.clone(), row_id.clone()) {
+                            warn!(
+                                ticket = %ticket_key,
+                                dropped = %prev,
+                                kept = %row_id,
+                                "Multiple live work_items rows share this ticket_key (cross-workspace); most-recently-started wins in the cache"
+                            );
+                        }
+                        self.repository
+                            .inner_arc()
+                            .write()
+                            .await
+                            .insert(ticket_key, wf);
+                    }
+                }
+                Err(e) => warn!(
+                    error = %e,
+                    "DB-first restore query failed; falling back to snapshot-only restore"
+                ),
+            }
+        }
 
         // Try multi-workspace read first; fall back to single-workspace read for first-time migration.
         let mut records = read_all_workspace_snapshots(&data_dir)?;
@@ -130,32 +175,58 @@ impl WorkflowPersistence {
 
         records.sort_by_key(|r| r.started_at);
 
-        let n = records.len();
+        // Phase B — merge the snapshot with DB-wins precedence. For a
+        // ticket_key the DB already loaded (Phase A), the snapshot only
+        // SUPPLEMENTS the fields the DB cannot store, and only while still
+        // unset; durable fields are never overwritten and the DB is not
+        // backfilled. For a ticket_key the DB lacks, the snapshot is the
+        // source and is backfilled into the DB.
         for rec in records {
             let ticket_key = rec.ticket_key.clone();
-            let is_done = matches!(rec.state, WorkflowState::Done);
-            let is_terminal = is_done
-                || matches!(
-                    rec.state,
-                    WorkflowState::Stopped | WorkflowState::Error { .. }
-                );
-            let state_display = rec.state.to_string();
-            let is_unstarted_pending =
-                matches!(rec.state, WorkflowState::Pending) && !rec.driver_started;
-            let wf = Workflow::from_persisted_record(rec);
-            let cancel_token = wf.cancel_token.clone();
+            if from_db.contains_key(&ticket_key) {
+                let wf_arc = self.repository.inner_arc();
+                let mut map = wf_arc.write().await;
+                if let Some(w) = map.get_mut(&ticket_key) {
+                    if w.terminal_lines.is_empty() && !rec.terminal_lines.is_empty() {
+                        w.terminal_lines = rec
+                            .terminal_lines
+                            .iter()
+                            .map(|l| TerminalLine {
+                                text: l.text.clone(),
+                                stream: l.stream.clone(),
+                            })
+                            .collect();
+                    }
+                    if w.auth_pin.is_none() {
+                        w.auth_pin = rec.auth_pin.clone();
+                    }
+                    if w.description_session_id.is_none() {
+                        w.description_session_id = rec.description_session_id.clone();
+                    }
+                    if !w.worktree_bootstrapped {
+                        w.worktree_bootstrapped = rec.worktree_bootstrapped;
+                    }
+                    // The DB only approximates ticketing_system via
+                    // jira_available; a github-mode snapshot carries the truth.
+                    if w.ticketing_system == crate::config::TicketingSystem::None
+                        && rec.ticketing_system != crate::config::TicketingSystem::None
+                    {
+                        w.ticketing_system = rec.ticketing_system;
+                        w.ticketing_available = true;
+                    }
+                }
+                continue;
+            }
 
+            let wf = Workflow::from_persisted_record(rec);
             self.repository
                 .inner_arc()
                 .write()
                 .await
                 .insert(ticket_key.clone(), wf);
 
-            // Shadow-write the restored workflow into work_items so the
-            // DB-first read paths see it without needing the HashMap
-            // fallback. Idempotent — on a duplicate (workspace, ticket_key)
-            // row the inner helper logs WARN and continues, so restarts of an
-            // already-backfilled install are safe.
+            // Backfill the DB from the snapshot only for rows the DB lacked
+            // (best-effort, idempotent). Never overwrites a DB-won row.
             {
                 let wf_arc = self.repository.inner_arc();
                 let wf_map = wf_arc.read().await;
@@ -163,6 +234,32 @@ impl WorkflowPersistence {
                     super::lifecycle::shadow_persist_work_item(db.as_ref(), w).await;
                 }
             }
+        }
+
+        // Phase C — respawn drivers for every in-progress entry in the merged
+        // map (DB- or snapshot-sourced), so DB-only rows are respawned too.
+        let n = self.repository.inner_arc().read().await.len();
+        let restore_keys: Vec<String> = self
+            .repository
+            .inner_arc()
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect();
+        for ticket_key in restore_keys {
+            let (cancel_token, state_for_checks, driver_started) = {
+                let wf_arc = self.repository.inner_arc();
+                let map = wf_arc.read().await;
+                match map.get(&ticket_key) {
+                    Some(w) => (w.cancel_token.clone(), w.state.clone(), w.driver_started),
+                    None => continue,
+                }
+            };
+            let is_terminal = state_for_checks.is_terminal();
+            let state_display = state_for_checks.to_string();
+            let is_unstarted_pending =
+                matches!(state_for_checks, WorkflowState::Pending) && !driver_started;
 
             // Terminal workflows (Done, Stopped, Error) are restored for dashboard visibility
             // but don't need a driver — they're idle until the user clicks an action (retry, delete, etc.).
@@ -651,6 +748,190 @@ mod tests {
             }
             other => panic!("expected Error state, got {other:?}"),
         }
+
+        // SAFETY: serialized by ENV_LOCK (still held).
+        unsafe {
+            std::env::remove_var("MAESTRO_DATA_DIR");
+        }
+    }
+
+    // ── DB-first restore (cutover invariants I3 / AC-2 / AC-3) ──────────
+
+    /// Build a DryRun engine backed by an in-memory DB with a seeded user.
+    async fn engine_with_db(workflows_dir: &std::path::Path) -> (WorkflowEngine, Database) {
+        let db = Database::open_in_memory().expect("in-memory db");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES ('u1', 'alice', 'user')",
+                vec![],
+            )
+            .await
+            .expect("seed user");
+        let config = std::sync::Arc::new(tokio::sync::RwLock::new(Config::default()));
+        let actions: std::sync::Arc<dyn ExternalActions> =
+            std::sync::Arc::new(DryRunActions::new("origin".to_string(), None));
+        let engine = WorkflowEngine::new_with_db(
+            config,
+            actions,
+            1,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            TicketingSystem::None,
+            workflows_dir.to_path_buf(),
+            Some(db.clone()),
+        );
+        (engine, db)
+    }
+
+    /// Insert a work_items row for `ticket_key` in `state` (owner `u1`).
+    async fn seed_db_row(db: &Database, id: &str, ticket_key: &str, state: WorkflowState) {
+        let mut wf = crate::workflow::engine::types::Workflow::new(
+            ticket_key.to_string(),
+            "summary".to_string(),
+            false,
+            false,
+            TicketingSystem::None,
+            None,
+            "ws".to_string(),
+        );
+        wf.id = id.to_string();
+        wf.user_id = Some("u1".to_string());
+        wf.state = state;
+        crate::db::work_items::insert_work_item(db.adapter(), &wf.to_work_item_row())
+            .await
+            .expect("insert work_items row");
+    }
+
+    /// A minimal snapshot record for `ticket_key` in `state`.
+    fn sample_record(id: &str, ticket_key: &str, state: WorkflowState) -> PersistedWorkflowRecord {
+        let now = chrono::Utc::now();
+        PersistedWorkflowRecord {
+            id: id.to_string(),
+            ticket_key: ticket_key.to_string(),
+            ticket_summary: "summary".to_string(),
+            ticket_description: "desc".to_string(),
+            ticket_type: "Task".to_string(),
+            state,
+            started_at: now,
+            updated_at: now,
+            steps_log: Vec::new(),
+            branch_name: "feature/x".to_string(),
+            worktree_path: None,
+            pr_url: None,
+            pr_merged: false,
+            terminal_lines: Vec::new(),
+            current_step_label: None,
+            started_manually: false,
+            jira_available: false,
+            last_session_id: None,
+            description_session_id: None,
+            ticketing_system: TicketingSystem::None,
+            ticket_url: None,
+            driver_started: true,
+            workflow_def_runs: HashMap::new(),
+            worktree_bootstrapped: true,
+            workspace_name: "ws".to_string(),
+            repository_id: None,
+            user_id: Some("u1".to_string()),
+            auth_pin: None,
+        }
+    }
+
+    /// T1 — on a `(ticket_key)` present in both the DB and the snapshot, the
+    /// DB row wins and the snapshot's (conflicting) state is discarded.
+    #[tokio::test]
+    async fn restore_db_row_wins_over_conflicting_snapshot() {
+        let _guard = ENV_LOCK.lock().await;
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let workflows_dir = tempfile::tempdir().expect("workflows dir");
+        // SAFETY: env mutation serialized by ENV_LOCK.
+        unsafe {
+            std::env::set_var("MAESTRO_DATA_DIR", data_dir.path());
+        }
+
+        let (engine, db) = engine_with_db(workflows_dir.path()).await;
+        // Authoritative DB row says Done; stale snapshot says AddressingTicket.
+        seed_db_row(&db, "wf-db", "TICK-1", WorkflowState::Done).await;
+        let rec = sample_record("wf-snap", "TICK-1", WorkflowState::AddressingTicket { pass: 1 });
+        write_all_workspace_snapshots(data_dir.path(), &[rec]).expect("write snapshot");
+
+        engine.restore_persisted_workflows().await.expect("restore");
+
+        let state = {
+            let m = engine.workflows_arc();
+            let g = m.read().await;
+            g.get("TICK-1").map(|w| w.state.clone()).expect("present")
+        };
+        assert!(
+            matches!(state, WorkflowState::Done),
+            "DB row must win on conflict, got {state:?}"
+        );
+
+        // SAFETY: serialized by ENV_LOCK (still held).
+        unsafe {
+            std::env::remove_var("MAESTRO_DATA_DIR");
+        }
+    }
+
+    /// T2 — a snapshot record with NO matching DB row is restored AND
+    /// backfilled into the DB (so the DB-first read path can serve it).
+    #[tokio::test]
+    async fn restore_snapshot_only_row_backfills_db() {
+        let _guard = ENV_LOCK.lock().await;
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let workflows_dir = tempfile::tempdir().expect("workflows dir");
+        // SAFETY: env mutation serialized by ENV_LOCK.
+        unsafe {
+            std::env::set_var("MAESTRO_DATA_DIR", data_dir.path());
+        }
+
+        let (engine, db) = engine_with_db(workflows_dir.path()).await;
+        // Terminal so no driver is spawned; only the merge+backfill matters.
+        let rec = sample_record("wf-snap2", "TICK-2", WorkflowState::Done);
+        write_all_workspace_snapshots(data_dir.path(), &[rec]).expect("write snapshot");
+
+        engine.restore_persisted_workflows().await.expect("restore");
+
+        let in_map = {
+            let m = engine.workflows_arc();
+            let g = m.read().await;
+            g.contains_key("TICK-2")
+        };
+        assert!(in_map, "snapshot-only row must land in the map");
+
+        let row = crate::db::work_items::get_work_item_by_ticket_key(db.adapter(), "TICK-2")
+            .await
+            .expect("query work_items");
+        assert!(
+            row.is_some(),
+            "snapshot-only row must be backfilled into the DB"
+        );
+    }
+
+    /// T6 — with the DB populated and NO snapshot file present, restore
+    /// rebuilds the dashboard from the DB alone (restore is DB-independent of
+    /// the snapshot).
+    #[tokio::test]
+    async fn restore_rebuilds_from_db_with_no_snapshot_file() {
+        let _guard = ENV_LOCK.lock().await;
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let workflows_dir = tempfile::tempdir().expect("workflows dir");
+        // SAFETY: env mutation serialized by ENV_LOCK.
+        unsafe {
+            std::env::set_var("MAESTRO_DATA_DIR", data_dir.path());
+        }
+
+        let (engine, db) = engine_with_db(workflows_dir.path()).await;
+        seed_db_row(&db, "wf-db3", "TICK-3", WorkflowState::Done).await;
+        // No snapshot file is written.
+
+        engine.restore_persisted_workflows().await.expect("restore");
+
+        let in_map = {
+            let m = engine.workflows_arc();
+            let g = m.read().await;
+            g.contains_key("TICK-3")
+        };
+        assert!(in_map, "must rebuild TICK-3 from the DB with no snapshot file");
 
         // SAFETY: serialized by ENV_LOCK (still held).
         unsafe {

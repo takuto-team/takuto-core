@@ -31,7 +31,23 @@ pub(crate) const FIX_PERMS_SNIPPET: &str = r#"sudo -n bash -c 'for d in "$HOME/.
 /// Maestro's background service; when it does not exist (local dev /
 /// no GitHub App) this is a no-op and the legacy `GH_TOKEN` passthrough
 /// from `PASSTHROUGH_ENV` carries the value instead.
-pub(crate) const GH_TOKEN_SNIPPET: &str = r#"[ -f "$HOME/.config/gh/gh-app-token" ] && export GH_TOKEN="$(cat "$HOME/.config/gh/gh-app-token")";"#;
+pub(crate) const GH_TOKEN_SNIPPET: &str = r#"[ -f "$HOME/.config/gh/gh-app-token" ] && export GH_TOKEN="${GH_TOKEN:-$(cat "$HOME/.config/gh/gh-app-token")}";"#;
+
+/// Configure the HTTPS `github.com` git credential helper so the agent's
+/// `git push` / `git fetch` authenticate non-interactively.
+///
+/// Agent-step workers run with `--entrypoint ""` and build their own inline
+/// `sh -c`; they neither run `worker-entrypoint.sh` nor inherit the main
+/// container's `~/.gitconfig`, where [`crate::github_app::configure_git_and_gh_auth`]
+/// installs this helper. WITHOUT this snippet the worker's git has no
+/// credential helper, so `git push` falls back to an interactive username
+/// prompt and dies with `could not read Username for 'https://github.com'` —
+/// which a weak model then loops on. Mirrors
+/// [`crate::github_app::git_credential_helper_script`] (GH_TOKEN-first, with
+/// the shared App-token file as fallback). `GH_TOKEN` is exported by
+/// [`GH_TOKEN_SNIPPET`] / [`BUNDLE_SOURCING_SH`] earlier in the payload, and
+/// git re-reads it from the environment at credential time. Non-fatal.
+pub(crate) const GIT_CRED_HELPER_SNIPPET: &str = r#"git config --global 'credential.https://github.com.helper' '!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo "password=${GH_TOKEN:-$(cat /home/maestro/.config/gh/gh-app-token 2>/dev/null)}"; }; f' 2>/dev/null || true;"#;
 
 /// Shell snippet that sources every `/run/maestro-secrets/*` file into the
 /// matching env var, then `rm -f`s the on-disk copy. **Single source of
@@ -148,10 +164,12 @@ pub(crate) fn build_sh_payload(has_bundle: bool, program: &str, args: &[&str]) -
     let user_exec = shell_parts.join(" ");
     if has_bundle {
         format!(
-            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {BUNDLE_SOURCING_SH}; exec {user_exec}"
+            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {BUNDLE_SOURCING_SH}; {GIT_CRED_HELPER_SNIPPET} exec {user_exec}"
         )
     } else {
-        format!("{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} exec {user_exec}")
+        format!(
+            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {GIT_CRED_HELPER_SNIPPET} exec {user_exec}"
+        )
     }
 }
 
@@ -439,11 +457,47 @@ mod tests {
     fn lock_in_build_sh_payload_no_bundle_exact_output() {
         let actual = build_sh_payload(false, "echo", &["hello", "world"]);
         let expected = format!(
-            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} exec echo hello world"
+            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {GIT_CRED_HELPER_SNIPPET} exec echo hello world"
         );
         assert_eq!(
             actual, expected,
             "build_sh_payload(false, ...) wire-format drifted"
+        );
+    }
+
+    /// Both payload variants must configure the git credential helper so the
+    /// agent's `git push` authenticates — the gap that produced the
+    /// "could not read Username for 'https://github.com'" loop.
+    #[test]
+    fn build_sh_payload_configures_git_credential_helper() {
+        for has_bundle in [true, false] {
+            let body = build_sh_payload(has_bundle, "opencode", &["run"]);
+            assert!(
+                body.contains("credential.https://github.com.helper"),
+                "has_bundle={has_bundle}: payload must configure the git credential helper"
+            );
+            // Runs before the agent so git is ready when the agent pushes.
+            let helper_at = body.find("credential.https://github.com.helper").unwrap();
+            let exec_at = body.find("exec opencode").unwrap();
+            assert!(helper_at < exec_at, "helper must be configured before exec");
+        }
+    }
+
+    /// The credential helper must prefer `$GH_TOKEN` (the resolved per-workflow
+    /// token — a user PAT when present) over the App-token file, so a provided
+    /// PAT genuinely overrides the App token.
+    #[test]
+    fn git_cred_helper_prefers_gh_token_over_app_file() {
+        assert!(
+            GIT_CRED_HELPER_SNIPPET.contains(
+                r#"${GH_TOKEN:-$(cat /home/maestro/.config/gh/gh-app-token 2>/dev/null)}"#
+            ),
+            "credential helper must be GH_TOKEN-first with the App-token file as fallback"
+        );
+        // The token-file path must match github_app::TOKEN_FILE_PATH.
+        assert!(
+            GIT_CRED_HELPER_SNIPPET.contains(crate::github_app::TOKEN_FILE_PATH),
+            "helper token path must match github_app::TOKEN_FILE_PATH"
         );
     }
 }

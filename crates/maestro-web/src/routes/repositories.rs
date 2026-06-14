@@ -457,7 +457,12 @@ async fn add_via_clone(
     let row = maestro_core::db::repositories::get(adapter, &repo_id)
         .await
         .map_err(db_error)?
-        .expect("row was just upserted via the adapter");
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "repository row missing immediately after upsert".to_string(),
+            )
+        })?;
 
     info!(
         actor_user_id = %auth.user_id,

@@ -140,7 +140,7 @@ export function OnboardingBanner({
         role="alert"
         className="bg-red-950/80 border-b border-red-700 px-4 py-3 text-red-200"
       >
-        <div className="max-w-7xl mx-auto flex items-start gap-3">
+        <div className="w-full flex items-start gap-3">
           <span aria-hidden="true" className="text-red-400 text-lg leading-none mt-0.5">
             ⚠
           </span>
@@ -183,7 +183,7 @@ export function OnboardingBanner({
       role="alert"
       className="bg-red-950/80 border-b border-red-700 px-4 py-3 text-red-200"
     >
-      <div className="max-w-7xl mx-auto flex items-start gap-3">
+      <div className="w-full flex items-start gap-3">
         <span aria-hidden="true" className="text-red-400 text-lg leading-none mt-0.5">
           ⚠
         </span>

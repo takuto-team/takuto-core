@@ -1,8 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "../api/client";
+import { queryKeys } from "../api/queryClient";
 import type { WorkflowSummary, WorkflowEvent, TerminalLine, WorkflowCounts } from "../api/types";
 
 export interface TerminalState {
@@ -12,6 +14,8 @@ export interface TerminalState {
 }
 
 const TERMINAL_MAX_LINES = 500;
+
+const EMPTY_COUNTS: WorkflowCounts = { running: 0, completed: 0, errors: 0, paused: 0 };
 
 /** Dynamic port forwards from API, keyed by ticket_key → [container_port, proxy_url][] */
 export type DynamicForwards = Record<string, [number, string][]>;
@@ -25,98 +29,104 @@ export interface SystemError {
 
 let errorIdCounter = 0;
 
+function isTerminalState(state: string): boolean {
+  const lower = state.toLowerCase();
+  return lower === "done" || lower.startsWith("error") || lower === "stopped";
+}
+
 export function useWorkflows() {
-  const [workflows, setWorkflows] = useState<Record<string, WorkflowSummary>>({});
-  const [orderKeys, setOrderKeys] = useState<string[]>([]);
+  const queryClient = useQueryClient();
+
+  const { data: list } = useQuery({
+    queryKey: queryKeys.workItems,
+    queryFn: () => apiJson<WorkflowSummary[]>("/api/work-items"),
+  });
+  const { data: countsData } = useQuery({
+    queryKey: queryKeys.workItemCounts,
+    queryFn: () => apiJson<WorkflowCounts>("/api/work-items/counts"),
+  });
+
+  // Workflows and dynamic forwards are pure projections of the server list.
+  const workflows = useMemo(() => {
+    const next: Record<string, WorkflowSummary> = {};
+    for (const w of list ?? []) next[w.ticket_key] = w;
+    return next;
+  }, [list]);
+
+  const dynamicForwards = useMemo(() => {
+    const next: DynamicForwards = {};
+    for (const w of list ?? []) {
+      const mappings = w.editor_port_mappings ?? [];
+      if (mappings.length > 0) next[w.ticket_key] = mappings;
+    }
+    return next;
+  }, [list]);
+
+  const counts = countsData ?? EMPTY_COUNTS;
+
+  // Terminal output is streamed over the WebSocket and never re-fetched, so
+  // it lives in local state seeded from each workflow's `terminal_lines`.
   const [terminalStates, setTerminalStates] = useState<Record<string, TerminalState>>({});
-  const [dynamicForwards, setDynamicForwards] = useState<DynamicForwards>({});
   const [systemErrors, setSystemErrors] = useState<SystemError[]>([]);
-  const [counts, setCounts] = useState<WorkflowCounts>({ running: 0, completed: 0, errors: 0, paused: 0 });
-  const initialLoadDone = useRef(false);
-
-  const fetchWorkflows = useCallback(async () => {
-    try {
-      const list = await apiJson<WorkflowSummary[]>("/api/work-items");
-      setWorkflows(() => {
-        const next: Record<string, WorkflowSummary> = {};
-        for (const w of list) next[w.ticket_key] = w;
-        return next;
-      });
-      setOrderKeys((prev) => {
-        const newKeys = list.map((w) => w.ticket_key);
-        if (prev.length === 0) return newKeys;
-        // Preserve existing order, append new keys
-        const existing = prev.filter((k) => newKeys.includes(k));
-        const added = newKeys.filter((k) => !prev.includes(k));
-        return [...existing, ...added];
-      });
-      // Initialize terminal states from workflow terminal_lines
-      setTerminalStates((prev) => {
-        const next = { ...prev };
-        for (const w of list) {
-          if (!next[w.ticket_key]) {
-            next[w.ticket_key] = {
-              stepName: w.state || "Waiting...",
-              lines: w.terminal_lines || [],
-              completed: false,
-            };
-          }
-        }
-        return next;
-      });
-      // Initialize dynamic forwards from API response (proxy URLs). The
-      // server is the source of truth: if it returns an empty mapping list
-      // for a workflow we already tracked, clear the stale entry — otherwise
-      // a `port_unforwarded` event that triggers a re-fetch would leave the
-      // old proxy URL hanging around.
-      setDynamicForwards((prev) => {
-        const next = { ...prev };
-        for (const w of list) {
-          const mappings = w.editor_port_mappings ?? [];
-          if (mappings.length > 0) {
-            next[w.ticket_key] = mappings;
-          } else if (next[w.ticket_key]) {
-            delete next[w.ticket_key];
-          }
-        }
-        return next;
-      });
-      initialLoadDone.current = true;
-    } catch {
-      // Silently ignore fetch errors (e.g. 401 handled by api client)
-    }
-  }, []);
-
-  const fetchCounts = useCallback(async () => {
-    try {
-      const data = await apiJson<WorkflowCounts>("/api/work-items/counts");
-      setCounts(data);
-    } catch {
-      // Silently ignore
-    }
-  }, []);
+  // Display order is the server order, but with memory: a refetch never
+  // re-sorts existing rows — new keys are appended. This reconciliation of
+  // server data into a stable client order keeps state (prior order), so it
+  // is a genuine sync effect rather than a pure derivation.
+  const [orderKeys, setOrderKeys] = useState<string[]>([]);
 
   useEffect(() => {
-    fetchWorkflows();
-  }, [fetchWorkflows]);
+    if (!list) return;
+    const newKeys = list.map((w) => w.ticket_key);
+    setOrderKeys((prev) => {
+      if (prev.length === 0) return newKeys;
+      const existing = prev.filter((k) => newKeys.includes(k));
+      const added = newKeys.filter((k) => !prev.includes(k));
+      return [...existing, ...added];
+    });
+    setTerminalStates((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const w of list) {
+        if (!next[w.ticket_key]) {
+          next[w.ticket_key] = {
+            stepName: w.state || "Waiting...",
+            lines: w.terminal_lines || [],
+            completed: false,
+          };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [list]);
+
+  const fetchWorkflows = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.workItems }),
+    [queryClient]
+  );
+  const fetchCounts = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.workItemCounts }),
+    [queryClient]
+  );
+
+  const patchWorkItem = useCallback(
+    (ticketKey: string, mut: (w: WorkflowSummary) => WorkflowSummary) => {
+      queryClient.setQueryData<WorkflowSummary[]>(queryKeys.workItems, (prev) =>
+        prev ? prev.map((w) => (w.ticket_key === ticketKey ? mut(w) : w)) : prev
+      );
+    },
+    [queryClient]
+  );
 
   const handleEvent = useCallback(
     (evt: WorkflowEvent) => {
       const { event_type, ticket_key } = evt;
 
       if (event_type === "work_item_removed") {
-        setWorkflows((prev) => {
-          const next = { ...prev };
-          delete next[ticket_key];
-          return next;
-        });
-        setOrderKeys((prev) => prev.filter((k) => k !== ticket_key));
+        queryClient.setQueryData<WorkflowSummary[]>(queryKeys.workItems, (prev) =>
+          prev ? prev.filter((w) => w.ticket_key !== ticket_key) : prev
+        );
         setTerminalStates((prev) => {
-          const next = { ...prev };
-          delete next[ticket_key];
-          return next;
-        });
-        setDynamicForwards((prev) => {
           const next = { ...prev };
           delete next[ticket_key];
           return next;
@@ -152,12 +162,8 @@ export function useWorkflows() {
             },
           };
         });
-        // Update workflow state to show step name
-        setWorkflows((prev) => {
-          const wf = prev[ticket_key];
-          if (!wf) return prev;
-          return { ...prev, [ticket_key]: { ...wf, state: evt.step_name || wf.state } };
-        });
+        // Reflect the active step name on the card immediately.
+        patchWorkItem(ticket_key, (wf) => ({ ...wf, state: evt.step_name || wf.state }));
         return;
       }
 
@@ -167,18 +173,17 @@ export function useWorkflows() {
           if (!ts) return prev;
           return { ...prev, [ticket_key]: { ...ts, completed: true } };
         });
-        // Re-fetch to get updated steps_log and progress
+        // Re-fetch to get updated steps_log and progress.
         fetchWorkflows();
         return;
       }
 
-      // Run command events — update run_commands in workflow state
+      // Run command events — re-fetch run_commands; surface stop failures.
       if (
         event_type === "run_command_port_forwarded" ||
         event_type === "run_command_port_unforwarded" ||
         event_type === "run_command_stopped"
       ) {
-        // Surface error from run command failure
         if (event_type === "run_command_stopped" && evt.error) {
           setSystemErrors((prev) => [
             ...prev,
@@ -200,44 +205,33 @@ export function useWorkflows() {
         return;
       }
 
-      // Workflow state change — update locally
-      let needsRefetch = false;
-      let countsOnly = false;
+      // Workflow state change.
+      const current = queryClient.getQueryData<WorkflowSummary[]>(queryKeys.workItems);
+      const wf = current?.find((w) => w.ticket_key === ticket_key);
+      if (!wf) {
+        // Unknown workflow (likely from another workspace) — refresh global counts only.
+        if (ticket_key) fetchCounts();
+        return;
+      }
 
-      setWorkflows((prev) => {
-        const wf = prev[ticket_key];
-        if (wf) {
-          const updated = { ...wf };
-          if (evt.state) updated.state = evt.state;
-          if (typeof evt.progress_percent === "number") updated.progress_percent = evt.progress_percent;
-          if (typeof evt.progress_steps_total === "number") updated.progress_steps_total = evt.progress_steps_total;
-          if (typeof evt.pr_merged === "boolean") updated.pr_merged = evt.pr_merged;
-          if (evt.error) updated.error = evt.error;
+      const updated: WorkflowSummary = { ...wf };
+      if (evt.state) updated.state = evt.state;
+      if (typeof evt.progress_percent === "number") updated.progress_percent = evt.progress_percent;
+      if (typeof evt.progress_steps_total === "number") updated.progress_steps_total = evt.progress_steps_total;
+      if (typeof evt.pr_merged === "boolean") updated.pr_merged = evt.pr_merged;
+      if (evt.error) updated.error = evt.error;
 
-          // Terminal states or newly-active workflows: re-fetch for action flags
-          // (can_open_editor, pr_url, etc.) that can only be computed server-side.
-          const lower = updated.state.toLowerCase();
-          const isTerminal = lower === "done" || lower.startsWith("error") || lower === "stopped";
-          const becameActive = !wf.can_open_editor && evt.state && evt.state !== wf.state;
-          if (isTerminal || becameActive) {
-            needsRefetch = true;
-            return prev;
-          }
-          return { ...prev, [ticket_key]: updated };
-        }
-        // Unknown workflow (likely from another workspace) — refresh global counts only
-        if (ticket_key) countsOnly = true;
-        return prev;
-      });
-
-      if (needsRefetch) {
+      // Terminal states or newly-active workflows: re-fetch for action flags
+      // (can_open_editor, pr_url, etc.) that can only be computed server-side.
+      const becameActive = !wf.can_open_editor && !!evt.state && evt.state !== wf.state;
+      if (isTerminalState(updated.state) || becameActive) {
         fetchWorkflows();
         fetchCounts();
-      } else if (countsOnly) {
-        fetchCounts();
+        return;
       }
+      patchWorkItem(ticket_key, () => updated);
     },
-    [fetchWorkflows, fetchCounts]
+    [queryClient, fetchWorkflows, fetchCounts, patchWorkItem]
   );
 
   const dismissError = useCallback((id: number) => {
@@ -245,13 +239,12 @@ export function useWorkflows() {
   }, []);
 
   const resetState = useCallback(() => {
-    setWorkflows({});
-    setOrderKeys([]);
     setTerminalStates({});
-    setDynamicForwards({});
     setSystemErrors([]);
-    initialLoadDone.current = false;
-  }, []);
+    setOrderKeys([]);
+    queryClient.removeQueries({ queryKey: queryKeys.workItems });
+    queryClient.removeQueries({ queryKey: queryKeys.workItemCounts });
+  }, [queryClient]);
 
   return {
     workflows,

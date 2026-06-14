@@ -2,20 +2,22 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * `useWorkflowDefinitions` — fetches the `/api/workflow-definitions`
- * collection and exposes:
- *   * `refresh()` — immediate fetch
- *   * `scheduleRefresh()` — debounced fetch (500 ms), used by the
- *     dashboard WS handler when `workflow_updated` /
+ * `useWorkflowDefinitions` — reads the `/api/workflow-definitions`
+ * collection through TanStack Query and exposes:
+ *   * `refresh()` — invalidate + refetch immediately
+ *   * `scheduleRefresh()` — debounced invalidate (500 ms), used by the
+ *     dashboard WS handler when `work_item_updated` /
  *     `workflow_definitions_changed` / `step_completed` events fire.
  *
- * Behaviour preserved verbatim from pre-extraction: the 500 ms debounce
- * timer has no unmount cleanup (designer flagged the lack of cleanup as
- * intentional — matches the original Dashboard code).
+ * The debounce coalesces bursts of WS events into a single refetch and is
+ * not a server-state cache concern, so it stays. As before, the timer has
+ * no unmount cleanup (matches the original Dashboard behaviour).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "../api/client";
+import { queryKeys } from "../api/queryClient";
 import type { WorkflowDefinition } from "../api/types";
 
 export interface UseWorkflowDefinitionsResult {
@@ -27,23 +29,22 @@ export interface UseWorkflowDefinitionsResult {
 const DEBOUNCE_MS = 500;
 
 export function useWorkflowDefinitions(): UseWorkflowDefinitionsResult {
-  const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
+  const queryClient = useQueryClient();
   const defsFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const { data } = useQuery({
+    queryKey: queryKeys.workflowDefinitions,
+    queryFn: () => apiJson<WorkflowDefinition[]>("/api/workflow-definitions"),
+  });
+
   const refresh = useCallback(() => {
-    apiJson<WorkflowDefinition[]>("/api/workflow-definitions")
-      .then(setWorkflowDefs)
-      .catch(() => {});
-  }, []);
+    queryClient.invalidateQueries({ queryKey: queryKeys.workflowDefinitions });
+  }, [queryClient]);
 
   const scheduleRefresh = useCallback(() => {
     if (defsFetchTimer.current) clearTimeout(defsFetchTimer.current);
     defsFetchTimer.current = setTimeout(refresh, DEBOUNCE_MS);
   }, [refresh]);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  return { workflowDefs, refresh, scheduleRefresh };
+  return { workflowDefs: data ?? [], refresh, scheduleRefresh };
 }

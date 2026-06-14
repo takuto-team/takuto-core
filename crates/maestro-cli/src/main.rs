@@ -627,19 +627,19 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("{msg}");
     }
 
-    // Auto-polling is disabled in this build. Operators need a visible
-    // signal at startup; if they had `auto_polling = true` configured, the
-    // override is louder still (warn vs info).
+    // Item polling enable/disable is driven by `[general] auto_polling` (and
+    // the live Pause/Resume + Configuration → Item Polling toggle). It only
+    // actually polls when a ticketing system is configured (Jira with acli, or
+    // GitHub); with `ticketing_system = none` the poller stays idle regardless.
     if config.general.auto_polling {
-        tracing::warn!(
-            "[general] auto_polling = true is ignored: auto-polling is disabled \
-             in this build (per-repo polling is not yet implemented). Items \
-             must be added manually via the dashboard."
+        info!(
+            "Item polling is enabled ([general] auto_polling = true) — active when a \
+             ticketing system is configured. Disable it from Configuration → Item Polling."
         );
     } else {
         info!(
-            "Auto-polling is disabled in this build (per-repo polling is not \
-             yet implemented). Items must be added manually via the dashboard."
+            "Item polling starts disabled ([general] auto_polling = false). Enable it \
+             from Configuration → Item Polling or POST /api/polling/resume."
         );
     }
 
@@ -668,20 +668,6 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config = Arc::new(RwLock::new(config));
-
-    {
-        let c = config.read().await;
-        if c.web.dashboard_auth_enabled() {
-            info!(
-                user = %c.web.dashboard_username.trim(),
-                "Dashboard auth ON — open /login.html to sign in; use the same hostname always (localhost vs 127.0.0.1 are different cookie sites)"
-            );
-        } else {
-            info!(
-                "Dashboard auth OFF — set non-empty [web] dashboard_username and dashboard_password (or use the Configuration page) to require login"
-            );
-        }
-    }
 
     let (git_remote, dry_mode, github_app_mgr) = {
         let c = config.read().await;
@@ -1052,6 +1038,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         cancel_token.clone(),
         polling_paused.clone(),
         resolved_poller_owner.clone(),
+        Arc::new(maestro_core::jira::RealJiraSourceFactory),
     );
 
     let polling_paused_for_gh = polling_paused.clone();

@@ -85,6 +85,10 @@ impl GitHubPoller {
         // This matches the Jira poller's behaviour: dry_mode affects side-effects, not polling.
         let dry_mode = config.general.dry_mode;
         let repo_path = std::path::PathBuf::from(&config.git.repo_path);
+        let label_filter = config.polling.github.labels.clone();
+        let title_keywords = config.polling.github.title_keywords.clone();
+        let max_parallel_items = config.polling.max_parallel_items;
+        let max_parallel_per_user = config.polling.max_parallel_per_user;
         drop(config);
 
         let remote_url = match crate::git::remote::resolve_remote_url(&repo_path, &remote).await {
@@ -114,27 +118,64 @@ impl GitHubPoller {
             "Polling GitHub issues"
         );
 
-        if visible_count >= max_active {
+        // Legacy ceiling: every dashboard row (including terminal Done/Stopped/
+        // Error) counts toward `max_active_workflows`.
+        let legacy_slots = max_active.saturating_sub(visible_count);
+
+        // New `[polling] max_parallel_items` ceiling: only items occupying a
+        // concurrency slot count (a different, narrower set than the legacy
+        // gate — terminal rows are excluded). When `0`, the cap is unlimited
+        // and only the legacy ceiling applies. `min()` picks the tighter limit.
+        let item_slots = if max_parallel_items > 0 {
+            let scope = if max_parallel_per_user {
+                self.resolved_owner_id.as_deref()
+            } else {
+                None
+            };
+            let in_use = self.engine.active_item_count(scope).await;
+            (max_parallel_items as usize).saturating_sub(in_use)
+        } else {
+            usize::MAX
+        };
+
+        let slots_available = legacy_slots.min(item_slots);
+        if slots_available == 0 {
             info!(
                 visible = visible_count,
                 max = max_active,
-                "At max active workflows (dashboard rows), skipping GitHub poll"
+                max_parallel_items = max_parallel_items,
+                "No available item slots (legacy or parallel-item cap), skipping GitHub poll"
             );
             return Ok(());
         }
 
-        let slots_available = max_active - visible_count;
-
         // Fetch open issues via `gh api`, injecting the GitHub App token when configured.
-        // Note: unlike the Jira poller (which supports `jql_filter` and `item_types`),
-        // the GitHub poller currently fetches all open issues without label/milestone
-        // filtering. A future `[github] label_filter` config option could narrow this.
+        // Label and title-keyword filtering from `[polling.github]` is applied below.
         let gh_token = self
             .engine
             .actions
             .get_gh_installation_token(&repo_path)
             .await;
-        let issues = fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref()).await?;
+        let mut issues = fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref()).await?;
+
+        // Apply the admin-configured label + title-keyword filters. Empty
+        // label list = no label filter; empty keyword list = no title filter.
+        let pre_filter = issues.len();
+        issues.retain(|i| {
+            let label_ok =
+                label_filter.is_empty() || i.labels.iter().any(|l| label_filter.contains(l));
+            let title_ok = crate::config::matches_any_keyword(&i.summary, &title_keywords);
+            label_ok && title_ok
+        });
+        if !label_filter.is_empty() || !title_keywords.is_empty() {
+            info!(
+                labels = ?label_filter,
+                title_keywords = ?title_keywords,
+                before = pre_filter,
+                after = issues.len(),
+                "Applied GitHub issue filters"
+            );
+        }
 
         if issues.is_empty() {
             info!("No open GitHub issues found");

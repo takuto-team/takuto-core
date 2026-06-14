@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
-use crate::state::{AuthState, ConfigState};
+use crate::state::AuthState;
 
 /// Returns the currently authenticated user's profile.
 ///
@@ -16,18 +16,14 @@ use crate::state::{AuthState, ConfigState};
 /// a valid session cookie is present.
 pub async fn me(
     State(auth): State<AuthState>,
-    State(config): State<ConfigState>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     use crate::auth::{session_cookie_from_headers, validate_db_session};
 
     let Some(ref db) = auth.db else {
-        // Legacy auth — no user model, return a synthetic admin.
-        return Json(serde_json::json!({
-            "username": config.config.read().await.web.dashboard_username.trim(),
-            "role": "admin",
-        }))
-        .into_response();
+        // No database — the auth middleware rejects protected requests before
+        // they reach this handler, so this branch is effectively unreachable.
+        return StatusCode::UNAUTHORIZED.into_response();
     };
 
     let adapter = db.adapter();

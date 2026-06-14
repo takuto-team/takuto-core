@@ -249,66 +249,62 @@ pub async fn list_workflows(
             // fields (state display, action flags, in-memory caches)
             // stay on the Workflow path because they have no DB
             // equivalent.
+            // The work_items row is authoritative for every durable field
+            // (ticket metadata, timestamps, branch, PR, worktree path); they
+            // are written to it as the engine learns them. After the state
+            // cutover every live row is DB-backed, so a present row is used
+            // wholesale — a single row-level branch, not a per-field ladder.
+            // A cached entry with no row is a transitional anomaly: log it and
+            // render durable fields from the cache so the row does not vanish
+            // mid-migration. Engine-derived fields (state display, action
+            // flags, port cache) come from the Workflow below.
             let row = db_rows.get(&w.ticket_key);
-            let ticket_summary = match row {
-                Some(r) => r.ticket_summary.clone().unwrap_or_default(),
-                None => w.ticket_summary.clone(),
-            };
-            let ticket_description = match row {
-                Some(r) => r.ticket_description.clone().unwrap_or_default(),
-                None => w.ticket_description.clone(),
-            };
-            let ticket_type = match row {
-                Some(r) => r.ticket_type.clone().unwrap_or_default(),
-                None => w.ticket_type.clone(),
-            };
-            let started_at_rfc = match row {
-                Some(r) => unix_seconds_to_rfc3339(r.started_at),
-                None => w.started_at.to_rfc3339(),
-            };
-            let updated_at_rfc = match row {
-                Some(r) => unix_seconds_to_rfc3339(r.updated_at),
-                None => w.updated_at.to_rfc3339(),
-            };
-            // Prefer the DB shadow-row, but fall back to the in-memory
-            // value when the DB column is empty/null. The shadow-write to
-            // `work_items` can lag behind the engine (e.g. FK violations on
-            // a sibling write block the row update entirely), and serving
-            // the stale empty value hides PR links and branch names on the
-            // dashboard for runs that actually completed cleanly in memory.
-            let branch_name = row
-                .and_then(|r| {
-                    r.branch_name
+            if row.is_none() {
+                tracing::warn!(
+                    ticket = %w.ticket_key,
+                    "work item in cache has no work_items row; rendering durable fields from the cache (transitional)"
+                );
+            }
+            let (
+                ticket_summary,
+                ticket_description,
+                ticket_type,
+                started_at_rfc,
+                updated_at_rfc,
+                branch_name,
+                pr_url,
+                pr_merged,
+                worktree_path,
+            ) = match row {
+                Some(r) => (
+                    r.ticket_summary.clone().unwrap_or_default(),
+                    r.ticket_description.clone().unwrap_or_default(),
+                    r.ticket_type.clone().unwrap_or_default(),
+                    unix_seconds_to_rfc3339(r.started_at),
+                    unix_seconds_to_rfc3339(r.updated_at),
+                    r.branch_name.clone().unwrap_or_default(),
+                    r.pr_url.clone(),
+                    r.pr_merged,
+                    r.worktree_path
                         .as_deref()
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| w.branch_name.clone());
-            let pr_url = row
-                .and_then(|r| {
-                    r.pr_url
-                        .as_deref()
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                })
-                .or_else(|| w.pr_url.clone());
-            // pr_merged is a flag, not a value, so true OR'd from either source.
-            let pr_merged = row.map(|r| r.pr_merged).unwrap_or(false) || w.pr_merged;
-            // Worktree path filtered by on-disk existence — a path
-            // recorded in the row whose directory has been removed
-            // is no longer useful to render.
-            let worktree_path = match row {
-                Some(r) => r
-                    .worktree_path
-                    .as_deref()
-                    .map(std::path::Path::new)
-                    .filter(|p| p.exists())
-                    .and_then(|p| p.to_str().map(str::to_string)),
-                None => w
-                    .worktree_path
-                    .as_ref()
-                    .filter(|p| p.exists())
-                    .and_then(|p| p.to_str().map(str::to_string)),
+                        .map(std::path::Path::new)
+                        .filter(|p| p.exists())
+                        .and_then(|p| p.to_str().map(str::to_string)),
+                ),
+                None => (
+                    w.ticket_summary.clone(),
+                    w.ticket_description.clone(),
+                    w.ticket_type.clone(),
+                    w.started_at.to_rfc3339(),
+                    w.updated_at.to_rfc3339(),
+                    w.branch_name.clone(),
+                    w.pr_url.clone(),
+                    w.pr_merged,
+                    w.worktree_path
+                        .as_ref()
+                        .filter(|p| p.exists())
+                        .and_then(|p| p.to_str().map(str::to_string)),
+                ),
             };
             WorkflowSummary {
                 id: w.id.clone(),
@@ -360,89 +356,83 @@ pub async fn list_workflows(
 }
 
 /// Per-user workflow counts for the dashboard summary bar.
-/// Counts come from a DB GROUP-BY when a row exists for a given
-/// ticket_key, falling back to the HashMap for legacy workflows that
-/// have not yet been backfilled. The two sources are merged by
-/// ticket_key (DB wins) so the same workflow is never double-counted
-/// during the transition.
+///
+/// Counts EXACTLY what the grid renders: the caller's in-memory workflows in
+/// repositories they've added — same source (the workflow map) and same filter
+/// as `list_workflows`, tallying the live in-memory state. This is deliberate:
+/// sourcing counts from the DB (across all workspaces, with shadow-write lag)
+/// let the summary bar diverge from the cards (e.g. a running item showing as 0
+/// while terminal rows from other workspaces inflated "errors").
 pub async fn workflow_counts(
     State(engine): State<EngineState>,
     State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
 ) -> Json<WorkflowCountsResponse> {
-    use maestro_core::db::work_items::WorkItemStateKind;
-    use std::collections::HashMap;
-
-    let mut counted: HashMap<String, WorkItemStateKind> = HashMap::new();
-
-    // ── DB primary ─────────────────────────────────────────────
-    if let Some(database) = auth_state.db.as_ref()
-        && let Ok(rows) =
-            maestro_core::db::work_items::list_user_state_kinds(database.adapter(), &auth.user_id)
-                .await
-    {
-        for (ticket_key, kind) in rows {
-            counted.insert(ticket_key, kind);
-        }
-    }
-
-    // ── HashMap fallback: only entries the DB didn't already
-    //    cover. Legacy workflows still live only in memory.
-    {
-        let wf_arc = engine.engine.workflows_arc();
-        let workflows = wf_arc.read().await;
-        for w in workflows.values() {
-            if w.user_id.as_deref() != Some(&auth.user_id) {
-                continue;
-            }
-            if counted.contains_key(&w.ticket_key) {
-                continue;
-            }
-            let kind = match &w.state {
-                WorkflowState::Pending => WorkItemStateKind::Pending,
-                WorkflowState::Assigning => WorkItemStateKind::Assigning,
-                WorkflowState::RetrievingDetails => WorkItemStateKind::RetrievingDetails,
-                WorkflowState::CreatingWorktree => WorkItemStateKind::CreatingWorktree,
-                WorkflowState::AddressingTicket { .. } => WorkItemStateKind::AddressingTicket,
-                WorkflowState::AddressingPrComments { .. } => {
-                    WorkItemStateKind::AddressingPrComments
+    // Repo gate identical to `list_workflows`: a workflow is visible when its
+    // repository_id (or, for legacy rows, workspace_name) belongs to a repo the
+    // caller has added.
+    let (allowed_repo_ids, allowed_repo_names): (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ) = if let Some(database) = auth_state.db.as_ref() {
+        match maestro_core::db::repositories::list_for_user(database.adapter(), &auth.user_id).await
+        {
+            Ok(repos) => {
+                let mut ids = std::collections::HashSet::new();
+                let mut names = std::collections::HashSet::new();
+                for r in repos {
+                    ids.insert(r.id);
+                    names.insert(r.name);
                 }
-                WorkflowState::MergingBaseBranch { .. } => WorkItemStateKind::MergingBaseBranch,
-                WorkflowState::Reviewing => WorkItemStateKind::Reviewing,
-                WorkflowState::CreatingPR => WorkItemStateKind::CreatingPr,
-                WorkflowState::Done => WorkItemStateKind::Done,
-                WorkflowState::Stopped => WorkItemStateKind::Stopped,
-                WorkflowState::Error { .. } => WorkItemStateKind::Error,
-                WorkflowState::Paused { .. } => WorkItemStateKind::Paused,
-            };
-            counted.insert(w.ticket_key.clone(), kind);
+                (ids, names)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load user repositories for count filter");
+                (
+                    std::collections::HashSet::new(),
+                    std::collections::HashSet::new(),
+                )
+            }
         }
-    }
+    } else {
+        // No DB (test paths): fall back to the user_id gate only.
+        (
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+        )
+    };
+    let no_db = auth_state.db.is_none();
 
     let mut running = 0u32;
     let mut completed = 0u32;
     let mut errors = 0u32;
     let mut paused = 0u32;
-    for kind in counted.values() {
-        match kind {
-            WorkItemStateKind::Done => completed += 1,
-            WorkItemStateKind::Error | WorkItemStateKind::Stopped => errors += 1,
-            WorkItemStateKind::Paused => paused += 1,
-            // Pending hasn't started yet — don't count, matching
-            // the legacy HashMap-only behaviour.
-            WorkItemStateKind::Pending => {}
-            // Every active driver state counts as "running" from
-            // the dashboard's perspective.
-            WorkItemStateKind::Assigning
-            | WorkItemStateKind::RetrievingDetails
-            | WorkItemStateKind::CreatingWorktree
-            | WorkItemStateKind::AddressingTicket
-            | WorkItemStateKind::AddressingPrComments
-            | WorkItemStateKind::MergingBaseBranch
-            | WorkItemStateKind::Reviewing
-            | WorkItemStateKind::CreatingPr => running += 1,
+
+    let wf_arc = engine.engine.workflows_arc();
+    let workflows = wf_arc.read().await;
+    for w in workflows.values() {
+        if w.user_id.as_deref() != Some(&auth.user_id) {
+            continue;
+        }
+        let visible = no_db
+            || w.repository_id
+                .as_ref()
+                .is_some_and(|id| allowed_repo_ids.contains(id))
+            || (!w.workspace_name.is_empty() && allowed_repo_names.contains(&w.workspace_name));
+        if !visible {
+            continue;
+        }
+        match &w.state {
+            WorkflowState::Done => completed += 1,
+            WorkflowState::Error { .. } | WorkflowState::Stopped => errors += 1,
+            WorkflowState::Paused { .. } => paused += 1,
+            // Pending hasn't started yet — not counted in any active bucket.
+            WorkflowState::Pending => {}
+            // Every active driver state counts as "running".
+            _ => running += 1,
         }
     }
+
     Json(WorkflowCountsResponse {
         running,
         completed,
@@ -541,47 +531,47 @@ pub async fn get_workflow(
         }
         result
     };
-    let ticket_summary = match &db_row {
-        Some(r) => r.ticket_summary.clone().unwrap_or_default(),
-        None => w.ticket_summary.clone(),
+    // See the list endpoint: the work_items row is authoritative for every
+    // durable field; a present row is used wholesale (one row-level branch,
+    // not a per-field ladder). A missing row is a transitional anomaly logged
+    // here, with the cache rendered so the item still resolves.
+    if db_row.is_none() {
+        tracing::warn!(
+            ticket = %w.ticket_key,
+            "work item in cache has no work_items row; rendering durable fields from the cache (transitional)"
+        );
+    }
+    let (
+        ticket_summary,
+        ticket_description,
+        ticket_type,
+        started_at_rfc,
+        updated_at_rfc,
+        branch_name,
+        pr_url,
+        pr_merged,
+    ) = match &db_row {
+        Some(r) => (
+            r.ticket_summary.clone().unwrap_or_default(),
+            r.ticket_description.clone().unwrap_or_default(),
+            r.ticket_type.clone().unwrap_or_default(),
+            unix_seconds_to_rfc3339(r.started_at),
+            unix_seconds_to_rfc3339(r.updated_at),
+            r.branch_name.clone().unwrap_or_default(),
+            r.pr_url.clone(),
+            r.pr_merged,
+        ),
+        None => (
+            w.ticket_summary.clone(),
+            w.ticket_description.clone(),
+            w.ticket_type.clone(),
+            w.started_at.to_rfc3339(),
+            w.updated_at.to_rfc3339(),
+            w.branch_name.clone(),
+            w.pr_url.clone(),
+            w.pr_merged,
+        ),
     };
-    let ticket_description = match &db_row {
-        Some(r) => r.ticket_description.clone().unwrap_or_default(),
-        None => w.ticket_description.clone(),
-    };
-    let ticket_type = match &db_row {
-        Some(r) => r.ticket_type.clone().unwrap_or_default(),
-        None => w.ticket_type.clone(),
-    };
-    let started_at_rfc = match &db_row {
-        Some(r) => unix_seconds_to_rfc3339(r.started_at),
-        None => w.started_at.to_rfc3339(),
-    };
-    let updated_at_rfc = match &db_row {
-        Some(r) => unix_seconds_to_rfc3339(r.updated_at),
-        None => w.updated_at.to_rfc3339(),
-    };
-    // See the list endpoint above: prefer a non-empty DB value, but fall
-    // back to the in-memory workflow when the shadow-row lags behind.
-    let branch_name = db_row
-        .as_ref()
-        .and_then(|r| {
-            r.branch_name
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| w.branch_name.clone());
-    let pr_url = db_row
-        .as_ref()
-        .and_then(|r| {
-            r.pr_url
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .or_else(|| w.pr_url.clone());
-    let pr_merged = db_row.as_ref().map(|r| r.pr_merged).unwrap_or(false) || w.pr_merged;
     Ok(Json(WorkflowSummary {
         id: w.id.clone(),
         ticket_key: w.ticket_key.clone(),

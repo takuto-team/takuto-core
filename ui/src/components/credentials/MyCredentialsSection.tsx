@@ -2,50 +2,49 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Per-user credentials section — visible to every authenticated user.
+ * Per-user AI credentials section — visible to every authenticated user.
  *
  * Lives inside the consolidated "AI Settings" tab on /config.html. Manages
  * the caller's own AI provider credential (api_key + optional Claude
- * cli_state) and their GitHub PAT.
+ * cli_state). The per-user GitHub PAT lives on its own "GitHub" tab
+ * (`GitHubCredentialsSection`).
  *
  * Source of truth: tmp/multi-agents/05_ux_design.md §2.2 (AI auth panel) +
- * §2.3 (GitHub auth panel) + 04_architecture.md §3 + §4.4.
+ * 04_architecture.md §3 + §4.4.
  *
  * Hard constraints (enforced here so reviewers see them in one place):
  *   - A1: Cursor is **API-key only**. No ttyd capture, no CLI-state path.
  *     The Cursor card MUST NOT mention ttyd, "device login", "interactive
  *     terminal", or any browser-flow vocabulary. Regression-guarded in
  *     `MyCredentialsSection.test.tsx`.
- *   - A3: per-user toggle is **"Attribute commits to me"** — NOT
- *     "Sign commits". v1 does NOT do GPG/SSH signing. Regression-guarded.
  *   - All four v1 adapters (Claude, Cursor, Codex, OpenCode) are wired as
  *     of Phase 4. Each renders a paste-an-API-key card.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   apiJson,
-  // deleteGithubPat / deleteProviderCredential intentionally NOT imported —
-  // task #31 removed the Disconnect / Remove-PAT buttons because the
-  // single Replace/Save flow covers rotation and revocation happens on
-  // the provider side (anthropic.com / cursor.com / github.com).
+  // deleteProviderCredential intentionally NOT imported — task #31 removed
+  // the Disconnect / Remove buttons because the single Replace/Save flow
+  // covers rotation and revocation happens on the provider side
+  // (anthropic.com / cursor.com).
   fetchUserCredentials,
-  patchGithubSettings,
-  setGithubPat,
   setProviderCredential,
   UserCredentialsError,
 } from "../../api/client";
 import { useToast } from "../../hooks/useToast";
-import type {
-  AuthStatus,
-  GithubAuthMode,
-  UserCredentialsStatus,
-} from "../../api/types";
+import type { AuthStatus, UserCredentialsStatus } from "../../api/types";
 import { AiCredentialPanel } from "./AiCredentialPanel";
-import { GitHubCredentialPanel } from "./GitHubCredentialPanel";
 import { PROVIDER_LABEL } from "./helpers";
 
-export function MyCredentialsSection() {
+interface Props {
+  /** Bump to force a refetch — e.g. when the admin changes the active provider
+   *  in a sibling section, so the credential card reflects the new provider
+   *  without a manual page reload. */
+  refreshKey?: number;
+}
+
+export function MyCredentialsSection({ refreshKey = 0 }: Props = {}) {
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -97,6 +96,18 @@ export function MyCredentialsSection() {
     };
   }, [refresh]);
 
+  // Refetch when the parent bumps `refreshKey` (e.g. the admin switched the
+  // active provider) so the card reflects the new provider in place — no
+  // unmount (initialLoading untouched), no double-fetch on first render.
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    void refresh();
+  }, [refreshKey, refresh]);
+
   /**
    * Provider name the admin has selected, used to pick which AI card to
    * render. Falls back to whatever the user already has stored, then "claude"
@@ -117,13 +128,6 @@ export function MyCredentialsSection() {
   const handleSurfaceError = useCallback(
     (e: unknown, fallback: string) => {
       if (e instanceof UserCredentialsError) {
-        if (e.code === "sso_authorization_required" && e.orgSsoUrl) {
-          showToast(
-            `GitHub SSO required. Authorize at ${e.orgSsoUrl} and try again.`,
-            "error",
-          );
-          return;
-        }
         showToast(`${e.message} (code: ${e.code})`, "error");
         return;
       }
@@ -144,8 +148,8 @@ export function MyCredentialsSection() {
         My credentials
       </h2>
       <p className="text-xs text-gray-500">
-        Your personal AI provider and GitHub tokens. Stored encrypted per-user;
-        workflows you start use these instead of the deployment default.
+        Your personal AI provider token. Stored encrypted per-user; workflows
+        you start use this instead of the deployment default.
       </p>
 
       {initialLoading && <p className="text-sm text-gray-500">Loading…</p>}
@@ -191,38 +195,6 @@ export function MyCredentialsSection() {
                 showToast(`${providerLabel} ${what}.`, "success");
               } catch (e: unknown) {
                 handleSurfaceError(e, "Could not save your credential.");
-              }
-            }}
-          />
-
-          <GitHubCredentialPanel
-            github={creds?.github ?? null}
-            authMode={auth?.github_mode as GithubAuthMode | undefined}
-            onSavePat={async (pat, attribute) => {
-              try {
-                // Capture login from the response *before* re-fetching so we
-                // can use it in the success toast. The refresh() call
-                // refreshes both `creds.github` and `auth.github_mode` (which
-                // flips app → app_plus_pat once the PAT lands).
-                const next = await setGithubPat({
-                  pat,
-                  attribute_commits: attribute,
-                });
-                await refresh();
-                showToast(
-                  `GitHub token saved — you're @${next.github?.login ?? "?"}.`,
-                  "success",
-                );
-              } catch (e: unknown) {
-                handleSurfaceError(e, "Could not save your GitHub token.");
-              }
-            }}
-            onToggleAttributeCommits={async (attribute) => {
-              try {
-                await patchGithubSettings({ attribute_commits: attribute });
-                await refresh();
-              } catch (e: unknown) {
-                handleSurfaceError(e, "Could not update GitHub settings.");
               }
             }}
           />
