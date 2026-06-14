@@ -332,9 +332,14 @@ impl WorkflowPersistence {
                     (running, worktree, ts, td, tt, user_id, workspace)
                 };
 
+                // Track whether a driver is actually re-spawned for this active
+                // workflow. If none is (no resumable running def, the worktree is
+                // gone after a restart, or the def no longer resolves), the
+                // WorkflowState is reconciled to Error below so the dashboard does
+                // not keep counting/badging it as Running with nothing executing.
+                let mut driver_spawned = false;
                 if running_def_names.is_empty() {
-                    info!(ticket = %ticket_key, "Restored workflow with no running defs (no driver spawned)");
-                    continue;
+                    info!(ticket = %ticket_key, "Restored active workflow with no running def to resume");
                 }
 
                 // Re-resolve the owner's flows for this workspace. When a DB +
@@ -481,6 +486,7 @@ impl WorkflowPersistence {
                             )
                             .await;
                         });
+                        driver_spawned = true;
                     } else {
                         // The running def's slug no longer resolves to a flow.
                         // When resolved from the user's flow list this means the
@@ -509,6 +515,45 @@ impl WorkflowPersistence {
                                 },
                             );
                         }
+                    }
+                }
+
+                // Reconcile: an active workflow that re-spawned no driver would
+                // otherwise linger as a zombie "Running" row (counted + badged on
+                // the dashboard) with nothing executing. Move it to Error so the
+                // card shows an actionable state and the Running count is accurate;
+                // the retry button recreates the worktree and resumes from there.
+                if !driver_spawned {
+                    let updated = chrono::Utc::now();
+                    let reconciled = WorkflowState::Error {
+                        source_state: Box::new(state_for_checks.clone()),
+                        message: "Interrupted by a restart and could not resume \
+                                  automatically; use the retry button."
+                            .to_string(),
+                    };
+                    let id_for_persist = {
+                        let wf_arc = self.repository.inner_arc();
+                        let mut wf_map = wf_arc.write().await;
+                        wf_map.get_mut(&ticket_key).map(|w| {
+                            w.state = reconciled.clone();
+                            w.current_step_label = None;
+                            w.updated_at = updated;
+                            w.id.clone()
+                        })
+                    };
+                    if let Some(id) = id_for_persist {
+                        warn!(
+                            ticket = %ticket_key,
+                            "Active workflow re-spawned no driver after restart — reconciled to Error (was a zombie Running row)"
+                        );
+                        super::driver::shadow_persist_state_change(
+                            db.as_ref(),
+                            &id,
+                            &reconciled,
+                            None,
+                            updated.timestamp(),
+                        )
+                        .await;
                     }
                 }
             }
@@ -932,6 +977,54 @@ mod tests {
             g.contains_key("TICK-3")
         };
         assert!(in_map, "must rebuild TICK-3 from the DB with no snapshot file");
+
+        // SAFETY: serialized by ENV_LOCK (still held).
+        unsafe {
+            std::env::remove_var("MAESTRO_DATA_DIR");
+        }
+    }
+
+    /// Regression: a restored ACTIVE workflow that re-spawns no driver (no
+    /// resumable running def, or a worktree gone after a rebuild) must be
+    /// reconciled to Error — not left as a zombie "Running" row that the
+    /// dashboard counts and badges while nothing actually executes. The
+    /// worktree-missing and def-no-longer-resolves branches converge on the
+    /// same reconciliation.
+    #[tokio::test]
+    async fn restore_reconciles_active_workflow_without_driver_to_error() {
+        let _guard = ENV_LOCK.lock().await;
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let workflows_dir = tempfile::tempdir().expect("workflows dir");
+        // SAFETY: env mutation serialized by ENV_LOCK.
+        unsafe {
+            std::env::set_var("MAESTRO_DATA_DIR", data_dir.path());
+        }
+
+        let (engine, db) = engine_with_db(workflows_dir.path()).await;
+        // Active state, but no def-runs persisted → nothing to re-spawn.
+        seed_db_row(
+            &db,
+            "wf-zombie",
+            "TICK-Z",
+            WorkflowState::AddressingTicket { pass: 1 },
+        )
+        .await;
+
+        engine.restore_persisted_workflows().await.expect("restore");
+
+        let state = {
+            let m = engine.workflows_arc();
+            let g = m.read().await;
+            g.get("TICK-Z").map(|w| w.state.clone()).expect("present")
+        };
+        assert!(
+            matches!(state, WorkflowState::Error { .. }),
+            "an active workflow with no re-spawned driver must reconcile to Error, got {state:?}"
+        );
+        assert!(
+            state.is_terminal(),
+            "reconciled state must be terminal so it is not counted as Running"
+        );
 
         // SAFETY: serialized by ENV_LOCK (still held).
         unsafe {
