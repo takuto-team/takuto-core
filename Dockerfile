@@ -18,30 +18,49 @@ RUN npm run build
 # must keep up with the workspace's stable-Rust floor or `cargo build`
 # rejects those calls during the container smoke build.
 # TODO: re-pin by @sha256 once Renovate is wired up (audit 2026-05-21 §3.5).
-FROM rust:1-bookworm AS builder
-
+# Rust build, split with cargo-chef so dependency compilation becomes a
+# cacheable Docker layer. The old single `cargo build` used
+# `--mount=type=cache,target=/app/target`, which BuildKit does NOT persist
+# across CI runners — so every release recompiled all ~500 crates from scratch
+# (~5-10 min/arch). With cargo-chef, `cook` compiles ONLY third-party deps from
+# `recipe.json`; that step depends solely on the dependency graph, so the GHA
+# buildx cache (`cache-to: gha,mode=max` in release.yml) reuses it across runs
+# and only our own crates recompile when our source changes.
+FROM rust:1-bookworm AS chef
+ARG CARGO_CHEF_VERSION=0.1.77
+RUN cargo install cargo-chef --locked --version ${CARGO_CHEF_VERSION}
 WORKDIR /app
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY VERSION ./
+COPY crates/ crates/
+# recipe.json captures the dependency graph only — a VERSION bump or a source
+# edit does NOT change it, so the cook layer below stays cached across releases.
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
 # Without this, Cargo hides progress in non-TTY Docker builds — looks hung for many minutes.
 # `when = always` requires an explicit `width` (Cargo 1.8x+).
 ENV CARGO_TERM_PROGRESS_WHEN=always
 ENV CARGO_TERM_PROGRESS_WIDTH=80
 
+# Compile dependencies only. Cached as a normal image layer (NO cache mount),
+# so buildx gha cache reuses it; re-cooked only when recipe.json (deps) changes.
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+
+# Build our own code. Deps are already compiled in target/, so this only
+# recompiles the takuto crates. Copy the binary to `/out` so it lands in the
+# image layer (target/ is not part of the final image).
 COPY Cargo.toml Cargo.lock ./
 COPY VERSION ./
 COPY crates/ crates/
 # rust-embed resolves ../../ui/dist/ relative to crates/takuto-web/
 COPY --from=ui-builder /ui/dist/ ui/dist/
-
-# BuildKit cache mounts: persist downloaded crates + `target/` between `docker compose build` runs.
-# Copy the binary to `/out` so it exists in the image layer (the mounted `/app/target` is not part of the layer).
-ARG TARGETARCH
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,target=/app/target,id=rust-target-${TARGETARCH},sharing=locked \
-    mkdir -p /out \
-    && echo "=== cargo build --release (first build often takes 10–20+ minutes; rebuilds reuse BuildKit cache) ===" \
+RUN mkdir -p /out \
     && cargo build --release \
-    && cp /app/target/release/takuto /out/takuto
+    && cp target/release/takuto /out/takuto
 
 # Takuto runtime image — kitchen-sink bake, per the project's "code-quality
 # vs. ergonomics" trade-off: every advertised feature works on a vanilla
