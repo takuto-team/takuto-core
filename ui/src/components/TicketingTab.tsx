@@ -58,10 +58,9 @@ export function TicketingTab({ isAdmin }: Props) {
 
   const showDisconnect = ticketing.system === "jira" && ticketing.connected !== null;
   // Deployment-level polling settings only apply once a ticketing system is
-  // actually configured, and only admins may edit them. Gate on the persisted
-  // (saved) system rather than the live selection so the section reflects what
-  // the poller really uses.
-  const showPolling = !loading && !!isAdmin && ticketing.persistedSystem !== "none";
+  // selected, and only admins may edit them. Gate on the live selection so
+  // choosing "None" hides the section immediately, without waiting for a save.
+  const showPolling = !loading && !!isAdmin && ticketing.system !== "none";
 
   return (
     <section aria-labelledby="ticketing-tab-title" className="flex flex-col gap-8">

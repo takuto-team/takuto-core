@@ -3,13 +3,13 @@
 
 /**
  * The Ticketing tab hosts the deployment item-polling settings inline, but only
- * when a ticketing system is configured AND the caller is an admin. With no
- * ticketing system the poller is idle, so the polling section is hidden
- * entirely — verified here per the user's requirement.
+ * when a ticketing system is selected AND the caller is an admin. Selecting
+ * "None" hides the polling section immediately (gated on the live selection,
+ * not the saved value) — verified here per the user's requirement.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import { TicketingTab } from "./TicketingTab";
 import { ToastProvider } from "../hooks/useToast";
 
@@ -83,5 +83,19 @@ describe("TicketingTab — item polling visibility", () => {
     renderTab(false);
     await screen.findByLabelText("Ticketing system");
     expect(screen.queryByText("Item polling")).toBeNull();
+  });
+
+  it("hides the polling section as soon as the admin selects None, before saving", async () => {
+    stubFetch("jira");
+    renderTab(true);
+    await waitFor(() => {
+      expect(screen.getByText("Item polling")).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText("Ticketing system"), {
+      target: { value: "none" },
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Item polling")).toBeNull();
+    });
   });
 });
