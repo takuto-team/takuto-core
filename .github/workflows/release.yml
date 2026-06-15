@@ -76,6 +76,14 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           format: table
+          # Exclude the bundled openvscode-server extensions: those are VS Code's
+          # built-in extensions vendored inside the third-party editor binary
+          # (their package.json declarations carry old transitive deps like
+          # handlebars/shell-quote/tar). We can't `npm update` them, and they are
+          # not part of Takuto's runtime/agent supply chain. The gate therefore
+          # enforces zero fixable CRITICAL/HIGH on what we control: OS packages,
+          # the `takuto` binary, and our UI.
+          skip-dirs: 'opt/openvscode-server-*/extensions'
 
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0

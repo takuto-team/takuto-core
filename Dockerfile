@@ -101,6 +101,9 @@ ARG TAKUTO_UID=999
 #     be `visudo -cf`-validated against a real user immediately.
 RUN set -eux \
     && apt-get update \
+    # Apply Debian security updates to the (digest-pinned) base packages so the
+    # release Trivy gate passes — e.g. libgnutls30 -> deb12u7 (CVE-2026-33845).
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
