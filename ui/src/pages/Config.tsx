@@ -12,6 +12,7 @@ import { WorktreeSettingsTab } from "../components/WorktreeSettingsTab";
 import { MyRepositoriesTab } from "../components/MyRepositoriesTab";
 import { AiSettingsTab } from "../components/AiSettingsTab";
 import { FlowsTab } from "../components/FlowsTab";
+import { TicketingTab } from "../components/TicketingTab";
 import { ItemPollingSettingsSection } from "../components/admin/ItemPollingSettingsSection";
 import { GitHubCredentialsSection } from "../components/credentials/GitHubCredentialsSection";
 
@@ -25,6 +26,7 @@ const ALL_TABS = [
   "Security",
   "AI Settings",
   "GitHub",
+  "Ticketing",
   "Users",
   "Item Polling",
   "My Repositories",
@@ -172,6 +174,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
     const slug = params.get("tab");
     if (slug === "ai") return "AI Settings";
     if (slug === "github") return "GitHub";
+    if (slug === "ticketing") return "Ticketing";
     if (slug === "repositories") return "My Repositories";
     if (slug === "worktree") return "Worktree Settings";
     if (slug === "Flows" || slug === "flows") return "Flows";
@@ -229,6 +232,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
         {tab === "Security" && <SecurityTabConnected />}
         {tab === "AI Settings" && <AiSettingsTab isAdmin={!!isAdmin} />}
         {tab === "GitHub" && <GitHubCredentialsSection />}
+        {tab === "Ticketing" && <TicketingTab isAdmin={isAdmin} />}
         {tab === "Users" && <UsersTabConnected />}
         {tab === "Item Polling" && isAdmin && <ItemPollingSettingsSection />}
         {tab === "My Repositories" && <MyRepositoriesTab isAdmin={isAdmin} />}

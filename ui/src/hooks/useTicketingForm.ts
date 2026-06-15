@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  deleteJiraCredential,
   fetchUserCredentials,
   RuntimeConfigError,
   putRuntimeConfig,
@@ -51,6 +52,11 @@ const JIRA_ERROR_COPY: Record<string, string> = {
 export function useTicketingForm({ initialSystem, ready }: Config) {
   const { showToast } = useToast();
   const [system, setSystem] = useState<TicketingSystemId>("none");
+  // The last-persisted ticketing system. We only PUT /api/config when the
+  // selection differs from this — so a user who leaves the system untouched
+  // (e.g. a non-admin managing only their Jira credential) never triggers the
+  // admin-gated config write.
+  const [persistedSystem, setPersistedSystem] = useState<TicketingSystemId>("none");
   const [seeded, setSeeded] = useState(false);
   const [site, setSite] = useState("");
   const [email, setEmail] = useState("");
@@ -64,6 +70,7 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
   useEffect(() => {
     if (ready && !seeded) {
       setSystem(initialSystem);
+      setPersistedSystem(initialSystem);
       setSeeded(true);
     }
   }, [ready, seeded, initialSystem]);
@@ -83,6 +90,7 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
   // credential — no re-post, no validation block.
   const keepingExisting = connected !== null && filledCount === 0;
   const jiraPartial = !keepingExisting && filledCount > 0 && filledCount < 3;
+  const systemChanged = system !== persistedSystem;
 
   const save = useCallback(async (): Promise<boolean> => {
     if (system === "jira" && jiraPartial) {
@@ -94,7 +102,11 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     }
     setSaving(true);
     try {
-      await putRuntimeConfig({ general: { ticketing_system: system } });
+      if (systemChanged) {
+        await putRuntimeConfig({ general: { ticketing_system: system } });
+        setPersistedSystem(system);
+      }
+      let connectedName: string | null = null;
       if (system === "jira" && jiraComplete) {
         const saved = await setJiraCredential({
           site: site.trim(),
@@ -103,11 +115,13 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
         });
         await refreshConnected();
         setToken("");
-        showToast(
-          `Jira connected as ${saved.account.display_name}.`,
-          "success",
-        );
-      } else {
+        connectedName = saved.account.display_name;
+      }
+      // Toast the most specific thing that happened; stay silent on a no-op so
+      // the wizard's "Continue" doesn't nag when nothing changed.
+      if (connectedName) {
+        showToast(`Jira connected as ${connectedName}.`, "success");
+      } else if (systemChanged) {
         showToast("Ticketing system saved.", "success");
       }
       return true;
@@ -132,6 +146,7 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     }
   }, [
     system,
+    systemChanged,
     jiraComplete,
     jiraPartial,
     site,
@@ -140,6 +155,30 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     refreshConnected,
     showToast,
   ]);
+
+  const disconnect = useCallback(async (): Promise<boolean> => {
+    setSaving(true);
+    try {
+      await deleteJiraCredential();
+      await refreshConnected();
+      setSite("");
+      setEmail("");
+      setToken("");
+      showToast("Jira credential removed.", "success");
+      return true;
+    } catch (e: unknown) {
+      const msg =
+        e instanceof UserCredentialsError
+          ? JIRA_ERROR_COPY[e.code] ?? `${e.message} (code: ${e.code})`
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      showToast(msg, "error");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [refreshConnected, showToast]);
 
   return {
     system,
@@ -153,5 +192,6 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     saving,
     connected,
     save,
+    disconnect,
   };
 }

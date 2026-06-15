@@ -137,7 +137,7 @@ describe("useTicketingForm", () => {
     expect(callsTo("/api/users/me/jira-credential")).toHaveLength(0);
   });
 
-  it("an already-connected user can save with a blank form (keeps existing credential)", async () => {
+  it("an already-connected user can save with a blank form without any writes", async () => {
     stubFetch({
       site: "https://acme.atlassian.net",
       email: "dev@acme.com",
@@ -158,7 +158,59 @@ describe("useTicketingForm", () => {
     });
 
     expect(ok).toBe(true);
-    expect(callsTo("/api/config")).toHaveLength(1);
+    // System unchanged and no token entered → no config PUT, no credential POST.
+    expect(callsTo("/api/config")).toHaveLength(0);
     expect(callsTo("/api/users/me/jira-credential")).toHaveLength(0);
+  });
+
+  it("rotates the Jira credential without writing config when the system is unchanged", async () => {
+    stubFetch();
+    const { result } = renderHook(
+      () => useTicketingForm({ initialSystem: "jira", ready: true }),
+      { wrapper },
+    );
+    // System stays "jira" (unchanged) — only a new token is entered. This is
+    // the non-admin "manage my own credential" path: it must NOT hit the
+    // admin-gated PUT /api/config.
+    act(() => {
+      result.current.setSite("https://acme.atlassian.net");
+      result.current.setEmail("dev@acme.com");
+      result.current.setToken("rotated-token");
+    });
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.save();
+    });
+
+    expect(ok).toBe(true);
+    expect(callsTo("/api/config")).toHaveLength(0);
+    expect(callsTo("/api/users/me/jira-credential")).toHaveLength(1);
+  });
+
+  it("disconnect() deletes the per-user Jira credential", async () => {
+    stubFetch({
+      site: "https://acme.atlassian.net",
+      email: "dev@acme.com",
+      account_id: "a1",
+      account_name: "Dev",
+      last_validated_at: null,
+    });
+    const { result } = renderHook(
+      () => useTicketingForm({ initialSystem: "jira", ready: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.connected).not.toBeNull());
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.disconnect();
+    });
+
+    expect(ok).toBe(true);
+    const del = (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === "/api/users/me/jira-credential" && (c[1]?.method ?? "GET") === "DELETE",
+    );
+    expect(del).toHaveLength(1);
   });
 });

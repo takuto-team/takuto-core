@@ -31,6 +31,9 @@ interface Props {
   token: string;
   onChangeToken: (v: string) => void;
   connected: UserJiraCredentialStatus | null;
+  /** When `false`, the system selector is read-only (the deployment-wide
+   *  ticketing system is admin-gated). Defaults to `true`. */
+  canEditSystem?: boolean;
 }
 
 export function TicketingStep({
@@ -43,6 +46,7 @@ export function TicketingStep({
   token,
   onChangeToken,
   connected,
+  canEditSystem = true,
 }: Props) {
   const activeHint = TICKETING_OPTIONS.find((o) => o.id === system)?.hint ?? "";
 
@@ -56,7 +60,10 @@ export function TicketingStep({
           id="onb-ticketing"
           value={system}
           onChange={(e) => onChangeSystem(e.target.value as TicketingSystemId)}
-          className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200"
+          disabled={!canEditSystem}
+          className={`w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm ${
+            canEditSystem ? "text-gray-200" : "text-gray-500 cursor-not-allowed"
+          }`}
         >
           {TICKETING_OPTIONS.map((o) => (
             <option key={o.id} value={o.id}>
@@ -65,6 +72,12 @@ export function TicketingStep({
           ))}
         </select>
         <p className="text-xs text-gray-500 mt-1">{activeHint}</p>
+        {!canEditSystem && (
+          <p className="text-xs text-gray-500 mt-1">
+            Only an admin can change the deployment's ticketing system. You can
+            still manage your own Jira credential below.
+          </p>
+        )}
       </div>
 
       {system === "jira" && (
