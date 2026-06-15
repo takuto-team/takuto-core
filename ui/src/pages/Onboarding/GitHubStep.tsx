@@ -13,10 +13,12 @@ interface Props {
   onChangeRemote: (v: string) => void;
   baseBranchInvalid: boolean;
   remoteInvalid: boolean;
+  /** When `false`, the git inputs are read-only (the `[git]` section is
+   *  admin-gated server-side). Defaults to `true`. */
+  canEditGit?: boolean;
 }
 
-const INPUT_BASE =
-  "w-full bg-gray-950 border rounded-lg px-3 py-2 text-sm text-gray-200";
+const INPUT_BASE = "w-full bg-gray-950 border rounded-lg px-3 py-2 text-sm";
 
 export function GitHubStep({
   githubAppConfigured,
@@ -26,7 +28,9 @@ export function GitHubStep({
   onChangeRemote,
   baseBranchInvalid,
   remoteInvalid,
+  canEditGit = true,
 }: Props) {
+  const inputText = canEditGit ? "text-gray-200" : "text-gray-500 cursor-not-allowed";
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3">
@@ -48,7 +52,8 @@ export function GitHubStep({
             value={baseBranch}
             onChange={(e) => onChangeBaseBranch(e.target.value)}
             placeholder="main"
-            className={`${INPUT_BASE} ${
+            disabled={!canEditGit}
+            className={`${INPUT_BASE} ${inputText} ${
               baseBranchInvalid ? "border-red-500" : "border-gray-700"
             }`}
           />
@@ -72,7 +77,8 @@ export function GitHubStep({
             value={remote}
             onChange={(e) => onChangeRemote(e.target.value)}
             placeholder="origin"
-            className={`${INPUT_BASE} ${
+            disabled={!canEditGit}
+            className={`${INPUT_BASE} ${inputText} ${
               remoteInvalid ? "border-red-500" : "border-gray-700"
             }`}
           />
@@ -84,6 +90,12 @@ export function GitHubStep({
             </p>
           )}
         </div>
+
+        {!canEditGit && (
+          <p className="text-xs text-gray-500">
+            Only an admin can change the deployment's git settings.
+          </p>
+        )}
       </div>
 
       <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-4 text-sm text-gray-300">

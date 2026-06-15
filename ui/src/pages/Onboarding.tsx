@@ -80,6 +80,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
     initialBaseBranch: gitBaseBranch,
     initialRemote: gitRemote,
     ready: !loading,
+    canSave: !!isAdmin,
   });
 
   const timeout = useStepTimeoutForm({ initialSecs: stepTimeoutSecs, ready: !loading });
@@ -188,6 +189,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                   onChangeRemote={git.setRemote}
                   baseBranchInvalid={git.baseBranchInvalid}
                   remoteInvalid={git.remoteInvalid}
+                  canEditGit={!!isAdmin}
                 />
               )}
               {step === 4 && (

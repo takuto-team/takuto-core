@@ -94,6 +94,26 @@ describe("useGitForm", () => {
     expect(callsTo("/api/config/git")).toHaveLength(0);
   });
 
+  it("is a no-op (returns true, no API call) when canSave is false", async () => {
+    stubFetch();
+    const { result } = renderHook(
+      () =>
+        useGitForm({
+          initialBaseBranch: "main",
+          initialRemote: "origin",
+          ready: true,
+          canSave: false,
+        }),
+      { wrapper },
+    );
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.save();
+    });
+    expect(ok).toBe(true);
+    expect(callsTo("/api/config/git")).toHaveLength(0);
+  });
+
   it("returns false on the admin-gated 403 (no throw)", async () => {
     stubFetch(403);
     const { result } = renderHook(

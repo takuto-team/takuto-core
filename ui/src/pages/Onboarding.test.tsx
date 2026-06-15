@@ -123,6 +123,19 @@ describe("Onboarding wizard — Git & GitHub step", () => {
     const remote = screen.getByLabelText("Remote") as HTMLInputElement;
     expect(baseBranch.value).toBe("develop");
     expect(remote.value).toBe("upstream");
+    expect(baseBranch.disabled).toBe(false);
+  });
+
+  it("renders the git inputs read-only for a non-admin", async () => {
+    stubFetch("none");
+    renderWizard(false);
+    await screen.findByLabelText("Ticketing system");
+    await skipToStep(3);
+    const baseBranch = (await screen.findByLabelText("Base branch")) as HTMLInputElement;
+    expect(baseBranch.disabled).toBe(true);
+    expect(
+      screen.getByText(/Only an admin can change the deployment's git settings/i),
+    ).toBeTruthy();
   });
 });
 

@@ -14,6 +14,11 @@ interface Config {
   /** Flips to `true` once the parent finished loading `/api/config`, so the
    *  fields seed themselves from the persisted values exactly once. */
   ready: boolean;
+  /** Whether the caller may persist git settings. `PUT /api/config/git` is
+   *  admin-only (403 otherwise), so when `false` `save()` is a no-op that lets
+   *  the wizard advance without an API call — same as the admin-gated polling
+   *  section. Defaults to `true`. */
+  canSave?: boolean;
 }
 
 const DEFAULT_BASE_BRANCH = "main";
@@ -28,7 +33,12 @@ const DEFAULT_REMOTE = "origin";
  * validation message off `baseBranchInvalid` / `remoteInvalid` — so the wizard
  * flow can gate "Continue". The admin-gated 403 surfaces as a friendly toast.
  */
-export function useGitForm({ initialBaseBranch, initialRemote, ready }: Config) {
+export function useGitForm({
+  initialBaseBranch,
+  initialRemote,
+  ready,
+  canSave = true,
+}: Config) {
   const { showToast } = useToast();
   const [baseBranch, setBaseBranch] = useState(DEFAULT_BASE_BRANCH);
   const [remote, setRemote] = useState(DEFAULT_REMOTE);
@@ -49,6 +59,12 @@ export function useGitForm({ initialBaseBranch, initialRemote, ready }: Config) 
   const remoteInvalid = remote.trim() === "";
 
   const save = useCallback(async (): Promise<boolean> => {
+    // Git settings are deployment-level and admin-gated server-side. A
+    // non-admin reaching this step advances without an API call rather than
+    // tripping a 403 (the inputs are read-only for them).
+    if (!canSave) {
+      return true;
+    }
     if (baseBranchInvalid || remoteInvalid) {
       // Inline validation message is already visible off the *Invalid flags;
       // just block forward navigation.
@@ -76,7 +92,7 @@ export function useGitForm({ initialBaseBranch, initialRemote, ready }: Config) 
     } finally {
       setSaving(false);
     }
-  }, [baseBranch, remote, baseBranchInvalid, remoteInvalid, showToast]);
+  }, [canSave, baseBranch, remote, baseBranchInvalid, remoteInvalid, showToast]);
 
   return {
     baseBranch,
