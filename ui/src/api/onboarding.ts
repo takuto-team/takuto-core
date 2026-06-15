@@ -29,3 +29,40 @@ export async function fetchOnboardingStatus(): Promise<SystemStatus | null> {
   }
   return res.json();
 }
+
+/**
+ * First-run state derived from `GET /api/onboarding/status`. Used to auto-route
+ * a signed-in user into the wizard when `config.toml` does not yet exist and
+ * the user has not already completed onboarding.
+ *
+ * - `configTomlOk`: `false` only when the server explicitly reports a missing
+ *   config file. Anything else (older server, network error, key absent) is
+ *   treated as "ok" so we never bounce an existing deployment into the wizard.
+ * - `completed`: `true` once the caller's onboarding row carries a
+ *   `completed_at` timestamp — guards against a redirect loop after the wizard
+ *   has been finished but before the process restarts.
+ */
+export interface OnboardingFirstRunState {
+  configTomlOk: boolean;
+  completed: boolean;
+}
+
+export async function fetchOnboardingFirstRunState(): Promise<OnboardingFirstRunState | null> {
+  const res = await api("/api/onboarding/status");
+  if (!res.ok) {
+    return null;
+  }
+  const body = (await res.json().catch(() => null)) as
+    | {
+        config_toml_ok?: boolean;
+        user_onboarding?: { completed_at?: string | null } | null;
+      }
+    | null;
+  if (!body) {
+    return null;
+  }
+  return {
+    configTomlOk: body.config_toml_ok !== false,
+    completed: Boolean(body.user_onboarding?.completed_at),
+  };
+}

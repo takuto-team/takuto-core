@@ -220,6 +220,21 @@ export interface ItemPollingConfigPatch {
   work_item_log_retention_days?: number;
 }
 
+/**
+ * Patch body for `PUT /api/config/git` — the operator-tunable portion of the
+ * `[git]` section (the branch work-item branches are cut from and the remote
+ * Takuto pushes to). Mirrors `agentConfig.ts` / `jiraConfig.ts`: a single PUT
+ * returns the fresh redacted `ConfigResponse` (with `persisted` /
+ * `persist_warning`). Both fields optional (replace-on-present); the server
+ * rejects an all-empty body.
+ */
+export interface GitConfigPatch {
+  /** Branch new work-item branches are created from (e.g. "main"). */
+  base_branch?: string;
+  /** Git remote Takuto fetches from and pushes branches to (e.g. "origin"). */
+  remote?: string;
+}
+
 /** One of the three linked-issue inclusion modes for `linked_items_in_prompt`. */
 export type LinkedItemsInPrompt = "full" | "summary_only" | "omit";
 
@@ -286,6 +301,18 @@ export interface ConfigResponse {
     app_id: number;
     app_installation_id: number;
     app_name?: string;
+    [key: string]: unknown;
+  };
+  /**
+   * The `[git]` section. `base_branch` / `remote` are patched via
+   * `PUT /api/config/git` and pre-populate the wizard's Git step. Optional
+   * (with optional inner fields) so a pre-feature server omitting them falls
+   * back to the "main" / "origin" defaults.
+   */
+  git?: {
+    base_branch?: string;
+    remote?: string;
+    repo_path?: string;
     [key: string]: unknown;
   };
   /**

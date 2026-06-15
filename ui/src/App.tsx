@@ -2,7 +2,8 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import type { ReactNode } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { Onboarding } from "./pages/Onboarding";
@@ -11,6 +12,7 @@ import { Config } from "./pages/Config";
 import { useAuth } from "./hooks/useAuth";
 import { ToastProvider, ToastContainer } from "./hooks/useToast";
 import { QueryErrorToaster } from "./components/QueryErrorToaster";
+import { fetchOnboardingFirstRunState } from "./api/onboarding";
 
 /**
  * Belt-and-braces admin route guard. Kept around for any future admin-only
@@ -51,6 +53,48 @@ export function RequireAdmin({
   return <>{children}</>;
 }
 
+/**
+ * First-run auto-launch. On a fresh install `config.toml` does not exist yet:
+ * the server boots from `Config::default()` and `GET /api/onboarding/status`
+ * reports `config_toml_ok: false`. When a signed-in user lands anywhere other
+ * than the wizard in that state — and has not already completed onboarding —
+ * route them into `/onboarding`. The completed-flag guard prevents a redirect
+ * loop after the wizard writes `config.toml` but before the process restarts.
+ *
+ * Runs the check once per mount (the `checked` guard), so finishing the wizard
+ * — which navigates to `/` within the same mount — does not bounce back.
+ */
+function FirstRunRedirect() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    if (checked) return;
+    if (pathname === "/onboarding") {
+      setChecked(true);
+      return;
+    }
+    let active = true;
+    fetchOnboardingFirstRunState()
+      .then((state) => {
+        if (!active) return;
+        setChecked(true);
+        if (state && !state.configTomlOk && !state.completed) {
+          navigate("/onboarding", { replace: true });
+        }
+      })
+      .catch(() => {
+        if (active) setChecked(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [checked, pathname, navigate]);
+
+  return null;
+}
+
 export function App() {
   const { authEnabled, loggedIn, setupRequired, currentUser, loading, login, logout, completeSetup } = useAuth();
 
@@ -72,6 +116,7 @@ export function App() {
 
   return (
     <ToastProvider>
+      <FirstRunRedirect />
       <Routes>
         <Route
           path="/"
@@ -101,7 +146,13 @@ export function App() {
         />
         <Route
           path="/onboarding"
-          element={<Onboarding onLogout={logout} authEnabled={authEnabled} />}
+          element={
+            <Onboarding
+              onLogout={logout}
+              authEnabled={authEnabled}
+              isAdmin={currentUser?.role === "admin"}
+            />
+          }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

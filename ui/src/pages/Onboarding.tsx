@@ -7,17 +7,23 @@
  * Step shell + nav controls. Step bodies live in `./Onboarding/*.tsx`;
  * the wizard navigation state machine is in `../hooks/useOnboardingFlow`,
  * the provider-form state + `/api/config` fetch are in `../hooks/useProviderForm`,
- * and the step-1 ticketing selector state is in `../hooks/useTicketingForm`.
+ * the step-1 ticketing selector state is in `../hooks/useTicketingForm`,
+ * the step-3 git settings in `../hooks/useGitForm`, and the step-4 step-timeout
+ * in `../hooks/useStepTimeoutForm`. All of them seed from the single
+ * `/api/config` fetch in `useProviderForm`.
  *
  * 4 steps:
  *   1. Ticketing      — selector (None / GitHub / Jira); Jira shows a
  *                        site/email/token form saved per-user. Writes
  *                        `[general] ticketing_system` via PUT /api/config.
+ *                        Admins also see the deployment item-polling section
+ *                        (PUT /api/config/polling) when a system is selected.
  *   2. AI provider    — provider form (PUT /api/config/agent) + inline AI
  *                        API-key entry (AiCredentialPanel).
- *   3. GitHub         — optional per-user PAT (GitHubCredentialsSection) +
- *                        a "Set up a GitHub App" doc link.
- *   4. Workflows      — the per-user/per-workspace flows editor (FlowsTab).
+ *   3. Git & GitHub   — git base branch + remote (PUT /api/config/git),
+ *                        GitHub App status, and an optional per-user PAT.
+ *   4. Workflows      — step timeout (PUT /api/config/agent) + the per-user /
+ *                        per-workspace flows editor (FlowsTab).
  *
  * Each step has Skip / Back / Continue; the last step has Finish instead of
  * Continue. "Finish" calls `POST /api/onboarding/complete` and navigates back
@@ -28,7 +34,10 @@ import { Link } from "react-router-dom";
 import { useOnboardingFlow } from "../hooks/useOnboardingFlow";
 import { useProviderForm } from "../hooks/useProviderForm";
 import { useTicketingForm } from "../hooks/useTicketingForm";
+import { useGitForm } from "../hooks/useGitForm";
+import { useStepTimeoutForm } from "../hooks/useStepTimeoutForm";
 import { FlowsTab } from "../components/FlowsTab";
+import { ItemPollingSettingsSection } from "../components/admin/ItemPollingSettingsSection";
 import type { TicketingSystemId } from "../api/types";
 import { GitHubStep } from "./Onboarding/GitHubStep";
 import { OnboardingAiKey } from "./Onboarding/OnboardingAiKey";
@@ -39,9 +48,10 @@ import { TicketingStep } from "./Onboarding/TicketingStep";
 interface Props {
   onLogout: () => void;
   authEnabled: boolean;
+  isAdmin?: boolean;
 }
 
-export function Onboarding({ onLogout, authEnabled }: Props) {
+export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
   const {
     loading,
     saving,
@@ -55,6 +65,9 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
     setExtraArgsText,
     ticketingSystem,
     githubAppConfigured,
+    gitBaseBranch,
+    gitRemote,
+    stepTimeoutSecs,
     save,
   } = useProviderForm();
 
@@ -63,13 +76,28 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
     ready: !loading,
   });
 
+  const git = useGitForm({
+    initialBaseBranch: gitBaseBranch,
+    initialRemote: gitRemote,
+    ready: !loading,
+  });
+
+  const timeout = useStepTimeoutForm({ initialSecs: stepTimeoutSecs, ready: !loading });
+
   const { step, completing, goNext, goSkip, goBack } = useOnboardingFlow({
     onBeforeNext: async (s) => {
       if (s === 1) return ticketing.save();
       if (s === 2) return save();
+      if (s === 3) return git.save();
+      if (s === 4) return timeout.save();
       return true;
     },
   });
+
+  // Deployment-level polling settings only apply once a ticketing system is
+  // selected, and only admins may edit them. Gate on the live selection so
+  // choosing "None" hides the section immediately (matching TicketingTab).
+  const showPolling = !loading && !!isAdmin && ticketing.system !== "none";
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -111,17 +139,30 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
           ) : (
             <>
               {step === 1 && (
-                <TicketingStep
-                  system={ticketing.system}
-                  onChangeSystem={ticketing.setSystem}
-                  site={ticketing.site}
-                  onChangeSite={ticketing.setSite}
-                  email={ticketing.email}
-                  onChangeEmail={ticketing.setEmail}
-                  token={ticketing.token}
-                  onChangeToken={ticketing.setToken}
-                  connected={ticketing.connected}
-                />
+                <>
+                  <TicketingStep
+                    system={ticketing.system}
+                    onChangeSystem={ticketing.setSystem}
+                    site={ticketing.site}
+                    onChangeSite={ticketing.setSite}
+                    email={ticketing.email}
+                    onChangeEmail={ticketing.setEmail}
+                    token={ticketing.token}
+                    onChangeToken={ticketing.setToken}
+                    connected={ticketing.connected}
+                    canEditSystem={!!isAdmin}
+                  />
+                  {showPolling && (
+                    <div className="border-t border-gray-800 pt-6">
+                      <p className="text-xs text-gray-500 mb-4">
+                        These settings control how Takuto picks up new work items
+                        automatically. Use the Save button below to apply changes —
+                        they are independent of the Continue button above.
+                      </p>
+                      <ItemPollingSettingsSection />
+                    </div>
+                  )}
+                </>
               )}
               {step === 2 && (
                 <div className="flex flex-col gap-6">
@@ -138,9 +179,62 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
                   <OnboardingAiKey provider={provider} />
                 </div>
               )}
-              {step === 3 && <GitHubStep githubAppConfigured={githubAppConfigured} />}
-              {step === 4 && <FlowsTab />}
+              {step === 3 && (
+                <GitHubStep
+                  githubAppConfigured={githubAppConfigured}
+                  baseBranch={git.baseBranch}
+                  onChangeBaseBranch={git.setBaseBranch}
+                  remote={git.remote}
+                  onChangeRemote={git.setRemote}
+                  baseBranchInvalid={git.baseBranchInvalid}
+                  remoteInvalid={git.remoteInvalid}
+                />
+              )}
+              {step === 4 && (
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-3">
+                    <h3 className="text-sm font-semibold text-gray-300 mb-1">Step timeout</h3>
+                    <div className="max-w-xs">
+                      <label htmlFor="onb-step-timeout" className="block text-xs text-gray-400 mb-1">
+                        Timeout (seconds)
+                      </label>
+                      <input
+                        id="onb-step-timeout"
+                        type="number"
+                        min={1}
+                        value={timeout.value}
+                        onChange={(e) => timeout.setValue(e.target.value)}
+                        placeholder="1800"
+                        className={`w-full bg-gray-950 border rounded-lg px-3 py-2 text-sm text-gray-200 ${
+                          timeout.invalid ? "border-red-500" : "border-gray-700"
+                        }`}
+                      />
+                      {timeout.invalid ? (
+                        <p className="text-xs text-red-400 mt-1">
+                          Step timeout must be a positive number.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-gray-500 mt-1">
+                          Maximum seconds an agent step may run before it is
+                          cancelled. Default 1800 (30 min).
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="border-t border-gray-800 pt-4">
+                    <FlowsTab />
+                  </div>
+                </div>
+              )}
             </>
+          )}
+
+          {step === 4 && (
+            <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-3 text-xs text-gray-400">
+              <strong>Database and dashboard port are not configured in this wizard.</strong>{" "}
+              Takuto writes a <code className="font-mono">config.toml</code> with the
+              defaults (SQLite, port 8080). Edit that file directly to change them.
+            </div>
           )}
 
           <div className="flex justify-between items-center mt-2">
@@ -166,6 +260,8 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
                 disabled={
                   saving ||
                   ticketing.saving ||
+                  git.saving ||
+                  timeout.saving ||
                   completing ||
                   // Self-hosted spec (2026-05-27 §2.5): block Continue on
                   // step 2 when OpenCode is selected without base_url +
@@ -183,7 +279,7 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
                   ? completing
                     ? "Finishing…"
                     : "Finish setup"
-                  : saving || ticketing.saving
+                  : saving || ticketing.saving || git.saving
                     ? "Saving…"
                     : "Continue"}
               </button>

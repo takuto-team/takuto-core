@@ -5,9 +5,87 @@ import { GitHubCredentialsSection } from "../../components/credentials/GitHubCre
 
 const GITHUB_APP_DOCS_URL = "https://takuto.io/docs/github-app/";
 
-export function GitHubStep({ githubAppConfigured }: { githubAppConfigured: boolean }) {
+interface Props {
+  githubAppConfigured: boolean;
+  baseBranch: string;
+  onChangeBaseBranch: (v: string) => void;
+  remote: string;
+  onChangeRemote: (v: string) => void;
+  baseBranchInvalid: boolean;
+  remoteInvalid: boolean;
+}
+
+const INPUT_BASE =
+  "w-full bg-gray-950 border rounded-lg px-3 py-2 text-sm text-gray-200";
+
+export function GitHubStep({
+  githubAppConfigured,
+  baseBranch,
+  onChangeBaseBranch,
+  remote,
+  onChangeRemote,
+  baseBranchInvalid,
+  remoteInvalid,
+}: Props) {
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-300 mb-1">Git settings</h3>
+          <p className="text-xs text-gray-500 mb-3">
+            The branch Takuto checks out for each work item, and the git remote
+            it pushes to.
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="onb-git-base-branch" className="block text-xs text-gray-400 mb-1">
+            Base branch
+          </label>
+          <input
+            id="onb-git-base-branch"
+            type="text"
+            value={baseBranch}
+            onChange={(e) => onChangeBaseBranch(e.target.value)}
+            placeholder="main"
+            className={`${INPUT_BASE} ${
+              baseBranchInvalid ? "border-red-500" : "border-gray-700"
+            }`}
+          />
+          {baseBranchInvalid ? (
+            <p className="text-xs text-red-400 mt-1">Base branch is required.</p>
+          ) : (
+            <p className="text-xs text-gray-500 mt-1">
+              The branch work-item branches are cut from. Usually "main" or
+              "master".
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label htmlFor="onb-git-remote" className="block text-xs text-gray-400 mb-1">
+            Remote
+          </label>
+          <input
+            id="onb-git-remote"
+            type="text"
+            value={remote}
+            onChange={(e) => onChangeRemote(e.target.value)}
+            placeholder="origin"
+            className={`${INPUT_BASE} ${
+              remoteInvalid ? "border-red-500" : "border-gray-700"
+            }`}
+          />
+          {remoteInvalid ? (
+            <p className="text-xs text-red-400 mt-1">Remote is required.</p>
+          ) : (
+            <p className="text-xs text-gray-500 mt-1">
+              The git remote Takuto fetches from and pushes branches to.
+            </p>
+          )}
+        </div>
+      </div>
+
       <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-4 text-sm text-gray-300">
         <p>
           GitHub App:{" "}

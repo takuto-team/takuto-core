@@ -66,6 +66,15 @@ export function useProviderForm() {
     () => Boolean(config?.github_app_configured),
     [config],
   );
+  // Git step (3) seeds from the same `/api/config` fetch — no duplicate
+  // round-trip. Fall back to the documented defaults when absent.
+  const gitBaseBranch = useMemo(() => config?.git?.base_branch ?? "", [config]);
+  const gitRemote = useMemo(() => config?.git?.remote ?? "", [config]);
+  // Workflows step (4) step-timeout seed, same shared fetch.
+  const stepTimeoutSecs = useMemo(() => {
+    const v = config?.agent?.step_timeout_secs;
+    return typeof v === "number" ? v : undefined;
+  }, [config]);
 
   const save = useCallback(async (): Promise<boolean> => {
     setSaving(true);
@@ -123,6 +132,9 @@ export function useProviderForm() {
     setExtraArgsText,
     ticketingSystem,
     githubAppConfigured,
+    gitBaseBranch,
+    gitRemote,
+    stepTimeoutSecs,
     save,
   };
 }

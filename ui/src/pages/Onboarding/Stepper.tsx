@@ -7,7 +7,7 @@ export const ONBOARDING_STEPS: { index: StepIndex; title: string; body: string }
   {
     index: 1,
     title: "Ticketing",
-    body: "Pick where Takuto should read tasks from. You can change this later.",
+    body: "Welcome — this is Takuto's first-time setup. Pick where it should read tasks from. You can change any of these settings from the Configuration page later.",
   },
   {
     index: 2,
@@ -16,8 +16,8 @@ export const ONBOARDING_STEPS: { index: StepIndex; title: string; body: string }
   },
   {
     index: 3,
-    title: "GitHub integration",
-    body: "Connect a GitHub App for shared access, or bring your own personal token.",
+    title: "Git & GitHub",
+    body: "Set the git branch and remote Takuto works from, then connect a GitHub App or personal token.",
   },
   {
     index: 4,
