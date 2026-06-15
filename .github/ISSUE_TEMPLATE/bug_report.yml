@@ -16,7 +16,7 @@ body:
     attributes:
       label: Takuto version
       description: Output of `cat VERSION` or the container image tag you are running.
-      placeholder: "e.g. 0.7.2 or ghcr.io/takuto-team/takuto-core-core:v0.7.2"
+      placeholder: "e.g. 0.7.2 or ghcr.io/takuto-team/takuto-core:v0.7.2"
     validations:
       required: true
   - type: dropdown

@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: takuto-team/takuto-cli
+  IMAGE_NAME: takuto-team/takuto-core
 
 jobs:
   build:
