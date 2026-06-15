@@ -47,9 +47,21 @@ export interface IssueCardController {
   onDeleteCancel: () => void;
 }
 
-export function useIssueCardController(ticketKey: string, onRefresh: () => void): IssueCardController {
+/**
+ * @param preparingWorkspace when true, the first editor/terminal open may have
+ *   to recreate the worktree on the backend (terminal workflow with no live
+ *   container), so the overlay shows a "Preparing workspace…" message and stays
+ *   up until the (slower) request resolves.
+ */
+export function useIssueCardController(
+  ticketKey: string,
+  onRefresh: () => void,
+  preparingWorkspace: boolean,
+): IssueCardController {
   const { showToast } = useToast();
   const { doAction, openEditor, openTerminal, closeEditor } = useIssueCardActions(ticketKey);
+
+  const PREPARING_MESSAGE = "Preparing workspace…";
 
   const [loading, setLoading] = useState<Loading>(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
@@ -106,12 +118,20 @@ export function useIssueCardController(ticketKey: string, onRefresh: () => void)
     onResume: useCallback(() => void withLoading(doAction("resume")), [withLoading, doAction]),
     onStop,
     onOpenEditor: useCallback(
-      () => void withLoading(openEditor, "Setting up a secure connection to an editor"),
-      [withLoading, openEditor],
+      () =>
+        void withLoading(
+          openEditor,
+          preparingWorkspace ? PREPARING_MESSAGE : "Setting up a secure connection to an editor",
+        ),
+      [withLoading, openEditor, preparingWorkspace],
     ),
     onOpenTerminal: useCallback(
-      () => void withLoading(openTerminal, "Setting up a secure connection to a terminal"),
-      [withLoading, openTerminal],
+      () =>
+        void withLoading(
+          openTerminal,
+          preparingWorkspace ? PREPARING_MESSAGE : "Setting up a secure connection to a terminal",
+        ),
+      [withLoading, openTerminal, preparingWorkspace],
     ),
     onCloseEditor: useCallback(() => void withLoading(closeEditor), [withLoading, closeEditor]),
     onConfirm,

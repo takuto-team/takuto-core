@@ -43,9 +43,12 @@ export function useIssueCardActions(ticketKey: string) {
     });
     // Terminal-on-cold-start: if no editor container yet, spin one up first.
     if (res.status === 409) {
-      await api(`/api/work-items/${encodeURIComponent(ticketKey)}/open-editor`, {
+      const editorRes = await api(`/api/work-items/${encodeURIComponent(ticketKey)}/open-editor`, {
         method: "POST",
       });
+      // Surface a workspace-prep failure here rather than masking it behind a
+      // second (also-failing) open-terminal call.
+      if (!editorRes.ok) throw new Error((await editorRes.text()) || "Failed to prepare workspace");
       res = await api(`/api/work-items/${encodeURIComponent(ticketKey)}/open-terminal`, {
         method: "POST",
       });

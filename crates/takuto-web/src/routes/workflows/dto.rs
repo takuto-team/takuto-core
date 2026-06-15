@@ -72,7 +72,9 @@ pub struct WorkflowSummary {
     /// `html_url` stored when the workflow was created. For Jira workflows, it is the
     /// computed browse URL. `None` when no URL is available (e.g. `ticketing_system = none`).
     pub issue_url: Option<String>,
-    /// **Open editor** is allowed (workflow not active, worktree exists, Docker available).
+    /// **Open editor** is allowed: Docker is available and either the worktree
+    /// exists or the workflow is terminal (Done/Stopped/Error) with a branch —
+    /// in which case the worktree is recreated on demand when missing.
     pub can_open_editor: bool,
     /// Set when an editor container is already running for this workflow.
     pub editor_url: Option<String>,
@@ -164,8 +166,22 @@ pub(super) fn manual_cap_fields(w: &Workflow) -> (bool, bool) {
     (w.started_manually, toward)
 }
 
+/// Docker-independent half of [`can_open_editor`]: whether the workflow has a
+/// worktree on disk *or* one that can be recreated on demand.
+///
+/// A terminal (Done/Stopped/Error) workflow that still has a branch can have
+/// its worktree recreated on demand (`ensure_worktree` in `editor.rs`), so the
+/// editor stays reachable even after the worktree directory was pruned.
+pub(super) fn editor_worktree_available(w: &Workflow) -> bool {
+    let worktree_exists = w.worktree_path.as_ref().is_some_and(|p| p.exists());
+    let recreatable = w.state.is_terminal() && !w.branch_name.is_empty();
+    worktree_exists || recreatable
+}
+
 pub(super) fn can_open_editor(w: &Workflow) -> bool {
-    w.worktree_path.as_ref().is_some_and(|p| p.exists()) && ContainerRunner::is_available()
+    // Docker is always required; the rest of the decision is pure and tested
+    // via `editor_worktree_available`.
+    ContainerRunner::is_available() && editor_worktree_available(w)
 }
 
 pub(super) fn has_report_file(w: &Workflow) -> bool {
@@ -309,5 +325,110 @@ mod tests {
         let mut w = wf_pending(false);
         w.state = WorkflowState::Done;
         assert!(!can_start_workflow(&w));
+    }
+
+    /// Create a unique existing directory under the system temp dir to stand in
+    /// for a live worktree path.
+    fn make_existing_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "takuto-editor-test-{}-{tag}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp worktree dir");
+        dir
+    }
+
+    /// Terminal workflow (Done) that still carries a branch is recreatable even
+    /// when the worktree directory is gone — the editor decision is `true`
+    /// (Docker gate applied separately in `can_open_editor`).
+    #[test]
+    fn editor_available_terminal_with_branch_no_worktree() {
+        let mut w = wf_pending(true);
+        w.state = WorkflowState::Done;
+        w.branch_name = "feat/gh-7".into();
+        w.worktree_path = None;
+        assert!(editor_worktree_available(&w));
+    }
+
+    #[test]
+    fn editor_available_terminal_stopped_with_branch() {
+        let mut w = wf_pending(true);
+        w.state = WorkflowState::Stopped;
+        w.branch_name = "feat/gh-3".into();
+        w.worktree_path = None;
+        assert!(editor_worktree_available(&w));
+    }
+
+    #[test]
+    fn editor_available_terminal_error_with_branch() {
+        let mut w = wf_pending(true);
+        w.state = WorkflowState::Error {
+            source_state: Box::new(WorkflowState::Pending),
+            message: "boom".into(),
+        };
+        w.branch_name = "feat/gh-9".into();
+        w.worktree_path = None;
+        assert!(editor_worktree_available(&w));
+    }
+
+    /// Pending workflow is not recreatable and (in tests) has no worktree → false.
+    #[test]
+    fn editor_unavailable_pending_no_worktree() {
+        let mut w = wf_pending(false);
+        w.branch_name = "feat/whatever".into();
+        w.worktree_path = None;
+        assert!(!editor_worktree_available(&w));
+    }
+
+    /// Terminal but no branch to check out → not recreatable → false.
+    #[test]
+    fn editor_unavailable_terminal_no_branch() {
+        let mut w = wf_pending(true);
+        w.state = WorkflowState::Done;
+        w.branch_name = String::new();
+        w.worktree_path = None;
+        assert!(!editor_worktree_available(&w));
+    }
+
+    /// A worktree that exists on disk makes the editor available regardless of
+    /// state (even a non-terminal/Pending workflow).
+    #[test]
+    fn editor_available_when_worktree_exists() {
+        let dir = make_existing_dir("exists");
+        let mut w = wf_pending(false);
+        w.state = WorkflowState::Pending;
+        w.branch_name = String::new();
+        w.worktree_path = Some(dir.clone());
+        assert!(editor_worktree_available(&w));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stale `worktree_path` that no longer exists on disk does not count as a
+    /// live worktree; only the recreatable/terminal path can rescue it.
+    #[test]
+    fn editor_unavailable_when_worktree_path_missing_and_pending() {
+        let dir = make_existing_dir("missing");
+        std::fs::remove_dir_all(&dir).expect("remove dir to simulate pruned worktree");
+        let mut w = wf_pending(false);
+        w.state = WorkflowState::Pending;
+        w.branch_name = "feat/pruned".into();
+        w.worktree_path = Some(dir);
+        assert!(!editor_worktree_available(&w));
+    }
+
+    /// `can_open_editor` ANDs the worktree decision with Docker availability.
+    /// When the worktree decision is `false` (Pending/no-branch/no-worktree),
+    /// the editor must be unavailable regardless of whether Docker is present.
+    #[test]
+    fn can_open_editor_false_when_worktree_decision_false() {
+        let mut w = wf_pending(false);
+        w.state = WorkflowState::Pending;
+        w.branch_name = String::new();
+        w.worktree_path = None;
+        assert!(!editor_worktree_available(&w));
+        assert!(!can_open_editor(&w));
     }
 }

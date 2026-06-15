@@ -52,7 +52,9 @@ jira_browse_url: string,
  */
 issue_url: string | null, 
 /**
- * **Open editor** is allowed (workflow not active, worktree exists, Docker available).
+ * **Open editor** is allowed: Docker is available and either the worktree
+ * exists or the workflow is terminal (Done/Stopped/Error) with a branch —
+ * in which case the worktree is recreated on demand when missing.
  */
 can_open_editor: boolean, 
 /**

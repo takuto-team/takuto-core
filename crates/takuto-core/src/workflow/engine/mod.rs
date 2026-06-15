@@ -243,6 +243,22 @@ impl WorkflowEngine {
         self.db.as_ref()
     }
 
+    /// Resolve `(repo_path, default_branch)` for an existing workflow.
+    ///
+    /// Looks up the workflow's `repository_id` / `workspace_name` against the
+    /// `repositories` table, falling back to `config.git`. Exposed for callers
+    /// outside the engine (e.g. the editor endpoint's on-demand worktree
+    /// recreation) that need the clone path and base branch for a ticket.
+    pub async fn resolve_repo_for_ticket(&self, ticket_key: &str) -> (PathBuf, String) {
+        resolve::resolve_repo_for_ticket(
+            ticket_key,
+            &self.workflows_arc(),
+            &self.config(),
+            self.db(),
+        )
+        .await
+    }
+
     /// Optional `GitAuthResolver` used to pin credentials at workflow start.
     /// Returns a cloned `Option<Arc<...>>` so callers can share the resolver
     /// without holding the engine.

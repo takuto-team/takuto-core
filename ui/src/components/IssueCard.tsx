@@ -35,7 +35,9 @@ export function IssueCard({
   onReport,
 }: Props) {
   const view = buildIssueCardView(w, ts, dynamicForwards);
-  const ctl = useIssueCardController(w.ticket_key, onRefresh);
+  // First open on a finished workflow may rebuild the worktree + container.
+  const preparingWorkspace = view.isTerminal && !w.editor_url;
+  const ctl = useIssueCardController(w.ticket_key, onRefresh, preparingWorkspace);
   const showMarkDone =
     (w.ticketing_system === "jira" || w.ticketing_system === "github") && w.can_mark_done;
 

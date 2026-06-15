@@ -4,6 +4,10 @@
 //! Editor + web terminal endpoints (`open_editor` / `close_editor` /
 //! `open_terminal` / `close_terminal`).
 
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -11,8 +15,10 @@ use axum::http::StatusCode;
 use serde::Serialize;
 
 use takuto_core::container::{self, ContainerRunner};
+use takuto_core::workflow::snapshot::WORKSPACES_DIR;
 
 use crate::auth::AuthenticatedUser;
+use crate::routes::repos::{CloneGuard, do_clone, sanitize_clone_error};
 use crate::session_registry::{SessionRoute, SessionRouteKind};
 use crate::state::{AuthState, ConfigState, DynamicPortForward, EditorState, EngineState};
 
@@ -47,37 +53,65 @@ pub async fn open_editor(
     require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
-    let cfg = cfg_state.config.read().await;
     let wf_arc = engine.engine.workflows_arc();
-    let workflows = wf_arc.read().await;
-    let w = workflows
-        .get(&id)
-        .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
+    let (existing_worktree, branch_name, worktree_lock, ticket_key) = {
+        let workflows = wf_arc.read().await;
+        let w = workflows
+            .get(&id)
+            .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
 
-    if !can_open_editor(w) {
-        return Err((
-            StatusCode::CONFLICT,
-            "Cannot open editor: workflow is active, worktree missing, or Docker unavailable"
-                .into(),
-        ));
-    }
+        if !can_open_editor(w) {
+            return Err((
+                StatusCode::CONFLICT,
+                "Cannot open editor: workflow is active, has no branch, or Docker is unavailable"
+                    .into(),
+            ));
+        }
 
-    let worktree = w
-        .worktree_path
-        .as_ref()
-        .ok_or((StatusCode::CONFLICT, "No worktree path".into()))?
-        .clone();
-    let ticket_key = w.ticket_key.clone();
-    let app_ports = cfg.editor.ports.clone();
-    let dynamic_ports = cfg.editor.dynamic_ports;
-    let theme = cfg.editor.theme.clone();
-    let extensions = cfg.editor.extensions.clone();
-    let settings = cfg.editor.settings.clone();
-    let setup_commands = cfg.terminal.setup_commands.clone();
-    let startup_commands = cfg.terminal.startup_commands.clone();
-    let git_editor = cfg.terminal.git_editor.clone();
-    drop(workflows);
-    drop(cfg);
+        (
+            w.worktree_path.clone(),
+            w.branch_name.clone(),
+            w.worktree_lock.clone(),
+            w.ticket_key.clone(),
+        )
+    };
+
+    let (
+        app_ports,
+        dynamic_ports,
+        theme,
+        extensions,
+        settings,
+        setup_commands,
+        startup_commands,
+        git_editor,
+    ) = {
+        let cfg = cfg_state.config.read().await;
+        (
+            cfg.editor.ports.clone(),
+            cfg.editor.dynamic_ports,
+            cfg.editor.theme.clone(),
+            cfg.editor.extensions.clone(),
+            cfg.editor.settings.clone(),
+            cfg.terminal.setup_commands.clone(),
+            cfg.terminal.startup_commands.clone(),
+            cfg.terminal.git_editor.clone(),
+        )
+    };
+
+    // Resolve the worktree path, recreating it on demand when the directory is
+    // missing (terminal workflow whose worktree was pruned). For an active
+    // workflow with a live worktree this is a cheap existence check.
+    let worktree = ensure_worktree(
+        &engine,
+        &auth_state,
+        &id,
+        &auth.user_id,
+        existing_worktree,
+        &branch_name,
+        worktree_lock,
+    )
+    .await?;
 
     let image = ContainerRunner::discover_worker_image()
         .await
@@ -311,6 +345,247 @@ pub async fn open_editor(
         port_mappings: info.port_mappings,
         path_token,
     }))
+}
+
+/// Ensure the workflow's worktree exists on disk, recreating it on demand.
+///
+/// For a live worktree this is a cheap existence check returning the existing
+/// path. When the directory is missing (a terminal workflow whose worktree was
+/// pruned), it re-clones the repository if its clone is gone, then checks out a
+/// worktree for the **existing** branch and persists the new path to both the
+/// in-memory `Workflow` and the `work_items` row.
+///
+/// Serialised per workflow via `worktree_lock` so two concurrent `open_editor`
+/// calls cannot race to recreate the same worktree; the loser observes the
+/// freshly-persisted path and reuses it.
+async fn ensure_worktree(
+    engine: &EngineState,
+    auth_state: &AuthState,
+    id: &str,
+    user_id: &str,
+    existing: Option<PathBuf>,
+    branch_name: &str,
+    worktree_lock: Arc<tokio::sync::Mutex<()>>,
+) -> Result<PathBuf, (StatusCode, String)> {
+    if let Some(p) = &existing
+        && p.exists()
+    {
+        return Ok(p.clone());
+    }
+
+    if branch_name.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            "Cannot recreate workspace: workflow has no branch to check out.".into(),
+        ));
+    }
+
+    // Serialise recreation per workflow.
+    let _guard = worktree_lock.lock().await;
+
+    // A concurrent open may have recreated the worktree while we waited for the
+    // lock — re-read the live path and reuse it if it now exists.
+    {
+        let workflows = engine.engine.workflows_arc();
+        let wf = workflows.read().await;
+        if let Some(w) = wf.get(id)
+            && let Some(p) = &w.worktree_path
+            && p.exists()
+        {
+            return Ok(p.clone());
+        }
+    }
+
+    let (repo_path, base_branch) = engine.engine.resolve_repo_for_ticket(id).await;
+
+    // Re-clone the repository if its clone directory is missing.
+    if !repo_path.join(".git").exists() {
+        let repo_url = lookup_repo_remote_url(engine, id).await.ok_or((
+            StatusCode::BAD_GATEWAY,
+            "Cannot recreate workspace: repository remote URL is unknown.".into(),
+        ))?;
+        let full_name = parse_github_owner_repo(&repo_url).ok_or((
+            StatusCode::BAD_GATEWAY,
+            "Cannot recreate workspace: repository URL is not a GitHub owner/repo URL.".into(),
+        ))?;
+
+        // Hold the process-wide clone lock so we don't race a repository add.
+        if engine
+            .clone_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                "A repository clone is already in progress; retry shortly.".into(),
+            ));
+        }
+        let _clone_guard = CloneGuard(engine.clone_in_progress.clone());
+
+        if let Some(parent) = repo_path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        let token_cwd = std::path::Path::new(WORKSPACES_DIR);
+
+        do_clone(engine, auth_state, &full_name, token_cwd, &repo_path, Some(user_id))
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    format!(
+                        "Failed to re-clone repository: {}",
+                        sanitize_clone_error(&e.to_string())
+                    ),
+                )
+            })?;
+    }
+
+    // Recreate the worktree for the existing branch. `create_worktree` fetches
+    // the base branch and falls back to a DWIM checkout of the existing branch.
+    let worktree = engine
+        .engine
+        .actions()
+        .create_worktree(&repo_path, branch_name, &base_branch)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to recreate worktree: {e}"),
+            )
+        })?;
+
+    // Persist the new worktree path to the in-memory workflow and the DB.
+    {
+        let workflows = engine.engine.workflows_arc();
+        let mut wf = workflows.write().await;
+        if let Some(w) = wf.get_mut(id) {
+            w.worktree_path = Some(worktree.clone());
+        }
+    }
+    let worktree_str = worktree.display().to_string();
+    if let Some(db) = engine.engine.db()
+        && let Err(e) = takuto_core::db::work_items::update_work_item_branch_and_worktree(
+            db.adapter(),
+            id,
+            Some(branch_name),
+            Some(&worktree_str),
+            chrono::Utc::now().timestamp(),
+        )
+        .await
+    {
+        tracing::warn!(
+            work_item_id = id,
+            error = %e,
+            "Failed to persist recreated worktree path (in-memory state is unaffected)"
+        );
+    }
+
+    tracing::info!(
+        work_item_id = id,
+        branch = branch_name,
+        worktree = %worktree_str,
+        "Recreated missing worktree on demand for editor/terminal"
+    );
+
+    Ok(worktree)
+}
+
+/// Look up the workflow's repository remote URL via its `repository_id`
+/// (canonical) or `workspace_name` (fallback). Returns `None` when no DB is
+/// attached or no registered repository carries a `repo_url`.
+async fn lookup_repo_remote_url(engine: &EngineState, id: &str) -> Option<String> {
+    let db = engine.engine.db()?;
+    let (repository_id, workspace_name) = {
+        let workflows = engine.engine.workflows_arc();
+        let wf = workflows.read().await;
+        let w = wf.get(id)?;
+        (w.repository_id.clone(), w.workspace_name.clone())
+    };
+
+    if let Some(repo_id) = repository_id.as_deref()
+        && let Ok(Some(row)) = takuto_core::db::repositories::get(db.adapter(), repo_id).await
+        && let Some(url) = row.repo_url
+    {
+        return Some(url);
+    }
+
+    if !workspace_name.is_empty()
+        && let Ok(Some(row)) =
+            takuto_core::db::repositories::get_by_name(db.adapter(), &workspace_name).await
+        && let Some(url) = row.repo_url
+    {
+        return Some(url);
+    }
+
+    None
+}
+
+/// Parse an `owner/repo` pair out of a GitHub HTTPS URL such as
+/// `https://github.com/owner/repo` (with or without a trailing `.git`).
+fn parse_github_owner_repo(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let rest = rest.trim_end_matches('/').trim_end_matches(".git");
+    let mut parts = rest.split('/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_github_owner_repo;
+
+    #[test]
+    fn parses_plain_https_url() {
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/acme/quantum-budget"),
+            Some("acme/quantum-budget".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_url_with_dot_git_and_trailing_slash() {
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/acme/quantum-budget.git"),
+            Some("acme/quantum-budget".to_string())
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/acme/quantum-budget/"),
+            Some("acme/quantum-budget".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_http_scheme() {
+        assert_eq!(
+            parse_github_owner_repo("http://github.com/acme/quantum-budget"),
+            Some("acme/quantum-budget".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_non_github_host() {
+        assert_eq!(
+            parse_github_owner_repo("https://gitlab.com/acme/quantum-budget"),
+            None
+        );
+        assert_eq!(parse_github_owner_repo("git@github.com:acme/repo.git"), None);
+    }
+
+    #[test]
+    fn rejects_missing_repo_or_extra_segments() {
+        assert_eq!(parse_github_owner_repo("https://github.com/acme"), None);
+        assert_eq!(parse_github_owner_repo("https://github.com/"), None);
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/acme/repo/extra"),
+            None
+        );
+    }
 }
 
 /// Stop and remove the editor container for a workflow.

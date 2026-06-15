@@ -124,6 +124,28 @@ describe("IssueCard", () => {
     expect(screen.getByText("hello-from-agent")).toBeTruthy();
   });
 
+  it("renders the editor and terminal buttons on a completed workflow with a branch and can_open_editor", () => {
+    renderCard({
+      workflow: makeWorkflow({
+        state: "Done",
+        branch_name: "feat/test-1",
+        can_open_editor: true,
+        editor_url: null,
+        terminal_url: null,
+      }),
+    });
+    expect(screen.getByTitle("Open editor")).toBeTruthy();
+    expect(screen.getByTitle("Open terminal")).toBeTruthy();
+  });
+
+  it("does not render the editor and terminal buttons when can_open_editor is false", () => {
+    renderCard({
+      workflow: makeWorkflow({ state: "Done", branch_name: "feat/test-1", can_open_editor: false }),
+    });
+    expect(screen.queryByTitle("Open editor")).toBeNull();
+    expect(screen.queryByTitle("Open terminal")).toBeNull();
+  });
+
   it("opens the delete confirmation when the delete button is clicked", () => {
     renderCard({ workflow: makeWorkflow({ can_delete: true }) });
     // DeleteIconButton has an accessible label; click it.
