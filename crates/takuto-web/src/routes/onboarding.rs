@@ -9,12 +9,14 @@
 //! user has signed in — matching `/api/auth/status`.
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::HeaderMap;
 use serde::Serialize;
+use tracing::warn;
 
 use takuto_core::docker_hooks::{StructuredWarning, SystemStatus};
 
+use crate::auth::AuthenticatedUser;
 use crate::state::{AuthState, ConfigState, EngineState};
 
 /// Codes that the per-request filter may drop based on the calling user's
@@ -203,6 +205,68 @@ pub async fn onboarding_status(
         status,
         user_onboarding,
         jira_credential_present,
+    })
+}
+
+/// Response for `POST /api/onboarding/complete`.
+#[derive(Debug, Serialize)]
+pub struct OnboardingCompleteResponse {
+    /// `true` when the full `config.toml` write succeeded.
+    pub persisted: bool,
+    /// Set when the in-memory state was fine but the disk write failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persist_warning: Option<String>,
+}
+
+/// `POST /api/onboarding/complete` — finish the wizard for the caller.
+///
+/// Two effects:
+///   1. Marks the caller's `onboarding_state.completed_at` so the wizard does
+///      not auto-launch on the next dashboard load (best-effort; a DB failure
+///      is logged but does not fail the request).
+///   2. Performs a FULL write of the live in-memory [`Config`] via the
+///      [`ConfigWriter`]. This guarantees a complete `config.toml` — including
+///      the manually-managed `[database]` / `[web]` defaults (SQLite, port
+///      8080) — exists after the wizard finishes, even when the operator
+///      skipped every step and the file never existed at startup. The write is
+///      idempotent and safe when `config.toml` already exists (the wizard's
+///      per-step PUTs may have created it already).
+///
+/// The endpoint sits behind the dashboard auth middleware, so an
+/// `AuthenticatedUser` is always present.
+///
+/// [`Config`]: takuto_core::config::Config
+/// [`ConfigWriter`]: takuto_core::config_writer::ConfigWriter
+pub async fn onboarding_complete(
+    State(auth): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Json<OnboardingCompleteResponse> {
+    if let Some(db) = auth.db.as_ref()
+        && let Err(e) =
+            takuto_core::db::onboarding::mark_completed(db.adapter(), &user.user_id).await
+    {
+        warn!(error = %e, "failed to mark onboarding completed");
+    }
+
+    // Snapshot the live config under the read lock, then write outside it.
+    let snapshot = { cfg_state.config.read().await.clone() };
+
+    let (persisted, persist_warning) = if let Some(ref writer) = cfg_state.config_writer {
+        match writer.write_config(&snapshot) {
+            Ok(()) => (true, None),
+            Err(e) => {
+                warn!(error = %e, "onboarding complete: config.toml write failed");
+                (false, Some(e.to_string()))
+            }
+        }
+    } else {
+        (false, None)
+    };
+
+    Json(OnboardingCompleteResponse {
+        persisted,
+        persist_warning,
     })
 }
 
@@ -427,5 +491,123 @@ mod tests {
             Some("opencode_not_authenticated")
         );
         assert_eq!(provider_warning_code("anything_else"), None);
+    }
+}
+
+#[cfg(test)]
+mod complete_http_tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use takuto_core::config::Config;
+    use takuto_core::config_writer::ConfigWriter;
+
+    use crate::server::build_router;
+    use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+    /// The happy path: with a writer pointing at a not-yet-existing path,
+    /// completing the wizard writes a complete, reloadable `config.toml`
+    /// carrying the manually-managed `[database]` / `[web]` defaults.
+    /// Build a unique, empty temp directory without pulling in `tempfile`
+    /// (not a dev-dependency of this crate). The caller owns cleanup.
+    fn unique_temp_dir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "takuto-onboard-complete-{}-{}",
+            std::process::id(),
+            n
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn complete_writes_full_config_with_defaults() {
+        let mut state = test_state_with_db();
+        let dir = unique_temp_dir();
+        let path = dir.join("config.toml");
+        assert!(!path.exists(), "precondition: no config file yet");
+        state.config.config_path = path.clone();
+        state.config.config_writer = Some(Arc::new(ConfigWriter::new(path.clone())));
+
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::post("/api/onboarding/complete")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["persisted"], true);
+
+        assert!(path.exists(), "config.toml must exist after completion");
+        let reloaded =
+            Config::load(&path).expect("written config.toml must reload via Config::load");
+        // Manually-managed defaults are present (SQLite + port 8080).
+        assert_eq!(reloaded.web.port, 8080);
+        assert!(
+            reloaded.database.connection.is_empty(),
+            "default SQLite leaves connection empty"
+        );
+        assert_eq!(reloaded.git.base_branch, "main");
+        assert_eq!(reloaded.git.remote, "origin");
+        assert_eq!(reloaded.agent.step_timeout_secs, 1800);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No writer (the default test state) → still 200, persisted = false.
+    #[tokio::test]
+    async fn complete_without_writer_is_best_effort_ok() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/onboarding/complete")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["persisted"], false);
+    }
+
+    /// Unauthenticated callers are rejected by the auth middleware (the route
+    /// lives in the protected router).
+    #[tokio::test]
+    async fn complete_requires_auth() {
+        let state = test_state_with_db();
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/onboarding/complete")
+                    .header("Origin", TEST_ORIGIN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

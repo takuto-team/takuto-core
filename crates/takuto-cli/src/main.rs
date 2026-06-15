@@ -204,11 +204,28 @@ struct Cli {
     dry_run: bool,
 }
 
+/// Load config from `config_path`, falling back to [`Config::default`] when the
+/// file is simply **absent** — the no-config-needed first-run bootstrap: the
+/// container (and these helper subcommands the Docker entrypoint invokes) must
+/// start without a `config.toml`, matching `run_server`. Any other load error
+/// (malformed TOML, failed validation) still propagates so a broken file is not
+/// silently masked.
+fn load_config_or_default(config_path: &std::path::Path) -> std::result::Result<Config, String> {
+    match Config::load(config_path) {
+        Ok(c) => Ok(c),
+        Err(takuto_core::error::TakutoError::ConfigNotFound(_)) => Ok(Config::default()),
+        Err(e) => Err(format!(
+            "Failed to load config {}: {e}",
+            config_path.display()
+        )),
+    }
+}
+
 fn run_docker_hooks(config_path: &std::path::Path, phase: DockerHookPhase) -> ExitCode {
-    let config = match Config::load(config_path) {
+    let config = match load_config_or_default(config_path) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load config {}: {e}", config_path.display());
+        Err(msg) => {
+            eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };
@@ -227,10 +244,10 @@ fn run_docker_hooks(config_path: &std::path::Path, phase: DockerHookPhase) -> Ex
 }
 
 fn run_preflight(config_path: &std::path::Path, strict: bool) -> ExitCode {
-    let config = match Config::load(config_path) {
+    let config = match load_config_or_default(config_path) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load config {}: {e}", config_path.display());
+        Err(msg) => {
+            eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };
@@ -383,10 +400,10 @@ async fn run_github_app_token(config_path: &std::path::Path) -> ExitCode {
 /// Exit code is 0 on success even when the install_commands list is
 /// empty (the entrypoint takes the no-op fast path).
 fn run_provisioning(config_path: &std::path::Path, action: &ProvisioningAction) -> ExitCode {
-    let config = match Config::load(config_path) {
+    let config = match load_config_or_default(config_path) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load config {}: {e}", config_path.display());
+        Err(msg) => {
+            eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };
@@ -414,10 +431,10 @@ fn run_provisioning(config_path: &std::path::Path, action: &ProvisioningAction) 
 /// Print the provider-aware egress allowlist (one host per line) for
 /// `docker/egress-rules.sh` to feed into its `allow_host` helper.
 fn run_egress_hosts(config_path: &std::path::Path) -> ExitCode {
-    let config = match Config::load(config_path) {
+    let config = match load_config_or_default(config_path) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load config {}: {e}", config_path.display());
+        Err(msg) => {
+            eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };

@@ -368,7 +368,15 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Admin-only patch of the [jira] section (filters + prompt-context policy).
         .route("/config/jira", put(routes::config_jira::put_jira_config))
+        // Admin-only patch of the [git] section (base branch + remote name).
+        .route("/config/git", put(routes::config_git::put_git_config))
         .route("/config/reload", post(routes::config::reload_config))
+        // Mark the caller's onboarding wizard complete and flush a full
+        // config.toml to disk (no-config-needed first-run bootstrap).
+        .route(
+            "/onboarding/complete",
+            post(routes::onboarding::onboarding_complete),
+        )
         // Per-user credential surface.
         .route(
             "/users/me/credentials",

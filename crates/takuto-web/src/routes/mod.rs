@@ -5,6 +5,7 @@ pub mod admin;
 pub mod auth;
 pub mod config;
 pub mod config_agent;
+pub mod config_git;
 pub mod config_jira;
 pub mod config_polling;
 pub mod credentials;

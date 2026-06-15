@@ -438,28 +438,16 @@ fi
 
 # --- Normal mode ---
 
-# Validate that required config files are volume-mounted.
-# The distributed image ships WITHOUT baked-in config — users must mount their own.
+# config.toml is OPTIONAL. The server falls back to built-in defaults
+# (Config::default) when the file is absent and serves the onboarding wizard;
+# the wizard writes a complete config.toml on "Finish setup" via ConfigWriter.
+# /etc/takuto is chowned to the takuto user above so that first write can
+# succeed. When the file IS present it is loaded normally on the next restart.
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "" >&2
-    echo "ERROR: config.toml not found at $CONFIG_FILE" >&2
-    echo "" >&2
-    echo "  The Takuto image does not include a default configuration." >&2
-    echo "  You must mount your config file when starting the container." >&2
-    echo "" >&2
-    echo "  docker-compose example (already in docker-compose.yml):" >&2
-    echo "    volumes:" >&2
-    echo "      - ./config.toml:/etc/takuto/config.toml:ro" >&2
-    echo "" >&2
-    echo "  docker run example:" >&2
-    echo "    docker run -v \$(pwd)/config.toml:/etc/takuto/config.toml:ro takuto" >&2
-    echo "" >&2
-    echo "  A reference example is available inside the image at:" >&2
-    echo "    /etc/takuto/examples/config.toml.example" >&2
-    echo "  Copy it to your host and customize:" >&2
-    echo "    docker run --rm --entrypoint cat takuto /etc/takuto/examples/config.toml.example > config.toml" >&2
-    echo "" >&2
-    exit 1
+    echo "[takuto] No config.toml at $CONFIG_FILE — starting with built-in defaults." >&2
+    echo "[takuto]          Complete the onboarding wizard in the dashboard to write one," >&2
+    echo "[takuto]          or mount your own at $CONFIG_FILE. A reference example is at" >&2
+    echo "[takuto]          /etc/takuto/examples/config.toml.example." >&2
 fi
 
 if [ ! -f /etc/takuto/env ]; then
