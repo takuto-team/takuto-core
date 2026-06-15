@@ -99,6 +99,10 @@ pub struct AuthState {
     /// `Some(resolver)`. Test fixtures with no DB use `None` and the
     /// per-route helpers fall back to the legacy App-only token path.
     pub git_auth_resolver: Option<Arc<takuto_core::github::auth_resolver::GitAuthResolver>>,
+    /// Injectable Jira HTTP shim for per-user credential validation.
+    /// Production uses [`takuto_core::jira::RealJiraHttp`]; tests inject a
+    /// fake impl so the suite never touches Jira cloud.
+    pub jira_http: Arc<dyn takuto_core::jira::JiraHttp>,
 }
 
 /// The live `Config` plus how to persist it plus boot-time integration flags

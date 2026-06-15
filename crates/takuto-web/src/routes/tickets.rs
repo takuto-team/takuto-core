@@ -706,6 +706,7 @@ mod tests {
                 db: None,
                 gh_client: Arc::new(takuto_core::auth::RealGhClient::new()),
                 git_auth_resolver: None,
+                jira_http: Arc::new(takuto_core::jira::RealJiraHttp::new()),
             },
             ConfigState {
                 config,

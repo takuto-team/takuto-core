@@ -43,9 +43,7 @@ use takuto_core::db::credential_audit::{self, CredentialAuditKind};
 use takuto_core::db::github_credentials;
 use takuto_core::db::jira_credentials;
 use takuto_core::db::provider_credentials::{self, ProviderCredentialKind, UpsertOutcome};
-use takuto_core::jira::{
-    JiraRestCredential, JiraValidationError, RealJiraHttp, validate_jira_credential,
-};
+use takuto_core::jira::{JiraRestCredential, JiraValidationError, validate_jira_credential};
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
@@ -870,8 +868,7 @@ pub async fn post_jira_credential(
         email: email.clone(),
         token: body.token.clone(),
     };
-    let http = RealJiraHttp::new();
-    let account = match validate_jira_credential(&http, &cred).await {
+    let account = match validate_jira_credential(auth_state.jira_http.as_ref(), &cred).await {
         Ok(a) => a,
         Err(e) => {
             let code = e.code();
@@ -1118,3 +1115,274 @@ pub async fn get_admin_github_status(
 // without needing a glob.
 #[allow(dead_code)]
 fn _seal_in_scope(_b: SealedBlob) {}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use takuto_core::jira::{JiraHttp, JiraRestCredential};
+    use takuto_core::jira::rest::JiraHttpResponse;
+
+    use crate::server::build_router;
+    use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+    /// A configurable fake for the [`JiraHttp`] trait.
+    ///
+    /// Set `status` to the HTTP status the mock should return; `body` to the
+    /// JSON payload.  `Err` is returned when `status` is `None` (transport
+    /// failure).
+    struct FakeJiraHttp {
+        status: Option<u16>,
+        body: String,
+    }
+
+    impl FakeJiraHttp {
+        fn ok_account() -> Self {
+            Self {
+                status: Some(200),
+                body: r#"{"accountId":"acc-123","displayName":"Test User","emailAddress":"test@acme.com"}"#.into(),
+            }
+        }
+
+        fn unauthorized() -> Self {
+            Self {
+                status: Some(401),
+                body: "{}".into(),
+            }
+        }
+
+        fn transport_error() -> Self {
+            Self {
+                status: None,
+                body: String::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl JiraHttp for FakeJiraHttp {
+        async fn get(
+            &self,
+            _cred: &JiraRestCredential,
+            _path: &str,
+        ) -> std::result::Result<JiraHttpResponse, String> {
+            match self.status {
+                Some(status) => Ok(JiraHttpResponse {
+                    status,
+                    body: self.body.clone(),
+                }),
+                None => Err("fake transport error".into()),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn post_jira_credential_rejects_empty_token() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"a@acme.com","token":""}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_token");
+    }
+
+    #[tokio::test]
+    async fn post_jira_credential_rejects_invalid_site() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"not-a-url","email":"a@acme.com","token":"tok"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "site_invalid");
+    }
+
+    #[tokio::test]
+    async fn post_jira_credential_jira_401_returns_400_invalid_token() {
+        let mut state = test_state_with_db();
+        state.auth_mut().jira_http = Arc::new(FakeJiraHttp::unauthorized());
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"a@acme.com","token":"bad-tok"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_token");
+    }
+
+    #[tokio::test]
+    async fn post_jira_credential_transport_failure_returns_502() {
+        let mut state = test_state_with_db();
+        state.auth_mut().jira_http = Arc::new(FakeJiraHttp::transport_error());
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"a@acme.com","token":"tok"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "jira_transport_error");
+    }
+
+    #[tokio::test]
+    async fn post_jira_credential_happy_path_stores_and_returns_account() {
+        let mut state = test_state_with_db();
+        state.auth_mut().jira_http = Arc::new(FakeJiraHttp::ok_account());
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"dev@acme.com","token":"good-tok"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["site"], "https://acme.atlassian.net");
+        assert_eq!(json["email"], "dev@acme.com");
+        assert_eq!(json["account"]["account_id"], "acc-123");
+        assert_eq!(json["account"]["display_name"], "Test User");
+
+        // Verify the credential is reflected in GET /api/users/me/credentials.
+        let app2 = build_router(state);
+        let get_resp = app2
+            .oneshot(
+                Request::get("/api/users/me/credentials")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_resp.status(), StatusCode::OK);
+        let get_body = get_resp.into_body().collect().await.unwrap().to_bytes();
+        let get_json: serde_json::Value = serde_json::from_slice(&get_body).unwrap();
+        let jira = &get_json["jira"];
+        assert!(!jira.is_null(), "jira field must be present after storing");
+        assert_eq!(jira["site"], "https://acme.atlassian.net");
+        assert_eq!(jira["account_id"], "acc-123");
+    }
+
+    #[tokio::test]
+    async fn delete_jira_credential_removes_stored_credential() {
+        let mut state = test_state_with_db();
+        state.auth_mut().jira_http = Arc::new(FakeJiraHttp::ok_account());
+        let cookie = register_and_login(&state).await;
+
+        // First store a credential.
+        let app = build_router(state.clone());
+        let post_resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"dev@acme.com","token":"tok"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post_resp.status(), StatusCode::OK);
+
+        // Delete it.
+        let app2 = build_router(state.clone());
+        let del_resp = app2
+            .oneshot(
+                Request::delete("/api/users/me/jira-credential")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del_resp.status(), StatusCode::NO_CONTENT);
+
+        // Verify the GET now shows jira: null.
+        let app3 = build_router(state);
+        let get_resp = app3
+            .oneshot(
+                Request::get("/api/users/me/credentials")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_resp.status(), StatusCode::OK);
+        let get_body = get_resp.into_body().collect().await.unwrap().to_bytes();
+        let get_json: serde_json::Value = serde_json::from_slice(&get_body).unwrap();
+        assert!(get_json["jira"].is_null(), "jira must be null after delete");
+    }
+}

@@ -12,7 +12,7 @@ pub mod source;
 pub use browse_url::ticket_browse_url;
 pub use error::JiraError;
 pub use rest::{
-    DbBackedJiraSourceFactory, JiraAccount, JiraRestClient, JiraRestCredential, JiraValidationError,
-    RealJiraHttp, resolve_rest_credential, validate as validate_jira_credential,
+    DbBackedJiraSourceFactory, JiraAccount, JiraHttp, JiraRestClient, JiraRestCredential,
+    JiraValidationError, RealJiraHttp, resolve_rest_credential, validate as validate_jira_credential,
 };
 pub use source::{RealJiraSourceFactory, TicketLister, TicketListerFactory, TicketReader};

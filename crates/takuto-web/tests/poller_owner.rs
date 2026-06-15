@@ -79,6 +79,7 @@ fn build_state(data_dir: &std::path::Path) -> AppState {
             db: Some(db),
             gh_client: Arc::new(takuto_core::auth::RealGhClient::new()),
             git_auth_resolver,
+            jira_http: Arc::new(takuto_core::jira::RealJiraHttp::new()),
         },
         ConfigState {
             config,

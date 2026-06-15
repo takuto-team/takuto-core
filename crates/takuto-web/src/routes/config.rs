@@ -274,6 +274,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_config_ticketing_system_jira_is_accepted_and_applied() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::put("/api/config")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", "http://localhost:8080")
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"general":{"ticketing_system":"jira"}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["general"]["ticketing_system"], "jira");
+
+        let cfg = state.config.config.read().await;
+        assert_eq!(
+            cfg.general.ticketing_system,
+            takuto_core::config::TicketingSystem::Jira,
+        );
+    }
+
+    #[tokio::test]
     async fn post_config_reload_without_config_file_returns_400() {
         let state = test_state_with_db();
         let cookie = register_and_login(&state).await;

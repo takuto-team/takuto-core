@@ -1153,6 +1153,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             db: db.clone(),
             gh_client: std::sync::Arc::new(takuto_core::auth::RealGhClient::new()),
             git_auth_resolver,
+            jira_http: std::sync::Arc::new(takuto_core::jira::RealJiraHttp::new()),
         },
         ConfigState {
             config: config.clone(),
