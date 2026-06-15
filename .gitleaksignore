@@ -1,0 +1,10 @@
+# gitleaks false positives suppressed by exact fingerprint
+# (commit:file:rule:startline). Each entry below was manually verified to be a
+# non-secret. Fingerprints are precise — they suppress only the named match,
+# not the rule, so real secrets still fail the scan.
+
+# generic-api-key matched the planning-doc filename "06_qa_and_blind_spots.md"
+# in a code comment (context "auth-overhaul, 06_qa_and_blind_spots.md"), in
+# pre-rename maestro-web commits. Not a credential.
+81e12d6d73bb3ec60399dc39de406579a579b470:crates/maestro-web/src/routes/auth/register.rs:generic-api-key:32
+ad068a0f81458b8ae4b547f22a830e257b84cb35:crates/maestro-web/src/routes/auth.rs:generic-api-key:690
