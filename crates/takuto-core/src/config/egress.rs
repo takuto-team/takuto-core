@@ -140,7 +140,11 @@ mod tests {
         c.agent.available_providers = vec!["codex".to_string()];
         let hosts = c.provider_egress_hosts();
         assert!(hosts.contains(&"api.openai.com".to_string()));
-        assert!(!hosts.iter().any(|h| h.contains("anthropic") || h.contains("claude")));
+        assert!(
+            !hosts
+                .iter()
+                .any(|h| h.contains("anthropic") || h.contains("claude"))
+        );
         assert!(!hosts.iter().any(|h| h.contains("cursor")));
     }
 
@@ -166,9 +170,18 @@ mod tests {
 
     #[test]
     fn host_from_url_variants() {
-        assert_eq!(host_from_url("https://api.openai.com/v1"), Some("api.openai.com".into()));
-        assert_eq!(host_from_url("http://lm-studio:1234/v1"), Some("lm-studio".into()));
-        assert_eq!(host_from_url("https://user@gw.example:8443/x"), Some("gw.example".into()));
+        assert_eq!(
+            host_from_url("https://api.openai.com/v1"),
+            Some("api.openai.com".into())
+        );
+        assert_eq!(
+            host_from_url("http://lm-studio:1234/v1"),
+            Some("lm-studio".into())
+        );
+        assert_eq!(
+            host_from_url("https://user@gw.example:8443/x"),
+            Some("gw.example".into())
+        );
         assert_eq!(host_from_url("gw.example:1234"), Some("gw.example".into()));
         assert_eq!(host_from_url("  "), None);
         assert_eq!(host_from_url(""), None);
