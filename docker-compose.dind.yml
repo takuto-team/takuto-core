@@ -1,4 +1,4 @@
-# Docker-in-Docker sidecar — use when Maestro needs `docker` / `docker compose`
+# Docker-in-Docker sidecar — use when Takuto needs `docker` / `docker compose`
 # inside the container (e.g. compose_up_commands, Playwright containers).
 #
 # Recommended for macOS (Podman or Docker Desktop).
@@ -6,14 +6,14 @@
 #
 # Merge with: COMPOSE_FILE=docker-compose.yml:docker-compose.dind.yml
 #
-# The sidecar runs a real Docker daemon. Maestro connects via DOCKER_HOST over
+# The sidecar runs a real Docker daemon. Takuto connects via DOCKER_HOST over
 # the internal compose network (no TLS — traffic never leaves the bridge).
 # The `workspace` volume is shared so paths like /workspace/project/... resolve
-# identically for both the Maestro CLI and the DinD daemon.
+# identically for both the Takuto CLI and the DinD daemon.
 #
-# GH-45: Maestro shares the DinD network namespace (`network_mode: service:dind`)
+# GH-45: Takuto shares the DinD network namespace (`network_mode: service:dind`)
 # so the reverse proxy can reach docker-proxy ports (9100+) via localhost.
-# Port 8080 is published on the `dind` service because the maestro service no
+# Port 8080 is published on the `dind` service because the takuto service no
 # longer has its own network interfaces.
 
 services:
@@ -21,21 +21,21 @@ services:
     image: docker:27-dind
     privileged: true
     ports:
-      # Maestro's dashboard port — published here because maestro shares this
+      # Takuto's dashboard port — published here because takuto shares this
       # network namespace via `network_mode: service:dind`.
-      - "${MAESTRO_PORT:-8080}:8080"
+      - "${TAKUTO_PORT:-8080}:8080"
     environment:
       DOCKER_TLS_CERTDIR: ""
     volumes:
       - workspace:/workspace
       - workspaces:/workspaces
-      - maestro-data:/shared-auth/maestro-data
-      # Task #48: mount the `maestro-tools` volume here too so the DinD
+      - takuto-data:/shared-auth/takuto-data
+      # Task #48: mount the `takuto-tools` volume here too so the DinD
       # daemon can reference it by name when bind-mounting into spawned
-      # workers / editors / run-commands via `-v maestro-tools:/opt/maestro-tools/bin:ro`.
+      # workers / editors / run-commands via `-v takuto-tools:/opt/takuto-tools/bin:ro`.
       # Named volumes resolve in DinD's own volume namespace, so DinD
       # MUST have a mount keeping the volume alive in its scope.
-      - maestro-tools:/opt/maestro-tools/bin
+      - takuto-tools:/opt/takuto-tools/bin
       - dind-storage:/var/lib/docker
       # Auth volumes — workers bind-mount from /shared-auth/* into standard home paths
       - claude-auth:/shared-auth/claude
@@ -51,9 +51,9 @@ services:
       - playwright-cache:/shared-auth/playwright-cache
       - vscode-data:/shared-auth/vscode
       # Config — workers need config.toml for egress rules (extra_egress_hosts, allow_all_https)
-      - ./.maestro/config.toml:/etc/maestro/config.toml:ro
-      - ./.maestro/workflows:/etc/maestro/workflows:ro
-      - ./.maestro/maestro.env:/etc/maestro/env:ro
+      - ./.takuto/config.toml:/etc/takuto/config.toml:ro
+      - ./.takuto/workflows:/etc/takuto/workflows:ro
+      - ./.takuto/takuto.env:/etc/takuto/env:ro
     healthcheck:
       test: ["CMD", "docker", "info"]
       interval: 5s
@@ -61,7 +61,7 @@ services:
       retries: 10
       start_period: 5s
 
-  maestro:
+  takuto:
     # Share the DinD container's network namespace so the reverse proxy can
     # reach docker-proxy published ports (editor/terminal) via localhost.
     # Without this, Docker Desktop for Mac blocks cross-container traffic to
@@ -70,20 +70,20 @@ services:
     ports: !reset []
     environment:
       - DOCKER_HOST=tcp://127.0.0.1:2375
-      # Task #43: when maestro tells DinD to bind-mount `${data_dir}/runtime/secrets/`
+      # Task #43: when takuto tells DinD to bind-mount `${data_dir}/runtime/secrets/`
       # (the per-workflow WorkerSecretsBundle), DinD resolves the source in its OWN
-      # filesystem, not maestro's. The `maestro-data` volume above mounts at
-      # `/home/maestro/.maestro` in maestro and `/shared-auth/maestro-data` in DinD;
+      # filesystem, not takuto's. The `takuto-data` volume above mounts at
+      # `/home/takuto/.takuto` in takuto and `/shared-auth/takuto-data` in DinD;
       # this env var tells the path-translator which DinD-side prefix to swap in.
       # Operators with a custom volume layout can override.
-      - MAESTRO_DIND_DATA_PREFIX=/shared-auth/maestro-data
+      - TAKUTO_DIND_DATA_PREFIX=/shared-auth/takuto-data
     depends_on:
       dind:
         condition: service_healthy
 
 volumes:
-  maestro-data:
-  # Task #48: see `docker-compose.yml` and `docs/extending-maestro.md`.
-  maestro-tools:
+  takuto-data:
+  # Task #48: see `docker-compose.yml` and `docs/extending-takuto.md`.
+  takuto-tools:
   dind-storage:
   vscode-data:

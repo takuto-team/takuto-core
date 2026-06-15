@@ -14,7 +14,7 @@ ignore = [
   # reaches us transitively via jsonwebtoken -> rsa. Remove once rsa ships a fix.
   "RUSTSEC-2023-0071",
   # time: DoS via stack exhaustion when parsing untrusted RFC 2822 input. Fixed
-  # in time >=0.3.47, but maestro-web pins `time = "=0.3.45"` exactly. Remove
+  # in time >=0.3.47, but takuto-web pins `time = "=0.3.45"` exactly. Remove
   # this entry once that exact pin is bumped to >=0.3.47.
   "RUSTSEC-2026-0009",
 ]

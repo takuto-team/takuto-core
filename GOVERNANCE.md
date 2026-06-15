@@ -2,7 +2,7 @@
 
 ## Current model
 
-Maestro is currently maintained by **@morphet81**.
+Takuto is currently maintained by **@morphet81**.
 
 - **Response SLA:** best-effort within 1 week on issues and PRs.
 - **Decisions:** the maintainer has final say on architecture and roadmap. Major

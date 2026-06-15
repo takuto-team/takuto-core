@@ -1,8 +1,8 @@
-> **Note:** Maestro is **not currently accepting external code contributions.**
+> **Note:** Takuto is **not currently accepting external code contributions.**
 > Dual-licensing (FSL + commercial) requires CLA infrastructure that is not
 > yet in place. Pull requests from outside the maintainer team will be closed.
-> Please open a [GitHub Issue](https://github.com/morphet81/maestro-core/issues)
-> or [Discussion](https://github.com/morphet81/maestro-core/discussions) instead,
+> Please open a [GitHub Issue](https://github.com/takuto-team/takuto-core/issues)
+> or [Discussion](https://github.com/takuto-team/takuto-core/discussions) instead,
 > and report security vulnerabilities privately per [`SECURITY.md`](../SECURITY.md).
 > See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the full policy.
 

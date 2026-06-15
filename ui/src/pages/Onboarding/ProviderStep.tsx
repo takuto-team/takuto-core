@@ -56,7 +56,7 @@ export function ProviderStep({
         </select>
         {provider === "opencode" && (
           <p className="text-xs text-gray-500 mt-1">
-            OpenCode wires Maestro to your self-hosted OpenAI-compatible
+            OpenCode wires Takuto to your self-hosted OpenAI-compatible
             endpoint (LM Studio, Ollama, vLLM, private gateways). To use
             Anthropic / OpenAI directly, pick the Claude or Codex
             provider instead.

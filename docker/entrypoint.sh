@@ -1,41 +1,41 @@
 #!/bin/bash
-# entrypoint.sh — Container entrypoint for Maestro
+# entrypoint.sh — Container entrypoint for Takuto
 #
 # Modes:
 #   setup  — required: GitHub + Atlassian auth; optional: Claude, Cursor, report generation
-#   (default) — egress rules, preflight, compose_up_commands, start Maestro
+#   (default) — egress rules, preflight, compose_up_commands, start Takuto
 #
-# Root performs privileged work, then re-execs as maestro (see id -u check).
+# Root performs privileged work, then re-execs as takuto (see id -u check).
 
 set -euo pipefail
 
 # ─── Root preamble (runs only as root) ──────────────────────────────────────
 if [ "$(id -u)" = "0" ]; then
-    if [ -f /etc/maestro/env ]; then
+    if [ -f /etc/takuto/env ]; then
         set -a
-        source /etc/maestro/env
+        source /etc/takuto/env
         set +a
     fi
 
-    # Named volumes often arrive root-owned; maestro must own auth trees so runtime (and optional
+    # Named volumes often arrive root-owned; takuto must own auth trees so runtime (and optional
     # [docker] compose_up_commands) can write there.
-    chown_maestro_tree() {
+    chown_takuto_tree() {
         local dir=$1
         [ -e "$dir" ] || return 0
-        if ! chown -R maestro:maestro "$dir"; then
-            echo "[maestro] WARNING: chown maestro:maestro $dir failed (hooks writing under this path may see Permission denied)" >&2
+        if ! chown -R takuto:takuto "$dir"; then
+            echo "[takuto] WARNING: chown takuto:takuto $dir failed (hooks writing under this path may see Permission denied)" >&2
         fi
     }
-    chown_maestro_tree /home/maestro/.maestro
-    chown_maestro_tree /home/maestro/.claude
-    chown_maestro_tree /home/maestro/.cursor
-    chown_maestro_tree /home/maestro/.agents
-    chown_maestro_tree /home/maestro/.config
-    chown_maestro_tree /home/maestro/.local
-    chown_maestro_tree /home/maestro/.npm
-    chown_maestro_tree /home/maestro/.aws
-    chown_maestro_tree /workspace
-    chown_maestro_tree /workspaces
+    chown_takuto_tree /home/takuto/.takuto
+    chown_takuto_tree /home/takuto/.claude
+    chown_takuto_tree /home/takuto/.cursor
+    chown_takuto_tree /home/takuto/.agents
+    chown_takuto_tree /home/takuto/.config
+    chown_takuto_tree /home/takuto/.local
+    chown_takuto_tree /home/takuto/.npm
+    chown_takuto_tree /home/takuto/.aws
+    chown_takuto_tree /workspace
+    chown_takuto_tree /workspaces
 
     if [ "${1:-}" != "setup" ] && [ "${1:-}" != "test-workflow" ]; then
         if iptables -L -n >/dev/null 2>&1; then
@@ -47,8 +47,8 @@ if [ "$(id -u)" = "0" ]; then
         fi
     fi
 
-    # Task #37 (Phase 2c, deployment fix): make /etc/maestro/ writable for the
-    # maestro user so ConfigWriter's atomic temp+rename can succeed at runtime.
+    # Task #37 (Phase 2c, deployment fix): make /etc/takuto/ writable for the
+    # takuto user so ConfigWriter's atomic temp+rename can succeed at runtime.
     # The directory itself comes from a host bind mount; the mountpoint's
     # container-side ownership is fixed here at boot. Without this every
     # dashboard config save (PUT /api/config/agent) is in-memory only and lost
@@ -61,45 +61,45 @@ if [ "$(id -u)" = "0" ]; then
     # only the directory entry flips. If the chown fails (e.g. read-only mount
     # in a CI sanity-check), the failure is swallowed and the boot-time
     # `config_dir_not_writable` SystemStatus warning surfaces the issue.
-    if [ -d /etc/maestro ]; then
-        chown maestro:maestro /etc/maestro 2>/dev/null || \
-            echo "[maestro] WARNING: chown /etc/maestro failed (dashboard config saves may not persist)" >&2
+    if [ -d /etc/takuto ]; then
+        chown takuto:takuto /etc/takuto 2>/dev/null || \
+            echo "[takuto] WARNING: chown /etc/takuto failed (dashboard config saves may not persist)" >&2
     fi
 
     # ─── Task #48: bootstrap_provisioning ────────────────────────────────
     #
-    # Read `[provisioning].install_commands` from /etc/maestro/config.toml
-    # via `maestro provisioning sha` + `maestro provisioning commands`,
+    # Read `[provisioning].install_commands` from /etc/takuto/config.toml
+    # via `takuto provisioning sha` + `takuto provisioning commands`,
     # and install whatever the admin has requested into the shared
-    # `maestro-tools` volume. SHA-gated: an unchanged install_commands
+    # `takuto-tools` volume. SHA-gated: an unchanged install_commands
     # list takes the fast path and skips re-running.
     #
     # The volume is bind-mounted RO into every spawned worker / editor /
-    # run-command, and `/opt/maestro-tools/bin` is FIRST on PATH, so
+    # run-command, and `/opt/takuto-tools/bin` is FIRST on PATH, so
     # anything dropped here:
-    #   (a) is available to every container Maestro spawns, and
+    #   (a) is available to every container Takuto spawns, and
     #   (b) SHADOWS baked tools of the same name (admin's pin-a-version
     #       lever).
     #
     # Failure mode: per-command failures log a WARNING but do NOT abort
-    # the maestro boot. ONLY on full success (all commands exit 0) is
+    # the takuto boot. ONLY on full success (all commands exit 0) is
     # the new SHA written, so partial-failure boots retry on the next
     # restart.
     #
     # Skipped in `setup` / `test-workflow` modes (interactive flows that
     # don't need the tools volume).
     bootstrap_provisioning() {
-        local SHA_FILE=/opt/maestro-tools/.provisioning-sha
-        local BIN_DIR=/opt/maestro-tools/bin
+        local SHA_FILE=/opt/takuto-tools/.provisioning-sha
+        local BIN_DIR=/opt/takuto-tools/bin
 
         if [ ! -f "$CONFIG_FILE_FOR_PROV" ]; then
-            echo "[maestro-provisioning] skip: no config file at $CONFIG_FILE_FOR_PROV"
+            echo "[takuto-provisioning] skip: no config file at $CONFIG_FILE_FOR_PROV"
             return 0
         fi
 
         local CURRENT_SHA
-        if ! CURRENT_SHA=$(/usr/local/bin/maestro --config "$CONFIG_FILE_FOR_PROV" provisioning sha 2>/dev/null); then
-            echo "[maestro-provisioning] WARN: unable to compute provisioning SHA — skipping install pass" >&2
+        if ! CURRENT_SHA=$(/usr/local/bin/takuto --config "$CONFIG_FILE_FOR_PROV" provisioning sha 2>/dev/null); then
+            echo "[takuto-provisioning] WARN: unable to compute provisioning SHA — skipping install pass" >&2
             return 0
         fi
         CURRENT_SHA="${CURRENT_SHA%%[[:space:]]*}"
@@ -109,14 +109,14 @@ if [ "$(id -u)" = "0" ]; then
         local CMD_COUNT=0
         while IFS= read -r -d '' _cmd; do
             CMD_COUNT=$((CMD_COUNT + 1))
-        done < <(/usr/local/bin/maestro --config "$CONFIG_FILE_FOR_PROV" provisioning commands 2>/dev/null || true)
+        done < <(/usr/local/bin/takuto --config "$CONFIG_FILE_FOR_PROV" provisioning commands 2>/dev/null || true)
 
-        # Ensure the volume mountpoint exists and is owned by maestro
-        # (the install commands typically run `runuser -u maestro --`
+        # Ensure the volume mountpoint exists and is owned by takuto
+        # (the install commands typically run `runuser -u takuto --`
         # for user-scope operations and need a writable parent).
         mkdir -p "$BIN_DIR"
-        chown -R maestro:maestro /opt/maestro-tools 2>/dev/null || true
-        chmod 0755 /opt/maestro-tools "$BIN_DIR"
+        chown -R takuto:takuto /opt/takuto-tools 2>/dev/null || true
+        chmod 0755 /opt/takuto-tools "$BIN_DIR"
 
         # Fast path: SHA unchanged → skip.
         if [ -f "$SHA_FILE" ]; then
@@ -124,7 +124,7 @@ if [ "$(id -u)" = "0" ]; then
             STORED_SHA=$(cat "$SHA_FILE" 2>/dev/null || true)
             STORED_SHA="${STORED_SHA%%[[:space:]]*}"
             if [ -n "$STORED_SHA" ] && [ "$STORED_SHA" = "$CURRENT_SHA" ]; then
-                echo "[maestro-provisioning] SHA matched, skipping ($CMD_COUNT commands; sha=$CURRENT_SHA)"
+                echo "[takuto-provisioning] SHA matched, skipping ($CMD_COUNT commands; sha=$CURRENT_SHA)"
                 return 0
             fi
         fi
@@ -132,38 +132,38 @@ if [ "$(id -u)" = "0" ]; then
         # Slow path: run each install_command. Empty list → write SHA + return.
         if [ "$CMD_COUNT" -eq 0 ]; then
             echo "$CURRENT_SHA" > "$SHA_FILE"
-            echo "[maestro-provisioning] no install_commands configured; recorded empty-list SHA"
+            echo "[takuto-provisioning] no install_commands configured; recorded empty-list SHA"
             return 0
         fi
 
-        echo "[maestro-provisioning] running $CMD_COUNT install commands (sha=$CURRENT_SHA)..."
-        export MAESTRO_TOOLS_BIN="$BIN_DIR"
+        echo "[takuto-provisioning] running $CMD_COUNT install commands (sha=$CURRENT_SHA)..."
+        export TAKUTO_TOOLS_BIN="$BIN_DIR"
         local IDX=0 OK=0 FAIL=0
         while IFS= read -r -d '' _cmd; do
             IDX=$((IDX + 1))
             if bash -c "$_cmd"; then
-                echo "[maestro-provisioning] cmd $IDX/$CMD_COUNT: ok"
+                echo "[takuto-provisioning] cmd $IDX/$CMD_COUNT: ok"
                 OK=$((OK + 1))
             else
                 local RC=$?
-                echo "[maestro-provisioning] cmd $IDX/$CMD_COUNT: WARN (rc=$RC) — continuing" >&2
+                echo "[takuto-provisioning] cmd $IDX/$CMD_COUNT: WARN (rc=$RC) — continuing" >&2
                 FAIL=$((FAIL + 1))
             fi
-        done < <(/usr/local/bin/maestro --config "$CONFIG_FILE_FOR_PROV" provisioning commands 2>/dev/null)
-        unset MAESTRO_TOOLS_BIN
+        done < <(/usr/local/bin/takuto --config "$CONFIG_FILE_FOR_PROV" provisioning commands 2>/dev/null)
+        unset TAKUTO_TOOLS_BIN
 
         if [ "$FAIL" -eq 0 ]; then
             echo "$CURRENT_SHA" > "$SHA_FILE"
-            echo "[maestro-provisioning] done: $OK/$CMD_COUNT ok; sha recorded ($CURRENT_SHA)"
+            echo "[takuto-provisioning] done: $OK/$CMD_COUNT ok; sha recorded ($CURRENT_SHA)"
         else
-            echo "[maestro-provisioning] done: $OK/$CMD_COUNT ok, $FAIL failed; sha NOT recorded — retry on next boot" >&2
+            echo "[takuto-provisioning] done: $OK/$CMD_COUNT ok, $FAIL failed; sha NOT recorded — retry on next boot" >&2
         fi
     }
 
     # config.toml path the CLI reads — same default the rest of the
     # entrypoint uses but resolved before setpriv (this var is also set
-    # in the maestro-user section below for the server itself).
-    CONFIG_FILE_FOR_PROV="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
+    # in the takuto-user section below for the server itself).
+    CONFIG_FILE_FOR_PROV="${TAKUTO_CONFIG:-/etc/takuto/config.toml}"
     if [ "${1:-}" != "setup" ] && [ "${1:-}" != "test-workflow" ]; then
         bootstrap_provisioning || true
     fi
@@ -172,21 +172,21 @@ if [ "$(id -u)" = "0" ]; then
     # controlling terminal is preserved. runuser calls setsid() for PAM session management, which
     # detaches from the controlling TTY — interactive CLI prompts (e.g. claude auth login) then
     # cannot show their token-entry prompt because tcgetpgrp() returns ENOTTY.
-    echo "[maestro] Starting as maestro user (preflight, hooks, server)..."
-    _uid=$(id -u maestro)
-    _gid=$(id -g maestro)
+    echo "[takuto] Starting as takuto user (preflight, hooks, server)..."
+    _uid=$(id -u takuto)
+    _gid=$(id -g takuto)
     exec setpriv --reuid="$_uid" --regid="$_gid" --init-groups -- /usr/local/bin/entrypoint.sh "$@"
 fi
 
-# ─── Everything below runs as the maestro user ───────────────────────────────
+# ─── Everything below runs as the takuto user ───────────────────────────────
 
-export HOME=/home/maestro
-export MAESTRO_HOME=/home/maestro
+export HOME=/home/takuto
+export TAKUTO_HOME=/home/takuto
 # Match docker-compose cursor-auth volume so `agent login` (setup) and `agent` (runtime) use the same store.
 export CURSOR_CONFIG_DIR="${CURSOR_CONFIG_DIR:-$HOME/.cursor}"
-export MISE_DATA_DIR="/home/maestro/.local/share/mise"
-export MISE_CACHE_DIR="/home/maestro/.cache/mise"
-export MISE_CONFIG_DIR="/home/maestro/.config/mise"
+export MISE_DATA_DIR="/home/takuto/.local/share/mise"
+export MISE_CACHE_DIR="/home/takuto/.cache/mise"
+export MISE_CONFIG_DIR="/home/takuto/.config/mise"
 export MISE_TRUST_ALL_CONFIGS=1
 export MISE_YES=1
 mkdir -p "$MISE_DATA_DIR/shims" "$MISE_CACHE_DIR" "$MISE_CONFIG_DIR"
@@ -197,21 +197,21 @@ if [ ! -f "$HOME/.claude.json" ]; then
     backup=$(ls -t "$HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1) || true
     if [ -n "$backup" ]; then
         cp "$backup" "$HOME/.claude.json"
-        echo "[maestro] Restored .claude.json from backup"
+        echo "[takuto] Restored .claude.json from backup"
     fi
 fi
 
-CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
+CONFIG_FILE="${TAKUTO_CONFIG:-/etc/takuto/config.toml}"
 
 # Optional host engine socket — warn early when the mount exists but this user cannot use it.
 if [ -e /var/run/docker.sock ]; then
     if [ ! -S /var/run/docker.sock ]; then
-        echo "[maestro] WARNING: /var/run/docker.sock exists but is not a Unix socket (wrong host bind path?)" >&2
+        echo "[takuto] WARNING: /var/run/docker.sock exists but is not a Unix socket (wrong host bind path?)" >&2
     elif [ ! -r /var/run/docker.sock ] || [ ! -w /var/run/docker.sock ]; then
-        echo "[maestro] WARNING: /var/run/docker.sock is not readable/writable as uid=$(id -u) gid=$(id -g)." >&2
-        echo "[maestro]          If you use rootless Podman, its socket is often 0600 — rebuild with MAESTRO_UID = host id -u" >&2
-        echo "[maestro]          (see README \"Host container socket\"; host id -g is not used — it often conflicts with Debian)." >&2
-        echo "[maestro]          Consider using the DinD sidecar instead (docker-compose.dind.yml) — see README." >&2
+        echo "[takuto] WARNING: /var/run/docker.sock is not readable/writable as uid=$(id -u) gid=$(id -g)." >&2
+        echo "[takuto]          If you use rootless Podman, its socket is often 0600 — rebuild with TAKUTO_UID = host id -u" >&2
+        echo "[takuto]          (see README \"Host container socket\"; host id -g is not used — it often conflicts with Debian)." >&2
+        echo "[takuto]          Consider using the DinD sidecar instead (docker-compose.dind.yml) — see README." >&2
     fi
 fi
 
@@ -237,7 +237,7 @@ if [ "${1:-}" = "setup" ]; then
     # causing the callback to never arrive and the auth flow to hang with no paste prompt.
     export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
 
-    echo "=== Maestro Setup ==="
+    echo "=== Takuto Setup ==="
     echo "Required: GitHub CLI + agent provider ($agent_provider). Atlassian CLI (acli) required only when ticketing_system = jira (current: $ticketing_system)."
     echo "Repository cloning is now handled via the dashboard (POST /api/repos/clone)."
     echo ""
@@ -363,7 +363,7 @@ if [ "${1:-}" = "setup" ]; then
     elif [ "$agent_provider" = "cursor" ]; then
         if ! command -v agent >/dev/null 2>&1; then
             echo "ERROR: Cursor Agent CLI (agent) not found on PATH."
-            echo "       Install Cursor CLI or set CURSOR_API_KEY in maestro.env."
+            echo "       Install Cursor CLI or set CURSOR_API_KEY in takuto.env."
             exit 1
         fi
         if [ -n "${CURSOR_API_KEY:-}" ]; then
@@ -432,7 +432,7 @@ if [ "${1:-}" = "setup" ]; then
 
     echo "=== Setup complete ==="
     echo "Auth and workspace data are persisted in Docker volumes where configured."
-    echo "Start Maestro with: docker compose up"
+    echo "Start Takuto with: docker compose up"
     exit 0
 fi
 
@@ -444,93 +444,93 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo "" >&2
     echo "ERROR: config.toml not found at $CONFIG_FILE" >&2
     echo "" >&2
-    echo "  The Maestro image does not include a default configuration." >&2
+    echo "  The Takuto image does not include a default configuration." >&2
     echo "  You must mount your config file when starting the container." >&2
     echo "" >&2
     echo "  docker-compose example (already in docker-compose.yml):" >&2
     echo "    volumes:" >&2
-    echo "      - ./config.toml:/etc/maestro/config.toml:ro" >&2
+    echo "      - ./config.toml:/etc/takuto/config.toml:ro" >&2
     echo "" >&2
     echo "  docker run example:" >&2
-    echo "    docker run -v \$(pwd)/config.toml:/etc/maestro/config.toml:ro maestro" >&2
+    echo "    docker run -v \$(pwd)/config.toml:/etc/takuto/config.toml:ro takuto" >&2
     echo "" >&2
     echo "  A reference example is available inside the image at:" >&2
-    echo "    /etc/maestro/examples/config.toml.example" >&2
+    echo "    /etc/takuto/examples/config.toml.example" >&2
     echo "  Copy it to your host and customize:" >&2
-    echo "    docker run --rm --entrypoint cat maestro /etc/maestro/examples/config.toml.example > config.toml" >&2
+    echo "    docker run --rm --entrypoint cat takuto /etc/takuto/examples/config.toml.example > config.toml" >&2
     echo "" >&2
     exit 1
 fi
 
-if [ ! -f /etc/maestro/env ]; then
-    echo "[maestro] WARNING: maestro.env not mounted at /etc/maestro/env." >&2
-    echo "[maestro]          This file is optional but recommended for API tokens and secrets." >&2
-    echo "[maestro]          Mount it with: -v ./maestro.env:/etc/maestro/env:ro" >&2
+if [ ! -f /etc/takuto/env ]; then
+    echo "[takuto] WARNING: takuto.env not mounted at /etc/takuto/env." >&2
+    echo "[takuto]          This file is optional but recommended for API tokens and secrets." >&2
+    echo "[takuto]          Mount it with: -v ./takuto.env:/etc/takuto/env:ro" >&2
 fi
 
-echo "[maestro] Running auth preflight..."
-# Phase 0 (04_architecture.md §1, §8): `maestro preflight` now always exits 0
+echo "[takuto] Running auth preflight..."
+# Phase 0 (04_architecture.md §1, §8): `takuto preflight` now always exits 0
 # under normal mode — every former hard-error becomes a structured warning
 # served from GET /api/onboarding/status. The block below is retained for ONE
 # release as a back-compat fallback: when the SQLite DB is unavailable the UI
 # cannot query the endpoint, so we still surface stderr text via the legacy
 # env var. The CLI's `--strict` flag (not used here) is the CI hard-fail mode.
 PREFLIGHT_ERROR=""
-if ! PREFLIGHT_OUT=$(/usr/local/bin/maestro --config "$CONFIG_FILE" preflight 2>&1); then
+if ! PREFLIGHT_OUT=$(/usr/local/bin/takuto --config "$CONFIG_FILE" preflight 2>&1); then
     PREFLIGHT_ERROR="$PREFLIGHT_OUT"
-    echo "[maestro] Preflight reported a failure: $PREFLIGHT_ERROR" >&2
-    echo "[maestro] Starting web server in degraded mode — UI reads GET /api/onboarding/status." >&2
+    echo "[takuto] Preflight reported a failure: $PREFLIGHT_ERROR" >&2
+    echo "[takuto] Starting web server in degraded mode — UI reads GET /api/onboarding/status." >&2
 fi
 # Legacy — UI reads from GET /api/onboarding/status going forward; this env var
 # is the fallback when the DB is unavailable.
-export MAESTRO_PREFLIGHT_ERROR="$PREFLIGHT_ERROR"
+export TAKUTO_PREFLIGHT_ERROR="$PREFLIGHT_ERROR"
 
 # When using a DinD sidecar (DOCKER_HOST=tcp://...), wait for the daemon.
 # Compose depends_on + healthcheck handles most of this, but a brief poll
 # avoids a race if compose_up_commands fire before the health check passes.
 if [ -n "${DOCKER_HOST:-}" ] && [[ "$DOCKER_HOST" == tcp://* ]]; then
-    echo "[maestro] Waiting for Docker daemon at $DOCKER_HOST..."
+    echo "[takuto] Waiting for Docker daemon at $DOCKER_HOST..."
     for i in $(seq 1 30); do
         if docker info >/dev/null 2>&1; then
-            echo "[maestro] Docker daemon is ready."
+            echo "[takuto] Docker daemon is ready."
             break
         fi
         if [ "$i" = 30 ]; then
-            echo "[maestro] WARNING: Docker daemon at $DOCKER_HOST not reachable after 30s." >&2
-            echo "[maestro]          compose_up_commands that need docker may fail." >&2
+            echo "[takuto] WARNING: Docker daemon at $DOCKER_HOST not reachable after 30s." >&2
+            echo "[takuto]          compose_up_commands that need docker may fail." >&2
         fi
         sleep 1
     done
 
     # After daemon is ready, ensure worker image is available.
-    # Priority: MAESTRO_WORKER_IMAGE env > MAESTRO_REGISTRY_IMAGE (baked into image) > maestro:latest
-    WORKER_IMAGE="${MAESTRO_WORKER_IMAGE:-${MAESTRO_REGISTRY_IMAGE:-maestro:latest}}"
+    # Priority: TAKUTO_WORKER_IMAGE env > TAKUTO_REGISTRY_IMAGE (baked into image) > takuto:latest
+    WORKER_IMAGE="${TAKUTO_WORKER_IMAGE:-${TAKUTO_REGISTRY_IMAGE:-takuto:latest}}"
     if ! docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
-        echo "[maestro] Worker image '$WORKER_IMAGE' not found on DinD, pulling..."
+        echo "[takuto] Worker image '$WORKER_IMAGE' not found on DinD, pulling..."
         if docker pull "$WORKER_IMAGE"; then
-            echo "[maestro] Worker image '$WORKER_IMAGE' pulled successfully."
-            # Also tag as maestro:latest so discover_worker_image fallback works
-            docker tag "$WORKER_IMAGE" maestro:latest 2>/dev/null || true
+            echo "[takuto] Worker image '$WORKER_IMAGE' pulled successfully."
+            # Also tag as takuto:latest so discover_worker_image fallback works
+            docker tag "$WORKER_IMAGE" takuto:latest 2>/dev/null || true
         else
-            echo "[maestro] WARNING: Failed to pull '$WORKER_IMAGE'." >&2
-            echo "[maestro]          Workflow isolation requires the worker image in DinD." >&2
-            echo "[maestro]          Run 'make load-worker' to load the local image, or check MAESTRO_WORKER_IMAGE." >&2
+            echo "[takuto] WARNING: Failed to pull '$WORKER_IMAGE'." >&2
+            echo "[takuto]          Workflow isolation requires the worker image in DinD." >&2
+            echo "[takuto]          Run 'make load-worker' to load the local image, or check TAKUTO_WORKER_IMAGE." >&2
         fi
     fi
 fi
 
-echo "[maestro] Running docker startup hooks (compose_up_commands)..."
-if ! /usr/local/bin/maestro --config "$CONFIG_FILE" docker-hooks startup; then
+echo "[takuto] Running docker startup hooks (compose_up_commands)..."
+if ! /usr/local/bin/takuto --config "$CONFIG_FILE" docker-hooks startup; then
     HOOK_ERR="Docker startup hooks (compose_up_commands) failed — check logs for details."
-    MAESTRO_PREFLIGHT_ERROR="${MAESTRO_PREFLIGHT_ERROR:+${MAESTRO_PREFLIGHT_ERROR}
+    TAKUTO_PREFLIGHT_ERROR="${TAKUTO_PREFLIGHT_ERROR:+${TAKUTO_PREFLIGHT_ERROR}
 }${HOOK_ERR}"
-    export MAESTRO_PREFLIGHT_ERROR
-    echo "[maestro] WARNING: Startup hooks failed — continuing in degraded mode." >&2
+    export TAKUTO_PREFLIGHT_ERROR
+    echo "[takuto] WARNING: Startup hooks failed — continuing in degraded mode." >&2
 fi
 
 
-export HOME="/home/maestro"
-export USER="maestro"
+export HOME="/home/takuto"
+export USER="takuto"
 
 # Multi-workspace support: repos under /workspaces/ may be cloned by a different
 # user/process. The wildcard safe.directory is necessary inside the container;
@@ -541,5 +541,5 @@ gh auth setup-git 2>/dev/null || true
 # Rewrite SSH GitHub URLs to HTTPS so the gh credential helper handles auth.
 # Without this, git-over-SSH fails because no SSH keys are persisted across restarts.
 git config --global url."https://github.com/".insteadOf "git@github.com:" 2>/dev/null || true
-echo "[maestro] Starting Maestro server..."
-exec /usr/local/bin/maestro "$@"
+echo "[takuto] Starting Takuto server..."
+exec /usr/local/bin/takuto "$@"

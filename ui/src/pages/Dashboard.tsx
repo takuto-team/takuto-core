@@ -198,7 +198,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         onSaved={fetchWorkflows}
       />
       <footer className="py-3 text-center">
-        <span className="text-xs text-gray-600">Maestro v{__APP_VERSION__}</span>
+        <span className="text-xs text-gray-600">Takuto v{__APP_VERSION__}</span>
       </footer>
       <SystemErrorAlert errors={systemErrors} onDismiss={dismissError} />
     </div>

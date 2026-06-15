@@ -172,7 +172,7 @@ function DeniedExtraArgPreview() {
   // shows the rendered error toast in the corner.
   useState(() => {
     showToast(
-      "extra_args contains a Maestro-owned flag: --dangerously-skip-permissions (code: denied_extra_arg)",
+      "extra_args contains a Takuto-owned flag: --dangerously-skip-permissions (code: denied_extra_arg)",
       "error",
     );
     return null;
@@ -182,7 +182,7 @@ function DeniedExtraArgPreview() {
       The toast appears in the bottom-right corner — error variant from
       <code className="text-gray-200"> useToast</code>. Triggered when{" "}
       <code className="text-gray-200">putAgentConfig</code> rejects a
-      Maestro-owned extra arg.
+      Takuto-owned extra arg.
     </p>
   );
 }

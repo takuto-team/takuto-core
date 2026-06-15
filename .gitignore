@@ -2,16 +2,16 @@
 .DS_Store
 .claude/
 
-# Maestro local config (user-specific, not tracked)
-/.maestro/config.toml
-/.maestro/maestro.env
-/.maestro/workflows/*.toml
-!/.maestro/workflows/*.example.toml
+# Takuto local config (user-specific, not tracked)
+/.takuto/config.toml
+/.takuto/takuto.env
+/.takuto/workflows/*.toml
+!/.takuto/workflows/*.example.toml
 
 # Legacy root-level config (if still present)
 /config.toml
 .env
-/maestro.env
+/takuto.env
 
 # Local issue tracking files
 /issues
@@ -30,7 +30,7 @@ SECURITY_ASSESSMENT_CONTAINER.md
 /ui/storybook-static/
 
 # Distribution repository (nested git repo)
-/maestro-releases/
+/takuto-releases/
 
 # tmp folder
 /tmp
@@ -41,7 +41,7 @@ SECURITY_ASSESSMENT_CONTAINER.md
 # Gitleaks scan reports (the .gitleaks.toml config itself is tracked)
 gitleak-report.json
 
-.maestro
+.takuto
 
 .playwright-mcp
 .playwright-cli

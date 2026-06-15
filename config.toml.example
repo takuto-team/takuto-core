@@ -1,5 +1,5 @@
 # =============================================================================
-# Maestro configuration
+# Takuto configuration
 # =============================================================================
 #
 # This file has two kinds of settings:
@@ -33,12 +33,12 @@
 ticketing_system = "none"
 # Logging verbosity: trace | debug | info | warn | error. Startup/restart only.
 log_level = "info"
-# Docker image for isolated workflow containers. Default: auto-detected from this Maestro instance.
-# worker_image = "maestro:latest"
+# Docker image for isolated workflow containers. Default: auto-detected from this Takuto instance.
+# worker_image = "takuto:latest"
 # Path scanned for *.toml workflow definitions, resolved relative to this file. Startup/restart only.
 # workflow_definitions_dir = "workflows"
 # When true (default), the server auto-generates {data_dir}/secret.key on first
-# boot if neither MAESTRO_SECRET_KEY nor an existing keyfile is present. Set to
+# boot if neither TAKUTO_SECRET_KEY nor an existing keyfile is present. Set to
 # false in hardened environments where the key is provisioned out of band.
 # allow_auto_generate_secret_key = true
 # Skip real Jira/GitHub side effects (no assigns, transitions, or pushes); local
@@ -94,16 +94,16 @@ port = 8080
 # Allowed CORS origins. When empty (default), auto-computed from host and port
 # (e.g. http://localhost:8080 when host is 0.0.0.0).
 # Set explicitly when behind a reverse proxy or TLS terminator:
-#   cors_origins = ["https://maestro.example.com"]
+#   cors_origins = ["https://takuto.example.com"]
 # Multiple origins are supported (e.g. for dev + production access):
-#   cors_origins = ["http://localhost:8080", "https://maestro.example.com"]
+#   cors_origins = ["http://localhost:8080", "https://takuto.example.com"]
 # Startup-only — not changeable via PUT /api/config. Requires restart.
 cors_origins = []
 # Controls the `Secure` flag on the session cookie. When unset (default),
-# Maestro auto-detects: the flag is set when any `cors_origins` entry is
+# Takuto auto-detects: the flag is set when any `cors_origins` entry is
 # `https://…` OR when the inbound request carries `X-Forwarded-Proto: https`
 # (so a TLS-terminating reverse proxy is enough). Set explicitly to `true`
-# to force the flag on (e.g. when terminating TLS in front of Maestro without
+# to force the flag on (e.g. when terminating TLS in front of Takuto without
 # advertising `X-Forwarded-Proto`), or to `false` for local plain-HTTP testing.
 # cookie_secure = true
 # Whether a successful login deletes all prior sessions for the same user.
@@ -133,13 +133,13 @@ jql_filter = ""
 # acli_allowed_extra_prefixes = []   # advanced: extra allowed acli argv prefix lines (tokens per line)
 
 # --- GitHub App authentication (optional) ---
-# When configured, Maestro authenticates as a GitHub App bot identity instead
+# When configured, Takuto authenticates as a GitHub App bot identity instead
 # of the personal `gh` user. Commits and PRs will be attributed to
-# `maestro-bot[bot]` (visible in the GitHub UI).
+# `takuto-bot[bot]` (visible in the GitHub UI).
 #
 # All three fields (app_id, app_installation_id, and one private key source)
 # must be set to enable GitHub App authentication. Errors in the private key
-# or installation ID are non-fatal at startup — Maestro falls back to personal
+# or installation ID are non-fatal at startup — Takuto falls back to personal
 # `gh` auth and logs a warning.
 #
 # Required App permissions: contents (write), pull_requests (write), metadata (read).
@@ -154,10 +154,10 @@ jql_filter = ""
 # -----END RSA PRIVATE KEY-----
 # """
 # # Or: path to a PEM file (alternative to inline key).
-# # app_private_key_path = "/etc/maestro/github-app-key.pem"
+# # app_private_key_path = "/etc/takuto/github-app-key.pem"
 #
 # --- gh CLI allowlist (advanced) ---
-# Extra `gh` argv prefixes allowed beyond Maestro's built-in set.
+# Extra `gh` argv prefixes allowed beyond Takuto's built-in set.
 # Built-in: api, pr create, pr edit, auth login, auth setup-git, auth status.
 # Each entry is a whitespace-separated token line (e.g. "pr list").
 # Set to ["*"] to allow ALL gh subcommands (disables the gh allowlist entirely).
@@ -165,10 +165,10 @@ jql_filter = ""
 
 # --- External database backend ---
 #
-# By default, Maestro stores users, sessions, credentials, and audit data in a
-# local SQLite file at {data_dir}/maestro.db. For multi-instance deployments
+# By default, Takuto stores users, sessions, credentials, and audit data in a
+# local SQLite file at {data_dir}/takuto.db. For multi-instance deployments
 # (or operators who want to centralise auth state in their existing DB), the
-# [database] block points Maestro at PostgreSQL, MySQL, or MariaDB.
+# [database] block points Takuto at PostgreSQL, MySQL, or MariaDB.
 #
 # Leaving the section out (or `connection = ""`) keeps the current SQLite
 # behaviour — zero-config default.
@@ -177,14 +177,14 @@ jql_filter = ""
 # require a process restart, same policy as `web.host` / `web.port`.
 #
 # [database]
-# # Connection URL. Empty / omitted → SQLite at {data_dir}/maestro.db.
+# # Connection URL. Empty / omitted → SQLite at {data_dir}/takuto.db.
 # # Supported schemes:
 # #   sqlite://path/to/file.db
 # #   postgres://user:pw@host:5432/db
 # #   postgresql://user:pw@host:5432/db   (alias)
 # #   mysql://user:pw@host:3306/db        (covers MariaDB)
 # # `GET /api/config` redacts the password component before returning.
-# connection = "postgres://maestro:s3cret@db.example:5432/maestro"
+# connection = "postgres://takuto:s3cret@db.example:5432/takuto"
 #
 # # Pool tuning (all optional). Defaults: 10 conns, 30 s acquire timeout,
 # # 10 min idle timeout.
@@ -198,7 +198,7 @@ jql_filter = ""
 # # the current process (recovery path).
 # # fail_fast = true
 #
-# # When true (default) and a legacy {data_dir}/maestro.db exists AND the
+# # When true (default) and a legacy {data_dir}/takuto.db exists AND the
 # # remote target has no `system_metadata.import_complete` row, perform a
 # # one-shot copy of every user-data table inside a single transaction at
 # # startup. Sessions are marked expired post-import so users re-authenticate.
@@ -290,14 +290,14 @@ title_keywords = []
 # =============================================================================
 
 [docker]
-# build_commands: optional `bash -c` steps during image build (see MAESTRO_BUILD_CONFIG in docker-compose).
-# Claude/Cursor skills: use a gitignored ./skills folder at the Maestro repo root; merged on container start (README).
+# build_commands: optional `bash -c` steps during image build (see TAKUTO_BUILD_CONFIG in docker-compose).
+# Claude/Cursor skills: use a gitignored ./skills folder at the Takuto repo root; merged on container start (README).
 # build_commands = [
 #   "apt-get update && apt-get install -y --no-install-recommends some-package",
 # ]
 build_commands = []
 
-# compose_up_commands: optional; run as maestro after preflight. Skills from ./skills do not require a hook here.
+# compose_up_commands: optional; run as takuto after preflight. Skills from ./skills do not require a hook here.
 compose_up_commands = []
 
 [editor]
@@ -340,13 +340,13 @@ compose_up_commands = []
 # Default git editor installed and configured inside every editor container.
 # Must be an apt package name (e.g. "nano", "vim", "micro", "helix").
 # When set, the package is installed via apt and `git config --global core.editor`
-# is updated for the maestro user so git commands (commit, rebase -i, etc.) open
+# is updated for the takuto user so git commands (commit, rebase -i, etc.) open
 # the chosen editor instead of failing with "unable to start editor 'editor'".
 # git_editor = "nano"
 
 # Shell commands run ONCE per editor container lifetime (guarded by a marker file).
 # Use for expensive one-time setup: apt packages, tool configuration, etc.
-# `/etc/maestro/env` is sourced before each command (API tokens available).
+# `/etc/takuto/env` is sourced before each command (API tokens available).
 # Mise installs persist in the shared mise volume across container restarts.
 # setup_commands = [
 #   "mise use -g zellij@latest neovim@latest",
@@ -375,68 +375,68 @@ extra_egress_hosts = []
 
 # ─── [provisioning] — admin-installed tools ─────────────────────────────
 #
-# Shell commands that install tools into the shared `maestro-tools`
-# Docker volume on maestro startup. The volume is bind-mounted READ-ONLY
-# into every container Maestro spawns (workers, editors, run-commands)
-# at `/opt/maestro-tools/bin`, and the maestro image prepends that path
+# Shell commands that install tools into the shared `takuto-tools`
+# Docker volume on takuto startup. The volume is bind-mounted READ-ONLY
+# into every container Takuto spawns (workers, editors, run-commands)
+# at `/opt/takuto-tools/bin`, and the takuto image prepends that path
 # to `$PATH` — so anything installed here is on PATH everywhere AND can
 # OVERRIDE a baked tool by name (PATH precedence).
 #
 # Behavior:
-#   • SHA-gated: maestro hashes the (canonicalized) `install_commands`
+#   • SHA-gated: takuto hashes the (canonicalized) `install_commands`
 #     list. If the SHA matches the recorded one in
-#     `/opt/maestro-tools/.provisioning-sha`, the install pass is SKIPPED.
+#     `/opt/takuto-tools/.provisioning-sha`, the install pass is SKIPPED.
 #     Edit this list → SHA changes → installs run again.
 #   • Each command runs as ROOT via `bash -c "$cmd"`. To run as the
-#     maestro user (e.g. `mise install`), wrap with `runuser -u maestro --`.
-#   • `$MAESTRO_TOOLS_BIN` expands to `/opt/maestro-tools/bin`.
-#   • Per-command failures log a WARNING but do NOT abort maestro boot.
+#     takuto user (e.g. `mise install`), wrap with `runuser -u takuto --`.
+#   • `$TAKUTO_TOOLS_BIN` expands to `/opt/takuto-tools/bin`.
+#   • Per-command failures log a WARNING but do NOT abort takuto boot.
 #     The SHA is only recorded on FULL success — partial-failure boots
 #     retry on the next restart.
 #
 # Decision guide (when do I use this vs a custom image?):
 #   • Single binary CLI tool (kubectl, terraform, a vendor CLI) → here.
 #   • Pin a baked tool to a specific version → here (PATH shadowing).
-#   • System packages (apt, libraries) → custom Dockerfile `FROM maestro:latest`.
+#   • System packages (apt, libraries) → custom Dockerfile `FROM takuto:latest`.
 #   • Extra env vars / mounts → docker-compose.override.yml.
-# See `docs/extending-maestro.md` for the full reference.
+# See `docs/extending-takuto.md` for the full reference.
 #
 # Force re-install (admin escape hatch):
-#   docker exec --user root maestro-core-maestro-1 \
-#     rm /opt/maestro-tools/.provisioning-sha && docker compose restart maestro
+#   docker exec --user root takuto-core-takuto-1 \
+#     rm /opt/takuto-tools/.provisioning-sha && docker compose restart takuto
 #
 # Wipe all customizations and start fresh:
-#   docker volume rm maestro-core_maestro-tools && docker compose up -d
+#   docker volume rm takuto-core_takuto-tools && docker compose up -d
 [provisioning]
 install_commands = [
   # fcli (Figma CLI). Migrated out of the baked image so admins can pin
   # the version or skip the install. amd64 prebuilt; other arches skipped.
-  '[ -f "$MAESTRO_TOOLS_BIN/fcli" ] || (ARCH=$(dpkg --print-architecture); [ "$ARCH" = "amd64" ] && curl -fsSL https://github.com/morphet81/figma-cli/releases/download/v0.2.0/fcli-v0.2.0-x86_64-unknown-linux-gnu.tar.gz -o /tmp/fcli.tar.gz && tar -xzf /tmp/fcli.tar.gz -C /tmp && install -m 0755 /tmp/fcli "$MAESTRO_TOOLS_BIN/fcli" && rm -rf /tmp/fcli /tmp/fcli.tar.gz || echo "WARN: fcli skipped on $ARCH")',
+  '[ -f "$TAKUTO_TOOLS_BIN/fcli" ] || (ARCH=$(dpkg --print-architecture); [ "$ARCH" = "amd64" ] && curl -fsSL https://github.com/morphet81/figma-cli/releases/download/v0.2.0/fcli-v0.2.0-x86_64-unknown-linux-gnu.tar.gz -o /tmp/fcli.tar.gz && tar -xzf /tmp/fcli.tar.gz -C /tmp && install -m 0755 /tmp/fcli "$TAKUTO_TOOLS_BIN/fcli" && rm -rf /tmp/fcli /tmp/fcli.tar.gz || echo "WARN: fcli skipped on $ARCH")',
 
   # lokalise2 (Lokalise CLI v2). Single Go binary.
-  '[ -f "$MAESTRO_TOOLS_BIN/lokalise2" ] || (ARCH=$(dpkg --print-architecture); case "$ARCH" in amd64) LA=x86_64;; arm64) LA=arm64;; *) LA="";; esac; [ -n "$LA" ] && curl -fSL https://github.com/lokalise/lokalise-cli-2-go/releases/latest/download/lokalise2_linux_${LA}.tar.gz -o /tmp/lk.tar.gz && tar -xzf /tmp/lk.tar.gz -C /tmp && install -m 0755 /tmp/lokalise2 "$MAESTRO_TOOLS_BIN/lokalise2" && rm -rf /tmp/lokalise2 /tmp/lk.tar.gz || echo "WARN: lokalise2 skipped on $ARCH")',
+  '[ -f "$TAKUTO_TOOLS_BIN/lokalise2" ] || (ARCH=$(dpkg --print-architecture); case "$ARCH" in amd64) LA=x86_64;; arm64) LA=arm64;; *) LA="";; esac; [ -n "$LA" ] && curl -fSL https://github.com/lokalise/lokalise-cli-2-go/releases/latest/download/lokalise2_linux_${LA}.tar.gz -o /tmp/lk.tar.gz && tar -xzf /tmp/lk.tar.gz -C /tmp && install -m 0755 /tmp/lokalise2 "$TAKUTO_TOOLS_BIN/lokalise2" && rm -rf /tmp/lokalise2 /tmp/lk.tar.gz || echo "WARN: lokalise2 skipped on $ARCH")',
 
   # figma-cli (npm-based). Installed into the tools volume so workers
   # see it without a global npm prefix override.
-  '[ -f "$MAESTRO_TOOLS_BIN/figma-cli" ] || (npm install -g --prefix "$MAESTRO_TOOLS_BIN/.npm" figma-cli && ln -sf "$MAESTRO_TOOLS_BIN/.npm/bin/figma-cli" "$MAESTRO_TOOLS_BIN/figma-cli")',
+  '[ -f "$TAKUTO_TOOLS_BIN/figma-cli" ] || (npm install -g --prefix "$TAKUTO_TOOLS_BIN/.npm" figma-cli && ln -sf "$TAKUTO_TOOLS_BIN/.npm/bin/figma-cli" "$TAKUTO_TOOLS_BIN/figma-cli")',
 
   # ─── Examples (uncomment to enable) ────────────────────────────────
   #
   # Pin claude to a specific version (overrides the baked @latest):
-  #   '[ -f "$MAESTRO_TOOLS_BIN/claude" ] || (npm install -g --prefix "$MAESTRO_TOOLS_BIN/.npm" @anthropic-ai/claude-code@2.1.140 && ln -sf "$MAESTRO_TOOLS_BIN/.npm/bin/claude" "$MAESTRO_TOOLS_BIN/claude")',
+  #   '[ -f "$TAKUTO_TOOLS_BIN/claude" ] || (npm install -g --prefix "$TAKUTO_TOOLS_BIN/.npm" @anthropic-ai/claude-code@2.1.140 && ln -sf "$TAKUTO_TOOLS_BIN/.npm/bin/claude" "$TAKUTO_TOOLS_BIN/claude")',
   #
   # Install kubectl for workflows that hit a Kubernetes cluster:
-  #   '[ -f "$MAESTRO_TOOLS_BIN/kubectl" ] || (curl -fsSLo "$MAESTRO_TOOLS_BIN/kubectl" https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x "$MAESTRO_TOOLS_BIN/kubectl")',
+  #   '[ -f "$TAKUTO_TOOLS_BIN/kubectl" ] || (curl -fsSLo "$TAKUTO_TOOLS_BIN/kubectl" https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x "$TAKUTO_TOOLS_BIN/kubectl")',
   #
   # Install AWS CLI v2 (removed from the bake — admin opts in here):
-  #   '[ -f "$MAESTRO_TOOLS_BIN/aws" ] || (curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/aws.zip && unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install --bin-dir "$MAESTRO_TOOLS_BIN" --install-dir "$MAESTRO_TOOLS_BIN/aws-cli" --update && rm -rf /tmp/aws*)',
+  #   '[ -f "$TAKUTO_TOOLS_BIN/aws" ] || (curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/aws.zip && unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install --bin-dir "$TAKUTO_TOOLS_BIN" --install-dir "$TAKUTO_TOOLS_BIN/aws-cli" --update && rm -rf /tmp/aws*)',
 ]
 
 # --- Dev-only knobs (leave commented in production) ---
 # When `mock_agent = true`, ClaudeSession::run_prompt and CursorSession::run_prompt
 # short-circuit into a scripted mock session — no real `claude` or `agent` process
 # is spawned, no API tokens are consumed. Designed for E2E tests and dashboard demos.
-# Honors the env var override `MAESTRO_DEV_MOCK_AGENT=1` (env wins over config).
+# Honors the env var override `TAKUTO_DEV_MOCK_AGENT=1` (env wins over config).
 # [dev]
 # mock_agent = false
 # mock_agent_script_path = "tmp/mock_script.txt"

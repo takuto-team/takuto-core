@@ -11,7 +11,7 @@
 //    CI job regenerates and fails if the committed TS differs from the Rust
 //    source of truth. Do NOT hand-edit the generated files or re-declare these
 //    shapes here. To change one, edit the Rust DTO (e.g.
-//    `crates/maestro-web/src/routes/workflows/dto.rs`) and run
+//    `crates/takuto-web/src/routes/workflows/dto.rs`) and run
 //    `./scripts/generate-ts-types.sh`, then commit the regenerated files.
 //      Generated set: WorkflowSummary, RunCommandStatus, TerminalLine,
 //      WorkflowCounts, StepLog, StepStatus, GitHubRepo, GitHubIssue,
@@ -307,7 +307,7 @@ export interface ConfigResponse {
   repo_html_url?: string | null;
   /**
    * Present on the response of `PUT /api/config` and `PUT /api/config/agent`.
-   * Anchored to `crates/maestro-web/src/routes/config.rs::UpdateConfigResponse`
+   * Anchored to `crates/takuto-web/src/routes/config.rs::UpdateConfigResponse`
    * (the backend uses `#[serde(flatten)]` on the config, so these fields
    * appear at the top level alongside `general` / `agent` / etc.).
    *
@@ -425,7 +425,7 @@ export type ProviderCredentialKind = "api_key" | "cli_state" | "oauth_token";
 /**
  * What credential the user currently has stored for the deployment-wide
  * active provider. Matches the wire shape returned by
- * `crates/maestro-web/src/routes/credentials.rs::ProviderCredentialStatus`
+ * `crates/takuto-web/src/routes/credentials.rs::ProviderCredentialStatus`
  * — do NOT rename these fields without also updating the Rust struct.
  *
  * - `provider`: "claude" | "cursor" | "codex" | "opencode" — the provider
@@ -447,7 +447,7 @@ export interface UserProviderCredentialStatus {
  * deployment-active provider a user can hold **two** rows in parallel —
  * one `api_key` row and one `cli_state` row — so the UI can render an
  * independent "Connected" pill per kind. Matches the Rust struct
- * `crates/maestro-web/src/routes/credentials.rs::ProviderCredentialBundle`.
+ * `crates/takuto-web/src/routes/credentials.rs::ProviderCredentialBundle`.
  *
  * Both `api_key` and `cli_state` are independently nullable. The backend
  * elides absent slots from the wire JSON (serde
@@ -481,7 +481,7 @@ export type GithubAuthMode =
 
 /**
  * Per-user GitHub credential. Matches the wire shape returned by
- * `crates/maestro-web/src/routes/credentials.rs::GithubCredentialStatus`
+ * `crates/takuto-web/src/routes/credentials.rs::GithubCredentialStatus`
  * — do NOT add fields without also updating the Rust struct.
  *
  * The presence of a PAT is implied by the parent's `github` field being

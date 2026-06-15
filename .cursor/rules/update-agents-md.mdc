@@ -1,17 +1,17 @@
 ---
 description: >-
-  New sessions must read AGENTS.md first for Maestro context; keep AGENTS.md
+  New sessions must read AGENTS.md first for Takuto context; keep AGENTS.md
   updated when project behavior or structure changes.
 alwaysApply: true
 ---
 
-# Maestro — agent onboarding and docs
+# Takuto — agent onboarding and docs
 
 ## Read `AGENTS.md` first (every new session)
 
 For **any new agent session** in this repository—before reading `README.md`, `ARCHITECTURE.md`, other docs, or exploring the codebase—**open and read the repository-root file `AGENTS.md` in full** as the **first** project file you consult.
 
-Treat it as the **mandatory entry point**: it explains what Maestro does, how the crates fit together, the workflow engine, Claude integration, and the HTTP/WebSocket API (including non-obvious details such as workflow map keys vs REST path parameters).
+Treat it as the **mandatory entry point**: it explains what Takuto does, how the crates fit together, the workflow engine, Claude integration, and the HTTP/WebSocket API (including non-obvious details such as workflow map keys vs REST path parameters).
 
 Only skip this step for work that **cannot** benefit from project context (e.g. a one-line typo in a file the user already specified with zero architectural impact). In all other cases, **start with `AGENTS.md`**.
 
@@ -26,7 +26,7 @@ In the **same change** (or immediately after), edit `AGENTS.md` whenever your ed
 - `ExternalActions` / dry-run semantics
 - REST paths, WebSocket payload shape, or static asset layout
 - New or removed `Config` fields or sections
-- Crate responsibilities or entrypoints (`maestro-cli`, `maestro-web`, `maestro-core`)
+- Crate responsibilities or entrypoints (`takuto-cli`, `takuto-web`, `takuto-core`)
 - Jira poller rules or integration surface
 
 ### When you can skip updates

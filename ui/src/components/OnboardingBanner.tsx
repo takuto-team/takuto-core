@@ -27,11 +27,11 @@ interface Props {
 }
 
 /** Canonical out-of-tree docs anchor for admin-side fixes. */
-const DOCS_URL = "https://github.com/morphet81/maestro/blob/main/AGENTS.md";
+const DOCS_URL = "https://github.com/takuto-team/takuto-cli/blob/main/AGENTS.md";
 
 /**
  * Per-warning-code deep-link spec. Keyed by the `code` field emitted by
- * `crates/maestro-core/src/docker_hooks.rs::collect_system_status`. Each
+ * `crates/takuto-core/src/docker_hooks.rs::collect_system_status`. Each
  * entry yields a `CtaSpec` describing how the right-hand "Set up" link
  * should render for that code.
  *
@@ -146,7 +146,7 @@ export function OnboardingBanner({
           </span>
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-red-300 text-sm">
-              Maestro is not ready — setup required
+              Takuto is not ready — setup required
             </p>
             {legacyPreflightError.split("\n").map((line, i) => (
               <p
@@ -159,7 +159,7 @@ export function OnboardingBanner({
             <p className="text-xs text-red-300/70 mt-1">
               Run{" "}
               <code className="bg-red-900/50 px-1 rounded">
-                docker compose run --rm -it maestro setup
+                docker compose run --rm -it takuto setup
               </code>{" "}
               to complete setup, then restart.
             </p>

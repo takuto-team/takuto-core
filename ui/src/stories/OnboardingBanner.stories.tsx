@@ -37,7 +37,7 @@ function healthy(): SystemStatus {
       mode: "app",
       app_configured: true,
       app_id: 12345,
-      app_name: "maestro-bot",
+      app_name: "takuto-bot",
     },
     provider: {
       selected: "claude",
@@ -104,7 +104,7 @@ export const GhAuthMissing: Story = {
           code: "gh_auth_missing",
           severity: "critical",
           message:
-            "GitHub authentication is missing. Maestro can't read repos, push commits, or open PRs.",
+            "GitHub authentication is missing. Takuto can't read repos, push commits, or open PRs.",
         },
       ],
     },

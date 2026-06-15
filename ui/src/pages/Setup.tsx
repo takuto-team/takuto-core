@@ -114,7 +114,7 @@ export function Setup({ onSetupComplete, onLogin }: Props) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="w-full max-w-md mx-4">
-          <h1 className="text-2xl font-bold text-white text-center mb-2">Maestro</h1>
+          <h1 className="text-2xl font-bold text-white text-center mb-2">Takuto</h1>
           <p className="text-sm text-gray-400 text-center mb-6">Account created successfully</p>
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-4">
             <div className="bg-amber-950 border border-amber-700 rounded-lg p-4">
@@ -172,7 +172,7 @@ export function Setup({ onSetupComplete, onLogin }: Props) {
   return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="w-full max-w-sm mx-4">
-        <h1 className="text-2xl font-bold text-white text-center mb-2">Maestro</h1>
+        <h1 className="text-2xl font-bold text-white text-center mb-2">Takuto</h1>
         <p className="text-sm text-gray-400 text-center mb-6">Create your admin account</p>
         <form
           onSubmit={handleSubmit}

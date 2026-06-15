@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Maestro includes the following third-party software.
+Takuto includes the following third-party software.
 
 ## Rust Dependencies
 

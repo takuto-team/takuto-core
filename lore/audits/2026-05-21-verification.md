@@ -1,4 +1,4 @@
-# Maestro — Phase Verification Log (2026-05-21 audit)
+# Takuto — Phase Verification Log (2026-05-21 audit)
 
 Tester regression coverage for the audit follow-up. Tracks the PO Verifier checks
 from `lore/audits/2026-05-21-plan.md` against the landed phases. Read-only
@@ -19,18 +19,18 @@ trim on `routes/workflows/mod.rs` (uncommitted, irrelevant to ACs).
 #### LOC against caps (PO production ≤ 600, `mod.rs` ≤ 200, tests ≤ 1000)
 
 ```
-     110 crates/maestro-core/src/config/agent_legacy.rs    ✓
-     518 crates/maestro-core/src/config/agent.rs           ✓ (≤600)
-     289 crates/maestro-core/src/config/general.rs         ✓
-     146 crates/maestro-core/src/config/git.rs             ✓
-      75 crates/maestro-core/src/config/jira.rs            ✓
-     278 crates/maestro-core/src/config/load.rs            ✓
-      99 crates/maestro-core/src/config/mod.rs             ✓ (≤200)
-      76 crates/maestro-core/src/config/patches.rs         ✓
-      84 crates/maestro-core/src/config/runtime.rs         ✓
-     121 crates/maestro-core/src/config/template.rs        ✓
-     781 crates/maestro-core/src/config/tests.rs           ✓ (≤1000 relaxed AC)
-     331 crates/maestro-core/src/config/web.rs             ✓
+     110 crates/takuto-core/src/config/agent_legacy.rs    ✓
+     518 crates/takuto-core/src/config/agent.rs           ✓ (≤600)
+     289 crates/takuto-core/src/config/general.rs         ✓
+     146 crates/takuto-core/src/config/git.rs             ✓
+      75 crates/takuto-core/src/config/jira.rs            ✓
+     278 crates/takuto-core/src/config/load.rs            ✓
+      99 crates/takuto-core/src/config/mod.rs             ✓ (≤200)
+      76 crates/takuto-core/src/config/patches.rs         ✓
+      84 crates/takuto-core/src/config/runtime.rs         ✓
+     121 crates/takuto-core/src/config/template.rs        ✓
+     781 crates/takuto-core/src/config/tests.rs           ✓ (≤1000 relaxed AC)
+     331 crates/takuto-core/src/config/web.rs             ✓
 ```
 
 All twelve files within the post-cleanup caps. The two follow-up commits
@@ -41,26 +41,26 @@ landed and resolved the earlier overages.
 
 | Check | Result |
 | ----- | ------ |
-| `crates/maestro-core/src/config.rs` removed | **PASS** |
+| `crates/takuto-core/src/config.rs` removed | **PASS** |
 | Every file within caps (above) | **PASS** |
 | `cargo build --workspace` zero warnings | **PASS** — `grep -cE "warning\|error"` = 0 |
-| `cargo test -p maestro-core --lib` | **PASS** — 659 passed, 0 failed, 1 ignored |
-| Consumer imports unchanged (`git grep -nE "use maestro_core::config" crates/`) | **PASS** — 26 hits resolve cleanly |
+| `cargo test -p takuto-core --lib` | **PASS** — 659 passed, 0 failed, 1 ignored |
+| Consumer imports unchanged (`git grep -nE "use takuto_core::config" crates/`) | **PASS** — 26 hits resolve cleanly |
 
 ### Phase 1 split 2 — `routes/workflows.rs` → `routes/workflows/`
 
 #### LOC against caps (PO production ≤ 500, `mod.rs` ≤ 150)
 
 ```
-      65 crates/maestro-web/src/routes/workflows/definitions.rs    ✓
-     281 crates/maestro-web/src/routes/workflows/dto.rs            ✓
-     434 crates/maestro-web/src/routes/workflows/editor.rs         ✓
-     198 crates/maestro-web/src/routes/workflows/lifecycle.rs      ✓
-     443 crates/maestro-web/src/routes/workflows/list.rs           ✓
-     218 crates/maestro-web/src/routes/workflows/manual.rs         ✓
-     151 crates/maestro-web/src/routes/workflows/mod.rs            ✓*
-     414 crates/maestro-web/src/routes/workflows/port_tracking.rs  ✓
-     330 crates/maestro-web/src/routes/workflows/run_commands.rs   ✓
+      65 crates/takuto-web/src/routes/workflows/definitions.rs    ✓
+     281 crates/takuto-web/src/routes/workflows/dto.rs            ✓
+     434 crates/takuto-web/src/routes/workflows/editor.rs         ✓
+     198 crates/takuto-web/src/routes/workflows/lifecycle.rs      ✓
+     443 crates/takuto-web/src/routes/workflows/list.rs           ✓
+     218 crates/takuto-web/src/routes/workflows/manual.rs         ✓
+     151 crates/takuto-web/src/routes/workflows/mod.rs            ✓*
+     414 crates/takuto-web/src/routes/workflows/port_tracking.rs  ✓
+     330 crates/takuto-web/src/routes/workflows/run_commands.rs   ✓
 ```
 
 \* `mod.rs` is 1 LOC over the ≤150 cap. **Rounding-range exception accepted by
@@ -72,7 +72,7 @@ fat methods). Eight production sub-modules all within the ≤500 cap.
 
 | Check | Result |
 | ----- | ------ |
-| `crates/maestro-web/src/routes/workflows.rs` removed | **PASS** |
+| `crates/takuto-web/src/routes/workflows.rs` removed | **PASS** |
 | Every sub-module within caps (above) | **PASS** |
 | No handler bodies in `mod.rs` (`grep -nE "^(async fn\|fn\|pub async fn\|pub fn) [a-z_]+.*Handler"`) | **PASS** — 0 hits |
 | Consumer imports unchanged (`git grep -nE "use crate::routes::workflows::" crates/`) | **PASS** — 1 hit resolves cleanly |
@@ -83,7 +83,7 @@ fat methods). Eight production sub-modules all within the ≤500 cap.
 | ----- | ------ |
 | `cargo build --workspace` zero warnings | **PASS** — `grep -cE "warning\|error"` = 0 |
 | `cargo test --workspace` | **PASS** — 1019 tests passed, 1 ignored, 0 failed across all crates + integration suites + doctests |
-| Public REST/WS surface preserved (cross-phase invariant #5) | **PASS by inference** — full workspace + 176 maestro-web integration tests green; no router-path changes flagged |
+| Public REST/WS surface preserved (cross-phase invariant #5) | **PASS by inference** — full workspace + 176 takuto-web integration tests green; no router-path changes flagged |
 | No new `Cargo.toml` dependencies | **PASS** for Phase 1 |
 
 Phase 1 ✓ **complete**.
@@ -100,23 +100,23 @@ Phase 1 ✓ **complete**.
 | `@latest` outside comments | **PASS** — 0 hits |
 | `curl … \| bash` outside comments | **PASS** — 0 hits; Cursor install replaced by pinned tarball + sha256 verify |
 | Runtime-stage `RUN` count ≤ 15 | **PASS** — 11 `RUN` lines (down from 26) |
-| `USER maestro` precedes `ENTRYPOINT` | **PASS (with caveat)** — see below |
-| `docker build --target runtime-base` succeeds | **PASS** — built locally to `maestro:slim-test` |
-| Runtime preamble comment present | **PASS** — line 41 `# Maestro runtime image — kitchen-sink bake…` |
+| `USER takuto` precedes `ENTRYPOINT` | **PASS (with caveat)** — see below |
+| `docker build --target runtime-base` succeeds | **PASS** — built locally to `takuto:slim-test` |
+| Runtime preamble comment present | **PASS** — line 41 `# Takuto runtime image — kitchen-sink bake…` |
 
-### Caveat — `USER maestro` immediately followed by `USER root`
+### Caveat — `USER takuto` immediately followed by `USER root`
 
 ```
-453:USER maestro
+453:USER takuto
 454:USER root
 456:ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 ```
 
-The PO AC literally requires `USER maestro` to precede `ENTRYPOINT`, which it
+The PO AC literally requires `USER takuto` to precede `ENTRYPOINT`, which it
 does. However, line 454 re-elevates to root for the entrypoint because
 `entrypoint.sh` still needs iptables + chown + provisioning writes. Comment
 block 441–452 documents the reason and points to a future entrypoint refactor.
-The net effective UID at container start is **root**, not `maestro` — the
+The net effective UID at container start is **root**, not `takuto` — the
 hardening goal is sidestepped by design until the entrypoint is rewritten
 (explicitly out of Phase 3 scope per the PO plan).
 
@@ -188,7 +188,7 @@ threshold. Flagging for the record; not blocking.
 | #1 `cargo build --workspace` zero-warning | **PASS** — grep count = 0 |
 | #2 `cargo test --workspace` green | **PASS** — 1019 passed, 0 failed, 1 ignored |
 | #4 `npm --prefix ui run build` | **PASS** |
-| #5 Public REST/WS contract preserved | **PASS by inference** — 176 maestro-web integration tests green, 0 router-path drift |
+| #5 Public REST/WS contract preserved | **PASS by inference** — 176 takuto-web integration tests green, 0 router-path drift |
 | #6 No new `Cargo.toml` dependency | **PASS** for landed phases |
 | #8 `AGENTS.md` updates in same commit | not audited line-by-line; deferred to team-lead spot-check |
 

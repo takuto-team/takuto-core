@@ -1,6 +1,6 @@
 name: Close external pull requests
 
-# Maestro is dual-licensed (FSL + commercial) and does not yet have CLA
+# Takuto is dual-licensed (FSL + commercial) and does not yet have CLA
 # infrastructure to accept outside contributions. This workflow politely
 # closes any pull request whose author is not the repository owner, a member,
 # or a collaborator, and links them to the channels that *are* open.
@@ -32,9 +32,9 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const body = [
-              `Thanks for your interest in Maestro, @${pr.user.login} — and sorry to close this without review.`,
+              `Thanks for your interest in Takuto, @${pr.user.login} — and sorry to close this without review.`,
               ``,
-              `**Maestro is not currently accepting external code contributions.**`,
+              `**Takuto is not currently accepting external code contributions.**`,
               ``,
               `The project is dual-licensed (FSL + commercial). Accepting outside`,
               `code under that model requires a Contributor License Agreement (CLA) and`,

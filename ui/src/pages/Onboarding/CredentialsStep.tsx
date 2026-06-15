@@ -13,7 +13,7 @@ export function CredentialsStep() {
         Paste your AI provider key and (optionally) a GitHub personal access
         token from the per-user credential page. Skipping is fine — the
         deployment-default credentials in{" "}
-        <code className="text-gray-400">maestro.env</code> stay in effect
+        <code className="text-gray-400">takuto.env</code> stay in effect
         until you connect your own.
       </p>
       <Link

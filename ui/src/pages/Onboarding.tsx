@@ -69,7 +69,7 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
             >
               Skip setup &rarr;
             </Link>
-            <span className="text-lg font-bold text-white">Set up Maestro</span>
+            <span className="text-lg font-bold text-white">Set up Takuto</span>
             {authEnabled && (
               <button
                 onClick={onLogout}

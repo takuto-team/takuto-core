@@ -116,7 +116,7 @@ export function MyCredentialsSection({ refreshKey = 0 }: Props = {}) {
   const adminProvider = auth?.provider_selected ?? null;
   // Wire-format note: the backend returns `provider.provider` (matches the
   // `provider` column in `user_provider_credentials`). See
-  // `crates/maestro-web/src/routes/credentials.rs::ProviderCredentialStatus`.
+  // `crates/takuto-web/src/routes/credentials.rs::ProviderCredentialStatus`.
   const userProvider = creds?.provider?.provider ?? null;
   const activeProvider = adminProvider ?? userProvider ?? "claude";
 

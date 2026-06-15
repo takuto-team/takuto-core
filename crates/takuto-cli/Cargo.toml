@@ -1,0 +1,26 @@
+[package]
+name = "takuto-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "takuto"
+path = "src/main.rs"
+
+[dependencies]
+takuto-core = { workspace = true }
+takuto-web = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+axum = { workspace = true }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

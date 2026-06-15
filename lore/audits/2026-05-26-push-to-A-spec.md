@@ -15,18 +15,18 @@ Every production `.unwrap()` / `.expect()` outside `#[cfg(test)]` now carries an
 
 | File | Sites | Justification class |
 |---|---|---|
-| `maestro-cli/src/main.rs` | 2 | SIGTERM/Ctrl-C handlers (cfg(unix) + tokio runtime contract) |
-| `maestro-core/src/license.rs` | 1 | `OnceLock::set` once-init guard |
-| `maestro-core/src/process.rs` | 4 | `Stdio::piped()` child stream `take()` contract |
-| `maestro-core/src/db/credentials.rs` | 2 | Argon2 `Params::new` constants within published bounds |
-| `maestro-core/src/config/web.rs` | 2 | `strip_suffix` guarded by `ends_with` |
-| `maestro-core/src/container/editor/token_gen.rs` | 1 | `getrandom` OS CSPRNG contract (token reuse unacceptable) |
-| `maestro-web/src/auth.rs` | 1 | HMAC-SHA256 key length type-checked at `&[u8; 32]` |
-| `maestro-web/src/server.rs` | 5 | Governor config + config RwLock + static response builders |
-| `maestro-web/src/routes/sessions/{mod,token_validator,proxy_forward}.rs` | 5 | `Response::builder()` with only `StatusCode` + empty body, or ASCII-only header values |
-| `maestro-web/src/routes/credentials.rs` | 2 | `require_master_key` middleware gates `auth.db.is_some()` |
-| `maestro-web/src/routes/repositories.rs` | 1 | Row was just upserted in same connection |
-| `maestro-web/src/routes/workflows/manual.rs` | 1 | `user_repos.is_empty()` rejected with 400 above |
+| `takuto-cli/src/main.rs` | 2 | SIGTERM/Ctrl-C handlers (cfg(unix) + tokio runtime contract) |
+| `takuto-core/src/license.rs` | 1 | `OnceLock::set` once-init guard |
+| `takuto-core/src/process.rs` | 4 | `Stdio::piped()` child stream `take()` contract |
+| `takuto-core/src/db/credentials.rs` | 2 | Argon2 `Params::new` constants within published bounds |
+| `takuto-core/src/config/web.rs` | 2 | `strip_suffix` guarded by `ends_with` |
+| `takuto-core/src/container/editor/token_gen.rs` | 1 | `getrandom` OS CSPRNG contract (token reuse unacceptable) |
+| `takuto-web/src/auth.rs` | 1 | HMAC-SHA256 key length type-checked at `&[u8; 32]` |
+| `takuto-web/src/server.rs` | 5 | Governor config + config RwLock + static response builders |
+| `takuto-web/src/routes/sessions/{mod,token_validator,proxy_forward}.rs` | 5 | `Response::builder()` with only `StatusCode` + empty body, or ASCII-only header values |
+| `takuto-web/src/routes/credentials.rs` | 2 | `require_master_key` middleware gates `auth.db.is_some()` |
+| `takuto-web/src/routes/repositories.rs` | 1 | Row was just upserted in same connection |
+| `takuto-web/src/routes/workflows/manual.rs` | 1 | `user_repos.is_empty()` rejected with 400 above |
 
 ### SAFETY comment pattern
 
@@ -74,10 +74,10 @@ The §8 #3 split landed the three worst offenders (container/runner.rs 1513 LOC,
 
 | File | Before | After (mod.rs + 3–5 leaves) | Reduction notes |
 |---|---|---|---|
-| `crates/maestro-web/src/routes/auth.rs` | 997 | 5 files, largest 347 LOC | 8 disjoint handlers; no shared mutable state |
-| `crates/maestro-web/src/routes/sessions.rs` | 1165 | 4 files, largest 568 LOC | top-level dispatch + 3 cohesive forwarders |
-| `crates/maestro-core/src/auth/bundle.rs` | 1244 | 6 files, largest 654 LOC (mod.rs tests dominate) | 5 production files + cross-module test mod |
-| `crates/maestro-core/src/container/editor.rs` | 1157 | 6 files, largest 641 LOC | docker-run orchestrator stays cohesive; helpers carved |
+| `crates/takuto-web/src/routes/auth.rs` | 997 | 5 files, largest 347 LOC | 8 disjoint handlers; no shared mutable state |
+| `crates/takuto-web/src/routes/sessions.rs` | 1165 | 4 files, largest 568 LOC | top-level dispatch + 3 cohesive forwarders |
+| `crates/takuto-core/src/auth/bundle.rs` | 1244 | 6 files, largest 654 LOC (mod.rs tests dominate) | 5 production files + cross-module test mod |
+| `crates/takuto-core/src/container/editor.rs` | 1157 | 6 files, largest 641 LOC | docker-run orchestrator stays cohesive; helpers carved |
 
 ### Per-target layout
 

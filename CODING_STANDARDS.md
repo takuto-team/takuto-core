@@ -1,4 +1,4 @@
-# Coding Standards — Maestro
+# Coding Standards — Takuto
 
 Rules for every AI agent and human contributor. Short, enforceable, no exceptions without a comment.
 

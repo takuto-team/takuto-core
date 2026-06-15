@@ -5,7 +5,7 @@
  * Client-side validator for the Claude `~/.claude.json` blob (#40).
  *
  * The **server is the source of truth** — see
- * `crates/maestro-web/src/routes/credentials.rs::validate_claude_session_blob`.
+ * `crates/takuto-web/src/routes/credentials.rs::validate_claude_session_blob`.
  * This module's purpose is only to surface obvious shape problems to the
  * user BEFORE the POST round-trip (#40 T-CLAUDE-UI-006), not to gate the
  * save itself.
@@ -79,7 +79,7 @@ export function parseClaudeSessionBlob(blob: string): ClaudeSessionParseResult {
       ok: false,
       code: "missing_oauth_account",
       message:
-        "Missing `oauthAccount` — Maestro needs the OAuth block Claude Code wrote at login.",
+        "Missing `oauthAccount` — Takuto needs the OAuth block Claude Code wrote at login.",
     };
   }
 

@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for proposing a feature. Larger or contentious proposals are
         better discussed first in
-        [Discussions](https://github.com/morphet81/maestro-core/discussions).
+        [Discussions](https://github.com/takuto-team/takuto-core/discussions).
   - type: textarea
     id: what
     attributes:

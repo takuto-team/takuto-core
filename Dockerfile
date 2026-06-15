@@ -29,7 +29,7 @@ ENV CARGO_TERM_PROGRESS_WIDTH=80
 COPY Cargo.toml Cargo.lock ./
 COPY VERSION ./
 COPY crates/ crates/
-# rust-embed resolves ../../ui/dist/ relative to crates/maestro-web/
+# rust-embed resolves ../../ui/dist/ relative to crates/takuto-web/
 COPY --from=ui-builder /ui/dist/ ui/dist/
 
 # BuildKit cache mounts: persist downloaded crates + `target/` between `docker compose build` runs.
@@ -41,15 +41,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     mkdir -p /out \
     && echo "=== cargo build --release (first build often takes 10–20+ minutes; rebuilds reuse BuildKit cache) ===" \
     && cargo build --release \
-    && cp /app/target/release/maestro /out/maestro
+    && cp /app/target/release/takuto /out/takuto
 
-# Maestro runtime image — kitchen-sink bake, per the project's "code-quality
+# Takuto runtime image — kitchen-sink bake, per the project's "code-quality
 # vs. ergonomics" trade-off: every advertised feature works on a vanilla
 # `docker compose up` with no extra setup steps. The cost is image size +
 # audit surface (Playwright Chromium libs, four AI provider CLIs, an editor,
 # a terminal, a build toolchain). The mitigations are:
-#   • Two image targets — `runtime-base` = `maestro:slim` (no Rust, no
-#     build-essential), `runtime-build-tools` = `maestro:full` (default).
+#   • Two image targets — `runtime-base` = `takuto:slim` (no Rust, no
+#     build-essential), `runtime-build-tools` = `takuto:full` (default).
 #   • Every FROM is pinned by `@sha256:` digest (Renovate-refreshed weekly).
 #   • Every direct download (ttyd, Node, Cursor agent, openvscode-server)
 #     verifies a per-arch sha256 against an ARG-pinned digest.
@@ -61,31 +61,31 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # and `lore/audits/2026-05-21-clean-code.md` §3.5 for the audit findings
 # this image hardening pass addresses.
 #
-# Stage 2a: Runtime base (= image target `maestro:slim`).
+# Stage 2a: Runtime base (= image target `takuto:slim`).
 # Renovate-managed digest, refresh weekly (audit 2026-05-21 §3.5 — pin all bases by @sha256).
-# Contains everything a deployed maestro server NEEDS to run its workflows except
+# Contains everything a deployed takuto server NEEDS to run its workflows except
 # build toolchains (no Rust, no build-essential). For users who do not run Rust
-# workflows or build native dependencies inside workers, `maestro:slim` is the
+# workflows or build native dependencies inside workers, `takuto:slim` is the
 # smaller, lower-attack-surface image. Build with:
-#   docker build --target runtime-base -t maestro:slim .
+#   docker build --target runtime-base -t takuto:slim .
 FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime-base
 
-ARG MAESTRO_VERSION=dev
-LABEL org.opencontainers.image.version="${MAESTRO_VERSION}"
-LABEL org.opencontainers.image.source="https://github.com/morphet81/maestro-core"
+ARG TAKUTO_VERSION=dev
+LABEL org.opencontainers.image.version="${TAKUTO_VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/takuto-team/takuto-core"
 LABEL org.opencontainers.image.licenses="FSL-1.1-ALv2"
-LABEL org.opencontainers.image.title="Maestro"
+LABEL org.opencontainers.image.title="Takuto"
 LABEL org.opencontainers.image.description="Automated workflow orchestration for AI coding agents"
 
 # Registry image name — used by entrypoint to auto-pull the worker image into DinD.
-ENV MAESTRO_REGISTRY_IMAGE=ghcr.io/morphet81/maestro:${MAESTRO_VERSION}
+ENV TAKUTO_REGISTRY_IMAGE=ghcr.io/takuto-team/takuto-core:${TAKUTO_VERSION}
 
 # Match host UID for rootless Podman API sockets (often mode 0600 — only the user matters). Set in compose `.env` and rebuild.
 # Do not force the primary GID to match the host: macOS "staff" is often GID 20, which is `dialout` on Debian and already exists.
-ARG MAESTRO_UID=999
+ARG TAKUTO_UID=999
 
 # Foundational apt block — all apt-managed packages + 3rd-party apt repos
-# (mise, gh, acli) + the maestro user + sudoers, in ONE RUN. The runtime
+# (mise, gh, acli) + the takuto user + sudoers, in ONE RUN. The runtime
 # stage was previously 26 RUN layers (audit §3.5); collapsing related apt
 # work into one cache-friendly layer is the bulk of the reduction.
 #
@@ -97,7 +97,7 @@ ARG MAESTRO_UID=999
 #   • acli is amd64-only via apt; `|| echo WARN` keeps arm64 builds working
 #     (the few admins who need acli on arm64 install a binary release via
 #     `[provisioning]`).
-#   • The maestro user is created in the same layer so the sudoers entry can
+#   • The takuto user is created in the same layer so the sudoers entry can
 #     be `visudo -cf`-validated against a real user immediately.
 RUN set -eux \
     && apt-get update \
@@ -155,14 +155,14 @@ RUN set -eux \
         libasound2 \
     && (apt-get install -y --no-install-recommends acli \
         || echo "WARN: acli not available for $(dpkg --print-architecture)") \
-    # ── Maestro user + sudoers ─────────────────────────────────────────────
-    && groupadd maestro \
-    && useradd -u "${MAESTRO_UID}" -g maestro -m -s /bin/bash maestro \
+    # ── Takuto user + sudoers ─────────────────────────────────────────────
+    && groupadd takuto \
+    && useradd -u "${TAKUTO_UID}" -g takuto -m -s /bin/bash takuto \
     && printf '%s\n' \
-        'maestro ALL=(root) NOPASSWD: /usr/bin/bash, /bin/bash, /usr/bin/bash *, /bin/bash *' \
-        > /etc/sudoers.d/maestro-hook-bash \
-    && chmod 0440 /etc/sudoers.d/maestro-hook-bash \
-    && visudo -cf /etc/sudoers.d/maestro-hook-bash \
+        'takuto ALL=(root) NOPASSWD: /usr/bin/bash, /bin/bash, /usr/bin/bash *, /bin/bash *' \
+        > /etc/sudoers.d/takuto-hook-bash \
+    && chmod 0440 /etc/sudoers.d/takuto-hook-bash \
+    && visudo -cf /etc/sudoers.d/takuto-hook-bash \
     && mise --version \
     && rm -rf /var/lib/apt/lists/*
 
@@ -202,13 +202,13 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 
 # ── Three-tier tool layout (task #48) ────────────────────────────────────
-#   BAKED        — required for advertised Maestro features (this Dockerfile).
+#   BAKED        — required for advertised Takuto features (this Dockerfile).
 #   PROVISIONING — admin preferences installed at runtime into the
-#                  `maestro-tools` named volume via `[provisioning]` in
-#                  config.toml. See `docs/extending-maestro.md` for the
+#                  `takuto-tools` named volume via `[provisioning]` in
+#                  config.toml. See `docs/extending-takuto.md` for the
 #                  authoritative reference + decision table.
 #   REMOVED      — specialized one-off tools. Admins add via custom
-#                  Dockerfile `FROM maestro:latest` or compose override.
+#                  Dockerfile `FROM takuto:latest` or compose override.
 #
 # Tools migrated OUT of the bake into `[provisioning]` defaults (task #48):
 #   fcli, lokalise2, figma-cli — see config.toml.example.
@@ -320,13 +320,13 @@ RUN set -eux \
 # only required for the minority of deployments that authenticate npm to
 # CodeArtifact. Admins who need it add a custom Dockerfile:
 #
-#   FROM maestro:latest
+#   FROM takuto:latest
 #   RUN apt-get update && apt-get install -y --no-install-recommends unzip \
 #       && curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/aws.zip \
 #       && unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install \
 #       && rm -rf /tmp/aws*
 #
-# See `docs/extending-maestro.md` for the full custom-image pattern.
+# See `docs/extending-takuto.md` for the full custom-image pattern.
 
 # Task #48: figma-cli was previously baked here; migrated to a
 # `[provisioning]` default in `config.toml.example` (admin can disable
@@ -338,94 +338,94 @@ RUN set -eux \
 # Copy egress rules script (executable bit set via BuildKit --chmod, no chmod RUN).
 COPY --chmod=0755 docker/egress-rules.sh /usr/local/bin/egress-rules.sh
 
-# Copy Maestro binary from builder (see builder stage: binary staged under `/out` for cache-friendly builds)
-COPY --from=builder /out/maestro /usr/local/bin/maestro
+# Copy Takuto binary from builder (see builder stage: binary staged under `/out` for cache-friendly builds)
+COPY --from=builder /out/takuto /usr/local/bin/takuto
 
 # Optional: TOML file in build context used only for [docker] build_commands (default: example with empty hooks).
-# Note: if you override MAESTRO_BUILD_CONFIG to a custom filename, ensure it is NOT excluded by .dockerignore.
-ARG MAESTRO_BUILD_CONFIG=config.toml.example
-COPY ${MAESTRO_BUILD_CONFIG} /tmp/maestro-build-config.toml
+# Note: if you override TAKUTO_BUILD_CONFIG to a custom filename, ensure it is NOT excluded by .dockerignore.
+ARG TAKUTO_BUILD_CONFIG=config.toml.example
+COPY ${TAKUTO_BUILD_CONFIG} /tmp/takuto-build-config.toml
 RUN mkdir -p /workspace \
-    && maestro --config /tmp/maestro-build-config.toml docker-hooks build \
-    && rm -f /tmp/maestro-build-config.toml
+    && takuto --config /tmp/takuto-build-config.toml docker-hooks build \
+    && rm -f /tmp/takuto-build-config.toml
 
 # Ship example files as reference for distributed-image users.
-# Runtime config is NOT baked in — users must volume-mount config.toml, maestro.env,
+# Runtime config is NOT baked in — users must volume-mount config.toml, takuto.env,
 # and workflows/ (see docker-compose.yml). The entrypoint validates the mount.
 # The parent dirs are auto-created by BuildKit's COPY (no separate mkdir RUN);
-# /etc/maestro/examples/workflows is also covered by the consolidated mkdir RUN below.
-COPY config.toml.example /etc/maestro/examples/config.toml.example
-COPY maestro.env.example /etc/maestro/examples/maestro.env.example
-COPY workflows/implement_ticket.example.toml workflows/address_pr_comments.example.toml workflows/merge_base.example.toml /etc/maestro/examples/workflows/
+# /etc/takuto/examples/workflows is also covered by the consolidated mkdir RUN below.
+COPY config.toml.example /etc/takuto/examples/config.toml.example
+COPY takuto.env.example /etc/takuto/examples/takuto.env.example
+COPY workflows/implement_ticket.example.toml workflows/address_pr_comments.example.toml workflows/merge_base.example.toml /etc/takuto/examples/workflows/
 
-# Maestro user, sudo install, and sudoers rule are set up in the foundational
+# Takuto user, sudo install, and sudoers rule are set up in the foundational
 # apt block above (so visudo can validate against the real user in the same
 # layer). Claude Code refuses --dangerously-skip-permissions as root, hence
-# the non-root identity for the maestro server process at runtime.
+# the non-root identity for the takuto server process at runtime.
 
-# All maestro-owned directory creation + ownership in one layer:
-#   • Maestro home dirs (mise data/cache/config, npm cache, npm-global prefix)
-#   • /opt/maestro-tools volume mountpoint (Task #48: shadows baked tools at runtime)
+# All takuto-owned directory creation + ownership in one layer:
+#   • Takuto home dirs (mise data/cache/config, npm cache, npm-global prefix)
+#   • /opt/takuto-tools volume mountpoint (Task #48: shadows baked tools at runtime)
 #   • /workspace (legacy single-workspace) + /workspaces (per-project clones)
-#   • /etc/maestro/examples/workflows (reference files shipped with the image)
+#   • /etc/takuto/examples/workflows (reference files shipped with the image)
 # Rust toolchain ownership transfer happens in `runtime-build-tools` (the only
 # stage that installs rustup/cargo). `runtime-base` has empty $RUSTUP_HOME /
 # $CARGO_HOME directories so chowning them here would be a no-op.
 RUN set -eux \
     && mkdir -p \
-        /home/maestro/.local/share/mise/shims \
-        /home/maestro/.cache/mise \
-        /home/maestro/.config/mise \
-        /home/maestro/.npm \
-        /home/maestro/.npm-global/lib \
-        /home/maestro/.npm-global/bin \
-        /opt/maestro-tools/bin \
+        /home/takuto/.local/share/mise/shims \
+        /home/takuto/.cache/mise \
+        /home/takuto/.config/mise \
+        /home/takuto/.npm \
+        /home/takuto/.npm-global/lib \
+        /home/takuto/.npm-global/bin \
+        /opt/takuto-tools/bin \
         /workspace/logs \
         /workspaces \
-        /etc/maestro/examples/workflows \
-    && chown -R maestro:maestro \
-        /home/maestro/.local \
-        /home/maestro/.cache \
-        /home/maestro/.config \
-        /home/maestro/.npm \
-        /home/maestro/.npm-global \
-        /opt/maestro-tools \
+        /etc/takuto/examples/workflows \
+    && chown -R takuto:takuto \
+        /home/takuto/.local \
+        /home/takuto/.cache \
+        /home/takuto/.config \
+        /home/takuto/.npm \
+        /home/takuto/.npm-global \
+        /opt/takuto-tools \
         /workspace \
         /workspaces \
-    && chmod 0755 /opt/maestro-tools /opt/maestro-tools/bin
+    && chmod 0755 /opt/takuto-tools /opt/takuto-tools/bin
 
 # npm cache dir (for npx and package installs)
-ENV NPM_CONFIG_CACHE=/home/maestro/.npm
+ENV NPM_CONFIG_CACHE=/home/takuto/.npm
 # npm global prefix — redirects `npm install -g` and npx global installs away from root-owned /usr/local
-ENV NPM_CONFIG_PREFIX=/home/maestro/.npm-global
-ENV MISE_DATA_DIR=/home/maestro/.local/share/mise
-ENV MISE_CACHE_DIR=/home/maestro/.cache/mise
-ENV MISE_CONFIG_DIR=/home/maestro/.config/mise
+ENV NPM_CONFIG_PREFIX=/home/takuto/.npm-global
+ENV MISE_DATA_DIR=/home/takuto/.local/share/mise
+ENV MISE_CACHE_DIR=/home/takuto/.cache/mise
+ENV MISE_CONFIG_DIR=/home/takuto/.config/mise
 ENV MISE_TRUST_ALL_CONFIGS=1
 ENV MISE_YES=1
-# Task #48: prepend the `maestro-tools` volume mount so anything dropped
+# Task #48: prepend the `takuto-tools` volume mount so anything dropped
 # there by the `[provisioning]` install pass at boot SHADOWS baked tools
 # of the same name. That gives admins a no-rebuild lever to pin a tool
 # to a specific version (or swap an entire binary) without changing the
 # image. The volume mountpoint was created in the combined mkdir RUN above;
 # the named volume itself is declared in `docker-compose.yml`.
-ENV PATH="/opt/maestro-tools/bin:/home/maestro/.npm-global/bin:/home/maestro/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV PATH="/opt/takuto-tools/bin:/home/takuto/.npm-global/bin:/home/takuto/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Login-shell defaults — write both profile.d files + .bashrc in one RUN.
 RUN set -eux \
     && printf '%s\n' \
-        'export MISE_DATA_DIR=/home/maestro/.local/share/mise' \
-        'export MISE_CACHE_DIR=/home/maestro/.cache/mise' \
-        'export MISE_CONFIG_DIR=/home/maestro/.config/mise' \
+        'export MISE_DATA_DIR=/home/takuto/.local/share/mise' \
+        'export MISE_CACHE_DIR=/home/takuto/.cache/mise' \
+        'export MISE_CONFIG_DIR=/home/takuto/.config/mise' \
         'export MISE_TRUST_ALL_CONFIGS=1' \
         'export MISE_YES=1' \
         'export PATH="$MISE_DATA_DIR/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
-        > /etc/profile.d/zz-maestro-mise.sh \
-    && chmod 644 /etc/profile.d/zz-maestro-mise.sh \
-    && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' \
-        >> /etc/profile.d/maestro-env.sh \
-    && echo '[ -f /etc/maestro/env ] && set -a && . /etc/maestro/env && set +a' \
-        >> /home/maestro/.bashrc
+        > /etc/profile.d/zz-takuto-mise.sh \
+    && chmod 644 /etc/profile.d/zz-takuto-mise.sh \
+    && echo '[ -f /etc/takuto/env ] && set -a && . /etc/takuto/env && set +a' \
+        >> /etc/profile.d/takuto-env.sh \
+    && echo '[ -f /etc/takuto/env ] && set -a && . /etc/takuto/env && set +a' \
+        >> /home/takuto/.bashrc
 
 WORKDIR /workspace
 
@@ -434,13 +434,13 @@ EXPOSE 8080
 # Entrypoint scripts — executable bit set via BuildKit --chmod, no chmod RUNs.
 # The entrypoint applies egress rules (if NET_ADMIN capability is available),
 # chowns named volumes that arrive root-owned, runs the [provisioning] install
-# pass, then setpriv's to the maestro user and execs the maestro server.
+# pass, then setpriv's to the takuto user and execs the takuto server.
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chmod=0755 docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
 COPY --chmod=0755 docker/test-workflow.sh /usr/local/bin/test-workflow.sh
 
 # Audit §3.5 — explicit non-root identity declaration. The runtime image declares
-# the `maestro` user identity here so the build chain (and any `docker history`
+# the `takuto` user identity here so the build chain (and any `docker history`
 # reader) can audit the non-root-by-default posture without grepping entrypoint.sh.
 #
 # The directive is immediately followed by `USER root` because the entrypoint
@@ -449,20 +449,20 @@ COPY --chmod=0755 docker/test-workflow.sh /usr/local/bin/test-workflow.sh
 #      capability set, not to the calling UID, so even with CAP_NET_ADMIN a
 #      non-root caller can't run iptables without ambient caps;
 #   2. chown of named volumes that arrive root-owned from the host;
-#   3. the [provisioning] install pass that writes to /opt/maestro-tools.
-# `docker/entrypoint.sh` setpriv's back to maestro for the actual maestro
+#   3. the [provisioning] install pass that writes to /opt/takuto-tools.
+# `docker/entrypoint.sh` setpriv's back to takuto for the actual takuto
 # server process (see entrypoint.sh ~line 178). A future entrypoint refactor
-# (sudo-elevate via the existing /bin/bash sudoers rule) can move `USER maestro`
+# (sudo-elevate via the existing /bin/bash sudoers rule) can move `USER takuto`
 # to immediately before `ENTRYPOINT`; that change is out of Phase 3 scope
 # because the brief explicitly forbids rewriting `entrypoint.sh`.
-USER maestro
+USER takuto
 USER root
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["--config", "/etc/maestro/config.toml"]
+CMD ["--config", "/etc/takuto/config.toml"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 2b: Runtime + build tools (= image target `maestro:full`, default target).
+# Stage 2b: Runtime + build tools (= image target `takuto:full`, default target).
 #
 # `FROM runtime-base` inherits everything in the slim image. This layer adds
 # the C toolchain (gcc + headers) needed by `mise install` when building
@@ -472,7 +472,7 @@ CMD ["--config", "/etc/maestro/config.toml"]
 # every time.
 #
 # This is the DEFAULT build target — plain `docker build .` and
-# `docker compose build` produce `maestro:full`. Admins who want the smaller
+# `docker compose build` produce `takuto:full`. Admins who want the smaller
 # slim image opt in with `--target runtime-base`.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM runtime-base AS runtime-build-tools
@@ -507,7 +507,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-delay 5 https://sh.ru
     && find /usr/local/cargo/bin -type f -exec chmod a+x {} \; \
     && /usr/local/cargo/bin/cargo --version \
     && /usr/local/cargo/bin/rustc --version \
-    # Transfer rustup/cargo ownership so maestro can install toolchain versions at runtime.
+    # Transfer rustup/cargo ownership so takuto can install toolchain versions at runtime.
     # (The image ships a pre-installed stable toolchain, but a project's .mise.toml may
     # request a different version; rustup needs to write to RUSTUP_HOME/tmp/ for that.)
-    && chown -R maestro:maestro /usr/local/rustup /usr/local/cargo
+    && chown -R takuto:takuto /usr/local/rustup /usr/local/cargo

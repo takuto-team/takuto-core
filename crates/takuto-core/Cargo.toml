@@ -1,0 +1,53 @@
+[package]
+name = "takuto-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+serde_yaml_ng = { workspace = true }
+ts-rs = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+jsonwebtoken = { workspace = true }
+dirs = { workspace = true }
+fs2 = { workspace = true }
+# CSPRNG for session path tokens (≥128 bits of entropy from OS entropy source).
+getrandom = "0.3"
+# Pluggable backends. The only DB driver in production — rusqlite is
+# now a #[cfg(test)] dep used by the in-memory shared-cache anchor
+# (Database::open_in_memory). See [dev-dependencies] below.
+sqlx = { workspace = true }
+argon2 = { workspace = true }
+# SHA-256 of [provisioning].install_commands so the entrypoint can
+# decide whether to skip the install pass on subsequent boots.
+sha2 = { workspace = true }
+rand = { workspace = true }
+# Envelope encryption for per-user credentials. XChaCha20-Poly1305
+# wraps a fresh per-row DEK; the DEK is then sealed with the master key.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
+# Zero out DEKs and the master key on Drop.
+zeroize = { version = "1.7", default-features = false, features = ["zeroize_derive"] }
+# Decode the optional 64-char hex TAKUTO_SECRET_KEY env var.
+hex = "0.4"
+# tmpfs-style temp directories for worker secret bundles
+# (RAII cleanup via Drop).
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+rusqlite = { workspace = true }
+
+[lints]
+workspace = true

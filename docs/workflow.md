@@ -1,4 +1,4 @@
-# Maestro Workflow
+# Takuto Workflow
 
 ## Ticket Lifecycle
 
@@ -15,7 +15,7 @@ flowchart TD
     H --> I[Agent steps: built-in or [[agent_steps]]<br/>Claude Code / Cursor Agent headless sessions]
     I --> J{Any step log Failed?}
     J -->|Yes| K[Workflow ends in error]
-    J -->|No| L[Finalize: optional pr_url from<br/>.maestro/outcome.toml or MAESTRO_PR_URL line]
+    J -->|No| L[Finalize: optional pr_url from<br/>.takuto/outcome.toml or TAKUTO_PR_URL line]
     L --> M[Workflow Done]
 
     style A fill:#1e3a5f
@@ -24,7 +24,7 @@ flowchart TD
     style I fill:#2d1e5f
 ```
 
-Linting, unit tests, E2E, and **opening a PR** are **not** engine steps. Encode them as **agent step prompts** (e.g. run `gh pr create`, print `MAESTRO_PR_URL: …`, or write `.maestro/outcome.toml`). The workflow **stops** when the last agent session exits successfully; Maestro then reads the optional PR URL and transitions to **Done**.
+Linting, unit tests, E2E, and **opening a PR** are **not** engine steps. Encode them as **agent step prompts** (e.g. run `gh pr create`, print `TAKUTO_PR_URL: …`, or write `.takuto/outcome.toml`). The workflow **stops** when the last agent session exits successfully; Takuto then reads the optional PR URL and transitions to **Done**.
 
 ### After Done (dashboard)
 

@@ -23,7 +23,7 @@ export function providerHelper(
 ): string {
   if (kind === "cli_state") {
     // Only Claude renders this branch (task #39 amendment).
-    return "Required for Pro/Team accounts whose local `claude` uses `/login`. Maestro reads `oauthAccount` from this blob and writes it to the worker's `.claude.json` at workflow start. The bearer token is still set separately on the API key tab.";
+    return "Required for Pro/Team accounts whose local `claude` uses `/login`. Takuto reads `oauthAccount` from this blob and writes it to the worker's `.claude.json` at workflow start. The bearer token is still set separately on the API key tab.";
   }
   switch (provider) {
     case "cursor":
@@ -32,13 +32,13 @@ export function providerHelper(
     case "claude":
       return "For direct Anthropic API or proxies that accept the same API key format. If you're on Pro/Team and your local `claude` uses `/login`, use 'Claude Code session' instead.";
     case "codex":
-      return "OpenAI API key (sk-…). The Codex CLI reads OPENAI_API_KEY from the worker environment — Maestro bridges this from the value you paste here.";
+      return "OpenAI API key (sk-…). The Codex CLI reads OPENAI_API_KEY from the worker environment — Takuto bridges this from the value you paste here.";
     case "opencode":
       // Self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md
       // §2.5): OpenCode is the self-hosted adapter. The key field is an
       // optional bearer for the endpoint, not an Anthropic / OpenAI key.
       // Leave blank for LM Studio / Ollama; required for authenticated
-      // private gateways. Maestro materialises `opencode.json` per
+      // private gateways. Takuto materialises `opencode.json` per
       // workflow with this value as `options.apiKey`.
       return "Optional bearer token for your self-hosted OpenAI-compatible endpoint. Leave blank for LM Studio / Ollama or any unauthenticated server. For private gateways requiring auth, paste the bearer the server expects.";
     default:

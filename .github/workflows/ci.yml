@@ -57,7 +57,7 @@ jobs:
       - name: cargo fmt --all -- --check
         run: cargo fmt --all -- --check
 
-      # `maestro-web` embeds `ui/dist/` via `rust-embed`, which fails to
+      # `takuto-web` embeds `ui/dist/` via `rust-embed`, which fails to
       # compile if the directory is missing. The UI job builds the real
       # frontend; the rust job only needs the directory to exist so the
       # macro can produce an (empty) asset set for tests/clippy/doc.
@@ -82,7 +82,7 @@ jobs:
   db-postgres:
     # Plan-11 §10 step 4: prove the dialect-aware migration source and the
     # DbAdapter-backed DAOs work end-to-end against a real PostgreSQL.
-    # Runs the `#[ignore]`-gated tests under `crates/maestro-core/src/db/`
+    # Runs the `#[ignore]`-gated tests under `crates/takuto-core/src/db/`
     # with `DATABASE_URL` pointed at a service-container PG instance.
     name: DB backend (PostgreSQL)
     runs-on: ubuntu-latest
@@ -90,20 +90,20 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: maestro
-          POSTGRES_PASSWORD: maestro
-          POSTGRES_DB: maestro_ci
+          POSTGRES_USER: takuto
+          POSTGRES_PASSWORD: takuto
+          POSTGRES_DB: takuto_ci
         ports:
           - 5432:5432
         # GHA waits on the service's health check before running steps,
         # so we don't need a manual `pg_isready` loop in the step body.
         options: >-
-          --health-cmd "pg_isready -U maestro -d maestro_ci"
+          --health-cmd "pg_isready -U takuto -d takuto_ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
-      DATABASE_URL: postgres://maestro:maestro@localhost:5432/maestro_ci
+      DATABASE_URL: postgres://takuto:takuto@localhost:5432/takuto_ci
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -124,7 +124,7 @@ jobs:
         # connect via `MySqlPool::connect` and would time out against
         # our Postgres service container). `--test-threads=1`
         # serialises the migrator + CRUD tests against the shared DB.
-        run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 --skip mysql
+        run: cargo test -p takuto-core --lib db::migrate -- --ignored --test-threads=1 --skip mysql
 
   db-mysql:
     # Plan-11 step 4 (MySQL leg): same idea as `db-postgres`, but spins
@@ -139,19 +139,19 @@ jobs:
       mysql:
         image: mysql:8
         env:
-          MYSQL_USER: maestro
-          MYSQL_PASSWORD: maestro
-          MYSQL_DATABASE: maestro_ci
+          MYSQL_USER: takuto
+          MYSQL_PASSWORD: takuto
+          MYSQL_DATABASE: takuto_ci
           MYSQL_ROOT_PASSWORD: root
         ports:
           - 3306:3306
         options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -umaestro -pmaestro"
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -utakuto -ptakuto"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
     env:
-      DATABASE_URL: mysql://maestro:maestro@localhost:3306/maestro_ci
+      DATABASE_URL: mysql://takuto:takuto@localhost:3306/takuto_ci
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -170,7 +170,7 @@ jobs:
       - name: cargo test --ignored (db migrations + CRUD against MySQL)
         # `--skip postgres` drops the Postgres-only ignored tests
         # (they hard-connect via `PgPool::connect`).
-        run: cargo test -p maestro-core --lib db::migrate -- --ignored --test-threads=1 --skip postgres
+        run: cargo test -p takuto-core --lib db::migrate -- --ignored --test-threads=1 --skip postgres
 
   ts-types-drift:
     # The dashboard wire DTOs (WorkflowSummary, …) are mirrored to
@@ -339,7 +339,7 @@ jobs:
           # Keep in sync with the `ignore` list in deny.toml:
           #   RUSTSEC-2023-0071 — rsa Marvin attack, no upstream fix yet.
           #   RUSTSEC-2026-0009 — time DoS; fixed in >=0.3.47, blocked by an
-          #                       exact `=0.3.45` pin in maestro-web.
+          #                       exact `=0.3.45` pin in takuto-web.
           ignore: RUSTSEC-2023-0071,RUSTSEC-2026-0009
 
   config-doc:
@@ -369,6 +369,6 @@ jobs:
         with:
           context: .
           push: false
-          tags: maestro:ci
+          tags: takuto:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -168,7 +168,7 @@ export function Login({ onLogin }: Props) {
   return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="w-full max-w-sm mx-4">
-        <h1 className="text-2xl font-bold text-white text-center mb-8">Maestro</h1>
+        <h1 className="text-2xl font-bold text-white text-center mb-8">Takuto</h1>
         {showRecovery ? (
           <RecoveryForm onDone={() => setShowRecovery(false)} />
         ) : (

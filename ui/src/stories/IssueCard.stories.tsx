@@ -48,7 +48,7 @@ const baseWorkflow: WorkflowSummary = {
   has_report: false,
   definition_runs: {},
   worktree_path: undefined,
-  workspace_name: "maestro-core",
+  workspace_name: "takuto-core",
 };
 
 const defaultWorkflowDefs = [
@@ -110,7 +110,7 @@ export const PendingWithWorktree: Story = {
       ...baseWorkflow,
       state: "Pending",
       can_start: true,
-      worktree_path: "/home/maestro/worktrees/proj-123",
+      worktree_path: "/home/takuto/worktrees/proj-123",
     },
   },
 };

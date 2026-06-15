@@ -2,7 +2,7 @@
 
 ## Summary
 
-Refactored the Maestro workflow system to support fully user-customizable secondary workflows via YAML files. Workflows are discovered dynamically from a `workflows/` directory, support inter-workflow dependencies, and are launchable from the dashboard UI with dependency-aware button states. Existing TOML workflow templates were migrated to the new YAML format.
+Refactored the Takuto workflow system to support fully user-customizable secondary workflows via YAML files. Workflows are discovered dynamically from a `workflows/` directory, support inter-workflow dependencies, and are launchable from the dashboard UI with dependency-aware button states. Existing TOML workflow templates were migrated to the new YAML format.
 
 ## Architecture
 
@@ -13,9 +13,9 @@ The implementation adds YAML workflow definitions as a **new layer alongside the
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| `definitions.rs` | `maestro-core/src/workflow/` | YAML parsing, discovery, validation, dependency resolution |
-| Engine extensions | `maestro-core/src/workflow/engine.rs` | Runtime execution, state management, file watching |
-| REST endpoints | `maestro-web/src/routes/workflows.rs` | API for listing definitions, starting/retrying runs |
+| `definitions.rs` | `takuto-core/src/workflow/` | YAML parsing, discovery, validation, dependency resolution |
+| Engine extensions | `takuto-core/src/workflow/engine.rs` | Runtime execution, state management, file watching |
+| REST endpoints | `takuto-web/src/routes/workflows.rs` | API for listing definitions, starting/retrying runs |
 | `WorkflowDefButtons.tsx` | `ui/src/components/` | Dependency-aware UI buttons |
 
 ## Changes
@@ -23,7 +23,7 @@ The implementation adds YAML workflow definitions as a **new layer alongside the
 ### Backend (Rust)
 
 **New files:**
-- `crates/maestro-core/src/workflow/definitions.rs` (944 lines) — Core module for YAML workflow definitions including:
+- `crates/takuto-core/src/workflow/definitions.rs` (944 lines) — Core module for YAML workflow definitions including:
   - YAML schema types (`WorkflowYaml`, `WorkflowStepYaml`, `DiscoveredWorkflow`)
   - `discover_workflows()` — scans directory, parses files, validates dependencies
   - `detect_cycles()` — DFS cycle detection for circular dependencies
@@ -34,22 +34,22 @@ The implementation adds YAML workflow definitions as a **new layer alongside the
   - 15 unit tests covering parsing, validation, cycles, dependencies
 
 **Modified files:**
-- `crates/maestro-core/src/workflow/engine.rs` (+556 lines):
+- `crates/takuto-core/src/workflow/engine.rs` (+556 lines):
   - `start_workflow_def()` / `retry_workflow_def()` — entry points for running definitions
   - `drive_workflow_def()` / `run_workflow_def_steps()` — async drivers using existing `run_agent_step_sequence()`
   - `start_definitions_watcher()` — background task polling every 5s, broadcasting WebSocket events on changes
   - `workflow_def_runs: HashMap<String, WorkflowDefRunState>` on `Workflow` struct
-- `crates/maestro-core/src/config.rs` — `workflow_definitions_dir` field on `GeneralConfig` (default `"workflows"`)
-- `crates/maestro-core/src/workflow/snapshot.rs` — `workflow_def_runs` persistence in snapshots
-- `crates/maestro-core/src/workflow/mod.rs` — registered `definitions` module
-- `crates/maestro-core/src/workflow/dashboard_progress.rs` — test helper compatibility
-- `crates/maestro-core/Cargo.toml` / `Cargo.toml` — `serde_yaml` workspace dependency
-- `crates/maestro-web/src/routes/workflows.rs` — 3 new handlers:
+- `crates/takuto-core/src/config.rs` — `workflow_definitions_dir` field on `GeneralConfig` (default `"workflows"`)
+- `crates/takuto-core/src/workflow/snapshot.rs` — `workflow_def_runs` persistence in snapshots
+- `crates/takuto-core/src/workflow/mod.rs` — registered `definitions` module
+- `crates/takuto-core/src/workflow/dashboard_progress.rs` — test helper compatibility
+- `crates/takuto-core/Cargo.toml` / `Cargo.toml` — `serde_yaml` workspace dependency
+- `crates/takuto-web/src/routes/workflows.rs` — 3 new handlers:
   - `GET /api/workflow-definitions` — lists discovered definitions
   - `POST /api/workflows/{id}/run-workflow/{def}` — starts a definition
   - `POST /api/workflows/{id}/retry-workflow/{def}` — retries a failed definition
-- `crates/maestro-web/src/server.rs` — route registration
-- `crates/maestro-cli/src/main.rs` — resolves `workflows_dir`, passes to engine, starts watcher
+- `crates/takuto-web/src/server.rs` — route registration
+- `crates/takuto-cli/src/main.rs` — resolves `workflows_dir`, passes to engine, starts watcher
 
 ### Frontend (React/TypeScript)
 
@@ -146,7 +146,7 @@ Downstream workflows remain disabled (locked) until all `depends_on` entries rea
 ## Step: Code Review
 
 - **Key findings**
-  - Two bugs found and fixed in `drive_workflow_def` and `start_workflow_def` in `crates/maestro-core/src/workflow/engine.rs`:
+  - Two bugs found and fixed in `drive_workflow_def` and `start_workflow_def` in `crates/takuto-core/src/workflow/engine.rs`:
     1. **Missing Stopped-state guard in `drive_workflow_def`**: When a user explicitly stops a workflow that has a running definition, the definition driver received a `Cancelled` error but fell through to the generic error handler, writing `WorkflowDefRunState::Error { "Cancelled" }`. This caused the UI to show a red error button with "Click to retry" for something that was intentionally stopped. Fixed by adding a state-snapshot check (matching the existing pattern in `drive_pr_review_workflow` and `drive_merge_base_workflow`) that early-returns when the parent workflow is `Stopped` or removed.
     2. **Reused parent cancel token in `start_workflow_def`**: Unlike `start_pr_review_workflow` and `start_merge_base_workflow` which create a fresh `CancellationToken`, the definition starter reused the parent workflow's token. Since `CancellationToken` never un-cancels, starting a definition on a previously-stopped workflow would immediately fail at the first `check_cancelled` call. Fixed by creating a fresh token under the write lock, matching the pattern of the existing secondary drivers.
   - Five additional low-severity suggestions identified but intentionally not fixed: `scan_definitions_dir` not skipping `.example.` files (spurious but harmless change events), TOCTOU race between locks (follows existing codebase patterns), `serde_yaml` 0.9 deprecated (functional), `discover_workflows` re-scanned on every call (negligible overhead), O(n²) sort in `topological_order` (negligible for typical workflow counts).
@@ -202,7 +202,7 @@ Downstream workflows remain disabled (locked) until all `depends_on` entries rea
     - `definitions.rs`: derivable `Default` impl (clippy::derivable_impls) — replaced manual impl with `#[derive(Default)]` + `#[default]` on the `Idle` variant.
     - `definitions.rs`: `&mut Vec<_>` parameter where `&mut [_]` suffices (clippy::ptr_arg) — changed `validate_dependencies` signature to accept `&mut [DiscoveredWorkflow]`.
     - `engine.rs`: two collapsible `if` blocks (clippy::collapsible_if) — merged nested conditions using let-chains.
-  - `cargo test` passed all 201 tests (183 in maestro-core, 18 in maestro-web) on the first run — no test failures.
+  - `cargo test` passed all 201 tests (183 in takuto-core, 18 in takuto-web) on the first run — no test failures.
   - `cargo fmt --check` reported formatting differences across 3 files (`main.rs`, `definitions.rs`, `engine.rs`); `cargo fmt` applied them.
   - After all fixes, all three checks (`clippy`, `test`, `fmt --check`) pass cleanly with zero warnings/errors.
 

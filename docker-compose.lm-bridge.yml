@@ -1,19 +1,19 @@
-# Bridge from Maestro workers to a host-mac model server (LM Studio, Ollama, etc.).
+# Bridge from Takuto workers to a host-mac model server (LM Studio, Ollama, etc.).
 #
 # Why this exists:
 #   Docker Desktop 4.34+ ships a gVisor-based network stack as the default and
 #   only honours `host.docker.internal` on the **default** bridge network.
-#   Containers on user-defined bridges (like Maestro's `maestro-core_default`)
+#   Containers on user-defined bridges (like Takuto's `takuto-core_default`)
 #   AND containers nested inside DinD CANNOT reach `host.docker.internal`,
-#   which makes a host-mac LM Studio unreachable from the Maestro workers.
+#   which makes a host-mac LM Studio unreachable from the Takuto workers.
 #
 # What this overlay does:
 #   Adds a tiny socat sidecar (`lm-bridge`) attached to BOTH the default
-#   docker bridge AND `maestro-core_default`:
+#   docker bridge AND `takuto-core_default`:
 #     - The default-bridge side reaches `host.docker.internal:${LM_PORT}` and
 #       forwards to LM Studio.
 #     - The compose-network side gives the DinD-nested workers a reachable
-#       target (workers can route into `maestro-core_default` via DinD's
+#       target (workers can route into `takuto-core_default` via DinD's
 #       outbound NAT, which we have verified end-to-end).
 #
 # Usage:
@@ -23,7 +23,7 @@
 #                   -f docker-compose.postgres.yml -f docker-compose.lm-bridge.yml up -d)
 #
 #   Then in Configuration → AI Settings → OpenCode → Base URL set:
-#     http://lm-bridge:1234/v1            (when MAESTRO_DNS=1 patches workers — todo)
+#     http://lm-bridge:1234/v1            (when TAKUTO_DNS=1 patches workers — todo)
 #   Or use the pinned IP directly:
 #     http://172.20.0.250:1234/v1
 #
@@ -34,7 +34,7 @@
 services:
   lm-bridge:
     image: alpine/socat:1.8.0.0
-    container_name: maestro-lm-bridge
+    container_name: takuto-lm-bridge
     restart: unless-stopped
     # socat: listen on tcp/1234 on every attached interface, fork per
     # connection, forward to host.docker.internal:${LM_HOST_PORT}. The
@@ -46,7 +46,7 @@ services:
       - "TCP-LISTEN:1234,fork,reuseaddr"
       - "TCP:host.docker.internal:${LM_HOST_PORT:-1234}"
     networks:
-      # The Maestro compose network: where DinD-nested workers can reach
+      # The Takuto compose network: where DinD-nested workers can reach
       # this sidecar. Pinned IP so the OpenCode base_url can be stable.
       default:
         ipv4_address: 172.20.0.250
@@ -58,7 +58,7 @@ services:
 
 networks:
   default:
-    name: maestro-core_default
+    name: takuto-core_default
     driver: bridge
     ipam:
       driver: default

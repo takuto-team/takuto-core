@@ -15,7 +15,7 @@ them.
 ## 1. The model identifier must include the provider prefix
 
 OpenCode's `-m` flag expects `<providerId>/<modelId>`. The provider
-in Maestro's generated `opencode.json` is always named
+in Takuto's generated `opencode.json` is always named
 `self_hosted`, so the **Model** field in AI Settings must look like:
 
 ```
@@ -24,7 +24,7 @@ self_hosted/<model-id-as-reported-by-the-server>
 
 Examples that work with LM Studio:
 
-| LM Studio model identifier (under "API Usage") | Set in Maestro |
+| LM Studio model identifier (under "API Usage") | Set in Takuto |
 |---|---|
 | `qwen/qwen2.5-vl-7b` | `self_hosted/qwen/qwen2.5-vl-7b` |
 | `lmstudio-community/Llama-3.1-8B-Instruct-GGUF` | `self_hosted/lmstudio-community/Llama-3.1-8B-Instruct-GGUF` |
@@ -40,17 +40,17 @@ Database migration complete.
 OpenCode error: unknown error
 ```
 
-Inside the maestro container, opencode's stderr is more verbose:
+Inside the takuto container, opencode's stderr is more verbose:
 
 ```bash
-docker exec <maestro-container> sh -c '
+docker exec <takuto-container> sh -c '
   mkdir -p /tmp/oc && cat > /tmp/oc/opencode.json <<EOF
   {
     "\$schema": "https://opencode.ai/config.json",
     "provider": {
       "self_hosted": {
         "npm": "@ai-sdk/openai-compatible",
-        "name": "Self-hosted (Maestro)",
+        "name": "Self-hosted (Takuto)",
         "options": {"baseURL": "http://host.docker.internal:1234/v1", "apiKey": "lm-studio"},
         "models": {"qwen/qwen2.5-vl-7b": {}}
       }
@@ -77,7 +77,7 @@ Model not found: qwen/qwen2.5-vl-7b.
 ## 2. `allow_shared_default` must be true when no user bearer is saved
 
 Self-hosted servers (LM Studio, Ollama) generally do not require a
-real API key. Maestro will inject the placeholder `"lm-studio"` as the
+real API key. Takuto will inject the placeholder `"lm-studio"` as the
 bearer **only when the per-workflow secrets bundle is built**. The
 bundle build is skipped when:
 
@@ -94,7 +94,7 @@ dashboard surfaces as `OpenCode error: unknown error`.
 
 ### How to confirm this is the problem
 
-In the maestro logs, look for:
+In the takuto logs, look for:
 
 ```
 build worker secrets bundle failed — falling back to legacy PASSTHROUGH_ENV path
@@ -137,7 +137,7 @@ lsof -nP -iTCP -sTCP:LISTEN | grep 1234
 > **and** Docker Desktop uses the gVisor network stack (the 4.34+ default).
 > You do **not** need it for cloud providers (Claude/Codex or any reachable
 > API URL), nor for a model server running **as a container inside the
-> Maestro compose network** — in that case point OpenCode's base URL at the
+> Takuto compose network** — in that case point OpenCode's base URL at the
 > service name (e.g. `http://lm-studio:1234/v1`) and skip `LM_BRIDGE`
 > entirely.
 
@@ -176,20 +176,20 @@ lsof -nP -iTCP -sTCP:LISTEN | grep 1234
 # Firewall is disabled. (State = 0)
 
 # 3. Public internet works from a container.
-docker exec <maestro-container> sh -c 'wget -q -O - -T 3 https://1.1.1.1 | head -3'
+docker exec <takuto-container> sh -c 'wget -q -O - -T 3 https://1.1.1.1 | head -3'
 # (prints HTML)
 
 # 4. host.docker.internal resolves but connections time out.
-docker exec <maestro-container> sh -c 'getent ahosts host.docker.internal | head -1'
+docker exec <takuto-container> sh -c 'getent ahosts host.docker.internal | head -1'
 # 192.168.65.254  STREAM host.docker.internal
 
-docker exec <maestro-container> sh -c 'curl -v -m 3 http://host.docker.internal:1234/v1/models 2>&1 | tail -5'
+docker exec <takuto-container> sh -c 'curl -v -m 3 http://host.docker.internal:1234/v1/models 2>&1 | tail -5'
 #   Trying 192.168.65.254:1234...
 # * Connection timed out after 3001 milliseconds
 
 # 5. Even the Mac's LAN IP times out (gVisor doesn't route private subnets
 #    that aren't on Docker Desktop's vmnet).
-docker exec <maestro-container> sh -c 'curl -v -m 3 http://<mac-LAN-IP>:1234/v1/models 2>&1 | tail -5'
+docker exec <takuto-container> sh -c 'curl -v -m 3 http://<mac-LAN-IP>:1234/v1/models 2>&1 | tail -5'
 # * Connection timed out
 ```
 
@@ -207,12 +207,12 @@ The only Docker Desktop quirk that we can rely on is this: **the
 default `bridge` network IS forwarded to the host correctly** under
 gVisor; user-defined networks and DinD-nested networks are not.
 
-So the supported workaround in Maestro is a tiny socat container
+So the supported workaround in Takuto is a tiny socat container
 attached to BOTH networks:
 
 - the default `bridge` network — so it can actually reach
   `host.docker.internal:<port>` on the Mac;
-- the Maestro compose network — so DinD-nested workers can route to
+- the Takuto compose network — so DinD-nested workers can route to
   it (DinD's outbound NAT into the compose network was verified
   end-to-end).
 
@@ -223,8 +223,8 @@ flag:
 make start BACKEND=postgres LM_BRIDGE=1
 ```
 
-That brings up `maestro-lm-bridge` (image `alpine/socat:1.8.0.0`)
-with a **pinned IP of `172.20.0.250`** on the Maestro compose
+That brings up `takuto-lm-bridge` (image `alpine/socat:1.8.0.0`)
+with a **pinned IP of `172.20.0.250`** on the Takuto compose
 network. It forwards TCP/1234 → `host.docker.internal:${LM_HOST_PORT:-1234}`.
 
 Then in **Configuration → AI Settings → OpenCode**, set the
@@ -250,8 +250,8 @@ LM_HOST_PORT=11434 make start BACKEND=postgres LM_BRIDGE=1
 ### One-line smoke test once `LM_BRIDGE=1` is up
 
 ```bash
-docker exec maestro-core-dind-1 docker run --rm --entrypoint /bin/bash \
-  maestro:latest -c \
+docker exec takuto-core-dind-1 docker run --rm --entrypoint /bin/bash \
+  takuto:latest -c \
   'exec 3<>/dev/tcp/172.20.0.250/1234;
    printf "GET /v1/models HTTP/1.0\r\nHost: x\r\n\r\n" >&3;
    timeout 5 cat <&3 | head -5'

@@ -7,7 +7,7 @@ export const ONBOARDING_STEPS: { index: StepIndex; title: string; body: string }
   {
     index: 1,
     title: "Ticketing",
-    body: "Pick where Maestro should read tasks from. You can change this later.",
+    body: "Pick where Takuto should read tasks from. You can change this later.",
   },
   {
     index: 2,

@@ -282,7 +282,7 @@ export function ProviderForm({
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          Maestro-owned flags (e.g.{" "}
+          Takuto-owned flags (e.g.{" "}
           <code className="text-gray-400">--dangerously-skip-permissions</code>,{" "}
           <code className="text-gray-400">--resume</code>) are rejected
           server-side.
@@ -303,7 +303,7 @@ export function ProviderForm({
           <p className="text-gray-500 mt-0.5">
             When on, users without their own credential fall back to the
             deployment-default token configured in{" "}
-            <code className="text-gray-400">maestro.env</code>. Default off.
+            <code className="text-gray-400">takuto.env</code>. Default off.
           </p>
         </label>
       </section>

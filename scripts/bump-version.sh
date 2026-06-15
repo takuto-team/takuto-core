@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bump the Maestro version interactively.
+# Bump the Takuto version interactively.
 # Updates VERSION, Cargo.toml workspace, ui/package.json, then commits, tags, and pushes.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

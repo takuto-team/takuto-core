@@ -26,7 +26,7 @@ can_delete: boolean,
  */
 can_start: boolean, 
 /**
- * Step-based progress 0–100 (see `dashboard_progress` in maestro-core).
+ * Step-based progress 0–100 (see `dashboard_progress` in takuto-core).
  */
 progress_percent: number, 
 /**

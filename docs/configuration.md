@@ -6,9 +6,9 @@ this page and that file disagree, the example wins.
 
 Settings are reloaded on file change (5-second poller). A few keys are
 **startup-only** and require a restart (noted inline). Secrets belong in
-`maestro.env`, never in `config.toml`.
+`takuto.env`, never in `config.toml`.
 
-Maestro splits config into two kinds:
+Takuto splits config into two kinds:
 
 - **Bootstrap** — needed before the database/dashboard exist, or applied only at
   startup. Hand-edit these in `config.toml` before the first boot.
@@ -22,7 +22,7 @@ surface (tab / endpoint) that manages it.
 ## Conventions
 
 - 🔒 — security-sensitive. Review before changing in a shared deployment.
-- **Default** column shows the value Maestro uses when the key is absent.
+- **Default** column shows the value Takuto uses when the key is absent.
 - **Scope** column: **Bootstrap** (hand-edit, often startup-only) or the UI tab /
   endpoint that manages the key.
 - Commented-out keys in `config.toml.example` show their default in the comment;
@@ -56,9 +56,9 @@ Process-wide behaviour: ticketing mode, polling, concurrency, logging.
 | `ticketing_system` | `"none"` | string | Bootstrap | `"jira"`, `"github"`, or `"none"`. Drives the poller and the dashboard **+** button. |
 | `dry_mode` 🔒 | `false` | bool | Bootstrap | Skip real Jira/GitHub side effects (no assigns, transitions, or pushes). Local work — worktrees, installs, agent sessions — still runs. Useful for staging a workflow definition before going live. |
 | `log_level` | `"info"` | string | Bootstrap (restart) | `trace`, `debug`, `info`, `warn`, `error`. Applied via `tracing_subscriber` `EnvFilter`. |
-| `worker_image` | `""` | string | Bootstrap | Docker image for isolated workflow containers when DinD is enabled. Empty = auto-detect from the running Maestro image. |
+| `worker_image` | `""` | string | Bootstrap | Docker image for isolated workflow containers when DinD is enabled. Empty = auto-detect from the running Takuto image. |
 | `workflow_definitions_dir` | `"workflows"` | string | Bootstrap (restart) | Path scanned for `*.toml` workflow definitions, resolved relative to the config file's directory. |
-| `allow_auto_generate_secret_key` 🔒 | `true` | bool | Bootstrap | When `true`, the server auto-generates `{data_dir}/secret.key` on first boot if neither `MAESTRO_SECRET_KEY` nor a keyfile is present. Set `false` to provision the key out of band (boots degraded until provided). |
+| `allow_auto_generate_secret_key` 🔒 | `true` | bool | Bootstrap | When `true`, the server auto-generates `{data_dir}/secret.key` on first boot if neither `TAKUTO_SECRET_KEY` nor a keyfile is present. Set `false` to provision the key out of band (boots degraded until provided). |
 | `poller_owner_username` | *(unset)* | string | Bootstrap | Username of the user who owns workflows created automatically by the poller. When unset, the lexicographically-first non-suspended admin is used. When set but missing/suspended, an admin fallback applies with a warning. When neither resolves, the poller skips entirely. |
 | `migrate_orphan_workflows` | `false` | bool | Bootstrap | When `true`, restored workflows with `user_id = None` (pre-multi-user orphans) are reassigned to the resolved poller owner at startup. |
 | `migrate_orphan_repo_associations` | `true` | bool | Bootstrap | When `true`, startup reconciliation creates a `user_repositories` association for every restored snapshot workflow that has a `user_id` and whose `workspace_name` matches a registered repository. Set to `false` to require users to re-add the repository explicitly. |
@@ -140,10 +140,10 @@ All `[git]` keys are **bootstrap** settings.
 ## `[github]`
 
 Optional GitHub App authentication. When configured, commits and PRs are attributed
-to `maestro-bot[bot]` instead of the personal `gh` user.
+to `takuto-bot[bot]` instead of the personal `gh` user.
 
 All three fields (`app_id`, `app_installation_id`, and one private key source)
-must be set together. Errors are non-fatal at startup — Maestro falls back to
+must be set together. Errors are non-fatal at startup — Takuto falls back to
 personal `gh` auth and logs a warning.
 
 Required App permissions: contents (write), pull_requests (write), metadata (read).
@@ -154,7 +154,7 @@ All `[github]` keys are **bootstrap** settings.
 |---|---|---|---|---|
 | `app_id` | *(unset)* | int | Bootstrap | GitHub App ID. |
 | `app_installation_id` | *(unset)* | int | Bootstrap | App installation ID for your org/repo. |
-| `app_private_key` 🔒 | *(unset)* | string | Bootstrap | PEM-encoded RSA private key, inline. Mutually exclusive with `app_private_key_path`. Prefer keeping this in `maestro.env` if you can — see [Environment variables](#environment-variables) in the README. |
+| `app_private_key` 🔒 | *(unset)* | string | Bootstrap | PEM-encoded RSA private key, inline. Mutually exclusive with `app_private_key_path`. Prefer keeping this in `takuto.env` if you can — see [Environment variables](#environment-variables) in the README. |
 | `app_private_key_path` 🔒 | *(unset)* | string | Bootstrap | Path to a PEM file with the App's private key. |
 | `gh_allowed_extra_prefixes` | `[]` | array<string> | Bootstrap | Extra `gh` argv prefixes allowed beyond the built-in set (`api`, `pr create`, `pr edit`, `auth login`, `auth setup-git`, `auth status`). Each entry is a whitespace-separated token line. Set to `["*"]` to disable the gh allowlist entirely. |
 
@@ -168,8 +168,8 @@ Dashboard server.
 |---|---|---|---|---|
 | `host` | `"0.0.0.0"` | string | Bootstrap (restart) | Bind address. |
 | `port` | `8080` | int | Bootstrap (restart) | Bind port. |
-| `cors_origins` 🔒 | `[]` | array<string> | Bootstrap (restart) | Allowed CORS origins. Empty = auto-compute from `host` and `port` (e.g. `http://localhost:8080`). Set explicitly when behind a reverse proxy or TLS terminator (e.g. `["https://maestro.example.com"]`). |
-| `cookie_secure` 🔒 | *(auto-detect)* | bool | Bootstrap | Controls the `Secure` flag on the session cookie. Unset: auto-detect (set when any `cors_origins` entry is `https://…` OR when the inbound request carries `X-Forwarded-Proto: https`). Force `true` when terminating TLS in front of Maestro without `X-Forwarded-Proto`; use `false` for local plain-HTTP testing only. |
+| `cors_origins` 🔒 | `[]` | array<string> | Bootstrap (restart) | Allowed CORS origins. Empty = auto-compute from `host` and `port` (e.g. `http://localhost:8080`). Set explicitly when behind a reverse proxy or TLS terminator (e.g. `["https://takuto.example.com"]`). |
+| `cookie_secure` 🔒 | *(auto-detect)* | bool | Bootstrap | Controls the `Secure` flag on the session cookie. Unset: auto-detect (set when any `cors_origins` entry is `https://…` OR when the inbound request carries `X-Forwarded-Proto: https`). Force `true` when terminating TLS in front of Takuto without `X-Forwarded-Proto`; use `false` for local plain-HTTP testing only. |
 | `kick_other_sessions_on_login` | `true` | bool | Bootstrap | When `true`, a successful login deletes all prior sessions for the same user (single-session enforcement). Set `false` for long-lived multi-client sessions (desktop + mobile). |
 
 > Authentication is **multi-user only**. On first boot the dashboard prompts you
@@ -234,8 +234,8 @@ All `[docker]` keys are **bootstrap** settings (consumed at image build / compos
 
 | Key | Default | Type | Scope | Description |
 |---|---|---|---|---|
-| `build_commands` | `[]` | array<string> | Bootstrap | Optional `bash -c` steps run during image build (see `MAESTRO_BUILD_CONFIG` in `docker-compose.yml`). |
-| `compose_up_commands` | `[]` | array<string> | Bootstrap | Optional commands run as the `maestro` user after preflight on every `docker compose up`. Skills from `./skills` do not require a hook here — they are merged automatically. |
+| `build_commands` | `[]` | array<string> | Bootstrap | Optional `bash -c` steps run during image build (see `TAKUTO_BUILD_CONFIG` in `docker-compose.yml`). |
+| `compose_up_commands` | `[]` | array<string> | Bootstrap | Optional commands run as the `takuto` user after preflight on every `docker compose up`. Skills from `./skills` do not require a hook here — they are merged automatically. |
 
 ---
 
@@ -264,7 +264,7 @@ All `[terminal]` keys are **bootstrap** settings.
 | Key | Default | Type | Scope | Description |
 |---|---|---|---|---|
 | `git_editor` | *(unset)* | string | Bootstrap | apt package name (e.g. `"nano"`, `"vim"`, `"micro"`, `"helix"`) installed inside every editor container; `git config --global core.editor` is set so `git commit`, `git rebase -i`, etc. open this editor. |
-| `setup_commands` | `[]` | array<string> | Bootstrap | Shell commands run **once per editor container lifetime** (guarded by a marker file). Use for expensive one-time setup. `/etc/maestro/env` is sourced before each command. |
+| `setup_commands` | `[]` | array<string> | Bootstrap | Shell commands run **once per editor container lifetime** (guarded by a marker file). Use for expensive one-time setup. `/etc/takuto/env` is sourced before each command. |
 | `startup_commands` | `[]` | array<string> | Bootstrap | Shell commands run **every time** a fresh editor container is created. Use for tools that should be verified or updated on each editor open (e.g. mise-managed runtimes). |
 
 ---
@@ -276,7 +276,7 @@ All `[network]` keys are **bootstrap** settings (firewall policy — deploy-time
 | Key | Default | Type | Scope | Description |
 |---|---|---|---|---|
 | `extra_egress_hosts` 🔒 | `[]` | array<string> | Bootstrap | Domains added to the egress allowlist on top of the built-in defaults (Atlassian, GitHub, Anthropic, npm registry, private registries detected in `.npmrc`). Each entry expands the attack surface — only add hosts you trust the agent to talk to. |
-| `allow_all_https` 🔒 | `false` | bool | Bootstrap | When `true`, skip the egress allowlist and permit all outbound HTTPS (ports 443/8443). `extra_egress_hosts` is ignored when this is enabled. **Use only in trusted environments** — this disables one of Maestro's core mitigations. |
+| `allow_all_https` 🔒 | `false` | bool | Bootstrap | When `true`, skip the egress allowlist and permit all outbound HTTPS (ports 443/8443). `extra_egress_hosts` is ignored when this is enabled. **Use only in trusted environments** — this disables one of Takuto's core mitigations. |
 
 ---
 
@@ -288,7 +288,7 @@ All `[dev]` keys are **bootstrap** settings.
 
 | Key | Default | Type | Scope | Description |
 |---|---|---|---|---|
-| `mock_agent` | `false` | bool | Bootstrap | When `true`, `ClaudeSession::run_prompt` and `CursorSession::run_prompt` short-circuit into a scripted mock session — no real `claude` or `agent` process spawns, no API tokens consumed. Honors the env override `MAESTRO_DEV_MOCK_AGENT=1` (env wins over config). Designed for E2E tests and dashboard demos. |
+| `mock_agent` | `false` | bool | Bootstrap | When `true`, `ClaudeSession::run_prompt` and `CursorSession::run_prompt` short-circuit into a scripted mock session — no real `claude` or `agent` process spawns, no API tokens consumed. Honors the env override `TAKUTO_DEV_MOCK_AGENT=1` (env wins over config). Designed for E2E tests and dashboard demos. |
 | `mock_agent_script_path` | `"tmp/mock_script.txt"` | string | Bootstrap | Path to the mock script file. |
 | `mock_agent_line_delay_ms` | `75` | int | Bootstrap | Delay between mock output lines. |
 | `mock_agent_total_ms` | `5000` | int | Bootstrap | Total mock session duration. |
@@ -305,7 +305,7 @@ was removed from the bake, or skip one entirely.
 
 | Key | Default | Type | Scope | Description |
 |---|---|---|---|---|
-| `install_commands` | `[]` | array of strings | Bootstrap | Shell snippets run in order against the tools volume. The set is SHA-gated: Maestro hashes the canonicalised list and re-runs provisioning only when it changes. Each snippet should be idempotent (guard with `[ -f "$MAESTRO_TOOLS_BIN/<tool>" ] || …`) and install into `$MAESTRO_TOOLS_BIN`. |
+| `install_commands` | `[]` | array of strings | Bootstrap | Shell snippets run in order against the tools volume. The set is SHA-gated: Takuto hashes the canonicalised list and re-runs provisioning only when it changes. Each snippet should be idempotent (guard with `[ -f "$TAKUTO_TOOLS_BIN/<tool>" ] || …`) and install into `$TAKUTO_TOOLS_BIN`. |
 
 ---
 
@@ -335,8 +335,8 @@ are per-user and configured via the same **Worktree Settings** tab.
 
 ## Environment variables
 
-Secrets and per-host overrides go in `maestro.env` (mounted at
-`/etc/maestro/env`). Only `export VAR=value` lines are honoured.
+Secrets and per-host overrides go in `takuto.env` (mounted at
+`/etc/takuto/env`). Only `export VAR=value` lines are honoured.
 
 | Variable | Purpose |
 |---|---|
@@ -345,10 +345,10 @@ Secrets and per-host overrides go in `maestro.env` (mounted at
 | `CLAUDE_CODE_OAUTH_TOKEN` 🔒 | Token for Claude Code OAuth auth. |
 | `CURSOR_API_KEY` 🔒 | Cursor Agent key — skips interactive `agent status` preflight. |
 | `GH_TOKEN` 🔒 | GitHub PAT (fine-grained, scoped to the target repo). |
-| `MAESTRO_CONFIG` | Path to an alternate `config.toml`. |
-| `MAESTRO_DATA_DIR` | Override the persistent data directory (`maestro.db`, snapshots). |
-| `MAESTRO_HOME` | Override the home base used to compute `MAESTRO_DATA_DIR`. |
-| `MAESTRO_DEV_MOCK_AGENT` | `1` = force mock agent on (overrides `[dev] mock_agent`). |
+| `TAKUTO_CONFIG` | Path to an alternate `config.toml`. |
+| `TAKUTO_DATA_DIR` | Override the persistent data directory (`takuto.db`, snapshots). |
+| `TAKUTO_HOME` | Override the home base used to compute `TAKUTO_DATA_DIR`. |
+| `TAKUTO_DEV_MOCK_AGENT` | `1` = force mock agent on (overrides `[dev] mock_agent`). |
 
 See the [README's environment variables section](../README.md#environment-variables) for the
-full `maestro.env` template.
+full `takuto.env` template.

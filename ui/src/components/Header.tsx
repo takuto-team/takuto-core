@@ -108,7 +108,7 @@ export function Header({
       <div className="w-full px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
           <div className="flex items-center gap-3">
-            <span className="text-lg font-bold tracking-tight text-white">Maestro</span>
+            <span className="text-lg font-bold tracking-tight text-white">Takuto</span>
             <span className="text-gray-700">|</span>
             {hasRepos && onSelectRepo ? (
               <div className="relative" ref={pickerRef}>

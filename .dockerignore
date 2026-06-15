@@ -16,7 +16,7 @@ design/
 # User-specific config files must NOT be baked into the distributed image.
 # They are volume-mounted at runtime (see docker-compose.yml).
 config.toml
-maestro.env
+takuto.env
 # Exclude user workflow files (local overrides are gitignored; only *.example.toml is tracked).
 # NOTE: Podman doesn't support negation (!pattern) reliably, so we exclude specific
 # user filenames instead of using a wildcard + exception.

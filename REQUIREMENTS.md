@@ -1,8 +1,8 @@
-# Maestro - Product Requirements Document
+# Takuto - Product Requirements Document
 
 ## 1. Product Overview
 
-**Maestro** is an automated Jira ticket handler that orchestrates Claude Code headless sessions inside a Docker container to implement software tickets end-to-end — from picking up a Jira ticket in "To Do" to creating a pull request on GitHub.
+**Takuto** is an automated Jira ticket handler that orchestrates Claude Code headless sessions inside a Docker container to implement software tickets end-to-end — from picking up a Jira ticket in "To Do" to creating a pull request on GitHub.
 
 ### 1.1 Goals
 
@@ -25,16 +25,16 @@
 
 ### 2.1 Ticket Polling and Pickup
 
-**US-2.1.1** As a user, I want Maestro to automatically poll Jira for tickets in "To Do" status so that new work is picked up without manual intervention.
+**US-2.1.1** As a user, I want Takuto to automatically poll Jira for tickets in "To Do" status so that new work is picked up without manual intervention.
 
 **Acceptance Criteria:**
-- Maestro polls Jira at a configurable interval (default: 60 seconds) using `acli`.
+- Takuto polls Jira at a configurable interval (default: 60 seconds) using `acli`.
 - Only tickets matching the configured project keys AND item types (e.g., Task, Bug) are picked up.
 - Tickets are picked up one at a time, in creation-date order (oldest first).
 - A ticket is only picked up if no workflow is currently running for it.
 - In dry mode: polling occurs normally, but no ticket state changes are made.
 
-**US-2.1.2** As a user, I want picked-up tickets to be assigned to the logged-in user and moved to "In Progress" so that the team has visibility into what Maestro is working on.
+**US-2.1.2** As a user, I want picked-up tickets to be assigned to the logged-in user and moved to "In Progress" so that the team has visibility into what Takuto is working on.
 
 **Acceptance Criteria:**
 - On pickup, the ticket is assigned to the Jira user authenticated via `acli`.
@@ -44,7 +44,7 @@
 
 ### 2.2 Ticket Details Retrieval
 
-**US-2.2** As a user, I want Maestro to retrieve the full ticket details including linked Jira items so that Claude Code has full context for implementation.
+**US-2.2** As a user, I want Takuto to retrieve the full ticket details including linked Jira items so that Claude Code has full context for implementation.
 
 **Acceptance Criteria:**
 - The ticket summary, description, acceptance criteria, and all custom fields are retrieved.
@@ -54,7 +54,7 @@
 
 ### 2.3 Git Worktree Creation
 
-**US-2.3** As a user, I want Maestro to create an isolated git worktree for each ticket so that parallel ticket work does not interfere.
+**US-2.3** As a user, I want Takuto to create an isolated git worktree for each ticket so that parallel ticket work does not interfere.
 
 **Acceptance Criteria:**
 - A new git worktree is created from the configured base branch.
@@ -65,7 +65,7 @@
 
 ### 2.4 Claude Code Implementation Sessions
 
-**US-2.4.1** As a user, I want Maestro to run Claude Code in headless mode with the `/address-ticket` skill so that the ticket is implemented automatically.
+**US-2.4.1** As a user, I want Takuto to run Claude Code in headless mode with the `/address-ticket` skill so that the ticket is implemented automatically.
 
 **Acceptance Criteria:**
 - Claude Code is started with `--allow-dangerously-skip-permissions` flag.
@@ -74,14 +74,14 @@
 - A PM agent within the Claude Code session auto-confirms implementation plans by validating them against the ticket requirements and acceptance criteria.
 - The session output (stdout/stderr) is captured and available for the execution report.
 
-**US-2.4.2** As a user, I want Maestro to run the `/review-changes` skill after each implementation pass so that code quality issues are caught and fixed.
+**US-2.4.2** As a user, I want Takuto to run the `/review-changes` skill after each implementation pass so that code quality issues are caught and fixed.
 
 **Acceptance Criteria:**
 - After `/address-ticket` completes, a new Claude Code session runs `/review-changes`.
 - Review findings are addressed within the same session.
 - The session is closed after review findings are resolved.
 
-**US-2.4.3** As a user, I want Maestro to perform 3 total implementation passes so that the solution is iteratively refined.
+**US-2.4.3** As a user, I want Takuto to perform 3 total implementation passes so that the solution is iteratively refined.
 
 **Acceptance Criteria:**
 - The cycle is: `/address-ticket` -> `/review-changes` -> `/address-ticket` -> `/review-changes` -> `/address-ticket` -> `/review-changes`.
@@ -91,7 +91,7 @@
 
 ### 2.5 Linting
 
-**US-2.5** As a user, I want Maestro to run the configured lint command and fix any issues so that the PR meets code style requirements.
+**US-2.5** As a user, I want Takuto to run the configured lint command and fix any issues so that the PR meets code style requirements.
 
 **Acceptance Criteria:**
 - The configured lint command is run in the worktree.
@@ -102,7 +102,7 @@
 
 ### 2.6 Unit Tests
 
-**US-2.6** As a user, I want Maestro to run unit tests and fix failures so that the implementation is verified.
+**US-2.6** As a user, I want Takuto to run unit tests and fix failures so that the implementation is verified.
 
 **Acceptance Criteria:**
 - The configured unit test command is run in the worktree.
@@ -113,7 +113,7 @@
 
 ### 2.7 End-to-End Tests
 
-**US-2.7** As a user, I want Maestro to run e2e tests and fix failures so that the implementation works in a realistic environment.
+**US-2.7** As a user, I want Takuto to run e2e tests and fix failures so that the implementation works in a realistic environment.
 
 **Acceptance Criteria:**
 - The configured e2e test command is run in the worktree.
@@ -124,7 +124,7 @@
 
 ### 2.8 Pull Request Creation
 
-**US-2.8** As a user, I want Maestro to create a GitHub pull request so that the implementation is ready for human review.
+**US-2.8** As a user, I want Takuto to create a GitHub pull request so that the implementation is ready for human review.
 
 **Acceptance Criteria:**
 - The PR is created via `gh pr create`.
@@ -133,7 +133,7 @@
   - Jira ticket reference (link to ticket).
   - Summary of changes (generated from commit messages).
   - Test results summary (pass/fail counts for unit and e2e).
-  - A note that the PR was auto-generated by Maestro.
+  - A note that the PR was auto-generated by Takuto.
 - The PR targets the configured base branch.
 - In dry mode: PR creation is skipped; a log entry records what would have been created.
 
@@ -143,14 +143,14 @@
 
 **Acceptance Criteria:**
 - Stopping a workflow kills all running Claude Code sessions for that ticket.
-- The Jira ticket is unassigned (Maestro's user removed as assignee).
+- The Jira ticket is unassigned (Takuto's user removed as assignee).
 - The ticket status transitions back to "To Do".
 - The git worktree and branch are preserved.
 - In dry mode: Jira changes are skipped; worktree is still preserved.
 
 ### 2.10 Workflow Pause / Resume
 
-**US-2.10.1** As a user, I want to pause a running workflow so that I can temporarily halt Maestro without losing progress.
+**US-2.10.1** As a user, I want to pause a running workflow so that I can temporarily halt Takuto without losing progress.
 
 **Acceptance Criteria:**
 - Pausing suspends execution after the current step completes (does not interrupt a running Claude Code session mid-execution).
@@ -170,7 +170,7 @@
 
 ### 3.1 Dashboard Page
 
-The dashboard is the main page of the Maestro web UI. It displays all active, paused, and recently completed workflows.
+The dashboard is the main page of the Takuto web UI. It displays all active, paused, and recently completed workflows.
 
 **US-3.1.1** As a user, I want to see a card for each running/paused workflow so that I can monitor progress at a glance.
 
@@ -200,7 +200,7 @@ The dashboard is the main page of the Maestro web UI. It displays all active, pa
 
 ### 3.2 Configuration Page
 
-**US-3.2** As a user, I want a configuration page so that I can adjust Maestro's settings without editing files.
+**US-3.2** As a user, I want a configuration page so that I can adjust Takuto's settings without editing files.
 
 **Acceptance Criteria:**
 - All configurable items (see Section 5) are presented in a form.
@@ -217,7 +217,7 @@ The dashboard is the main page of the Maestro web UI. It displays all active, pa
 
 ### 3.3 Report Modal
 
-**US-3.3** As a user, I want to view a detailed execution report for any workflow so that I can understand what Maestro did and debug issues.
+**US-3.3** As a user, I want to view a detailed execution report for any workflow so that I can understand what Takuto did and debug issues.
 
 **Acceptance Criteria:**
 - The report modal displays:
@@ -266,7 +266,7 @@ Dry mode allows running the full pipeline without making any writes to external 
 
 ## 5. Configuration Schema
 
-All configuration is stored in a single file (`maestro.toml` at the project root or a path specified by `MAESTRO_CONFIG` env var).
+All configuration is stored in a single file (`takuto.toml` at the project root or a path specified by `TAKUTO_CONFIG` env var).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -297,7 +297,7 @@ The Docker image must include:
 - Claude Code CLI
 - Playwright CLI (for e2e tests)
 - Git
-- Rust toolchain (for building Maestro itself)
+- Rust toolchain (for building Takuto itself)
 - Node.js runtime (for Claude Code and Playwright)
 - The project's Claude Code skills collection
 
@@ -307,7 +307,7 @@ The Docker image must include:
 |---|---|---|
 | `acli` | API token | `ACLI_API_TOKEN` env var, configured at container start |
 | `gh` | OAuth or PAT | `GH_TOKEN` env var, or `gh auth login` with token at container start |
-| `figma-cli` | API token | `FIGMA_API_TOKEN` env var (also stored in `maestro.toml`) |
+| `figma-cli` | API token | `FIGMA_API_TOKEN` env var (also stored in `takuto.toml`) |
 | Claude Code | API key | `ANTHROPIC_API_KEY` env var |
 
 All tokens are passed via environment variables at container startup. No interactive login flows are required.
@@ -357,12 +357,12 @@ All other outbound connections are blocked.
 ### 7.5 Container Restart
 
 - On container restart, all in-flight workflows are lost (no persistent state).
-- Tickets that were "In Progress" with Maestro as assignee should be detected on startup and either resumed or moved back to "To Do" (configurable behavior: `on_restart: "resume" | "reset"`).
+- Tickets that were "In Progress" with Takuto as assignee should be detected on startup and either resumed or moved back to "To Do" (configurable behavior: `on_restart: "resume" | "reset"`).
 - Worktrees from previous runs are preserved on the mounted volume.
 
 ### 7.6 Graceful Shutdown
 
-- On SIGTERM/SIGINT, Maestro:
+- On SIGTERM/SIGINT, Takuto:
   1. Stops accepting new tickets.
   2. Waits for current Claude Code sessions to complete (up to a configurable grace period).
   3. Kills remaining sessions after the grace period.
@@ -377,7 +377,7 @@ For reference, the complete ordered workflow for a single ticket:
 
 | Step | Description | Dry Mode |
 |---|---|---|
-| 1 | Assign ticket to Maestro user | Skip |
+| 1 | Assign ticket to Takuto user | Skip |
 | 2 | Move ticket to "In Progress" | Skip |
 | 3 | Retrieve ticket details + linked items | Execute |
 | 4 | Create git worktree on new branch | Execute |
@@ -398,7 +398,7 @@ On stop at any step: kill sessions, unassign (skip in dry), move to To Do (skip 
 
 ## 9. Non-Functional Requirements
 
-- **Startup time**: Maestro should be ready to poll within 5 seconds of container start.
+- **Startup time**: Takuto should be ready to poll within 5 seconds of container start.
 - **Memory**: Each workflow should use no more than 512 MB of memory (excluding Claude Code sessions).
 - **Logging**: All actions are logged to stdout in structured JSON format for container log aggregation.
 - **Web UI responsiveness**: Dashboard updates within 2 seconds of a workflow state change (via polling or WebSocket).

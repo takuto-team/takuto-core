@@ -1,8 +1,8 @@
-# Claude / AI agent instructions — Maestro
+# Claude / AI agent instructions — Takuto
 
 ## Read `AGENTS.md` first (new session)
 
-At the **start of every new session** that involves this codebase, **read `AGENTS.md` at the repository root before any other project documentation or exploratory reading** (`README.md`, `ARCHITECTURE.md`, crate sources, etc.). It is the **first** file you should load for Maestro context.
+At the **start of every new session** that involves this codebase, **read `AGENTS.md` at the repository root before any other project documentation or exploratory reading** (`README.md`, `ARCHITECTURE.md`, crate sources, etc.). It is the **first** file you should load for Takuto context.
 
 Exception: purely local edits where the user has pinned an exact file and no project context is needed (e.g. a trivial typo). Otherwise, **always start with `AGENTS.md`**.
 
@@ -37,11 +37,11 @@ Apply the same rule to commit messages going forward when reasonable — the cod
 
 ## Migrations are immutable
 
-Once a migration file under `crates/maestro-core/migrations/` has been merged and applied to any environment, **never edit the file again — not even comments, whitespace, or trailing newlines**. sqlx stores a SHA256 checksum of each migration in `_sqlx_migrations` at apply time and refuses to boot when the on-disk content drifts (`migration X was previously applied but has been modified`).
+Once a migration file under `crates/takuto-core/migrations/` has been merged and applied to any environment, **never edit the file again — not even comments, whitespace, or trailing newlines**. sqlx stores a SHA256 checksum of each migration in `_sqlx_migrations` at apply time and refuses to boot when the on-disk content drifts (`migration X was previously applied but has been modified`).
 
 This rule overrides every other "scrub", "rename", or "tidy" instruction. If you find unwanted content in an applied migration:
 
 - Live with it — the file is part of the DB's contract, not the prose surface.
 - Or write a follow-up migration that does what you wanted (rename a column, drop an index) the proper way.
 
-The same prohibition applies to bulk find/replace tools, automated formatters, and agents: when sweeping comments, ticket references, or anything else across the tree, **exclude `crates/maestro-core/migrations/` from the sweep**.
+The same prohibition applies to bulk find/replace tools, automated formatters, and agents: when sweeping comments, ticket references, or anything else across the tree, **exclude `crates/takuto-core/migrations/` from the sweep**.

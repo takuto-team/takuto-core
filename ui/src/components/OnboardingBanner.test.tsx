@@ -21,7 +21,7 @@ function healthy(): SystemStatus {
       mode: "app",
       app_configured: true,
       app_id: 1,
-      app_name: "maestro-bot",
+      app_name: "takuto-bot",
     },
     provider: {
       selected: "claude",
@@ -150,7 +150,7 @@ describe.each([
     renderBanner(statusWith([warning]), { isAdmin: true });
     const link = screen.getByRole("link", { name: /read docs/i }) as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe(
-      "https://github.com/morphet81/maestro/blob/main/AGENTS.md",
+      "https://github.com/takuto-team/takuto-cli/blob/main/AGENTS.md",
     );
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Maestro is in early development. Security fixes are applied to the latest
+Takuto is in early development. Security fixes are applied to the latest
 released minor only.
 
 | Version | Supported |
@@ -17,7 +17,7 @@ released minor only.
 Two private reporting channels:
 
 1. **GitHub Security Advisories** (preferred) — file a private advisory at
-   <https://github.com/morphet81/maestro-core/security/advisories/new>.
+   <https://github.com/takuto-team/takuto-core/security/advisories/new>.
 2. **Email** — `morphet.contact@gmail.com` until a project domain is registered.
 
 For sensitive reports, request a PGP key over the same channels.
@@ -30,8 +30,8 @@ coordinated with the reporter.
 
 In scope:
 
-- Authentication, session management, and authorisation in the Maestro web
-  layer (`crates/maestro-web`).
+- Authentication, session management, and authorisation in the Takuto web
+  layer (`crates/takuto-web`).
 - Container and egress isolation boundaries (`docker/egress-rules.sh`,
   workflow container lifecycle).
 - Reverse-proxy token leakage (`/s/*` path-token registry).
@@ -42,7 +42,7 @@ In scope:
 Out of scope:
 
 - Issues that require physical access to the host or an already-compromised
-  Maestro account.
+  Takuto account.
 - Self-inflicted issues from disabling `cors_origins`, setting
   `allow_all_https`, or running with `cookie_secure = false` over HTTPS.
 - Vulnerabilities in third-party agent runtimes (Claude Code, Cursor Agent) —
@@ -52,12 +52,12 @@ Out of scope:
 
 ## Trust model
 
-Maestro is **multi-user, single-tenant**. All users on one instance share
+Takuto is **multi-user, single-tenant**. All users on one instance share
 the same Jira, GitHub, and AI credentials configured at deployment.
 
 Any user you grant an account to can execute code in worker containers
 under the deployment's identity — including any tokens stored in
-`maestro.env`. **Do not grant accounts to users you do not trust.**
+`takuto.env`. **Do not grant accounts to users you do not trust.**
 
 Admin privileges are scoped to user management (create, edit, suspend,
 delete users, and change shared polling / config settings). Admins cannot

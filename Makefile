@@ -1,4 +1,4 @@
-# Maestro — container management shortcuts
+# Takuto — container management shortcuts
 #
 # Wraps docker/podman compose with the correct -f flags.
 # DinD sidecar is included by default; set DIND=0 to disable.
@@ -34,8 +34,8 @@ PROJECT_NAME := $(shell basename $(CURDIR))
 DIND ?= 1
 # Set BACKEND=postgres or BACKEND=mariadb to layer the external-DB
 # overlay on top of the SQLite default. `BACKEND=sqlite` (the default)
-# uses the base compose file only — Maestro talks to its local
-# {data_dir}/maestro.db. Plan-11 §8 importer auto-copies that SQLite
+# uses the base compose file only — Takuto talks to its local
+# {data_dir}/takuto.db. Plan-11 §8 importer auto-copies that SQLite
 # file into the chosen external DB on first boot.
 BACKEND ?= sqlite
 COMPOSE_FILES := -f docker-compose.yml
@@ -54,7 +54,7 @@ endif
 # on the host Mac. Docker Desktop's gVisor network stack breaks the
 # direct `host.docker.internal` path for both DinD AND user-defined
 # bridges; the sidecar lives on both the default bridge (where
-# host.docker.internal works) and the maestro-core compose network
+# host.docker.internal works) and the takuto-core compose network
 # (where workers can reach it). See
 # docs/troubleshooting-self-hosted-models.md for the full diagnosis.
 LM_BRIDGE ?= 0
@@ -62,13 +62,13 @@ ifeq ($(LM_BRIDGE),1)
 COMPOSE_FILES += -f docker-compose.lm-bridge.yml
 endif
 
-# Resolve the actual image name for the maestro service (compose may prefix with project name).
-MAESTRO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images maestro --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
+# Resolve the actual image name for the takuto service (compose may prefix with project name).
+TAKUTO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images takuto --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)
 
 # Docker image registry for push targets.
-REGISTRY ?= ghcr.io/morphet81/maestro
+REGISTRY ?= ghcr.io/takuto-team/takuto-core
 
-.PHONY: help build build-local start stop auth test logs logs-maestro ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full backup-postgres backup-mariadb
+.PHONY: help build build-local start stop auth test logs logs-takuto ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full backup-postgres backup-mariadb
 
 # Output directory for `backup-postgres` / `backup-mariadb`. Gitignored.
 DUMP_DIR ?= dump
@@ -76,7 +76,7 @@ DUMP_DIR ?= dump
 
 help: ## Show this help
 	@echo ""
-	@echo "  \033[1mMaestro — container management shortcuts\033[0m"
+	@echo "  \033[1mTakuto — container management shortcuts\033[0m"
 	@echo ""
 	@echo "  \033[1mEngine\033[0m   defaults to docker — use PODMAN=1 to force podman"
 	@echo "  \033[1mBackend\033[0m  defaults to sqlite — set BACKEND=postgres or BACKEND=mariadb"
@@ -109,30 +109,30 @@ endif
 build-local: ## Build container image locally (no compose)
 	@echo "Building with $(_ENGINE)..."
 ifeq ($(HAS_BUILDX),1)
-	$(_ENGINE) buildx build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test --load .
+	$(_ENGINE) buildx build --platform linux/amd64 --build-arg TAKUTO_VERSION=$$(cat VERSION) -t takuto:local-test --load .
 else
-	DOCKER_BUILDKIT=1 $(_ENGINE) build --platform linux/amd64 --build-arg MAESTRO_VERSION=$$(cat VERSION) -t maestro:local-test .
+	DOCKER_BUILDKIT=1 $(_ENGINE) build --platform linux/amd64 --build-arg TAKUTO_VERSION=$$(cat VERSION) -t takuto:local-test .
 endif
 
-start: ## Start Maestro + DinD sidecar
-	@if [ ! -f .maestro/config.toml ]; then \
-		echo "ERROR: .maestro/config.toml not found." >&2; \
-		echo "       mkdir -p .maestro && cp config.toml.example .maestro/config.toml" >&2; \
+start: ## Start Takuto + DinD sidecar
+	@if [ ! -f .takuto/config.toml ]; then \
+		echo "ERROR: .takuto/config.toml not found." >&2; \
+		echo "       mkdir -p .takuto && cp config.toml.example .takuto/config.toml" >&2; \
 		exit 1; \
 	fi
-	@if [ ! -f .maestro/maestro.env ]; then \
-		echo "WARNING: .maestro/maestro.env not found — creating empty file."; \
-		echo "         Add API tokens and secrets (see maestro.env.example)."; \
-		touch .maestro/maestro.env; \
+	@if [ ! -f .takuto/takuto.env ]; then \
+		echo "WARNING: .takuto/takuto.env not found — creating empty file."; \
+		echo "         Add API tokens and secrets (see takuto.env.example)."; \
+		touch .takuto/takuto.env; \
 	fi
-	@mkdir -p .maestro/workflows
+	@mkdir -p .takuto/workflows
 	$(COMPOSE) $(COMPOSE_FILES) up -d || (echo "ERROR: Failed to start containers. Run 'make logs' for details." >&2; exit 1)
 ifeq ($(DIND),1)
 	@$(MAKE) --no-print-directory load-worker
 endif
 ifeq ($(LM_BRIDGE),1)
 	@echo "Attaching lm-bridge to the default Docker bridge (gVisor host path)..."
-	@$(_ENGINE) network connect bridge maestro-lm-bridge 2>/dev/null || true
+	@$(_ENGINE) network connect bridge takuto-lm-bridge 2>/dev/null || true
 	@echo "lm-bridge ready at 172.20.0.250:1234 (forwards to host.docker.internal:$${LM_HOST_PORT:-1234})"
 endif
 
@@ -140,70 +140,70 @@ stop: ## Stop and remove containers
 	$(COMPOSE) $(COMPOSE_FILES) down
 
 auth: ## Interactive first-time auth setup
-	@if [ ! -f .maestro/config.toml ]; then \
-		echo "ERROR: .maestro/config.toml not found." >&2; \
-		echo "       mkdir -p .maestro && cp config.toml.example .maestro/config.toml" >&2; \
+	@if [ ! -f .takuto/config.toml ]; then \
+		echo "ERROR: .takuto/config.toml not found." >&2; \
+		echo "       mkdir -p .takuto && cp config.toml.example .takuto/config.toml" >&2; \
 		exit 1; \
 	fi
-	@if [ ! -f .maestro/maestro.env ]; then \
-		echo "WARNING: .maestro/maestro.env not found — creating empty file."; \
-		echo "         Add API tokens and secrets (see maestro.env.example)."; \
-		touch .maestro/maestro.env; \
+	@if [ ! -f .takuto/takuto.env ]; then \
+		echo "WARNING: .takuto/takuto.env not found — creating empty file."; \
+		echo "         Add API tokens and secrets (see takuto.env.example)."; \
+		touch .takuto/takuto.env; \
 	fi
 ifeq ($(IS_PODMAN),1)
 	@P=$(PROJECT_NAME); \
-	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro[-_]maestro:" | head -1); \
-	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
+	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]takuto:|^takuto[-_]takuto:" | head -1); \
+	if [ -z "$$IMAGE" ]; then echo "ERROR: Takuto image not found. Run 'make build' first." >&2; exit 1; fi; \
 	podman run --rm -it \
 		--security-opt=label=disable \
-		-v "$$(pwd)/.maestro/config.toml":/etc/maestro/config.toml:ro \
-		-v "$$(pwd)/.maestro/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/.maestro/maestro.env":/etc/maestro/env:ro \
-		-v "$${P}_maestro-data":/home/maestro/.maestro \
-		-v "$${P}_claude-auth":/home/maestro/.claude \
-		-v "$${P}_cursor-auth":/home/maestro/.cursor \
-		-v "$${P}_agents-data":/home/maestro/.agents \
-		-v "$${P}_gh-auth":/home/maestro/.config/gh \
-		-v "$${P}_acli-auth":/home/maestro/.config/acli \
-		-v "$${P}_fcli-auth":/home/maestro/.config/fcli \
+		-v "$$(pwd)/.takuto/config.toml":/etc/takuto/config.toml:ro \
+		-v "$$(pwd)/.takuto/workflows":/etc/takuto/workflows:ro \
+		-v "$$(pwd)/.takuto/takuto.env":/etc/takuto/env:ro \
+		-v "$${P}_takuto-data":/home/takuto/.takuto \
+		-v "$${P}_claude-auth":/home/takuto/.claude \
+		-v "$${P}_cursor-auth":/home/takuto/.cursor \
+		-v "$${P}_agents-data":/home/takuto/.agents \
+		-v "$${P}_gh-auth":/home/takuto/.config/gh \
+		-v "$${P}_acli-auth":/home/takuto/.config/acli \
+		-v "$${P}_fcli-auth":/home/takuto/.config/fcli \
 		-v "$${P}_workspace":/workspace \
-		-v "$${P}_npm-cache":/home/maestro/.npm \
-		-v "$${P}_mise-data":/home/maestro/.local/share/mise \
-		-v "$${P}_mise-cache":/home/maestro/.cache/mise \
-		-v "$${P}_aws-config":/home/maestro/.aws \
-		-v "$${P}_playwright-cache":/home/maestro/.cache/ms-playwright \
-		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
-		-e MAESTRO_HOME=/home/maestro \
-		-e MAESTRO_DATA_DIR=/home/maestro/.maestro \
-		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
+		-v "$${P}_npm-cache":/home/takuto/.npm \
+		-v "$${P}_mise-data":/home/takuto/.local/share/mise \
+		-v "$${P}_mise-cache":/home/takuto/.cache/mise \
+		-v "$${P}_aws-config":/home/takuto/.aws \
+		-v "$${P}_playwright-cache":/home/takuto/.cache/ms-playwright \
+		-e TAKUTO_CONFIG=/etc/takuto/config.toml \
+		-e TAKUTO_HOME=/home/takuto \
+		-e TAKUTO_DATA_DIR=/home/takuto/.takuto \
+		-e CURSOR_CONFIG_DIR=/home/takuto/.cursor \
 		-e "FIGMA_API_TOKEN=$${FIGMA_API_TOKEN:-}" \
 		-e NODE_OPTIONS=--dns-result-order=ipv4first \
 		"$$IMAGE" setup
 else
 	@P=$(PROJECT_NAME); \
-	IMAGE=$$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[-_]maestro:|^maestro[-_]maestro:" | head -1); \
-	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
+	IMAGE=$$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[-_]takuto:|^takuto[-_]takuto:" | head -1); \
+	if [ -z "$$IMAGE" ]; then echo "ERROR: Takuto image not found. Run 'make build' first." >&2; exit 1; fi; \
 	docker run --rm -it \
-		-v "$$(pwd)/.maestro/config.toml":/etc/maestro/config.toml:ro \
-		-v "$$(pwd)/.maestro/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/.maestro/maestro.env":/etc/maestro/env:ro \
-		-v "$${P}_maestro-data":/home/maestro/.maestro \
-		-v "$${P}_claude-auth":/home/maestro/.claude \
-		-v "$${P}_cursor-auth":/home/maestro/.cursor \
-		-v "$${P}_agents-data":/home/maestro/.agents \
-		-v "$${P}_gh-auth":/home/maestro/.config/gh \
-		-v "$${P}_acli-auth":/home/maestro/.config/acli \
-		-v "$${P}_fcli-auth":/home/maestro/.config/fcli \
+		-v "$$(pwd)/.takuto/config.toml":/etc/takuto/config.toml:ro \
+		-v "$$(pwd)/.takuto/workflows":/etc/takuto/workflows:ro \
+		-v "$$(pwd)/.takuto/takuto.env":/etc/takuto/env:ro \
+		-v "$${P}_takuto-data":/home/takuto/.takuto \
+		-v "$${P}_claude-auth":/home/takuto/.claude \
+		-v "$${P}_cursor-auth":/home/takuto/.cursor \
+		-v "$${P}_agents-data":/home/takuto/.agents \
+		-v "$${P}_gh-auth":/home/takuto/.config/gh \
+		-v "$${P}_acli-auth":/home/takuto/.config/acli \
+		-v "$${P}_fcli-auth":/home/takuto/.config/fcli \
 		-v "$${P}_workspace":/workspace \
-		-v "$${P}_npm-cache":/home/maestro/.npm \
-		-v "$${P}_mise-data":/home/maestro/.local/share/mise \
-		-v "$${P}_mise-cache":/home/maestro/.cache/mise \
-		-v "$${P}_aws-config":/home/maestro/.aws \
-		-v "$${P}_playwright-cache":/home/maestro/.cache/ms-playwright \
-		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
-		-e MAESTRO_HOME=/home/maestro \
-		-e MAESTRO_DATA_DIR=/home/maestro/.maestro \
-		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
+		-v "$${P}_npm-cache":/home/takuto/.npm \
+		-v "$${P}_mise-data":/home/takuto/.local/share/mise \
+		-v "$${P}_mise-cache":/home/takuto/.cache/mise \
+		-v "$${P}_aws-config":/home/takuto/.aws \
+		-v "$${P}_playwright-cache":/home/takuto/.cache/ms-playwright \
+		-e TAKUTO_CONFIG=/etc/takuto/config.toml \
+		-e TAKUTO_HOME=/home/takuto \
+		-e TAKUTO_DATA_DIR=/home/takuto/.takuto \
+		-e CURSOR_CONFIG_DIR=/home/takuto/.cursor \
 		-e "FIGMA_API_TOKEN=$${FIGMA_API_TOKEN:-}" \
 		-e NODE_OPTIONS=--dns-result-order=ipv4first \
 		"$$IMAGE" setup
@@ -211,66 +211,66 @@ endif
 
 test: ## Smoke test: auth, worktree, agent hello, cleanup
 ifeq ($(IS_PODMAN),1)
-	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro test-workflow
+	$(COMPOSE) $(COMPOSE_FILES) run --rm -it takuto test-workflow
 else
-	$(COMPOSE) $(COMPOSE_FILES) run --rm -it maestro test-workflow
+	$(COMPOSE) $(COMPOSE_FILES) run --rm -it takuto test-workflow
 endif
 
 logs: ## Tail all container logs
 	$(COMPOSE) $(COMPOSE_FILES) logs -f
 
-logs-maestro: ## Tail only the Maestro container
-	$(COMPOSE) $(COMPOSE_FILES) logs -f maestro
+logs-takuto: ## Tail only the Takuto container
+	$(COMPOSE) $(COMPOSE_FILES) logs -f takuto
 
 ps: ## Show running containers
 	$(COMPOSE) $(COMPOSE_FILES) ps
 
-bash: ## Open a shell inside Maestro as the maestro user
+bash: ## Open a shell inside Takuto as the takuto user
 ifeq ($(IS_PODMAN),1)
 	@P=$(PROJECT_NAME); \
-	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]maestro:|^maestro[-_]maestro:" | head -1); \
-	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run 'make build' first." >&2; exit 1; fi; \
-	podman run --rm -it --user maestro \
+	IMAGE=$$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$${P}[_-]takuto:|^takuto[-_]takuto:" | head -1); \
+	if [ -z "$$IMAGE" ]; then echo "ERROR: Takuto image not found. Run 'make build' first." >&2; exit 1; fi; \
+	podman run --rm -it --user takuto \
 		--security-opt=label=disable \
 		--entrypoint /bin/bash \
-		-v "$$(pwd)/.maestro/config.toml":/etc/maestro/config.toml:ro \
-		-v "$$(pwd)/.maestro/workflows":/etc/maestro/workflows:ro \
-		-v "$$(pwd)/.maestro/maestro.env":/etc/maestro/env:ro \
-		-v "$${P}_maestro-data":/home/maestro/.maestro \
-		-v "$${P}_claude-auth":/home/maestro/.claude \
-		-v "$${P}_cursor-auth":/home/maestro/.cursor \
-		-v "$${P}_agents-data":/home/maestro/.agents \
-		-v "$${P}_gh-auth":/home/maestro/.config/gh \
-		-v "$${P}_acli-auth":/home/maestro/.config/acli \
-		-v "$${P}_fcli-auth":/home/maestro/.config/fcli \
+		-v "$$(pwd)/.takuto/config.toml":/etc/takuto/config.toml:ro \
+		-v "$$(pwd)/.takuto/workflows":/etc/takuto/workflows:ro \
+		-v "$$(pwd)/.takuto/takuto.env":/etc/takuto/env:ro \
+		-v "$${P}_takuto-data":/home/takuto/.takuto \
+		-v "$${P}_claude-auth":/home/takuto/.claude \
+		-v "$${P}_cursor-auth":/home/takuto/.cursor \
+		-v "$${P}_agents-data":/home/takuto/.agents \
+		-v "$${P}_gh-auth":/home/takuto/.config/gh \
+		-v "$${P}_acli-auth":/home/takuto/.config/acli \
+		-v "$${P}_fcli-auth":/home/takuto/.config/fcli \
 		-v "$${P}_workspace":/workspace \
-		-v "$${P}_npm-cache":/home/maestro/.npm \
-		-v "$${P}_mise-data":/home/maestro/.local/share/mise \
-		-v "$${P}_mise-cache":/home/maestro/.cache/mise \
-		-v "$${P}_aws-config":/home/maestro/.aws \
-		-v "$${P}_playwright-cache":/home/maestro/.cache/ms-playwright \
-		-e HOME=/home/maestro \
-		-e MAESTRO_CONFIG=/etc/maestro/config.toml \
-		-e MAESTRO_HOME=/home/maestro \
-		-e MAESTRO_DATA_DIR=/home/maestro/.maestro \
-		-e CURSOR_CONFIG_DIR=/home/maestro/.cursor \
+		-v "$${P}_npm-cache":/home/takuto/.npm \
+		-v "$${P}_mise-data":/home/takuto/.local/share/mise \
+		-v "$${P}_mise-cache":/home/takuto/.cache/mise \
+		-v "$${P}_aws-config":/home/takuto/.aws \
+		-v "$${P}_playwright-cache":/home/takuto/.cache/ms-playwright \
+		-e HOME=/home/takuto \
+		-e TAKUTO_CONFIG=/etc/takuto/config.toml \
+		-e TAKUTO_HOME=/home/takuto \
+		-e TAKUTO_DATA_DIR=/home/takuto/.takuto \
+		-e CURSOR_CONFIG_DIR=/home/takuto/.cursor \
 		"$$IMAGE" -c 'cd /workspaces && exec bash'
 else
-	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it -w /workspaces maestro bash
+	$(COMPOSE) $(COMPOSE_FILES) exec -u takuto -it -w /workspaces takuto bash
 endif
 
-exec: ## Open a shell inside Maestro (alias for bash)
+exec: ## Open a shell inside Takuto (alias for bash)
 ifeq ($(IS_PODMAN),1)
 	@$(MAKE) bash
 else
-	$(COMPOSE) $(COMPOSE_FILES) exec -u maestro -it maestro bash
+	$(COMPOSE) $(COMPOSE_FILES) exec -u takuto -it takuto bash
 endif
 
 worker-bash: ## Open a bash shell inside the running worker container for a ticket (usage: make worker-bash GH-45)
 	$(eval _KEY := $(filter-out $@,$(MAKECMDGOALS)))
 	@if [ -z "$(_KEY)" ]; then echo "ERROR: Ticket key required. Usage: make worker-bash GH-45" >&2; exit 1; fi; \
 	SANITIZED=$$(echo "$(_KEY)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g'); \
-	CONTAINER=$$($(COMPOSE) $(COMPOSE_FILES) exec -T dind docker ps --filter "name=maestro-worker-$${SANITIZED}-" --format '{{.Names}}' | head -1); \
+	CONTAINER=$$($(COMPOSE) $(COMPOSE_FILES) exec -T dind docker ps --filter "name=takuto-worker-$${SANITIZED}-" --format '{{.Names}}' | head -1); \
 	if [ -z "$$CONTAINER" ]; then echo "ERROR: No running worker container found for $(_KEY). Is a step currently executing?" >&2; exit 1; fi; \
 	echo "Opening bash in $$CONTAINER..."; \
 	exec $(COMPOSE) $(COMPOSE_FILES) exec dind docker exec -it "$$CONTAINER" bash
@@ -279,8 +279,8 @@ worker-bash: ## Open a bash shell inside the running worker container for a tick
 	@:
 
 load-worker: ## Load worker image into DinD
-	@IMAGE=$$($(_ENGINE) images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$(PROJECT_NAME)[-_]maestro:" | head -1); \
-	if [ -z "$$IMAGE" ]; then echo "ERROR: Maestro image not found. Run make build first." >&2; exit 1; fi; \
+	@IMAGE=$$($(_ENGINE) images --format '{{.Repository}}:{{.Tag}}' | grep -E "(^|/)$(PROJECT_NAME)[-_]takuto:" | head -1); \
+	if [ -z "$$IMAGE" ]; then echo "ERROR: Takuto image not found. Run make build first." >&2; exit 1; fi; \
 	echo "Waiting for DinD to be ready..."; \
 	for i in $$(seq 1 30); do \
 		if $(COMPOSE) $(COMPOSE_FILES) exec -T dind docker info >/dev/null 2>&1; then break; fi; \
@@ -288,8 +288,8 @@ load-worker: ## Load worker image into DinD
 	done; \
 	echo "Loading $$IMAGE into DinD..."; \
 	$(_ENGINE) save "$$IMAGE" | $(COMPOSE) $(COMPOSE_FILES) exec -T dind docker load; \
-	echo "Tagging as maestro:latest on DinD..."; \
-	$(COMPOSE) $(COMPOSE_FILES) exec -T dind docker tag "$$IMAGE" maestro:latest
+	echo "Tagging as takuto:latest on DinD..."; \
+	$(COMPOSE) $(COMPOSE_FILES) exec -T dind docker tag "$$IMAGE" takuto:latest
 
 # ── Push multi-arch image to registry ──────────────────────────────────────────
 # Works with Docker (buildx) or Podman (manifest).
@@ -302,7 +302,7 @@ push: ## Build + push multi-arch image (amd64 + arm64)
 ifeq ($(HAS_BUILDX),1)
 	docker buildx build \
 		--platform linux/amd64,linux/arm64 \
-		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--build-arg TAKUTO_VERSION=$(VERSION) \
 		-t $(REGISTRY):$(VERSION) \
 		-t $(REGISTRY):latest \
 		--push .
@@ -310,7 +310,7 @@ else
 	$(_ENGINE) manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
 	$(_ENGINE) build \
 		--platform linux/amd64,linux/arm64 \
-		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--build-arg TAKUTO_VERSION=$(VERSION) \
 		--manifest $(REGISTRY):$(VERSION) .
 	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
 	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
@@ -320,7 +320,7 @@ push-arm64: ## Build + push arm64 image only
 ifeq ($(HAS_BUILDX),1)
 	docker buildx build \
 		--platform linux/arm64 \
-		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--build-arg TAKUTO_VERSION=$(VERSION) \
 		-t $(REGISTRY):$(VERSION) \
 		-t $(REGISTRY):latest \
 		--push .
@@ -328,7 +328,7 @@ else
 	$(_ENGINE) manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
 	$(_ENGINE) build \
 		--platform linux/arm64 \
-		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--build-arg TAKUTO_VERSION=$(VERSION) \
 		--manifest $(REGISTRY):$(VERSION) .
 	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
 	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
@@ -338,7 +338,7 @@ push-amd64: ## Build + push amd64 image only
 ifeq ($(HAS_BUILDX),1)
 	docker buildx build \
 		--platform linux/amd64 \
-		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--build-arg TAKUTO_VERSION=$(VERSION) \
 		-t $(REGISTRY):$(VERSION) \
 		-t $(REGISTRY):latest \
 		--push .
@@ -346,7 +346,7 @@ else
 	$(_ENGINE) manifest rm $(REGISTRY):$(VERSION) 2>/dev/null || true
 	$(_ENGINE) build \
 		--platform linux/amd64 \
-		--build-arg MAESTRO_VERSION=$(VERSION) \
+		--build-arg TAKUTO_VERSION=$(VERSION) \
 		--manifest $(REGISTRY):$(VERSION) .
 	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):$(VERSION)
 	$(_ENGINE) manifest push $(REGISTRY):$(VERSION) docker://$(REGISTRY):latest
@@ -355,7 +355,7 @@ endif
 clean-dind: ## Clean up DinD dangling images and volumes
 	@echo "Cleaning up DinD dangling images and volumes..."; \
 	$(COMPOSE) $(COMPOSE_FILES) exec -T dind docker system prune -f || true; \
-	echo "DinD cleanup complete. Run 'make load-worker' to reload maestro:latest if needed."
+	echo "DinD cleanup complete. Run 'make load-worker' to reload takuto:latest if needed."
 
 restart: stop start ## Restart (stop + start)
 
@@ -375,8 +375,8 @@ backup-postgres: ## Dump the Postgres DB to dump/postgres-<timestamp>.sql.gz
 	@mkdir -p $(DUMP_DIR)
 	@TIMESTAMP=$$(date +%Y%m%d-%H%M%S); \
 	OUT="$(DUMP_DIR)/postgres-$$TIMESTAMP.sql.gz"; \
-	PGUSER=$${POSTGRES_USER:-maestro}; \
-	PGDB=$${POSTGRES_DB:-maestro}; \
+	PGUSER=$${POSTGRES_USER:-takuto}; \
+	PGDB=$${POSTGRES_DB:-takuto}; \
 	echo "Dumping Postgres ($$PGDB as $$PGUSER) -> $$OUT"; \
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.postgres.yml exec -T postgres \
 	  pg_dump --clean --if-exists -U "$$PGUSER" -d "$$PGDB" \
@@ -388,7 +388,7 @@ backup-mariadb: ## Dump the MariaDB DB to dump/mariadb-<timestamp>.sql.gz
 	@TIMESTAMP=$$(date +%Y%m%d-%H%M%S); \
 	OUT="$(DUMP_DIR)/mariadb-$$TIMESTAMP.sql.gz"; \
 	ROOT_PASS=$${MARIADB_ROOT_PASSWORD:-root}; \
-	DB=$${MARIADB_DATABASE:-maestro}; \
+	DB=$${MARIADB_DATABASE:-takuto}; \
 	echo "Dumping MariaDB ($$DB as root) -> $$OUT"; \
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.mariadb.yml exec -T -e MYSQL_PWD="$$ROOT_PASS" mariadb \
 	  mariadb-dump --single-transaction --add-drop-table -u root "$$DB" \

@@ -1,43 +1,43 @@
-# MariaDB-backed Maestro deployment.
+# MariaDB-backed Takuto deployment.
 #
 # Usage:
-#   make start BACKEND=mariadb      — start Maestro + MariaDB
+#   make start BACKEND=mariadb      — start Takuto + MariaDB
 #   make stop  BACKEND=mariadb
 #
 # Or directly:
 #   docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
 #
 # MariaDB and MySQL share the same wire protocol, sqlx driver, and SQL
-# dialect from Maestro's point of view (DbBackend::MySql covers both).
+# dialect from Takuto's point of view (DbBackend::MySql covers both).
 # Swap `mariadb:11` for `mysql:8` if you want to target MySQL specifically.
 
 services:
-  maestro:
+  takuto:
     depends_on:
       mariadb:
         condition: service_healthy
     environment:
-      # Plan-11: MAESTRO_DATABASE_CONNECTION overrides [database].connection.
+      # Plan-11: TAKUTO_DATABASE_CONNECTION overrides [database].connection.
       # `mysql://` scheme covers both MySQL and MariaDB (same protocol).
-      - MAESTRO_DATABASE_CONNECTION=mysql://${MARIADB_USER:-maestro}:${MARIADB_PASSWORD:-changeme}@mariadb:3306/${MARIADB_DATABASE:-maestro}
+      - TAKUTO_DATABASE_CONNECTION=mysql://${MARIADB_USER:-takuto}:${MARIADB_PASSWORD:-changeme}@mariadb:3306/${MARIADB_DATABASE:-takuto}
 
   mariadb:
     image: mariadb:11
     environment:
-      MARIADB_USER: ${MARIADB_USER:-maestro}
+      MARIADB_USER: ${MARIADB_USER:-takuto}
       MARIADB_PASSWORD: ${MARIADB_PASSWORD:-changeme}
-      MARIADB_DATABASE: ${MARIADB_DATABASE:-maestro}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-takuto}
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root}
     volumes:
-      - maestro-mariadb:/var/lib/mysql
-    # Port not published by default — only maestro reaches it on the
+      - takuto-mariadb:/var/lib/mysql
+    # Port not published by default — only takuto reaches it on the
     # internal compose network. Uncomment for mysql-cli from the host.
     # ports:
     #   - "3306:3306"
     healthcheck:
       # `healthcheck.sh --connect` (shipped in the official image) confirms
-      # mariadbd is accepting connections and the named DB exists. Maestro's
-      # 5 s `SELECT 1` probe runs immediately after maestro boots — without
+      # mariadbd is accepting connections and the named DB exists. Takuto's
+      # 5 s `SELECT 1` probe runs immediately after takuto boots — without
       # the depends_on gate, fail_fast=true would race.
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 5s
@@ -46,4 +46,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  maestro-mariadb:
+  takuto-mariadb:

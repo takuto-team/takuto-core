@@ -1,6 +1,6 @@
-# Maestro
+# Takuto
 
-**Maestro is an AI coding pipeline that works at your pace.** Let it run autonomously overnight — polling Jira or GitHub Issues, writing code, running tests, opening PRs — or stay in the driver's seat: pick items manually, refine descriptions with AI assistance, and trigger each phase yourself from the dashboard.
+**Takuto is an AI coding pipeline that works at your pace.** Let it run autonomously overnight — polling Jira or GitHub Issues, writing code, running tests, opening PRs — or stay in the driver's seat: pick items manually, refine descriptions with AI assistance, and trigger each phase yourself from the dashboard.
 
 **License:** FSL for self-hosted use, commercial license available — see [License](#license).
 
@@ -9,7 +9,7 @@
 ## Table of contents
 
 - [What you can achieve](#what-you-can-achieve)
-- [Why Maestro?](#why-maestro)
+- [Why Takuto?](#why-takuto)
 - [You will need](#you-will-need)
 - [Cost expectations](#cost-expectations)
 - [Quick start — Individual developer (local)](#quick-start--individual-developer-local)
@@ -18,7 +18,7 @@
 - [Multi-user model](#multi-user-model)
 - [Privacy & telemetry](#privacy--telemetry)
 - [Configuration reference](#configuration-reference)
-- [Extending Maestro — adding tools](#extending-maestro--adding-tools)
+- [Extending Takuto — adding tools](#extending-takuto--adding-tools)
 - [Browser-based editor and web terminal](#browser-based-editor-and-web-terminal)
 - [Docker-in-Docker sidecar (optional)](#docker-in-docker-sidecar-optional)
 - [Dry mode](#dry-mode)
@@ -34,20 +34,20 @@
 
 ## What you can achieve
 
-- **Fully automated mode** — connect Jira or GitHub Issues and Maestro polls automatically: it picks up "To Do" tickets, assigns them, runs the full AI pipeline (worktree → install → implement → lint/tests → PR), and moves on to the next one.
+- **Fully automated mode** — connect Jira or GitHub Issues and Takuto polls automatically: it picks up "To Do" tickets, assigns them, runs the full AI pipeline (worktree → install → implement → lint/tests → PR), and moves on to the next one.
 - **Manual mode, your pace** — add any ticket or task to the dashboard yourself, refine its description with AI assistance before the agent ever sees it, then trigger each workflow phase when you're ready. No polling, no surprises.
 - **Mix both** — auto-pick routine tasks while manually curating the tricky ones. You control which tickets get the autopilot treatment and which ones you steer yourself.
 - **Run multiple tickets in parallel** — configure how many workflows run concurrently; each gets its own git worktree and isolated environment.
 - **Monitor everything in real time** — a live web dashboard streams terminal output per workflow, shows progress, and lets you pause, resume, retry, or inspect any run.
 - **Jump into any workflow** — open a browser-based VS Code editor and web terminal, pre-configured with your project tools, pointed at the exact worktree the agent is working on.
 - **Define your own pipeline steps** — TOML workflow definitions let you chain phases: implement → address PR comments → merge base branch → deploy. Steps depend on each other; trigger them from the dashboard.
-- **Work without a ticketing system** — paste any description via the dashboard and Maestro treats it as a workflow. No Jira account required.
+- **Work without a ticketing system** — paste any description via the dashboard and Takuto treats it as a workflow. No Jira account required.
 
 ---
 
-## Why Maestro?
+## Why Takuto?
 
-| | IDE assistant (Copilot, Cursor inline) | Maestro |
+| | IDE assistant (Copilot, Cursor inline) | Takuto |
 |---|---|---|
 | **Where it runs** | Inside your editor, on your machine | Inside Docker, on any machine or server |
 | **Supervision required** | Yes — you approve each step | Optional — fully autonomous or manual-trigger, your choice |
@@ -79,7 +79,7 @@ A Linux host is recommended for server deployments; macOS works for local use bu
 
 ## Cost expectations
 
-Maestro doesn't bill you — your AI provider does. The agent runs Claude Code or Cursor Agent against your account, and each ticket consumes tokens proportional to the size of the codebase, the prompt context, and the number of steps in your workflow definition.
+Takuto doesn't bill you — your AI provider does. The agent runs Claude Code or Cursor Agent against your account, and each ticket consumes tokens proportional to the size of the codebase, the prompt context, and the number of steps in your workflow definition.
 
 Rough budgeting (Sonnet 4-tier models, your mileage will vary):
 
@@ -103,13 +103,13 @@ Cost-saving levers:
 
 ## Quick start — Individual developer (local)
 
-Run Maestro on your laptop. Takes about 10 minutes.
+Run Takuto on your laptop. Takes about 10 minutes.
 
 ### 1. Configure
 
 ```bash
 cp config.toml.example config.toml
-cp maestro.env.example maestro.env
+cp takuto.env.example takuto.env
 ```
 
 Edit `config.toml`:
@@ -127,7 +127,7 @@ docker compose build
 ### 3. Authenticate (first time only)
 
 ```bash
-docker compose run --rm -it maestro setup
+docker compose run --rm -it takuto setup
 ```
 
 Walks you through: GitHub CLI → Atlassian CLI (optional) → Claude Code or Cursor Agent → clone your repo.
@@ -145,20 +145,20 @@ docker compose up
 
 Dashboard at **http://localhost:8080**.
 
-If you use Jira or GitHub Issues, Maestro starts polling automatically. Otherwise, click **+** to paste a description and kick off a workflow manually.
+If you use Jira or GitHub Issues, Takuto starts polling automatically. Otherwise, click **+** to paste a description and kick off a workflow manually.
 
 ---
 
 ## Quick start — Teams (server deployment)
 
-Self-host Maestro on a Linux server. Your team accesses the dashboard through a browser; the agent runs in the background.
+Self-host Takuto on a Linux server. Your team accesses the dashboard through a browser; the agent runs in the background.
 
 ### 1. Clone and configure on the server
 
 ```bash
-git clone <maestro-repo-url> && cd maestro-core
+git clone <takuto-repo-url> && cd takuto-core
 cp config.toml.example config.toml
-cp maestro.env.example maestro.env
+cp takuto.env.example takuto.env
 ```
 
 Key settings for server deployments:
@@ -173,7 +173,7 @@ host = "0.0.0.0"
 port = 8080
 ```
 
-> Maestro uses a multi-user database for authentication — on first boot the
+> Takuto uses a multi-user database for authentication — on first boot the
 > dashboard prompts you to create the initial admin account. See
 > [Multi-user model](#multi-user-model).
 >
@@ -182,7 +182,7 @@ port = 8080
 > contains them they are silently ignored — create your admin account on the
 > first-boot setup page (or `POST /api/auth/register`) instead.
 
-Put secrets in `maestro.env` (never in `config.toml`):
+Put secrets in `takuto.env` (never in `config.toml`):
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GH_TOKEN="github_pat_..."
@@ -192,7 +192,7 @@ export GH_TOKEN="github_pat_..."
 
 ```bash
 docker compose build
-docker compose run --rm -it maestro setup
+docker compose run --rm -it takuto setup
 ```
 
 ### 3. Start as a service
@@ -203,11 +203,11 @@ docker compose up -d
 
 ### 4. Expose with a reverse proxy (recommended)
 
-Point nginx or Caddy at port 8080 and terminate TLS there. Maestro listens on plain HTTP; put HTTPS termination in front.
+Point nginx or Caddy at port 8080 and terminate TLS there. Takuto listens on plain HTTP; put HTTPS termination in front.
 
 Example Caddy snippet:
 ```
-maestro.yourcompany.com {
+takuto.yourcompany.com {
     reverse_proxy localhost:8080
 }
 ```
@@ -226,7 +226,7 @@ For each ticket (or manual entry):
 2. **Worktree** — new git branch from your configured base branch
 3. **Worktree init** — runs your per-workspace init commands (e.g. `npm ci`) in the worktree, configured in **Configuration → Worktree Settings**
 4. **Agent steps** — one or more AI sessions using your TOML workflow definition; each step has a prompt with ticket context injected
-5. **Done** — dashboard shows PR URL (from `.maestro/outcome.toml` or `MAESTRO_PR_URL:` in agent output)
+5. **Done** — dashboard shows PR URL (from `.takuto/outcome.toml` or `TAKUTO_PR_URL:` in agent output)
 
 On **stop**: active sessions killed, ticket reverted to "To Do".
 
@@ -244,7 +244,7 @@ Each definition has `[[steps]]` with a `prompt` (ticket context auto-injected) o
 
 ## Multi-user model
 
-Maestro is multi-user, single-tenant. Every user has their own dashboard view; all users on one instance share the same Jira, GitHub, and AI credentials.
+Takuto is multi-user, single-tenant. Every user has their own dashboard view; all users on one instance share the same Jira, GitHub, and AI credentials.
 
 **On first boot,** when the database has zero users, the dashboard shows a **first-user setup** page. The account you create there becomes the initial **admin**.
 
@@ -255,7 +255,7 @@ Maestro is multi-user, single-tenant. Every user has their own dashboard view; a
 
 **Sign-in flow:**
 
-- Username + password, argon2-hashed in `maestro.db`.
+- Username + password, argon2-hashed in `takuto.db`.
 - Idle session TTL: 24 hours. Absolute TTL: 30 days.
 - After 5 failed login or recovery attempts in 10 minutes the account is temporarily locked; an admin clears it via `POST /api/users/{id}/unlock`.
 - Per-IP rate limit on `/api/auth/login` and `/api/auth/recover`: 10 / minute.
@@ -272,7 +272,7 @@ User management UI lives at **Configuration → Users** (admin-only). For the fu
 
 ## Privacy & telemetry
 
-**Maestro does not collect or transmit any telemetry.** There is no usage analytics, no crash reporter, no phone-home — verify with `git grep telemetry` if you want to.
+**Takuto does not collect or transmit any telemetry.** There is no usage analytics, no crash reporter, no phone-home — verify with `git grep telemetry` if you want to.
 
 All outbound traffic is to services *you* configure:
 
@@ -282,7 +282,7 @@ All outbound traffic is to services *you* configure:
 - npm registry (`registry.npmjs.org`) and any private registries detected in `.npmrc`.
 - Any host you add to `[network] extra_egress_hosts`.
 
-The egress firewall (iptables, set up at container start) blocks everything else by default. Ticket content, source code, and agent prompts are sent only to the AI provider you configured — Maestro itself never sees them.
+The egress firewall (iptables, set up at container start) blocks everything else by default. Ticket content, source code, and agent prompts are sent only to the AI provider you configured — Takuto itself never sees them.
 
 ---
 
@@ -305,15 +305,15 @@ A few keys you'll touch first:
 
 ---
 
-## Extending Maestro — adding tools
+## Extending Takuto — adding tools
 
-You'll often need tools that aren't baked into the official image: `kubectl`, `terraform`, an internal vendor CLI, a pinned version of `claude`. Maestro has three extension paths; pick the one that matches your need.
+You'll often need tools that aren't baked into the official image: `kubectl`, `terraform`, an internal vendor CLI, a pinned version of `claude`. Takuto has three extension paths; pick the one that matches your need.
 
 | Your need | Mechanism | Where to write it |
 |---|---|---|
 | Add a single binary CLI (kubectl, terraform, internal CLI) | **Provisioning** | `[provisioning].install_commands` in `config.toml` |
 | Pin a baked tool to a specific version | **Provisioning** (PATH shadowing) | `[provisioning].install_commands` |
-| Add system packages (apt) or libraries | **Custom Dockerfile** | New Dockerfile `FROM ghcr.io/morphet81/maestro:latest` |
+| Add system packages (apt) or libraries | **Custom Dockerfile** | New Dockerfile `FROM ghcr.io/takuto-team/takuto-core:latest` |
 | Add an environment variable everywhere | **Compose override** | `docker-compose.override.yml` |
 | Mount an extra host directory | **Compose override** | `docker-compose.override.yml` |
 
@@ -324,50 +324,50 @@ Edit `config.toml`:
 ```toml
 [provisioning]
 install_commands = [
-  '[ -f "$MAESTRO_TOOLS_BIN/kubectl" ] || (curl -fsSLo "$MAESTRO_TOOLS_BIN/kubectl" https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x "$MAESTRO_TOOLS_BIN/kubectl")',
+  '[ -f "$TAKUTO_TOOLS_BIN/kubectl" ] || (curl -fsSLo "$TAKUTO_TOOLS_BIN/kubectl" https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x "$TAKUTO_TOOLS_BIN/kubectl")',
 ]
 ```
 
-Restart maestro — `kubectl` is now available to every workflow, the in-browser editor, every run-command. The install is SHA-gated: rebooting with the same `install_commands` list is a no-op (fast path); editing the list re-runs the install pass.
+Restart takuto — `kubectl` is now available to every workflow, the in-browser editor, every run-command. The install is SHA-gated: rebooting with the same `install_commands` list is a no-op (fast path); editing the list re-runs the install pass.
 
 ### Quickstart — Pin claude to a specific version
 
 ```toml
 [provisioning]
 install_commands = [
-  '[ -f "$MAESTRO_TOOLS_BIN/claude" ] || (npm install -g --prefix "$MAESTRO_TOOLS_BIN/.npm" @anthropic-ai/claude-code@2.1.140 && ln -sf "$MAESTRO_TOOLS_BIN/.npm/bin/claude" "$MAESTRO_TOOLS_BIN/claude")',
+  '[ -f "$TAKUTO_TOOLS_BIN/claude" ] || (npm install -g --prefix "$TAKUTO_TOOLS_BIN/.npm" @anthropic-ai/claude-code@2.1.140 && ln -sf "$TAKUTO_TOOLS_BIN/.npm/bin/claude" "$TAKUTO_TOOLS_BIN/claude")',
 ]
 ```
 
-PATH precedence makes the pinned version win over the baked `@latest`. The `maestro-tools` volume is bind-mounted into every Maestro-spawned container with `$PATH` prepended so the override propagates everywhere.
+PATH precedence makes the pinned version win over the baked `@latest`. The `takuto-tools` volume is bind-mounted into every Takuto-spawned container with `$PATH` prepended so the override propagates everywhere.
 
 ### Quickstart — System packages via custom image
 
 ```dockerfile
-# my-maestro.Dockerfile
-FROM ghcr.io/morphet81/maestro:latest
+# my-takuto.Dockerfile
+FROM ghcr.io/takuto-team/takuto-core:latest
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
         awscli postgresql-client \
     && rm -rf /var/lib/apt/lists/*
-USER maestro
+USER takuto
 ```
 
 Wire it into `docker-compose.yml`:
 
 ```yaml
 services:
-  maestro:
+  takuto:
     build:
       context: .
-      dockerfile: my-maestro.Dockerfile
+      dockerfile: my-takuto.Dockerfile
 ```
 
 ### Full reference
 
-See **[docs/extending-maestro.md](docs/extending-maestro.md)** for:
+See **[docs/extending-takuto.md](docs/extending-takuto.md)** for:
 - The three-tier model (Baked / Provisioning / Custom Image) with rationale.
-- The full `[provisioning]` reference: `$MAESTRO_TOOLS_BIN`, idempotency rules, SHA gate behavior, force-reinstall escape hatches.
+- The full `[provisioning]` reference: `$TAKUTO_TOOLS_BIN`, idempotency rules, SHA gate behavior, force-reinstall escape hatches.
 - The current tool inventory: which tools are baked, which are provisioning defaults, which were removed.
 - Troubleshooting common provisioning issues.
 
@@ -389,13 +389,13 @@ Ports are allocated from the range **9100–9200**. Close an editor with the **"
 
 ## Docker-in-Docker sidecar (optional)
 
-To run `docker` inside Maestro (e.g. nested `docker run`, Playwright containers), merge the DinD sidecar:
+To run `docker` inside Takuto (e.g. nested `docker run`, Playwright containers), merge the DinD sidecar:
 
 ```bash
 # In .env:
 COMPOSE_FILE=docker-compose.yml:docker-compose.dind.yml
 docker compose up -d
-make load-worker   # load the Maestro image into DinD so worker containers start
+make load-worker   # load the Takuto image into DinD so worker containers start
 ```
 
 Each workflow's install and agent steps then run in ephemeral Docker containers — preventing port conflicts and filesystem side-effects between concurrent workflows.
@@ -412,7 +412,7 @@ make start BACKEND=postgres LM_BRIDGE=1
 LM_HOST_PORT=11434 make start BACKEND=postgres LM_BRIDGE=1
 ```
 
-This starts a small `socat` sidecar (`maestro-lm-bridge`) at a fixed address. Then in **Configuration → AI Settings → OpenCode → Base URL** set:
+This starts a small `socat` sidecar (`takuto-lm-bridge`) at a fixed address. Then in **Configuration → AI Settings → OpenCode → Base URL** set:
 
 ```
 http://172.20.0.250:1234/v1
@@ -421,7 +421,7 @@ http://172.20.0.250:1234/v1
 **You do NOT need `LM_BRIDGE` if:**
 
 - you use a **cloud provider** (Claude, Codex, or any reachable API URL), or
-- your model server runs **as a container inside the Maestro compose network** — reach it directly by service name (e.g. `http://lm-studio:1234/v1`).
+- your model server runs **as a container inside the Takuto compose network** — reach it directly by service name (e.g. `http://lm-studio:1234/v1`).
 
 See [`docs/troubleshooting-self-hosted-models.md`](docs/troubleshooting-self-hosted-models.md) for the full diagnosis and a smoke test.
 
@@ -435,7 +435,7 @@ Set `dry_mode = true` in `config.toml` to run the full pipeline without any Jira
 
 ## Security and operations
 
-> **Maestro runs AI agents autonomously and unattended.** The mitigations below protect your codebase and data.
+> **Takuto runs AI agents autonomously and unattended.** The mitigations below protect your codebase and data.
 
 ### Branch protection (required)
 
@@ -461,11 +461,11 @@ Use a fine-grained PAT scoped to the target repository:
 | Metadata | Read | Required base permission |
 | Issues | Read & write | Only if `ticketing_system = "github"` |
 
-Set via `GH_TOKEN` in `maestro.env` — no interactive login needed.
+Set via `GH_TOKEN` in `takuto.env` — no interactive login needed.
 
 ### Other mitigations
 
-- **Untrusted ticket text** (descriptions, linked issues) is embedded in AI prompts as `{ticket_context}`. Use Jira permissions, branch protection, and human code review. Maestro adds explicit `UNTRUSTED_JIRA` framing and optional `[jira]` byte caps; that reduces prompt-injection risk but does not eliminate it.
+- **Untrusted ticket text** (descriptions, linked issues) is embedded in AI prompts as `{ticket_context}`. Use Jira permissions, branch protection, and human code review. Takuto adds explicit `UNTRUSTED_JIRA` framing and optional `[jira]` byte caps; that reduces prompt-injection risk but does not eliminate it.
 - **Dashboard `PUT /api/config`** only accepts `web` (login) and `general.max_concurrent_workflows` / `max_active_workflows` — **strict JSON**; anything else returns 400. Change all other settings in `config.toml` and restart.
 - **Egress firewall** restricts outbound traffic to: Jira/Atlassian, GitHub, Anthropic/Claude, npm registry, and any `extra_egress_hosts` you add.
 
@@ -473,10 +473,10 @@ Set via `GH_TOKEN` in `maestro.env` — no interactive login needed.
 
 ## Environment variables
 
-Put secrets in `maestro.env` (mounted at `/etc/maestro/env`):
+Put secrets in `takuto.env` (mounted at `/etc/takuto/env`):
 
 ```bash
-cp maestro.env.example maestro.env
+cp takuto.env.example takuto.env
 ```
 
 ```bash
@@ -505,18 +505,18 @@ Allowed by default:
 
 | Volume | Mount | Purpose |
 |--------|-------|---------|
-| `claude-auth` | `/home/maestro/.claude` | Claude Code auth + skills |
-| `cursor-auth` | `/home/maestro/.cursor` | Cursor Agent data |
-| `gh-auth` | `/home/maestro/.config/gh` | GitHub CLI auth |
-| `acli-auth` | `/home/maestro/.config/acli` | Atlassian CLI auth |
+| `claude-auth` | `/home/takuto/.claude` | Claude Code auth + skills |
+| `cursor-auth` | `/home/takuto/.cursor` | Cursor Agent data |
+| `gh-auth` | `/home/takuto/.config/gh` | GitHub CLI auth |
+| `acli-auth` | `/home/takuto/.config/acli` | Atlassian CLI auth |
 | `workspace` | `/workspace` | Cloned repository |
-| `npm-cache` | `/home/maestro/.npm` | npm download cache |
-| `aws-config` | `/home/maestro/.aws` | AWS credentials (optional) |
+| `npm-cache` | `/home/takuto/.npm` | npm download cache |
+| `aws-config` | `/home/takuto/.aws` | AWS credentials (optional) |
 
 ### AWS CodeArtifact (if needed)
 
 ```bash
-podman run --rm -v maestro_aws-config:/data -v ~/.aws:/src:ro alpine cp -r /src/. /data/
+podman run --rm -v takuto_aws-config:/data -v ~/.aws:/src:ro alpine cp -r /src/. /data/
 ```
 
 Add the `codeartifact login` step to your per-workspace init commands in
@@ -535,11 +535,11 @@ extra_egress_hosts = ["yourcompany-123456.d.codeartifact.region.amazonaws.com"]
 
 ### Project skills (`./skills`)
 
-Add a `skills/` directory at the Maestro project root (gitignored). Skills are merged into Claude/Cursor's skills directory on every container start. For Claude in `--bare` mode, Maestro injects skill content via `--system-prompt`. For Cursor, skills are invoked natively.
+Add a `skills/` directory at the Takuto project root (gitignored). Skills are merged into Claude/Cursor's skills directory on every container start. For Claude in `--bare` mode, Takuto injects skill content via `--system-prompt`. For Cursor, skills are invoked natively.
 
 ### Non-root execution
 
-The container starts as root (for iptables setup), then switches to the `maestro` user. Claude Code requires non-root execution for `--allow-dangerously-skip-permissions`.
+The container starts as root (for iptables setup), then switches to the `takuto` user. Claude Code requires non-root execution for `--allow-dangerously-skip-permissions`.
 
 ### Logs
 
@@ -557,7 +557,7 @@ docker exec <container> cat /workspace/logs/PROJ-42.log
 
 Your npm registry is blocked by egress rules. Check the debug log:
 ```bash
-docker exec -u maestro <container> tail -30 /home/maestro/.npm/_logs/*-debug-0.log
+docker exec -u takuto <container> tail -30 /home/takuto/.npm/_logs/*-debug-0.log
 ```
 Add the registry domain to `[network] extra_egress_hosts`.
 
@@ -565,7 +565,7 @@ Add the registry domain to `[network] extra_egress_hosts`.
 
 The Anthropic API endpoint is blocked. Verify:
 ```bash
-docker exec -u maestro <container> curl -s -o /dev/null -w "%{http_code}" https://api.claude.ai
+docker exec -u takuto <container> curl -s -o /dev/null -w "%{http_code}" https://api.claude.ai
 ```
 Add missing domains to `extra_egress_hosts`.
 
@@ -573,7 +573,7 @@ Add missing domains to `extra_egress_hosts`.
 
 Auth is in Docker volumes. If volumes were deleted, re-run setup:
 ```bash
-docker compose run --rm -it maestro setup
+docker compose run --rm -it takuto setup
 ```
 
 ### Cursor `agent login`: `bad option: --use-system-ca`
@@ -600,7 +600,7 @@ The image installs [mise](https://mise.jdx.dev/) and builds tools on first run. 
 
 ### `docker compose up` stalls after "Egress rules applied"
 
-Auth preflight is running. A hang here is usually `agent status` blocking without a TTY. Rebuild the image. For Cursor, set `CURSOR_API_KEY` in `maestro.env` to skip interactive auth checks.
+Auth preflight is running. A hang here is usually `agent status` blocking without a TTY. Rebuild the image. For Cursor, set `CURSOR_API_KEY` in `takuto.env` to skip interactive auth checks.
 
 ### Podman on Linux with SELinux
 
@@ -654,9 +654,9 @@ ui/                  # React + TypeScript dashboard (Vite PWA)
     components/      # IssueCard, modals, icons, etc.
     pages/           # Dashboard, Login, Config
 crates/
-  maestro-core/      # Workflow engine, Jira/GitHub/Claude integrations, config
-  maestro-web/       # Axum web server, REST API, WebSocket
-  maestro-cli/       # CLI entry point
+  takuto-core/      # Workflow engine, Jira/GitHub/Claude integrations, config
+  takuto-web/       # Axum web server, REST API, WebSocket
+  takuto-cli/       # CLI entry point
 docker/
   entrypoint.sh      # Container entrypoint
   egress-rules.sh    # iptables egress allowlist
@@ -667,7 +667,7 @@ workflows/           # TOML workflow definitions (*.example.toml → copy and ed
 
 ## Going deeper
 
-- [AGENTS.md](AGENTS.md) — canonical map of architecture, runtime paths, REST/WebSocket contracts. Read this first if you're contributing or hacking on Maestro.
+- [AGENTS.md](AGENTS.md) — canonical map of architecture, runtime paths, REST/WebSocket contracts. Read this first if you're contributing or hacking on Takuto.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — crate-by-crate breakdown and diagrams.
 - [CODING_STANDARDS.md](CODING_STANDARDS.md) — SOLID, Rust, React/TypeScript, and security rules every contributor follows.
 - [docs/workflow.md](docs/workflow.md) — Mermaid diagrams for the ticket lifecycle.
@@ -679,6 +679,6 @@ workflows/           # TOML workflow definitions (*.example.toml → copy and ed
 
 ## License
 
-Maestro Core is source-available under the [Functional Source License 1.1 (FSL-1.1-ALv2)](LICENSE).
+Takuto Core is source-available under the [Functional Source License 1.1 (FSL-1.1-ALv2)](LICENSE).
 
-Self-hosting is free. If you offer Maestro as a service to others, the FSL does not permit using it to offer a competing product or hosted service. For a commercial license, see morphet.contact@gmail.com.
+Self-hosting is free. If you offer Takuto as a service to others, the FSL does not permit using it to offer a competing product or hosted service. For a commercial license, see morphet.contact@gmail.com.

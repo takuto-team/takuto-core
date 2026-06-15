@@ -27,8 +27,8 @@ export default defineConfig({
       navigateFallbackDenylist: [/^\/s\//],
     },
     manifest: {
-      name: "Maestro Dashboard",
-      short_name: "Maestro",
+      name: "Takuto Dashboard",
+      short_name: "Takuto",
       description: "Automated workflow orchestration dashboard",
       theme_color: "#030712",
       background_color: "#030712",

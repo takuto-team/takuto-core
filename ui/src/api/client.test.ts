@@ -409,7 +409,7 @@ describe("putAgentConfig()", () => {
   });
 
   it("throws AgentConfigError with structured code on 400", async () => {
-    const body = { error: "denied_extra_arg", message: "--resume is Maestro-owned" };
+    const body = { error: "denied_extra_arg", message: "--resume is Takuto-owned" };
     const res = new Response(JSON.stringify(body), { status: 400 });
     Object.defineProperty(res, "ok", { value: false });
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
@@ -423,7 +423,7 @@ describe("putAgentConfig()", () => {
     const err = caught as AgentConfigError;
     expect(err.code).toBe("denied_extra_arg");
     expect(err.status).toBe(400);
-    expect(err.message).toBe("--resume is Maestro-owned");
+    expect(err.message).toBe("--resume is Takuto-owned");
   });
 
   it("throws AgentConfigError on 403 with no JSON body (falls back to http_403 code)", async () => {
@@ -492,12 +492,12 @@ describe("fetchOnboardingStatus()", () => {
 describe("repository API wrappers", () => {
   it("listMyRepositories hits GET /api/repositories", async () => {
     mockFetch(200, [
-      { id: "r1", name: "maestro-core", repo_url: "https://github.com/x/y", local_path: "/workspaces/maestro-core", default_branch: "main", added_at: 1 },
+      { id: "r1", name: "takuto-core", repo_url: "https://github.com/x/y", local_path: "/workspaces/takuto-core", default_branch: "main", added_at: 1 },
     ]);
     const rows = await listMyRepositories();
     expect(fetch).toHaveBeenCalledWith("/api/repositories", { credentials: "same-origin" });
     expect(rows).toHaveLength(1);
-    expect(rows[0].name).toBe("maestro-core");
+    expect(rows[0].name).toBe("takuto-core");
   });
 
   it("listAvailableRepositories hits GET /api/repositories/_available", async () => {

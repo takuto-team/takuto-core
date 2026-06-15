@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect or unexpected behaviour in Maestro.
+description: Report a defect or unexpected behaviour in Takuto.
 title: "[bug]: "
 labels: ["bug", "needs-triage"]
 body:
@@ -10,20 +10,20 @@ body:
         much detail as you can — vague reports are hard to act on.
 
         **Do not** report security vulnerabilities here — use the channels
-        in [SECURITY.md](https://github.com/morphet81/maestro-core/blob/main/SECURITY.md).
+        in [SECURITY.md](https://github.com/takuto-team/takuto-core/blob/main/SECURITY.md).
   - type: input
     id: version
     attributes:
-      label: Maestro version
+      label: Takuto version
       description: Output of `cat VERSION` or the container image tag you are running.
-      placeholder: "e.g. 0.7.2 or ghcr.io/morphet81/maestro-core:v0.7.2"
+      placeholder: "e.g. 0.7.2 or ghcr.io/takuto-team/takuto-core-core:v0.7.2"
     validations:
       required: true
   - type: dropdown
     id: deployment
     attributes:
       label: Deployment mode
-      description: How are you running Maestro?
+      description: How are you running Takuto?
       options:
         - Docker Compose (recommended)
         - Standalone container
@@ -67,7 +67,7 @@ body:
       label: Steps to reproduce
       description: Minimum sequence of actions to reproduce the bug.
       placeholder: |
-        1. Start Maestro with config X
+        1. Start Takuto with config X
         2. Trigger workflow Y
         3. Observe ...
     validations:
@@ -91,7 +91,7 @@ body:
     attributes:
       label: Logs
       description: |
-        Relevant log lines from `maestro` (JSON), the dashboard, or the
+        Relevant log lines from `takuto` (JSON), the dashboard, or the
         agent session. Redact secrets and tokens before pasting.
       render: shell
     validations:

@@ -365,7 +365,7 @@ export function FlowsTab() {
       {confirmReseed && (
         <ConfirmModal
           title="Re-seed flows from defaults"
-          message={`This replaces all flows for ${workspace} with the defaults shipped with Maestro. Your current flows for this workspace will be lost. Other workspaces are unaffected.`}
+          message={`This replaces all flows for ${workspace} with the defaults shipped with Takuto. Your current flows for this workspace will be lost. Other workspaces are unaffected.`}
           confirmLabel="Re-seed"
           onConfirm={handleReseed}
           onCancel={() => setConfirmReseed(false)}

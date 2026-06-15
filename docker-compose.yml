@@ -2,14 +2,14 @@
 # Merge docker-compose.dind.yml for a DinD sidecar (works on all platforms).
 # See .env.example and README.
 services:
-  maestro:
+  takuto:
     build:
       context: .
       args:
         # File in build context; use your own config.toml if it lists [docker] build_commands (e.g. skill installers)
-        MAESTRO_BUILD_CONFIG: config.toml.example
+        TAKUTO_BUILD_CONFIG: config.toml.example
         # Match host UID for rootless Podman Docker API sockets (0600). Omit for default 999. Do not mirror host GID (often clashes with Debian).
-        MAESTRO_UID: ${MAESTRO_UID:-999}
+        TAKUTO_UID: ${TAKUTO_UID:-999}
     ports:
       - "8080:8080"
     cap_add:
@@ -21,48 +21,48 @@ services:
     volumes:
       # Configuration file (read-write: dashboard and setup wizard persist
       # changes via the Config API layer; see AGENTS.md "Config persistence")
-      - ./.maestro/config.toml:/etc/maestro/config.toml:rw
+      - ./.takuto/config.toml:/etc/takuto/config.toml:rw
       # External workflow steps: copy workflows/*.example.toml → workflows/ticket.toml (etc.) on the host;
-      # config paths are relative to /etc/maestro/ (next to mounted config.toml).
-      - ./.maestro/workflows:/etc/maestro/workflows:ro
+      # config paths are relative to /etc/takuto/ (next to mounted config.toml).
+      - ./.takuto/workflows:/etc/takuto/workflows:ro
       # Custom environment variables (optional)
-      - ./.maestro/maestro.env:/etc/maestro/env:ro
-      # Persistent state for maestro user
-      - maestro-data:/home/maestro/.maestro
-      # Task #48: shared `maestro-tools` volume — populated at startup
+      - ./.takuto/takuto.env:/etc/takuto/env:ro
+      # Persistent state for takuto user
+      - takuto-data:/home/takuto/.takuto
+      # Task #48: shared `takuto-tools` volume — populated at startup
       # by `[provisioning].install_commands` and bind-mounted RO into
       # every spawned worker / editor / run-command (see
-      # `docs/extending-maestro.md`). RW here because the maestro
+      # `docs/extending-takuto.md`). RW here because the takuto
       # entrypoint writes into it during the SHA-gated install pass.
-      - maestro-tools:/opt/maestro-tools/bin
-      - claude-auth:/home/maestro/.claude
-      - cursor-auth:/home/maestro/.cursor
-      - agents-data:/home/maestro/.agents
-      - gh-auth:/home/maestro/.config/gh
-      - acli-auth:/home/maestro/.config/acli
-      - fcli-auth:/home/maestro/.config/fcli
+      - takuto-tools:/opt/takuto-tools/bin
+      - claude-auth:/home/takuto/.claude
+      - cursor-auth:/home/takuto/.cursor
+      - agents-data:/home/takuto/.agents
+      - gh-auth:/home/takuto/.config/gh
+      - acli-auth:/home/takuto/.config/acli
+      - fcli-auth:/home/takuto/.config/fcli
       # Legacy single-workspace mount (kept for backward compatibility)
       - workspace:/workspace
       # Project repositories cloned via the dashboard Setup flow
       - workspaces:/workspaces
-      # npm cache — persisted for the maestro user
-      - npm-cache:/home/maestro/.npm
+      # npm cache — persisted for the takuto user
+      - npm-cache:/home/takuto/.npm
       # mise installs + shims (tool versions from `.mise.toml` / `.tool-versions`)
-      - mise-data:/home/maestro/.local/share/mise
-      - mise-cache:/home/maestro/.cache/mise
+      - mise-data:/home/takuto/.local/share/mise
+      - mise-cache:/home/takuto/.cache/mise
       # AWS credentials (optional, for CodeArtifact auth)
-      - aws-config:/home/maestro/.aws
+      - aws-config:/home/takuto/.aws
       # Playwright browser binaries (workers use project lockfile; cache shared across workflows)
-      - playwright-cache:/home/maestro/.cache/ms-playwright
+      - playwright-cache:/home/takuto/.cache/ms-playwright
     environment:
       # Must match mounted config path (used by preflight / docker-hooks startup in entrypoint)
-      - MAESTRO_CONFIG=/etc/maestro/config.toml
+      - TAKUTO_CONFIG=/etc/takuto/config.toml
       # Stable home for hook scripts ($HOME can be wrong/empty in some Podman setups; docker-hooks forces this for children)
-      - MAESTRO_HOME=/home/maestro
-      # Workflow snapshot storage (persisted via maestro-data volume, survives workspace branch switches)
-      - MAESTRO_DATA_DIR=/home/maestro/.maestro
+      - TAKUTO_HOME=/home/takuto
+      # Workflow snapshot storage (persisted via takuto-data volume, survives workspace branch switches)
+      - TAKUTO_DATA_DIR=/home/takuto/.takuto
       # Keep Cursor CLI config/auth on the same path as the cursor-auth volume (default can differ with XDG)
-      - CURSOR_CONFIG_DIR=/home/maestro/.cursor
+      - CURSOR_CONFIG_DIR=/home/takuto/.cursor
       # Figma API token (optional, also configurable in config.toml)
       - FIGMA_API_TOKEN=${FIGMA_API_TOKEN:-}
     restart: unless-stopped
@@ -74,13 +74,13 @@ services:
       start_period: 10s
 
 volumes:
-  maestro-data:
+  takuto-data:
   # Task #48: admin-provisioned tools volume. See README "Extending
-  # Maestro" + `docs/extending-maestro.md`. Mounted RW into the maestro
+  # Takuto" + `docs/extending-takuto.md`. Mounted RW into the takuto
   # service (the entrypoint writes here) and RO into every spawned
   # worker / editor / run-command. Wipe with `docker volume rm
-  # maestro-core_maestro-tools` to reset to a clean state.
-  maestro-tools:
+  # takuto-core_takuto-tools` to reset to a clean state.
+  takuto-tools:
   claude-auth:
   cursor-auth:
   agents-data:

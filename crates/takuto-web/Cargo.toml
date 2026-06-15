@@ -1,0 +1,60 @@
+[package]
+name = "takuto-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# `test-utils` exposes `crate::test_helpers` so external integration tests
+# under `crates/takuto-web/tests/` can build the shared AppState / temp-DB
+# factories. The module is gated out of release builds — see
+# lore/code-quality-principles.md §6 ("Test scaffolding does not ship in the
+# production crate surface"). Enabled automatically during `cargo test` via
+# the self dev-dependency below; never enable as a default feature.
+test-utils = []
+
+[dependencies]
+takuto-core = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ts-rs = { workspace = true }
+tracing = { workspace = true }
+axum = { workspace = true }
+axum-extra = { version = "0.10", features = ["cookie"] }
+base64 = "0.22"
+cookie = "0.18"
+hex = "0.4"
+hmac = "0.12"
+tower = { workspace = true }
+tower-http = { workspace = true }
+tower_governor = { workspace = true }
+rust-embed = { workspace = true }
+mime_guess = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+sha2 = "0.10"
+subtle = "2"
+# Reverse-proxy plumbing for /s/{token}/* — forwards HTTP requests and tunnels
+# WebSocket upgrades from the shared dashboard listener to per-session backends
+# bound on loopback.
+hyper = { version = "1", features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
+
+[dev-dependencies]
+# The credentials integration test implements the
+# `takuto_core::auth::GhClient` trait, which is `#[async_trait]`.
+async-trait = { workspace = true }
+# Self dev-dep — activates the `test-utils` feature during `cargo test`,
+# `cargo bench`, and example builds so external integration tests under
+# `tests/` can use `crate::test_helpers`. Production builds (no dev-deps,
+# no `cfg(test)`) compile the module out per
+# lore/code-quality-principles.md §6.
+takuto-web = { path = ".", features = ["test-utils"] }
+
+[lints]
+workspace = true

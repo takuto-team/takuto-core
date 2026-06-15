@@ -48,7 +48,7 @@ function buildConfig(
       linked_items_in_prompt: "summary_only",
       ticket_context_max_description_bytes: 8192,
       linked_issue_description_max_bytes: 2048,
-      jql_filter: 'labels = "maestro"',
+      jql_filter: 'labels = "takuto"',
       done_status: "Done",
     },
     github: { app_id: 0, app_installation_id: 0 },
@@ -86,7 +86,7 @@ function withConfigMock(mock: FetchMock) {
           );
         }
         if (url === "/api/me/flows" && method === "GET") {
-          const body: UserFlowsResponse = { flows: mock.flows, workspace: "maestro-core" };
+          const body: UserFlowsResponse = { flows: mock.flows, workspace: "takuto-core" };
           return new Response(JSON.stringify(body), {
             status: 200,
             headers: { "Content-Type": "application/json" },

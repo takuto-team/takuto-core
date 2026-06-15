@@ -1,8 +1,8 @@
-# Maestro Architecture
+# Takuto Architecture
 
 ## Overview
 
-Maestro is a Rust application that drives ticket-shaped work through **Claude Code** or **Cursor Agent** in headless mode. It polls **Jira** or **GitHub Issues** (or runs ticket-free from manual paste-description starts), and for each item orchestrates a workflow: branch + git worktree, optional per-workspace **worktree init commands** (edited from the dashboard, not `config.toml`), then a sequence of **agent steps** and **command steps** defined by TOML files in `workflows/`. The engine **finalizes to `Done` after the last step succeeds** — there is no separate built-in PR step; a PR URL surfaces on the dashboard via `.maestro/outcome.toml` or a `MAESTRO_PR_URL: …` line in agent output. Lint, tests, and other deterministic gates are expressed either as agent prompts or as command steps. A small web dashboard lists workflows, streams output over WebSocket, and exposes REST endpoints for control, config, and user management.
+Takuto is a Rust application that drives ticket-shaped work through **Claude Code** or **Cursor Agent** in headless mode. It polls **Jira** or **GitHub Issues** (or runs ticket-free from manual paste-description starts), and for each item orchestrates a workflow: branch + git worktree, optional per-workspace **worktree init commands** (edited from the dashboard, not `config.toml`), then a sequence of **agent steps** and **command steps** defined by TOML files in `workflows/`. The engine **finalizes to `Done` after the last step succeeds** — there is no separate built-in PR step; a PR URL surfaces on the dashboard via `.takuto/outcome.toml` or a `TAKUTO_PR_URL: …` line in agent output. Lint, tests, and other deterministic gates are expressed either as agent prompts or as command steps. A small web dashboard lists workflows, streams output over WebSocket, and exposes REST endpoints for control, config, and user management.
 
 ---
 
@@ -11,7 +11,7 @@ Maestro is a Rust application that drives ticket-shaped work through **Claude Co
 Cargo workspace with three crates:
 
 ```
-maestro/
+takuto/
 ├── Cargo.toml                  # workspace root
 ├── Cargo.lock
 ├── ARCHITECTURE.md
@@ -31,7 +31,7 @@ maestro/
 │       ├── pages/               # Dashboard, Login, Config
 │       └── styles/              # Tailwind CSS + custom styles
 ├── crates/
-│   ├── maestro-core/           # workflow engine, orchestrator, external integrations
+│   ├── takuto-core/           # workflow engine, orchestrator, external integrations
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
@@ -59,7 +59,7 @@ maestro/
 │   │       │   └── dry_run.rs  # DryRunActions implementation
 │   │       ├── process.rs      # child process management
 │   │       └── error.rs        # error types
-│   ├── maestro-web/            # axum web server + dashboard
+│   ├── takuto-web/            # axum web server + dashboard
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
@@ -71,7 +71,7 @@ maestro/
 │   │       │   └── ws.rs         # WebSocket handler
 │   │       ├── state.rs        # shared app state
 │   │       └── (no assets — served from ui/dist/ via rust-embed)
-│   └── maestro-cli/            # binary entry point
+│   └── takuto-cli/            # binary entry point
 │       ├── Cargo.toml
 │       └── src/
 │           └── main.rs         # CLI args, config loading, startup
@@ -83,16 +83,16 @@ maestro/
 
 | Crate | Purpose |
 |---|---|
-| `maestro-core` | All business logic: workflow state machine, Jira polling, Claude Code session management, git operations, process management. No web concerns. |
-| `maestro-web` | HTTP server, REST API, WebSocket push, static asset serving. Depends on `maestro-core`. |
-| `maestro-cli` | Binary entry point. Parses CLI args, loads config, starts the core engine and web server. Depends on both other crates. |
+| `takuto-core` | All business logic: workflow state machine, Jira polling, Claude Code session management, git operations, process management. No web concerns. |
+| `takuto-web` | HTTP server, REST API, WebSocket push, static asset serving. Depends on `takuto-core`. |
+| `takuto-cli` | Binary entry point. Parses CLI args, loads config, starts the core engine and web server. Depends on both other crates. |
 
 ---
 
 ## Key Dependencies
 
 ```toml
-# maestro-core
+# takuto-core
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
@@ -102,7 +102,7 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# maestro-web
+# takuto-web
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = "0.10"
 tower = "0.5"
@@ -110,7 +110,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 rust-embed = "8"
 tokio-tungstenite = "0.26"
 
-# maestro-cli
+# takuto-cli
 clap = { version = "4", features = ["derive"] }
 ```
 
@@ -443,11 +443,11 @@ RUN npm install -g figma-cli
 RUN curl -fsSL <skills-install-url> | sh
 
 # Copy binary
-COPY --from=builder /app/target/release/maestro /usr/local/bin/maestro
-COPY config.toml /etc/maestro/config.toml
+COPY --from=builder /app/target/release/takuto /usr/local/bin/takuto
+COPY config.toml /etc/takuto/config.toml
 
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/maestro"]
+ENTRYPOINT ["/usr/local/bin/takuto"]
 ```
 
 ### Tool Installation Strategy
@@ -502,14 +502,14 @@ The container must run with `--cap-add=NET_ADMIN` to apply iptables rules, or th
 ```yaml
 version: "3.9"
 services:
-  maestro:
+  takuto:
     build: .
     ports:
       - "8080:8080"
     cap_add:
       - NET_ADMIN
     volumes:
-      - ./config.toml:/etc/maestro/config.toml:ro
+      - ./config.toml:/etc/takuto/config.toml:ro
       - gh-auth:/root/.config/gh:ro
       - acli-auth:/root/.config/acli:ro
       - repo:/workspace
@@ -646,7 +646,7 @@ dry_mode = true
 
 ## Configuration
 
-TOML file at `/etc/maestro/config.toml` (configurable via CLI arg):
+TOML file at `/etc/takuto/config.toml` (configurable via CLI arg):
 
 ```toml
 [general]
@@ -713,7 +713,7 @@ Config changes via the web UI are:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
-pub enum MaestroError {
+pub enum TakutoError {
     #[error("Jira error: {0}")]
     Jira(String),
 

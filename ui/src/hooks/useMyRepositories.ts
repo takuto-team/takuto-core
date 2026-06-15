@@ -9,7 +9,7 @@
  *   * `myRepos` starts at `null` (loading sentinel) until the first
  *     fetch lands.
  *   * `activeRepoName` is `null` ("All repositories") or a name string,
- *     persisted in `localStorage` under `maestro.activeRepoName`.
+ *     persisted in `localStorage` under `takuto.activeRepoName`.
  *     Lazy initializer + write-through both wrapped in `try`/`catch`
  *     to tolerate quota / disabled storage.
  *   * Sync effect drops a stale `activeRepoName` (no longer in
@@ -22,7 +22,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listMyRepositories, type RepositoryRow } from "../api/client";
 import { queryKeys } from "../api/queryClient";
 
-const ACTIVE_REPO_KEY = "maestro.activeRepoName";
+const ACTIVE_REPO_KEY = "takuto.activeRepoName";
 
 export interface UseMyRepositoriesResult {
   myRepos: RepositoryRow[] | null;

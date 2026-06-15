@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/maestro-core", "crates/maestro-web", "crates/maestro-cli"]
+members = ["crates/takuto-core", "crates/takuto-web", "crates/takuto-cli"]
 resolver = "2"
 
 [workspace.package]
@@ -62,7 +62,7 @@ jsonwebtoken = "9"
 fs2 = "0.4"
 
 # Database — legacy embedded SQLite. Kept during the cutover so the
-# importer can read the old maestro.db; dropped once sqlx's SQLite
+# importer can read the old takuto.db; dropped once sqlx's SQLite
 # driver fully takes over.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
@@ -94,8 +94,8 @@ rand = "0.9"
 libc = "0.2"
 
 # Internal crates
-maestro-core = { path = "crates/maestro-core" }
-maestro-web = { path = "crates/maestro-web" }
+takuto-core = { path = "crates/takuto-core" }
+takuto-web = { path = "crates/takuto-web" }
 
 # Single source of truth for lints across the workspace. Each crate opts in
 # with `[lints] workspace = true`.

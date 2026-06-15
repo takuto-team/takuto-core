@@ -1,13 +1,13 @@
 #!/bin/bash
 # test-workflow.sh — Smoke test: auth, worktree, skill-driven workflow, cleanup.
-# Runs as the maestro user inside the container (entrypoint handles root preamble).
+# Runs as the takuto user inside the container (entrypoint handles root preamble).
 set -euo pipefail
 
-CONFIG_FILE="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
+CONFIG_FILE="${TAKUTO_CONFIG:-/etc/takuto/config.toml}"
 STEP=0
 TOTAL=4
 FAILED=0
-TEST_BRANCH="test/maestro-smoketest"
+TEST_BRANCH="test/takuto-smoketest"
 
 # Read config values
 base_branch=$(grep -E '^\s*base_branch\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | head -1 || true)
@@ -19,7 +19,7 @@ git_remote="${git_remote:-origin}"
 agent_provider=$(grep -E '^\s*provider\s*=' "$CONFIG_FILE" 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d ' ' | head -1 || true)
 agent_provider="${agent_provider:-claude}"
 
-WORKTREE_PATH="$repo_path/worktrees/test-maestro-smoketest"
+WORKTREE_PATH="$repo_path/worktrees/test-takuto-smoketest"
 
 step_start() {
     STEP=$((STEP + 1))
@@ -75,7 +75,7 @@ if [ ! -f "$HOME/.claude.json" ]; then
     fi
 fi
 
-echo "=== Maestro Smoke Test ==="
+echo "=== Takuto Smoke Test ==="
 echo "Provider: $agent_provider | Base: $git_remote/$base_branch | Repo: $repo_path"
 
 # Step 1: Preflight auth checks
@@ -135,7 +135,7 @@ echo "  Creating worktree at $WORKTREE_PATH on branch $TEST_BRANCH..."
 git worktree add -b "$TEST_BRANCH" "$WORKTREE_PATH" "$git_remote/$base_branch" --quiet
 step_ok "Create worktree"
 
-# Step 3: Skill interpolation test (Maestro reads SKILL.md, substitutes args, injects via --system-prompt)
+# Step 3: Skill interpolation test (Takuto reads SKILL.md, substitutes args, injects via --system-prompt)
 step_start "Run workflow ($agent_provider)"
 
 # Create say-hello skill for both providers
@@ -162,9 +162,9 @@ fi
 
 # --- Workflow step 1: /say-hello "John Doe" "Cold" via interpolation ---
 echo ""
-echo "  Workflow step 1/2: say-hello skill (Maestro-style interpolation)"
+echo "  Workflow step 1/2: say-hello skill (Takuto-style interpolation)"
 
-# Read SKILL.md, strip frontmatter, substitute args (replicates Maestro skill_resolve logic)
+# Read SKILL.md, strip frontmatter, substitute args (replicates Takuto skill_resolve logic)
 SKILL_RAW=$(sed '1{/^---$/d}' "$HOME/.claude/skills/say-hello/SKILL.md" | sed '1,/^---$/d')
 SKILL_CONTENT=$(echo "$SKILL_RAW" | sed 's/\$ARGUMENTS/John Doe Cold/g; s/\$1/John Doe/g; s/\$2/Cold/g')
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test Claude Code headless — run as maestro user inside container
+# Test Claude Code headless — run as takuto user inside container
 set -e
 echo "=== Claude Code test ==="
 echo "User: $(whoami)"

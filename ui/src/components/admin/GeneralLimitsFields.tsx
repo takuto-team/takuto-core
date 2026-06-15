@@ -66,7 +66,7 @@ export function GeneralLimitsFields({
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          How often Maestro checks GitHub for whether a workflow&apos;s PR has
+          How often Takuto checks GitHub for whether a workflow&apos;s PR has
           been merged.
         </p>
       </div>

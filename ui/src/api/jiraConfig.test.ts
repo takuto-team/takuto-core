@@ -17,7 +17,7 @@ const patch: JiraConfigPatch = {
   linked_items_in_prompt: "summary_only",
   ticket_context_max_description_bytes: 4096,
   linked_issue_description_max_bytes: 0,
-  jql_filter: 'labels = "maestro"',
+  jql_filter: 'labels = "takuto"',
   done_status: "Done",
   project_keys: ["PROJ", "OPS"],
 };

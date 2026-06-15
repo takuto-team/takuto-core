@@ -2,7 +2,7 @@
 # egress-rules.sh — Apply network egress allowlist
 # Requires: --cap-add=NET_ADMIN on the Docker container
 #
-# This script restricts outbound traffic to only the services Maestro needs.
+# This script restricts outbound traffic to only the services Takuto needs.
 # Domain names are resolved to IPs at apply time. For dynamic resolution,
 # consider using a forward proxy instead.
 
@@ -49,15 +49,15 @@ allow_host() {
 }
 
 # ---------------------------------------------------------------------------
-# Core services (required for Maestro to function)
+# Core services (required for Takuto to function)
 # ---------------------------------------------------------------------------
 
 # Jira / Atlassian Cloud
 allow_host api.atlassian.com
 # Allow the specific Jira Cloud instance used by acli.
 # Read site from config.toml if available; fall back to a sensible default.
-MAESTRO_CONFIG="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
-jira_site=$(sed -n 's/^[[:space:]]*site[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$MAESTRO_CONFIG" 2>/dev/null || true)
+TAKUTO_CONFIG="${TAKUTO_CONFIG:-/etc/takuto/config.toml}"
+jira_site=$(sed -n 's/^[[:space:]]*site[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$TAKUTO_CONFIG" 2>/dev/null || true)
 if [ -n "$jira_site" ]; then
     allow_host "$jira_site"
 fi
@@ -92,10 +92,10 @@ allow_host o2.ingest.sentry.io
 # ---------------------------------------------------------------------------
 # Custom egress hosts (from config.toml [network] extra_egress_hosts)
 # ---------------------------------------------------------------------------
-MAESTRO_CONFIG="${MAESTRO_CONFIG:-/etc/maestro/config.toml}"
-if [ -f "$MAESTRO_CONFIG" ]; then
+TAKUTO_CONFIG="${TAKUTO_CONFIG:-/etc/takuto/config.toml}"
+if [ -f "$TAKUTO_CONFIG" ]; then
     # Parse TOML array: extra_egress_hosts = ["host1", "host2"]
-    extra_hosts=$(sed -n 's/^[[:space:]]*extra_egress_hosts[[:space:]]*=[[:space:]]*\[//p' "$MAESTRO_CONFIG" 2>/dev/null \
+    extra_hosts=$(sed -n 's/^[[:space:]]*extra_egress_hosts[[:space:]]*=[[:space:]]*\[//p' "$TAKUTO_CONFIG" 2>/dev/null \
         | tr -d '[]"' | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | grep -v '^$' || true)
     if [ -n "$extra_hosts" ]; then
         echo "Adding custom egress hosts from config..."
@@ -160,23 +160,23 @@ allow_host api.figma.com
 # Fallback: if any resolved host had 0 IPs (cloud providers with rotating IPs),
 # allow all HTTPS as a safety net. This is a temporary measure until a
 # DNS-based proxy (squid) is implemented.
-ALLOW_ALL_HTTPS=$(sed -n 's/^[[:space:]]*allow_all_https[[:space:]]*=[[:space:]]*\(.*\)/\1/p' "$MAESTRO_CONFIG" 2>/dev/null | tr -d ' "' || true)
+ALLOW_ALL_HTTPS=$(sed -n 's/^[[:space:]]*allow_all_https[[:space:]]*=[[:space:]]*\(.*\)/\1/p' "$TAKUTO_CONFIG" 2>/dev/null | tr -d ' "' || true)
 if [ "$ALLOW_ALL_HTTPS" = "true" ]; then
     echo "WARNING: allow_all_https is enabled — all outbound HTTPS (port 443) is permitted"
     iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 fi
 
-# Plan-11: when Maestro is configured to talk to an external database
+# Plan-11: when Takuto is configured to talk to an external database
 # (postgres / mysql / mariadb sidecar), allow that host:port pair.
 # Otherwise the default DROP policy silently times out the sqlx pool
 # at 30 s — surfacing as "Database backend unreachable" at startup.
 #
-# `MAESTRO_DATABASE_CONNECTION` env var wins (matches the compose
+# `TAKUTO_DATABASE_CONNECTION` env var wins (matches the compose
 # overlays); fall back to `[database].connection` in config.toml so
 # operators who set the URL there get the same allowance.
-DB_URL="${MAESTRO_DATABASE_CONNECTION:-}"
+DB_URL="${TAKUTO_DATABASE_CONNECTION:-}"
 if [ -z "$DB_URL" ]; then
-    DB_URL=$(sed -n 's/^[[:space:]]*connection[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$MAESTRO_CONFIG" 2>/dev/null | head -1 || true)
+    DB_URL=$(sed -n 's/^[[:space:]]*connection[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$TAKUTO_CONFIG" 2>/dev/null | head -1 || true)
 fi
 case "$DB_URL" in
     postgres://*|postgresql://*|mysql://*)

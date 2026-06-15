@@ -1,4 +1,4 @@
-title = "Maestro gitleaks config"
+title = "Takuto gitleaks config"
 
 # Build on top of the upstream default ruleset so new secret patterns are
 # picked up automatically as gitleaks updates.

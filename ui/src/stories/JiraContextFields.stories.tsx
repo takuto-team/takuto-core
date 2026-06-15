@@ -87,7 +87,7 @@ export const Populated: Story = {
       initialLinkedItemsInPrompt="summary_only"
       initialTicketContextMaxDescriptionBytes="8192"
       initialLinkedIssueDescriptionMaxBytes="2048"
-      initialJqlFilter='labels = "maestro"'
+      initialJqlFilter='labels = "takuto"'
       initialDoneStatus="Done"
       initialProjectKeys={["PROJ", "OPS"]}
     />

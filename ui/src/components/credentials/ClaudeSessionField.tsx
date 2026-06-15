@@ -121,7 +121,7 @@ export function ClaudeSessionField({
             shell and copy the output.
           </p>
           <p>
-            Maestro only needs the{" "}
+            Takuto only needs the{" "}
             <code className="text-gray-300">oauthAccount</code> block (with{" "}
             <code className="text-gray-300">accountUuid</code>,{" "}
             <code className="text-gray-300">emailAddress</code>, and{" "}

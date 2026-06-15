@@ -1345,87 +1345,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
-name = "maestro-cli"
-version = "0.5.15"
-dependencies = [
- "axum",
- "clap",
- "maestro-core",
- "maestro-web",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "maestro-core"
-version = "0.5.15"
-dependencies = [
- "argon2",
- "async-trait",
- "chacha20poly1305",
- "chrono",
- "dirs",
- "fs2",
- "getrandom 0.3.4",
- "hex",
- "jsonwebtoken",
- "libc",
- "rand 0.9.4",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "ts-rs",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "maestro-web"
-version = "0.5.15"
-dependencies = [
- "async-trait",
- "axum",
- "axum-extra",
- "base64",
- "chrono",
- "cookie",
- "hex",
- "hmac",
- "http-body-util",
- "hyper",
- "hyper-util",
- "maestro-core",
- "maestro-web",
- "mime_guess",
- "rust-embed",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "time",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tower_governor",
- "tracing",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2549,6 +2468,87 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "takuto-cli"
+version = "0.5.15"
+dependencies = [
+ "axum",
+ "clap",
+ "takuto-core",
+ "takuto-web",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "takuto-core"
+version = "0.5.15"
+dependencies = [
+ "argon2",
+ "async-trait",
+ "chacha20poly1305",
+ "chrono",
+ "dirs",
+ "fs2",
+ "getrandom 0.3.4",
+ "hex",
+ "jsonwebtoken",
+ "libc",
+ "rand 0.9.4",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "ts-rs",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "takuto-web"
+version = "0.5.15"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-extra",
+ "base64",
+ "chrono",
+ "cookie",
+ "hex",
+ "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "mime_guess",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "takuto-core",
+ "takuto-web",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tower_governor",
+ "tracing",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]

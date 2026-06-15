@@ -120,7 +120,7 @@ export function JiraContextFields({
           type="text"
           value={jqlFilter}
           onChange={(e) => onJqlFilterChange(e.target.value)}
-          placeholder='e.g. labels = "maestro"'
+          placeholder='e.g. labels = "takuto"'
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">

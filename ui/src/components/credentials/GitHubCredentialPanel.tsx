@@ -80,14 +80,14 @@ export function GitHubCredentialPanel({
 
       {effectiveMode === "app" && !hasPat && (
         <p className="text-sm text-gray-400">
-          Maestro is using its GitHub App. Workflows run as the bot. Add a
+          Takuto is using its GitHub App. Workflows run as the bot. Add a
           personal access token below if you want commits and PRs attributed
           to you.
         </p>
       )}
       {effectiveMode === "pat_only" && !hasPat && (
         <p className="text-sm text-amber-300">
-          No shared GitHub App is configured. Maestro can only talk to GitHub
+          No shared GitHub App is configured. Takuto can only talk to GitHub
           via a personal access token — without one, GitHub-touching workflows
           won't start.
         </p>

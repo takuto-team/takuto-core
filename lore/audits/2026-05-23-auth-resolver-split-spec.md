@@ -1,14 +1,14 @@
 # Refactor spec — split `github/auth_resolver.rs`
 
-Source: 2026-05-21 clean-code audit §9 ("Per-layer cut plans") — second target on the §8 priority #3 list ("Decompose the three Rust god modules"). Current state: `crates/maestro-core/src/github/auth_resolver.rs` = 1,381 LOC (audit §1 worst-offender #5).
+Source: 2026-05-21 clean-code audit §9 ("Per-layer cut plans") — second target on the §8 priority #3 list ("Decompose the three Rust god modules"). Current state: `crates/takuto-core/src/github/auth_resolver.rs` = 1,381 LOC (audit §1 worst-offender #5).
 
 ## Goal
 
-Split `github/auth_resolver.rs` into focused sub-modules under `github/auth_resolver/` per the audit's cut plan, with zero behaviour change and an identical public surface (every `crate::github::auth_resolver::*` and `maestro_core::github::auth_resolver::*` path keeps resolving).
+Split `github/auth_resolver.rs` into focused sub-modules under `github/auth_resolver/` per the audit's cut plan, with zero behaviour change and an identical public surface (every `crate::github::auth_resolver::*` and `takuto_core::github::auth_resolver::*` path keeps resolving).
 
 ## Scope (in)
 
-Produce these 6 files under `crates/maestro-core/src/github/auth_resolver/`:
+Produce these 6 files under `crates/takuto-core/src/github/auth_resolver/`:
 
 - `mod.rs` — re-exports only (`pub use {decision, errors, validator, audit, resolver}::*;`); ≤ 30 LOC.
 - `resolver.rs` — `GitAuthResolver` struct + impl orchestration (`new`, `with_app_token_cwd`, `mode_for_user`, `token_for`, and the `user_has_pat` / `attribute_commits` / `unseal_user_pat` / `materialise_app_token` / `materialise_user_pat` internals); ≤ 300 LOC.
@@ -22,9 +22,9 @@ Produce these 6 files under `crates/maestro-core/src/github/auth_resolver/`:
 - NO behaviour change. The decision matrix in `decide_token_source` is byte-identical; the audit-write call sites fire under the exact same conditions.
 - NO renames of public items (`GitAuthResolver`, `GitAuthError`, `GitAuthResult`, `GitAction`, `TokenSource`, `GithubAuthMode`, `SecretToken`, `GitToken`, `decide_token_source`, `auth_warning_payload`).
 - NO directory rename: the on-disk dir stays `github/auth_resolver/` (NOT `github/auth/`) so every existing `crate::github::auth_resolver::*` import resolves with zero shim. The audit's "`github/auth/`" naming is treated as descriptive; this spec follows the same precedent as the runner split (keep the existing module path, split inside it).
-- NO `MaestroError` changes (that is §8 item #2 — separate task; the resolver still surfaces `GitAuthError` and callers still convert at their boundary).
+- NO `TakutoError` changes (that is §8 item #2 — separate task; the resolver still surfaces `GitAuthError` and callers still convert at their boundary).
 - NO `ExternalActions` trait changes.
-- NO changes to `auth/bundle.rs`, `workflow/engine/*.rs`, `maestro-web/src/state.rs`, or any other caller — every existing import path must continue to resolve unchanged.
+- NO changes to `auth/bundle.rs`, `workflow/engine/*.rs`, `takuto-web/src/state.rs`, or any other caller — every existing import path must continue to resolve unchanged.
 - NO modifications to sibling files in `github/` (`mod.rs` line `pub mod auth_resolver;` stays as-is).
 
 ## Acceptance criteria
@@ -33,7 +33,7 @@ Produce these 6 files under `crates/maestro-core/src/github/auth_resolver/`:
 - [ ] `resolver.rs` ≤ 300 LOC of non-test code.
 - [ ] `cargo build --workspace` produces **zero warnings**.
 - [ ] `cargo test --workspace` is green.
-- [ ] Public re-export surface of `crate::github::auth_resolver::*` is identical before/after. Verify by grepping `auth_resolver::` across `crates/maestro-core/`, `crates/maestro-web/`, and `crates/maestro-cli/` — every existing path resolves (the 28 references found at spec time).
+- [ ] Public re-export surface of `crate::github::auth_resolver::*` is identical before/after. Verify by grepping `auth_resolver::` across `crates/takuto-core/`, `crates/takuto-web/`, and `crates/takuto-cli/` — every existing path resolves (the 28 references found at spec time).
 - [ ] The two existing `thiserror`-derived enums in this file are preserved verbatim: `GitAuthError` (5 variants with their stable `error_code()` mapping) lives in `errors.rs`; any other `thiserror` enum that surfaces here at split time moves with its owning concept and keeps the same variant set and `#[error("…")]` strings.
 - [ ] `#[cfg(test)] mod tests` modules stay co-located with the code they cover — the 28-cell decision-matrix tests move into `decision.rs`; the `should_audit_first_use` tests move into `audit.rs`; the resolver integration tests (DB-backed) stay in `resolver.rs`.
 - [ ] `SecretToken`'s redacted `Debug` impl is preserved byte-for-byte (the `"bytes: <redacted>"` string is part of the security contract — any logged struct must continue to show `<redacted>`).

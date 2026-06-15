@@ -1,4 +1,4 @@
-# Maestro — Clean Code Audit (2026-05-21)
+# Takuto — Clean Code Audit (2026-05-21)
 
 Audit performed at commit `afc09e2`. Findings span Rust backend, React/TypeScript frontend, and Docker layer. Companion to `lore/refactor-backlog.md`.
 
@@ -27,24 +27,24 @@ The Rust workspace is well-typed at the error boundary and almost free of produc
 
 | # | Layer | File / Symbol | Metric | Headline |
 |---:|---|---|---:|---|
-| 1 | Rust | `crates/maestro-core/src/config.rs` | 2,693 LOC / 26 structs+enums / `Config` 12 fields | Workspace-wide configuration leviathan |
-| 2 | Rust | `crates/maestro-web/src/routes/workflows.rs` | 2,313 LOC / 26 async handlers / 333-line `run_command_port_tracker` | One file owns every workflow endpoint |
-| 3 | Rust | `crates/maestro-core/src/workflow/engine/step_runner.rs:268` | 429-line single function `run_agent_step_sequence` | Driver loop hides four state machines |
-| 4 | Rust | `crates/maestro-core/src/container/runner.rs` | 1,513 LOC | Mounts, env, args, exec, cleanup in one struct |
-| 5 | Rust | `crates/maestro-core/src/workflow/engine/types.rs` `Workflow` | 26 public fields | God data class shared across 6 sub-modules |
-| 6 | Rust | `crates/maestro-core/src/github/auth_resolver.rs` | 1,381 LOC | Resolver, validator, tests, three mocks in one file |
-| 7 | Rust | `crates/maestro-core/src/workflow/engine/mod.rs` | 1,319 LOC / `WorkflowEngine` 13 fields / 30+ public methods | Engine facade became a god |
-| 8 | Rust | `crates/maestro-core/src/error.rs:13` | 16-variant enum, 11 wrap `String` | `thiserror` used but stringly inside |
-| 9 | Rust | `crates/maestro-core/src/docker_hooks.rs` | 1,216 LOC / 19 `eprintln!` in prod | Hooks mixed with preflight + YAML parsing |
+| 1 | Rust | `crates/takuto-core/src/config.rs` | 2,693 LOC / 26 structs+enums / `Config` 12 fields | Workspace-wide configuration leviathan |
+| 2 | Rust | `crates/takuto-web/src/routes/workflows.rs` | 2,313 LOC / 26 async handlers / 333-line `run_command_port_tracker` | One file owns every workflow endpoint |
+| 3 | Rust | `crates/takuto-core/src/workflow/engine/step_runner.rs:268` | 429-line single function `run_agent_step_sequence` | Driver loop hides four state machines |
+| 4 | Rust | `crates/takuto-core/src/container/runner.rs` | 1,513 LOC | Mounts, env, args, exec, cleanup in one struct |
+| 5 | Rust | `crates/takuto-core/src/workflow/engine/types.rs` `Workflow` | 26 public fields | God data class shared across 6 sub-modules |
+| 6 | Rust | `crates/takuto-core/src/github/auth_resolver.rs` | 1,381 LOC | Resolver, validator, tests, three mocks in one file |
+| 7 | Rust | `crates/takuto-core/src/workflow/engine/mod.rs` | 1,319 LOC / `WorkflowEngine` 13 fields / 30+ public methods | Engine facade became a god |
+| 8 | Rust | `crates/takuto-core/src/error.rs:13` | 16-variant enum, 11 wrap `String` | `thiserror` used but stringly inside |
+| 9 | Rust | `crates/takuto-core/src/docker_hooks.rs` | 1,216 LOC / 19 `eprintln!` in prod | Hooks mixed with preflight + YAML parsing |
 | 10 | Docker | `Dockerfile:3,14,40` | 3 `FROM`, 0 `@sha256` | Reproducibility breaks across base re-tags |
 | 11 | React | `ui/src/components/modals/TicketDetailModal.tsx` | 501 LOC / 12 `useState` / 5 effects+refs | Modal does 6 jobs |
 | 12 | React | `ui/src/pages/Dashboard.tsx` | 440 LOC / 21 hook calls / 10 `useState` | Page also orchestration container |
 
 ## Systemic smells
 
-### [Rust] Stringly-typed `MaestroError`
+### [Rust] Stringly-typed `TakutoError`
 - **Count:** 11/16 variants wrap `String`; 33 functions return `Result<_, String>`.
-- **Root cause:** errors converted to text at the failure site (`.map_err(|e| MaestroError::Jira(e.to_string()))`).
+- **Root cause:** errors converted to text at the failure site (`.map_err(|e| TakutoError::Jira(e.to_string()))`).
 - **Fix:** typed payloads on every domain variant; `#[from]` impls for `rusqlite::Error`, `reqwest::Error`, `serde_json::Error`; delete `Result<_, String>`.
 
 ### [Rust] Fire-and-forget `tokio::spawn`
@@ -83,7 +83,7 @@ The Rust workspace is well-typed at the error boundary and almost free of produc
 
 ### [Docker] Runtime bundles build toolchains
 - **Count:** Rust toolchain (lines 122–136), `build-essential` + `autoconf` + `bison` + `libssl-dev` + `libyaml-dev` (lines 107–120).
-- **Fix:** split into `maestro:slim` (no build tools) and `maestro:full` (current shape).
+- **Fix:** split into `takuto:slim` (no build tools) and `takuto:full` (current shape).
 
 ### [Docker] `@latest` in image build
 - **Count:** 2 npm globals at `@latest` + `curl … | bash` for Cursor and Rust.
@@ -96,8 +96,8 @@ The Rust workspace is well-typed at the error boundary and almost free of produc
 ## Prioritised fix order (4 items, blast-radius first)
 
 1. **Split `config.rs` and `routes/workflows.rs`** — 5,006 LOC of conflict-prone shared code; mechanical extraction along clean per-section/per-handler seams.
-2. **Restructure `MaestroError`** — typed payloads on all variants; delete `Result<_, String>`; remove `Box<dyn Error>` from `run_server`.
-3. **Pin Docker bases + split runtime image** — `@sha256:` on all `FROM`; publish `maestro:slim` and `maestro:full`; pin all `@latest` and shell-pipe installs.
+2. **Restructure `TakutoError`** — typed payloads on all variants; delete `Result<_, String>`; remove `Box<dyn Error>` from `run_server`.
+3. **Pin Docker bases + split runtime image** — `@sha256:` on all `FROM`; publish `takuto:slim` and `takuto:full`; pin all `@latest` and shell-pipe installs.
 4. **Audit `tokio::spawn` + `clippy::await_holding_lock`** — every fire-and-forget spawn registers in a `JoinSet`; lint catches lock-across-await.
 
 ## Per-layer cut plans
@@ -136,9 +136,9 @@ The Rust workspace is well-typed at the error boundary and almost free of produc
 - `Workflow = (Identity, Progress, Runtime, Ownership)` composition
 
 ### Dockerfile → 2 stages + 2 image targets
-- `runtime-base` — `debian:bookworm-slim@<digest>` + minimal runtime deps + Playwright libs + maestro user + entrypoints + binary
+- `runtime-base` — `debian:bookworm-slim@<digest>` + minimal runtime deps + Playwright libs + takuto user + entrypoints + binary
 - `runtime-build-tools` — `FROM runtime-base` + Rust toolchain + build-essential + autoconf + libssl-dev + libyaml-dev
-- `maestro:slim` = `runtime-base`; `maestro:full` = `runtime-build-tools`
+- `takuto:slim` = `runtime-base`; `takuto:full` = `runtime-build-tools`
 - All `npm install -g …@latest` pinned; checksums on `ttyd` / `openvscode-server` / Node tarballs; replace `curl | bash` for Cursor with pinned tarball + sha256
 
 ### `TicketDetailModal.tsx` (501 LOC) → 4 components
@@ -162,7 +162,7 @@ The Rust workspace is well-typed at the error boundary and almost free of produc
 | Rule | Status | Detail |
 |---|---|---|
 | No `unwrap()`/`expect()` in non-test code | **Fail (minor)** | 5 real code-path violations + ~45 in test-support files inside `src/` |
-| `thiserror` errors; no `Box<dyn Error>` in public API | **Fail** | `MaestroError` variants stringly; `run_server` returns `Box<dyn Error>`; 33 `Result<_, String>` |
+| `thiserror` errors; no `Box<dyn Error>` in public API | **Fail** | `TakutoError` variants stringly; `run_server` returns `Box<dyn Error>`; 33 `Result<_, String>` |
 | Rust file > ~300 LOC ⇒ split | **Fail (systemic)** | 51 files exceed 400 LOC |
 | React component > ~150 LOC ⇒ split | **Fail (4 hot spots)** | 4 over 400 LOC |
 | No `RwLock`/`Mutex` guard across `.await` | **Indeterminate** | 328 sites match heuristic — needs `clippy::await_holding_lock` |

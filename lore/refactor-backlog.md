@@ -19,21 +19,21 @@ All items must obey `CODING_STANDARDS.md` §5: minimum viable change, one logica
 
 The 2026-05-21 clean-code audit (`lore/audits/2026-05-21-clean-code.md`) executed Phases 1, 3, and 5 of the plan in `lore/audits/2026-05-21-plan.md` — module splits (`config/`, `routes/workflows/`), Docker image hardening, and React UI component splits respectively. See `git log --since=2026-05-21` for the commit trail.
 
-**Phases 2 (typed `MaestroError`) and 4 (async hygiene) were deferred to this backlog per the option-2 wrap decision** — captured below as `P1-D-1` and `P1-D-2`. The audit context (worst offender rankings, systemic smells, prioritised fix order) is in the audit file; the verbatim scope / ACs / risks / verifier blocks are reproduced here so a future picker can work without flipping documents. Several P0/P1 entries below were superseded by earlier work — see the "Overlap" section of `lore/audits/2026-05-21-plan.md` for a per-item status.
+**Phases 2 (typed `TakutoError`) and 4 (async hygiene) were deferred to this backlog per the option-2 wrap decision** — captured below as `P1-D-1` and `P1-D-2`. The audit context (worst offender rankings, systemic smells, prioritised fix order) is in the audit file; the verbatim scope / ACs / risks / verifier blocks are reproduced here so a future picker can work without flipping documents. Several P0/P1 entries below were superseded by earlier work — see the "Overlap" section of `lore/audits/2026-05-21-plan.md` for a per-item status.
 
 ---
 
 ## P0 — Top-priority fixes (audit §8)
 
-### P0-1 · Split `crates/maestro-core/src/container.rs` into a `container/` module
+### P0-1 · Split `crates/takuto-core/src/container.rs` into a `container/` module
 
 **Scope**
 
-- `crates/maestro-core/src/container.rs` (2,699 prod LOC, 52 module items, 3,816 LOC including tests).
+- `crates/takuto-core/src/container.rs` (2,699 prod LOC, 52 module items, 3,816 LOC including tests).
 - New tree:
 
   ```
-  crates/maestro-core/src/container/
+  crates/takuto-core/src/container/
     mod.rs            # thin facade — re-exports + types shared across submodules
     runner.rs         # current 73–757 (struct + ctor + spawn helpers + impl block 427–757)
     editor.rs         # current 783–1520 (openvscode-server / per-user editor session lifecycle)
@@ -50,7 +50,7 @@ Violates CODING_STANDARDS §1 "one file = one reason to change" and the 300-LOC 
 
 **Acceptance criteria**
 
-- `wc -l crates/maestro-core/src/container/*.rs` shows every file ≤ ~400 LOC of non-test code.
+- `wc -l crates/takuto-core/src/container/*.rs` shows every file ≤ ~400 LOC of non-test code.
 - `mod.rs` contains **only** `pub mod`/`pub(crate) use` lines plus shared type definitions used by ≥ 2 submodules (no `fn` bodies).
 - `cargo build --workspace` produces **zero warnings** (§2 quality bar).
 - `cargo test --workspace` passes; every test moved survives the move.
@@ -86,13 +86,13 @@ CODING_STANDARDS §3 mandates `strict: true`. Today both UI tsconfigs silently l
 
 ---
 
-### P0-3 · Split `crates/maestro-core/src/workflow/engine/driver.rs` into focused engine sub-modules
+### P0-3 · Split `crates/takuto-core/src/workflow/engine/driver.rs` into focused engine sub-modules
 
 **Scope**
 
-- `crates/maestro-core/src/workflow/engine/driver.rs` (2,162 LOC, 22 fns, 0 inline tests).
+- `crates/takuto-core/src/workflow/engine/driver.rs` (2,162 LOC, 22 fns, 0 inline tests).
 - Keep `driver.rs` itself for `drive_workflow_def` plus the small glue it owns (~400 LOC).
-- New siblings under `crates/maestro-core/src/workflow/engine/`:
+- New siblings under `crates/takuto-core/src/workflow/engine/`:
 
   | File | Current lines | Functions moved |
   |---|---|---|
@@ -110,7 +110,7 @@ CODING_STANDARDS §1 + §2 "follow the engine/ pattern: large modules become dir
 **Acceptance criteria**
 
 - Every new file is ≤ ~400 LOC non-test.
-- `crates/maestro-core/src/workflow/engine/driver.rs` keeps `drive_workflow_def` as its single entry-point.
+- `crates/takuto-core/src/workflow/engine/driver.rs` keeps `drive_workflow_def` as its single entry-point.
 - `git grep -nE "workflow::engine::driver::" crates/` confirms no external caller had to change imports (re-exports preserved) — **no public API change**.
 - `cargo build --workspace` → zero warnings; `cargo test --workspace` → green.
 - `AGENTS.md` "Engine and storage" section reviewed; the bootstrap step-numbering bullets must still be accurate after the move. Update in the same commit if any file path is named.
@@ -157,12 +157,12 @@ Today nothing prevents a warning-bearing commit from landing, and release binari
 
 ## P1 — High-value follow-ups
 
-### P1-1 · Split `crates/maestro-web/src/routes/workflows.rs` into an 8-file module
+### P1-1 · Split `crates/takuto-web/src/routes/workflows.rs` into an 8-file module
 
 **Scope**
 
-- `crates/maestro-web/src/routes/workflows.rs` (2,313 LOC, 23 handlers).
-- New tree under `crates/maestro-web/src/routes/workflows/`:
+- `crates/takuto-web/src/routes/workflows.rs` (2,313 LOC, 23 handlers).
+- New tree under `crates/takuto-web/src/routes/workflows/`:
   - `mod.rs` — facade: declares sub-modules, exposes the `Router` builder.
   - `queries.rs` — list/get/count handlers.
   - `lifecycle.rs` — start, stop, retry, delete, mark-as-done.
@@ -181,18 +181,18 @@ CODING_STANDARDS §1 — one file = one reason to change. A single 2.3k-LOC rout
 - Every new file ≤ ~400 LOC.
 - `mod.rs` contains only the router wiring + `pub(crate) use` re-exports; no handler bodies.
 - The `Router` returned to `build_router` exposes **the same path → handler mapping** (verify with `git diff` on the `.route(...)` list).
-- `cargo test -p maestro-web` and the existing integration tests pass.
+- `cargo test -p takuto-web` and the existing integration tests pass.
 - No public type renamed or moved across crate boundaries.
 
 **Owner:** backend
 
 ---
 
-### P1-2 · Split `crates/maestro-core/src/config.rs` into a `config/` module
+### P1-2 · Split `crates/takuto-core/src/config.rs` into a `config/` module
 
 **Scope**
 
-- `crates/maestro-core/src/config.rs` (1,512 prod LOC, 22 pub structs, 3 `impl Config` blocks).
+- `crates/takuto-core/src/config.rs` (1,512 prod LOC, 22 pub structs, 3 `impl Config` blocks).
 - New tree:
   - `config/mod.rs` — facade, re-exports.
   - `config/schema.rs` — the structs + `Default` impls.
@@ -205,23 +205,23 @@ Three orthogonal concerns (data shape, value interpolation, file I/O + validatio
 
 **Acceptance criteria**
 
-- `wc -l crates/maestro-core/src/config/*.rs` ≤ ~600 LOC each (schema may be the largest).
-- Public type paths preserved (`maestro_core::Config`, `maestro_core::config::Config`, etc.) — confirm with `git grep -nE "use maestro_core::(config::)?Config"`.
-- `cargo test -p maestro-core` passes.
+- `wc -l crates/takuto-core/src/config/*.rs` ≤ ~600 LOC each (schema may be the largest).
+- Public type paths preserved (`takuto_core::Config`, `takuto_core::config::Config`, etc.) — confirm with `git grep -nE "use takuto_core::(config::)?Config"`.
+- `cargo test -p takuto-core` passes.
 - `AGENTS.md` § Configuration paths reviewed; update file references if any are named.
 
 **Owner:** backend
 
 ---
 
-### P1-3 · Promote `MaestroError` variants to typed `#[from]` wiring
+### P1-3 · Promote `TakutoError` variants to typed `#[from]` wiring
 
 **Scope**
 
-- `crates/maestro-core/src/error.rs` — today 10 / 13 variants carry `String` payloads.
+- `crates/takuto-core/src/error.rs` — today 10 / 13 variants carry `String` payloads.
 - Add `#[from] rusqlite::Error`, `#[from] serde_json::Error`, `#[from] chrono::ParseError` (drop the lossy `.to_string()` conversions).
-- Promote `Jira`, `Git`, `Claude`, `AiAgent`, `Auth`, `Database`, `Config` variants to wrap `#[source] Box<dyn std::error::Error + Send + Sync>` (the **public crate-boundary** rule in CODING_STANDARDS §2 forbids `Box<dyn Error>` in a public API — these wrappers are internal to the `MaestroError` enum, not the public return type, so they comply; we only widen the source storage).
-- Sweep the 41 `.map_err(|e| MaestroError::*(e.to_string()))` call sites and replace with `?` where the new `#[from]` covers it, or with explicit `MaestroError::Variant { source: Box::new(e) }` otherwise.
+- Promote `Jira`, `Git`, `Claude`, `AiAgent`, `Auth`, `Database`, `Config` variants to wrap `#[source] Box<dyn std::error::Error + Send + Sync>` (the **public crate-boundary** rule in CODING_STANDARDS §2 forbids `Box<dyn Error>` in a public API — these wrappers are internal to the `TakutoError` enum, not the public return type, so they comply; we only widen the source storage).
+- Sweep the 41 `.map_err(|e| TakutoError::*(e.to_string()))` call sites and replace with `?` where the new `#[from]` covers it, or with explicit `TakutoError::Variant { source: Box::new(e) }` otherwise.
 
 **Rationale**
 
@@ -229,10 +229,10 @@ Three orthogonal concerns (data shape, value interpolation, file I/O + validatio
 
 **Acceptance criteria**
 
-- `grep -nE "MaestroError::\\w+\\(.*\\.to_string\\(\\)\\)" crates/ | wc -l` reports **zero** (down from 41).
-- `cargo test --workspace` green; new unit test in `error.rs` confirms `MaestroError::Database(...).source().is_some()` for a wrapped `rusqlite::Error`.
-- No public function signature change (callers still return `MaestroError`).
-- No `Box<dyn Error>` in any **return type**; confined to the `MaestroError` variant's internal `#[source]` field.
+- `grep -nE "TakutoError::\\w+\\(.*\\.to_string\\(\\)\\)" crates/ | wc -l` reports **zero** (down from 41).
+- `cargo test --workspace` green; new unit test in `error.rs` confirms `TakutoError::Database(...).source().is_some()` for a wrapped `rusqlite::Error`.
+- No public function signature change (callers still return `TakutoError`).
+- No `Box<dyn Error>` in any **return type**; confined to the `TakutoError` variant's internal `#[source]` field.
 - `cargo build --workspace` zero warnings.
 
 **Owner:** backend
@@ -243,11 +243,11 @@ Three orthogonal concerns (data shape, value interpolation, file I/O + validatio
 
 **Scope**
 
-- `crates/maestro-core/src/workflow/engine/types.rs:131` — `Workflow` has 31 `pub` fields.
+- `crates/takuto-core/src/workflow/engine/types.rs:131` — `Workflow` has 31 `pub` fields.
   - Keep `pub`: `id`, `ticket_key`, `state`, `started_at`.
   - Convert dashboard-projection / driver fields to `pub(crate)`: `current_step_label`, `terminal_lines`, `driver_started`, plus any other field mutated by the engine internals.
   - Expose **accessor methods** that enforce state-machine invariants for any field external callers actually need to write today (audit `engine/driver.rs:298` and similar — `wf.state = …` direct writes must go through a `try_transition()` method).
-- `crates/maestro-web/src/state.rs` — `AppState` has 28 `pub` fields. Convert to `pub(crate)` minimum. Anything truly needed at the crate boundary stays `pub`; everything else drops a level.
+- `crates/takuto-web/src/state.rs` — `AppState` has 28 `pub` fields. Convert to `pub(crate)` minimum. Anything truly needed at the crate boundary stays `pub`; everything else drops a level.
 
 **Rationale**
 
@@ -256,7 +256,7 @@ CODING_STANDARDS §1 (Open/Closed) — direct field mutation bypasses the state 
 **Acceptance criteria**
 
 - `grep -nE "wf\\.state = " crates/ | wc -l` → 0 (all writes go through an accessor).
-- `git grep -n "pub " crates/maestro-core/src/workflow/engine/types.rs` shows only the 4 retained public fields plus the new accessor methods.
+- `git grep -n "pub " crates/takuto-core/src/workflow/engine/types.rs` shows only the 4 retained public fields plus the new accessor methods.
 - `cargo build --workspace` zero warnings; no caller outside the crate broke (we didn't remove any externally-needed field, just narrowed its visibility).
 - New `///` doc on each accessor method.
 
@@ -264,13 +264,13 @@ CODING_STANDARDS §1 (Open/Closed) — direct field mutation bypasses the state 
 
 ---
 
-### P1-5 · Gate `crates/maestro-web/src/test_helpers.rs` so it doesn't ship in prod
+### P1-5 · Gate `crates/takuto-web/src/test_helpers.rs` so it doesn't ship in prod
 
 **Scope**
 
-- `crates/maestro-web/src/lib.rs:22` — change `pub mod test_helpers;` to one of:
-  - `#[cfg(any(test, feature = "test-utils"))] pub mod test_helpers;` with a corresponding `test-utils = []` feature in `crates/maestro-web/Cargo.toml`, **or**
-  - Relocate the module to a sister `maestro-web-testing` crate listed as a `[dev-dependencies]` of `maestro-web`.
+- `crates/takuto-web/src/lib.rs:22` — change `pub mod test_helpers;` to one of:
+  - `#[cfg(any(test, feature = "test-utils"))] pub mod test_helpers;` with a corresponding `test-utils = []` feature in `crates/takuto-web/Cargo.toml`, **or**
+  - Relocate the module to a sister `takuto-web-testing` crate listed as a `[dev-dependencies]` of `takuto-web`.
 
 **Rationale**
 
@@ -278,9 +278,9 @@ CODING_STANDARDS §2 "Tests go in `#[cfg(test)] mod tests`". Test helpers shippe
 
 **Acceptance criteria**
 
-- `cargo build -p maestro-web --release` succeeds and `cargo expand -p maestro-web --release | grep test_helpers` (or equivalent) shows the module compiled out.
-- `cargo test -p maestro-web --features test-utils` (or via the new crate) still compiles every existing test.
-- No callsite in production code (`crates/maestro-web/src/{routes,middleware,state,server}.rs`) references `test_helpers::*`.
+- `cargo build -p takuto-web --release` succeeds and `cargo expand -p takuto-web --release | grep test_helpers` (or equivalent) shows the module compiled out.
+- `cargo test -p takuto-web --features test-utils` (or via the new crate) still compiles every existing test.
+- No callsite in production code (`crates/takuto-web/src/{routes,middleware,state,server}.rs`) references `test_helpers::*`.
 - The 14 `.unwrap()` calls inside `test_helpers.rs` are unchanged — they are test scaffolding (this gate is the fix; they no longer count as production unwraps).
 
 **Owner:** cross-cutting
@@ -417,11 +417,11 @@ CODING_STANDARDS §1 — one reason to change per file; today every API category
 
 ## P2 — Cleanups and policy fixes
 
-### P2-1 · Split `crates/maestro-core/src/workflow/helpers.rs` and rename by responsibility
+### P2-1 · Split `crates/takuto-core/src/workflow/helpers.rs` and rename by responsibility
 
 **Scope**
 
-- `crates/maestro-core/src/workflow/helpers.rs` — three unrelated families.
+- `crates/takuto-core/src/workflow/helpers.rs` — three unrelated families.
 - Replace with three named modules:
   - `workflow/ticket_context.rs` — `build_ticket_context`, `extract_acceptance_criteria`, `format_acceptance_criteria_block`.
   - `workflow/step_inspect.rs` — `step_already_succeeded`, `check_cancelled`, `parse_gh_issue_number`.
@@ -433,7 +433,7 @@ CODING_STANDARDS §1 — one reason to change per file; today every API category
 
 **Acceptance criteria**
 
-- File `crates/maestro-core/src/workflow/helpers.rs` no longer exists.
+- File `crates/takuto-core/src/workflow/helpers.rs` no longer exists.
 - `git grep -n "workflow::helpers" crates/` → zero hits.
 - All call sites updated; `cargo build --workspace` zero warnings; `cargo test --workspace` green.
 
@@ -445,7 +445,7 @@ CODING_STANDARDS §1 — one reason to change per file; today every API category
 
 **Scope**
 
-- `crates/maestro-core/src/workflow/engine/types.rs:78` — the `Default` impl returns an empty/invalid `WorkflowEvent`.
+- `crates/takuto-core/src/workflow/engine/types.rs:78` — the `Default` impl returns an empty/invalid `WorkflowEvent`.
 
 **Rationale**
 
@@ -467,16 +467,16 @@ CODING_STANDARDS §1 (Liskov) — `Default::default()` must be a valid substitut
 
 - 37 sites in production code (exclude `tests_phase2a_master_key.rs`, which is `#[cfg(test)]` at parent).
 - Hot spots called out by the audit:
-  - `crates/maestro-core/src/process.rs:193–194, 254–255`
-  - `crates/maestro-web/src/server.rs:445, 458, 463`
-  - `crates/maestro-web/src/routes/sessions.rs:139, 160, 240, 384, 624`
-  - `crates/maestro-web/src/routes/credentials.rs:395, 598`
-  - `crates/maestro-web/src/routes/workflows.rs:1184`
-  - `crates/maestro-core/src/auth/bundle.rs:135`
-  - `crates/maestro-core/src/auth/master_key.rs:291`
-  - `crates/maestro-core/src/db/credentials.rs:77, 89`
+  - `crates/takuto-core/src/process.rs:193–194, 254–255`
+  - `crates/takuto-web/src/server.rs:445, 458, 463`
+  - `crates/takuto-web/src/routes/sessions.rs:139, 160, 240, 384, 624`
+  - `crates/takuto-web/src/routes/credentials.rs:395, 598`
+  - `crates/takuto-web/src/routes/workflows.rs:1184`
+  - `crates/takuto-core/src/auth/bundle.rs:135`
+  - `crates/takuto-core/src/auth/master_key.rs:291`
+  - `crates/takuto-core/src/db/credentials.rs:77, 89`
 - For each: replace with `?`, an explicit `match`, or — if the invariant is truly compile-time-knowable — an `// SAFETY: …` comment and an `.expect("static invariant: …")` with a descriptive message (rare; the bar is high).
-- The 14 unwraps in `crates/maestro-web/src/test_helpers.rs` are addressed by P1-5's `cfg`-gating, not by rewrite.
+- The 14 unwraps in `crates/takuto-web/src/test_helpers.rs` are addressed by P1-5's `cfg`-gating, not by rewrite.
 
 **Rationale**
 
@@ -522,7 +522,7 @@ Module-scope `let` is hidden mutable state — breaks SSR, breaks hot-reload, br
 **Scope**
 
 - `Dockerfile` (runtime stage, lines ~56–293).
-- Add a preamble comment block stating: "Maestro intentionally bakes Rust toolchain + 4 AI CLIs + openvscode-server + Playwright deps. Trade-off: larger image vs. zero first-run install latency for advertised features. See lore/code-quality-principles.md and AGENTS.md § Tool layout."
+- Add a preamble comment block stating: "Takuto intentionally bakes Rust toolchain + 4 AI CLIs + openvscode-server + Playwright deps. Trade-off: larger image vs. zero first-run install latency for advertised features. See lore/code-quality-principles.md and AGENTS.md § Tool layout."
 - Add build args (with sensible defaults that match today's image):
   - `ARG WITH_CODEX=true`
   - `ARG WITH_OPENCODE=true`
@@ -532,7 +532,7 @@ Module-scope `let` is hidden mutable state — breaks SSR, breaks hot-reload, br
 
 **Rationale**
 
-We accept the kitchen-sink trade-off (see `lore/code-quality-principles.md`) but admins building custom images via `FROM maestro:latest` should be able to skip CLIs they don't use. AGENTS.md § "Don't move a baked agent CLI to provisioning" is preserved — these are build-args, not provisioning entries.
+We accept the kitchen-sink trade-off (see `lore/code-quality-principles.md`) but admins building custom images via `FROM takuto:latest` should be able to skip CLIs they don't use. AGENTS.md § "Don't move a baked agent CLI to provisioning" is preserved — these are build-args, not provisioning entries.
 
 **Acceptance criteria**
 
@@ -551,17 +551,17 @@ These two entries reproduce Phase 2 and Phase 4 of `lore/audits/2026-05-21-plan.
 
 ---
 
-### P1-D-1 · Phase 2 — Restructure `MaestroError` with typed payloads
+### P1-D-1 · Phase 2 — Restructure `TakutoError` with typed payloads
 
 **Owner:** backend
 
-**Source documents:** `lore/audits/2026-05-21-clean-code.md` §3 worst offender #8 (`error.rs:13`), §4 "Stringly-typed `MaestroError`"; `lore/audits/2026-05-21-plan.md` §"Phase 2".
+**Source documents:** `lore/audits/2026-05-21-clean-code.md` §3 worst offender #8 (`error.rs:13`), §4 "Stringly-typed `TakutoError`"; `lore/audits/2026-05-21-plan.md` §"Phase 2".
 
-**Audit drivers:** §4 "Stringly-typed `MaestroError`" (11/16 variants wrap `String`; 33 `Result<_, String>` signatures); §3 worst offender #8 (`error.rs:13`).
+**Audit drivers:** §4 "Stringly-typed `TakutoError`" (11/16 variants wrap `String`; 33 `Result<_, String>` signatures); §3 worst offender #8 (`error.rs:13`).
 
 #### Scope
 
-- `crates/maestro-core/src/error.rs` — replace `String`-wrapped variants with typed payloads:
+- `crates/takuto-core/src/error.rs` — replace `String`-wrapped variants with typed payloads:
   - `Jira { ticket: String, action: String, source: Box<dyn std::error::Error + Send + Sync> }`
   - `Git { op: String, path: PathBuf, stderr: String }`
   - `GitHubApp { source: Box<dyn std::error::Error + Send + Sync> }`
@@ -571,11 +571,11 @@ These two entries reproduce Phase 2 and Phase 4 of `lore/audits/2026-05-21-plan.
   - `Auth { kind: AuthKind, source: Box<dyn std::error::Error + Send + Sync> }` where `AuthKind` is a new enum (`Pin`, `Token`, `MasterKey`, …).
   - `Config { section: String, reason: String }`
   - Add `#[from] reqwest::Error`, `#[from] serde_json::Error`, `#[from] chrono::ParseError` where they currently lose their cause through `.to_string()`.
-- Sweep every `Result<_, String>` signature (33 per audit) and replace with `Result<_, MaestroError>`. Touched crates:
-  - `crates/maestro-core/src/**`
-  - `crates/maestro-web/src/routes/**` (post-Phase-1 split)
-  - `crates/maestro-cli/src/main.rs` — including `run_server`'s `Box<dyn Error>` return type → `Result<(), MaestroError>`.
-- Sweep every `MaestroError::*(e.to_string())` call site (audit lists 41 such); replace with `?` where `#[from]` covers it, or `MaestroError::Variant { source: Box::new(e), … }` otherwise.
+- Sweep every `Result<_, String>` signature (33 per audit) and replace with `Result<_, TakutoError>`. Touched crates:
+  - `crates/takuto-core/src/**`
+  - `crates/takuto-web/src/routes/**` (post-Phase-1 split)
+  - `crates/takuto-cli/src/main.rs` — including `run_server`'s `Box<dyn Error>` return type → `Result<(), TakutoError>`.
+- Sweep every `TakutoError::*(e.to_string())` call site (audit lists 41 such); replace with `?` where `#[from]` covers it, or `TakutoError::Variant { source: Box::new(e), … }` otherwise.
 
 #### Out of scope
 
@@ -587,28 +587,28 @@ These two entries reproduce Phase 2 and Phase 4 of `lore/audits/2026-05-21-plan.
 #### Acceptance criteria
 
 - `grep -rnE "Result<[^,]+, ?String>" crates/*/src --include="*.rs" | wc -l` returns **0**.
-- `grep -rnE "MaestroError::\w+\([^)]*\.to_string\(\)" crates/ --include="*.rs" | wc -l` returns **0** (down from ~41).
-- `grep -nE "Box<dyn .*Error>" crates/maestro-cli/src/main.rs` returns **0**.
-- `grep -cE "^\s+(Jira|Git|GitHubApp|Claude|AiAgent|Database|Auth|Config)\s*\(String\)" crates/maestro-core/src/error.rs` returns **0**.
-- `grep -cE "#\[from\]" crates/maestro-core/src/error.rs` returns **≥ 5** (Io + TomlParse already present, plus rusqlite, reqwest, serde_json, chrono).
-- The manual `impl From<rusqlite::Error> for MaestroError` block at the bottom of `error.rs` is gone (replaced by `#[from]` on the variant).
-- A new unit test in `error.rs` asserts `MaestroError::from(rusqlite_err).source().is_some()` — i.e. the wrapped cause is recoverable, not stringified.
+- `grep -rnE "TakutoError::\w+\([^)]*\.to_string\(\)" crates/ --include="*.rs" | wc -l` returns **0** (down from ~41).
+- `grep -nE "Box<dyn .*Error>" crates/takuto-cli/src/main.rs` returns **0**.
+- `grep -cE "^\s+(Jira|Git|GitHubApp|Claude|AiAgent|Database|Auth|Config)\s*\(String\)" crates/takuto-core/src/error.rs` returns **0**.
+- `grep -cE "#\[from\]" crates/takuto-core/src/error.rs` returns **≥ 5** (Io + TomlParse already present, plus rusqlite, reqwest, serde_json, chrono).
+- The manual `impl From<rusqlite::Error> for TakutoError` block at the bottom of `error.rs` is gone (replaced by `#[from]` on the variant).
+- A new unit test in `error.rs` asserts `TakutoError::from(rusqlite_err).source().is_some()` — i.e. the wrapped cause is recoverable, not stringified.
 - `cargo build --workspace` exits 0 with **zero warnings**.
 - `cargo test --workspace` exits 0.
-- The public signature of `run_server` is `pub async fn run_server(...) -> Result<(), MaestroError>`; verify with `grep -nE "fn run_server" crates/maestro-cli/src/main.rs`.
+- The public signature of `run_server` is `pub async fn run_server(...) -> Result<(), TakutoError>`; verify with `grep -nE "fn run_server" crates/takuto-cli/src/main.rs`.
 
 #### Commit shape
 
 - **One PR, ~6–8 commits.**
   1. Restructure `error.rs` variants (compiler errors expected across the workspace from now on; do not fix yet).
   2. Add `#[from]` impls and the new test.
-  3–N. Sweep call sites, one crate at a time (`maestro-core`, then `maestro-web`, then `maestro-cli`). Each commit leaves `cargo build` green.
+  3–N. Sweep call sites, one crate at a time (`takuto-core`, then `takuto-web`, then `takuto-cli`). Each commit leaves `cargo build` green.
   - Final commit: delete any remaining `Result<_, String>` aliases / re-exports.
 
 #### Risks and mitigations
 
-- **Risk:** Promoting `Database(String)` to `Database(#[from] rusqlite::Error)` changes the variant's tuple arity; any `match MaestroError::Database(s)` site breaks. **Mitigation:** the compiler flags every site; fix them mechanically in the same commit. The audit listed the hot sites — `crates/maestro-core/src/db/credentials.rs`, `db/auth.rs`, etc.
-- **Risk:** `Box<dyn Error>` in the variant payload looks like it violates CODING_STANDARDS §2 ("no `Box<dyn Error>` in public API"). **Mitigation:** the §2 rule applies to **return types**, not internal `#[source]` fields. `MaestroError` itself remains the public return type; the boxed source is an implementation detail of one variant. Add an inline comment in `error.rs` documenting this distinction.
+- **Risk:** Promoting `Database(String)` to `Database(#[from] rusqlite::Error)` changes the variant's tuple arity; any `match TakutoError::Database(s)` site breaks. **Mitigation:** the compiler flags every site; fix them mechanically in the same commit. The audit listed the hot sites — `crates/takuto-core/src/db/credentials.rs`, `db/auth.rs`, etc.
+- **Risk:** `Box<dyn Error>` in the variant payload looks like it violates CODING_STANDARDS §2 ("no `Box<dyn Error>` in public API"). **Mitigation:** the §2 rule applies to **return types**, not internal `#[source]` fields. `TakutoError` itself remains the public return type; the boxed source is an implementation detail of one variant. Add an inline comment in `error.rs` documenting this distinction.
 - **Risk:** sweeping `Result<_, String>` may surface latent bugs where a handler relied on `.map_err(|e| e.to_string())` to flatten an `anyhow`-style chain. **Mitigation:** keep the test suite green between every commit; if a test starts failing on the typed error, the failure mode was already wrong and the test is the source of truth.
 
 #### Verifier
@@ -616,7 +616,7 @@ These two entries reproduce Phase 2 and Phase 4 of `lore/audits/2026-05-21-plan.
 The tester runs:
 1. `cargo test --workspace`
 2. The three `grep` ACs above (`Result<_, String>` count, `to_string()` call sites, `Box<dyn .*Error>` count).
-3. Adds a new test that pattern-matches on a typed `MaestroError::Database { .. }` or `MaestroError::Jira { ticket, .. }` variant from a real failure path and confirms the payload fields carry structured data.
+3. Adds a new test that pattern-matches on a typed `TakutoError::Database { .. }` or `TakutoError::Jira { ticket, .. }` variant from a real failure path and confirms the payload fields carry structured data.
 
 ---
 
@@ -628,11 +628,11 @@ The tester runs:
 
 **Audit drivers:** §4 "Fire-and-forget `tokio::spawn`" (21 of 34 spawns drop their handle); §4 "Lock-across-`.await`" (heuristic 328 sites); §4 "`eprintln!` in production paths" (42, of which 19 in `docker_hooks.rs`); §3 worst offender #9.
 
-**Depends on `P1-D-1`** (typed `MaestroError`). Originally also depended on Phase 1 module splits, which have shipped.
+**Depends on `P1-D-1`** (typed `TakutoError`). Originally also depended on Phase 1 module splits, which have shipped.
 
 #### Scope
 
-- **Enable `clippy::await_holding_lock` workspace-wide.** Add to `crates/maestro-core/src/lib.rs` and `crates/maestro-web/src/lib.rs`:
+- **Enable `clippy::await_holding_lock` workspace-wide.** Add to `crates/takuto-core/src/lib.rs` and `crates/takuto-web/src/lib.rs`:
   ```rust
   #![deny(clippy::await_holding_lock)]
   ```
@@ -649,9 +649,9 @@ The tester runs:
   - Graceful shutdown drains the `JoinSet` on engine/app teardown (this is already partially wired via `CancellationToken`; integrate the `JoinSet` with the existing token).
 - **Replace 42 `eprintln!`/`println!` in `crates/*/src/**`** with `tracing::info!`/`tracing::warn!`/`tracing::error!` per the call's existing severity. `docker_hooks.rs` (19 sites) is the hot spot.
 - **Replace the 5 prod-path `unwrap()`/`expect()`** flagged in the audit:
-  - `crates/maestro-cli/src/main.rs:1204` (`SIGTERM` handler install) → `.expect("static invariant: signal handler installation cannot fail on supported platforms")` with an inline `// SAFETY:` comment, or propagate via `?` if practical.
-  - `crates/maestro-cli/src/main.rs:1216` (Ctrl+C handler) → same.
-  - Any remaining hits in `crates/maestro-core/src/{server,routes}/**` outside test files.
+  - `crates/takuto-cli/src/main.rs:1204` (`SIGTERM` handler install) → `.expect("static invariant: signal handler installation cannot fail on supported platforms")` with an inline `// SAFETY:` comment, or propagate via `?` if practical.
+  - `crates/takuto-cli/src/main.rs:1216` (Ctrl+C handler) → same.
+  - Any remaining hits in `crates/takuto-core/src/{server,routes}/**` outside test files.
 - Production-code count: `cargo test --workspace` files like `github_app.rs`, `skill_resolve.rs`, `config_watcher.rs` use `.unwrap()` inside `#[cfg(test)]` blocks — those are **out of scope** (test code is allowed per CODING_STANDARDS §2).
 
 #### Out of scope
@@ -668,8 +668,8 @@ The tester runs:
 - `grep -rnE "tokio::spawn\(" crates/*/src --include="*.rs" | grep -vE "(joinset|tasks|background_tasks)\.spawn\(" | wc -l` returns **0**. Every spawn goes through a `JoinSet`.
 - `grep -rnE "^\s+(eprintln|println)!" crates/*/src --include="*.rs" | grep -v "^.*tests\.rs:" | grep -v "#\[cfg(test)\]" | wc -l` returns **0**.
 - `grep -rnE "\.(unwrap|expect)\(" crates/*/src --include="*.rs" | grep -vE "(tests?\.rs|test_helpers|#\[cfg\(test\)\])" | wc -l` returns **≤ 0 sites without an adjacent `// SAFETY:` comment**. (Any remaining `.expect("static invariant: …")` must be preceded by a `// SAFETY:` line — verify with `awk` script: every match in production code has a `// SAFETY:` on the previous non-blank line.)
-- `WorkflowEngine` struct definition contains a `JoinSet` field; `grep -nE "JoinSet" crates/maestro-core/src/workflow/engine/mod.rs` returns ≥ 1.
-- `AppState` contains a `JoinSet` field; `grep -nE "JoinSet" crates/maestro-web/src/state.rs` returns ≥ 1.
+- `WorkflowEngine` struct definition contains a `JoinSet` field; `grep -nE "JoinSet" crates/takuto-core/src/workflow/engine/mod.rs` returns ≥ 1.
+- `AppState` contains a `JoinSet` field; `grep -nE "JoinSet" crates/takuto-web/src/state.rs` returns ≥ 1.
 - `cargo build --workspace` exits 0 with **zero warnings**.
 - `cargo test --workspace` exits 0.
 - A new test in `engine/mod.rs` (or a new `engine/shutdown.rs`) asserts: spawn a background task that loops on a `tokio::time::sleep`; call `engine.shutdown()`; assert the task's `JoinHandle` aborts within 100 ms.

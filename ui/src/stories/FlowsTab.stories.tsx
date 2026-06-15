@@ -151,29 +151,29 @@ type Story = StoryObj<typeof meta>;
 
 export const SeededDefaults: Story = {
   name: "Seeded defaults",
-  decorators: [withFlowsMock({ workspace: "maestro-core", flows: seededDefaults })],
+  decorators: [withFlowsMock({ workspace: "takuto-core", flows: seededDefaults })],
 };
 
 export const EmptyByChoice: Story = {
   name: "Empty (user cleared all)",
-  decorators: [withFlowsMock({ workspace: "maestro-core", flows: [] })],
+  decorators: [withFlowsMock({ workspace: "takuto-core", flows: [] })],
 };
 
 export const AtCap: Story = {
   name: "At the 20-flow cap",
-  decorators: [withFlowsMock({ workspace: "maestro-core", flows: filledToCap })],
+  decorators: [withFlowsMock({ workspace: "takuto-core", flows: filledToCap })],
 };
 
 export const Loading: Story = {
   name: "Loading (slow GET)",
   decorators: [
-    withFlowsMock({ workspace: "maestro-core", flows: seededDefaults, getDelayMs: 1_000_000 }),
+    withFlowsMock({ workspace: "takuto-core", flows: seededDefaults, getDelayMs: 1_000_000 }),
   ],
 };
 
 export const LoadError: Story = {
   name: "GET failed",
-  decorators: [withFlowsMock({ workspace: "maestro-core", flows: [], getFails: true })],
+  decorators: [withFlowsMock({ workspace: "takuto-core", flows: [], getFails: true })],
 };
 
 export const SingleFlow: Story = {
