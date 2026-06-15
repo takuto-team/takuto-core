@@ -225,7 +225,10 @@ mod tests {
         let (pct, total) = progress_fields(&w, &cfg, None);
         assert_eq!(pct, 100);
         assert!(total > 0);
-        assert_eq!(progress_fields(&w, &cfg, Some(0)), progress_fields(&w, &cfg, None));
+        assert_eq!(
+            progress_fields(&w, &cfg, Some(0)),
+            progress_fields(&w, &cfg, None)
+        );
     }
 
     #[test]

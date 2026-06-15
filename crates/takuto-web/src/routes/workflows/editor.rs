@@ -427,17 +427,24 @@ async fn ensure_worktree(
         }
         let token_cwd = std::path::Path::new(WORKSPACES_DIR);
 
-        do_clone(engine, auth_state, &full_name, token_cwd, &repo_path, Some(user_id))
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::BAD_GATEWAY,
-                    format!(
-                        "Failed to re-clone repository: {}",
-                        sanitize_clone_error(&e.to_string())
-                    ),
-                )
-            })?;
+        do_clone(
+            engine,
+            auth_state,
+            &full_name,
+            token_cwd,
+            &repo_path,
+            Some(user_id),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!(
+                    "Failed to re-clone repository: {}",
+                    sanitize_clone_error(&e.to_string())
+                ),
+            )
+        })?;
     }
 
     // Recreate the worktree for the EXISTING branch. The clone above already
@@ -669,7 +676,10 @@ mod tests {
             parse_github_owner_repo("https://gitlab.com/acme/quantum-budget"),
             None
         );
-        assert_eq!(parse_github_owner_repo("git@github.com:acme/repo.git"), None);
+        assert_eq!(
+            parse_github_owner_repo("git@github.com:acme/repo.git"),
+            None
+        );
     }
 
     #[test]

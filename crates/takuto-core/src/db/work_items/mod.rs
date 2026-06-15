@@ -1445,12 +1445,10 @@ mod tests {
             .await
             .unwrap();
 
-        let counts = count_steps_of_latest_completed_def(
-            &a,
-            &["wi-3".to_string(), "wi-empty".to_string()],
-        )
-        .await
-        .unwrap();
+        let counts =
+            count_steps_of_latest_completed_def(&a, &["wi-3".to_string(), "wi-empty".to_string()])
+                .await
+                .unwrap();
 
         // Latest completed flow = `implement` (3 steps); errored run ignored.
         assert_eq!(counts.get("wi-3").copied(), Some(3));
