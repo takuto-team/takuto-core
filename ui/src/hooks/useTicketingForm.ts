@@ -183,6 +183,11 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
   return {
     system,
     setSystem,
+    /** The last-persisted ticketing system (what's actually saved on the
+     *  server), as opposed to the live `system` selection which may be an
+     *  unsaved edit. Consumers that gate deployment config on the *effective*
+     *  system (e.g. showing polling settings) should read this. */
+    persistedSystem,
     site,
     setSite,
     email,

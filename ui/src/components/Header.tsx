@@ -16,7 +16,6 @@ const CONFIG_MENU_TABS: { label: string; slug: string; adminOnly?: boolean }[] =
   { label: "GitHub", slug: "github" },
   { label: "Ticketing", slug: "ticketing" },
   { label: "Users", slug: "users", adminOnly: true },
-  { label: "Item Polling", slug: "polling", adminOnly: true },
   { label: "My Repositories", slug: "repositories" },
   { label: "Worktree Settings", slug: "worktree" },
   { label: "Flows", slug: "flows" },

@@ -294,11 +294,8 @@ export function ItemPollingForm({
       {!showJira && !showGithub && (
         <p className="text-xs text-gray-500">
           No ticketing system is configured, so the poller is idle and item
-          filters don&apos;t apply. Pick a ticketing system on the{" "}
-          <a href="/config.html?tab=ticketing" className="text-blue-400 hover:text-blue-300">
-            Ticketing
-          </a>{" "}
-          tab (Jira or GitHub) to filter polled items.
+          filters don&apos;t apply. Choose a ticketing system (Jira or GitHub)
+          to filter polled items.
         </p>
       )}
 

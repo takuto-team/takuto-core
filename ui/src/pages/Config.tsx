@@ -13,7 +13,6 @@ import { MyRepositoriesTab } from "../components/MyRepositoriesTab";
 import { AiSettingsTab } from "../components/AiSettingsTab";
 import { FlowsTab } from "../components/FlowsTab";
 import { TicketingTab } from "../components/TicketingTab";
-import { ItemPollingSettingsSection } from "../components/admin/ItemPollingSettingsSection";
 import { GitHubCredentialsSection } from "../components/credentials/GitHubCredentialsSection";
 
 interface Props {
@@ -28,7 +27,6 @@ const ALL_TABS = [
   "GitHub",
   "Ticketing",
   "Users",
-  "Item Polling",
   "My Repositories",
   "Worktree Settings",
   "Flows",
@@ -159,10 +157,10 @@ function SecurityTabConnected() {
 // ---------------------------------------------------------------------------
 
 export function Config({ onLogout, authEnabled, isAdmin }: Props) {
-  // Admin-only tabs: "Users", "Item Polling". "Worktree Settings" and
-  // "My Repositories" are user-facing — no admin gate; each user manages their
-  // own data.
-  const adminOnlyTabs: Tab[] = ["Users", "Item Polling"];
+  // Admin-only tabs: "Users". "Worktree Settings" and "My Repositories" are
+  // user-facing — no admin gate; each user manages their own data. Item polling
+  // moved into the "Ticketing" tab, where it is admin-gated internally.
+  const adminOnlyTabs: Tab[] = ["Users"];
   const tabs = ALL_TABS.filter((t) => (adminOnlyTabs.includes(t) ? isAdmin : true));
 
   // Allow direct deep-linking via `?tab=<slug>` (used by Header, redirects
@@ -174,12 +172,14 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
     const slug = params.get("tab");
     if (slug === "ai") return "AI Settings";
     if (slug === "github") return "GitHub";
-    if (slug === "ticketing") return "Ticketing";
+    // Item polling merged into the Ticketing tab — keep the old slugs working.
+    if (slug === "ticketing" || slug === "polling" || slug === "item-polling") {
+      return "Ticketing";
+    }
     if (slug === "repositories") return "My Repositories";
     if (slug === "worktree") return "Worktree Settings";
     if (slug === "Flows" || slug === "flows") return "Flows";
     if (slug === "users" && isAdmin) return "Users";
-    if ((slug === "polling" || slug === "item-polling") && isAdmin) return "Item Polling";
     if (slug === "security") return "Security";
     return tabs[0];
   })();
@@ -234,7 +234,6 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
         {tab === "GitHub" && <GitHubCredentialsSection />}
         {tab === "Ticketing" && <TicketingTab isAdmin={isAdmin} />}
         {tab === "Users" && <UsersTabConnected />}
-        {tab === "Item Polling" && isAdmin && <ItemPollingSettingsSection />}
         {tab === "My Repositories" && <MyRepositoriesTab isAdmin={isAdmin} />}
         {tab === "Worktree Settings" && <WorktreeSettingsTab />}
         {tab === "Flows" && <FlowsTab />}

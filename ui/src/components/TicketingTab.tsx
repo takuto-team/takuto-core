@@ -11,6 +11,12 @@
  * remove their personal Jira credential. The admin-gated `PUT /api/config`
  * write only fires when the system selection actually changes, so a non-admin
  * managing only their credential never trips the 403.
+ *
+ * Item polling (deployment-level, admin-only) lives on this same page, rendered
+ * below the ticketing controls — but only when a ticketing system is actually
+ * configured (`persistedSystem !== "none"`) and the caller is an admin. With no
+ * ticketing system the poller is idle, so the polling settings are hidden
+ * entirely.
  */
 
 import { useEffect, useState } from "react";
@@ -18,6 +24,7 @@ import { apiJson } from "../api/client";
 import type { ConfigResponse, TicketingSystemId } from "../api/types";
 import { TicketingStep } from "../pages/Onboarding/TicketingStep";
 import { useTicketingForm } from "../hooks/useTicketingForm";
+import { ItemPollingSettingsSection } from "./admin/ItemPollingSettingsSection";
 
 interface Props {
   isAdmin?: boolean;
@@ -50,57 +57,70 @@ export function TicketingTab({ isAdmin }: Props) {
   const ticketing = useTicketingForm({ initialSystem, ready: !loading });
 
   const showDisconnect = ticketing.system === "jira" && ticketing.connected !== null;
+  // Deployment-level polling settings only apply once a ticketing system is
+  // actually configured, and only admins may edit them. Gate on the persisted
+  // (saved) system rather than the live selection so the section reflects what
+  // the poller really uses.
+  const showPolling = !loading && !!isAdmin && ticketing.persistedSystem !== "none";
 
   return (
-    <section aria-labelledby="ticketing-tab-title" className="flex flex-col gap-4 max-w-2xl">
-      <div>
-        <h2 id="ticketing-tab-title" className="text-lg font-semibold text-white">
-          Ticketing
-        </h2>
-        <p className="text-sm text-gray-500 mt-1">
-          Choose where Takuto reads work items from, and connect your personal
-          Jira account.
-        </p>
-      </div>
+    <section aria-labelledby="ticketing-tab-title" className="flex flex-col gap-8">
+      <div className="flex flex-col gap-4 max-w-2xl">
+        <div>
+          <h2 id="ticketing-tab-title" className="text-lg font-semibold text-white">
+            Ticketing
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Choose where Takuto reads work items from, and connect your personal
+            Jira account.
+          </p>
+        </div>
 
-      {loading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
-      ) : (
-        <>
-          <TicketingStep
-            system={ticketing.system}
-            onChangeSystem={ticketing.setSystem}
-            site={ticketing.site}
-            onChangeSite={ticketing.setSite}
-            email={ticketing.email}
-            onChangeEmail={ticketing.setEmail}
-            token={ticketing.token}
-            onChangeToken={ticketing.setToken}
-            connected={ticketing.connected}
-            canEditSystem={!!isAdmin}
-          />
+        {loading ? (
+          <p className="text-sm text-gray-500">Loading…</p>
+        ) : (
+          <>
+            <TicketingStep
+              system={ticketing.system}
+              onChangeSystem={ticketing.setSystem}
+              site={ticketing.site}
+              onChangeSite={ticketing.setSite}
+              email={ticketing.email}
+              onChangeEmail={ticketing.setEmail}
+              token={ticketing.token}
+              onChangeToken={ticketing.setToken}
+              connected={ticketing.connected}
+              canEditSystem={!!isAdmin}
+            />
 
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => void ticketing.save()}
-              disabled={ticketing.saving}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {ticketing.saving ? "Saving…" : "Save"}
-            </button>
-            {showDisconnect && (
+            <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => void ticketing.disconnect()}
+                onClick={() => void ticketing.save()}
                 disabled={ticketing.saving}
-                className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
-                Disconnect Jira
+                {ticketing.saving ? "Saving…" : "Save"}
               </button>
-            )}
-          </div>
-        </>
+              {showDisconnect && (
+                <button
+                  type="button"
+                  onClick={() => void ticketing.disconnect()}
+                  disabled={ticketing.saving}
+                  className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  Disconnect Jira
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {showPolling && (
+        <div className="border-t border-gray-800 pt-6">
+          <ItemPollingSettingsSection />
+        </div>
       )}
     </section>
   );
