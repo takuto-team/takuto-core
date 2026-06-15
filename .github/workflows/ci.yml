@@ -3,13 +3,14 @@ name: CI
 # Enforces the §2 quality bar from CODING_STANDARDS.md and the standing CI
 # decisions in lore/code-quality-principles.md §5.
 #
-# The heavy cargo gates (fmt / clippy -D warnings / test / doc) run in the
-# local **pre-push hook** (`.githooks/pre-push` -> `scripts/preflight.sh`),
-# NOT in CI — a cold workspace build was ~20 min per run. Install the hook with
-# `./scripts/install-git-hooks.sh` (or `make check` to run the gates on demand).
-# CI still covers everything that needs a clean/remote environment: DB backends,
-# the frontend build, generated-type drift, supply-chain audits, and the
-# container smoke build.
+# The heavy cargo gates (fmt / clippy -D warnings / test / doc) run LOCALLY,
+# NOT in CI — a cold workspace build was ~20 min per run. Run them before
+# pushing with `make checked-push` (preflight, then push only if green) or
+# `make check` on demand. A pre-push *hook* was tried but a multi-minute hook
+# idles git's push connection into a timeout (SIGPIPE), so the gate is a
+# wrapper that pushes on a fresh connection instead. CI still covers everything
+# that needs a clean/remote environment: DB backends, the frontend build,
+# generated-type drift, supply-chain audits, and the container smoke build.
 #
 # A warning is still a release-blocker, not a future task. If a transient
 # toolchain issue surfaces a warning we cannot fix today, pin the toolchain in

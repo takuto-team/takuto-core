@@ -68,7 +68,7 @@ TAKUTO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images takuto --format '{{.Re
 # Docker image registry for push targets.
 REGISTRY ?= ghcr.io/takuto-team/takuto-core
 
-.PHONY: help build build-local start stop auth test logs logs-takuto ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full backup-postgres backup-mariadb
+.PHONY: help build build-local start stop auth test logs logs-takuto ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full checked-push backup-postgres backup-mariadb
 
 # Output directory for `backup-postgres` / `backup-mariadb`. Gitignored.
 DUMP_DIR ?= dump
@@ -364,6 +364,9 @@ check: ## Run the same gates CI runs (fast subset — no network/docker)
 
 check-full: ## Run all CI gates including gitleaks, cargo-deny, cargo-audit, npm audit
 	./scripts/preflight.sh --full
+
+checked-push: ## Run the full local gate, then git push only if it passes (ARGS="origin main")
+	./scripts/checked-push.sh $(ARGS)
 
 # ── DB backups ────────────────────────────────────────────────────────
 # Both targets stream the dump from the running DB container through
