@@ -124,26 +124,24 @@ Edit `config.toml`:
 docker compose build
 ```
 
-### 3. Authenticate (first time only)
+### 3. Start
 
 ```bash
-docker compose run --rm -it takuto setup
+docker compose up
 ```
 
-Walks you through: GitHub CLI → Atlassian CLI (optional) → Claude Code or Cursor Agent → clone your repo.
+Dashboard at **http://localhost:8080**. On first load it prompts you to create the initial **admin account** — no credentials live in `config.toml`.
 
 **Podman on macOS:** increase the default machine resources first:
 ```bash
 podman machine stop && podman machine set --memory 12288 --cpus 4 && podman machine start
 ```
 
-### 4. Start
+### 4. Add your credentials in the UI
 
-```bash
-docker compose up
-```
+Log in, then open **Configuration → My Credentials** and paste your **provider API key** (Claude / Cursor / OpenAI) and a **GitHub token (PAT)**. This is the recommended path — the app starts and is fully reachable **without** any CLI auth step.
 
-Dashboard at **http://localhost:8080**.
+> **Optional — OAuth login (not recommended).** If you prefer interactive OAuth for Claude/Cursor/GitHub instead of API keys, run `docker compose run --rm -it takuto setup` first (it walks through GitHub CLI → Atlassian CLI (optional) → Claude Code / Cursor Agent login). The app works fine without it; API keys entered in the UI are simpler.
 
 If you use Jira or GitHub Issues, Takuto starts polling automatically. Otherwise, click **+** to paste a description and kick off a workflow manually.
 
@@ -188,12 +186,13 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export GH_TOKEN="github_pat_..."
 ```
 
-### 2. Build and authenticate
+### 2. Build
 
 ```bash
 docker compose build
-docker compose run --rm -it takuto setup
 ```
+
+> **Optional — OAuth login (not recommended).** `docker compose run --rm -it takuto setup` authenticates Claude/Cursor/GitHub via interactive OAuth. You don't need it: start the server (next step), create the admin account on first load, and have each user paste their API keys under **Configuration → My Credentials**. The app is reachable without this step.
 
 ### 3. Start as a service
 

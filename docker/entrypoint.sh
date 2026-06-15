@@ -502,20 +502,31 @@ if [ -n "${DOCKER_HOST:-}" ] && [[ "$DOCKER_HOST" == tcp://* ]]; then
         sleep 1
     done
 
-    # After daemon is ready, ensure worker image is available.
+    # After daemon is ready, ensure the worker image is available in DinD.
     # Priority: TAKUTO_WORKER_IMAGE env > TAKUTO_REGISTRY_IMAGE (baked into image) > takuto:latest
+    #
+    # IMPORTANT: pull in the BACKGROUND. The worker image is multi-GB; pulling
+    # it synchronously here blocks the web server (started at the end of this
+    # script) for the entire pull — so the dashboard is unreachable for minutes
+    # on a fresh install even though the container is "running". The server
+    # itself does not need this image; only workflow execution does. Pulling in
+    # the background lets the dashboard come up immediately (to register the
+    # admin and set API keys); a workflow started before the pull finishes
+    # simply waits for the image. The `--local` runtime / pre-loaded image
+    # short-circuits via the `docker image inspect` check below.
     WORKER_IMAGE="${TAKUTO_WORKER_IMAGE:-${TAKUTO_REGISTRY_IMAGE:-takuto:latest}}"
     if ! docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
-        echo "[takuto] Worker image '$WORKER_IMAGE' not found on DinD, pulling..."
-        if docker pull "$WORKER_IMAGE"; then
-            echo "[takuto] Worker image '$WORKER_IMAGE' pulled successfully."
-            # Also tag as takuto:latest so discover_worker_image fallback works
-            docker tag "$WORKER_IMAGE" takuto:latest 2>/dev/null || true
-        else
-            echo "[takuto] WARNING: Failed to pull '$WORKER_IMAGE'." >&2
-            echo "[takuto]          Workflow isolation requires the worker image in DinD." >&2
-            echo "[takuto]          Run 'make load-worker' to load the local image, or check TAKUTO_WORKER_IMAGE." >&2
-        fi
+        echo "[takuto] Worker image '$WORKER_IMAGE' not found on DinD — pulling in the background (the dashboard stays reachable; workflows wait for the image if started first)."
+        (
+            if docker pull "$WORKER_IMAGE"; then
+                # Tag as takuto:latest so discover_worker_image fallback works.
+                docker tag "$WORKER_IMAGE" takuto:latest 2>/dev/null || true
+                echo "[takuto] Worker image '$WORKER_IMAGE' pulled successfully (background)."
+            else
+                echo "[takuto] WARNING: background pull of '$WORKER_IMAGE' failed — workflow isolation needs it." >&2
+                echo "[takuto]          Run 'make load-worker' to load a local image, or check TAKUTO_WORKER_IMAGE." >&2
+            fi
+        ) &
     fi
 fi
 
