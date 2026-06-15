@@ -6,25 +6,32 @@
  *
  * Step shell + nav controls. Step bodies live in `./Onboarding/*.tsx`;
  * the wizard navigation state machine is in `../hooks/useOnboardingFlow`,
- * and the provider-form's local state + `/api/config` fetch are in
- * `../hooks/useProviderForm`.
+ * the provider-form state + `/api/config` fetch are in `../hooks/useProviderForm`,
+ * and the step-1 ticketing selector state is in `../hooks/useTicketingForm`.
  *
- * 4 steps per 04_architecture.md §9:
- *   1. Ticketing system  — read-only display (changes go through config.toml today)
- *   2. AI provider       — delegates to <ProviderForm> in AdminAiSettings (lifted)
- *   3. GitHub integration — read-only display
- *   4. Your credentials   — placeholder card
+ * 4 steps:
+ *   1. Ticketing      — selector (None / GitHub / Jira); Jira shows a
+ *                        site/email/token form saved per-user. Writes
+ *                        `[general] ticketing_system` via PUT /api/config.
+ *   2. AI provider    — provider form (PUT /api/config/agent) + inline AI
+ *                        API-key entry (AiCredentialPanel).
+ *   3. GitHub         — optional per-user PAT (GitHubCredentialsSection) +
+ *                        a "Set up a GitHub App" doc link.
+ *   4. Workflows      — the per-user/per-workspace flows editor (FlowsTab).
  *
  * Each step has Skip / Back / Continue; the last step has Finish instead of
- * Continue. Skip is a no-op today; "Finish" calls
- * `POST /api/onboarding/complete` and navigates back to the dashboard.
+ * Continue. "Finish" calls `POST /api/onboarding/complete` and navigates back
+ * to the dashboard.
  */
 
 import { Link } from "react-router-dom";
 import { useOnboardingFlow } from "../hooks/useOnboardingFlow";
 import { useProviderForm } from "../hooks/useProviderForm";
-import { CredentialsStep } from "./Onboarding/CredentialsStep";
+import { useTicketingForm } from "../hooks/useTicketingForm";
+import { FlowsTab } from "../components/FlowsTab";
+import type { TicketingSystemId } from "../api/types";
 import { GitHubStep } from "./Onboarding/GitHubStep";
+import { OnboardingAiKey } from "./Onboarding/OnboardingAiKey";
 import { ONBOARDING_STEPS, Stepper } from "./Onboarding/Stepper";
 import { ProviderStep } from "./Onboarding/ProviderStep";
 import { TicketingStep } from "./Onboarding/TicketingStep";
@@ -51,10 +58,16 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
     save,
   } = useProviderForm();
 
+  const ticketing = useTicketingForm({
+    initialSystem: ticketingSystem as TicketingSystemId,
+    ready: !loading,
+  });
+
   const { step, completing, goNext, goSkip, goBack } = useOnboardingFlow({
     onBeforeNext: async (s) => {
-      if (s !== 2) return true;
-      return save();
+      if (s === 1) return ticketing.save();
+      if (s === 2) return save();
+      return true;
     },
   });
 
@@ -97,21 +110,36 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
             <p className="text-sm text-gray-500">Loading current settings…</p>
           ) : (
             <>
-              {step === 1 && <TicketingStep ticketingSystem={ticketingSystem} />}
-              {step === 2 && (
-                <ProviderStep
-                  provider={provider}
-                  onChangeProvider={setProvider}
-                  baseUrl={baseUrl}
-                  onChangeBaseUrl={setBaseUrl}
-                  model={model}
-                  onChangeModel={setModel}
-                  extraArgsText={extraArgsText}
-                  onChangeExtraArgs={setExtraArgsText}
+              {step === 1 && (
+                <TicketingStep
+                  system={ticketing.system}
+                  onChangeSystem={ticketing.setSystem}
+                  site={ticketing.site}
+                  onChangeSite={ticketing.setSite}
+                  email={ticketing.email}
+                  onChangeEmail={ticketing.setEmail}
+                  token={ticketing.token}
+                  onChangeToken={ticketing.setToken}
+                  connected={ticketing.connected}
                 />
               )}
+              {step === 2 && (
+                <div className="flex flex-col gap-6">
+                  <ProviderStep
+                    provider={provider}
+                    onChangeProvider={setProvider}
+                    baseUrl={baseUrl}
+                    onChangeBaseUrl={setBaseUrl}
+                    model={model}
+                    onChangeModel={setModel}
+                    extraArgsText={extraArgsText}
+                    onChangeExtraArgs={setExtraArgsText}
+                  />
+                  <OnboardingAiKey provider={provider} />
+                </div>
+              )}
               {step === 3 && <GitHubStep githubAppConfigured={githubAppConfigured} />}
-              {step === 4 && <CredentialsStep />}
+              {step === 4 && <FlowsTab />}
             </>
           )}
 
@@ -137,6 +165,7 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
                 onClick={goNext}
                 disabled={
                   saving ||
+                  ticketing.saving ||
                   completing ||
                   // Self-hosted spec (2026-05-27 §2.5): block Continue on
                   // step 2 when OpenCode is selected without base_url +
@@ -154,7 +183,7 @@ export function Onboarding({ onLogout, authEnabled }: Props) {
                   ? completing
                     ? "Finishing…"
                     : "Finish setup"
-                  : saving
+                  : saving || ticketing.saving
                     ? "Saving…"
                     : "Continue"}
               </button>

@@ -497,6 +497,20 @@ export interface UserGithubCredentialStatus {
   last_validated_at: string | null;
 }
 
+/**
+ * Per-user Jira credential status. Matches the `jira` object returned by
+ * `GET /api/users/me/credentials`. The API token itself is never returned.
+ */
+export interface UserJiraCredentialStatus {
+  /** Normalized Atlassian site URL (e.g. `https://acme.atlassian.net`). */
+  site: string;
+  /** Atlassian account email the token belongs to. */
+  email: string;
+  account_id: string;
+  account_name: string;
+  last_validated_at: string | null;
+}
+
 export interface UserCredentialsStatus {
   /**
    * `null` when the user has no credential of any kind for the active
@@ -506,6 +520,8 @@ export interface UserCredentialsStatus {
   provider: UserProviderCredentialBundle | null;
   /** `null` when the user has not captured a PAT (App-only / missing mode). */
   github: UserGithubCredentialStatus | null;
+  /** `null` when the user has not captured a Jira credential. */
+  jira?: UserJiraCredentialStatus | null;
 }
 
 /**
@@ -540,6 +556,56 @@ export interface SetProviderCredentialRequest {
 export interface SetGithubPatRequest {
   pat: string;
   attribute_commits?: boolean;
+}
+
+/**
+ * The three ticketing modes Takuto supports. Matches the `TicketingSystem`
+ * enum in `crates/takuto-core/src/config/general.rs` (serde
+ * `rename_all = "lowercase"`).
+ */
+export type TicketingSystemId = "none" | "jira" | "github";
+
+/**
+ * Body for the per-user Jira credential endpoint
+ * (`POST /api/users/me/jira-credential`, `deny_unknown_fields`). The
+ * credential is validated live against the Atlassian API, then stored
+ * encrypted per-user and consumed by the Jira client / poller.
+ */
+export interface SetJiraCredentialRequest {
+  /** Full Atlassian site URL, e.g. `https://acme.atlassian.net` (http(s):// required). */
+  site: string;
+  /** Atlassian account email the API token belongs to. */
+  email: string;
+  /** Atlassian API token. */
+  token: string;
+}
+
+/**
+ * 200 response from `POST /api/users/me/jira-credential`. The token is never
+ * echoed back; the `account` block is resolved from Atlassian at save time.
+ */
+export interface JiraCredentialSaved {
+  site: string;
+  email: string;
+  account: {
+    account_id: string;
+    display_name: string;
+  };
+}
+
+/**
+ * Patch body for the `[general]` portion of `PUT /api/config`. Mirrors the
+ * backend `GeneralConcurrencyPatch` — every field optional, replace-on-present.
+ */
+export interface GeneralConfigPatch {
+  ticketing_system?: TicketingSystemId;
+  max_concurrent_workflows?: number;
+  max_active_workflows?: number;
+}
+
+/** Patch body for `PUT /api/config` (the runtime dashboard patch). */
+export interface RuntimeConfigPatch {
+  general?: GeneralConfigPatch;
 }
 
 /** Body for `PATCH /api/users/me/github` (A3 rename). */

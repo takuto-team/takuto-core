@@ -52,7 +52,7 @@ pub async fn get_version() -> Json<serde_json::Value> {
 
 pub async fn get_config(State(cfg): State<ConfigState>) -> Json<ConfigResponse> {
     // Clone needed values and release the read lock before any filesystem I/O.
-    let (config_clone, active_repo_path_str, github_configured, app_name_raw) = {
+    let (config_clone, active_repo_path_str, github_configured, app_name_raw, ticketing_system) = {
         let config = cfg.config.read().await;
         let path = config.git.repo_path.clone();
         let gh_configured = config.github.is_configured();
@@ -61,11 +61,16 @@ pub async fn get_config(State(cfg): State<ConfigState>) -> Json<ConfigResponse> 
         } else {
             None
         };
+        // Read ticketing_system from the LIVE config (not the startup
+        // `ConfigState` snapshot) so a `PUT /api/config` change to
+        // `[general] ticketing_system` is reflected on the next GET.
+        let ticketing_system = config.general.ticketing_system.to_string();
         (
             config.redacted_for_api_clone(),
             path,
             gh_configured,
             app_name,
+            ticketing_system,
         )
     }; // read lock dropped here
 
@@ -88,7 +93,7 @@ pub async fn get_config(State(cfg): State<ConfigState>) -> Json<ConfigResponse> 
         github_app_configured: github_configured,
         config: config_clone,
         jira_available: cfg.jira_available.load(Ordering::Relaxed),
-        ticketing_system: cfg.ticketing_system.to_string(),
+        ticketing_system,
         preflight_error: cfg.preflight_error.clone(),
         config_writable: cfg.config_writer.is_some(),
         repo_exists,

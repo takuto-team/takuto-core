@@ -60,6 +60,10 @@ pub struct OnboardingStatusBody {
     /// session even when they have no row yet (empty defaults).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_onboarding: Option<UserOnboardingSummary>,
+    /// Whether the authenticated caller has a stored per-user Jira credential.
+    /// `None` for unauthenticated callers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jira_credential_present: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -112,15 +116,16 @@ pub async fn onboarding_status(
     //     of user PAT) or if the user has a `user_github_credentials` row;
     //   - drop any non-active provider's `*_not_authenticated` warning
     //     defensively (collect_system_status only emits the active one).
-    let (user_onboarding, user_filter): (
+    let (user_onboarding, user_filter, jira_credential_present): (
         Option<UserOnboardingSummary>,
         Option<UserCredentialState>,
+        Option<bool>,
     ) = if let Some(db) = auth.db.as_ref() {
         let cookie = crate::auth::session_cookie_from_headers(&headers)
             .map(|s| s.to_string())
             .unwrap_or_default();
         if cookie.is_empty() {
-            (None, None)
+            (None, None, None)
         } else {
             let user_id = crate::auth::validate_db_session(db.adapter(), &cookie).await;
 
@@ -139,12 +144,16 @@ pub async fn onboarding_status(
                     takuto_core::db::github_credentials::find(adapter, &uid).await,
                     Ok(Some(_))
                 );
-                Some((uid, creds_present, github_pat_present))
+                let jira_present = matches!(
+                    takuto_core::db::jira_credentials::find(adapter, &uid).await,
+                    Ok(Some(_))
+                );
+                Some((uid, creds_present, github_pat_present, jira_present))
             } else {
                 None
             };
 
-            if let Some((user_id, creds_present, github_pat_present)) = pre {
+            if let Some((user_id, creds_present, github_pat_present, jira_present)) = pre {
                 let row = takuto_core::db::onboarding::get(db.adapter(), &user_id)
                     .await
                     .ok()
@@ -168,13 +177,14 @@ pub async fn onboarding_status(
                         active_provider_credential_present: creds_present,
                         github_pat_present,
                     }),
+                    Some(jira_present),
                 )
             } else {
-                (None, None)
+                (None, None, None)
             }
         }
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     // Apply the per-user filter to the warning vector. When the caller is
@@ -192,6 +202,7 @@ pub async fn onboarding_status(
     Json(OnboardingStatusBody {
         status,
         user_onboarding,
+        jira_credential_present,
     })
 }
 

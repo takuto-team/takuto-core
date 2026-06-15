@@ -389,6 +389,11 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::patch(routes::credentials::patch_github_attribution),
         )
         .route(
+            "/users/me/jira-credential",
+            post(routes::credentials::post_jira_credential)
+                .delete(routes::credentials::delete_jira_credential),
+        )
+        .route(
             "/admin/users/{id}/github-status",
             get(routes::credentials::get_admin_github_status),
         )

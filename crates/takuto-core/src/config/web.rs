@@ -169,6 +169,10 @@ pub struct GeneralConcurrencyPatch {
     pub max_concurrent_workflows: Option<u32>,
     #[serde(default)]
     pub max_active_workflows: Option<u32>,
+    /// Onboarding step 1 writes the ticketing source here
+    /// (`"none"` | `"jira"` | `"github"`).
+    #[serde(default)]
+    pub ticketing_system: Option<super::general::TicketingSystem>,
 }
 
 #[cfg(test)]

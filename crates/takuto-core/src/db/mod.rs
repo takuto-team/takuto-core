@@ -15,6 +15,7 @@ pub mod credentials;
 pub mod error;
 pub mod github_credentials;
 pub mod importer;
+pub mod jira_credentials;
 pub mod log_retention;
 pub mod login_attempts;
 pub mod upsert;

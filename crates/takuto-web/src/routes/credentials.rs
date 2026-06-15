@@ -11,6 +11,8 @@
 //! - `DELETE /api/users/me/credentials/{provider}` — wipe an AI-provider credential
 //! - `POST   /api/users/me/github-pat`             — validate + seal + store a GitHub PAT
 //! - `DELETE /api/users/me/github-pat`             — wipe the user's PAT
+//! - `POST   /api/users/me/jira-credential`        — validate + seal + store a per-user Jira credential
+//! - `DELETE /api/users/me/jira-credential`        — wipe the user's Jira credential
 //! - `PATCH  /api/users/me/github`                 — toggle `attribute_commits`
 //! - `GET    /api/admin/users/{id}/github-status`  — admin-only read of peer's PAT presence
 //!
@@ -39,7 +41,11 @@ use takuto_core::auth::{PatValidationError, SealedBlob, seal, validate_pat};
 use takuto_core::config::AiAgentProvider;
 use takuto_core::db::credential_audit::{self, CredentialAuditKind};
 use takuto_core::db::github_credentials;
+use takuto_core::db::jira_credentials;
 use takuto_core::db::provider_credentials::{self, ProviderCredentialKind, UpsertOutcome};
+use takuto_core::jira::{
+    JiraRestCredential, JiraValidationError, RealJiraHttp, validate_jira_credential,
+};
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
@@ -78,6 +84,18 @@ pub struct UserCredentialsStatus {
     /// fields inside the bundle are optional independently.
     pub provider: Option<ProviderCredentialBundle>,
     pub github: Option<GithubCredentialStatus>,
+    /// `None` when the user has no per-user Jira credential row.
+    pub jira: Option<JiraCredentialStatus>,
+}
+
+/// Per-user Jira credential status. Never returns the token.
+#[derive(Debug, Serialize)]
+pub struct JiraCredentialStatus {
+    pub site: String,
+    pub email: String,
+    pub account_id: String,
+    pub account_name: String,
+    pub last_validated_at: Option<String>,
 }
 
 /// Per-provider credential bundle. One slot per `kind`. UI uses
@@ -162,6 +180,17 @@ pub struct GithubPatBody {
     /// `None` defaults to `true` (commit attribution ON).
     #[serde(default, rename = "attribute_commits")]
     pub sign_commits: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JiraCredentialBody {
+    /// Jira site base URL, e.g. `https://acme.atlassian.net`.
+    pub site: String,
+    /// Account email — the Basic-auth username.
+    pub email: String,
+    /// Jira API token — the sealed secret.
+    pub token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -312,7 +341,24 @@ pub async fn get_my_credentials(
             sign_commits: row.sign_commits,
             last_validated_at: row.last_validated_at,
         });
-    let status = UserCredentialsStatus { provider, github };
+    let jira = jira_credentials::find(adapter, user_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "jira_credentials::find failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "read_failed")
+        })?
+        .map(|row| JiraCredentialStatus {
+            site: row.site,
+            email: row.email,
+            account_id: row.account_id,
+            account_name: row.account_name,
+            last_validated_at: row.last_validated_at,
+        });
+    let status = UserCredentialsStatus {
+        provider,
+        github,
+        jira,
+    };
 
     Ok(Json(status))
 }
@@ -755,6 +801,207 @@ pub async fn delete_github_pat(
             &user_id,
             Some(&user_id),
             CredentialAuditKind::GithubPat,
+            None,
+            "deleted",
+            "ok",
+            None,
+        )
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "credential_audit::log_in_tx failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    }
+    tx.commit().await.map_err(|e| {
+        tracing::warn!(error = %e, "commit failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Normalise + validate a Jira site URL. Trims a trailing slash and rejects
+/// anything that is not an `http(s)` URL or is oversized.
+fn normalise_jira_site(site: &str) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let trimmed = site.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "site_empty"));
+    }
+    if trimmed.len() > 512 {
+        return Err(err(StatusCode::BAD_REQUEST, "site_too_long"));
+    }
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err(err(StatusCode::BAD_REQUEST, "site_invalid"));
+    }
+    if trimmed.contains(char::is_whitespace) {
+        return Err(err(StatusCode::BAD_REQUEST, "site_invalid"));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// `POST /api/users/me/jira-credential` — validate the credential against the
+/// Jira REST API (`GET /rest/api/3/myself`), seal the token, upsert, and
+/// audit-log. On validation failure: `400` (`invalid_token` / `unauthorized`)
+/// or `502` (`jira_transport_error`) plus an audit row with `outcome="error"`.
+pub async fn post_jira_credential(
+    State(auth_state): State<AuthState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+    Json(body): Json<JiraCredentialBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let site = normalise_jira_site(&body.site)?;
+    let email = body.email.trim().to_string();
+    if email.is_empty() || email.len() > 320 {
+        return Err(err(StatusCode::BAD_REQUEST, "email_invalid"));
+    }
+    if body.token.trim().is_empty() || body.token.len() > MAX_API_KEY_LEN {
+        return Err(err(StatusCode::BAD_REQUEST, "invalid_token"));
+    }
+
+    let master = require_master_key(&auth_state)?;
+    // SAFETY: `require_master_key` returns `Err` when the DB is missing.
+    let db = auth_state
+        .db
+        .as_ref()
+        .expect("require_master_key gated db.is_some()")
+        .clone();
+
+    let cred = JiraRestCredential {
+        site: site.clone(),
+        email: email.clone(),
+        token: body.token.clone(),
+    };
+    let http = RealJiraHttp::new();
+    let account = match validate_jira_credential(&http, &cred).await {
+        Ok(a) => a,
+        Err(e) => {
+            let code = e.code();
+            let _ = credential_audit::log(
+                db.adapter(),
+                &auth.user_id,
+                Some(&auth.user_id),
+                CredentialAuditKind::JiraCredential,
+                None,
+                "validation_failed",
+                "error",
+                Some(code),
+            )
+            .await;
+            let status = match e {
+                JiraValidationError::Transport(_) => StatusCode::BAD_GATEWAY,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            return Err(err(status, code));
+        }
+    };
+
+    let sealed = seal(&master, body.token.as_bytes()).map_err(|e| {
+        tracing::warn!(error = %e, "Jira token seal failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "seal_failed")
+    })?;
+    drop(master);
+
+    let user_id = auth.user_id.clone();
+    let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let adapter = db.adapter();
+    let already_present = jira_credentials::find(adapter, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "jira_credentials::find failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?
+        .is_some();
+
+    let mut tx = adapter.begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "begin tx failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    jira_credentials::upsert(
+        &mut tx,
+        &user_id,
+        &sealed,
+        &site,
+        &email,
+        &account.account_id,
+        &account.display_name,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "jira_credentials::upsert failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    jira_credentials::touch_last_validated(&mut tx, &user_id, &now)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "jira touch_last_validated failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    let event = if already_present {
+        "rotated"
+    } else {
+        "created"
+    };
+    credential_audit::log_in_tx(
+        &mut tx,
+        &user_id,
+        Some(&user_id),
+        CredentialAuditKind::JiraCredential,
+        None,
+        event,
+        "ok",
+        None,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "credential_audit::log_in_tx failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    tx.commit().await.map_err(|e| {
+        tracing::warn!(error = %e, "commit failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "site": site,
+            "email": email,
+            "account": {
+                "account_id": account.account_id,
+                "display_name": account.display_name,
+            },
+        })),
+    ))
+}
+
+/// `DELETE /api/users/me/jira-credential` — hard delete + audit.
+pub async fn delete_jira_credential(
+    State(auth_state): State<AuthState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let db = auth_state
+        .db
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
+        .clone();
+    let user_id = auth.user_id.clone();
+
+    let adapter = db.adapter();
+    let mut tx = adapter.begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "begin tx failed");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+    })?;
+    let was_present = jira_credentials::delete(&mut tx, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "jira_credentials::delete failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        })?;
+    if was_present {
+        credential_audit::log_in_tx(
+            &mut tx,
+            &user_id,
+            Some(&user_id),
+            CredentialAuditKind::JiraCredential,
             None,
             "deleted",
             "ok",

@@ -21,9 +21,11 @@ import {
   mockSetProviderCredential,
 } from "./mocks";
 import type {
+  JiraCredentialSaved,
   PatchGithubSettingsRequest,
   ProviderCredentialKind,
   SetGithubPatRequest,
+  SetJiraCredentialRequest,
   SetProviderCredentialRequest,
   UserCredentialsStatus,
 } from "./types";
@@ -178,6 +180,42 @@ export async function setGithubPat(
   });
   if (!res.ok) await rejectWithCredentialsError(res);
   return res.json();
+}
+
+/**
+ * POST /api/users/me/jira-credential — save the caller's per-user Jira
+ * credential (site + email + API token). The backend validates it live
+ * against the Atlassian API, then stores it encrypted per-user for the Jira
+ * client / poller. Returns the resolved account block; the token is never
+ * echoed back. Throws a `UserCredentialsError` (carrying the structured
+ * `error` code) on non-2xx.
+ */
+export async function setJiraCredential(
+  body: SetJiraCredentialRequest,
+): Promise<JiraCredentialSaved> {
+  if (isMocksEnabled()) {
+    // No mock handler — onboarding stories never exercise the Jira save path,
+    // so return a synthetic success when mocks are enabled.
+    return {
+      site: body.site,
+      email: body.email,
+      account: { account_id: "mock", display_name: body.email },
+    };
+  }
+  const res = await api("/api/users/me/jira-credential", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await rejectWithCredentialsError(res);
+  return res.json();
+}
+
+/** DELETE /api/users/me/jira-credential — hard delete (idempotent, 204). */
+export async function deleteJiraCredential(): Promise<void> {
+  if (isMocksEnabled()) return;
+  const res = await api("/api/users/me/jira-credential", { method: "DELETE" });
+  if (!res.ok && res.status !== 204) await rejectWithCredentialsError(res);
 }
 
 /** DELETE /api/users/me/github-pat — hard delete. */

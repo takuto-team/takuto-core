@@ -12,17 +12,17 @@ export const ONBOARDING_STEPS: { index: StepIndex; title: string; body: string }
   {
     index: 2,
     title: "AI provider",
-    body: "Choose the AI that drives your work items. Each teammate brings their own login on top of this.",
+    body: "Choose the AI that drives your work items, then add your own provider key.",
   },
   {
     index: 3,
     title: "GitHub integration",
-    body: "Connect a GitHub App for shared access, or skip and have each teammate bring a personal token.",
+    body: "Connect a GitHub App for shared access, or bring your own personal token.",
   },
   {
     index: 4,
-    title: "Your credentials",
-    body: "Add your own AI provider key and GitHub token so you can run work items immediately.",
+    title: "Workflows",
+    body: "Review the flows you can run on each work item. Tweak or re-seed them any time.",
   },
 ];
 

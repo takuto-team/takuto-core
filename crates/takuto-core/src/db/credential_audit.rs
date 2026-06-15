@@ -29,6 +29,8 @@ use crate::error::Result;
 pub enum CredentialAuditKind {
     AiProvider,
     GithubPat,
+    /// Per-user Jira API token (site + email + token).
+    JiraCredential,
     /// Reserved variant (carry-over from the original Cursor ttyd-capture
     /// design that amendment A1 cancelled). Never written by current code.
     /// Kept in the enum so any historical rows in pre-A1 databases still
@@ -41,6 +43,7 @@ impl CredentialAuditKind {
         match self {
             CredentialAuditKind::AiProvider => "ai_provider",
             CredentialAuditKind::GithubPat => "github_pat",
+            CredentialAuditKind::JiraCredential => "jira_credential",
             CredentialAuditKind::CursorSession => "cursor_session",
         }
     }
@@ -188,6 +191,7 @@ pub async fn list_for_user(
         let kind = match kind_str.as_str() {
             "ai_provider" => CredentialAuditKind::AiProvider,
             "github_pat" => CredentialAuditKind::GithubPat,
+            "jira_credential" => CredentialAuditKind::JiraCredential,
             "cursor_session" => CredentialAuditKind::CursorSession,
             other => {
                 // Unknown `kind` is a schema-drift / DB-corruption signal.

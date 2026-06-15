@@ -19,14 +19,17 @@ export { api, apiJson, apiPost, apiPostJson } from "./http";
 export {
   UserCredentialsError,
   deleteGithubPat,
+  deleteJiraCredential,
   deleteProviderCredential,
   fetchUserCredentials,
   patchGithubSettings,
   setClaudeSession,
   setGithubPat,
+  setJiraCredential,
   setProviderCredential,
 } from "./credentials";
 export { AgentConfigError, putAgentConfig } from "./agentConfig";
+export { RuntimeConfigError, putRuntimeConfig } from "./generalConfig";
 export { fetchOnboardingStatus } from "./onboarding";
 export {
   type RunCommand,

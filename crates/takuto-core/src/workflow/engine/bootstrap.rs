@@ -253,11 +253,22 @@ pub(super) async fn bootstrap_new_workflow(
         let mut step_log = StepLog::new("Retrieve Details".to_string());
         check_cancelled(cancel_token)?;
 
-        let jira_client = JiraClient::new(repo_path.clone());
-        let detail = match jira_client
-            .get_ticket_details(ticket_key, &project_keys)
-            .await
-        {
+        // Prefer the workflow owner's per-user Jira credential (REST) when one
+        // is configured; fall back to the global `acli` client otherwise.
+        let owner_user_id = {
+            let wf = workflows.read().await;
+            wf.get(ticket_key).and_then(|w| w.user_id.clone())
+        };
+        let reader: Box<dyn crate::jira::TicketReader> = match (db, owner_user_id.as_deref()) {
+            (Some(database), Some(uid)) => {
+                match crate::jira::resolve_rest_credential(database, uid).await {
+                    Some(cred) => Box::new(crate::jira::JiraRestClient::real(cred)),
+                    None => Box::new(JiraClient::new(repo_path.clone())),
+                }
+            }
+            _ => Box::new(JiraClient::new(repo_path.clone())),
+        };
+        let detail = match reader.get_ticket_details(ticket_key, &project_keys).await {
             Ok(detail) => {
                 step_log
                     .output

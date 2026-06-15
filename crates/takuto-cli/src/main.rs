@@ -1059,7 +1059,13 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         cancel_token.clone(),
         polling_paused.clone(),
         resolved_poller_owner.clone(),
-        Arc::new(takuto_core::jira::RealJiraSourceFactory),
+        // Prefer the resolved owner's per-user Jira credential (REST) when one
+        // is configured; the factory falls back to the global `acli` client
+        // otherwise.
+        Arc::new(takuto_core::jira::DbBackedJiraSourceFactory::new(
+            db.clone(),
+            resolved_poller_owner.clone(),
+        )),
     );
 
     let polling_paused_for_gh = polling_paused.clone();

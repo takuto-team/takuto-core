@@ -133,6 +133,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "work_items_soft_delete",
         sql: include_str!("../../migrations/20260605000001_work_items_soft_delete.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_615_000_001,
+        description: "user_jira_credentials",
+        sql: include_str!("../../migrations/20260615000001_user_jira_credentials.sql"),
+    },
 ];
 
 /// A `sqlx::migrate::MigrationSource` impl that resolves the embedded
@@ -661,8 +666,9 @@ mod tests {
         // V1..V6 from the legacy schema.rs port, V7 = importer's
         // system_metadata, V8 = work_items, V9 = repository_id on
         // work_items, V10 = per-user work-item flows, V11 = work_items
-        // soft-delete. Bump when adding new migrations.
-        assert_eq!(MIGRATIONS.len(), 11);
+        // soft-delete, V12 = per-user Jira credentials. Bump when adding
+        // new migrations.
+        assert_eq!(MIGRATIONS.len(), 12);
     }
 
     #[test]
@@ -772,8 +778,8 @@ mod tests {
             .await
             .expect("count rows");
         assert_eq!(
-            count.0, 11,
-            "expected 11 applied migrations recorded by sqlx, got {}",
+            count.0, 12,
+            "expected 12 applied migrations recorded by sqlx, got {}",
             count.0
         );
     }
