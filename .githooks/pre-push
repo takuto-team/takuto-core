@@ -4,11 +4,16 @@
 # workspace (fmt / clippy -D warnings / test / doc) plus the frontend, license,
 # and config-doc gates — see scripts/preflight.sh. The CI "Rust" job was removed
 # because a cold workspace build took ~20 min; this hook catches the same
-# failures locally in seconds (incremental builds) before anything is pushed.
+# failures locally (incremental builds) before anything is pushed.
+#
+# IMPORTANT: git streams the to-be-pushed refs on the hook's STDIN. We MUST
+# drain them first — otherwise git receives SIGPIPE writing to an unread pipe
+# and aborts the push with exit 141 *even when every check passes*. Confirmed:
+# without `cat >/dev/null` the push silently no-ops; with it the push lands.
 #
 # Enable with: ./scripts/install-git-hooks.sh
 # Bypass once (emergency): git push --no-verify
 #
-set -euo pipefail
+cat >/dev/null
 
-exec "$(git rev-parse --show-toplevel)/scripts/preflight.sh"
+exec "$(git rev-parse --show-toplevel)/scripts/preflight.sh" </dev/null
