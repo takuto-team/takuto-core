@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#
+# Pre-push gate. Runs the same fast checks CI would have run for the cargo
+# workspace (fmt / clippy -D warnings / test / doc) plus the frontend, license,
+# and config-doc gates — see scripts/preflight.sh. The CI "Rust" job was removed
+# because a cold workspace build took ~20 min; this hook catches the same
+# failures locally in seconds (incremental builds) before anything is pushed.
+#
+# Enable with: ./scripts/install-git-hooks.sh
+# Bypass once (emergency): git push --no-verify
+#
+set -euo pipefail
+
+exec "$(git rev-parse --show-toplevel)/scripts/preflight.sh"

@@ -1,14 +1,17 @@
 name: CI
 
 # Enforces the §2 quality bar from CODING_STANDARDS.md and the standing CI
-# decisions in lore/code-quality-principles.md §5:
+# decisions in lore/code-quality-principles.md §5.
 #
-#   - cargo build --workspace --all-targets        (zero warnings)
-#   - cargo clippy --workspace --all-targets -- -D warnings
-#   - cargo test  --workspace
-#   - npm ci && npm run build  (frontend, with strict TypeScript)
+# The heavy cargo gates (fmt / clippy -D warnings / test / doc) run in the
+# local **pre-push hook** (`.githooks/pre-push` -> `scripts/preflight.sh`),
+# NOT in CI — a cold workspace build was ~20 min per run. Install the hook with
+# `./scripts/install-git-hooks.sh` (or `make check` to run the gates on demand).
+# CI still covers everything that needs a clean/remote environment: DB backends,
+# the frontend build, generated-type drift, supply-chain audits, and the
+# container smoke build.
 #
-# A warning on `main` is a release-blocker, not a future task. If a transient
+# A warning is still a release-blocker, not a future task. If a transient
 # toolchain issue surfaces a warning we cannot fix today, pin the toolchain in
 # rust-toolchain.toml — do not relax the gate.
 
@@ -28,57 +31,6 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  rust:
-    name: Rust (build · clippy · test)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-        with:
-          toolchain: stable
-          components: clippy, rustfmt
-
-      # Swatinem/rust-cache uses (rustc version + Cargo.lock + job name) as
-      # the cache key, prunes stale intermediate artifacts so the cache
-      # doesn't bloat over time, and restore-falls-back across lockfile
-      # bumps. The previous actions/cache config invalidated on every
-      # Cargo.lock change, which forced a cold build on most PRs.
-      - name: Rust build cache
-        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@6887963ccf37a9ddcd8c5fa4baeb3e1e5fd61fa1 # v2
-        with:
-          tool: cargo-nextest
-
-      - name: cargo fmt --all -- --check
-        run: cargo fmt --all -- --check
-
-      # `takuto-web` embeds `ui/dist/` via `rust-embed`, which fails to
-      # compile if the directory is missing. The UI job builds the real
-      # frontend; the rust job only needs the directory to exist so the
-      # macro can produce an (empty) asset set for tests/clippy/doc.
-      - name: Create empty ui/dist for rust-embed
-        run: mkdir -p ui/dist && touch ui/dist/.gitkeep
-
-      # clippy with `--all-targets` compiles every test/example/bench,
-      # which warms the same artifacts cargo-nextest needs below. A
-      # separate `cargo build` step was just paying the link cost twice.
-      - name: cargo clippy --workspace --all-targets -- -D warnings
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-      # cargo-nextest parallelises test execution per-process (libtest
-      # serialises per-thread), retries flakies, and skips doc-tests
-      # (this workspace has none, only `text`/`ignore` code fences).
-      - name: cargo nextest run --workspace
-        run: cargo nextest run --workspace --locked --no-fail-fast
-
-      - name: cargo doc --workspace --no-deps
-        run: cargo doc --workspace --no-deps --locked
-
   db-postgres:
     # Plan-11 §10 step 4: prove the dialect-aware migration source and the
     # DbAdapter-backed DAOs work end-to-end against a real PostgreSQL.
