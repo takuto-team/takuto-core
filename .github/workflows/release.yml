@@ -40,7 +40,12 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.DISTRIBUTION_GHCR_TOKEN }}
+          # The image (`takuto-team/takuto-core`) is this repo's own GHCR
+          # package, so the workflow's built-in GITHUB_TOKEN can publish it
+          # (the job already declares `permissions: packages: write`). No
+          # external PAT secret needed now that we no longer push to a
+          # different repo's namespace.
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Build the image into the local Docker daemon first so it can be scanned
       # and an SBOM generated BEFORE anything is published. The matrix runner is
@@ -142,7 +147,12 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.DISTRIBUTION_GHCR_TOKEN }}
+          # The image (`takuto-team/takuto-core`) is this repo's own GHCR
+          # package, so the workflow's built-in GITHUB_TOKEN can publish it
+          # (the job already declares `permissions: packages: write`). No
+          # external PAT secret needed now that we no longer push to a
+          # different repo's namespace.
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
