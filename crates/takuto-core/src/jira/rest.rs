@@ -163,8 +163,12 @@ impl JiraHttp for RealJiraHttp {
                 output.stderr.trim()
             ));
         }
-        parse_status_marker(&output.stdout)
-            .ok_or_else(|| format!("could not parse curl response: {} bytes", output.stdout.len()))
+        parse_status_marker(&output.stdout).ok_or_else(|| {
+            format!(
+                "could not parse curl response: {} bytes",
+                output.stdout.len()
+            )
+        })
     }
 }
 
@@ -364,8 +368,9 @@ impl TicketReader for JiraRestClient {
             if !project_keys.iter().any(|pk| pk == linked_project) {
                 continue;
             }
-            let linked_path =
-                format!("rest/api/3/issue/{linked_key}?fields=summary,issuetype,status,description");
+            let linked_path = format!(
+                "rest/api/3/issue/{linked_key}?fields=summary,issuetype,status,description"
+            );
             match self.get_json(&linked_path).await {
                 Ok(linked_value) => {
                     let lt = issue_to_ticket(&linked_value, "Task");
@@ -446,10 +451,7 @@ fn url_encode(input: &str) -> String {
 /// token with the master key. Returns `None` when there is no row, no master
 /// key, or the token cannot be decrypted (logged, treated as "no credential"
 /// so callers fall back to `acli`).
-pub async fn resolve_rest_credential(
-    db: &Database,
-    user_id: &str,
-) -> Option<JiraRestCredential> {
+pub async fn resolve_rest_credential(db: &Database, user_id: &str) -> Option<JiraRestCredential> {
     let row = match crate::db::jira_credentials::find(db.adapter(), user_id).await {
         Ok(Some(row)) => row,
         Ok(None) => return None,
@@ -663,7 +665,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_ticket_details_parses_issue() {
-        let path = "rest/api/3/issue/PROJ-10?fields=summary,issuetype,status,description,issuelinks";
+        let path =
+            "rest/api/3/issue/PROJ-10?fields=summary,issuetype,status,description,issuelinks";
         let body = r#"{"key":"PROJ-10","fields":{
             "summary":"Implement",
             "issuetype":{"name":"Story"},

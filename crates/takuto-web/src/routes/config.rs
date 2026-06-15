@@ -285,9 +285,7 @@ mod tests {
                     .header("Content-Type", "application/json")
                     .header("Origin", "http://localhost:8080")
                     .header("Cookie", &cookie)
-                    .body(Body::from(
-                        r#"{"general":{"ticketing_system":"jira"}}"#,
-                    ))
+                    .body(Body::from(r#"{"general":{"ticketing_system":"jira"}}"#))
                     .unwrap(),
             )
             .await

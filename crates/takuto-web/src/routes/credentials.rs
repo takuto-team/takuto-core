@@ -1126,8 +1126,8 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    use takuto_core::jira::{JiraHttp, JiraRestCredential};
     use takuto_core::jira::rest::JiraHttpResponse;
+    use takuto_core::jira::{JiraHttp, JiraRestCredential};
 
     use crate::server::build_router;
     use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
