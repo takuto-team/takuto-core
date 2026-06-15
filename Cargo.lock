@@ -2472,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "takuto-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "clap",
@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "takuto-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2519,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "takuto-web"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "axum",
