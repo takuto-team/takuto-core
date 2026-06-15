@@ -4,7 +4,7 @@
 use crate::db::{DbAdapter, DbValue};
 use crate::error::Result;
 
-use super::*;
+use super::RunCommandRow;
 
 // ── work_item_run_commands ───────────────────────────────────────────────
 

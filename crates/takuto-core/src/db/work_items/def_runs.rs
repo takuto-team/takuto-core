@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::db::{DbAdapter, DbValue};
 use crate::error::Result;
 
-use super::*;
+use super::{DefRunState, DefinitionRunRow};
 
 // ── work_item_definition_runs ────────────────────────────────────────────
 
