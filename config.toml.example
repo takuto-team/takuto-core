@@ -365,6 +365,10 @@ compose_up_commands = []
 # ]
 
 [network]
+# The egress firewall automatically allows the API endpoints of the AI
+# provider(s) you use: the active `[agent].provider` plus every provider in
+# `[agent].available_providers` (Claude, Codex/OpenAI, Cursor), and any
+# self-hosted `base_url`. Trim `available_providers` to narrow the firewall.
 # Additional domains to allow through the egress firewall
 # (e.g., private npm registries, internal APIs)
 extra_egress_hosts = []

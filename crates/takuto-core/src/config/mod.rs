@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod agent;
 pub mod database;
+mod egress;
 pub mod error;
 mod general;
 mod git;

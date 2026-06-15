@@ -139,6 +139,11 @@ enum Commands {
         #[command(subcommand)]
         action: ProvisioningAction,
     },
+    /// Print the egress allowlist hosts for the configured AI provider(s),
+    /// one per line. Consumed by `docker/egress-rules.sh` so the firewall
+    /// opens exactly the active + admin-allowed providers (and any
+    /// self-hosted `base_url`) instead of hard-coding one vendor.
+    EgressHosts,
 }
 
 #[derive(Subcommand)]
@@ -406,6 +411,22 @@ fn run_provisioning(config_path: &std::path::Path, action: &ProvisioningAction) 
     ExitCode::SUCCESS
 }
 
+/// Print the provider-aware egress allowlist (one host per line) for
+/// `docker/egress-rules.sh` to feed into its `allow_host` helper.
+fn run_egress_hosts(config_path: &std::path::Path) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config {}: {e}", config_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    for host in config.provider_egress_hosts() {
+        println!("{host}");
+    }
+    ExitCode::SUCCESS
+}
+
 /// - `--yes-i-am-sure` not passed
 /// - any workflow in a non-terminal, non-paused state per the snapshot file
 ///   (graceful-shutdown the server first; see QA T-KEYS-002)
@@ -570,6 +591,7 @@ fn main() -> ExitCode {
             action: KeysAction::Reset { yes_i_am_sure },
         }) => run_keys_reset(&cli.config, *yes_i_am_sure),
         Some(Commands::Provisioning { action }) => run_provisioning(&cli.config, action),
+        Some(Commands::EgressHosts) => run_egress_hosts(&cli.config),
         None => match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()

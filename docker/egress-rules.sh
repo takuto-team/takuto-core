@@ -69,15 +69,23 @@ allow_host api.github.com
 allow_host raw.githubusercontent.com
 allow_host objects.githubusercontent.com
 
-# Anthropic (Claude API + auth)
-# Claude Code headless uses api.claude.ai for API calls, not api.anthropic.com
-allow_host api.anthropic.com
-allow_host api.claude.ai
-allow_host claude.ai
-allow_host console.anthropic.com
-allow_host cdn.anthropic.com
-allow_host statsig.anthropic.com
-allow_host statsig.claude.ai
+# AI provider API endpoints — resolved from config by `takuto egress-hosts`,
+# which returns the hosts for the active provider (`[agent].provider`) plus
+# every provider in `[agent].available_providers`, and any self-hosted
+# `base_url`. This replaces the old hard-coded Anthropic-only block so Codex
+# (OpenAI) and Cursor work out of the box too. With the default config (all
+# four providers available) every supported vendor's hosts are allowed; trim
+# `available_providers` to narrow the firewall to the providers you use.
+TAKUTO_BIN="${TAKUTO_BIN:-/usr/local/bin/takuto}"
+if [ -x "$TAKUTO_BIN" ]; then
+    while IFS= read -r provider_host; do
+        [ -n "$provider_host" ] || continue
+        echo "Allowing AI provider host: $provider_host"
+        allow_host "$provider_host"
+    done < <("$TAKUTO_BIN" --config "$TAKUTO_CONFIG" egress-hosts 2>/dev/null || true)
+else
+    echo "WARNING: takuto binary not found at $TAKUTO_BIN — AI provider egress hosts not applied" >&2
+fi
 
 # Sentry error reporting — Claude Code uses subdomain-based ingest endpoints
 allow_host sentry.io
