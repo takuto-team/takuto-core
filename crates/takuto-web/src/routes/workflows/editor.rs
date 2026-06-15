@@ -396,7 +396,7 @@ async fn ensure_worktree(
         }
     }
 
-    let (repo_path, base_branch) = engine.engine.resolve_repo_for_ticket(id).await;
+    let (repo_path, _base_branch) = engine.engine.resolve_repo_for_ticket(id).await;
 
     // Re-clone the repository if its clone directory is missing.
     if !repo_path.join(".git").exists() {
@@ -440,19 +440,20 @@ async fn ensure_worktree(
             })?;
     }
 
-    // Recreate the worktree for the existing branch. `create_worktree` fetches
-    // the base branch and falls back to a DWIM checkout of the existing branch.
-    let worktree = engine
-        .engine
-        .actions()
-        .create_worktree(&repo_path, branch_name, &base_branch)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to recreate worktree: {e}"),
-            )
-        })?;
+    // Recreate the worktree for the EXISTING branch. The clone above already
+    // fetched every branch, so this checks out `branch_name` offline — no
+    // base-branch fetch (which would need a GitHub App token this deployment
+    // may not have). A stale clone missing the branch falls back to an
+    // authenticated fetch using the same resolver token the clone used.
+    let worktree =
+        worktree_add_existing_branch(engine, auth_state, &repo_path, branch_name, user_id)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to recreate worktree: {e}"),
+                )
+            })?;
 
     // Persist the new worktree path to the in-memory workflow and the DB.
     {
@@ -488,6 +489,100 @@ async fn ensure_worktree(
     );
 
     Ok(worktree)
+}
+
+/// Add a git worktree for an **existing** branch in an already-present clone.
+///
+/// Unlike `RealActions::create_worktree`, this does NOT fetch the base branch:
+/// a full clone already has every branch as a remote-tracking ref, so
+/// `git worktree add <path> <branch>` checks the branch out offline. Only a
+/// stale clone that is missing the branch needs a network fetch — and that
+/// fetch authenticates with the same `GitAuthResolver` token the clone used
+/// (preferred), falling back to a GitHub App installation token. This is what
+/// makes recreation work on PAT-only deployments, where the App-only
+/// `gh_token_env` path returns no token and `git` would prompt for a username.
+async fn worktree_add_existing_branch(
+    engine: &EngineState,
+    auth_state: &AuthState,
+    repo_path: &std::path::Path,
+    branch: &str,
+    user_id: &str,
+) -> Result<PathBuf, String> {
+    let worktree_path = repo_path.join("worktrees").join(branch.replace('/', "-"));
+
+    // Best-effort cleanup of any stale directory / registration at the target.
+    let _ = tokio::fs::remove_dir_all(&worktree_path).await;
+    let _ = takuto_core::process::run_shell_command_with_env(
+        "git worktree prune",
+        repo_path,
+        tokio_util::sync::CancellationToken::new(),
+        &[],
+    )
+    .await;
+
+    let add_cmd = format!(
+        "git -c core.hooksPath=/dev/null worktree add {} {branch}",
+        worktree_path.display()
+    );
+
+    // Fast path: branch present locally (fresh clone) → offline checkout.
+    let first = takuto_core::process::run_shell_command_with_env(
+        &add_cmd,
+        repo_path,
+        tokio_util::sync::CancellationToken::new(),
+        &[],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if first.success() {
+        return Ok(worktree_path);
+    }
+
+    // Slow path: the branch is not present locally. Fetch it with auth, retry.
+    let token = match auth_state.git_auth_resolver.as_ref() {
+        Some(resolver) => resolver
+            .token_for(
+                takuto_core::github::auth_resolver::GitAction::Fetch,
+                user_id,
+            )
+            .await
+            .ok()
+            .map(|t| t.bearer.expose().to_string()),
+        None => {
+            engine
+                .engine
+                .actions()
+                .get_gh_installation_token(repo_path)
+                .await
+        }
+    };
+    if let Some(tok) = token {
+        // Inline credential helper reads the token from $GH_TOKEN so it never
+        // appears in argv / process listings (mirrors `do_clone`).
+        let cred = "!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f";
+        let _ = takuto_core::process::run_shell_command_with_env(
+            &format!("git -c credential.helper='{cred}' fetch origin {branch}"),
+            repo_path,
+            tokio_util::sync::CancellationToken::new(),
+            &[("GH_TOKEN", tok.as_str())],
+        )
+        .await;
+    }
+
+    let _ = tokio::fs::remove_dir_all(&worktree_path).await;
+    let retry = takuto_core::process::run_shell_command_with_env(
+        &add_cmd,
+        repo_path,
+        tokio_util::sync::CancellationToken::new(),
+        &[],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if retry.success() {
+        Ok(worktree_path)
+    } else {
+        Err(retry.stderr.trim().to_string())
+    }
 }
 
 /// Look up the workflow's repository remote URL via its `repository_id`
