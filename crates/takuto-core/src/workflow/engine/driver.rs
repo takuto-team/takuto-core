@@ -387,6 +387,45 @@ pub(super) async fn progress_dashboard_fields_for_ticket(
     })
 }
 
+/// Like [`progress_dashboard_fields_for_ticket`], but a **completed** workflow
+/// renders the authoritative persisted step count of its latest completed flow.
+/// Used by the engine-level broadcasts (`mark_work_done`, `broadcast_event`),
+/// which can fire for a workflow restored after a restart — where the in-memory
+/// `steps_log` / `current_def_total_steps` are gone and the pure estimate would
+/// floor at "3/3". Live-run callers keep the cheaper in-memory variant.
+pub(super) async fn progress_dashboard_fields_for_ticket_with_db(
+    workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
+    config: &Arc<RwLock<Config>>,
+    ticket_key: &str,
+    db: Option<&Database>,
+) -> Option<(u8, u32)> {
+    // Snapshot the in-memory estimate (and the work-item id, if completed)
+    // under the locks, then release them before any DB round-trip.
+    let (fallback, done_id) = {
+        let cfg = config.read().await;
+        let wf = workflows.read().await;
+        let w = wf.get(ticket_key)?;
+        let fallback = (
+            crate::workflow::dashboard_progress::workflow_progress_percent(w, &cfg),
+            crate::workflow::dashboard_progress::estimated_step_total(w, &cfg),
+        );
+        let done_id = matches!(w.state, WorkflowState::Done).then(|| w.id.clone());
+        (fallback, done_id)
+    };
+
+    if let (Some(id), Some(database)) = (done_id, db)
+        && let Ok(counts) = crate::db::work_items::count_steps_of_latest_completed_def(
+            database.adapter(),
+            std::slice::from_ref(&id),
+        )
+        .await
+        && let Some(n) = counts.get(&id).copied().filter(|n| *n > 0)
+    {
+        return Some((100, n));
+    }
+    Some(fallback)
+}
+
 pub(super) async fn transition_to_agent_step(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     event_tx: &broadcast::Sender<WorkflowEvent>,

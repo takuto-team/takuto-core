@@ -1,8 +1,13 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+@theme {
+  --font-sans: "Geist Variable", system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "JetBrains Mono", "Fira Code", monospace;
+}
+
 :root {
-  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-family: var(--font-sans);
   color-scheme: dark;
 }
 

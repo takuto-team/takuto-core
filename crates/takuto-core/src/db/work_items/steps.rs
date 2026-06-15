@@ -131,3 +131,59 @@ pub async fn list_steps(adapter: &DbAdapter, work_item_id: &str) -> Result<Vec<S
     }
     Ok(out)
 }
+
+/// For each requested `work_item_id`, the number of `work_item_steps` belonging
+/// to that item's most-recently-completed definition run (the completed
+/// `work_item_definition_runs` row with the greatest `ended_at`). Work items
+/// with no completed run — or no recorded steps — are absent from the map.
+///
+/// This is the authoritative "steps in the latest completed flow" count the
+/// dashboard renders for terminal workflows, where the in-memory `steps_log`
+/// and `current_def_total_steps` estimate are unavailable after a restart.
+pub async fn count_steps_of_latest_completed_def(
+    adapter: &DbAdapter,
+    work_item_ids: &[String],
+) -> Result<std::collections::HashMap<String, u32>> {
+    if work_item_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let placeholders = vec!["?"; work_item_ids.len()].join(", ");
+    // Inner-most subquery: latest completed run per requested work item.
+    // Joined back to its definition_filename, then to the steps recorded
+    // under that filename. `COUNT(*)` is the flow's executed step count.
+    let sql = format!(
+        "SELECT s.work_item_id, COUNT(*) \
+         FROM work_item_steps s \
+         JOIN ( \
+             SELECT d.work_item_id, d.definition_filename \
+             FROM work_item_definition_runs d \
+             JOIN ( \
+                 SELECT work_item_id, MAX(ended_at) AS max_ended \
+                 FROM work_item_definition_runs \
+                 WHERE state = 'completed' AND work_item_id IN ({placeholders}) \
+                 GROUP BY work_item_id \
+             ) latest \
+               ON latest.work_item_id = d.work_item_id \
+              AND latest.max_ended = d.ended_at \
+             WHERE d.state = 'completed' \
+         ) chosen \
+           ON chosen.work_item_id = s.work_item_id \
+          AND chosen.definition_filename = s.definition_filename \
+         GROUP BY s.work_item_id"
+    );
+
+    let params: Vec<DbValue> = work_item_ids
+        .iter()
+        .map(|id| DbValue::Text(id.clone()))
+        .collect();
+    let rows = adapter.query_all(&sql, params).await?;
+
+    let mut out = std::collections::HashMap::with_capacity(rows.len());
+    for r in &rows {
+        let id = r.get_text(0)?;
+        let count = r.get_i64(1)?.max(0) as u32;
+        out.insert(id, count);
+    }
+    Ok(out)
+}

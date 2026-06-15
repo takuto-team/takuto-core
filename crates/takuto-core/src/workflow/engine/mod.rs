@@ -442,16 +442,23 @@ impl WorkflowEngine {
         let engine_config = Arc::clone(&self.config);
         let ticket_key_owned = ticket_key.to_string();
         let tx = self.event_bus.sender().clone();
+        let engine_db = self.db.clone();
         self.lifecycle
             .mark_work_done(ticket_key, &self.persistence, move |mut event| {
                 let workflows = engine_workflows.clone();
                 let config = engine_config.clone();
                 let ticket = ticket_key_owned.clone();
                 let tx2 = tx.clone();
+                let db = engine_db.clone();
                 tokio::spawn(async move {
                     if let Some((pct, total)) =
-                        driver::progress_dashboard_fields_for_ticket(&workflows, &config, &ticket)
-                            .await
+                        driver::progress_dashboard_fields_for_ticket_with_db(
+                            &workflows,
+                            &config,
+                            &ticket,
+                            db.as_ref(),
+                        )
+                        .await
                     {
                         event.progress_percent = Some(pct);
                         event.progress_steps_total = Some(total);
@@ -471,9 +478,15 @@ impl WorkflowEngine {
         let config = Arc::clone(&self.config);
         let ticket_key = event.ticket_key.clone();
         let tx = self.event_bus.sender().clone();
+        let db = self.db.clone();
         tokio::spawn(async move {
-            if let Some((pct, total)) =
-                driver::progress_dashboard_fields_for_ticket(&workflows, &config, &ticket_key).await
+            if let Some((pct, total)) = driver::progress_dashboard_fields_for_ticket_with_db(
+                &workflows,
+                &config,
+                &ticket_key,
+                db.as_ref(),
+            )
+            .await
             {
                 event.progress_percent = Some(pct);
                 event.progress_steps_total = Some(total);

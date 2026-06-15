@@ -36,6 +36,35 @@ pub fn workflow_progress_percent(w: &Workflow, cfg: &Config) -> u8 {
     p.min(100) as u8
 }
 
+/// Dashboard progress fields `(percent, total)` for a workflow.
+///
+/// A **completed** workflow renders the authoritative persisted step count of
+/// its latest completed flow at 100%, when that count is known. This matters
+/// after a restart: `current_def_total_steps` is not persisted and the
+/// DB-restored `steps_log` is empty, so [`estimated_step_total`] would
+/// otherwise fall back to a heuristic that floors around 3 (the "3/3" bug).
+///
+/// Every other case — in-progress workflows, and terminals without a persisted
+/// count (e.g. a run that errored before any flow completed) — falls back to
+/// the in-memory estimate, preserving existing behaviour. The override is
+/// scoped to `Done` so a failed/stopped workflow is never shown as 100%.
+pub fn progress_fields(
+    w: &Workflow,
+    cfg: &Config,
+    persisted_completed_steps: Option<u32>,
+) -> (u8, u32) {
+    if matches!(w.state, WorkflowState::Done)
+        && let Some(n) = persisted_completed_steps
+        && n > 0
+    {
+        return (100, n);
+    }
+    (
+        workflow_progress_percent(w, cfg),
+        estimated_step_total(w, cfg),
+    )
+}
+
 /// Filled segment count for a discrete progress bar: rounds `progress_percent` (0–100) to the nearest step out of `total`.
 pub fn workflow_progress_filled_segments(progress_percent: u8, total: u32) -> u32 {
     if total == 0 {
@@ -177,6 +206,51 @@ mod tests {
         let w = wf_with(WorkflowState::Done, vec![], None);
         let cfg = Config::default();
         assert_eq!(workflow_progress_percent(&w, &cfg), 100);
+    }
+
+    #[test]
+    fn progress_fields_uses_persisted_count_for_completed() {
+        let w = wf_with(WorkflowState::Done, vec![], None);
+        let cfg = Config::default();
+        // Completed + known count → that count at 100%.
+        assert_eq!(progress_fields(&w, &cfg, Some(6)), (100, 6));
+        assert_eq!(progress_fields(&w, &cfg, Some(10)), (100, 10));
+    }
+
+    #[test]
+    fn progress_fields_completed_without_count_falls_back() {
+        let w = wf_with(WorkflowState::Done, vec![], None);
+        let cfg = Config::default();
+        // No persisted count, or a zero count, → in-memory estimate (100% for Done).
+        let (pct, total) = progress_fields(&w, &cfg, None);
+        assert_eq!(pct, 100);
+        assert!(total > 0);
+        assert_eq!(progress_fields(&w, &cfg, Some(0)), progress_fields(&w, &cfg, None));
+    }
+
+    #[test]
+    fn progress_fields_ignores_count_for_non_completed() {
+        let cfg = Config::default();
+        // In-progress: the persisted count must not leak into the denominator.
+        let running = wf_with(WorkflowState::AddressingTicket { pass: 1 }, vec![], None);
+        assert_eq!(
+            progress_fields(&running, &cfg, Some(99)),
+            (
+                workflow_progress_percent(&running, &cfg),
+                estimated_step_total(&running, &cfg)
+            )
+        );
+        // Errored terminal: never reported as a full/complete bar.
+        let errored = wf_with(
+            WorkflowState::Error {
+                source_state: Box::new(WorkflowState::AddressingTicket { pass: 1 }),
+                message: "boom".into(),
+            },
+            vec![],
+            None,
+        );
+        let (pct, _) = progress_fields(&errored, &cfg, Some(6));
+        assert_ne!(pct, 100);
     }
 
     #[test]

@@ -199,6 +199,25 @@ pub async fn list_workflows(
             HashMap::new()
         };
 
+    // Authoritative step count of each work item's latest completed flow,
+    // keyed by work_items.id. Used as the progress denominator for completed
+    // workflows, whose in-memory `steps_log` / `current_def_total_steps` do
+    // not survive a restart. Keyed by the rendered workflow's own id (NOT the
+    // ticket_key-deduped `db_rows`, which can collide when two work items share
+    // a ticket_key). One batched query for the whole list.
+    let completed_step_counts: HashMap<String, u32> = match auth_state.db.as_ref() {
+        Some(database) if !visible_workflows.is_empty() => {
+            let ids: Vec<String> = visible_workflows.iter().map(|w| w.id.clone()).collect();
+            takuto_core::db::work_items::count_steps_of_latest_completed_def(
+                database.adapter(),
+                &ids,
+            )
+            .await
+            .unwrap_or_default()
+        }
+        _ => HashMap::new(),
+    };
+
     let run_commands_by_pair: HashMap<
         (String, String),
         Vec<takuto_core::db::user_worktree_commands::RunCommand>,
@@ -306,6 +325,11 @@ pub async fn list_workflows(
                         .and_then(|p| p.to_str().map(str::to_string)),
                 ),
             };
+            let progress = dashboard_progress::progress_fields(
+                w,
+                &cfg,
+                completed_step_counts.get(&w.id).copied(),
+            );
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -326,8 +350,8 @@ pub async fn list_workflows(
                 can_mark_done,
                 can_delete: !w.state.is_active() || can_start_workflow(w),
                 can_start: can_start_workflow(w),
-                progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
-                progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
+                progress_percent: progress.0,
+                progress_steps_total: progress.1,
                 started_manually,
                 counts_toward_manual_cap,
                 jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
@@ -572,6 +596,23 @@ pub async fn get_workflow(
             w.pr_merged,
         ),
     };
+    // Authoritative step count of the latest completed flow (terminal workflows
+    // only; in-progress bars come from the in-memory estimate). Keyed by the
+    // rendered workflow's own id, which equals its work_items.id.
+    let completed_steps: Option<u32> = match auth_state.db.as_ref() {
+        Some(database) if w.state.is_terminal() => {
+            takuto_core::db::work_items::count_steps_of_latest_completed_def(
+                database.adapter(),
+                std::slice::from_ref(&w.id),
+            )
+            .await
+            .unwrap_or_default()
+            .get(&w.id)
+            .copied()
+        }
+        _ => None,
+    };
+    let progress = dashboard_progress::progress_fields(w, &cfg, completed_steps);
     Ok(Json(WorkflowSummary {
         id: w.id.clone(),
         ticket_key: w.ticket_key.clone(),
@@ -592,8 +633,8 @@ pub async fn get_workflow(
         can_mark_done,
         can_delete: !w.state.is_active() || can_start_workflow(w),
         can_start: can_start_workflow(w),
-        progress_percent: dashboard_progress::workflow_progress_percent(w, &cfg),
-        progress_steps_total: dashboard_progress::estimated_step_total(w, &cfg),
+        progress_percent: progress.0,
+        progress_steps_total: progress.1,
         started_manually,
         counts_toward_manual_cap,
         jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),

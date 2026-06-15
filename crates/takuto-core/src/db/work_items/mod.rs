@@ -1383,6 +1383,85 @@ mod tests {
         assert_eq!(runs[0].ended_at, Some(500));
     }
 
+    #[tokio::test]
+    async fn count_steps_of_latest_completed_def_picks_completed_run() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-alice", "alice").await;
+        insert_work_item(&a, &sample_row("wi-3", "GH-3", Some("u-alice")))
+            .await
+            .unwrap();
+        // Empty item: a run that never completed must not appear in the map.
+        insert_work_item(&a, &sample_row("wi-empty", "GH-9", Some("u-alice")))
+            .await
+            .unwrap();
+
+        // Mirror the real GH-3 shape: an older errored `implement_ticket`
+        // run plus a later completed `implement` run. Only the latter counts.
+        upsert_definition_run(
+            &a,
+            "wi-3",
+            "implement_ticket",
+            DefRunState::Error,
+            Some("boom"),
+            Some(50),
+            Some(100),
+        )
+        .await
+        .unwrap();
+        upsert_definition_run(
+            &a,
+            "wi-3",
+            "implement",
+            DefRunState::Completed,
+            None,
+            Some(200),
+            Some(500),
+        )
+        .await
+        .unwrap();
+        // wi-empty has a running (not completed) run.
+        upsert_definition_run(
+            &a,
+            "wi-empty",
+            "implement",
+            DefRunState::Running,
+            None,
+            Some(200),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // One step under the errored run, three under the completed one.
+        record_step_start(&a, "wi-3", "Implement ticket", Some("implement_ticket"), 60)
+            .await
+            .unwrap();
+        for (name, ts) in [("Implement", 210), ("Review", 220), ("Create PR", 230)] {
+            record_step_start(&a, "wi-3", name, Some("implement"), ts)
+                .await
+                .unwrap();
+        }
+        record_step_start(&a, "wi-empty", "Implement", Some("implement"), 210)
+            .await
+            .unwrap();
+
+        let counts = count_steps_of_latest_completed_def(
+            &a,
+            &["wi-3".to_string(), "wi-empty".to_string()],
+        )
+        .await
+        .unwrap();
+
+        // Latest completed flow = `implement` (3 steps); errored run ignored.
+        assert_eq!(counts.get("wi-3").copied(), Some(3));
+        // No completed run → absent from the map.
+        assert!(!counts.contains_key("wi-empty"));
+
+        // Empty input short-circuits to an empty map.
+        let empty = count_steps_of_latest_completed_def(&a, &[]).await.unwrap();
+        assert!(empty.is_empty());
+    }
+
     // ── log lines ────────────────────────────────────────────────────
 
     #[tokio::test]
