@@ -4,6 +4,37 @@ pub mod auth_resolver;
 pub mod poller;
 pub mod pr_merge_poller;
 
+use std::sync::Arc;
+
+use auth_resolver::{GitAction, GitAuthResolver};
+
+/// Resolve a GitHub token for a server-side `gh` / REST call: prefer the
+/// already-fetched GitHub **App** installation token; when there is none (a
+/// PAT-only deployment), fall back to the caller's per-user PAT via the
+/// [`GitAuthResolver`]. Returns `None` only when neither is available.
+///
+/// Centralises the App-then-PAT precedence so every GitHub-touching call site
+/// (repo listing, issue picker, description sync, mergers/pollers) authenticates
+/// identically and never runs `gh` unauthenticated on a PAT-only install.
+pub async fn github_token_app_then_pat(
+    app_token: Option<String>,
+    resolver: Option<&Arc<GitAuthResolver>>,
+    user_id: Option<&str>,
+    action: GitAction,
+) -> Option<String> {
+    if app_token.is_some() {
+        return app_token;
+    }
+    match (resolver, user_id) {
+        (Some(resolver), Some(uid)) => resolver
+            .token_for(action, uid)
+            .await
+            .ok()
+            .map(|t| t.bearer.expose().to_string()),
+        _ => None,
+    }
+}
+
 /// Parse `owner/repo` from a GitHub URL or bare `owner/repo` string.
 ///
 /// Handles:

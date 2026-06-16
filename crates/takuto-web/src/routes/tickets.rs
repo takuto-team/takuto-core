@@ -567,13 +567,20 @@ pub async fn update_ticket_description(
                     )
                 })?;
 
-            // Inject GitHub App installation token when configured so `gh api`
-            // works without personal user authentication.
-            let gh_token = engine
+            // Prefer the GitHub App installation token; on PAT-only deployments
+            // fall back to the caller's per-user PAT so `gh api` authenticates.
+            let app_token = engine
                 .engine
                 .actions()
                 .get_gh_installation_token(&repo_path)
                 .await;
+            let gh_token = takuto_core::github::github_token_app_then_pat(
+                app_token,
+                auth_state.git_auth_resolver.as_ref(),
+                Some(&auth.user_id),
+                takuto_core::github::auth_resolver::GitAction::IssueComment,
+            )
+            .await;
 
             let endpoint = format!("repos/{owner_repo}/issues/{issue_number}");
             let body_field = format!("body={}", body.description);

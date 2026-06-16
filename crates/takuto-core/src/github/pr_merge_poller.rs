@@ -65,7 +65,7 @@ impl PrMergePoller {
 
     async fn poll_once(&self) {
         // Collect eligible workflows: have a GitHub PR URL, not already merged.
-        let eligible: Vec<(String, String, u64)> = {
+        let eligible: Vec<(String, String, u64, Option<String>)> = {
             let wf_arc = self.engine.workflows_arc();
             let workflows = wf_arc.read().await;
             workflows
@@ -79,7 +79,12 @@ impl PrMergePoller {
                         return None;
                     }
                     let (owner_repo, pr_number) = parse_pr_url(pr_url)?;
-                    Some((w.ticket_key.clone(), owner_repo, pr_number))
+                    Some((
+                        w.ticket_key.clone(),
+                        owner_repo,
+                        pr_number,
+                        w.user_id.clone(),
+                    ))
                 })
                 .collect()
         };
@@ -99,18 +104,28 @@ impl PrMergePoller {
             std::path::PathBuf::from(&config.git.repo_path)
         };
 
-        let gh_token = self
+        // App token (deployment-wide) is fetched once; for PAT-only deployments
+        // we fall back per workflow to that workflow owner's PAT below.
+        let app_token = self
             .engine
             .actions
             .get_gh_installation_token(&repo_path)
             .await;
+        let resolver = self.engine.git_auth_resolver();
 
-        for (ticket_key, owner_repo, pr_number) in eligible {
+        for (ticket_key, owner_repo, pr_number, owner_id) in eligible {
             // Check cancellation between API calls to exit promptly.
             if self.cancel_token.is_cancelled() {
                 return;
             }
 
+            let gh_token = crate::github::github_token_app_then_pat(
+                app_token.clone(),
+                resolver.as_ref(),
+                owner_id.as_deref(),
+                crate::github::auth_resolver::GitAction::Clone,
+            )
+            .await;
             match check_pr_merged(&owner_repo, pr_number, &repo_path, gh_token.as_deref()).await {
                 Ok(true) => {
                     info!(

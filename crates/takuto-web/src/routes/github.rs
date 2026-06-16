@@ -113,11 +113,19 @@ pub async fn list_github_issues(
         )
     })?;
 
-    let gh_token = engine
+    let app_token = engine
         .engine
         .actions()
         .get_gh_installation_token(&repo_path)
         .await;
+    // PAT-only deployments have no App token — fall back to the caller's PAT.
+    let gh_token = takuto_core::github::github_token_app_then_pat(
+        app_token,
+        auth_state.git_auth_resolver.as_ref(),
+        Some(&auth.user_id),
+        takuto_core::github::auth_resolver::GitAction::Clone,
+    )
+    .await;
 
     let issues =
         takuto_core::github::fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref())

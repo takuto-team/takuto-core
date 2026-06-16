@@ -149,13 +149,21 @@ impl GitHubPoller {
             return Ok(());
         }
 
-        // Fetch open issues via `gh api`, injecting the GitHub App token when configured.
+        // Fetch open issues via `gh api`. Prefer the GitHub App token; on
+        // PAT-only deployments fall back to the poller owner's per-user PAT.
         // Label and title-keyword filtering from `[polling.github]` is applied below.
-        let gh_token = self
+        let app_token = self
             .engine
             .actions
             .get_gh_installation_token(&repo_path)
             .await;
+        let gh_token = crate::github::github_token_app_then_pat(
+            app_token,
+            self.engine.git_auth_resolver().as_ref(),
+            self.resolved_owner_id.as_deref(),
+            crate::github::auth_resolver::GitAction::Clone,
+        )
+        .await;
         let mut issues = fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref()).await?;
 
         // Apply the admin-configured label + title-keyword filters. Empty
