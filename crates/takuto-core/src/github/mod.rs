@@ -279,4 +279,79 @@ mod tests {
     fn parse_pr_url_non_numeric_returns_none() {
         assert_eq!(parse_pr_url("https://github.com/owner/repo/pull/abc"), None);
     }
+
+    // ── github_token_app_then_pat: App-token-first, per-user PAT fallback ──────
+    // Regression guard for "use the per-user PAT for every server-side GitHub
+    // call" — every GitHub-touching call site (repo list, issue picker,
+    // description sync, pollers) routes through this helper.
+
+    async fn resolver_with_pat(user_id: &str) -> Arc<GitAuthResolver> {
+        use crate::auth::{MasterKey, seal};
+        use crate::db::{Database, DbValue, github_credentials};
+        let db = Database::open_in_memory()
+            .expect("in-mem db")
+            .with_test_master_key(MasterKey::from_bytes([0x42; 32]));
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+                vec![
+                    DbValue::Text(user_id.to_string()),
+                    DbValue::Text(user_id.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        let mk = db.master_key().expect("mk").key.clone();
+        let sealed = seal(&mk, b"ghp_user_pat").unwrap();
+        let mut tx = db.adapter().begin().await.unwrap();
+        github_credentials::upsert(
+            &mut tx,
+            user_id,
+            &sealed,
+            &format!("{user_id}-gh"),
+            "[\"repo\"]",
+            true,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        Arc::new(GitAuthResolver::new(db, None))
+    }
+
+    #[tokio::test]
+    async fn token_app_then_pat_prefers_app_token() {
+        // App token present → returned as-is; the resolver is never consulted
+        // (passing None proves the App path short-circuits).
+        let got =
+            github_token_app_then_pat(Some("app-tok".into()), None, None, GitAction::Clone).await;
+        assert_eq!(got.as_deref(), Some("app-tok"));
+    }
+
+    #[tokio::test]
+    async fn token_app_then_pat_falls_back_to_user_pat() {
+        // No App token (PAT-only deployment) → resolve the caller's PAT.
+        let resolver = resolver_with_pat("u-1").await;
+        let got =
+            github_token_app_then_pat(None, Some(&resolver), Some("u-1"), GitAction::Clone).await;
+        assert_eq!(got.as_deref(), Some("ghp_user_pat"));
+    }
+
+    #[tokio::test]
+    async fn token_app_then_pat_none_without_app_or_resolver() {
+        assert!(
+            github_token_app_then_pat(None, None, Some("u-1"), GitAction::Clone)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn token_app_then_pat_none_without_user_id() {
+        let resolver = resolver_with_pat("u-1").await;
+        assert!(
+            github_token_app_then_pat(None, Some(&resolver), None, GitAction::Clone)
+                .await
+                .is_none()
+        );
+    }
 }
