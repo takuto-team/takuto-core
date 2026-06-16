@@ -48,7 +48,7 @@ afterEach(() => {
  * per-user AI credential POST to return 400 so we can assert the wizard
  * blocks forward navigation on save failure.
  */
-function stubFetch(opts: { failCredential?: boolean } = {}) {
+function stubFetch(opts: { failCredential?: boolean; failPat?: boolean } = {}) {
   (fetch as ReturnType<typeof vi.fn>).mockImplementation(
     async (url: string, init?: RequestInit) => {
       const json = (body: unknown, status = 200) =>
@@ -98,7 +98,9 @@ function stubFetch(opts: { failCredential?: boolean } = {}) {
           : json({ provider: null, github: null });
       }
       if (url === "/api/users/me/github-pat") {
-        return json({ provider: null, github: { login: "octocat", scopes: ["repo"], attribute_commits: true } });
+        return opts.failPat
+          ? json({ error: "gh_transport_error", message: "could not reach github" }, 502)
+          : json({ provider: null, github: { login: "octocat", scopes: ["repo"], attribute_commits: true } });
       }
       return json({});
     },
@@ -134,6 +136,7 @@ async function goToStep2() {
 const credentialPosts = () =>
   calls.filter((c) => c.url.startsWith("/api/users/me/credentials/"));
 const patPosts = () => calls.filter((c) => c.url === "/api/users/me/github-pat");
+const gitPuts = () => calls.filter((c) => c.url === "/api/config/git");
 
 describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
   it("POSTs the typed API key to the provider credential endpoint before advancing", async () => {
@@ -228,5 +231,28 @@ describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
       expect(screen.getByLabelText("Timeout (seconds)")).toBeTruthy();
     });
     expect(patPosts().length).toBe(0);
+  });
+
+  it("does NOT save git settings when the PAT save fails (no misleading success)", async () => {
+    stubFetch({ failPat: true });
+    renderWizard();
+    await goToStep3();
+
+    const patInput = await screen.findByLabelText(/Personal access token/i);
+    fireEvent.change(patInput, { target: { value: "ghp_bad" } });
+
+    await clickContinue();
+
+    // The PAT POST was attempted and failed.
+    await waitFor(() => {
+      expect(patPosts().length).toBe(1);
+    });
+    // Git settings must NOT have been saved — the PAT save runs first and
+    // blocks the step, so the user never sees a "Git settings saved." toast
+    // alongside the PAT error.
+    expect(gitPuts().length).toBe(0);
+    // Still on step 3 (Git step visible, step 4 timeout field absent).
+    expect(screen.getByLabelText("Base branch")).toBeTruthy();
+    expect(screen.queryByLabelText("Timeout (seconds)")).toBeNull();
   });
 });

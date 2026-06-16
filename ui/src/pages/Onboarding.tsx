@@ -104,9 +104,17 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
         return aiKeyRef.current ? aiKeyRef.current.saveIfDirty() : true;
       }
       if (s === 3) {
-        const gitOk = await git.save();
-        if (!gitOk) return false;
-        return githubPatRef.current ? githubPatRef.current.saveIfDirty() : true;
+        // Persist the per-user PAT first, then the deployment git settings.
+        // A typed PAT that fails to save (e.g. a GitHub transport error)
+        // must block the step BEFORE git is saved — otherwise the user sees
+        // a misleading "Git settings saved." success toast alongside the PAT
+        // error in the same Continue. A blank PAT resolves true (no-op), so
+        // the common case still saves git and shows its own success toast.
+        const patOk = githubPatRef.current
+          ? await githubPatRef.current.saveIfDirty()
+          : true;
+        if (!patOk) return false;
+        return git.save();
       }
       if (s === 4) return timeout.save();
       return true;
