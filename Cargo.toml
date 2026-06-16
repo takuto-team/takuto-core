@@ -3,7 +3,7 @@ members = ["crates/takuto-core", "crates/takuto-web", "crates/takuto-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.6.6"
+version = "0.6.7"
 edition = "2024"
 license = "FSL-1.1-ALv2"
 
