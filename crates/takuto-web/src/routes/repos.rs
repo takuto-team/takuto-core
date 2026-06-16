@@ -61,24 +61,23 @@ pub async fn list_github_repos(
     let workspaces = std::path::Path::new(WORKSPACES_DIR);
 
     // Prefer the GitHub App installation token; for PAT-only deployments fall
-    // back to the caller's per-user PAT (resolved via GitAuthResolver). Without
-    // this fallback the `gh` call below runs unauthenticated and fails with
-    // "run gh auth login / set GH_TOKEN" on PAT-only installs.
+    // back to the caller's per-user PAT. Without this the `gh` call below runs
+    // unauthenticated and fails ("run gh auth login / set GH_TOKEN"). The
+    // App-then-PAT precedence is the shared, unit-tested `github_token_app_then_pat`
+    // helper; `is_app` (App token present) drives the endpoint choice below.
     let app_token = engine
         .engine
         .actions()
         .get_gh_installation_token(workspaces)
         .await;
-    let (gh_token, is_app): (Option<String>, bool) = match app_token {
-        Some(t) => (Some(t), true),
-        None => match auth_state.git_auth_resolver.as_ref() {
-            Some(resolver) => match resolver.token_for(GitAction::Clone, &auth.user_id).await {
-                Ok(tok) => (Some(tok.bearer.expose().to_string()), false),
-                Err(_) => (None, false),
-            },
-            None => (None, false),
-        },
-    };
+    let is_app = app_token.is_some();
+    let gh_token = takuto_core::github::github_token_app_then_pat(
+        app_token,
+        auth_state.git_auth_resolver.as_ref(),
+        Some(&auth.user_id),
+        GitAction::Clone,
+    )
+    .await;
 
     let Some(token) = gh_token else {
         return Err((
