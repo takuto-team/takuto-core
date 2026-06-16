@@ -1172,13 +1172,17 @@ pub(super) fn spawn_output_relay(
 
 /// Close a GitHub issue via `gh api PATCH repos/{owner_repo}/issues/{number}`.
 ///
-/// Uses the GitHub App installation token when one is available (GitHub App configured);
-/// falls back to the ambient `gh` auth otherwise.
+/// Resolves the workflow owner's per-user PAT (`GitAuthResolver`, `IssueComment`
+/// action) and injects it as `GH_TOKEN` so the `gh` call authenticates on
+/// PAT-only deployments; falls back to the GitHub App installation token, then
+/// to ambient `gh` auth.
 pub(super) async fn close_github_issue(
     ticket_key: &str,
     repo_url: &str,
     cwd: &Path,
     actions: &dyn crate::actions::traits::ExternalActions,
+    git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    user_id: Option<&str>,
 ) -> Result<()> {
     let issue_number =
         parse_gh_issue_number(ticket_key).ok_or_else(|| ConfigError::Operational {
@@ -1191,7 +1195,20 @@ pub(super) async fn close_github_issue(
             detail: format!("failed to parse owner/repo from '{repo_url}'"),
         })?;
 
-    let gh_token = actions.get_gh_installation_token(cwd).await;
+    // Prefer the workflow owner's per-user PAT; fall back to the GitHub App
+    // installation token, then to ambient `gh` auth (no token injected).
+    let pat_token = match (git_auth_resolver, user_id) {
+        (Some(resolver), Some(uid)) => resolver
+            .token_for(crate::github::auth_resolver::GitAction::IssueComment, uid)
+            .await
+            .ok()
+            .map(|t| t.bearer.expose().to_string()),
+        _ => None,
+    };
+    let gh_token = match pat_token {
+        Some(t) => Some(t),
+        None => actions.get_gh_installation_token(cwd).await,
+    };
     let env: Vec<(&str, &str)> = gh_token
         .as_deref()
         .map(|t| vec![("GH_TOKEN", t)])

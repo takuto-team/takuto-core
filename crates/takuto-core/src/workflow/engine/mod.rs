@@ -199,7 +199,8 @@ impl WorkflowEngine {
         self.git_auth_resolver = Some(resolver.clone());
         self.definitions.set_git_auth_resolver(resolver.clone());
         self.persistence.set_git_auth_resolver(resolver.clone());
-        self.transitions.set_git_auth_resolver(resolver);
+        self.transitions.set_git_auth_resolver(resolver.clone());
+        self.lifecycle.set_git_auth_resolver(resolver);
         self
     }
 

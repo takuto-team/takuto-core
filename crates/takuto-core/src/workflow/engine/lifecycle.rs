@@ -33,6 +33,10 @@ pub(crate) struct WorkflowLifecycle {
     /// `repository_id`. Optional only because some unit-test paths construct
     /// the engine without a DB.
     pub(crate) db: Option<Database>,
+    /// Resolves per-user GitHub tokens / author identities (PAT path) for git
+    /// operations (worktree fetch, issue close). `None` until wired via
+    /// [`set_git_auth_resolver`].
+    pub(crate) git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
 }
 
 impl WorkflowLifecycle {
@@ -54,7 +58,15 @@ impl WorkflowLifecycle {
             jira_available,
             ticketing_system,
             db,
+            git_auth_resolver: None,
         }
+    }
+
+    pub(crate) fn set_git_auth_resolver(
+        &mut self,
+        resolver: Arc<crate::github::auth_resolver::GitAuthResolver>,
+    ) {
+        self.git_auth_resolver = Some(resolver);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -253,6 +265,7 @@ impl WorkflowLifecycle {
             let event_tx = self.event_bus.sender().clone();
             let key = ticket_key.clone();
             let db = self.db.clone();
+            let resolver = self.git_auth_resolver.clone();
             tokio::spawn(async move {
                 super::driver::prepare_worktree_for_ticket(
                     &key,
@@ -261,6 +274,7 @@ impl WorkflowLifecycle {
                     &actions,
                     &event_tx,
                     db.as_ref(),
+                    resolver.as_ref(),
                 )
                 .await;
             });
@@ -494,6 +508,8 @@ impl WorkflowLifecycle {
                         &remote_url,
                         cwd,
                         self.actions.as_ref(),
+                        self.git_auth_resolver.as_ref(),
+                        owner_user_id.as_deref(),
                     )
                     .await
                     {

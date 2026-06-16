@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::gh_github::apply_git_identity_from_gh;
+use super::gh_github::{apply_git_identity, apply_git_identity_from_gh};
 use super::traits::ExternalActions;
 use crate::error::Result;
 use crate::git::{GitError, worktree_remove};
@@ -84,7 +84,13 @@ impl ExternalActions for DryRunActions {
         Ok(output.stdout)
     }
 
-    async fn create_worktree(&self, repo_path: &Path, branch: &str, base: &str) -> Result<PathBuf> {
+    async fn create_worktree(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base: &str,
+        _gh_token: Option<&str>,
+    ) -> Result<PathBuf> {
         let worktree_path = repo_path.join("worktrees").join(branch.replace('/', "-"));
         info!(
             branch = branch,
@@ -184,7 +190,11 @@ impl ExternalActions for DryRunActions {
         .into())
     }
 
-    async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()> {
+    async fn configure_git_author_from_github(
+        &self,
+        cwd: &Path,
+        identity: Option<(&str, &str)>,
+    ) -> Result<()> {
         if let Some(ref app) = self.github_app {
             info!(
                 cwd = %cwd.display(),
@@ -193,6 +203,13 @@ impl ExternalActions for DryRunActions {
             return app
                 .configure_git_and_gh_auth(cwd, CancellationToken::new())
                 .await;
+        }
+        if let Some((name, email)) = identity {
+            info!(
+                cwd = %cwd.display(),
+                "Setting git author from resolved identity (dry mode — local git config, executes normally)"
+            );
+            return apply_git_identity(cwd, name, email, CancellationToken::new()).await;
         }
         info!(
             cwd = %cwd.display(),

@@ -52,13 +52,16 @@ async fn fetch_gh_user(cwd: &Path, cancel: CancellationToken) -> Result<GhUser> 
     Ok(u)
 }
 
-/// Sets `user.name` and `user.email` locally in `cwd` so commits match the `gh` account.
-pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -> Result<()> {
-    let (name, email) = github_commit_identity(cwd, cancel.child_token()).await?;
-
+/// Sets `user.name` and `user.email` locally in `cwd` to the given values.
+pub async fn apply_git_identity(
+    cwd: &Path,
+    name: &str,
+    email: &str,
+    cancel: CancellationToken,
+) -> Result<()> {
     let name_out = crate::process::run_command(
         "git",
-        &["config", "user.name", &name],
+        &["config", "user.name", name],
         cwd,
         cancel.child_token(),
     )
@@ -73,7 +76,7 @@ pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -
 
     let email_out = crate::process::run_command(
         "git",
-        &["config", "user.email", &email],
+        &["config", "user.email", email],
         cwd,
         cancel.child_token(),
     )
@@ -89,9 +92,15 @@ pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -
     info!(
         git_name = %name,
         git_email = %email,
-        "Set worktree git author from GitHub CLI (`gh`) user"
+        "Set git author identity"
     );
     Ok(())
+}
+
+/// Sets `user.name` and `user.email` locally in `cwd` so commits match the `gh` account.
+pub async fn apply_git_identity_from_gh(cwd: &Path, cancel: CancellationToken) -> Result<()> {
+    let (name, email) = github_commit_identity(cwd, cancel.child_token()).await?;
+    apply_git_identity(cwd, &name, &email, cancel).await
 }
 
 /// Adds the authenticated user as a PR reviewer (`gh pr edit --add-reviewer`).

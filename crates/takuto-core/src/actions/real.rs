@@ -9,7 +9,9 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::gh_github::{apply_git_identity_from_gh, gh_request_self_pr_reviewer};
+use super::gh_github::{
+    apply_git_identity, apply_git_identity_from_gh, gh_request_self_pr_reviewer,
+};
 use super::traits::ExternalActions;
 use crate::config::Config;
 use crate::error::Result;
@@ -184,7 +186,13 @@ impl ExternalActions for RealActions {
         Ok(output.stdout)
     }
 
-    async fn create_worktree(&self, repo_path: &Path, branch: &str, base: &str) -> Result<PathBuf> {
+    async fn create_worktree(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base: &str,
+        gh_token: Option<&str>,
+    ) -> Result<PathBuf> {
         let worktree_path = repo_path.join("worktrees").join(branch.replace('/', "-"));
         info!(branch = branch, base = base, path = %worktree_path.display(), "Creating git worktree");
 
@@ -197,20 +205,35 @@ impl ExternalActions for RealActions {
 
         let remote = &self.git_remote;
         // Fetch the base branch from the configured remote to ensure it's available locally.
-        // Inject GH_TOKEN so git's credential helper (gh) can authenticate via the GitHub App.
         info!(base = base, remote = %remote, "Fetching base branch from git remote");
-        let token_env = self.gh_token_env(repo_path).await;
-        let token_env_refs: Vec<(&str, &str)> = token_env
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        let fetch_output = process::run_shell_command_with_env(
-            &format!("git fetch {remote} {base}"),
-            repo_path,
-            CancellationToken::new(),
-            &token_env_refs,
-        )
-        .await?;
+        let fetch_output = if let Some(token) = gh_token {
+            // Per-user token (e.g. a PAT): authenticate the fetch via an inline
+            // credential helper that reads the token from $GH_TOKEN, so it never
+            // appears in argv / process listings.
+            let cred = "!f() { echo protocol=https; echo host=github.com; echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f";
+            process::run_shell_command_with_env(
+                &format!("git -c credential.helper='{cred}' fetch {remote} {base}"),
+                repo_path,
+                CancellationToken::new(),
+                &[("GH_TOKEN", token)],
+            )
+            .await?
+        } else {
+            // No per-user token: fall back to the ambient GitHub App token
+            // environment (empty for PAT-only deployments).
+            let token_env = self.gh_token_env(repo_path).await;
+            let token_env_refs: Vec<(&str, &str)> = token_env
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            process::run_shell_command_with_env(
+                &format!("git fetch {remote} {base}"),
+                repo_path,
+                CancellationToken::new(),
+                &token_env_refs,
+            )
+            .await?
+        };
         if !fetch_output.success() {
             return Err(GitError::FetchBaseBranchFailed {
                 base: base.to_string(),
@@ -293,11 +316,21 @@ impl ExternalActions for RealActions {
         .into())
     }
 
-    async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()> {
+    async fn configure_git_author_from_github(
+        &self,
+        cwd: &Path,
+        identity: Option<(&str, &str)>,
+    ) -> Result<()> {
         if let Some(ref app) = self.github_app {
             return app
                 .configure_git_and_gh_auth(cwd, CancellationToken::new())
                 .await;
+        }
+        // PAT path: set the author directly from the resolved identity instead
+        // of shelling `gh api user` in the server process (fragile when the
+        // server lacks `gh` auth/PATH context).
+        if let Some((name, email)) = identity {
+            return apply_git_identity(cwd, name, email, CancellationToken::new()).await;
         }
         apply_git_identity_from_gh(cwd, CancellationToken::new()).await
     }

@@ -28,12 +28,39 @@ pub trait ExternalActions: Send + Sync {
     // implementor no longer reads `self.repo_path()` (a global config
     // getter that was dropped); callers resolve the repository's
     // `local_path` from the workflow's `repository_id` and thread it in.
-    async fn create_worktree(&self, repo_path: &Path, branch: &str, base: &str) -> Result<PathBuf>;
+    /// Create a git worktree for `branch` off `base`, fetching `base` from the
+    /// configured remote first.
+    ///
+    /// `gh_token` carries a per-user token (e.g. a personal access token
+    /// resolved via `GitAuthResolver`) used to authenticate the base-branch
+    /// fetch through an inline credential helper. When `None`, the implementor
+    /// falls back to its ambient GitHub App token environment (which is empty
+    /// for PAT-only deployments).
+    async fn create_worktree(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base: &str,
+        gh_token: Option<&str>,
+    ) -> Result<PathBuf>;
     async fn remove_worktree(&self, repo_path: &Path, worktree_path: &Path) -> Result<()>;
     /// Best-effort **`git branch -D`** in the main repo after worktree removal (no-op if `branch` is empty or already gone).
     async fn delete_local_branch(&self, repo_path: &Path, branch: &str) -> Result<()>;
-    /// Set `git config user.name` / `user.email` in `cwd` from `gh api user` (GitHub no-reply email).
-    async fn configure_git_author_from_github(&self, cwd: &Path) -> Result<()>;
+    /// Configure the git author identity (and, for the GitHub App path, `gh`
+    /// credential auth) in `cwd`.
+    ///
+    /// When `identity` is `Some((name, email))` and no GitHub App is
+    /// configured, the author is set directly from that resolved identity
+    /// (e.g. a per-user PAT's login / no-reply email via `GitAuthResolver`),
+    /// avoiding a fragile `gh api user` shell-out in the server process. When
+    /// `identity` is `None` and no App is configured, it falls back to
+    /// `gh api user`. The GitHub App path ignores `identity` and uses the bot
+    /// identity unchanged.
+    async fn configure_git_author_from_github(
+        &self,
+        cwd: &Path,
+        identity: Option<(&str, &str)>,
+    ) -> Result<()>;
 
     /// Return a fresh GitHub App installation token for injection as `GH_TOKEN` into worker
     /// container environments. Returns `None` when the GitHub App is not configured or when

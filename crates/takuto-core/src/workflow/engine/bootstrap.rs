@@ -39,6 +39,40 @@ use super::step_runner::{
 };
 use super::types::{Workflow, WorkflowEvent};
 
+/// Resolve a per-user GitHub token (bearer) and author identity for a workflow.
+///
+/// Returns `(token, identity)` where `token` is the bearer to inject into the
+/// base-branch fetch and `identity` is `(author_name, author_email)` to set as
+/// the git author. Both are `None` when there is no resolver, no `user_id`, or
+/// the resolver could not produce a token (e.g. App-only mode, where the fetch
+/// keeps its ambient App-token behaviour and the author identity comes from the
+/// App / `gh` path instead).
+async fn resolve_fetch_token_and_identity(
+    git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    user_id: Option<&str>,
+) -> (Option<String>, Option<(String, String)>) {
+    let (resolver, uid) = match (git_auth_resolver, user_id) {
+        (Some(r), Some(u)) => (r, u),
+        _ => return (None, None),
+    };
+    match resolver
+        .token_for(crate::github::auth_resolver::GitAction::Fetch, uid)
+        .await
+    {
+        Ok(tok) => {
+            let identity = match (tok.author_name.clone(), tok.author_email.clone()) {
+                (Some(name), Some(email)) => Some((name, email)),
+                _ => None,
+            };
+            (Some(tok.bearer.expose().to_string()), identity)
+        }
+        Err(e) => {
+            warn!(error = %e, "Could not resolve per-user GitHub token for worktree fetch; falling back to ambient auth");
+            (None, None)
+        }
+    }
+}
+
 /// Pre-create the git worktree immediately when a ticket is added to the dashboard.
 ///
 /// This is a best-effort background operation.  Failures are logged as warnings; the full
@@ -50,14 +84,27 @@ pub(super) async fn prepare_worktree_for_ticket(
     actions: &Arc<dyn ExternalActions>,
     event_tx: &broadcast::Sender<WorkflowEvent>,
     db: Option<&Database>,
+    git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
 ) {
     // The repository path is per-workflow (the registered repo the
     // caller picked when starting the workflow). Fall back to the global
     // `cfg.git.repo_path` only when no DB / `repository_id` is available.
     let (repo_path, base_branch) = resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
 
+    // Resolve the workflow owner's per-user GitHub token + identity (PAT path).
+    let owner_user_id = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).and_then(|w| w.user_id.clone())
+    };
+    let (gh_token, identity) =
+        resolve_fetch_token_and_identity(git_auth_resolver, owner_user_id.as_deref()).await;
+    let identity_refs = identity.as_ref().map(|(n, e)| (n.as_str(), e.as_str()));
+
     // Configure git credentials before fetching.
-    if let Err(e) = actions.configure_git_author_from_github(&repo_path).await {
+    if let Err(e) = actions
+        .configure_git_author_from_github(&repo_path, identity_refs)
+        .await
+    {
         warn!(
             ticket = %ticket_key,
             error = %e,
@@ -81,13 +128,13 @@ pub(super) async fn prepare_worktree_for_ticket(
     let _guard = worktree_lock.lock().await;
 
     match actions
-        .create_worktree(&repo_path, &branch_name, &base_branch)
+        .create_worktree(&repo_path, &branch_name, &base_branch, gh_token.as_deref())
         .await
     {
         Ok(worktree_path) => {
             // Configure git identity on the new worktree.
             if let Err(e) = actions
-                .configure_git_author_from_github(&worktree_path)
+                .configure_git_author_from_github(&worktree_path, identity_refs)
                 .await
             {
                 warn!(
@@ -189,6 +236,19 @@ pub(super) async fn bootstrap_new_workflow(
         let wf = workflows.read().await;
         wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
     };
+
+    // Resolve the workflow owner's per-user GitHub token + author identity once
+    // (PAT path). The token authenticates the base-branch fetch; the identity
+    // sets the git author without a fragile `gh api user` shell-out. Both are
+    // `None` for App-only / no-resolver paths, which keep the prior behaviour.
+    let owner_user_id_for_auth = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key).and_then(|w| w.user_id.clone())
+    };
+    let (gh_token, identity) =
+        resolve_fetch_token_and_identity(git_auth_resolver, owner_user_id_for_auth.as_deref())
+            .await;
+    let identity_refs = identity.as_ref().map(|(n, e)| (n.as_str(), e.as_str()));
 
     // Repo path comes from the workflow's `repository_id` lookup, not
     // from a global `cfg.git.repo_path`. `project_keys` stays in config —
@@ -398,9 +458,12 @@ pub(super) async fn bootstrap_new_workflow(
         // Full worktree creation path.
         let mut step_log = StepLog::new("Create Worktree".to_string());
 
-        // Configure the git credential helper (gh auth setup-git) on the repo root BEFORE
-        // fetching, so `git fetch` can authenticate via the GitHub App token.
-        if let Err(e) = actions.configure_git_author_from_github(&repo_path).await {
+        // Configure the git credential helper / author identity on the repo root
+        // BEFORE fetching, so `git fetch` can authenticate.
+        if let Err(e) = actions
+            .configure_git_author_from_github(&repo_path, identity_refs)
+            .await
+        {
             warn!(
                 ticket = %ticket_key,
                 error = %e,
@@ -412,7 +475,7 @@ pub(super) async fn bootstrap_new_workflow(
             git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type);
 
         let worktree_path = actions
-            .create_worktree(&repo_path, &branch_name, &base_branch)
+            .create_worktree(&repo_path, &branch_name, &base_branch, gh_token.as_deref())
             .await?;
 
         let branch_persist = {
@@ -450,9 +513,9 @@ pub(super) async fn bootstrap_new_workflow(
         (worktree_path, branch_name)
     };
 
-    // Align git author with the authenticated GitHub CLI user.
+    // Align git author with the resolved identity (PAT) or the GitHub App / `gh` user.
     match actions
-        .configure_git_author_from_github(&worktree_path)
+        .configure_git_author_from_github(&worktree_path, identity_refs)
         .await
     {
         Ok(()) => {
@@ -726,4 +789,77 @@ pub(super) async fn bootstrap_new_workflow(
     }
 
     Ok((worktree_path, ticket_detail))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{MasterKey, seal};
+    use crate::db::{Database, DbValue, github_credentials};
+    use crate::github::auth_resolver::GitAuthResolver;
+
+    fn in_mem_db() -> Database {
+        Database::open_in_memory()
+            .expect("in-mem DB")
+            .with_test_master_key(MasterKey::from_bytes([0x5A; 32]))
+    }
+
+    async fn seed_user(db: &Database, user_id: &str) {
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+                vec![
+                    DbValue::Text(user_id.to_string()),
+                    DbValue::Text(user_id.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn seed_pat(db: &Database, user_id: &str, login: &str) {
+        let mk = db.master_key().expect("test mk").key.clone();
+        let sealed = seal(&mk, b"ghp_bootstrap_pat").unwrap();
+        let adapter = db.adapter();
+        let mut tx = adapter.begin().await.unwrap();
+        github_credentials::upsert(&mut tx, user_id, &sealed, login, "[\"repo\"]", true)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_fetch_token_returns_pat_and_identity_for_pat_user() {
+        let db = in_mem_db();
+        seed_user(&db, "u-alice").await;
+        seed_pat(&db, "u-alice", "alice").await;
+        let resolver = Arc::new(GitAuthResolver::new(db, None));
+
+        let (token, identity) =
+            resolve_fetch_token_and_identity(Some(&resolver), Some("u-alice")).await;
+        assert_eq!(token.as_deref(), Some("ghp_bootstrap_pat"));
+        assert_eq!(
+            identity,
+            Some((
+                "alice".to_string(),
+                "alice@users.noreply.github.com".to_string()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_fetch_token_returns_none_without_resolver() {
+        let (token, identity) = resolve_fetch_token_and_identity(None, Some("u-alice")).await;
+        assert!(token.is_none());
+        assert!(identity.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_fetch_token_returns_none_without_user_id() {
+        let db = in_mem_db();
+        let resolver = Arc::new(GitAuthResolver::new(db, None));
+        let (token, identity) = resolve_fetch_token_and_identity(Some(&resolver), None).await;
+        assert!(token.is_none());
+        assert!(identity.is_none());
+    }
 }
