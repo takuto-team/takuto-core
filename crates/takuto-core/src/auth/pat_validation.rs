@@ -8,12 +8,13 @@
 //!
 //! Three steps:
 //!
-//! - `gh api -i user` with `Authorization: token <pat>` — captures `login`
-//!   plus scopes from the `X-OAuth-Scopes` response header. 401/403 yields
-//!   the typed `InvalidPat` error.
-//! - Scope check: classic `repo` OR fine-grained
-//!   `contents:write + pull_requests:write + issues:read`.
-//! - SSO check: for each org provided by the caller, `gh api orgs/<org>` —
+//! - `GET /user` with `Authorization: token <pat>` — captures `login` plus any
+//!   scopes from the `X-OAuth-Scopes` response header. 401/403 yields the typed
+//!   `InvalidPat` error.
+//! - Scope check: classic PATs (which advertise `X-OAuth-Scopes`) must carry
+//!   `repo`. Fine-grained PATs do not expose their permissions via any response
+//!   header, so they are accepted on liveness alone.
+//! - SSO check: for each org provided by the caller, `GET /orgs/<org>` —
 //!   a 403 with an `X-GitHub-SSO: required; url=…` header is the documented
 //!   SSO-block signature.
 
@@ -52,10 +53,10 @@ impl PatValidationError {
     }
 }
 
-/// Classic-PAT required scope; sufficient on its own.
+/// Classic-PAT required scope; sufficient on its own. Fine-grained PATs are
+/// validated by liveness only — their permissions are not introspectable via
+/// any response header.
 const CLASSIC_REQUIRED: &str = "repo";
-/// Fine-grained PAT required scope set; all three must be present.
-const FINE_GRAINED_REQUIRED: &[&str] = &["contents:write", "pull_requests:write", "issues:read"];
 
 /// Run the full PAT validation flow against the supplied `GhClient`.
 ///
@@ -97,13 +98,22 @@ pub async fn validate_pat(
         return Err(PatValidationError::InvalidPat);
     }
 
-    // Scopes. Classic PATs use `X-OAuth-Scopes`; fine-grained PATs use
-    // `X-Accepted-OAuth-Scopes` to advertise *available* scopes, but the
-    // header set that proves possession of write access is the actual
-    // `X-OAuth-Scopes` so we read that. Empty header → no scopes asserted.
-    let scopes_hdr = resp.header("X-OAuth-Scopes").unwrap_or("").to_string();
-    let scopes = parse_scopes_header(&scopes_hdr);
-    check_scopes(&scopes)?;
+    // Scope check. Classic PATs advertise their scopes in `X-OAuth-Scopes`;
+    // fine-grained PATs do NOT expose their permissions via any response
+    // header. So we only enforce a scope when that header is present and
+    // non-empty (a classic token) — require `repo`. When it is absent or empty
+    // (a fine-grained PAT, or a scope-less classic token) we cannot introspect
+    // permissions, and a 200 from `/user` already proved the token is live, so
+    // we accept it; an under-permissioned token surfaces a clear error at the
+    // first push/PR rather than a confusing rejection here.
+    let scopes = match resp.header("X-OAuth-Scopes") {
+        Some(hdr) if !hdr.trim().is_empty() => {
+            let scopes = parse_scopes_header(hdr);
+            require_classic_repo_scope(&scopes)?;
+            scopes
+        }
+        _ => Vec::new(),
+    };
 
     // SSO check per org. Stop at the first sso_required hit — the UI shows
     // one authorise button at a time anyway.
@@ -131,20 +141,17 @@ fn parse_scopes_header(header: &str) -> Vec<String> {
         .collect()
 }
 
-fn check_scopes(scopes: &[String]) -> Result<(), PatValidationError> {
-    let has_classic = scopes.iter().any(|s| s == CLASSIC_REQUIRED);
-    if has_classic {
-        return Ok(());
-    }
-    let missing: Vec<String> = FINE_GRAINED_REQUIRED
-        .iter()
-        .filter(|req| !scopes.iter().any(|s| s == **req))
-        .map(|s| s.to_string())
-        .collect();
-    if missing.is_empty() {
+/// Classic PATs must carry the `repo` scope to push branches and open PRs.
+/// (Fine-grained PATs are accepted by the caller without this check — GitHub
+/// does not expose fine-grained permissions in any response header, so they
+/// cannot be introspected at validation time.)
+fn require_classic_repo_scope(scopes: &[String]) -> Result<(), PatValidationError> {
+    if scopes.iter().any(|s| s == CLASSIC_REQUIRED) {
         Ok(())
     } else {
-        Err(PatValidationError::InsufficientScopes { missing })
+        Err(PatValidationError::InsufficientScopes {
+            missing: vec![CLASSIC_REQUIRED.to_string()],
+        })
     }
 }
 
@@ -258,10 +265,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_fine_grained_with_full_scope_set_succeeds() {
-        let gh = MockGh::user_ok("alice", "contents:write, pull_requests:write, issues:read");
+    async fn validate_fine_grained_pat_without_scope_header_succeeds() {
+        // Fine-grained PATs do not return an `X-OAuth-Scopes` header at all.
+        // A live token (200 from /user) must still be accepted — its
+        // permissions cannot be introspected and are enforced at use time.
+        let gh = MockGh::user(GhResponse {
+            status: 200,
+            headers: vec![("Content-Type".into(), "application/json".into())],
+            body: "{\"login\":\"alice\"}".into(),
+        });
         let v = validate_pat(&gh, "github_pat_test", &[]).await.unwrap();
         assert_eq!(v.login, "alice");
+        assert!(v.scopes.is_empty());
     }
 
     #[tokio::test]
@@ -295,28 +310,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_rejects_missing_repo_scope() {
+    async fn validate_rejects_classic_pat_missing_repo_scope() {
+        // A classic token advertises scopes via X-OAuth-Scopes; without `repo`
+        // it cannot push/PR, so it is rejected with `repo` as the missing scope.
         let gh = MockGh::user_ok("alice", "read:org");
         let err = validate_pat(&gh, "ghp", &[]).await.unwrap_err();
         match err {
             PatValidationError::InsufficientScopes { missing } => {
-                assert!(missing.contains(&"contents:write".to_string()));
+                assert_eq!(missing, vec!["repo".to_string()]);
             }
             other => panic!("expected InsufficientScopes; got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn validate_rejects_partial_fine_grained_scopes() {
-        let gh = MockGh::user_ok("alice", "contents:write");
-        let err = validate_pat(&gh, "github_pat", &[]).await.unwrap_err();
-        match err {
-            PatValidationError::InsufficientScopes { missing } => {
-                assert!(missing.contains(&"pull_requests:write".to_string()));
-                assert!(missing.contains(&"issues:read".to_string()));
-            }
-            other => panic!("expected InsufficientScopes; got {other:?}"),
-        }
+    async fn validate_accepts_empty_scope_header_as_uncheckable() {
+        // A present-but-empty X-OAuth-Scopes (scope-less classic token, or some
+        // responses that omit the value) is not introspectable — accept on
+        // liveness rather than reject. Mirrors the fine-grained (absent) path.
+        let gh = MockGh::user_ok("alice", "");
+        let v = validate_pat(&gh, "ghp", &[]).await.unwrap();
+        assert_eq!(v.login, "alice");
+        assert!(v.scopes.is_empty());
     }
 
     #[tokio::test]
