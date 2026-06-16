@@ -120,10 +120,10 @@ export function FlowEditor({
   const nameError = useMemo(() => {
     if (trimmedName === "") return null;
     if (otherNames.includes(trimmedName)) {
-      return `A flow named "${trimmedName}" already exists.`;
+      return `A workflow named "${trimmedName}" already exists.`;
     }
     if (slug === "") {
-      return "A flow name must contain at least one letter or number.";
+      return "A workflow name must contain at least one letter or number.";
     }
     const collision = otherFlows.find((f) => slugify(f.name) === slug);
     if (collision) {
@@ -279,7 +279,7 @@ export function FlowEditor({
             disabled={!canSave}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            {saving ? "Saving…" : editIndex === null ? "Create flow" : "Save flow"}
+            {saving ? "Saving…" : editIndex === null ? "Create workflow" : "Save workflow"}
           </button>
         </div>
       </div>

@@ -181,7 +181,9 @@ export function FlowsTab() {
   };
 
   const atCap = flows.length >= MAX_FLOWS;
-  const capTooltip = atCap ? "You've reached the 20-flow limit for this workspace." : undefined;
+  const capTooltip = atCap
+    ? "You've reached the 20-workflow limit for this workspace."
+    : undefined;
 
   const addButton = (
     <button
@@ -191,7 +193,7 @@ export function FlowsTab() {
       title={capTooltip}
       className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
     >
-      + Add flow
+      + Add workflow
     </button>
   );
 
@@ -211,11 +213,11 @@ export function FlowsTab() {
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-base font-semibold text-gray-300 mb-1">
-            Flows — <span className="font-mono">{workspace || "…"}</span>
+            Workflows — <span className="font-mono">{workspace || "…"}</span>
           </h2>
           <p className="text-sm text-gray-500 max-w-2xl">
-            Click a flow on a work-item card to run its steps in order. Dependencies require an
-            upstream flow to have completed at least once on that work item.
+            Click a workflow on a work-item card to run its steps in order. Dependencies require an
+            upstream workflow to have completed at least once on that work item.
           </p>
         </div>
         <span className={`text-sm font-mono ${atCap ? "text-amber-400" : "text-gray-500"}`}>
@@ -240,7 +242,7 @@ export function FlowsTab() {
         <div className="flex justify-center py-8">
           <div className="border border-gray-800 rounded-lg bg-gray-950 p-6 max-w-md text-center space-y-4">
             <p className="text-sm text-gray-400">
-              You have no flows configured for <span className="font-mono">{workspace}</span>.
+              You have no workflows configured for <span className="font-mono">{workspace}</span>.
             </p>
             <p className="text-sm text-gray-500">
               Work-item cards in this workspace will show an empty state until you add at least one.
@@ -324,7 +326,7 @@ export function FlowsTab() {
                   <EditableName
                     value={newFlowName}
                     onChange={setNewFlowName}
-                    placeholder="Untitled flow"
+                    placeholder="Untitled workflow"
                     textClassName="text-sm font-medium"
                   />
                 </div>
@@ -354,8 +356,8 @@ export function FlowsTab() {
 
       {confirmDelete !== null && (
         <ConfirmModal
-          title="Delete flow"
-          message={`Delete flow "${flows[confirmDelete]?.name ?? ""}"? This removes it from every work-item card in this workspace.`}
+          title="Delete workflow"
+          message={`Delete workflow "${flows[confirmDelete]?.name ?? ""}"? This removes it from every work-item card in this workspace.`}
           confirmLabel="Delete"
           onConfirm={handleDelete}
           onCancel={() => setConfirmDelete(null)}
@@ -364,8 +366,8 @@ export function FlowsTab() {
 
       {confirmReseed && (
         <ConfirmModal
-          title="Re-seed flows from defaults"
-          message={`This replaces all flows for ${workspace} with the defaults shipped with Takuto. Your current flows for this workspace will be lost. Other workspaces are unaffected.`}
+          title="Re-seed workflows from defaults"
+          message={`This replaces all workflows for ${workspace} with the defaults shipped with Takuto. Your current workflows for this workspace will be lost. Other workspaces are unaffected.`}
           confirmLabel="Re-seed"
           onConfirm={handleReseed}
           onCancel={() => setConfirmReseed(false)}

@@ -125,7 +125,7 @@ export function FlowCard({
               setNameDraft(flow.name);
             }
           }}
-          placeholder="Untitled flow"
+          placeholder="Untitled workflow"
           textClassName="text-sm font-medium"
         />
 

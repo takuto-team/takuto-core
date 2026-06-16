@@ -18,7 +18,7 @@ const CONFIG_MENU_TABS: { label: string; slug: string; adminOnly?: boolean }[] =
   { label: "Users", slug: "users", adminOnly: true },
   { label: "My Repositories", slug: "repositories" },
   { label: "Worktree Settings", slug: "worktree" },
-  { label: "Flows", slug: "flows" },
+  { label: "Workflows", slug: "flows" },
 ];
 
 interface Props {

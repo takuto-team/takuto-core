@@ -59,6 +59,13 @@ describe("FlowsTab", () => {
     expect(screen.getByText("2 / 20")).toBeTruthy();
   });
 
+  it("uses 'Workflows' wording (not 'Flows') in the heading and add button", async () => {
+    render(<FlowsTab />);
+    await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
+    expect(screen.getByRole("heading", { name: /^Workflows —/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /\+ Add workflow/i })).toBeTruthy();
+  });
+
   it("a drag-reorder PUTs the list in the new order", async () => {
     render(<FlowsTab />);
     await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());

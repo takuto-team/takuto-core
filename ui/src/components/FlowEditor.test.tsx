@@ -38,10 +38,10 @@ describe("FlowEditor — name validation surfaced upward", () => {
       />,
     );
     expect(onNameError).toHaveBeenLastCalledWith(
-      expect.stringMatching(/a flow named "Build" already exists/i),
+      expect.stringMatching(/a workflow named "Build" already exists/i),
     );
     expect(
-      (screen.getByRole("button", { name: /create flow/i }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: /create workflow/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
@@ -61,7 +61,7 @@ describe("FlowEditor — name validation surfaced upward", () => {
       expect.stringMatching(/both become "implement-ticket"/i),
     );
     expect(
-      (screen.getByRole("button", { name: /create flow/i }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: /create workflow/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 });
@@ -82,7 +82,7 @@ describe("FlowEditor — dependency cycle", () => {
 
     expect(screen.getByText(/create a cycle/i)).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: /save flow/i }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: /save workflow/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 });
@@ -152,7 +152,7 @@ describe("FlowEditor — save", () => {
       target: { value: "Run the deploy" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /create flow/i }));
+    fireEvent.click(screen.getByRole("button", { name: /create workflow/i }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     const submitted = onSubmit.mock.calls[0][0] as UserFlow[];
