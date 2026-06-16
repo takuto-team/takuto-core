@@ -8,12 +8,13 @@
 //! flow) and the still-mounted `GET /api/github/repos` listing endpoint.
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use ts_rs::TS;
 
+use crate::auth::AuthenticatedUser;
 use crate::state::{AuthState, EngineState};
 use takuto_core::workflow::snapshot::WORKSPACES_DIR;
 
@@ -52,20 +53,40 @@ pub struct RepoListQuery {
 /// `GET /api/github/repos` — list GitHub repos accessible by the authenticated user.
 pub async fn list_github_repos(
     State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Query(query): Query<RepoListQuery>,
 ) -> Result<Json<Vec<GitHubRepoRow>>, (StatusCode, String)> {
+    use takuto_core::github::auth_resolver::GitAction;
     let workspaces = std::path::Path::new(WORKSPACES_DIR);
 
-    let gh_token = engine
+    // Prefer the GitHub App installation token; for PAT-only deployments fall
+    // back to the caller's per-user PAT (resolved via GitAuthResolver). Without
+    // this fallback the `gh` call below runs unauthenticated and fails with
+    // "run gh auth login / set GH_TOKEN" on PAT-only installs.
+    let app_token = engine
         .engine
         .actions()
         .get_gh_installation_token(workspaces)
         .await;
+    let (gh_token, is_app): (Option<String>, bool) = match app_token {
+        Some(t) => (Some(t), true),
+        None => match auth_state.git_auth_resolver.as_ref() {
+            Some(resolver) => match resolver.token_for(GitAction::Clone, &auth.user_id).await {
+                Ok(tok) => (Some(tok.bearer.expose().to_string()), false),
+                Err(_) => (None, false),
+            },
+            None => (None, false),
+        },
+    };
 
-    let env: Vec<(&str, &str)> = gh_token
-        .as_deref()
-        .map(|t| vec![("GH_TOKEN", t)])
-        .unwrap_or_default();
+    let Some(token) = gh_token else {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "GitHub authentication unavailable — add a personal access token on the GitHub settings tab, or configure a GitHub App.".to_string(),
+        ));
+    };
+    let env: Vec<(&str, &str)> = vec![("GH_TOKEN", token.as_str())];
 
     // If a search query is provided, use the search endpoint.
     // For the empty-query case: GitHub App installation tokens cannot call
@@ -85,7 +106,7 @@ pub async fn list_github_repos(
             "--field".to_string(),
             "per_page=50".to_string(),
         ]
-    } else if gh_token.is_some() {
+    } else if is_app {
         // Installation token: list repos the app installation has access to.
         vec![
             "api".to_string(),
