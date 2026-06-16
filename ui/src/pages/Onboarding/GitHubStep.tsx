@@ -1,7 +1,9 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import type { Ref } from "react";
 import { GitHubCredentialsSection } from "../../components/credentials/GitHubCredentialsSection";
+import type { GitHubCredentialPanelHandle } from "../../components/credentials/GitHubCredentialPanel";
 
 const GITHUB_APP_DOCS_URL = "https://takuto.io/docs/github-app/";
 
@@ -16,6 +18,9 @@ interface Props {
   /** When `false`, the git inputs are read-only (the `[git]` section is
    *  admin-gated server-side). Defaults to `true`. */
   canEditGit?: boolean;
+  /** Forwarded to the per-user PAT panel so the wizard persists a typed PAT
+   *  when the user clicks Continue. */
+  patPanelRef?: Ref<GitHubCredentialPanelHandle>;
 }
 
 const INPUT_BASE = "w-full bg-gray-950 border rounded-lg px-3 py-2 text-sm";
@@ -29,6 +34,7 @@ export function GitHubStep({
   baseBranchInvalid,
   remoteInvalid,
   canEditGit = true,
+  patPanelRef,
 }: Props) {
   const inputText = canEditGit ? "text-gray-200" : "text-gray-500 cursor-not-allowed";
   return (
@@ -127,7 +133,7 @@ export function GitHubStep({
           Add a PAT so commits, PRs, and review comments on your work items are
           attributed to you. Skip it to run as the shared GitHub App.
         </p>
-        <GitHubCredentialsSection />
+        <GitHubCredentialsSection panelRef={patPanelRef} />
       </div>
     </div>
   );

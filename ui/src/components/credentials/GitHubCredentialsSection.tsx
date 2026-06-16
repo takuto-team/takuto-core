@@ -14,7 +14,7 @@
  * `GitHubCredentialsSection.test.tsx`.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type Ref } from "react";
 import {
   apiJson,
   fetchUserCredentials,
@@ -28,9 +28,19 @@ import type {
   GithubAuthMode,
   UserCredentialsStatus,
 } from "../../api/types";
-import { GitHubCredentialPanel } from "./GitHubCredentialPanel";
+import {
+  GitHubCredentialPanel,
+  type GitHubCredentialPanelHandle,
+} from "./GitHubCredentialPanel";
 
-export function GitHubCredentialsSection() {
+interface Props {
+  /** Optional imperative handle, forwarded to the inner panel so the
+   *  onboarding wizard can persist a typed PAT on "Continue". The Config-page
+   *  usage omits it and is unaffected. */
+  panelRef?: Ref<GitHubCredentialPanelHandle>;
+}
+
+export function GitHubCredentialsSection({ panelRef }: Props = {}) {
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -89,6 +99,7 @@ export function GitHubCredentialsSection() {
 
       {!initialLoading && (
         <GitHubCredentialPanel
+          ref={panelRef}
           github={creds?.github ?? null}
           authMode={auth?.github_mode as GithubAuthMode | undefined}
           onSavePat={async (pat, attribute) => {
@@ -102,8 +113,10 @@ export function GitHubCredentialsSection() {
                 `GitHub token saved — you're @${next.github?.login ?? "?"}.`,
                 "success",
               );
+              return true;
             } catch (e: unknown) {
               handleSurfaceError(e, "Could not save your GitHub token.");
+              return false;
             }
           }}
           onToggleAttributeCommits={async (attribute) => {

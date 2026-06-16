@@ -8,7 +8,13 @@
  * when a component exceeds ~150 lines").
  */
 
-import { useMemo, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useMemo,
+  useState,
+} from "react";
 import { ConnectedStatusPill } from "../ConnectedStatusPill";
 import { CredentialPasteField } from "../CredentialPasteField";
 import { parseClaudeSessionBlob } from "../../utils/claudeSession";
@@ -22,16 +28,36 @@ import { ClaudeAuthTabButton, ClaudeSessionField } from "./ClaudeSessionField";
 interface AiCredentialPanelProps {
   activeProvider: string;
   credentials: UserCredentialsStatus | null;
-  onSave: (body: SetProviderCredentialRequest) => Promise<void>;
+  /** Persist the entered credential. Returns `true` on success, `false` on
+   *  failure (the caller renders the error toast). */
+  onSave: (body: SetProviderCredentialRequest) => Promise<boolean>;
+}
+
+/**
+ * Imperative handle the onboarding wizard drives on "Continue" so the
+ * currently-typed credential is persisted as part of advancing the step,
+ * without the user having to click the panel's own Save button.
+ */
+export interface AiCredentialPanelHandle {
+  /**
+   * Submit the entered credential if the active field is non-blank. Reuses
+   * the same submit logic (incl. Claude api_key/cli_state tab + session
+   * validation) as the panel's own Save button. A blank field is a no-op
+   * that resolves `true` (the user is skipping / using a deployment default).
+   * Resolves `false` only when a non-blank submit fails validation or the save.
+   */
+  saveIfDirty: () => Promise<boolean>;
 }
 
 type ClaudeAuthMethod = "api_key" | "cli_state";
 
-export function AiCredentialPanel({
-  activeProvider,
-  credentials,
-  onSave,
-}: AiCredentialPanelProps) {
+export const AiCredentialPanel = forwardRef<
+  AiCredentialPanelHandle,
+  AiCredentialPanelProps
+>(function AiCredentialPanel(
+  { activeProvider, credentials, onSave }: AiCredentialPanelProps,
+  ref,
+) {
   const [apiKey, setApiKey] = useState("");
   const [sessionJson, setSessionJson] = useState("");
   const [saving, setSaving] = useState(false);
@@ -77,36 +103,53 @@ export function AiCredentialPanel({
     return undefined;
   }, [apiKeyActive, cliStateActive]);
 
-  const submitApiKey = async () => {
+  const submitApiKey = useCallback(async (): Promise<boolean> => {
     setSaving(true);
     try {
-      await onSave({ api_key: apiKey });
-      setApiKey("");
+      const ok = await onSave({ api_key: apiKey });
+      if (ok) setApiKey("");
+      return ok;
     } finally {
       setSaving(false);
     }
-  };
+  }, [apiKey, onSave]);
 
-  const submitSession = async () => {
+  const submitSession = useCallback(async (): Promise<boolean> => {
     // #40 T-CLAUDE-UI-006: client-side validation BEFORE the POST. Surface
     // structured errors inline so the user can correct without a round-trip.
     const result = parseClaudeSessionBlob(sessionJson);
     if (!result.ok) {
       setSessionError(result.message);
-      return;
+      return false;
     }
     setSessionError(null);
     setSaving(true);
     try {
-      await onSave({
+      const ok = await onSave({
         kind: "cli_state",
         claude_session_json: sessionJson,
       });
-      setSessionJson("");
+      if (ok) setSessionJson("");
+      return ok;
     } finally {
       setSaving(false);
     }
-  };
+  }, [sessionJson, onSave]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      saveIfDirty: async () => {
+        if (isClaude && claudeTab === "cli_state") {
+          if (sessionJson.trim() === "") return true;
+          return submitSession();
+        }
+        if (apiKey.trim() === "") return true;
+        return submitApiKey();
+      },
+    }),
+    [isClaude, claudeTab, apiKey, sessionJson, submitApiKey, submitSession],
+  );
 
   return (
     <section
@@ -204,4 +247,4 @@ export function AiCredentialPanel({
       )}
     </section>
   );
-}
+});

@@ -193,8 +193,10 @@ export function MyCredentialsSection({ refreshKey = 0 }: Props = {}) {
                     ? "session uploaded"
                     : "connected";
                 showToast(`${providerLabel} ${what}.`, "success");
+                return true;
               } catch (e: unknown) {
                 handleSurfaceError(e, "Could not save your credential.");
+                return false;
               }
             }}
           />

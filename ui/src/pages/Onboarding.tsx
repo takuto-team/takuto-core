@@ -30,8 +30,11 @@
  * to the dashboard.
  */
 
+import { useRef } from "react";
 import { Link } from "react-router-dom";
 import { useOnboardingFlow } from "../hooks/useOnboardingFlow";
+import type { AiCredentialPanelHandle } from "../components/credentials/AiCredentialPanel";
+import type { GitHubCredentialPanelHandle } from "../components/credentials/GitHubCredentialPanel";
 import { useProviderForm } from "../hooks/useProviderForm";
 import { useTicketingForm } from "../hooks/useTicketingForm";
 import { useGitForm } from "../hooks/useGitForm";
@@ -85,11 +88,26 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
 
   const timeout = useStepTimeoutForm({ initialSecs: stepTimeoutSecs, ready: !loading });
 
+  // Imperative handles into the inline credential panels so "Continue" also
+  // persists the per-user AI key (step 2) and GitHub PAT (step 3) the user
+  // typed — the provider/git PUTs alone do not carry those credentials.
+  const aiKeyRef = useRef<AiCredentialPanelHandle>(null);
+  const githubPatRef = useRef<GitHubCredentialPanelHandle>(null);
+
   const { step, completing, goNext, goSkip, goBack } = useOnboardingFlow({
     onBeforeNext: async (s) => {
       if (s === 1) return ticketing.save();
-      if (s === 2) return save();
-      if (s === 3) return git.save();
+      if (s === 2) {
+        const provider = await save();
+        if (!provider) return false;
+        // Blank key → saveIfDirty resolves true (skip / deployment default).
+        return aiKeyRef.current ? aiKeyRef.current.saveIfDirty() : true;
+      }
+      if (s === 3) {
+        const gitOk = await git.save();
+        if (!gitOk) return false;
+        return githubPatRef.current ? githubPatRef.current.saveIfDirty() : true;
+      }
       if (s === 4) return timeout.save();
       return true;
     },
@@ -177,7 +195,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                     extraArgsText={extraArgsText}
                     onChangeExtraArgs={setExtraArgsText}
                   />
-                  <OnboardingAiKey provider={provider} />
+                  <OnboardingAiKey ref={aiKeyRef} provider={provider} />
                 </div>
               )}
               {step === 3 && (
@@ -190,6 +208,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                   baseBranchInvalid={git.baseBranchInvalid}
                   remoteInvalid={git.remoteInvalid}
                   canEditGit={!!isAdmin}
+                  patPanelRef={githubPatRef}
                 />
               )}
               {step === 4 && (

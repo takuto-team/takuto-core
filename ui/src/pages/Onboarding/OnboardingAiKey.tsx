@@ -13,14 +13,17 @@
  * a pure rendering surface.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { forwardRef, useCallback, useEffect, useState } from "react";
 import {
   fetchUserCredentials,
   setProviderCredential,
   UserCredentialsError,
 } from "../../api/client";
 import type { AgentProviderId, UserCredentialsStatus } from "../../api/types";
-import { AiCredentialPanel } from "../../components/credentials/AiCredentialPanel";
+import {
+  AiCredentialPanel,
+  type AiCredentialPanelHandle,
+} from "../../components/credentials/AiCredentialPanel";
 import { PROVIDER_LABEL } from "../../components/credentials/helpers";
 import { useToast } from "../../hooks/useToast";
 
@@ -29,7 +32,8 @@ interface Props {
   provider: AgentProviderId;
 }
 
-export function OnboardingAiKey({ provider }: Props) {
+export const OnboardingAiKey = forwardRef<AiCredentialPanelHandle, Props>(
+  function OnboardingAiKey({ provider }: Props, ref) {
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +61,7 @@ export function OnboardingAiKey({ provider }: Props) {
         const label = PROVIDER_LABEL[provider] ?? provider;
         const what = body.kind === "cli_state" ? "session uploaded" : "connected";
         showToast(`${label} ${what}.`, "success");
+        return true;
       } catch (e: unknown) {
         const msg =
           e instanceof UserCredentialsError
@@ -65,6 +70,7 @@ export function OnboardingAiKey({ provider }: Props) {
               ? e.message
               : "Could not save your credential.";
         showToast(msg, "error");
+        return false;
       }
     },
     [provider, refresh, showToast],
@@ -76,9 +82,11 @@ export function OnboardingAiKey({ provider }: Props) {
 
   return (
     <AiCredentialPanel
+      ref={ref}
       activeProvider={provider}
       credentials={creds}
       onSave={handleSave}
     />
   );
-}
+  },
+);

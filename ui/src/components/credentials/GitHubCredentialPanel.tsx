@@ -6,7 +6,13 @@
  * `MyCredentialsSection.tsx` (CODING_STANDARDS §3 one component per file).
  */
 
-import { useEffect, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useState,
+} from "react";
 import { ConnectedStatusPill } from "../ConnectedStatusPill";
 import { CredentialPasteField } from "../CredentialPasteField";
 import type { GithubAuthMode, UserCredentialsStatus } from "../../api/types";
@@ -15,16 +21,34 @@ import { describeMode } from "./helpers";
 interface GitHubCredentialPanelProps {
   github: UserCredentialsStatus["github"] | null;
   authMode: GithubAuthMode | undefined;
-  onSavePat: (pat: string, attributeCommits: boolean) => Promise<void>;
+  /** Persist the entered PAT. Returns `true` on success, `false` on failure
+   *  (the caller renders the error toast). */
+  onSavePat: (pat: string, attributeCommits: boolean) => Promise<boolean>;
   onToggleAttributeCommits: (next: boolean) => Promise<void>;
 }
 
-export function GitHubCredentialPanel({
-  github,
-  authMode,
-  onSavePat,
-  onToggleAttributeCommits,
-}: GitHubCredentialPanelProps) {
+/**
+ * Imperative handle the onboarding wizard drives on "Continue" so the
+ * currently-typed PAT is persisted as part of advancing the step, without
+ * the user having to click the panel's own Validate & save button.
+ */
+export interface GitHubCredentialPanelHandle {
+  /**
+   * Submit the entered PAT (with the attribute-commits toggle) if non-blank.
+   * A blank field is a no-op that resolves `true` (the user is skipping /
+   * running as the shared GitHub App). Resolves `false` only when a non-blank
+   * save fails.
+   */
+  saveIfDirty: () => Promise<boolean>;
+}
+
+export const GitHubCredentialPanel = forwardRef<
+  GitHubCredentialPanelHandle,
+  GitHubCredentialPanelProps
+>(function GitHubCredentialPanel(
+  { github, authMode, onSavePat, onToggleAttributeCommits }: GitHubCredentialPanelProps,
+  ref,
+) {
   const [pat, setPat] = useState("");
   const [attribute, setAttribute] = useState(github?.attribute_commits ?? true);
   const [saving, setSaving] = useState(false);
@@ -40,15 +64,27 @@ export function GitHubCredentialPanel({
   const hasPat = github != null;
   const effectiveMode = authMode ?? "missing";
 
-  const submit = async () => {
+  const submit = useCallback(async (): Promise<boolean> => {
     setSaving(true);
     try {
-      await onSavePat(pat, attribute);
-      setPat("");
+      const ok = await onSavePat(pat, attribute);
+      if (ok) setPat("");
+      return ok;
     } finally {
       setSaving(false);
     }
-  };
+  }, [pat, attribute, onSavePat]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      saveIfDirty: async () => {
+        if (pat.trim() === "") return true;
+        return submit();
+      },
+    }),
+    [pat, submit],
+  );
 
   // Issue B from #31: no "Remove PAT" button. PAT revocation happens on
   // github.com; to wipe the local row the user saves a different token.
@@ -164,4 +200,4 @@ export function GitHubCredentialPanel({
       />
     </section>
   );
-}
+});
