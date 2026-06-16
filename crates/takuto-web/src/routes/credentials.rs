@@ -650,6 +650,23 @@ pub async fn post_github_pat(
         Ok(v) => v,
         Err(e) => {
             let code = e.code();
+            // Surface the detailed cause server-side: the wire response and the
+            // audit row only carry the stable `code`, so a transport failure
+            // (`gh` spawn error, non-2xx, unparseable response) is otherwise
+            // invisible to operators. The detail never contains the PAT — it is
+            // built from status/body/spawn diagnostics, not the request header.
+            match &e {
+                PatValidationError::Transport(detail) => {
+                    tracing::warn!(
+                        error_code = code,
+                        detail = %detail,
+                        "GitHub PAT validation failed at the transport layer"
+                    );
+                }
+                _ => {
+                    tracing::info!(error_code = code, "GitHub PAT validation rejected");
+                }
+            }
             // Audit-log the validation failure (best-effort — the bad
             // PAT never reaches the seal layer).
             let _ = credential_audit::log(

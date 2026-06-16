@@ -618,7 +618,7 @@ pub fn default_flows_from_dir(dir: &Path) -> Vec<UserFlow> {
 
     // Second pass: rewrite each dependency (a source filename) to the target
     // flow's name, dropping any that no longer resolve to a kept flow.
-    flows
+    let rewritten: Vec<UserFlow> = flows
         .iter()
         .map(|(filename, flow)| {
             let depends_on = flow
@@ -642,7 +642,39 @@ pub fn default_flows_from_dir(dir: &Path) -> Vec<UserFlow> {
                 steps: flow.steps.clone(),
             }
         })
-        .collect()
+        .collect();
+
+    order_flows_dependencies_first(rewritten)
+}
+
+/// Stable topological ordering: every flow appears after all flows it depends
+/// on, with the incoming (alphabetical) order preserved as the tie-break so the
+/// result stays deterministic. The seeded list drives dashboard button order,
+/// so this surfaces the foundational dependency-free flow (e.g. "Implement
+/// ticket") first, ahead of the flows that build on it ("Address PR comments",
+/// "Merge base branch"). On an unresolved cycle the remaining flows are
+/// appended in their incoming order rather than dropped.
+fn order_flows_dependencies_first(flows: Vec<UserFlow>) -> Vec<UserFlow> {
+    let mut remaining = flows;
+    let mut ordered: Vec<UserFlow> = Vec::with_capacity(remaining.len());
+    let mut placed: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    while !remaining.is_empty() {
+        let next = remaining
+            .iter()
+            .position(|f| f.depends_on.iter().all(|d| placed.contains(d)));
+        match next {
+            Some(i) => {
+                let flow = remaining.remove(i);
+                placed.insert(flow.name.clone());
+                ordered.push(flow);
+            }
+            None => {
+                ordered.append(&mut remaining);
+            }
+        }
+    }
+    ordered
 }
 
 /// Resolve the set of runnable workflow definitions for a user in a workspace.
@@ -1278,6 +1310,59 @@ prompt = "merge base"
         // The source `depends_on` is a filename; it must be rewritten to the
         // target flow's name so the user-flow graph is name-based.
         assert_eq!(merge.depends_on, vec!["Implement Ticket".to_string()]);
+    }
+
+    #[test]
+    fn default_flows_orders_dependency_free_flow_first() {
+        let dir = create_temp_dir();
+        // `address_pr_comments` sorts alphabetically before `implement_ticket`,
+        // but it depends on it — so the seeded order must lead with the
+        // dependency-free "Implement ticket", not the alphabetical first file.
+        fs::write(
+            dir.path().join("address_pr_comments.toml"),
+            r#"
+name = "Address PR Comments"
+depends_on = ["implement_ticket"]
+[[steps]]
+name = "Address"
+prompt = "address"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("implement_ticket.toml"),
+            r#"
+name = "Implement Ticket"
+[[steps]]
+name = "Code"
+prompt = "do it"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("merge_base.toml"),
+            r#"
+name = "Merge Base Branch"
+depends_on = ["implement_ticket"]
+[[steps]]
+name = "Merge"
+prompt = "merge"
+"#,
+        )
+        .unwrap();
+
+        let flows = default_flows_from_dir(dir.path());
+        let names: Vec<_> = flows.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names.first(), Some(&"Implement Ticket"));
+        // The two dependents keep their relative (alphabetical) order after it.
+        assert_eq!(
+            names,
+            vec![
+                "Implement Ticket",
+                "Address PR Comments",
+                "Merge Base Branch"
+            ]
+        );
     }
 
     #[test]

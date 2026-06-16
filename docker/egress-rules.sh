@@ -10,6 +10,28 @@ set -euo pipefail
 
 echo "Applying egress allowlist rules..."
 
+# CDN-backed GitHub hosts (api.github.com, github.com, codeload, …) sit behind
+# Fastly and resolve to a large, frequently-rotating IPv4 set. Pinning a single
+# boot-time A record (see allow_host below) is therefore unreliable: `gh` and
+# `git` routinely open a connection to an address that was never whitelisted,
+# the packet is DROPped, and the call fails at the transport layer
+# (gh_transport_error on PAT save; clone/push hangs then errors).
+#
+# GitHub publishes its current ranges at https://api.github.com/meta. Fetch them
+# HERE — before the default-DROP policy below is in effect, while egress is
+# still fully open — and stash the IPv4 CIDRs for the GitHub section to allow.
+# A failure (offline, schema change, no jq) leaves the variable empty and we
+# fall back to the boot-time allow_host resolution, so this never makes egress
+# stricter than before.
+GH_META_CIDRS=$(curl -fsS --max-time 10 https://api.github.com/meta 2>/dev/null \
+    | jq -r '(.api // []) + (.git // []) + (.web // []) + (.hooks // []) | .[]' 2>/dev/null \
+    | grep -v ':' | sort -u || true)
+if [ -n "$GH_META_CIDRS" ]; then
+    echo "Fetched $(echo "$GH_META_CIDRS" | wc -l | tr -d ' ') GitHub IPv4 CIDR ranges from api.github.com/meta"
+else
+    echo "WARNING: could not fetch GitHub IP ranges from api.github.com/meta — falling back to boot-time DNS resolution for GitHub hosts" >&2
+fi
+
 # Default policy: drop all outbound
 iptables -P OUTPUT DROP
 
@@ -48,6 +70,18 @@ allow_host() {
     done
 }
 
+# Helper: allow a single IPv4 CIDR block (e.g. 140.82.112.0/20). Used for the
+# GitHub published ranges fetched above — these cover the whole rotating CDN
+# pool, not just one boot-time A record. IPv6 CIDRs are skipped (iptables here
+# is IPv4 only); the caller already filters them, this is belt-and-braces.
+allow_cidr() {
+    local cidr="$1"
+    case "$cidr" in
+        *:*) return 0 ;;
+    esac
+    [ -n "$cidr" ] && iptables -A OUTPUT -d "$cidr" -j ACCEPT
+}
+
 # ---------------------------------------------------------------------------
 # Core services (required for Takuto to function)
 # ---------------------------------------------------------------------------
@@ -63,7 +97,15 @@ if [ -n "$jira_site" ]; then
 fi
 # See: https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/
 
-# GitHub
+# GitHub — allow the published IP ranges first (covers the full rotating CDN
+# pool so gh/git connections don't land on an un-whitelisted Fastly edge), then
+# keep the boot-time DNS resolution as a fallback for when the meta fetch failed
+# and for hosts not covered by the meta ranges.
+if [ -n "$GH_META_CIDRS" ]; then
+    while IFS= read -r gh_cidr; do
+        [ -n "$gh_cidr" ] && allow_cidr "$gh_cidr"
+    done <<< "$GH_META_CIDRS"
+fi
 allow_host github.com
 allow_host api.github.com
 allow_host raw.githubusercontent.com
