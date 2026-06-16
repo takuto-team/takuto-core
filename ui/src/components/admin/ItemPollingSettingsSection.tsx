@@ -11,7 +11,13 @@
  * the per-system Jira / GitHub filters.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useState,
+} from "react";
 import { apiJson } from "../../api/client";
 import { getMyFlows, slugify } from "../../api/flows";
 import {
@@ -136,7 +142,16 @@ function jiraPatchFromDraft(draft: ItemPollingDraft): JiraConfigPatch {
   return patch;
 }
 
-export function ItemPollingSettingsSection() {
+/** Imperative handle so a parent (e.g. the onboarding wizard) can persist the
+ *  current draft on "Continue" instead of relying on the inline Save button. */
+export interface ItemPollingSettingsHandle {
+  /** Persist the current polling (+ Jira-context) draft. Resolves `false` on a
+   *  hard error (so the wizard can stay on the step). */
+  save: () => Promise<boolean>;
+}
+
+export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
+  function ItemPollingSettingsSection(_props, ref) {
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -164,47 +179,50 @@ export function ItemPollingSettingsSection() {
     refresh();
   }, [refresh]);
 
-  const handleSave = useCallback(() => {
+  // The General-limits + polling fields ride PUT /api/config/polling; the
+  // Jira-context fields ride the separate PUT /api/config/jira. Fire the
+  // polling patch first, then the Jira patch only when Jira is active, and
+  // rebuild the draft from the freshest response. Returns `false` on a hard
+  // error so callers (the wizard) can block advancing.
+  const runSave = useCallback(async (): Promise<boolean> => {
     setSaving(true);
-    // The General-limits + polling fields ride PUT /api/config/polling; the
-    // Jira-context fields ride the separate PUT /api/config/jira. Fire the
-    // polling patch first, then the Jira patch only when Jira is active, and
-    // rebuild the draft from the freshest response.
-    void (async () => {
-      try {
-        let updated = await putItemPollingConfig(pollingPatchFromDraft(draft));
-        let persistWarning =
-          updated.persisted === false ? (updated.persist_warning ?? "unknown error") : null;
-        if (ticketingSystem === "jira") {
-          updated = await putJiraConfig(jiraPatchFromDraft(draft));
-          if (updated.persisted === false) {
-            persistWarning = updated.persist_warning ?? "unknown error";
-          }
+    try {
+      let updated = await putItemPollingConfig(pollingPatchFromDraft(draft));
+      let persistWarning =
+        updated.persisted === false ? (updated.persist_warning ?? "unknown error") : null;
+      if (ticketingSystem === "jira") {
+        updated = await putJiraConfig(jiraPatchFromDraft(draft));
+        if (updated.persisted === false) {
+          persistWarning = updated.persist_warning ?? "unknown error";
         }
-        // Don't touch ticketingSystem here: these PUTs return the flattened
-        // Config without the synthesized `ticketing_system` field, so reading
-        // it would clobber the loaded value with "none" and hide the filters
-        // until refresh. It can't change as a result of this save.
-        setDraft(draftFromConfig(updated));
-        if (persistWarning) {
-          showToast(
-            `Item polling settings applied in memory but NOT persisted to disk: ${persistWarning}. The change will be lost on next restart — fix the config volume and save again.`,
-            "error",
-          );
-        } else {
-          showToast("Item polling settings saved.", "success");
-        }
-      } catch (e: unknown) {
-        if (e instanceof ItemPollingConfigError || e instanceof JiraConfigError) {
-          showToast(`${e.message} (code: ${e.code})`, "error");
-        } else {
-          showToast(e instanceof Error ? e.message : String(e), "error");
-        }
-      } finally {
-        setSaving(false);
       }
-    })();
+      // Don't touch ticketingSystem here: these PUTs return the flattened
+      // Config without the synthesized `ticketing_system` field, so reading
+      // it would clobber the loaded value with "none" and hide the filters
+      // until refresh. It can't change as a result of this save.
+      setDraft(draftFromConfig(updated));
+      if (persistWarning) {
+        showToast(
+          `Item polling settings applied in memory but NOT persisted to disk: ${persistWarning}. The change will be lost on next restart — fix the config volume and save again.`,
+          "error",
+        );
+      } else {
+        showToast("Item polling settings saved.", "success");
+      }
+      return true;
+    } catch (e: unknown) {
+      if (e instanceof ItemPollingConfigError || e instanceof JiraConfigError) {
+        showToast(`${e.message} (code: ${e.code})`, "error");
+      } else {
+        showToast(e instanceof Error ? e.message : String(e), "error");
+      }
+      return false;
+    } finally {
+      setSaving(false);
+    }
   }, [draft, ticketingSystem, showToast]);
+
+  useImperativeHandle(ref, () => ({ save: runSave }), [runSave]);
 
   return (
     <section aria-labelledby="item-polling-section-title" className="flex flex-col gap-3">
@@ -226,10 +244,10 @@ export function ItemPollingSettingsSection() {
           onDraftChange={setDraft}
           flows={flows}
           ticketingSystem={ticketingSystem}
-          onSave={handleSave}
+          onSave={() => void runSave()}
           saving={saving}
         />
       )}
     </section>
   );
-}
+});

@@ -40,7 +40,10 @@ import { useTicketingForm } from "../hooks/useTicketingForm";
 import { useGitForm } from "../hooks/useGitForm";
 import { useStepTimeoutForm } from "../hooks/useStepTimeoutForm";
 import { FlowsTab } from "../components/FlowsTab";
-import { ItemPollingSettingsSection } from "../components/admin/ItemPollingSettingsSection";
+import {
+  ItemPollingSettingsSection,
+  type ItemPollingSettingsHandle,
+} from "../components/admin/ItemPollingSettingsSection";
 import type { TicketingSystemId } from "../api/types";
 import { GitHubStep } from "./Onboarding/GitHubStep";
 import { OnboardingAiKey } from "./Onboarding/OnboardingAiKey";
@@ -93,10 +96,17 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
   // typed — the provider/git PUTs alone do not carry those credentials.
   const aiKeyRef = useRef<AiCredentialPanelHandle>(null);
   const githubPatRef = useRef<GitHubCredentialPanelHandle>(null);
+  const pollingRef = useRef<ItemPollingSettingsHandle>(null);
 
   const { step, completing, goNext, goSkip, goBack } = useOnboardingFlow({
     onBeforeNext: async (s) => {
-      if (s === 1) return ticketing.save();
+      if (s === 1) {
+        const ok = await ticketing.save();
+        if (!ok) return false;
+        // Persist the embedded item-polling section too (it has no own Save in
+        // the wizard) so toggles like "disable polling" are actually saved.
+        return pollingRef.current ? pollingRef.current.save() : true;
+      }
       if (s === 2) {
         const provider = await save();
         if (!provider) return false;
@@ -183,10 +193,10 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                     <div className="border-t border-gray-800 pt-6">
                       <p className="text-xs text-gray-500 mb-4">
                         These settings control how Takuto picks up new work items
-                        automatically. Use the Save button below to apply changes —
-                        they are independent of the Continue button above.
+                        automatically. They're saved when you continue (the Save
+                        button below applies them immediately).
                       </p>
-                      <ItemPollingSettingsSection />
+                      <ItemPollingSettingsSection ref={pollingRef} />
                     </div>
                   )}
                 </>

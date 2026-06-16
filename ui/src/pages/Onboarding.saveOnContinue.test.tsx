@@ -102,6 +102,17 @@ function stubFetch(opts: { failCredential?: boolean; failPat?: boolean } = {}) {
           ? json({ error: "gh_transport_error", message: "could not reach github" }, 502)
           : json({ provider: null, github: { login: "octocat", scopes: ["repo"], attribute_commits: true } });
       }
+      if (url === "/api/config/polling" || url === "/api/config/jira") {
+        return json({
+          general: { ticketing_system: "github", poll_interval_secs: 60 },
+          agent: {},
+          jira: { project_keys: [], site: "", item_types: [] },
+          github: { app_id: 0, app_installation_id: 0 },
+          polling: {},
+          web: {},
+          persisted: true,
+        });
+      }
       return json({});
     },
   );
@@ -137,6 +148,31 @@ const credentialPosts = () =>
   calls.filter((c) => c.url.startsWith("/api/users/me/credentials/"));
 const patPosts = () => calls.filter((c) => c.url === "/api/users/me/github-pat");
 const gitPuts = () => calls.filter((c) => c.url === "/api/config/git");
+const pollingPuts = () => calls.filter((c) => c.url === "/api/config/polling");
+
+describe("Onboarding — save-on-continue, step 1 (item polling)", () => {
+  it("persists the item-polling section (e.g. disabling polling) on Continue", async () => {
+    stubFetch();
+    renderWizard();
+
+    // Select a ticketing system so the admin-only polling section renders.
+    const select = await screen.findByLabelText("Ticketing system");
+    fireEvent.change(select, { target: { value: "github" } });
+
+    // Toggle "Enable item polling" off (defaults on).
+    const toggle = await screen.findByRole("switch", { name: "Enable item polling" });
+    fireEvent.click(toggle);
+
+    await clickContinue();
+
+    // The polling section must be saved by Continue — not left unsaved as
+    // before — carrying the disabled flag through to the backend.
+    await waitFor(() => {
+      expect(pollingPuts().length).toBeGreaterThanOrEqual(1);
+    });
+    expect(pollingPuts()[0].body).toMatchObject({ auto_polling: false });
+  });
+});
 
 describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
   it("POSTs the typed API key to the provider credential endpoint before advancing", async () => {
