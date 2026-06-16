@@ -268,9 +268,9 @@ RUN set -eux \
 #  • codex         — `@openai/codex`             (Codex CLI for [agent] provider = "codex")
 #  • opencode      — `opencode-ai`               (OpenCode CLI for [agent] provider = "opencode";
 #                    canonical distribution is the `opencode-ai` package, NOT `opencode`)
-ARG CLAUDE_CODE_VERSION=2.1.146
-ARG CODEX_VERSION=0.132.0
-ARG OPENCODE_AI_VERSION=1.15.6
+ARG CLAUDE_CODE_VERSION=2.1.178
+ARG CODEX_VERSION=0.140.0
+ARG OPENCODE_AI_VERSION=1.17.7
 RUN npm install -g \
         "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
         "@openai/codex@${CODEX_VERSION}" \
@@ -286,9 +286,9 @@ RUN npm install -g \
 #   • supply-chain — a compromised install script can no longer inject arbitrary code at build time.
 # To bump: download the new tarball from downloads.cursor.com/lab/<version>/linux/<arch>/agent-cli-package.tar.gz,
 # update CURSOR_AGENT_VERSION + the two per-arch sha256 ARGs.
-ARG CURSOR_AGENT_VERSION=2026.05.20-2b5dd59
-ARG CURSOR_AGENT_SHA256_X64=27453acdea679d1570ab5adbbef9d19ecbf4c3efc8df687338c7fc156a693e18
-ARG CURSOR_AGENT_SHA256_ARM64=baf2f0aa1ca890f0b71480fba2db40bacff4eb56b9408c940d574ce39d8ab3fc
+ARG CURSOR_AGENT_VERSION=2026.06.15-18-00-12-6f5a2cf
+ARG CURSOR_AGENT_SHA256_X64=33b22b0c4fd0397a89fc1b908e4536bb0a8fb09daff97acf519fbec76569ccb3
+ARG CURSOR_AGENT_SHA256_ARM64=703e3a47a47bbaae4d54b48f860a780adae56bfdbfb8cfccf578dddbd5721382
 RUN set -eux \
     && ARCH="$(dpkg --print-architecture)" \
     && case "$ARCH" in \
