@@ -335,8 +335,8 @@ async fn invalid_pat_returns_400_invalid_pat_and_writes_audit_row() {
 
 #[tokio::test]
 async fn pat_missing_repo_scope_returns_insufficient_scopes() {
-    // PAT validates as a user but only has `read:org` — neither classic nor
-    // fine-grained sufficient.
+    // Classic PAT (advertises X-OAuth-Scopes) that has `read:org` but not
+    // `repo` — rejected, with `repo` reported as the missing scope.
     let (state, cookie) = state_with_mock(MockGh::user_ok("alice", "read:org")).await;
     let pre = audit_row_count(&state).await;
 
@@ -355,7 +355,7 @@ async fn pat_missing_repo_scope_returns_insufficient_scopes() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "insufficient_scopes");
     let missing: Vec<String> = serde_json::from_value(json["missing_scopes"].clone()).unwrap();
-    assert!(missing.contains(&"contents:write".to_string()));
+    assert!(missing.contains(&"repo".to_string()));
 
     let post = audit_row_count(&state).await;
     assert_eq!(post, pre + 1);
