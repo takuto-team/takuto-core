@@ -22,20 +22,33 @@ const DOCKER_CMD_TIMEOUT: Duration = Duration::from_secs(10);
 /// Run a `docker` command, returning its output, or `None` if it failed to
 /// spawn or exceeded [`DOCKER_CMD_TIMEOUT`].
 async fn run_docker_bounded(args: &[&str]) -> Option<std::process::Output> {
-    let fut = tokio::process::Command::new("docker")
+    run_cmd_bounded("docker", args, DOCKER_CMD_TIMEOUT).await
+}
+
+/// Run `program args` with a hard wall-clock `timeout`, returning its output or
+/// `None` on spawn failure or timeout. The timed-out child is killed
+/// (`kill_on_drop`). Factored out from [`run_docker_bounded`] so the bounding
+/// behaviour — the guard that stops a wedged Docker daemon from hanging
+/// pause/cancel — is unit-testable without a real `docker` binary.
+async fn run_cmd_bounded(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    let fut = tokio::process::Command::new(program)
         .args(args)
         .kill_on_drop(true)
         .output();
-    match tokio::time::timeout(DOCKER_CMD_TIMEOUT, fut).await {
+    match tokio::time::timeout(timeout, fut).await {
         Ok(Ok(out)) => Some(out),
         Ok(Err(e)) => {
-            warn!(error = %e, "docker command failed to spawn during cleanup");
+            warn!(error = %e, program, "command failed to spawn during cleanup");
             None
         }
         Err(_) => {
             warn!(
-                timeout_secs = DOCKER_CMD_TIMEOUT.as_secs(),
-                "docker command timed out during cleanup; skipping (daemon unresponsive?)"
+                timeout_secs = timeout.as_secs(),
+                program, "command timed out during cleanup; skipping (daemon unresponsive?)"
             );
             None
         }
@@ -110,5 +123,41 @@ pub(crate) async fn prune_dangling_images() {
         ),
         // None → run_docker_bounded already logged the spawn failure/timeout.
         None => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_cmd_bounded;
+    use std::time::Duration;
+
+    /// The guard that keeps a wedged/unresponsive Docker daemon from hanging
+    /// pause/cancel: a command that outlives the timeout must resolve to `None`
+    /// promptly, not block forever.
+    #[tokio::test]
+    async fn run_cmd_bounded_times_out_a_slow_command() {
+        let out = run_cmd_bounded("sh", &["-c", "sleep 5"], Duration::from_millis(200)).await;
+        assert!(
+            out.is_none(),
+            "a command exceeding the timeout must return None"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_cmd_bounded_returns_output_for_a_fast_command() {
+        let out = run_cmd_bounded("sh", &["-c", "printf ok"], Duration::from_secs(5))
+            .await
+            .expect("a fast command should produce output");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok");
+    }
+
+    #[tokio::test]
+    async fn run_cmd_bounded_returns_none_on_spawn_failure() {
+        let out = run_cmd_bounded("takuto-no-such-binary-xyz", &[], Duration::from_secs(5)).await;
+        assert!(
+            out.is_none(),
+            "a missing binary must return None, not panic"
+        );
     }
 }
