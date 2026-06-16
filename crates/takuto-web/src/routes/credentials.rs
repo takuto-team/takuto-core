@@ -170,6 +170,19 @@ pub struct DeleteProviderCredentialQuery {
     pub kind: Option<String>,
 }
 
+/// `GET /api/users/me/credentials?provider=cursor` query string. When
+/// `provider` is omitted the endpoint scopes the returned bundle to the
+/// deployment's persisted `[agent] provider` (back-compat). The onboarding
+/// wizard passes the provider the user just selected — which is NOT yet
+/// persisted at the time of an inline credential save — so the connection
+/// pill reflects the credential for that provider immediately, without
+/// waiting for the wizard's "Continue" to PUT the provider config.
+#[derive(Debug, Deserialize, Default)]
+pub struct GetCredentialsQuery {
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GithubPatBody {
@@ -274,6 +287,7 @@ pub async fn get_my_credentials(
     State(auth_state): State<AuthState>,
     State(cfg_state): State<ConfigState>,
     Extension(auth): Extension<AuthenticatedUser>,
+    Query(query): Query<GetCredentialsQuery>,
 ) -> Result<Json<UserCredentialsStatus>, (StatusCode, Json<serde_json::Value>)> {
     let db = auth_state
         .db
@@ -281,9 +295,15 @@ pub async fn get_my_credentials(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?
         .clone();
 
-    let active_provider = {
-        let cfg = cfg_state.config.read().await;
-        cfg.agent.provider.as_str().to_string()
+    // A `?provider=` override scopes the bundle to a specific provider (the
+    // wizard's not-yet-persisted selection); absent, fall back to the
+    // deployment's persisted provider.
+    let active_provider = match query.provider.as_deref() {
+        Some(p) => normalise_provider(p)?,
+        None => {
+            let cfg = cfg_state.config.read().await;
+            cfg.agent.provider.as_str().to_string()
+        }
     };
     let adapter = db.adapter();
     let user_id = &auth.user_id;
@@ -1347,6 +1367,71 @@ mod tests {
         assert!(!jira.is_null(), "jira field must be present after storing");
         assert_eq!(jira["site"], "https://acme.atlassian.net");
         assert_eq!(jira["account_id"], "acc-123");
+    }
+
+    #[tokio::test]
+    async fn get_credentials_provider_query_scopes_to_requested_provider() {
+        // Default test config has `[agent] provider = claude`. A credential
+        // saved for a DIFFERENT provider (cursor) must be invisible to the
+        // unscoped GET (config provider) but visible when the request scopes
+        // to `?provider=cursor` — the wizard's not-yet-persisted selection.
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        // Save a Cursor api_key.
+        let app = build_router(state.clone());
+        let post_resp = app
+            .oneshot(
+                Request::post("/api/users/me/credentials/cursor")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(r#"{"api_key":"cur-test-key"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            post_resp.status().is_success(),
+            "POST cursor api_key should succeed, got {}",
+            post_resp.status()
+        );
+
+        // Unscoped GET uses the persisted provider (claude) → no bundle.
+        let app2 = build_router(state.clone());
+        let get_default = app2
+            .oneshot(
+                Request::get("/api/users/me/credentials")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_default.status(), StatusCode::OK);
+        let body = get_default.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["provider"].is_null(),
+            "unscoped GET (claude) must not see the cursor credential"
+        );
+
+        // Scoped GET (?provider=cursor) sees the active api_key bundle.
+        let app3 = build_router(state);
+        let get_scoped = app3
+            .oneshot(
+                Request::get("/api/users/me/credentials?provider=cursor")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_scoped.status(), StatusCode::OK);
+        let body = get_scoped.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["provider"]["provider"], "cursor");
+        assert_eq!(json["provider"]["api_key"]["active"], true);
     }
 
     #[tokio::test]

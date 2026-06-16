@@ -38,10 +38,14 @@ export const OnboardingAiKey = forwardRef<AiCredentialPanelHandle, Props>(
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Scope the credentials fetch to the provider selected in the step-2 form.
+  // The persisted `[agent] provider` is only written on "Continue", so a GET
+  // scoped to it would return the wrong bundle right after an inline save and
+  // leave the connection pill stuck on "Not connected".
   const refresh = useCallback(async () => {
-    const c = await fetchUserCredentials().catch(() => null);
+    const c = await fetchUserCredentials(provider).catch(() => null);
     setCreds(c);
-  }, []);
+  }, [provider]);
 
   useEffect(() => {
     let mounted = true;

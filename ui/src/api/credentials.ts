@@ -88,11 +88,25 @@ async function rejectWithCredentialsError(res: Response): Promise<never> {
 }
 
 /** GET /api/users/me/credentials — current per-user readiness flags. */
-export async function fetchUserCredentials(): Promise<UserCredentialsStatus> {
+/**
+ * GET /api/users/me/credentials — combined provider + GitHub + Jira status.
+ *
+ * `provider` scopes the returned AI-provider bundle to a specific provider
+ * instead of the deployment's persisted `[agent] provider`. The onboarding
+ * wizard passes the provider the user just selected (not yet persisted) so
+ * the connection pill flips as soon as an inline key is saved. Omit it
+ * everywhere else to keep the persisted-provider behaviour.
+ */
+export async function fetchUserCredentials(
+  provider?: string,
+): Promise<UserCredentialsStatus> {
   if (isMocksEnabled()) {
     return await mockGetCredentials().json();
   }
-  const res = await api("/api/users/me/credentials");
+  const path = provider
+    ? `/api/users/me/credentials?provider=${encodeURIComponent(provider)}`
+    : "/api/users/me/credentials";
+  const res = await api(path);
   if (!res.ok) await rejectWithCredentialsError(res);
   return res.json();
 }
