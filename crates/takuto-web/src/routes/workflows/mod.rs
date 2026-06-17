@@ -13,6 +13,7 @@ mod lifecycle;
 mod list;
 mod log;
 mod manual;
+mod picker;
 mod port_tracking;
 mod run_commands;
 mod steps;
@@ -32,6 +33,7 @@ pub use list::{
 };
 pub use log::{LogLineDto, LogQuery, get_log};
 pub use manual::{StartManualWorkflowBody, StartManualWorkflowResponse, start_manual_workflow};
+pub(crate) use picker::annotate_candidates;
 pub use port_tracking::track_port_forwards;
 pub use run_commands::{
     RunCommandsStatusResponse, StartRunCommandRequest, StartRunCommandResponse, list_run_commands,

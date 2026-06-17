@@ -197,6 +197,34 @@ impl WorkflowLifecycle {
         if let Some(desc) = ticket_description {
             workflow.ticket_description = desc;
         }
+
+        // Derive a unique branch for this run so a re-add opens its OWN PR
+        // instead of inheriting a previous run's deterministic branch (and the
+        // PR already open on it). The first run keeps the canonical name; each
+        // re-add gets a `-N` suffix from the count of prior runs (incl.
+        // soft-deleted history). Without a DB we leave it empty and bootstrap
+        // falls back to the canonical name.
+        if let Some(db) = self.db.as_ref() {
+            match crate::db::work_items::count_runs_for_ticket(
+                db.adapter(),
+                &workflow.workspace_name,
+                &ticket_key,
+            )
+            .await
+            {
+                Ok(prior) => {
+                    workflow.branch_name = crate::git::worktree::branch_name_for_ticket_run(
+                        &ticket_key,
+                        &workflow.ticket_type,
+                        prior + 1,
+                    );
+                }
+                Err(e) => {
+                    warn!(ticket = %ticket_key, error = ?e, "Failed to count prior runs; bootstrap will use the canonical branch name");
+                }
+            }
+        }
+
         // driver_started stays false (set by Workflow::new)
         let id = workflow.id.clone();
         let user_id_for_emit = workflow.user_id.clone();

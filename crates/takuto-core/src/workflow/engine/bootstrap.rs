@@ -113,14 +113,25 @@ pub(super) async fn prepare_worktree_for_ticket(
     }
 
     // Use "Task" as the default item type at add time (Jira details not fetched yet).
-    let (item_type, worktree_lock) = {
+    let (item_type, worktree_lock, existing_branch) = {
         let wf = workflows.read().await;
         match wf.get(ticket_key) {
-            Some(w) => (w.ticket_type.clone(), w.worktree_lock.clone()),
+            Some(w) => (
+                w.ticket_type.clone(),
+                w.worktree_lock.clone(),
+                w.branch_name.clone(),
+            ),
             None => return, // Workflow was removed before the task started.
         }
     };
-    let branch_name = git::worktree::branch_name_for_ticket(ticket_key, &item_type);
+    // Prefer a branch already chosen at add time (carries the re-add `-N`
+    // suffix that makes a fresh run open its own PR); else derive the canonical
+    // name for back-compat with items added before that logic existed.
+    let branch_name = if existing_branch.is_empty() {
+        git::worktree::branch_name_for_ticket(ticket_key, &item_type)
+    } else {
+        existing_branch
+    };
 
     // Hold the per-workflow lock for the duration of create_worktree. If
     // `bootstrap_new_workflow` fires concurrently, it acquires the same
@@ -478,8 +489,21 @@ pub(super) async fn bootstrap_new_workflow(
             );
         }
 
-        let branch_name =
-            git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type);
+        // Prefer a branch already chosen at add time (carries the re-add `-N`
+        // suffix); else derive the canonical name for back-compat.
+        let branch_name = {
+            let existing = {
+                let wf = workflows.read().await;
+                wf.get(ticket_key)
+                    .map(|w| w.branch_name.clone())
+                    .unwrap_or_default()
+            };
+            if existing.is_empty() {
+                git::worktree::branch_name_for_ticket(ticket_key, &ticket_detail.item_type)
+            } else {
+                existing
+            }
+        };
 
         let worktree_path = actions
             .create_worktree(&repo_path, &branch_name, &base_branch, gh_token.as_deref())

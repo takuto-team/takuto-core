@@ -20,6 +20,14 @@ pub struct GithubIssueRow {
     pub summary: String,
     pub body: String,
     pub url: String,
+    /// The caller already has this issue on their board (non-`Done`); the picker
+    /// disables the row with an "Already added" message.
+    pub already_added: bool,
+    /// The most recent PR a prior run recorded for this issue, if any; the
+    /// picker prompts before re-adding (a new run opens a separate PR).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub existing_pr_url: Option<String>,
 }
 
 #[cfg(test)]
@@ -132,13 +140,29 @@ pub async fn list_github_issues(
             .await
             .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 
+    let keys: Vec<String> = issues.iter().map(|i| i.key.clone()).collect();
+    let wf_arc = engine.engine.workflows_arc();
+    let annotations = crate::routes::workflows::annotate_candidates(
+        &wf_arc,
+        Some(&db),
+        &auth.user_id,
+        Some(&row.name),
+        &keys,
+    )
+    .await;
+
     let rows: Vec<GithubIssueRow> = issues
         .into_iter()
-        .map(|issue| GithubIssueRow {
-            key: issue.key,
-            summary: issue.summary,
-            body: issue.body,
-            url: issue.html_url,
+        .map(|issue| {
+            let ann = annotations.get(&issue.key).cloned().unwrap_or_default();
+            GithubIssueRow {
+                key: issue.key,
+                summary: issue.summary,
+                body: issue.body,
+                url: issue.html_url,
+                already_added: ann.already_added,
+                existing_pr_url: ann.existing_pr_url,
+            }
         })
         .collect();
 

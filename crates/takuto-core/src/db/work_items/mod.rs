@@ -796,6 +796,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn count_runs_for_ticket_includes_soft_deleted_history() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-alice", "alice").await;
+        assert_eq!(
+            count_runs_for_ticket(&a, "demo", "PROJ-1").await.unwrap(),
+            0
+        );
+
+        insert_work_item(&a, &sample_row("wi-1", "PROJ-1", Some("u-alice")))
+            .await
+            .unwrap();
+        soft_delete_work_item(&a, "wi-1", 150).await.unwrap();
+        // Even after soft-delete, the run still counts toward history so the
+        // next branch gets a unique suffix.
+        assert_eq!(
+            count_runs_for_ticket(&a, "demo", "PROJ-1").await.unwrap(),
+            1
+        );
+
+        insert_work_item(&a, &sample_row("wi-2", "PROJ-1", Some("u-alice")))
+            .await
+            .unwrap();
+        assert_eq!(
+            count_runs_for_ticket(&a, "demo", "PROJ-1").await.unwrap(),
+            2
+        );
+        // A different ticket is independent.
+        assert_eq!(
+            count_runs_for_ticket(&a, "demo", "PROJ-9").await.unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_pr_url_for_ticket_reads_across_soft_deleted_history() {
+        let a = fresh_adapter().await;
+        seed_user(&a, "u-alice", "alice").await;
+        // No prior PR yet.
+        assert!(
+            latest_pr_url_for_ticket(&a, "demo", "PROJ-1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // First run records a PR, then is soft-deleted (the reported scenario).
+        let mut first = sample_row("wi-1", "PROJ-1", Some("u-alice"));
+        first.started_at = 100;
+        first.pr_url = Some("https://github.com/o/r/pull/18".to_string());
+        insert_work_item(&a, &first).await.unwrap();
+        soft_delete_work_item(&a, "wi-1", 150).await.unwrap();
+
+        assert_eq!(
+            latest_pr_url_for_ticket(&a, "demo", "PROJ-1")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("https://github.com/o/r/pull/18"),
+            "a soft-deleted past run's PR must still be discoverable for the confirmation"
+        );
+
+        // A newer run with its own PR wins by started_at.
+        let mut second = sample_row("wi-2", "PROJ-1", Some("u-alice"));
+        second.started_at = 200;
+        second.pr_url = Some("https://github.com/o/r/pull/27".to_string());
+        insert_work_item(&a, &second).await.unwrap();
+        assert_eq!(
+            latest_pr_url_for_ticket(&a, "demo", "PROJ-1")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("https://github.com/o/r/pull/27")
+        );
+    }
+
+    #[tokio::test]
     async fn list_filters_by_workspace_and_owner() {
         let a = fresh_adapter().await;
         seed_user(&a, "u-alice", "alice").await;

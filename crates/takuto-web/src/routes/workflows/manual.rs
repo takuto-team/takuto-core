@@ -98,19 +98,21 @@ pub async fn start_manual_workflow(
         let wf_arc = engine.engine.workflows_arc();
         let map = wf_arc.read().await;
         if let Some(existing) = map.get(&ticket_key) {
-            // Terminal-state entries (Done / Stopped / Error) are safe to replace —
-            // the user is starting fresh on the same ticket. Replacement also recovers
-            // from "orphan" rows (user_id = None) carried over from legacy snapshots:
-            // those rows are invisible to the caller (per-user isolation), so without
-            // this branch they would be undeletable zombies blocking the re-add.
-            let terminal = matches!(
-                existing.state,
-                WorkflowState::Done | WorkflowState::Stopped | WorkflowState::Error { .. }
-            );
-            if !terminal {
+            // Only a `Done` item is "handled in the past" and therefore safe to
+            // re-add (a fresh run opens its own PR). Items still on the board —
+            // in-progress, `Paused`, `Stopped`, or `Error` — are "Already added"
+            // and must not be replaced; the picker disables them and this guard
+            // keeps the server authoritative against a direct API call.
+            //
+            // Orphan rows (user_id = None) carried over from legacy snapshots are
+            // invisible to the caller (per-user isolation); allow replacing those
+            // regardless of state so they don't become undeletable zombies.
+            let is_orphan = existing.user_id.is_none();
+            let replaceable = matches!(existing.state, WorkflowState::Done) || is_orphan;
+            if !replaceable {
                 return Err((
                     StatusCode::CONFLICT,
-                    format!("An item already exists for {ticket_key}"),
+                    format!("{ticket_key} is already on your board"),
                 ));
             }
             tracing::info!(
@@ -118,7 +120,7 @@ pub async fn start_manual_workflow(
                 prev_state = %existing.state,
                 prev_owner = ?existing.user_id,
                 new_owner = %auth.user_id,
-                "Replacing terminal-state workflow with a fresh add"
+                "Replacing re-addable workflow with a fresh add"
             );
         }
     }
@@ -294,6 +296,26 @@ mod tests {
             .unwrap()
     }
 
+    fn start_manual_request_for(cookie: &str, ticket_key: &str) -> Request<Body> {
+        let body = format!(r#"{{"ticket_key":"{ticket_key}","ticket_summary":"re-add"}}"#);
+        Request::post("/api/workflows/start-manual")
+            .header("Content-Type", "application/json")
+            .header("Origin", TEST_ORIGIN)
+            .header("Cookie", cookie)
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    async fn set_state(
+        state: &AppState,
+        ticket_key: &str,
+        s: takuto_core::workflow::state::WorkflowState,
+    ) {
+        let arc = state.engine.engine.workflows_arc();
+        let mut map = arc.write().await;
+        map.get_mut(ticket_key).expect("seeded item present").state = s;
+    }
+
     #[tokio::test]
     async fn manual_start_409_when_global_parallel_cap_reached() {
         let state = test_state_with_db();
@@ -361,5 +383,67 @@ mod tests {
         let app = build_router(state);
         let resp = app.oneshot(start_manual_request(&cookie)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn manual_start_409_when_item_already_on_board() {
+        // A ticket the caller currently has on the board in a non-Done state
+        // ("Already added") must be rejected — even Stopped/Error, which used to
+        // be replaceable.
+        use takuto_core::workflow::state::WorkflowState;
+        for blocking in [
+            WorkflowState::Stopped,
+            WorkflowState::Error {
+                source_state: Box::new(WorkflowState::Reviewing),
+                message: "boom".into(),
+            },
+            WorkflowState::Paused {
+                source_state: Box::new(WorkflowState::AddressingTicket { pass: 1 }),
+            },
+        ] {
+            let state = test_state_with_db();
+            let cookie = register_and_login(&state).await;
+            let admin_id = user_id_for(&state, "admin").await;
+            seed_item(&state, "DUP-1", &admin_id).await;
+            set_state(&state, "DUP-1", blocking).await;
+
+            let app = build_router(state);
+            let resp = app
+                .oneshot(start_manual_request_for(&cookie, "DUP-1"))
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::CONFLICT,
+                "a non-Done board item must block re-add"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_start_allows_re_add_of_done_item() {
+        // A Done item is past work and re-addable: the request must pass the
+        // duplicate guard and only fail later for having no repo (400).
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let admin_id = user_id_for(&state, "admin").await;
+        seed_item(&state, "DONE-1", &admin_id).await;
+        set_state(
+            &state,
+            "DONE-1",
+            takuto_core::workflow::state::WorkflowState::Done,
+        )
+        .await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(start_manual_request_for(&cookie, "DONE-1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "Done re-add must clear the duplicate guard (then 400 for no repo)"
+        );
     }
 }

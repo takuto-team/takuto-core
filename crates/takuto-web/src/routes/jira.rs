@@ -4,14 +4,15 @@
 use std::path::PathBuf;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use serde::Serialize;
 use ts_rs::TS;
 
 use takuto_core::jira::client::{JiraClient, TicketDescriptionPreview};
 
-use crate::state::ConfigState;
+use crate::auth::AuthenticatedUser;
+use crate::state::{AuthState, ConfigState, EngineState};
 
 #[derive(Serialize, TS)]
 #[ts(rename = "TodoTicket", export_to = "TodoTicket.ts")]
@@ -19,6 +20,14 @@ pub struct TodoTicketRow {
     pub key: String,
     pub summary: String,
     pub item_type: String,
+    /// The caller already has this ticket on their board (non-`Done`); the
+    /// picker disables the row with an "Already added" message.
+    pub already_added: bool,
+    /// The most recent PR a prior run recorded for this ticket, if any; the
+    /// picker prompts before re-adding (a new run opens a separate PR).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub existing_pr_url: Option<String>,
 }
 
 #[cfg(test)]
@@ -38,6 +47,9 @@ mod ts_bindings {
 /// All **To Do** issues for configured projects (every issue type), backlog order — for the manual-start picker.
 pub async fn list_todo_tickets_manual(
     State(cfg): State<ConfigState>,
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    Extension(auth): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<TodoTicketRow>>, (StatusCode, String)> {
     let config = cfg.config.read().await;
     if config.jira.project_keys.is_empty() {
@@ -57,12 +69,30 @@ pub async fn list_todo_tickets_manual(
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 
+    // Jira keys are globally unique within the instance, so annotation is not
+    // workspace-scoped (no repo context in this endpoint).
+    let keys: Vec<String> = tickets.iter().map(|t| t.key.clone()).collect();
+    let wf_arc = engine.engine.workflows_arc();
+    let annotations = crate::routes::workflows::annotate_candidates(
+        &wf_arc,
+        auth_state.db.as_ref(),
+        &auth.user_id,
+        None,
+        &keys,
+    )
+    .await;
+
     let rows: Vec<TodoTicketRow> = tickets
         .into_iter()
-        .map(|t| TodoTicketRow {
-            key: t.key,
-            summary: t.summary,
-            item_type: t.item_type,
+        .map(|t| {
+            let ann = annotations.get(&t.key).cloned().unwrap_or_default();
+            TodoTicketRow {
+                key: t.key,
+                summary: t.summary,
+                item_type: t.item_type,
+                already_added: ann.already_added,
+                existing_pr_url: ann.existing_pr_url,
+            }
         })
         .collect();
 

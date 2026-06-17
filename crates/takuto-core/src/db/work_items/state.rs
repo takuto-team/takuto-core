@@ -263,6 +263,51 @@ pub async fn list_all_for_restore(adapter: &DbAdapter) -> Result<Vec<WorkItemRow
     Ok(out)
 }
 
+/// Total number of runs ever recorded for a ticket in a workspace, **including
+/// soft-deleted history**. Used to derive a unique branch suffix on re-add so a
+/// fresh run opens its own PR instead of inheriting a previous run's branch.
+pub async fn count_runs_for_ticket(
+    adapter: &DbAdapter,
+    workspace_name: &str,
+    ticket_key: &str,
+) -> Result<u32> {
+    let row = adapter
+        .query_one(
+            "SELECT COUNT(*) FROM work_items WHERE workspace_name = ? AND ticket_key = ?",
+            vec![
+                DbValue::Text(workspace_name.to_string()),
+                DbValue::Text(ticket_key.to_string()),
+            ],
+        )
+        .await?;
+    Ok(row.get_i64(0)?.max(0) as u32)
+}
+
+/// Most recent `pr_url` recorded for a ticket in a workspace, across **all** runs
+/// including soft-deleted history. `None` when no prior run opened a PR. Used to
+/// decide whether re-adding the ticket should prompt a confirmation.
+pub async fn latest_pr_url_for_ticket(
+    adapter: &DbAdapter,
+    workspace_name: &str,
+    ticket_key: &str,
+) -> Result<Option<String>> {
+    let row = adapter
+        .query_optional(
+            "SELECT pr_url FROM work_items \
+             WHERE workspace_name = ? AND ticket_key = ? AND pr_url IS NOT NULL \
+             ORDER BY started_at DESC LIMIT 1",
+            vec![
+                DbValue::Text(workspace_name.to_string()),
+                DbValue::Text(ticket_key.to_string()),
+            ],
+        )
+        .await?;
+    match row {
+        Some(r) => Ok(r.get_text_opt(0)?),
+        None => Ok(None),
+    }
+}
+
 fn caller_can_see(
     item: &WorkItemRow,
     caller_user_id: Option<&str>,
