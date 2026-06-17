@@ -248,6 +248,7 @@ pub(super) async fn run_workflow_def_steps(
         log_writer,
         agent_run_semaphore.clone(),
         container_runner.as_ref(),
+        container_runtime,
         &prior_steps,
         false, // do not skip prior successes — always run all steps
         config,
@@ -323,6 +324,9 @@ pub(super) async fn run_agent_step_sequence(
     log_writer: &Arc<WorkflowLogWriter>,
     agent_run_semaphore: Arc<Semaphore>,
     container_runner: Option<&ContainerRunner>,
+    // Docker boundary for command-step spawns (and the gate upstream). A fake
+    // in tests runs command steps without a daemon.
+    container_runtime: &dyn crate::container::ContainerRuntime,
     prior_steps_log: &[StepLog],
     // If true: skip agent steps already Success in prior_steps_log (restart resume).
     apply_prior_success_skip: bool,
@@ -488,15 +492,16 @@ pub(super) async fn run_agent_step_sequence(
                         let cmd_result = if let Some(runner) = container_runner {
                             let (prog, docker_args) = runner.wrap_shell_command(&interpolated_cmd);
                             let refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
-                            crate::process::run_command_streaming_with_timeout(
-                                &prog,
-                                &refs,
-                                worktree_path,
-                                cancel_token.child_token(),
-                                line_tx.clone(),
-                                timeout,
-                            )
-                            .await
+                            container_runtime
+                                .run_worker_command(
+                                    &prog,
+                                    &refs,
+                                    worktree_path,
+                                    cancel_token.child_token(),
+                                    line_tx.clone(),
+                                    timeout,
+                                )
+                                .await
                         } else {
                             crate::process::run_shell_command_streaming_with_timeout(
                                 &interpolated_cmd,

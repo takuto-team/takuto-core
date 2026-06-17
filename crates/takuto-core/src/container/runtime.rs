@@ -16,9 +16,14 @@
 //! [`DockerRuntime`] is the production implementation; it delegates to the
 //! existing [`ContainerRunner`] associated functions so behavior is unchanged.
 
+use std::path::Path;
+
 use async_trait::async_trait;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio_util::sync::CancellationToken;
 
 use super::runner::ContainerRunner;
+use crate::process::{CommandOutput, OutputLine};
 
 /// The process-spawning docker operations used during container orchestration.
 #[async_trait]
@@ -34,6 +39,20 @@ pub trait ContainerRuntime: Send + Sync {
     /// Force-remove all worker containers for `ticket_key` (and prune dangling
     /// images). Best-effort; never fails the caller.
     async fn cleanup_for_ticket(&self, ticket_key: &str);
+
+    /// Run a single (already `wrap_command`-assembled) command-step process,
+    /// streaming output lines to `line_tx`. The caller builds `program`/`args`
+    /// from [`ContainerRunner::wrap_shell_command`]; this method owns only the
+    /// spawn, so a fake can stand in for the real `docker run` in tests.
+    async fn run_worker_command(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: &Path,
+        cancel_token: CancellationToken,
+        line_tx: UnboundedSender<OutputLine>,
+        timeout_secs: u64,
+    ) -> crate::error::Result<CommandOutput>;
 }
 
 /// Production [`ContainerRuntime`] backed by the real docker CLI via
@@ -53,6 +72,26 @@ impl ContainerRuntime for DockerRuntime {
     async fn cleanup_for_ticket(&self, ticket_key: &str) {
         ContainerRunner::cleanup_for_ticket(ticket_key).await;
     }
+
+    async fn run_worker_command(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: &Path,
+        cancel_token: CancellationToken,
+        line_tx: UnboundedSender<OutputLine>,
+        timeout_secs: u64,
+    ) -> crate::error::Result<CommandOutput> {
+        crate::process::run_command_streaming_with_timeout(
+            program,
+            args,
+            cwd,
+            cancel_token,
+            line_tx,
+            timeout_secs,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -66,6 +105,9 @@ pub(crate) mod testing {
         pub available: bool,
         pub worker_image: Option<String>,
         pub cleaned: Mutex<Vec<String>>,
+        /// Exit code returned by `run_worker_command` (0 = success). Lets a test
+        /// drive both the command-step success and failure branches.
+        pub command_exit_code: i32,
     }
 
     impl FakeContainerRuntime {
@@ -74,6 +116,7 @@ pub(crate) mod testing {
                 available: false,
                 worker_image: None,
                 cleaned: Mutex::new(Vec::new()),
+                command_exit_code: 0,
             }
         }
 
@@ -82,6 +125,16 @@ pub(crate) mod testing {
                 available: true,
                 worker_image: Some(image.to_string()),
                 cleaned: Mutex::new(Vec::new()),
+                command_exit_code: 0,
+            }
+        }
+
+        /// `available_with_image` but command steps exit with `code` (non-zero
+        /// to exercise the command-failure path).
+        pub fn with_command_exit(image: &str, code: i32) -> Self {
+            Self {
+                command_exit_code: code,
+                ..Self::available_with_image(image)
             }
         }
 
@@ -105,6 +158,22 @@ pub(crate) mod testing {
                 .lock()
                 .expect("cleaned lock poisoned")
                 .push(ticket_key.to_string());
+        }
+
+        async fn run_worker_command(
+            &self,
+            _program: &str,
+            _args: &[&str],
+            _cwd: &Path,
+            _cancel_token: CancellationToken,
+            _line_tx: UnboundedSender<OutputLine>,
+            _timeout_secs: u64,
+        ) -> crate::error::Result<CommandOutput> {
+            Ok(CommandOutput {
+                exit_code: self.command_exit_code,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
         }
     }
 }

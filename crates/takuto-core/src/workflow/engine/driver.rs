@@ -1128,4 +1128,110 @@ mod tests {
             "DockerUnavailable must drive the workflow to Error: {state:?}"
         );
     }
+
+    // ── command-step path (no Docker, fake worker command) ────────────────
+
+    /// Drive a `num_steps`-command-step flow through `drive_workflow_def` with a
+    /// `FakeContainerRuntime` whose `run_worker_command` returns `exit_code`.
+    /// Returns the workflow's final state + step log.
+    async fn run_command_step_flow(
+        exit_code: i32,
+        num_steps: usize,
+    ) -> (WfState, Vec<crate::workflow::step::StepLog>) {
+        use crate::config::{AgentStepConfig, StepAvailability};
+        use crate::container::runtime::testing::FakeContainerRuntime;
+        use crate::workflow::engine::test_support::seed_workflow;
+
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+
+        let mut wf = seed_workflow(WfState::Pending, "GH-1", None);
+        wf.worktree_path = Some(wt.clone());
+        wf.worktree_bootstrapped = true;
+        let workflows: Arc<RwLock<HashMap<String, Workflow>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        workflows.write().await.insert("GH-1".to_string(), wf);
+
+        let steps: Vec<AgentStepConfig> = (0..num_steps)
+            .map(|i| AgentStepConfig {
+                name: format!("cmd{i}"),
+                prompt: String::new(),
+                repeat: 1,
+                skills: vec![],
+                resume_previous: false,
+                when: StepAvailability::Always,
+                commands: vec!["echo hi".to_string()],
+            })
+            .collect();
+        let runtime: Arc<dyn crate::container::ContainerRuntime> =
+            Arc::new(FakeContainerRuntime::with_command_exit("img", exit_code));
+        let (event_tx, _rx) = broadcast::channel(256);
+
+        super::drive_workflow_def(
+            "GH-1".to_string(),
+            "implement".to_string(),
+            steps,
+            Some(wt),
+            "sum".to_string(),
+            "desc".to_string(),
+            "Task".to_string(),
+            Arc::new(RwLock::new(crate::config::Config::default())),
+            workflows.clone(),
+            Arc::new(crate::actions::dry_run::DryRunActions::new(
+                "origin".to_string(),
+                None,
+            )),
+            event_tx,
+            CancellationToken::new(),
+            Arc::new(Semaphore::new(4)),
+            Arc::new(AtomicBool::new(false)),
+            None,
+            None,
+            None,
+            runtime,
+        )
+        .await;
+
+        let map = workflows.read().await;
+        let w = &map["GH-1"];
+        (w.state.clone(), w.steps_log.clone())
+    }
+
+    #[tokio::test]
+    async fn command_step_success_reaches_terminal() {
+        let (state, log) = run_command_step_flow(0, 1).await;
+        assert!(
+            !matches!(state, WfState::Error { .. }),
+            "a zero-exit command step must not error: {state:?}"
+        );
+        assert!(
+            log.iter()
+                .any(|s| s.status == crate::workflow::step::StepStatus::Success),
+            "the command step must be recorded Success"
+        );
+    }
+
+    /// A failing command on the *last* run records the step Failed but does NOT
+    /// abort the flow (it still completes).
+    #[tokio::test]
+    async fn command_step_failure_on_last_step_records_failed_but_completes() {
+        let (state, log) = run_command_step_flow(1, 1).await;
+        assert!(!matches!(state, WfState::Error { .. }), "got {state:?}");
+        assert!(
+            log.iter()
+                .any(|s| s.status == crate::workflow::step::StepStatus::Failed),
+            "the failing command step must be recorded Failed"
+        );
+    }
+
+    /// A failing command before the last step aborts the whole flow to Error.
+    #[tokio::test]
+    async fn command_step_failure_before_last_aborts_to_error() {
+        let (state, _log) = run_command_step_flow(1, 2).await;
+        assert!(
+            matches!(state, WfState::Error { .. }),
+            "a non-last failing command step must drive the workflow to Error: {state:?}"
+        );
+    }
 }
