@@ -1542,4 +1542,53 @@ mod facade_engine_tests {
         )
         .await;
     }
+
+    // ── mark_work_done / stop_all_workflows (via the shared harness) ──────
+
+    mod completion {
+        use crate::workflow::engine::test_support::{insert, seed_workflow, test_engine};
+        use crate::workflow::state::WorkflowState;
+
+        /// Marking a `Done` workflow done (no Jira, no worktree) removes it from
+        /// the dashboard and reports `workflow_removed`.
+        #[tokio::test]
+        async fn mark_work_done_removes_a_done_workflow() {
+            let dir = tempfile::tempdir().unwrap();
+            let (engine, _db) = test_engine(dir.path());
+            insert(&engine, seed_workflow(WorkflowState::Done, "GH-1", None)).await;
+
+            let outcome = engine.mark_work_done("GH-1").await.expect("mark done");
+            assert!(outcome.workflow_removed, "a clean Done must be removed");
+            assert!(outcome.jira_ok && outcome.worktree_ok);
+            assert!(
+                !engine
+                    .get_workflow_ids()
+                    .await
+                    .contains(&"GH-1".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn mark_work_done_rejects_non_done_and_missing() {
+            let dir = tempfile::tempdir().unwrap();
+            let (engine, _db) = test_engine(dir.path());
+            insert(&engine, seed_workflow(WorkflowState::Pending, "GH-1", None)).await;
+            assert!(engine.mark_work_done("GH-1").await.is_err());
+            assert!(engine.mark_work_done("missing").await.is_err());
+        }
+
+        /// `stop_all_workflows` drives every active workflow to a terminal state.
+        #[tokio::test]
+        async fn stop_all_workflows_clears_active() {
+            let dir = tempfile::tempdir().unwrap();
+            let (engine, _db) = test_engine(dir.path());
+            insert(&engine, seed_workflow(WorkflowState::Pending, "A-1", None)).await;
+            insert(&engine, seed_workflow(WorkflowState::Pending, "B-1", None)).await;
+            insert(&engine, seed_workflow(WorkflowState::Done, "C-1", None)).await;
+            assert_eq!(engine.active_workflow_count().await, 2);
+
+            engine.stop_all_workflows().await;
+            assert_eq!(engine.active_workflow_count().await, 0);
+        }
+    }
 }
