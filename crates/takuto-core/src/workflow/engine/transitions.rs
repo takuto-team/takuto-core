@@ -597,3 +597,169 @@ impl WorkflowTransitions {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::{errored, insert, paused, seed_workflow, test_engine};
+    use crate::workflow::state::WorkflowState;
+    use tokio_util::sync::CancellationToken;
+
+    /// Grab a clone of a workflow's cancel token (clones share cancellation state).
+    async fn token_of(engine: &super::super::WorkflowEngine, key: &str) -> CancellationToken {
+        engine.workflows_arc().read().await[key]
+            .cancel_token
+            .clone()
+    }
+
+    async fn state_of(engine: &super::super::WorkflowEngine, key: &str) -> WorkflowState {
+        engine.workflows_arc().read().await[key].state.clone()
+    }
+
+    // ── pause ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn pause_active_sets_paused_and_cancels_driver() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(&engine, seed_workflow(WorkflowState::Pending, "P-1", None)).await;
+        let tok = token_of(&engine, "P-1").await;
+
+        engine.pause_workflow("P-1").await.expect("pause active");
+
+        assert!(matches!(
+            state_of(&engine, "P-1").await,
+            WorkflowState::Paused { .. }
+        ));
+        assert!(
+            tok.is_cancelled(),
+            "pausing must cancel the running driver token"
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_rejects_terminal_and_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(&engine, seed_workflow(WorkflowState::Done, "D-1", None)).await;
+        assert!(engine.pause_workflow("D-1").await.is_err());
+        assert!(engine.pause_workflow("missing").await.is_err());
+    }
+
+    // ── stop ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn stop_sets_stopped_and_cancels() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(&engine, seed_workflow(WorkflowState::Pending, "S-1", None)).await;
+        let tok = token_of(&engine, "S-1").await;
+        engine.stop_workflow("S-1").await.expect("stop");
+        assert!(matches!(
+            state_of(&engine, "S-1").await,
+            WorkflowState::Stopped
+        ));
+        assert!(tok.is_cancelled());
+        assert!(engine.stop_workflow("missing").await.is_err());
+    }
+
+    // ── resume ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn resume_paused_restores_source_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        // Paused with no running defs → resume restores state and spawns no driver.
+        insert(&engine, seed_workflow(paused(), "R-1", None)).await;
+        engine.resume_workflow("R-1").await.expect("resume paused");
+        assert!(matches!(
+            state_of(&engine, "R-1").await,
+            WorkflowState::Pending
+        ));
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_non_paused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(&engine, seed_workflow(WorkflowState::Pending, "R-1", None)).await;
+        assert!(engine.resume_workflow("R-1").await.is_err());
+    }
+
+    // ── retry ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn retry_terminal_starts_fresh_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        // Owner None avoids a users FK on the fresh work_items shadow-row.
+        let done = seed_workflow(WorkflowState::Done, "T-1", None);
+        let old_id = done.id.clone();
+        insert(&engine, done).await;
+
+        let new_id = engine.retry_workflow("T-1").await.expect("retry terminal");
+        assert_ne!(new_id, old_id, "retry must create a fresh workflow id");
+        // A fresh Pending workflow under the same ticket key, no auto-start driver.
+        assert!(matches!(
+            state_of(&engine, "T-1").await,
+            WorkflowState::Pending
+        ));
+    }
+
+    #[tokio::test]
+    async fn retry_rejects_non_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(&engine, seed_workflow(WorkflowState::Pending, "T-1", None)).await;
+        assert!(engine.retry_workflow("T-1").await.is_err());
+    }
+
+    // ── resume_from_error ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn resume_from_error_without_failed_defs_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        // Workflow-level Error passes the state guard, but with no def in an
+        // Error run-state there is nothing to retry → typed error.
+        insert(&engine, seed_workflow(errored(), "E-1", None)).await;
+        let err = engine.resume_from_error("E-1").await.unwrap_err();
+        assert!(
+            err.to_string().contains("No failed workflow definitions"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_from_error_rejects_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(&engine, seed_workflow(WorkflowState::Pending, "E-1", None)).await;
+        assert!(engine.resume_from_error("E-1").await.is_err());
+    }
+
+    // ── delete ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_removes_non_active_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(&engine, seed_workflow(WorkflowState::Done, "X-1", None)).await;
+        engine
+            .delete_workflow("X-1")
+            .await
+            .expect("delete terminal");
+        assert!(!engine.get_workflow_ids().await.contains(&"X-1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_active_workflow_with_live_driver() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        // Delete is refused only when the workflow is active AND a driver is
+        // attached (`is_active() && driver_started`).
+        let mut wf = seed_workflow(WorkflowState::Pending, "X-1", None);
+        wf.driver_started = true;
+        insert(&engine, wf).await;
+        assert!(engine.delete_workflow("X-1").await.is_err());
+    }
+}

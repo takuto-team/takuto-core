@@ -366,3 +366,59 @@ impl WorkflowDefinitionManager {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::{flow, insert, seed_user, seed_workflow, test_engine};
+    use crate::db::user_work_item_flows;
+    use crate::workflow::state::WorkflowState;
+
+    /// With no resolvable definitions (empty dir, owner-less workflow → TOML
+    /// discovery path), starting any def reports it as not found.
+    #[tokio::test]
+    async fn start_unknown_definition_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(&engine, seed_workflow(WorkflowState::Pending, "GH-1", None)).await;
+        let err = engine
+            .start_workflow_def("GH-1", "nope", None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("nope"), "got: {err}");
+    }
+
+    /// A flow whose dependency hasn't completed is refused — exercising the
+    /// DB-backed `resolve_user_flows` path + `are_dependencies_met`.
+    #[tokio::test]
+    async fn start_definition_blocked_by_unmet_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, db) = test_engine(dir.path());
+        seed_user(&db, "alice", "user").await;
+        // "review" depends on "implement"; neither has run yet.
+        user_work_item_flows::set(
+            db.adapter(),
+            "alice",
+            "ws",
+            &[
+                flow("implement", &[], &["build"]),
+                flow("review", &["implement"], &["check"]),
+            ],
+        )
+        .await
+        .expect("seed flows");
+        insert(
+            &engine,
+            seed_workflow(WorkflowState::Pending, "GH-1", Some("alice")),
+        )
+        .await;
+
+        let err = engine
+            .start_workflow_def("GH-1", "review", Some("alice"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("depend"),
+            "expected a dependencies-not-met error, got: {err}"
+        );
+    }
+}

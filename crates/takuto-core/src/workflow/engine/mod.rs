@@ -12,6 +12,8 @@ mod persistence;
 mod repository;
 mod resolve;
 mod step_runner;
+#[cfg(test)]
+mod test_support;
 mod transitions;
 mod types;
 
@@ -543,5 +545,102 @@ impl WorkflowEngine {
     /// and broadcasts a `workflow_definitions_changed` event when the file list changes.
     pub fn start_definitions_watcher(&self, cancel_token: CancellationToken) {
         self.definitions.start_definitions_watcher(cancel_token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{errored, insert, paused, seed_workflow, test_engine};
+    use crate::workflow::state::WorkflowState;
+
+    /// Seed a representative mix: 2 alice (active + done), 1 bob (active),
+    /// 1 orphan paused, 1 orphan errored.
+    async fn seeded() -> (super::WorkflowEngine, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        insert(
+            &engine,
+            seed_workflow(WorkflowState::Pending, "A-1", Some("alice")),
+        )
+        .await;
+        insert(
+            &engine,
+            seed_workflow(WorkflowState::Done, "A-2", Some("alice")),
+        )
+        .await;
+        insert(
+            &engine,
+            seed_workflow(WorkflowState::Pending, "B-1", Some("bob")),
+        )
+        .await;
+        insert(&engine, seed_workflow(paused(), "C-1", None)).await;
+        insert(&engine, seed_workflow(errored(), "D-1", None)).await;
+        (engine, dir)
+    }
+
+    #[tokio::test]
+    async fn counts_reflect_workflow_states() {
+        let (engine, _dir) = seeded().await;
+        // Every row is on the dashboard.
+        assert_eq!(engine.dashboard_workflow_count().await, 5);
+        // Slots: everything except Done/Stopped/Error → Pending×2 + Paused.
+        assert_eq!(engine.concurrency_slots_in_use().await, 3);
+        // Active (not terminal, not paused, not error) → the two Pending.
+        assert_eq!(engine.active_workflow_count().await, 2);
+        assert_eq!(engine.get_workflow_ids().await.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn active_item_count_scopes_to_user() {
+        let (engine, _dir) = seeded().await;
+        // Global occupying-slot count.
+        assert_eq!(engine.active_item_count(None).await, 3);
+        // Alice has one occupying (A-1 Pending); A-2 is Done.
+        assert_eq!(engine.active_item_count(Some("alice")).await, 1);
+        assert_eq!(engine.active_item_count(Some("bob")).await, 1);
+        assert_eq!(engine.active_item_count(Some("nobody")).await, 0);
+    }
+
+    #[tokio::test]
+    async fn migrate_orphans_to_owner_is_idempotent() {
+        let (engine, _dir) = seeded().await;
+        // C-1 + D-1 have user_id None.
+        assert_eq!(engine.migrate_orphan_workflows_to_owner("admin").await, 2);
+        // Re-running touches nothing.
+        assert_eq!(engine.migrate_orphan_workflows_to_owner("admin").await, 0);
+        // The previously-orphan workflows now belong to admin.
+        let arc = engine.workflows_arc();
+        let map = arc.read().await;
+        assert_eq!(map["C-1"].user_id.as_deref(), Some("admin"));
+        assert_eq!(map["D-1"].user_id.as_deref(), Some("admin"));
+    }
+
+    #[tokio::test]
+    async fn add_to_dashboard_inserts_without_driver() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _db) = test_engine(dir.path());
+        let id = engine
+            .add_to_dashboard(
+                "NEW-1".to_string(),
+                "new item".to_string(),
+                true,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("add_to_dashboard");
+        assert!(!id.is_empty());
+        assert_eq!(engine.dashboard_workflow_count().await, 1);
+        assert!(
+            engine
+                .get_workflow_ids()
+                .await
+                .contains(&"NEW-1".to_string())
+        );
+        // No driver was spawned — the workflow is parked on the dashboard.
+        let arc = engine.workflows_arc();
+        assert!(!arc.read().await["NEW-1"].driver_started);
     }
 }
