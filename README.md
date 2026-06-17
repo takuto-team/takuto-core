@@ -1,8 +1,38 @@
-# Takuto
+<div align="center">
 
-**Takuto is an AI coding pipeline that works at your pace.** Let it run autonomously overnight — polling Jira or GitHub Issues, writing code, running tests, opening PRs — or stay in the driver's seat: pick items manually, refine descriptions with AI assistance, and trigger each phase yourself from the dashboard.
+# Takuto Core
 
-**License:** FSL for self-hosted use, commercial license available — see [License](#license).
+**AI coding agents that run isolated — and under your control.**
+
+Turn Jira and GitHub tickets into pull requests: fully autonomous, or steered ticket by
+ticket from a live dashboard. Every agent runs in its own container, behind an egress
+firewall, on hardware you own.
+
+[Documentation](https://takuto-doc.alexandre-obellianne.workers.dev) ·
+[Quick start](https://takuto-doc.alexandre-obellianne.workers.dev/docs/quick-start/) ·
+[Security](https://takuto-doc.alexandre-obellianne.workers.dev/security/) ·
+[CLI](https://github.com/takuto-team/takuto-cli)
+
+![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--3.0-8b7cf6)
+![Status: beta](https://img.shields.io/badge/status-beta-ffb454)
+![Self-hosted](https://img.shields.io/badge/self--hosted-yes-2ea043)
+
+</div>
+
+<!-- TODO(launch): replace with a 60–90s demo GIF — a ticket going in, the live dashboard
+     working, a PR coming out. This is the single most persuasive asset; record it before
+     announcing. Suggested path: docs/demo.gif -->
+<!-- ![Takuto turning a ticket into a pull request](docs/demo.gif) -->
+
+**What it is.** Takuto Core is a self-hosted AI coding pipeline. Point it at Jira or GitHub
+Issues and let it run the whole loop — branch → install → implement → lint/tests → PR — then
+move to the next ticket; or stay in the driver's seat and trigger each phase yourself. It's
+**bring-your-own-agent** (Claude Code, Cursor Agent, Codex, or OpenCode for self-hosted
+models), and there is **no telemetry** — your code and tickets go only to the provider you
+configure.
+
+The rest of this README goes from the high-level picture down to full operational detail.
+For the polished guides, see the **[documentation site](https://takuto-doc.alexandre-obellianne.workers.dev)**.
 
 ---
 
@@ -81,16 +111,10 @@ A Linux host is recommended for server deployments; macOS works for local use bu
 
 Takuto doesn't bill you — your AI provider does. The agent runs Claude Code or Cursor Agent against your account, and each ticket consumes tokens proportional to the size of the codebase, the prompt context, and the number of steps in your workflow definition.
 
-Rough budgeting (Sonnet 4-tier models, your mileage will vary):
-
-- **$0.50 – $2 per ticket** for a typical implement-then-review pipeline on a medium codebase.
-- Larger codebases, longer prompts, or pipelines with extra `repeat`-passes can push a single ticket past $5.
-- Cursor Agent's "Auto" model selection generally lands in a similar range but bills per the Cursor plan you have.
-
-Reference pricing pages:
-
-- [Anthropic API pricing](https://www.anthropic.com/pricing#anthropic-api)
-- [Cursor pricing](https://cursor.com/pricing)
+What that costs depends entirely on the provider and model you choose — check their current
+rates, and watch your first few runs to get a feel for your own workload. Cost scales with
+codebase size, prompt context, and the number of steps in your workflow. A **self-hosted
+model** via OpenCode removes per-token billing entirely (you pay only for the hardware).
 
 Cost-saving levers:
 
