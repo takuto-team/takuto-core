@@ -100,8 +100,12 @@ fi
 # ── Heavy / external gates (opt-in) ───────────────────────────────
 if [[ $FULL -eq 1 ]]; then
   if command -v gitleaks >/dev/null 2>&1; then
+    # Scan git-tracked content/history only. `gitleaks dir .` walks the whole
+    # working tree (target/, node_modules/, .takuto/ local runtime config,
+    # browser logs) and floods the gate with findings in build artifacts that
+    # were never committed; `gitleaks git` sees only what git tracks.
     run "gitleaks (tracked)" \
-      gitleaks dir . --config .gitleaks.toml --no-banner
+      gitleaks git . --config .gitleaks.toml --no-banner
   else
     printf '%b⚠ gitleaks binary not found — skipping%b\n\n' "$DIM" "$RESET"
   fi
