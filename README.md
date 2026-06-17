@@ -98,10 +98,12 @@ Before you start, gather these:
 - **RAM:** ≥ 8 GiB for a single workflow; ≥ 12 GiB on macOS with Podman because the Podman VM needs its own share. Tune `[general] max_concurrent_workflows` to your machine.
 - **Disk:** ≥ 30 GiB free. Worktrees, npm/cargo caches, mise toolchains, and (if enabled) the DinD storage layer all live in Docker volumes.
 - **GitHub access:** either a fine-grained personal access token (PAT) or a configured GitHub App. See [Scoped GitHub token](#scoped-github-token-recommended).
-- **Atlassian CLI (optional):** required only when `[general] ticketing_system = "jira"`. Installed automatically inside the container; you authenticate via `make setup`.
-- **Claude or Cursor account:**
-  - Claude Code via Anthropic API key, Pro/Max OAuth, or a corporate proxy (`ANTHROPIC_BASE_URL`).
-  - Cursor Agent via `CURSOR_API_KEY` or interactive `agent login`.
+- **Atlassian CLI (optional):** required only when `[general] ticketing_system = "jira"`. Installed automatically inside the container; you authenticate from the dashboard.
+- **An AI provider account** — bring your own agent:
+  - **Claude Code** — Anthropic API key, Pro/Max OAuth, or a corporate proxy (`ANTHROPIC_BASE_URL`).
+  - **Cursor Agent** — `CURSOR_API_KEY` or interactive `agent login`.
+  - **Codex** — an OpenAI API key (`OPENAI_API_KEY`).
+  - **OpenCode** — a self-hosted model server (LM Studio, Ollama, vLLM…) via its `base_url`.
 
 A Linux host is recommended for server deployments; macOS works for local use but Podman's VM eats memory you'd rather give to the agent.
 
