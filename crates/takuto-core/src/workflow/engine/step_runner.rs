@@ -41,7 +41,7 @@ use crate::workflow::log_writer::WorkflowLogWriter;
 use crate::workflow::outcome::resolve_pr_url;
 use crate::workflow::state::WorkflowState;
 use crate::workflow::step::{StepLog, StepStatus};
-use crate::workflow::stream_humanize::{humanize_agent_stream_line, is_session_lifecycle_line};
+use crate::workflow::stream_humanize::{humanize_agent_stream_line, is_no_progress_exempt};
 
 use super::auth_pin::try_attach_secrets_bundle;
 use super::driver::{
@@ -1145,11 +1145,14 @@ pub(super) fn spawn_output_relay(
 
                 // ── No-progress guardrail ───────────────────────────────────
                 // Count consecutive repeats of the same substantive line.
-                // Lifecycle markers ("… session initialized/completed") are
-                // skipped so a healthy multi-turn run (which re-emits them
-                // every turn) is never tripped; only genuine output stalls —
-                // a model retrying the same failing action verbatim — trip it.
-                if max_repeated_output_lines > 0 && !is_session_lifecycle_line(&display_text) {
+                // Lifecycle markers ("… session initialized/completed") and the
+                // generic "Tool call started" placeholder are skipped: the
+                // former recur every turn in a healthy multi-turn run, the
+                // latter collapses distinct-but-undescribable tool calls to one
+                // string. Counting either would false-trip on real progress;
+                // only genuine output stalls — a model retrying the same
+                // failing action verbatim — should trip it.
+                if max_repeated_output_lines > 0 && !is_no_progress_exempt(&display_text) {
                     let norm = normalize_signal_line(&display_text);
                     if !norm.is_empty() {
                         if last_signal.as_deref() == Some(norm.as_str()) {
@@ -1374,6 +1377,50 @@ mod tests {
         assert!(
             !step_cancel.is_cancelled(),
             "varied output must not trip the no-progress guardrail"
+        );
+        assert!(loop_signal.lock().unwrap().is_none());
+    }
+
+    /// A newer CLI emitting tool variants the humanizer can't describe collapses
+    /// every call to the generic "Tool call started" placeholder. Those carry no
+    /// progress signal, so a burst of them — real, distinct tool calls — must NOT
+    /// trip the guard even far past the threshold.
+    #[tokio::test]
+    async fn relay_does_not_trip_on_generic_tool_call_placeholder() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_writer = Arc::new(WorkflowLogWriter::new(dir.path(), "GH-4").await);
+        let workflows: Arc<RwLock<HashMap<String, Workflow>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let (event_tx, _rx) = broadcast::channel(256);
+        let loop_signal: LoopSignal = Arc::new(std::sync::Mutex::new(None));
+        let step_cancel = CancellationToken::new();
+
+        let line_tx = spawn_output_relay(
+            &event_tx,
+            "GH-4",
+            "Implement",
+            &log_writer,
+            &workflows,
+            AiAgentProvider::Cursor,
+            8,
+            loop_signal.clone(),
+            step_cancel.clone(),
+        );
+
+        // An unrecognized tool shape → humanizer falls back to "Tool call started".
+        let unknown_tool = r#"{"type":"tool_call","subtype":"started","tool_call":{"someFutureToolCall":{"args":{}}}}"#;
+        for _ in 0..20 {
+            let _ = line_tx.send(OutputLine {
+                content: unknown_tool.to_string(),
+                stream: "stdout".to_string(),
+            });
+        }
+        drop(line_tx);
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !step_cancel.is_cancelled(),
+            "generic tool-call placeholders must not trip the no-progress guardrail"
         );
         assert!(loop_signal.lock().unwrap().is_none());
     }

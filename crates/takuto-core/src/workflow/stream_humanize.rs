@@ -36,6 +36,19 @@ pub fn is_session_lifecycle_line(line: &str) -> bool {
     l.ends_with("session initialized") || l.ends_with("session completed")
 }
 
+/// `true` when a humanized line carries no progress signal and must not be
+/// counted by the no-progress guardrail. This is the union of session
+/// lifecycle markers and the generic tool-call placeholders the humanizers
+/// emit when they cannot describe a tool call (an unrecognized tool shape).
+///
+/// Without this, a run that issues many distinct-but-undescribable tool calls
+/// in a row — e.g. a newer CLI emitting tool variants the humanizer doesn't
+/// parse yet — collapses every call to the identical placeholder string and
+/// false-trips the guard, even though the agent is making real progress.
+pub fn is_no_progress_exempt(line: &str) -> bool {
+    is_session_lifecycle_line(line) || line.trim() == "Tool call started"
+}
+
 pub fn humanize_agent_stream_line(provider: AiAgentProvider, raw: &str) -> Option<String> {
     match provider {
         AiAgentProvider::Claude => humanize_claude_output(raw),
@@ -459,6 +472,15 @@ fn cursor_shell_completed_dashboard_line(
     line
 }
 
+fn truncate_label(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let prefix: String = s.chars().take(max).collect();
+        format!("{prefix}…")
+    } else {
+        s.to_string()
+    }
+}
+
 fn cursor_function_args_snippet(f: &Value) -> Option<String> {
     let raw = f.get("arguments").or_else(|| f.get("args"))?;
     let s = if let Some(t) = raw.as_str() {
@@ -501,6 +523,52 @@ fn summarize_cursor_tool_event(value: &Value) -> Option<String> {
         if let Some(e) = tc.get("editToolCall") {
             let path = e.get("args")?.get("file_path")?.as_str()?;
             return Some(format!("Editing {path}"));
+        }
+        if let Some(g) = tc.get("globToolCall") {
+            let pat = g.get("args")?.get("globPattern")?.as_str()?;
+            return Some(format!("Glob {}", truncate_label(pat, 80)));
+        }
+        if let Some(g) = tc.get("grepToolCall") {
+            let pat = g.get("args")?.get("pattern")?.as_str()?;
+            return Some(format!("Searching \"{}\"", truncate_label(pat, 80)));
+        }
+        if let Some(l) = tc.get("readLintsToolCall") {
+            let n = l
+                .get("args")
+                .and_then(|a| a.get("paths"))
+                .and_then(|p| p.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            return Some(match n {
+                0 => "Reading lints".to_string(),
+                1 => "Reading lints (1 file)".to_string(),
+                n => format!("Reading lints ({n} files)"),
+            });
+        }
+        if let Some(s) = tc.get("webSearchToolCall") {
+            let term = s.get("args")?.get("searchTerm")?.as_str()?;
+            return Some(format!("Web search \"{}\"", truncate_label(term, 80)));
+        }
+        if let Some(t) = tc.get("updateTodosToolCall") {
+            let n = t
+                .get("args")
+                .and_then(|a| a.get("todos"))
+                .and_then(|p| p.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            return Some(format!("Updating todos ({n})"));
+        }
+        if let Some(a) = tc.get("awaitToolCall") {
+            return Some(
+                match a
+                    .get("args")
+                    .and_then(|x| x.get("taskId"))
+                    .and_then(|v| v.as_str())
+                {
+                    Some(task) => format!("Awaiting task {task}"),
+                    None => "Awaiting task".to_string(),
+                },
+            );
         }
         if let Some(f) = tc.get("function") {
             let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -704,5 +772,93 @@ mod tests {
         assert!(line.starts_with("Tool: read_file ("), "unexpected: {line}");
         assert_ne!(line.as_str(), "Tool call started");
         assert!(line.contains("path"), "{line}");
+    }
+
+    // Newer cursor-agent builds emit native tool variants (glob/grep/lints/
+    // web-search/todos/await) the humanizer must describe distinctly — otherwise
+    // a burst of them collapses to the generic placeholder and false-trips the
+    // no-progress guard. NDJSON below is taken verbatim from a real run.
+    #[test]
+    fn cursor_glob_tool_started_shows_pattern() {
+        let raw = r#"{"type":"tool_call","subtype":"started","tool_call":{"globToolCall":{"args":{"globPattern":"**/*constants*"}}}}"#;
+        assert_eq!(cursor_humanize(raw).as_deref(), Some("Glob **/*constants*"));
+    }
+
+    #[test]
+    fn cursor_grep_tool_started_shows_pattern() {
+        let raw = r#"{"type":"tool_call","subtype":"started","tool_call":{"grepToolCall":{"args":{"pattern":"nature|categories|NATURE","glob":"**/*.{ts,tsx,rs}"}}}}"#;
+        assert_eq!(
+            cursor_humanize(raw).as_deref(),
+            Some("Searching \"nature|categories|NATURE\"")
+        );
+    }
+
+    #[test]
+    fn cursor_read_lints_tool_started_shows_file_count() {
+        let raw = r#"{"type":"tool_call","subtype":"started","tool_call":{"readLintsToolCall":{"args":{"paths":["a.tsx","b.tsx","c.tsx"]}}}}"#;
+        assert_eq!(
+            cursor_humanize(raw).as_deref(),
+            Some("Reading lints (3 files)")
+        );
+        let one = r#"{"type":"tool_call","subtype":"started","tool_call":{"readLintsToolCall":{"args":{"paths":["a.tsx"]}}}}"#;
+        assert_eq!(
+            cursor_humanize(one).as_deref(),
+            Some("Reading lints (1 file)")
+        );
+    }
+
+    #[test]
+    fn cursor_web_search_tool_started_shows_term() {
+        let raw = r#"{"type":"tool_call","subtype":"started","tool_call":{"webSearchToolCall":{"args":{"searchTerm":"postgres aarch64 tarball"}}}}"#;
+        assert_eq!(
+            cursor_humanize(raw).as_deref(),
+            Some("Web search \"postgres aarch64 tarball\"")
+        );
+    }
+
+    #[test]
+    fn cursor_update_todos_tool_started_shows_count() {
+        let raw = r#"{"type":"tool_call","subtype":"started","tool_call":{"updateTodosToolCall":{"args":{"todos":[{"id":"1"},{"id":"2"}],"merge":false}}}}"#;
+        assert_eq!(cursor_humanize(raw).as_deref(), Some("Updating todos (2)"));
+    }
+
+    #[test]
+    fn cursor_await_tool_started_shows_task_id() {
+        let raw = r#"{"type":"tool_call","subtype":"started","tool_call":{"awaitToolCall":{"args":{"taskId":"615635","blockUntilMs":180000}}}}"#;
+        assert_eq!(
+            cursor_humanize(raw).as_deref(),
+            Some("Awaiting task 615635")
+        );
+    }
+
+    // Regression: a sequence of distinct glob/grep tool calls must produce
+    // distinct lines, so the no-progress guard never collapses them to one.
+    #[test]
+    fn cursor_distinct_search_calls_produce_distinct_lines() {
+        let lines: Vec<String> = [
+            r#"{"type":"tool_call","subtype":"started","tool_call":{"grepToolCall":{"args":{"pattern":"foo"}}}}"#,
+            r#"{"type":"tool_call","subtype":"started","tool_call":{"globToolCall":{"args":{"globPattern":"**/*.ts"}}}}"#,
+            r#"{"type":"tool_call","subtype":"started","tool_call":{"grepToolCall":{"args":{"pattern":"bar"}}}}"#,
+        ]
+        .iter()
+        .filter_map(|r| cursor_humanize(r))
+        .collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "Searching \"foo\"");
+        assert_eq!(lines[1], "Glob **/*.ts");
+        assert_eq!(lines[2], "Searching \"bar\"");
+        // None collapsed to the generic placeholder.
+        assert!(lines.iter().all(|l| l != "Tool call started"));
+    }
+
+    #[test]
+    fn no_progress_exempt_covers_lifecycle_and_generic_placeholder() {
+        assert!(is_no_progress_exempt("Cursor Agent session completed"));
+        assert!(is_no_progress_exempt("Claude Code session initialized"));
+        assert!(is_no_progress_exempt("Tool call started"));
+        // Substantive lines are never exempt.
+        assert!(!is_no_progress_exempt("Searching \"foo\""));
+        assert!(!is_no_progress_exempt("$ npm test"));
+        assert!(!is_no_progress_exempt("Glob **/*.ts"));
     }
 }
