@@ -185,6 +185,11 @@ pub struct Workflow {
     /// When `false`, the next workflow-def start must run bootstrap even if a worktree exists
     /// (the worktree was pre-created at ticket-add time but setup has not run yet).
     pub worktree_bootstrapped: bool,
+    /// `true` while the best-effort background worktree pre-creation
+    /// (`prepare_worktree_for_ticket`, spawned at add-to-dashboard) is in flight.
+    /// Transient runtime state — drives the dashboard's "preparing" readiness
+    /// signal and is **not** persisted (a restart implies nothing is in flight).
+    pub worktree_preparing: bool,
     /// Name of the workspace (repo directory name under `/workspaces/`) this workflow belongs to.
     /// Used for per-workspace snapshot isolation and dashboard filtering.
     /// Kept as a denormalised back-compat handle; `repository_id` is the
@@ -249,6 +254,7 @@ impl Workflow {
             driver_started: false,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
+            worktree_preparing: false,
             workspace_name,
             repository_id: None,
             user_id: None,
@@ -385,6 +391,8 @@ impl Workflow {
             driver_started: rec.driver_started,
             workflow_def_runs: rec.workflow_def_runs,
             worktree_bootstrapped: rec.worktree_bootstrapped,
+            // Transient — nothing is in flight immediately after a restore.
+            worktree_preparing: false,
             workspace_name: rec.workspace_name,
             repository_id: rec.repository_id,
             user_id: rec.user_id,
@@ -476,6 +484,7 @@ impl Workflow {
             driver_started: row.driver_started,
             workflow_def_runs,
             worktree_bootstrapped: false,
+            worktree_preparing: false,
             workspace_name: row.workspace_name,
             repository_id: row.repository_id,
             user_id: row.user_id,
@@ -659,6 +668,7 @@ mod facade_workflow_tests {
             driver_started: true,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
+            worktree_preparing: false,
             workspace_name: "test-workspace".into(),
             repository_id: None,
             user_id: None,

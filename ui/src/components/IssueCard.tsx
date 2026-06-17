@@ -85,6 +85,7 @@ export function IssueCard({
           filled={view.filled}
           duration={view.duration}
           isActive={view.isActive}
+          prepState={view.prepState}
           hasReport={w.has_report}
           canResumeFromError={w.can_resume_from_error}
           onRetry={ctl.onRetry}

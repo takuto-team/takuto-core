@@ -120,4 +120,13 @@ workspace_name: string,
  * FK to `repositories.id`. `None` for legacy snapshots not yet
  * back-filled by the startup reconciliation.
  */
-repository_id?: string, };
+repository_id?: string, 
+/**
+ * Readiness of a **parked** item (added to the dashboard, not yet started):
+ * `"preparing"` (worktree pre-creation in flight), `"repo_not_ready"` (the
+ * repository isn't available on disk), or `"ready"` (start a workflow).
+ * `None` for any non-parked item (running / paused / terminal) — the card
+ * then shows the normal step/progress display. Backend-derived; the UI must
+ * not infer this from `branch_name`/`worktree_path`.
+ */
+prep_state?: string, };

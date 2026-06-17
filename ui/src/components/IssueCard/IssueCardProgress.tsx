@@ -20,6 +20,7 @@ interface Props {
   filled: number;
   duration: string | null;
   isActive: boolean;
+  prepState: string | null;
   hasReport: boolean;
   canResumeFromError: boolean;
   onRetry: () => void;
@@ -39,6 +40,7 @@ export function IssueCardProgress({
   filled,
   duration,
   isActive,
+  prepState,
   hasReport,
   canResumeFromError,
   onRetry,
@@ -50,6 +52,28 @@ export function IssueCardProgress({
 }: Props) {
   const isTerminalish =
     status.label === "Error" || status.label === "Completed" || status.label === "Stopped";
+
+  // A parked item (added to the dashboard, not yet started) reports its
+  // readiness via `prepState`; render that instead of a fake step/progress bar.
+  if (prepState) {
+    const readinessText =
+      prepState === "preparing"
+        ? "Preparing worktree…"
+        : prepState === "repo_not_ready"
+          ? "Repository not ready"
+          : "Ready — pick a workflow to start";
+    return (
+      <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative h-[80px] flex flex-col justify-center">
+        <div className="flex items-center leading-none gap-2 text-xs text-gray-500">
+          {prepState === "preparing" && (
+            <span className="inline-block w-2 h-2 rounded-full bg-gray-500 animate-pulse flex-shrink-0" />
+          )}
+          {readinessText}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative h-[80px] flex flex-col justify-center">
       <div className="flex items-center justify-between">

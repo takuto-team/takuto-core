@@ -256,6 +256,19 @@ impl WorkflowLifecycle {
             ..Default::default()
         });
 
+        // Mark the worktree pre-creation as in flight so the dashboard shows a
+        // transient "preparing" readiness state. `prepare_worktree_for_ticket`
+        // clears it on completion (success or failure).
+        if let Some(w) = self
+            .repository
+            .inner_arc()
+            .write()
+            .await
+            .get_mut(&ticket_key)
+        {
+            w.worktree_preparing = true;
+        }
+
         // Pre-create the git worktree in the background so it is ready before the user
         // starts a workflow def.  Failure is non-fatal — bootstrap will create it on first run.
         {
@@ -730,6 +743,7 @@ mod facade_engine_tests {
             driver_started: true,
             workflow_def_runs: HashMap::new(),
             worktree_bootstrapped: false,
+            worktree_preparing: false,
             workspace_name: "test-workspace".into(),
             repository_id: None,
             user_id: None,

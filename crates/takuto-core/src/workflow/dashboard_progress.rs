@@ -186,6 +186,7 @@ mod tests {
             driver_started: true,
             workflow_def_runs: std::collections::HashMap::new(),
             worktree_bootstrapped: false,
+            worktree_preparing: false,
             workspace_name: "test-workspace".into(),
             repository_id: None,
             user_id: None,

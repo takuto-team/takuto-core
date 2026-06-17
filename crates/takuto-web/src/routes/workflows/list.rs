@@ -26,9 +26,51 @@ use crate::state::{
 use super::dto::{
     TerminalLineDto, WorkflowCountsResponse, WorkflowSummary, build_issue_url,
     build_run_commands_status, can_open_editor, can_resume_from_error, can_start_workflow,
-    extract_error, has_report_file, manual_cap_fields, workflow_action_flags,
+    extract_error, has_report_file, manual_cap_fields, prep_state, workflow_action_flags,
     workflow_def_runs_display,
 };
+
+/// Resolve whether a parked workflow's repository is present on disk, from the
+/// already-loaded `repo_paths` map (id + name → local_path). Only meaningful for
+/// parked items; callers gate on `can_start_workflow`.
+fn repo_available(
+    w: &takuto_core::workflow::engine::Workflow,
+    repo_paths: &std::collections::HashMap<String, String>,
+) -> bool {
+    let key = w
+        .repository_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(w.workspace_name.as_str());
+    repo_paths
+        .get(key)
+        .map(|p| std::path::Path::new(p).exists())
+        .unwrap_or(false)
+}
+
+/// Single-workflow variant of [`repo_available`]: resolves the repo's
+/// `local_path` from the DB (by `repository_id`, else `workspace_name`) and
+/// checks it exists on disk. Used by `get_workflow`, which doesn't load the
+/// full repo list.
+async fn repo_available_db(
+    db: Option<&takuto_core::db::Database>,
+    w: &takuto_core::workflow::engine::Workflow,
+) -> bool {
+    let Some(db) = db else { return false };
+    let row = if let Some(id) = w.repository_id.as_deref().filter(|s| !s.is_empty()) {
+        takuto_core::db::repositories::get(db.adapter(), id)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        takuto_core::db::repositories::get_by_name(db.adapter(), &w.workspace_name)
+            .await
+            .ok()
+            .flatten()
+    };
+    row.map(|r| std::path::Path::new(&r.local_path).exists())
+        .unwrap_or(false)
+}
 use super::require_workflow_access;
 
 /// Convert a Unix-seconds timestamp to RFC3339 with millisecond
@@ -55,6 +97,10 @@ pub async fn list_workflows(
     // Workflow visibility is gated by the caller's `user_repositories`
     // associations. Build two HashSets in ONE batched query so the in-memory
     // filter below is O(1) per workflow.
+    // `repo_paths` (id + name → local_path) lets a parked item resolve its
+    // repo's on-disk presence for the `prep_state` readiness signal.
+    let mut repo_paths: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     let (allowed_repo_ids, allowed_repo_names): (
         std::collections::HashSet<String>,
         std::collections::HashSet<String>,
@@ -65,6 +111,8 @@ pub async fn list_workflows(
                 let mut ids = std::collections::HashSet::new();
                 let mut names = std::collections::HashSet::new();
                 for r in repos {
+                    repo_paths.insert(r.id.clone(), r.local_path.clone());
+                    repo_paths.insert(r.name.clone(), r.local_path);
                     ids.insert(r.id);
                     names.insert(r.name);
                 }
@@ -330,6 +378,12 @@ pub async fn list_workflows(
                 &cfg,
                 completed_step_counts.get(&w.id).copied(),
             );
+            // FS-check the repo only for parked items (short-circuits otherwise).
+            let repo_ready = if can_start_workflow(w) {
+                repo_available(w, &repo_paths)
+            } else {
+                true
+            };
             WorkflowSummary {
                 id: w.id.clone(),
                 ticket_key: w.ticket_key.clone(),
@@ -371,6 +425,7 @@ pub async fn list_workflows(
                 user_id: w.user_id.clone(),
                 workspace_name: w.workspace_name.clone(),
                 repository_id: w.repository_id.clone(),
+                prep_state: prep_state(w, repo_ready).map(str::to_string),
             }
         })
         .collect();
@@ -613,6 +668,12 @@ pub async fn get_workflow(
         _ => None,
     };
     let progress = dashboard_progress::progress_fields(w, &cfg, completed_steps);
+    // Resolve repo presence only for parked items (drives `prep_state`).
+    let repo_ready = if can_start_workflow(w) {
+        repo_available_db(auth_state.db.as_ref(), w).await
+    } else {
+        true
+    };
     Ok(Json(WorkflowSummary {
         id: w.id.clone(),
         ticket_key: w.ticket_key.clone(),
@@ -701,6 +762,7 @@ pub async fn get_workflow(
         user_id: w.user_id.clone(),
         workspace_name: w.workspace_name.clone(),
         repository_id: w.repository_id.clone(),
+        prep_state: prep_state(w, repo_ready).map(str::to_string),
     }))
 }
 

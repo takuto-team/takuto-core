@@ -156,6 +156,7 @@ pub(super) async fn prepare_worktree_for_ticket(
                 if let Some(w) = wf.get_mut(ticket_key) {
                     w.worktree_path = Some(worktree_path.clone());
                     w.branch_name = branch_name.clone();
+                    w.worktree_preparing = false;
                     w.updated_at = Utc::now();
                     (w.id.clone(), w.user_id.clone(), w.updated_at.timestamp())
                 } else {
@@ -194,6 +195,12 @@ pub(super) async fn prepare_worktree_for_ticket(
             });
         }
         Err(e) => {
+            // Clear the in-flight marker so the dashboard stops showing
+            // "preparing" — the item falls back to "ready" (bootstrap will
+            // create the worktree on first run).
+            if let Some(w) = workflows.write().await.get_mut(ticket_key) {
+                w.worktree_preparing = false;
+            }
             warn!(
                 ticket = %ticket_key,
                 error = %e,

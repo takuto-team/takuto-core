@@ -122,6 +122,15 @@ pub struct WorkflowSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub repository_id: Option<String>,
+    /// Readiness of a **parked** item (added to the dashboard, not yet started):
+    /// `"preparing"` (worktree pre-creation in flight), `"repo_not_ready"` (the
+    /// repository isn't available on disk), or `"ready"` (start a workflow).
+    /// `None` for any non-parked item (running / paused / terminal) — the card
+    /// then shows the normal step/progress display. Backend-derived; the UI must
+    /// not infer this from `branch_name`/`worktree_path`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prep_state: Option<String>,
 }
 
 #[derive(Serialize, TS)]
@@ -193,6 +202,24 @@ pub(super) fn has_report_file(w: &Workflow) -> bool {
 
 pub(super) fn can_start_workflow(w: &Workflow) -> bool {
     matches!(w.state, WorkflowState::Pending) && !w.driver_started
+}
+
+/// Readiness signal for a **parked** item (see [`WorkflowSummary::prep_state`]).
+/// `None` for any non-parked item. `repo_available` is whether the workflow's
+/// repository is present on disk (resolved by the caller from the already-loaded
+/// repo list). Pure — never inferred from branch/worktree existence, so it
+/// cannot latch.
+pub(super) fn prep_state(w: &Workflow, repo_available: bool) -> Option<&'static str> {
+    if !can_start_workflow(w) {
+        return None;
+    }
+    Some(if w.worktree_preparing {
+        "preparing"
+    } else if !repo_available {
+        "repo_not_ready"
+    } else {
+        "ready"
+    })
 }
 
 pub(super) fn can_resume_from_error(w: &Workflow) -> bool {
@@ -325,6 +352,39 @@ mod tests {
         let mut w = wf_pending(false);
         w.state = WorkflowState::Done;
         assert!(!can_start_workflow(&w));
+    }
+
+    // ── prep_state (parked-item readiness) ────────────────────────────────
+
+    #[test]
+    fn prep_state_ready_for_parked_with_repo() {
+        let w = wf_pending(false); // Pending, no driver, not preparing
+        assert_eq!(prep_state(&w, true), Some("ready"));
+    }
+
+    #[test]
+    fn prep_state_preparing_when_worktree_in_flight() {
+        let mut w = wf_pending(false);
+        w.worktree_preparing = true;
+        // "preparing" wins even if the repo isn't (yet) resolvable.
+        assert_eq!(prep_state(&w, false), Some("preparing"));
+    }
+
+    #[test]
+    fn prep_state_repo_not_ready_when_repo_absent() {
+        let w = wf_pending(false);
+        assert_eq!(prep_state(&w, false), Some("repo_not_ready"));
+    }
+
+    #[test]
+    fn prep_state_none_for_non_parked() {
+        // Driver started → not parked.
+        let started = wf_pending(true);
+        assert_eq!(prep_state(&started, true), None);
+        // Terminal → not parked.
+        let mut done = wf_pending(false);
+        done.state = WorkflowState::Done;
+        assert_eq!(prep_state(&done, true), None);
     }
 
     /// Create a unique existing directory under the system temp dir to stand in

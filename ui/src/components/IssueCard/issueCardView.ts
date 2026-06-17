@@ -22,6 +22,9 @@ export interface IssueCardView {
   isTerminal: boolean;
   isPending: boolean;
   isActive: boolean;
+  /// Backend-derived readiness for a parked item: "ready" | "preparing" |
+  /// "repo_not_ready", or null for any non-parked item.
+  prepState: string | null;
   duration: string | null;
   stepLabel: string;
   stateDisplay: string;
@@ -54,6 +57,7 @@ export function buildIssueCardView(
   const isTerminal = ["Completed", "Error", "Stopped"].includes(status.label);
   const isPending = status.label === "Pending" && w.can_start;
   const isActive = status.label === "Running" || status.label === "Paused";
+  const prepState = w.prep_state ?? null;
 
   const duration =
     isTerminal &&
@@ -108,6 +112,7 @@ export function buildIssueCardView(
     isTerminal,
     isPending,
     isActive,
+    prepState,
     duration,
     stepLabel,
     stateDisplay,

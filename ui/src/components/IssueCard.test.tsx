@@ -105,20 +105,34 @@ describe("IssueCard", () => {
     expect(link?.getAttribute("href")).toBe("https://github.com/acme/app/pull/123");
   });
 
-  it("does not show an indefinite 'Preparing worktree' for a parked pending item", () => {
-    // A parked add-to-dashboard item is Pending with a branch but no visible
-    // worktree; it must render its normal pending state, not a stuck spinner.
+  it("shows a ready message (no fake progress bar) for a parked ready item", () => {
+    // A ready parked item must NOT render "Pending (0/N)" + an empty bar.
     renderCard({
       workflow: makeWorkflow({
         state: "Pending",
         can_start: true,
-        branch_name: "feat/test-1",
-        worktree_path: undefined,
+        prep_state: "ready",
         progress_percent: 0,
-        progress_steps_total: 0,
+        progress_steps_total: 5,
       }),
     });
+    expect(screen.getByText(/ready — pick a workflow to start/i)).toBeTruthy();
     expect(screen.queryByText(/Preparing worktree/i)).toBeNull();
+    expect(screen.queryByText(/\(0\//)).toBeNull(); // no 0/N progress text
+  });
+
+  it("shows a transient 'Preparing worktree' while prep is in flight", () => {
+    renderCard({
+      workflow: makeWorkflow({ state: "Pending", can_start: true, prep_state: "preparing" }),
+    });
+    expect(screen.getByText(/Preparing worktree/i)).toBeTruthy();
+  });
+
+  it("shows 'Repository not ready' when the repo isn't available", () => {
+    renderCard({
+      workflow: makeWorkflow({ state: "Pending", can_start: true, prep_state: "repo_not_ready" }),
+    });
+    expect(screen.getByText(/Repository not ready/i)).toBeTruthy();
   });
 
   it("disables the console-output button when there are no terminal lines", () => {
