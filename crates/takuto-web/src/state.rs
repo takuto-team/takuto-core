@@ -177,9 +177,7 @@ pub struct EditorState {
     pub path_token_registry: PathTokenRegistry,
 }
 
-/// Run-command companion to [`EditorState`]. Two fields are intentional —
-/// adding a third (e.g. a future `run_command_scanners` map) is the natural
-/// extension point.
+/// Run-command companion to [`EditorState`].
 #[derive(Clone)]
 pub struct RunCommandState {
     /// Active run command processes, keyed by ticket_key.
@@ -189,6 +187,10 @@ pub struct RunCommandState {
     /// workflow can have multiple concurrent run-commands. Cleared in
     /// `stop_run_command`, `delete_workflow`, and `mark_done`.
     pub run_command_bundles: RunCommandBundlesMap,
+    /// Docker boundary for `start_run_command` / `stop_run_command`. Production
+    /// uses [`DockerSpawner`](crate::container_spawner::DockerSpawner); tests
+    /// inject a fake so the spawn path is exercisable without a daemon.
+    pub spawner: std::sync::Arc<dyn crate::container_spawner::ContainerSpawner>,
 }
 
 /// Top-level application state — composed of 5 focused sub-structs so route

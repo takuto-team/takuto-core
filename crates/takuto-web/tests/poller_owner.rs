@@ -100,6 +100,7 @@ fn build_state(data_dir: &std::path::Path) -> AppState {
         RunCommandState {
             run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
             run_command_bundles: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            spawner: Arc::new(takuto_web::test_helpers::FakeSpawner::ready()),
         },
     )
 }

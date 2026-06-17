@@ -16,6 +16,9 @@ test-utils = []
 
 [dependencies]
 takuto-core = { workspace = true }
+# `container_spawner::ContainerSpawner` is a `#[async_trait]` object so the
+# run-command Docker calls can be faked in tests.
+async-trait = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 serde = { workspace = true }
@@ -46,9 +49,6 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", 
 http-body-util = "0.1"
 
 [dev-dependencies]
-# The credentials integration test implements the
-# `takuto_core::auth::GhClient` trait, which is `#[async_trait]`.
-async-trait = { workspace = true }
 # Self dev-dep — activates the `test-utils` feature during `cargo test`,
 # `cargo bench`, and example builds so external integration tests under
 # `tests/` can use `crate::test_helpers`. Production builds (no dev-deps,

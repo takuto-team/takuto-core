@@ -734,6 +734,7 @@ mod tests {
             RunCommandState {
                 run_commands: Arc::new(RwLock::new(HashMap::new())),
                 run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
+                spawner: Arc::new(crate::test_helpers::FakeSpawner::ready()),
             },
         )
     }

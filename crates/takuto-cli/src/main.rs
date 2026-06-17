@@ -1209,6 +1209,7 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             run_command_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            spawner: std::sync::Arc::new(takuto_web::container_spawner::DockerSpawner),
         },
     );
     let app = build_router(app_state);

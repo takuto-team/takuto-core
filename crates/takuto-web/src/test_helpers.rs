@@ -47,6 +47,17 @@ pub fn test_state_with_db() -> AppState {
 /// Useful when you need to tweak the config or insert data into the DB before
 /// constructing the state.
 pub fn test_state_with_db_instance(db: Database) -> AppState {
+    test_state_with_db_and_spawner(db, Arc::new(FakeSpawner::ready()))
+}
+
+/// Like [`test_state_with_db_instance`] but with an injected container spawner.
+///
+/// Lets a test drive the run-command spawn path with a [`FakeSpawner`] it keeps
+/// a handle to (to assert recorded calls), instead of the default ready fake.
+pub fn test_state_with_db_and_spawner(
+    db: Database,
+    spawner: Arc<dyn crate::container_spawner::ContainerSpawner>,
+) -> AppState {
     let config = Arc::new(RwLock::new(Config::default()));
     let actions: Arc<dyn takuto_core::actions::traits::ExternalActions> =
         Arc::new(DryRunActions::new("origin".to_string(), None));
@@ -100,8 +111,83 @@ pub fn test_state_with_db_instance(db: Database) -> AppState {
         RunCommandState {
             run_commands: Arc::new(RwLock::new(HashMap::new())),
             run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
+            spawner,
         },
     )
+}
+
+/// In-memory [`ContainerSpawner`](crate::container_spawner::ContainerSpawner)
+/// double for the run-command spawn path. Records every `start` / `stop` call
+/// and returns canned values — no Docker daemon, no real container.
+#[derive(Clone)]
+pub struct FakeSpawner {
+    pub available: bool,
+    pub image: Option<String>,
+    pub start_result: Result<Vec<u16>, String>,
+    /// `(ticket_key, cmd_index)` of each `start_run_command` call.
+    pub started: Arc<std::sync::Mutex<Vec<(String, usize)>>>,
+    /// `(ticket_key, cmd_index)` of each `stop_run_command` call.
+    pub stopped: Arc<std::sync::Mutex<Vec<(String, usize)>>>,
+}
+
+impl FakeSpawner {
+    /// A spawner that reports Docker available and succeeds, returning one
+    /// forwarded spare port. The default for [`test_state_with_db_instance`].
+    pub fn ready() -> Self {
+        Self {
+            available: true,
+            image: Some("takuto:test".to_string()),
+            start_result: Ok(vec![3000]),
+            started: Arc::new(std::sync::Mutex::new(Vec::new())),
+            stopped: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Like [`ready`](Self::ready) but `start_run_command` fails with `msg`,
+    /// for exercising the spawn-failure branch.
+    pub fn failing(msg: &str) -> Self {
+        Self {
+            start_result: Err(msg.to_string()),
+            ..Self::ready()
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::container_spawner::ContainerSpawner for FakeSpawner {
+    fn is_available(&self) -> bool {
+        self.available
+    }
+
+    async fn discover_worker_image(&self) -> Option<String> {
+        self.image.clone()
+    }
+
+    async fn start_run_command(
+        &self,
+        ticket_key: &str,
+        _worktree_path: &std::path::Path,
+        _image: &str,
+        _command: &str,
+        cmd_index: usize,
+        _dynamic_ports: usize,
+        _isolate_workspace: bool,
+        _extra_env: &[(String, String)],
+        _secrets_bundle: Option<&takuto_core::auth::WorkerSecretsBundle>,
+    ) -> Result<Vec<u16>, String> {
+        self.started
+            .lock()
+            .unwrap()
+            .push((ticket_key.to_string(), cmd_index));
+        self.start_result.clone()
+    }
+
+    async fn stop_run_command(&self, ticket_key: &str, cmd_index: usize) {
+        self.stopped
+            .lock()
+            .unwrap()
+            .push((ticket_key.to_string(), cmd_index));
+    }
 }
 
 /// Origin header to attach to mutating requests in tests. Matches the

@@ -73,3 +73,83 @@ pub async fn retry_workflow_def(
         .map(|()| StatusCode::ACCEPTED)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use crate::server::build_router;
+    use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+    /// `list_workflow_definitions` resolves the per-user flow store and returns
+    /// a JSON array. With the default (empty) flow defaults the body is `[]`,
+    /// but the handler still exercises the full DB-backed resolve path.
+    #[tokio::test]
+    async fn list_definitions_returns_json_array_for_authed_user() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::get("/api/workflow-definitions")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.is_array(), "definitions response must be a JSON array");
+    }
+
+    /// Running a definition for a ticket the caller doesn't own (here: a
+    /// non-existent workflow) is rejected by `require_workflow_access` with
+    /// 404 — the access guard, not the engine, is what answers.
+    #[tokio::test]
+    async fn run_workflow_def_404_for_unknown_workflow() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflows/NOPE-1/run-workflow/implement")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn retry_workflow_def_404_for_unknown_workflow() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflows/NOPE-1/retry-workflow/implement")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+}

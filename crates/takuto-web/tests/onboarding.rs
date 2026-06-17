@@ -74,6 +74,7 @@ fn test_state_no_db() -> AppState {
         RunCommandState {
             run_commands: Arc::new(RwLock::new(HashMap::new())),
             run_command_bundles: Arc::new(RwLock::new(HashMap::new())),
+            spawner: Arc::new(takuto_web::test_helpers::FakeSpawner::ready()),
         },
     )
 }

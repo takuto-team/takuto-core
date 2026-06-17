@@ -121,6 +121,7 @@ fn test_state_isolated() -> (AppState, TempDir) {
         RunCommandState {
             run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
             run_command_bundles: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            spawner: Arc::new(takuto_web::test_helpers::FakeSpawner::ready()),
         },
     );
     (state, dir)

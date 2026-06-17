@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use takuto_core::container::{self, ContainerRunner};
+use takuto_core::container;
 
 use crate::auth::AuthenticatedUser;
 use crate::state::{AuthState, ConfigState, EditorState, EngineState, RunCommandState};
@@ -172,14 +172,16 @@ pub async fn start_run_command(
         }
     }
 
-    if !ContainerRunner::is_available() {
+    if !run_command.spawner.is_available() {
         return Err((
             StatusCode::CONFLICT,
             "Docker is not available — cannot start run command container".into(),
         ));
     }
 
-    let image = ContainerRunner::discover_worker_image()
+    let image = run_command
+        .spawner
+        .discover_worker_image()
         .await
         .unwrap_or_else(|| "takuto:latest".to_string());
 
@@ -204,31 +206,33 @@ pub async fn start_run_command(
         map.insert((ticket_key.clone(), index), b.clone());
     }
 
-    let spare_ports = container::start_run_command(
-        &ticket_key,
-        &worktree,
-        &image,
-        &rc_command,
-        index,
-        dynamic_ports,
-        true, // isolate_workspace: restrict container to this issue's worktree
-        &[("TAKUTO_PROXY_BASE", &proxy_base)],
-        secrets_bundle.as_deref(),
-    )
-    .await
-    .map_err(|e| {
-        // Spawn failed → drop the stashed Arc.
-        let run_command_clone = run_command.clone();
-        let key = (ticket_key.clone(), index);
-        tokio::spawn(async move {
-            run_command_clone
-                .run_command_bundles
-                .write()
-                .await
-                .remove(&key);
-        });
-        (StatusCode::INTERNAL_SERVER_ERROR, e)
-    })?;
+    let spare_ports = run_command
+        .spawner
+        .start_run_command(
+            &ticket_key,
+            &worktree,
+            &image,
+            &rc_command,
+            index,
+            dynamic_ports,
+            true, // isolate_workspace: restrict container to this issue's worktree
+            &[("TAKUTO_PROXY_BASE".to_string(), proxy_base.clone())],
+            secrets_bundle.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            // Spawn failed → drop the stashed Arc.
+            let run_command_clone = run_command.clone();
+            let key = (ticket_key.clone(), index);
+            tokio::spawn(async move {
+                run_command_clone
+                    .run_command_bundles
+                    .write()
+                    .await
+                    .remove(&key);
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
+        })?;
 
     // Register in state BEFORE spawning background tasks so that events
     // emitted by the scanner/tracker always find an existing map entry
@@ -349,7 +353,10 @@ pub async fn stop_run_command(
     }
 
     // Stop the container
-    container::stop_run_command(&ticket_key, index).await;
+    run_command
+        .spawner
+        .stop_run_command(&ticket_key, index)
+        .await;
     // Drop the bundle Arc — last strong reference fires the TempDir
     // RAII cleanup. Done AFTER stop_run_command so the secret files
     // stay on disk for the container's final teardown read.
@@ -372,4 +379,387 @@ pub async fn stop_run_command(
     .await;
 
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tokio_util::sync::CancellationToken;
+    use tower::ServiceExt;
+
+    use takuto_core::db::user_worktree_commands::RunCommand;
+    use takuto_core::db::{repositories, user_worktree_commands};
+    use takuto_core::workflow::state::WorkflowState;
+
+    use crate::server::build_router;
+    use crate::state::{ActiveRunCommand, AppState};
+    use crate::test_helpers::{
+        FakeSpawner, TEST_ORIGIN, register_and_login, temp_db, test_state_with_db,
+        test_state_with_db_and_spawner,
+    };
+
+    const WS: &str = "rc-ws";
+
+    async fn user_id_for(state: &AppState, username: &str) -> String {
+        let db = state.auth.db.as_ref().expect("db");
+        takuto_core::db::users::get_user_by_username(db.adapter(), username)
+            .await
+            .expect("query user")
+            .expect("user exists")
+            .id
+    }
+
+    /// Seed a workflow the caller can access: a repository linked to the user,
+    /// plus an in-memory workflow carrying that repo id. `require_workflow_access`
+    /// then passes (repo-id match), letting tests reach the run-command guards.
+    /// The workflow is left in `Pending` (active) — flip `.state` per test.
+    async fn seed_accessible_workflow(state: &AppState, ticket_key: &str, owner_id: &str) {
+        let db = state.auth.db.as_ref().expect("db");
+        let repo_id = repositories::upsert(
+            db.adapter(),
+            WS,
+            None,
+            &format!("/tmp/takuto-test-{ticket_key}-repo"),
+            "main",
+            Some(owner_id),
+        )
+        .await
+        .expect("upsert repo");
+        repositories::add_for_user(db.adapter(), owner_id, &repo_id)
+            .await
+            .expect("link repo to user");
+
+        state
+            .engine
+            .engine
+            .start_workflow(
+                ticket_key.to_string(),
+                "run-command fixture".to_string(),
+                true,
+                None,
+                None,
+                Some(owner_id.to_string()),
+                Some(repo_id),
+            )
+            .await
+            .expect("seed start_workflow");
+
+        // The run-command DB lookup keys on the workflow's workspace name.
+        let arc = state.engine.engine.workflows_arc();
+        let mut map = arc.write().await;
+        let w = map.get_mut(ticket_key).expect("seeded workflow present");
+        w.workspace_name = WS.to_string();
+    }
+
+    /// Overwrite the seeded workflow's state + worktree so a specific guard is reached.
+    async fn set_state_and_worktree(
+        state: &AppState,
+        ticket_key: &str,
+        new_state: WorkflowState,
+        worktree: Option<PathBuf>,
+    ) {
+        let arc = state.engine.engine.workflows_arc();
+        let mut map = arc.write().await;
+        let w = map.get_mut(ticket_key).expect("seeded workflow present");
+        w.state = new_state;
+        w.worktree_path = worktree;
+    }
+
+    async fn seed_one_run_command(state: &AppState, owner_id: &str) {
+        let db = state.auth.db.as_ref().expect("db");
+        user_worktree_commands::upsert(
+            db.adapter(),
+            owner_id,
+            WS,
+            &[],
+            &[RunCommand {
+                name: "dev".into(),
+                command: "npm run dev".into(),
+            }],
+        )
+        .await
+        .expect("seed run command");
+    }
+
+    // ── list_run_commands ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_run_commands_404_when_workflow_absent() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/api/workflows/NOPE-1/run-commands")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_run_commands_empty_for_owned_workflow_without_configured_commands() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/api/workflows/RC-1/run-commands")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["commands"].as_array().unwrap().len(), 0);
+    }
+
+    // ── start_run_command guards (all return before any container spawn) ───
+
+    fn start_req(ticket: &str, index: usize, cookie: &str) -> Request<Body> {
+        Request::post(format!(
+            "/api/workflows/{ticket}/run-commands/{index}/start"
+        ))
+        .header("Origin", TEST_ORIGIN)
+        .header("Cookie", cookie)
+        .body(Body::empty())
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn start_run_command_404_when_workflow_absent() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let app = build_router(state);
+        let resp = app.oneshot(start_req("NOPE-1", 0, &cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn start_run_command_400_when_index_out_of_range() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await;
+        // No configured run commands → index 0 is out of range.
+        let app = build_router(state);
+        let resp = app.oneshot(start_req("RC-1", 0, &cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn start_run_command_409_when_workflow_active() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await; // Pending ⇒ active
+        seed_one_run_command(&state, &uid).await;
+        let app = build_router(state);
+        let resp = app.oneshot(start_req("RC-1", 0, &cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn start_run_command_409_when_no_worktree() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await;
+        seed_one_run_command(&state, &uid).await;
+        set_state_and_worktree(&state, "RC-1", WorkflowState::Done, None).await;
+        let app = build_router(state);
+        let resp = app.oneshot(start_req("RC-1", 0, &cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn start_run_command_409_when_worktree_missing_on_disk() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await;
+        seed_one_run_command(&state, &uid).await;
+        set_state_and_worktree(
+            &state,
+            "RC-1",
+            WorkflowState::Done,
+            Some(PathBuf::from("/tmp/takuto-test-does-not-exist-xyz")),
+        )
+        .await;
+        let app = build_router(state);
+        let resp = app.oneshot(start_req("RC-1", 0, &cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    /// The spawn-success path: all guards pass and an injected [`FakeSpawner`]
+    /// stands in for Docker, so the handler runs image discovery → spawn →
+    /// register the active run command, with no daemon and no real container.
+    #[tokio::test]
+    async fn start_run_command_200_spawns_via_fake_and_registers() {
+        let fake = std::sync::Arc::new(FakeSpawner::ready());
+        let state = test_state_with_db_and_spawner(temp_db(), fake.clone());
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await;
+        seed_one_run_command(&state, &uid).await;
+        let tmp = std::env::temp_dir().join(format!("takuto-test-wt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        set_state_and_worktree(&state, "RC-1", WorkflowState::Done, Some(tmp.clone())).await;
+
+        let rc_state = state.run_command.run_commands.clone();
+        let app = build_router(state);
+        let resp = app.oneshot(start_req("RC-1", 0, &cookie)).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["index"], 0);
+        assert_eq!(json["name"], "dev");
+
+        // The fake recorded exactly one spawn for (ticket, index) …
+        assert_eq!(
+            fake.started.lock().unwrap().as_slice(),
+            &[("RC-1".to_string(), 0)]
+        );
+        // … and the handler registered the active run command in state.
+        assert!(
+            rc_state.read().await.get("RC-1").is_some(),
+            "a successful spawn must register the run command"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The spawn-failure branch: all guards pass but the spawner returns `Err`,
+    /// so the handler answers 500 and does not register an active run command.
+    #[tokio::test]
+    async fn start_run_command_500_when_spawn_fails() {
+        let fake = std::sync::Arc::new(FakeSpawner::failing("boom: no ports"));
+        let state = test_state_with_db_and_spawner(temp_db(), fake.clone());
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await;
+        seed_one_run_command(&state, &uid).await;
+        let tmp = std::env::temp_dir().join(format!("takuto-test-wt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        set_state_and_worktree(&state, "RC-1", WorkflowState::Done, Some(tmp.clone())).await;
+
+        let rc_state = state.run_command.run_commands.clone();
+        let app = build_router(state);
+        let resp = app.oneshot(start_req("RC-1", 0, &cookie)).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // The spawn was attempted …
+        assert_eq!(
+            fake.started.lock().unwrap().as_slice(),
+            &[("RC-1".to_string(), 0)]
+        );
+        // … but a failed spawn must not leave a registered run command.
+        assert!(
+            rc_state.read().await.get("RC-1").is_none(),
+            "a failed spawn must not register the run command"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn start_run_command_409_when_already_running() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await;
+        seed_one_run_command(&state, &uid).await;
+        let tmp = std::env::temp_dir().join(format!("takuto-test-wt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        set_state_and_worktree(&state, "RC-1", WorkflowState::Done, Some(tmp.clone())).await;
+        // Pre-register an active run command at index 0 keyed by ticket_key.
+        {
+            let mut rc = state.run_command.run_commands.write().await;
+            rc.entry("RC-1".to_string())
+                .or_default()
+                .push(ActiveRunCommand {
+                    cmd_index: 0,
+                    name: "dev".into(),
+                    scanner_cancel: CancellationToken::new(),
+                    forwarded_port: None,
+                });
+        }
+        let app = build_router(state);
+        let resp = app.oneshot(start_req("RC-1", 0, &cookie)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── stop_run_command ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn stop_run_command_404_when_workflow_absent() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflows/NOPE-1/run-commands/0/stop")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn stop_run_command_removes_active_entry_and_returns_200() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let uid = user_id_for(&state, "admin").await;
+        seed_accessible_workflow(&state, "RC-1", &uid).await;
+        {
+            let mut rc = state.run_command.run_commands.write().await;
+            rc.entry("RC-1".to_string())
+                .or_default()
+                .push(ActiveRunCommand {
+                    cmd_index: 0,
+                    name: "dev".into(),
+                    scanner_cancel: CancellationToken::new(),
+                    forwarded_port: None,
+                });
+        }
+        let rc_state = state.run_command.run_commands.clone();
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflows/RC-1/run-commands/0/stop")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // The active entry for the ticket was removed.
+        assert!(
+            rc_state.read().await.get("RC-1").is_none(),
+            "stopping the only run command should drop the ticket's entry"
+        );
+    }
 }
