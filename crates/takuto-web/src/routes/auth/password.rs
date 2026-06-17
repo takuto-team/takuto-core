@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! `POST /api/auth/change-password`, `POST /api/auth/regenerate-recovery-codes`,
+//! `POST /api/auth/change-password`, `POST /api/auth/recovery-codes`,
 //! and `POST /api/auth/recover` — all flows that mutate password / recovery
 //! credentials for an existing user.
 
@@ -319,5 +319,179 @@ pub async fn recover(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use crate::server::build_router;
+    use crate::state::AppState;
+    use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+    fn post(path: &str, cookie: Option<&str>, body: &str) -> Request<Body> {
+        let mut b = Request::post(path)
+            .header("Content-Type", "application/json")
+            .header("Origin", TEST_ORIGIN);
+        if let Some(c) = cookie {
+            b = b.header("Cookie", c);
+        }
+        b.body(Body::from(body.to_string())).unwrap()
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+    }
+
+    // ── change_password ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn change_password_succeeds_with_correct_current() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let resp = build_router(state)
+            .oneshot(post(
+                "/api/auth/change-password",
+                Some(&cookie),
+                r#"{"current_password":"testpassword1234","new_password":"brandnewpass99"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_short_new_password() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let resp = build_router(state)
+            .oneshot(post(
+                "/api/auth/change-password",
+                Some(&cookie),
+                r#"{"current_password":"testpassword1234","new_password":"short"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_wrong_current() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let resp = build_router(state)
+            .oneshot(post(
+                "/api/auth/change-password",
+                Some(&cookie),
+                r#"{"current_password":"wrongpassword123","new_password":"brandnewpass99"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn change_password_requires_session() {
+        let state = test_state_with_db();
+        let _ = register_and_login(&state).await; // user exists, but no cookie sent
+        let resp = build_router(state)
+            .oneshot(post(
+                "/api/auth/change-password",
+                None,
+                r#"{"current_password":"testpassword1234","new_password":"brandnewpass99"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ── regenerate_recovery_codes ─────────────────────────────────────────
+
+    async fn regenerate_codes(state: &AppState, cookie: &str) -> Vec<String> {
+        let resp = build_router(state.clone())
+            .oneshot(post("/api/auth/recovery-codes", Some(cookie), "{}"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        json["recovery_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn regenerate_recovery_codes_returns_eight() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let codes = regenerate_codes(&state, &cookie).await;
+        assert_eq!(codes.len(), 8);
+        assert!(codes.iter().all(|c| !c.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn regenerate_requires_session() {
+        let state = test_state_with_db();
+        let resp = build_router(state)
+            .oneshot(post("/api/auth/recovery-codes", None, "{}"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ── recover ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn recover_rejects_short_password() {
+        let state = test_state_with_db();
+        let _ = register_and_login(&state).await;
+        let resp = build_router(state)
+            .oneshot(post(
+                "/api/auth/recover",
+                None,
+                r#"{"username":"admin","recovery_code":"x","new_password":"short"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn recover_unknown_user_is_unauthorized() {
+        let state = test_state_with_db();
+        let resp = build_router(state)
+            .oneshot(post(
+                "/api/auth/recover",
+                None,
+                r#"{"username":"ghost","recovery_code":"x","new_password":"longenoughpw99"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn recover_with_valid_code_resets_password() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let codes = regenerate_codes(&state, &cookie).await;
+
+        let body = format!(
+            r#"{{"username":"admin","recovery_code":"{}","new_password":"recoveredpass99"}}"#,
+            codes[0]
+        );
+        let resp = build_router(state)
+            .oneshot(post("/api/auth/recover", None, &body))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 }
