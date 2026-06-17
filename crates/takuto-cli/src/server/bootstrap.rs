@@ -6,6 +6,7 @@
 //! values later phases need.
 
 use std::sync::Arc;
+use std::sync::Once;
 use std::sync::atomic::AtomicBool;
 
 use tokio::sync::RwLock;
@@ -20,6 +21,27 @@ use takuto_core::docker_hooks;
 
 use super::Bootstrap;
 use crate::cli::Cli;
+
+/// Install the global JSON tracing subscriber exactly once per process.
+///
+/// `tracing_subscriber::*::init()` panics if a global subscriber is already
+/// set, which makes any code path that reaches it impossible to exercise more
+/// than once (e.g. parallel tests calling [`init`]). Guarding with [`Once`] +
+/// `try_init` keeps the first install authoritative and turns later calls into
+/// a no-op. The directive is parsed *before* the `Once` so a bad `log_level`
+/// still surfaces as an error rather than being swallowed.
+fn init_logging(log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
+    static LOGGING_INIT: Once = Once::new();
+    let directive = log_level.parse()?;
+    LOGGING_INIT.call_once(move || {
+        let _ = tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(EnvFilter::from_default_env().add_directive(directive))
+            .with_target(true)
+            .try_init();
+    });
+    Ok(())
+}
 
 pub(super) async fn init(cli: &Cli) -> Result<Bootstrap, Box<dyn std::error::Error>> {
     // Detect stale `[commands]` / `[[run_commands]]` keys BEFORE `tracing_subscriber::init`
@@ -45,13 +67,7 @@ pub(super) async fn init(cli: &Cli) -> Result<Bootstrap, Box<dyn std::error::Err
         config.general.dry_mode = true;
     }
 
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            EnvFilter::from_default_env().add_directive(config.general.log_level.parse()?),
-        )
-        .with_target(true)
-        .init();
+    init_logging(&config.general.log_level)?;
 
     // Replay legacy-key warnings now that the subscriber is initialised.
     for msg in &legacy_warnings {

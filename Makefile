@@ -68,7 +68,7 @@ TAKUTO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images takuto --format '{{.Re
 # Docker image registry for push targets.
 REGISTRY ?= ghcr.io/takuto-team/takuto-core
 
-.PHONY: help build build-local start stop auth test logs logs-takuto ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full checked-push backup-postgres backup-mariadb
+.PHONY: help build build-local start stop auth test logs logs-takuto ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full checked-push coverage backup-postgres backup-mariadb
 
 # Output directory for `backup-postgres` / `backup-mariadb`. Gitignored.
 DUMP_DIR ?= dump
@@ -367,6 +367,16 @@ check-full: ## Run all CI gates including gitleaks, cargo-deny, cargo-audit, npm
 
 checked-push: ## Run the full local gate, then git push only if it passes (ARGS="origin main")
 	./scripts/checked-push.sh $(ARGS)
+
+# Files excluded from coverage: generated bindings and the irreducible serve
+# shell (real TcpListener bind + axum::serve + OS signal wiring — not
+# unit-testable; everything that *decides* what to serve lives in tested
+# functions). Keep this list conservative — exclude only genuinely
+# untestable-by-unit-test code, never code a seam/fake could reach.
+COV_IGNORE := (ts_bindings\.rs|server/serve\.rs)
+
+coverage: ## Workspace line coverage (ARGS="--html" for a report); excludes generated + serve-shell
+	cargo llvm-cov --workspace --summary-only --ignore-filename-regex '$(COV_IGNORE)' $(ARGS)
 
 # ── DB backups ────────────────────────────────────────────────────────
 # Both targets stream the dump from the running DB container through

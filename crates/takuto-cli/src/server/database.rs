@@ -16,21 +16,22 @@ use takuto_core::repo_reconcile;
 
 use super::Bootstrap;
 
-pub(super) async fn open_and_reconcile(boot: &Bootstrap) -> Option<Database> {
+pub(super) async fn open_and_reconcile(
+    boot: &Bootstrap,
+    data_dir: Option<&std::path::Path>,
+) -> Option<Database> {
     let config = &boot.config;
 
-    // Initialize the SQLite database for multi-user auth. This happens BEFORE
-    // engine construction so the engine can thread the DB handle into the
-    // bootstrap driver for per-workspace `worktree_init_commands` overrides,
-    // and BEFORE poller construction so we can resolve the poller-owner
-    // user_id and pass it into both pollers.
-    let resolved_data_dir = takuto_core::workflow::snapshot::resolve_data_dir();
+    // The data directory is resolved by the caller (`resolve_data_dir()` reads
+    // process env) and passed in, so this function is a pure function of
+    // `(boot, data_dir)` and can be exercised against a temp dir in tests.
+    let resolved_data_dir = data_dir;
     // Sweep orphan WorkerSecretsBundle directories from a prior
     // run (crash between TempDir creation and drop leaves them around).
     // Safe to run unconditionally — best-effort, no-op when the dir is
     // missing. Runs BEFORE the DB opens because it touches a sibling
     // directory under data_dir, not the DB itself.
-    if let Some(dir) = resolved_data_dir.as_deref()
+    if let Some(dir) = resolved_data_dir
         && let Err(e) = takuto_core::auth::bundle::cleanup_orphan_secrets(dir)
     {
         tracing::warn!(
@@ -55,7 +56,7 @@ pub(super) async fn open_and_reconcile(boot: &Bootstrap) -> Option<Database> {
     {
         db_config.connection = env_url;
     }
-    let db = match resolved_data_dir.as_deref() {
+    let db = match resolved_data_dir {
         Some(data_dir) => match takuto_core::db::Database::connect(
             data_dir,
             &db_config,
@@ -93,7 +94,7 @@ pub(super) async fn open_and_reconcile(boot: &Bootstrap) -> Option<Database> {
     // workflows have no `repositories` row to look up by workspace_name
     // and the workflow filter hides every legacy workflow from its
     // owner's dashboard until an admin manually re-adds.
-    if let (Some(db), Some(data_dir)) = (db.as_ref(), resolved_data_dir.as_deref()) {
+    if let (Some(db), Some(data_dir)) = (db.as_ref(), resolved_data_dir) {
         let migrate_associations = config.read().await.general.migrate_orphan_repo_associations;
 
         // Repositories DAO uses the agnostic adapter — no rusqlite
@@ -210,4 +211,50 @@ pub(super) async fn open_and_reconcile(boot: &Bootstrap) -> Option<Database> {
     }
 
     db
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use tokio::sync::RwLock;
+
+    use takuto_core::actions::dry_run::DryRunActions;
+    use takuto_core::config::{Config, TicketingSystem};
+    use takuto_core::docker_hooks::SystemStatus;
+
+    fn boot_fixture() -> Bootstrap {
+        let config = Arc::new(RwLock::new(Config::default()));
+        Bootstrap {
+            config,
+            actions: Arc::new(DryRunActions::new("origin".to_string(), None)),
+            github_app_mgr: None,
+            ticketing_system: TicketingSystem::None,
+            system_status: SystemStatus::default(),
+            jira_available: Arc::new(AtomicBool::new(false)),
+            acli_ok: false,
+            max_concurrent: 1,
+            workflows_dir: std::path::PathBuf::from("/tmp"),
+            work_item_flow_defaults: Arc::new(Vec::new()),
+        }
+    }
+
+    /// With a real (empty) data dir the DB opens and reconciliation runs to
+    /// completion (no repos, no users) — exercising the open + reconcile +
+    /// seed path end to end.
+    #[tokio::test]
+    async fn opens_db_and_reconciles_against_temp_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_and_reconcile(&boot_fixture(), Some(dir.path())).await;
+        assert!(db.is_some(), "a valid data dir must yield an open database");
+    }
+
+    /// No data dir → no database (the degraded, legacy-auth path).
+    #[tokio::test]
+    async fn returns_none_without_data_dir() {
+        let db = open_and_reconcile(&boot_fixture(), None).await;
+        assert!(db.is_none());
+    }
 }

@@ -1,33 +1,121 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-//! Phase 4: assemble `AppState`, spawn the background tasks (snapshot syncer,
-//! log retention, config watcher, dev-mock reload), and run the
-//! `tokio::select!` loop that drives the pollers, the HTTP server, and graceful
-//! shutdown.
+//! Phase 4: decide which poller to run, assemble `AppState`, spawn the
+//! background tasks, then hand the HTTP server + poller futures to
+//! [`super::serve`] (the irreducible bind/serve/signal shell).
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use takuto_core::config::TicketingSystem;
+use takuto_core::config::{Config, TicketingSystem};
 use takuto_core::config_watcher::ConfigWatcher;
 use takuto_core::config_writer::ConfigWriter;
 use takuto_core::db::Database;
+use takuto_core::db::user_work_item_flows::UserFlow;
 use takuto_core::docker_hooks;
+use takuto_core::docker_hooks::SystemStatus;
+use takuto_core::github::auth_resolver::GitAuthResolver;
 use takuto_core::github::poller::GitHubPoller;
 use takuto_core::github::pr_merge_poller::PrMergePoller;
 use takuto_core::jira::poller::JiraPoller;
+use takuto_core::workflow::engine::WorkflowEngine;
 use takuto_web::server::build_router;
 use takuto_web::state::{
     AppState, AuthState, ConfigState, EditorState, EngineState, RunCommandState,
 };
 
-use super::{Bootstrap, EngineSetup};
+use super::{Bootstrap, EngineSetup, serve};
 use crate::cli::Cli;
+
+/// Which poller (if any) the active ticketing configuration calls for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PollerChoice {
+    Jira,
+    GitHub,
+    Idle,
+}
+
+/// Pure decision: Jira polls only when acli is authenticated; GitHub always
+/// polls; anything else (or unauthenticated Jira) stays idle.
+pub(super) fn select_poller(ticketing: TicketingSystem, acli_ok: bool) -> PollerChoice {
+    match ticketing {
+        TicketingSystem::Jira if acli_ok => PollerChoice::Jira,
+        TicketingSystem::GitHub => PollerChoice::GitHub,
+        _ => PollerChoice::Idle,
+    }
+}
+
+/// The pieces [`build_app_state`] needs. A plain carrier so the assembler keeps
+/// a readable call site instead of a dozen positional arguments.
+pub(super) struct AppStateParts {
+    pub engine: Arc<WorkflowEngine>,
+    pub polling_paused: Arc<AtomicBool>,
+    pub system_status: SystemStatus,
+    pub db: Option<Database>,
+    pub git_auth_resolver: Option<Arc<GitAuthResolver>>,
+    pub config: Arc<RwLock<Config>>,
+    pub config_path: PathBuf,
+    pub config_writer: Arc<ConfigWriter>,
+    pub ticketing_system: TicketingSystem,
+    pub jira_available: Arc<AtomicBool>,
+    pub preflight_error: Option<String>,
+    pub work_item_flow_defaults: Arc<Vec<UserFlow>>,
+}
+
+/// Assemble the composed [`AppState`] from its parts. Pure (no I/O); the fresh
+/// in-memory maps (editor/run-command scanners + bundle registries) start
+/// empty, exactly as a cold boot expects.
+pub(super) fn build_app_state(p: AppStateParts) -> AppState {
+    AppState::new(
+        EngineState {
+            engine: p.engine,
+            polling_paused: p.polling_paused,
+            clone_in_progress: Arc::new(AtomicBool::new(false)),
+            system_status: Arc::new(RwLock::new(p.system_status)),
+        },
+        AuthState {
+            db: p.db,
+            gh_client: Arc::new(takuto_core::auth::RealGhClient::new()),
+            git_auth_resolver: p.git_auth_resolver,
+            jira_http: Arc::new(takuto_core::jira::RealJiraHttp::new()),
+        },
+        ConfigState {
+            config: p.config,
+            config_path: p.config_path,
+            config_writer: Some(p.config_writer),
+            ticketing_system: p.ticketing_system,
+            jira_available: p.jira_available,
+            preflight_error: p.preflight_error,
+            work_item_flow_defaults: p.work_item_flow_defaults,
+        },
+        EditorState {
+            editor_scanners: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            dynamic_forwards: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            terminal_ports: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            // Hold per-workflow bundles alive for the lifetime of the detached
+            // editor containers. Cleared by the matching close handlers and by
+            // workflow teardown.
+            editor_bundles: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            path_token_registry: takuto_web::session_registry::PathTokenRegistry::new(),
+        },
+        RunCommandState {
+            run_commands: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            // Hold per-workflow bundles alive for the lifetime of the detached
+            // run-command containers. Cleared by the matching stop handlers and
+            // by workflow teardown.
+            run_command_bundles: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            spawner: Arc::new(takuto_web::container_spawner::DockerSpawner),
+        },
+    )
+}
 
 pub(super) async fn run(
     cli: &Cli,
@@ -154,61 +242,20 @@ pub(super) async fn run(
     let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());
     let config_writer = Arc::new(ConfigWriter::new(config_path.clone()));
 
-    let app_state = AppState::new(
-        EngineState {
-            engine: engine.clone(),
-            polling_paused,
-            clone_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            system_status: std::sync::Arc::new(tokio::sync::RwLock::new(system_status)),
-        },
-        AuthState {
-            // Clone so the retention task below gets its own handle
-            // without depriving AuthState of one.
-            db: db.clone(),
-            gh_client: std::sync::Arc::new(takuto_core::auth::RealGhClient::new()),
-            git_auth_resolver,
-            jira_http: std::sync::Arc::new(takuto_core::jira::RealJiraHttp::new()),
-        },
-        ConfigState {
-            config: config.clone(),
-            config_path: config_path.clone(),
-            config_writer: Some(config_writer.clone()),
-            ticketing_system,
-            jira_available: jira_available.clone(),
-            preflight_error,
-            work_item_flow_defaults: work_item_flow_defaults.clone(),
-        },
-        EditorState {
-            editor_scanners: std::sync::Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            dynamic_forwards: std::sync::Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            terminal_ports: std::sync::Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            // Hold per-workflow bundles alive for the lifetime of the
-            // detached editor containers. Cleared by the matching
-            // close handlers and by workflow teardown.
-            editor_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            path_token_registry: takuto_web::session_registry::PathTokenRegistry::new(),
-        },
-        RunCommandState {
-            run_commands: std::sync::Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            // Hold per-workflow bundles alive for the lifetime of the
-            // detached run-command containers. Cleared by the matching
-            // stop handlers and by workflow teardown.
-            run_command_bundles: std::sync::Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            spawner: std::sync::Arc::new(takuto_web::container_spawner::DockerSpawner),
-        },
-    );
+    let app_state = build_app_state(AppStateParts {
+        engine: engine.clone(),
+        polling_paused,
+        system_status,
+        db: db.clone(),
+        git_auth_resolver,
+        config: config.clone(),
+        config_path: config_path.clone(),
+        config_writer: config_writer.clone(),
+        ticketing_system,
+        jira_available,
+        preflight_error,
+        work_item_flow_defaults,
+    });
     let app = build_router(app_state);
 
     let web_host = config.read().await.web.host.clone();
@@ -217,7 +264,6 @@ pub(super) async fn run(
 
     info!(bind = %bind_addr, "Starting web server");
 
-    let shutdown_token = cancel_token.clone();
     let shutdown_engine = engine.clone();
     let snapshot_engine = engine.clone();
     let snapshot_cancel = cancel_token.clone();
@@ -311,113 +357,104 @@ pub(super) async fn run(
         }
     });
 
-    tokio::select! {
-        _ = async {
-            match ticketing_system {
-                TicketingSystem::Jira if acli_ok => {
-                    poller.run().await;
-                }
-                TicketingSystem::GitHub => {
-                    let gh_poller = GitHubPoller::new(
-                        config.clone(),
-                        engine.clone(),
-                        cancel_token_for_gh,
-                        polling_paused_for_gh,
-                        resolved_poller_owner.clone(),
-                    );
-                    gh_poller.run().await;
-                }
-                _ => {
-                    // No ticketing integration or Jira not authenticated — poller stays idle forever.
-                    std::future::pending::<()>().await;
-                }
+    // Build the chosen poller future (each owns its poller). Jira polls only
+    // when acli is authenticated; GitHub always polls; otherwise idle forever.
+    let poller_fut: Pin<Box<dyn Future<Output = ()> + Send>> =
+        match select_poller(ticketing_system, acli_ok) {
+            PollerChoice::Jira => Box::pin(async move { poller.run().await }),
+            PollerChoice::GitHub => {
+                let gh_poller = GitHubPoller::new(
+                    config.clone(),
+                    engine.clone(),
+                    cancel_token_for_gh,
+                    polling_paused_for_gh,
+                    resolved_poller_owner.clone(),
+                );
+                Box::pin(async move { gh_poller.run().await })
             }
-        } => {
-            info!("Poller stopped");
-        }
-        _ = pr_merge_poller.run() => {
-            info!("PR merge status poller stopped");
-        }
-        _ = snapshot_task => {
-            info!("Workflow snapshot syncer stopped");
-        }
-        _ = config_watcher_task => {
-            info!("Config file watcher stopped");
-        }
-        result = async {
-            let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-            axum::serve(listener, app)
-                .with_graceful_shutdown(cancel_token.cancelled_owned())
-                .await
-        } => {
-            if let Err(e) = result {
-                tracing::error!(error = %e, "Web server error");
-            }
-        }
-        _ = async {
-            let ctrl_c = tokio::signal::ctrl_c();
-            #[cfg(unix)]
-            {
-                use tokio::signal::unix::{SignalKind, signal};
-                match signal(SignalKind::terminate()) {
-                    Ok(mut sigterm) => {
-                        tokio::select! {
-                            _ = ctrl_c => {
-                                info!("Received SIGINT, initiating graceful shutdown");
-                            }
-                            _ = sigterm.recv() => {
-                                info!("Received SIGTERM, initiating graceful shutdown");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Degrade gracefully: keep running with only the Ctrl+C
-                        // hook. SIGTERM-based shutdown is unavailable, but the
-                        // process still responds to SIGINT and cancellation.
-                        tracing::error!(
-                            error = %e,
-                            "Failed to install SIGTERM handler; continuing with Ctrl+C only"
-                        );
-                        if let Err(e) = ctrl_c.await {
-                            tracing::error!(
-                                error = %e,
-                                "Ctrl+C handler unavailable; running without signal-based shutdown"
-                            );
-                            std::future::pending::<()>().await;
-                        }
-                        info!("Received Ctrl+C, initiating graceful shutdown");
-                    }
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                if let Err(e) = ctrl_c.await {
-                    // No Ctrl+C hook available: park forever rather than triggering
-                    // an immediate shutdown. The process still stops via cancellation.
-                    tracing::error!(
-                        error = %e,
-                        "Ctrl+C handler unavailable; running without signal-based shutdown"
-                    );
-                    std::future::pending::<()>().await;
-                }
-                info!("Received Ctrl+C, initiating graceful shutdown");
-            }
-        } => {
-            info!("Shutting down gracefully...");
+            PollerChoice::Idle => Box::pin(std::future::pending::<()>()),
+        };
+    let pr_merge_fut: Pin<Box<dyn Future<Output = ()> + Send>> =
+        Box::pin(async move { pr_merge_poller.run().await });
 
-            shutdown_token.cancel();
-
-            info!("Persisting workflows and stopping drivers for resume after restart...");
-            if let Err(e) = shutdown_engine.persist_interrupt_for_restart().await {
-                tracing::warn!(error = %e, "Failed to write workflow snapshot; workflows may not resume cleanly");
-            }
-
-            info!("Waiting for cleanup tasks to complete...");
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-            info!("Graceful shutdown complete");
-        }
-    }
+    serve::run_until_shutdown(
+        app,
+        bind_addr,
+        cancel_token,
+        shutdown_engine,
+        poller_fut,
+        pr_merge_fut,
+        snapshot_task,
+        config_watcher_task,
+    )
+    .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use takuto_core::actions::dry_run::DryRunActions;
+
+    #[test]
+    fn select_poller_rules() {
+        assert_eq!(
+            select_poller(TicketingSystem::Jira, true),
+            PollerChoice::Jira
+        );
+        // Jira without acli falls back to idle (no polling).
+        assert_eq!(
+            select_poller(TicketingSystem::Jira, false),
+            PollerChoice::Idle
+        );
+        assert_eq!(
+            select_poller(TicketingSystem::GitHub, false),
+            PollerChoice::GitHub
+        );
+        assert_eq!(
+            select_poller(TicketingSystem::None, true),
+            PollerChoice::Idle
+        );
+    }
+
+    /// `build_app_state` assembles a router-ready state from a temp DB + engine,
+    /// exercising every substate constructor without binding a socket.
+    #[tokio::test]
+    async fn build_app_state_assembles_a_routable_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), true).expect("open temp db");
+        let config = Arc::new(RwLock::new(Config::default()));
+        let actions: Arc<dyn takuto_core::actions::traits::ExternalActions> =
+            Arc::new(DryRunActions::new("origin".to_string(), None));
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let engine = Arc::new(WorkflowEngine::new_with_db(
+            config.clone(),
+            actions,
+            1,
+            jira_available.clone(),
+            TicketingSystem::None,
+            dir.path().to_path_buf(),
+            Some(db.clone()),
+        ));
+        let config_path = dir.path().join("config.toml");
+
+        let state = build_app_state(AppStateParts {
+            engine,
+            polling_paused: Arc::new(AtomicBool::new(true)),
+            system_status: SystemStatus::default(),
+            db: Some(db),
+            git_auth_resolver: None,
+            config,
+            config_path: config_path.clone(),
+            config_writer: Arc::new(ConfigWriter::new(config_path)),
+            ticketing_system: TicketingSystem::None,
+            jira_available,
+            preflight_error: None,
+            work_item_flow_defaults: Arc::new(Vec::new()),
+        });
+
+        // The state composes into a working router (exercises the assembly).
+        let _router = build_router(state);
+    }
 }

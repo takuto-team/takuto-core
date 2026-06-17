@@ -15,6 +15,7 @@ mod database;
 mod engine;
 mod poller_owner;
 mod runtime;
+mod serve;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -61,7 +62,8 @@ pub(crate) struct EngineSetup {
 
 pub async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let boot = bootstrap::init(cli).await?;
-    let db = database::open_and_reconcile(&boot).await;
+    let data_dir = takuto_core::workflow::snapshot::resolve_data_dir();
+    let db = database::open_and_reconcile(&boot, data_dir.as_deref()).await;
     let eng = engine::build(&boot, &db).await;
     runtime::run(cli, boot, db, eng).await
 }
