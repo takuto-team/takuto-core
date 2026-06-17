@@ -968,4 +968,69 @@ mod tests {
             "must exhaust the retry bound before giving up"
         );
     }
+
+    // ── shadow-write helpers ──────────────────────────────────────────────
+
+    /// Drive every `shadow_*` writer against a real (in-memory) DB row created
+    /// by `add_to_dashboard`, covering each helper's `Some(db)` happy path.
+    #[tokio::test]
+    async fn shadow_writes_round_trip_against_db() {
+        use crate::db::work_items::{DefRunState, StepStatus as DbStepStatus};
+        use crate::workflow::engine::test_support::test_engine;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, db) = test_engine(dir.path());
+        let id = engine
+            .add_to_dashboard("GH-1".into(), "sum".into(), true, None, None, None, None)
+            .await
+            .expect("add_to_dashboard creates the work_items row");
+
+        // Terminal state → durable-write (retry) path; then a non-terminal write.
+        shadow_persist_state_change(Some(&db), &id, &WorkflowState::Done, Some("build"), 100).await;
+        shadow_persist_state_change(Some(&db), &id, &WorkflowState::Pending, None, 101).await;
+        shadow_persist_branch_and_worktree(Some(&db), &id, "feat/x", Some("/tmp/wt"), 102).await;
+
+        let step_id =
+            shadow_record_step_start(Some(&db), &id, "build", Some("implement"), 103).await;
+        assert!(step_id.is_some(), "step start must return the new row id");
+        shadow_record_step_end(
+            Some(&db),
+            step_id,
+            DbStepStatus::Success,
+            Some(0),
+            None,
+            104,
+        )
+        .await;
+        // step_db_id None → no-op even with a db present.
+        shadow_record_step_end(Some(&db), None, DbStepStatus::Failed, None, None, 104).await;
+
+        shadow_start_def_run(Some(&db), &id, "implement", 105).await;
+        shadow_finish_def_run(
+            Some(&db),
+            &id,
+            "implement",
+            DefRunState::Completed,
+            None,
+            106,
+        )
+        .await;
+    }
+
+    /// Every shadow writer is a silent no-op when no DB is attached.
+    #[tokio::test]
+    async fn shadow_writes_are_noops_without_db() {
+        use crate::db::work_items::{DefRunState, StepStatus as DbStepStatus};
+
+        shadow_persist_state_change(None, "x", &WorkflowState::Done, None, 1).await;
+        shadow_persist_branch_and_worktree(None, "x", "b", None, 1).await;
+        assert!(
+            shadow_record_step_start(None, "x", "s", None, 1)
+                .await
+                .is_none()
+        );
+        shadow_record_step_end(None, Some(5), DbStepStatus::Failed, None, None, 1).await;
+        shadow_start_def_run(None, "x", "d", 1).await;
+        shadow_finish_def_run(None, "x", "d", DefRunState::Error, Some("e"), 1).await;
+    }
 }
