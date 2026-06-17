@@ -736,4 +736,36 @@ mod tests {
         // Temp file must not linger
         assert!(!dir.path().join("gh-app-token.tmp").exists());
     }
+
+    // -- git_credential_helper_script --
+
+    #[test]
+    fn credential_helper_script_emits_token_from_env_or_file() {
+        let script = git_credential_helper_script();
+        assert!(script.contains("username=x-access-token"));
+        // Falls back to the token file when GH_TOKEN is unset.
+        assert!(script.contains("GH_TOKEN:-"));
+        assert!(script.contains(TOKEN_FILE_PATH));
+    }
+
+    // -- try_create_token_manager --
+
+    #[test]
+    fn try_create_token_manager_none_when_unconfigured() {
+        assert!(try_create_token_manager(&GitHubAppConfig::default()).is_none());
+    }
+
+    #[test]
+    fn try_create_token_manager_none_when_key_invalid() {
+        // Configured (all required fields set) but the inline PEM is garbage,
+        // so manager construction fails and the helper degrades to None rather
+        // than aborting startup.
+        let cfg = GitHubAppConfig {
+            app_id: 1,
+            app_installation_id: 1,
+            app_private_key: "not-a-valid-pem".into(),
+            ..Default::default()
+        };
+        assert!(try_create_token_manager(&cfg).is_none());
+    }
 }
