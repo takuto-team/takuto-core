@@ -75,6 +75,21 @@ For the polished guides, see the **[documentation site](https://takuto-doc.alexa
 
 ---
 
+## What makes it different
+
+- **Isolated by container.** Every workflow runs in its own container and git worktree,
+  behind a default-deny egress firewall — the prompt-injection blast radius is one container,
+  not your machine or your network.
+- **Define the architecture, then let it run.** You set the approach — the ticket/spec and the
+  workflow steps — and the agent does the legwork autonomously. Step in only at the end to
+  fine-tune through the in-browser VS Code editor or web terminal (pointed at the exact
+  worktree) if the result needs a human touch.
+- **AI-assisted ticket prep.** Sharpen a ticket with AI help *before* the agent ever sees it,
+  so it works from a clear, complete spec instead of a vague one — better input, better PR.
+- **Run your app from a clean container.** Custom run commands launch your dev server / app
+  inside the isolated container on the server (with port forwarding), so you can preview and
+  verify the agent's work in a fresh environment — no "works on my machine".
+
 ## Why Takuto?
 
 | | IDE assistant (Copilot, Cursor inline) | Takuto |
