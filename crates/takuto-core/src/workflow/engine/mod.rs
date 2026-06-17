@@ -34,6 +34,7 @@ use transitions::WorkflowTransitions;
 
 use crate::actions::traits::ExternalActions;
 use crate::config::{Config, TicketingSystem};
+use crate::container::{ContainerRuntime, DockerRuntime};
 use crate::db::Database;
 use crate::error::Result;
 
@@ -69,6 +70,11 @@ pub struct WorkflowEngine {
     /// Defaults to a `RealGhClient`. Test fixtures override via
     /// [`Self::with_gh_client`] to inject a mock.
     pub(crate) gh_client: Arc<dyn crate::auth::GhClient>,
+    /// Docker boundary used by the driver/step path: availability probe,
+    /// worker-image discovery, container cleanup. Defaults to [`DockerRuntime`];
+    /// tests inject a fake via [`Self::with_container_runtime`] so the full step
+    /// loop runs without a daemon.
+    pub(crate) container_runtime: Arc<dyn ContainerRuntime>,
     // Service structs
     persistence: WorkflowPersistence,
     lifecycle: WorkflowLifecycle,
@@ -169,11 +175,23 @@ impl WorkflowEngine {
             db,
             git_auth_resolver: None,
             gh_client: Arc::new(crate::auth::RealGhClient::new()),
+            container_runtime: Arc::new(DockerRuntime),
             persistence,
             lifecycle,
             transitions,
             definitions,
         }
+    }
+
+    /// Override the container runtime (production uses `DockerRuntime`; tests
+    /// inject a `FakeContainerRuntime`). Propagates to the three service structs
+    /// that spawn driver tasks so the whole step path uses the same boundary.
+    pub fn with_container_runtime(mut self, rt: Arc<dyn ContainerRuntime>) -> Self {
+        self.container_runtime = rt.clone();
+        self.definitions.set_container_runtime(rt.clone());
+        self.persistence.set_container_runtime(rt.clone());
+        self.transitions.set_container_runtime(rt);
+        self
     }
 
     /// Override the GhClient (production uses `RealGhClient`; tests

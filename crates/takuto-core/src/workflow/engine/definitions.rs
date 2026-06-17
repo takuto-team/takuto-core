@@ -11,6 +11,7 @@ use tracing::info;
 
 use crate::actions::traits::ExternalActions;
 use crate::config::{Config, ConfigError};
+use crate::container::{ContainerRuntime, DockerRuntime};
 use crate::db::Database;
 use crate::error::Result;
 
@@ -31,6 +32,9 @@ pub(crate) struct WorkflowDefinitionManager {
     /// Resolver for pin + bundle build. Set via
     /// [`WorkflowEngine::with_git_auth_resolver`].
     pub(crate) git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
+    /// Docker boundary forwarded to spawned drivers. Set via
+    /// [`super::WorkflowEngine::with_container_runtime`]; defaults to real docker.
+    pub(crate) container_runtime: Arc<dyn ContainerRuntime>,
 }
 
 impl WorkflowDefinitionManager {
@@ -55,6 +59,7 @@ impl WorkflowDefinitionManager {
             workflows_dir,
             db,
             git_auth_resolver: None,
+            container_runtime: Arc::new(DockerRuntime),
         }
     }
 
@@ -63,6 +68,10 @@ impl WorkflowDefinitionManager {
         resolver: Arc<crate::github::auth_resolver::GitAuthResolver>,
     ) {
         self.git_auth_resolver = Some(resolver);
+    }
+
+    pub(crate) fn set_container_runtime(&mut self, rt: Arc<dyn ContainerRuntime>) {
+        self.container_runtime = rt;
     }
 
     /// Resolve the runnable definition set for a ticket's workflow.
@@ -245,6 +254,7 @@ impl WorkflowDefinitionManager {
         let db = self.db.clone();
         // Thread the resolver into the spawned driver task.
         let resolver = self.git_auth_resolver.clone();
+        let runtime = self.container_runtime.clone();
 
         tokio::spawn(async move {
             super::driver::drive_workflow_def(
@@ -265,6 +275,7 @@ impl WorkflowDefinitionManager {
                 db,
                 resolver,
                 None, // fresh start — not a resume
+                runtime,
             )
             .await;
         });

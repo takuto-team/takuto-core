@@ -99,6 +99,9 @@ pub(super) async fn run_workflow_def_steps(
     // step uses a built-in "resume" prompt and (if known) the
     // recorded `session_id`. `None` means start from scratch.
     resume: Option<ResumeContext>,
+    // Docker availability + worker-image discovery boundary. `DockerRuntime`
+    // in production; a fake in tests so the step loop runs without a daemon.
+    container_runtime: &dyn crate::container::ContainerRuntime,
 ) -> Result<()> {
     let ticket = JiraTicket {
         key: ticket_key.to_string(),
@@ -136,11 +139,12 @@ pub(super) async fn run_workflow_def_steps(
     }
 
     // Construct container runner for isolation
-    let container_runner = if ContainerRunner::is_available() {
+    let container_runner = if container_runtime.is_available().await {
         let cfg = config.read().await;
         let image = if cfg.general.worker_image.is_empty() {
             drop(cfg);
-            ContainerRunner::discover_worker_image()
+            container_runtime
+                .discover_worker_image()
                 .await
                 .unwrap_or_else(|| "takuto:latest".to_string())
         } else {

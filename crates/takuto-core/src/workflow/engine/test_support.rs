@@ -19,6 +19,8 @@ use crate::actions::dry_run::DryRunActions;
 use crate::actions::traits::ExternalActions;
 use crate::auth::{GhClient, GhResponse};
 use crate::config::{Config, TicketingSystem};
+use crate::container::ContainerRuntime;
+use crate::container::runtime::testing::FakeContainerRuntime;
 use crate::db::user_work_item_flows::{UserFlow, UserFlowStep};
 use crate::db::{Database, DbValue};
 use crate::workflow::engine::{Workflow, WorkflowEngine};
@@ -48,9 +50,22 @@ impl GhClient for MockGhClient {
     }
 }
 
-/// An in-memory-DB engine wired with `DryRunActions` + [`MockGhClient`].
-/// `max_concurrent_workflows = 4` so concurrency-slot tests have headroom.
+/// An in-memory-DB engine wired with `DryRunActions` + [`MockGhClient`] and a
+/// `FakeContainerRuntime` that reports Docker available — so the full step loop
+/// runs without a daemon. `max_concurrent_workflows = 4` for slot headroom.
 pub(crate) fn test_engine(workflows_dir: &Path) -> (WorkflowEngine, Database) {
+    test_engine_with_runtime(
+        workflows_dir,
+        Arc::new(FakeContainerRuntime::available_with_image("takuto:test")),
+    )
+}
+
+/// Like [`test_engine`] but with an explicit container runtime (e.g.
+/// `FakeContainerRuntime::unavailable()` to exercise the DockerUnavailable gate).
+pub(crate) fn test_engine_with_runtime(
+    workflows_dir: &Path,
+    runtime: Arc<dyn ContainerRuntime>,
+) -> (WorkflowEngine, Database) {
     let db = Database::open_in_memory().expect("in-memory db");
     let config = Arc::new(RwLock::new(Config::default()));
     let actions: Arc<dyn ExternalActions> =
@@ -64,8 +79,31 @@ pub(crate) fn test_engine(workflows_dir: &Path) -> (WorkflowEngine, Database) {
         workflows_dir.to_path_buf(),
         Some(db.clone()),
     )
-    .with_gh_client(Arc::new(MockGhClient));
+    .with_gh_client(Arc::new(MockGhClient))
+    .with_container_runtime(runtime);
     (engine, db)
+}
+
+/// Poll the in-memory map until `key` reaches a terminal state, or give up
+/// after `timeout_ms`. Returns the terminal state, or `None` on timeout.
+pub(crate) async fn wait_terminal(
+    engine: &WorkflowEngine,
+    key: &str,
+    timeout_ms: u64,
+) -> Option<WorkflowState> {
+    let arc = engine.workflows_arc();
+    tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
+        loop {
+            if let Some(state) = arc.read().await.get(key).map(|w| w.state.clone())
+                && state.is_terminal()
+            {
+                return state;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .ok()
 }
 
 /// Insert a `users` row (role `"admin"` or `"user"`).

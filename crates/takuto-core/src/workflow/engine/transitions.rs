@@ -11,7 +11,7 @@ use tracing::{info, warn};
 
 use crate::actions::traits::ExternalActions;
 use crate::config::{Config, ConfigError};
-use crate::container::ContainerRunner;
+use crate::container::{ContainerRunner, ContainerRuntime, DockerRuntime};
 use crate::db::Database;
 use crate::error::Result;
 
@@ -37,6 +37,8 @@ pub(crate) struct WorkflowTransitions {
     pub(crate) git_auth_resolver: Option<Arc<crate::github::auth_resolver::GitAuthResolver>>,
     /// GhClient for at-resume PAT revalidation.
     pub(crate) gh_client: Option<Arc<dyn crate::auth::GhClient>>,
+    /// Docker boundary forwarded to drivers re-spawned on resume.
+    pub(crate) container_runtime: Arc<dyn ContainerRuntime>,
 }
 
 impl WorkflowTransitions {
@@ -64,6 +66,7 @@ impl WorkflowTransitions {
             db,
             git_auth_resolver: None,
             gh_client: None,
+            container_runtime: Arc::new(DockerRuntime),
         }
     }
 
@@ -76,6 +79,10 @@ impl WorkflowTransitions {
 
     pub(crate) fn set_gh_client(&mut self, gh: Arc<dyn crate::auth::GhClient>) {
         self.gh_client = Some(gh);
+    }
+
+    pub(crate) fn set_container_runtime(&mut self, rt: Arc<dyn ContainerRuntime>) {
+        self.container_runtime = rt;
     }
 
     pub async fn pause_workflow(&self, ticket_key: &str) -> Result<()> {
@@ -337,6 +344,7 @@ impl WorkflowTransitions {
 
                 // Thread the resolver into the resumed driver task.
                 let resolver = self.git_auth_resolver.clone();
+                let runtime = self.container_runtime.clone();
                 let resume_ctx = super::step_runner::ResumeContext {
                     session_id: resume_session_id.clone(),
                 };
@@ -359,6 +367,7 @@ impl WorkflowTransitions {
                         db,
                         resolver,
                         Some(resume_ctx),
+                        runtime,
                     )
                     .await;
                 });

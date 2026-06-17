@@ -10,6 +10,7 @@ use tracing::{info, warn};
 
 use crate::actions::traits::ExternalActions;
 use crate::config::Config;
+use crate::container::{ContainerRuntime, DockerRuntime};
 use crate::db::Database;
 use crate::error::Result;
 
@@ -37,6 +38,8 @@ pub(crate) struct WorkflowPersistence {
     /// `None`; set by `WorkflowEngine::with_gh_client` (so tests can inject
     /// a mock without going through the real `gh` binary).
     pub(crate) gh_client: Option<Arc<dyn crate::auth::GhClient>>,
+    /// Docker boundary forwarded to drivers re-spawned on restore.
+    pub(crate) container_runtime: Arc<dyn ContainerRuntime>,
 }
 
 impl WorkflowPersistence {
@@ -55,6 +58,7 @@ impl WorkflowPersistence {
             actions,
             git_auth_resolver: None,
             gh_client: None,
+            container_runtime: Arc::new(DockerRuntime),
         }
     }
 
@@ -67,6 +71,10 @@ impl WorkflowPersistence {
 
     pub(crate) fn set_gh_client(&mut self, gh: Arc<dyn crate::auth::GhClient>) {
         self.gh_client = Some(gh);
+    }
+
+    pub(crate) fn set_container_runtime(&mut self, rt: Arc<dyn ContainerRuntime>) {
+        self.container_runtime = rt;
     }
 
     /// Periodic snapshot sync during normal operation (called by background task).
@@ -464,6 +472,7 @@ impl WorkflowPersistence {
 
                         // Thread the resolver to the spawned driver.
                         let resolver = self.git_auth_resolver.clone();
+                        let runtime = self.container_runtime.clone();
                         tokio::spawn(async move {
                             drive_workflow_def(
                                 ticket,
@@ -483,6 +492,7 @@ impl WorkflowPersistence {
                                 db_clone,
                                 resolver,
                                 None, // restart restore — fresh start, not a resume
+                                runtime,
                             )
                             .await;
                         });

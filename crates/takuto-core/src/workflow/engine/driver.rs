@@ -19,7 +19,6 @@ use tracing::{error, info};
 
 use crate::actions::traits::ExternalActions;
 use crate::config::Config;
-use crate::container::ContainerRunner;
 use crate::db::Database;
 use crate::error::{Result, TakutoError};
 use crate::workflow::log_writer::WorkflowLogWriter;
@@ -65,6 +64,10 @@ pub(super) async fn drive_workflow_def(
     // When `Some`, the run is a resume: the first agent step gets a
     // built-in resume prompt and (if known) the recorded session id.
     resume: Option<super::step_runner::ResumeContext>,
+    // Docker boundary: availability probe + image discovery (in the step
+    // runner) and worker cleanup (below). `DockerRuntime` in production; a
+    // fake in tests so the full step loop runs without a daemon.
+    container_runtime: Arc<dyn crate::container::ContainerRuntime>,
 ) {
     use crate::workflow::definitions::WorkflowDefRunState;
 
@@ -174,13 +177,14 @@ pub(super) async fn drive_workflow_def(
             db.as_ref(),
             git_auth_resolver.as_ref(),
             resume.clone(),
+            container_runtime.as_ref(),
         )
         .await
     }
     .await;
 
     // Always clean up worker containers regardless of success/failure
-    ContainerRunner::cleanup_for_ticket(&ticket_key).await;
+    container_runtime.cleanup_for_ticket(&ticket_key).await;
 
     let (workflow_id, workflow_user_id) = {
         let wf = workflows.read().await;
@@ -1032,5 +1036,96 @@ mod tests {
         shadow_record_step_end(None, Some(5), DbStepStatus::Failed, None, None, 1).await;
         shadow_start_def_run(None, "x", "d", 1).await;
         shadow_finish_def_run(None, "x", "d", DefRunState::Error, Some("e"), 1).await;
+    }
+
+    // ── full-flow agent path (no Docker, mock agent) ──────────────────────
+
+    use crate::db::user_work_item_flows;
+    use crate::workflow::engine::test_support::{
+        flow, insert, seed_user, seed_workflow, test_engine, test_engine_with_runtime,
+        wait_terminal,
+    };
+    use crate::workflow::state::WorkflowState as WfState;
+
+    /// Pre-create a worktree dir + mark the workflow bootstrapped so the driver
+    /// skips git bootstrap and goes straight to the step loop.
+    async fn seed_runnable_workflow(
+        engine: &crate::workflow::engine::WorkflowEngine,
+        db: &crate::db::Database,
+        worktree_root: &std::path::Path,
+    ) {
+        seed_user(db, "alice", "user").await;
+        user_work_item_flows::set(
+            db.adapter(),
+            "alice",
+            "ws",
+            &[flow("implement", &[], &["build"])],
+        )
+        .await
+        .expect("seed flow");
+        let wt = worktree_root.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let mut wf = seed_workflow(WfState::Pending, "GH-1", Some("alice"));
+        wf.worktree_path = Some(wt);
+        wf.worktree_bootstrapped = true;
+        insert(engine, wf).await;
+    }
+
+    /// The full agent path: bootstrap is skipped, the gate passes via the fake
+    /// runtime, and the mock agent completes the step — driving the workflow to
+    /// a terminal, non-error state with a recorded success.
+    #[tokio::test]
+    async fn full_agent_flow_runs_to_terminal_without_docker() {
+        let _mock = crate::dev_mock::MockGuard::on();
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, db) = test_engine(dir.path());
+        seed_runnable_workflow(&engine, &db, dir.path()).await;
+
+        engine
+            .start_workflow_def("GH-1", "implement", Some("alice"))
+            .await
+            .expect("start def");
+        let state = wait_terminal(&engine, "GH-1", 10_000)
+            .await
+            .expect("workflow must reach a terminal state");
+
+        assert!(
+            !matches!(state, WfState::Error { .. }),
+            "agent flow must not error: {state:?}"
+        );
+        let arc = engine.workflows_arc();
+        let map = arc.read().await;
+        assert!(
+            map["GH-1"]
+                .steps_log
+                .iter()
+                .any(|s| s.status == crate::workflow::step::StepStatus::Success),
+            "a step must be recorded as Success"
+        );
+    }
+
+    /// When the runtime reports Docker unavailable, the step gate fails and the
+    /// driver moves the workflow to Error — now a deterministic branch.
+    #[tokio::test]
+    async fn flow_errors_when_docker_unavailable() {
+        use crate::container::runtime::testing::FakeContainerRuntime;
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, db) = test_engine_with_runtime(
+            dir.path(),
+            std::sync::Arc::new(FakeContainerRuntime::unavailable()),
+        );
+        seed_runnable_workflow(&engine, &db, dir.path()).await;
+
+        engine
+            .start_workflow_def("GH-1", "implement", Some("alice"))
+            .await
+            .expect("start def");
+        let state = wait_terminal(&engine, "GH-1", 10_000)
+            .await
+            .expect("workflow must reach a terminal state");
+        assert!(
+            matches!(state, WfState::Error { .. }),
+            "DockerUnavailable must drive the workflow to Error: {state:?}"
+        );
     }
 }
