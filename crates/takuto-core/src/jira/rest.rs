@@ -539,6 +539,7 @@ impl TicketLister for ResolvingJiraLister {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::sync::Mutex;
 
     struct MockHttp {
@@ -683,5 +684,108 @@ mod tests {
         assert_eq!(ticket.summary, "Implement");
         assert_eq!(ticket.item_type, "Story");
         assert_eq!(ticket.status, "In Progress");
+    }
+
+    // ── issue_to_ticket fallbacks ─────────────────────────────────────────
+
+    #[test]
+    fn issue_to_ticket_falls_back_for_missing_fields() {
+        // No "fields" object → the issue itself is used; missing keys default,
+        // and issuetype falls back to the supplied default_type.
+        let bare = json!({ "key": "K-1" });
+        let t = issue_to_ticket(&bare, "DefaultType");
+        assert_eq!(t.key, "K-1");
+        assert_eq!(t.summary, "");
+        assert_eq!(t.status, "");
+        assert_eq!(t.item_type, "DefaultType");
+        assert!(t.linked_items.is_empty());
+    }
+
+    // ── extract_linked_keys ───────────────────────────────────────────────
+
+    #[test]
+    fn extract_linked_keys_reads_outward_and_inward() {
+        let v = json!({ "fields": { "issuelinks": [
+            { "type": { "name": "Blocks", "outward": "blocks" }, "outwardIssue": { "key": "A-1" } },
+            { "type": { "name": "Relates" }, "inwardIssue": { "key": "B-2" } }
+        ]}});
+        let keys = extract_linked_keys(&v);
+        // Outward uses the "outward" label; inward with no "inward" label falls
+        // back to the type name.
+        assert!(keys.contains(&("A-1".to_string(), "blocks".to_string())));
+        assert!(keys.contains(&("B-2".to_string(), "Relates".to_string())));
+    }
+
+    #[test]
+    fn extract_linked_keys_empty_without_issuelinks() {
+        assert!(extract_linked_keys(&json!({ "fields": {} })).is_empty());
+    }
+
+    // ── url_encode ────────────────────────────────────────────────────────
+
+    #[test]
+    fn url_encode_percent_encodes_reserved_only() {
+        assert_eq!(url_encode("a b"), "a%20b");
+        assert_eq!(url_encode("\"x\""), "%22x%22");
+        // Unreserved characters pass through untouched.
+        assert_eq!(url_encode("aZ09-_.~"), "aZ09-_.~");
+    }
+
+    // ── list / detail edge + error paths ──────────────────────────────────
+
+    #[tokio::test]
+    async fn list_todo_empty_project_keys_returns_empty() {
+        let client = JiraRestClient::new(Arc::new(MockHttp::new()), cred());
+        let out = client
+            .list_todo_tickets(&[], &["Task".to_string()])
+            .await
+            .unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_json_non_200_is_error() {
+        let jql = url_encode(
+            "project in (\"P\") AND status = \"To Do\" AND issuetype in (\"Task\") ORDER BY key ASC",
+        );
+        let path = format!(
+            "rest/api/3/search?jql={jql}&maxResults=50&fields=summary,issuetype,status,description"
+        );
+        let http = MockHttp::new().with(&path, 500, "boom");
+        let client = JiraRestClient::new(Arc::new(http), cred());
+        assert!(
+            client
+                .list_todo_tickets(&["P".to_string()], &["Task".to_string()])
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn get_ticket_details_resolves_in_project_links_and_skips_others() {
+        let main_path =
+            "rest/api/3/issue/PROJ-10?fields=summary,issuetype,status,description,issuelinks";
+        let main_body = r#"{"key":"PROJ-10","fields":{
+            "summary":"Main","issuetype":{"name":"Task"},"status":{"name":"To Do"},
+            "issuelinks":[
+                {"type":{"name":"Blocks","outward":"blocks"},"outwardIssue":{"key":"PROJ-11"}},
+                {"type":{"name":"Blocks","outward":"blocks"},"outwardIssue":{"key":"OTHER-1"}},
+                {"type":{"name":"Blocks","outward":"blocks"},"outwardIssue":{"key":"PROJ-12"}}
+            ]}}"#;
+        let linked_path = "rest/api/3/issue/PROJ-11?fields=summary,issuetype,status,description";
+        let linked_body = r#"{"key":"PROJ-11","fields":{"summary":"Linked","issuetype":{"name":"Bug"},"status":{"name":"Done"}}}"#;
+        // PROJ-11 has a canned response; PROJ-12 does NOT (→ fetch error, warned
+        // and skipped); OTHER-1 is out of project (→ filtered before fetch).
+        let http = MockHttp::new()
+            .with(main_path, 200, main_body)
+            .with(linked_path, 200, linked_body);
+        let client = JiraRestClient::new(Arc::new(http), cred());
+        let ticket = client
+            .get_ticket_details("PROJ-10", &["PROJ".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(ticket.linked_items.len(), 1);
+        assert_eq!(ticket.linked_items[0].key, "PROJ-11");
+        assert_eq!(ticket.linked_items[0].link_type, "blocks");
     }
 }
