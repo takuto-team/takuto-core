@@ -21,7 +21,6 @@ export interface IssueCardView {
   prUrl: string;
   isTerminal: boolean;
   isPending: boolean;
-  isPreparingWorktree: boolean;
   isActive: boolean;
   duration: string | null;
   stepLabel: string;
@@ -54,7 +53,6 @@ export function buildIssueCardView(
   const prUrl = w.pr_url?.trim() || "";
   const isTerminal = ["Completed", "Error", "Stopped"].includes(status.label);
   const isPending = status.label === "Pending" && w.can_start;
-  const isPreparingWorktree = isPending && !!w.branch_name && !w.worktree_path;
   const isActive = status.label === "Running" || status.label === "Paused";
 
   const duration =
@@ -109,7 +107,6 @@ export function buildIssueCardView(
     prUrl,
     isTerminal,
     isPending,
-    isPreparingWorktree,
     isActive,
     duration,
     stepLabel,

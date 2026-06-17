@@ -19,7 +19,6 @@ interface Props {
   total: number;
   filled: number;
   duration: string | null;
-  isPreparingWorktree: boolean;
   isActive: boolean;
   hasReport: boolean;
   canResumeFromError: boolean;
@@ -39,7 +38,6 @@ export function IssueCardProgress({
   total,
   filled,
   duration,
-  isPreparingWorktree,
   isActive,
   hasReport,
   canResumeFromError,
@@ -54,48 +52,39 @@ export function IssueCardProgress({
     status.label === "Error" || status.label === "Completed" || status.label === "Stopped";
   return (
     <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative h-[80px] flex flex-col justify-center">
-      {isPreparingWorktree ? (
-        <div className="flex items-center leading-none gap-2 text-xs text-gray-500">
-          <span className="inline-block w-2 h-2 rounded-full bg-gray-500 animate-pulse flex-shrink-0" />
-          Preparing worktree&hellip;
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-gray-500">{stepLabel}</div>
+        <div className="flex items-center gap-2">
+          <span
+            className={`flex items-center leading-none gap-1 text-xs text-gray-400 ${
+              !duration ? "invisible" : ""
+            }`}
+          >
+            <ClockIcon />
+            <span className="font-mono">{duration ?? "0s"}</span>
+          </span>
+          {hasReport && (
+            <button
+              onClick={onReport}
+              className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
+              title="View work item report"
+            >
+              Show Report
+            </button>
+          )}
+          {isTerminalish && <RestartIconButton onClick={onRetry} />}
+          {(status.label === "Error" || status.label === "Stopped") && canResumeFromError && (
+            <ResumeIconButton onClick={onResumeFromError} title="Retry from last failure" />
+          )}
+          {isActive && status.label === "Running" && <PauseIconButton onClick={onPause} />}
+          {isActive && status.label === "Paused" && <ResumeIconButton onClick={onResume} />}
+          {isActive && <StopIconButton onClick={onStop} />}
         </div>
-      ) : (
-        <>
-          <div className="flex items-center justify-between">
-            <div className="text-xs text-gray-500">{stepLabel}</div>
-            <div className="flex items-center gap-2">
-              <span
-                className={`flex items-center leading-none gap-1 text-xs text-gray-400 ${
-                  !duration ? "invisible" : ""
-                }`}
-              >
-                <ClockIcon />
-                <span className="font-mono">{duration ?? "0s"}</span>
-              </span>
-              {hasReport && (
-                <button
-                  onClick={onReport}
-                  className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
-                  title="View work item report"
-                >
-                  Show Report
-                </button>
-              )}
-              {isTerminalish && <RestartIconButton onClick={onRetry} />}
-              {(status.label === "Error" || status.label === "Stopped") && canResumeFromError && (
-                <ResumeIconButton onClick={onResumeFromError} title="Retry from last failure" />
-              )}
-              {isActive && status.label === "Running" && <PauseIconButton onClick={onPause} />}
-              {isActive && status.label === "Paused" && <ResumeIconButton onClick={onResume} />}
-              {isActive && <StopIconButton onClick={onStop} />}
-            </div>
-          </div>
-          <div className="text-sm font-mono text-gray-300 mt-0.5">{stateDisplay}</div>
-          <div className="mt-2">
-            <ProgressBar pct={pct} total={total} filled={filled} color={status.color} />
-          </div>
-        </>
-      )}
+      </div>
+      <div className="text-sm font-mono text-gray-300 mt-0.5">{stateDisplay}</div>
+      <div className="mt-2">
+        <ProgressBar pct={pct} total={total} filled={filled} color={status.color} />
+      </div>
     </div>
   );
 }

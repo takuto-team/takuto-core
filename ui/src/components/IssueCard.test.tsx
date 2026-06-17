@@ -105,6 +105,22 @@ describe("IssueCard", () => {
     expect(link?.getAttribute("href")).toBe("https://github.com/acme/app/pull/123");
   });
 
+  it("does not show an indefinite 'Preparing worktree' for a parked pending item", () => {
+    // A parked add-to-dashboard item is Pending with a branch but no visible
+    // worktree; it must render its normal pending state, not a stuck spinner.
+    renderCard({
+      workflow: makeWorkflow({
+        state: "Pending",
+        can_start: true,
+        branch_name: "feat/test-1",
+        worktree_path: undefined,
+        progress_percent: 0,
+        progress_steps_total: 0,
+      }),
+    });
+    expect(screen.queryByText(/Preparing worktree/i)).toBeNull();
+  });
+
   it("disables the console-output button when there are no terminal lines", () => {
     renderCard({ workflow: makeWorkflow() });
     const btn = screen.getByRole("button", { name: /show console output/i }) as HTMLButtonElement;
