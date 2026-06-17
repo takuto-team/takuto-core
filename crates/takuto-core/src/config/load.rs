@@ -392,3 +392,136 @@ impl Config {
         c
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── resolve_config_relative_path ──────────────────────────────────────
+
+    #[test]
+    fn relative_path_is_joined_to_config_dir() {
+        let base = Path::new("/etc/takuto");
+        assert_eq!(
+            resolve_config_relative_path(base, "workflows"),
+            PathBuf::from("/etc/takuto/workflows")
+        );
+    }
+
+    #[test]
+    fn absolute_path_is_returned_as_is() {
+        let base = Path::new("/etc/takuto");
+        assert_eq!(
+            resolve_config_relative_path(base, "/abs/dir"),
+            PathBuf::from("/abs/dir")
+        );
+    }
+
+    #[test]
+    fn empty_relative_path_is_empty() {
+        assert_eq!(
+            resolve_config_relative_path(Path::new("/etc/takuto"), "  "),
+            PathBuf::new()
+        );
+    }
+
+    // ── detect_legacy_command_keys ────────────────────────────────────────
+
+    #[test]
+    fn detects_legacy_commands_and_run_commands() {
+        let toml = "[commands]\ninit = []\n[[run_commands]]\nname = \"x\"\ncommand = \"y\"\n";
+        let warnings = detect_legacy_command_keys(toml);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings.iter().any(|w| w.contains("[commands]")));
+        assert!(warnings.iter().any(|w| w.contains("run_commands")));
+    }
+
+    #[test]
+    fn no_legacy_keys_and_invalid_toml_yield_no_warnings() {
+        assert!(detect_legacy_command_keys("[general]\npoll_interval_secs = 30\n").is_empty());
+        assert!(detect_legacy_command_keys("this is = = not toml").is_empty());
+    }
+
+    // ── load / load_from_str ──────────────────────────────────────────────
+
+    #[test]
+    fn default_config_round_trips_through_load_from_str() {
+        let toml = Config::default()
+            .to_toml_string()
+            .expect("serialize default");
+        assert!(
+            Config::load_from_str(&toml).is_ok(),
+            "default config must round-trip and validate"
+        );
+    }
+
+    #[test]
+    fn load_missing_file_is_config_not_found() {
+        let err = Config::load(Path::new("/nonexistent/takuto-xyz.toml")).unwrap_err();
+        assert!(matches!(err, TakutoError::ConfigNotFound(_)));
+    }
+
+    // ── validate ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn default_config_is_valid() {
+        assert!(Config::default().validate().is_ok());
+    }
+
+    /// Mutate one field of an otherwise-valid config and assert validate()
+    /// rejects it, naming the offending field.
+    fn assert_rejects(mutate: impl FnOnce(&mut Config), field_marker: &str) {
+        let mut cfg = Config::default();
+        mutate(&mut cfg);
+        let err = cfg.validate().unwrap_err();
+        let dbg = format!("{err:?}");
+        assert!(
+            dbg.contains(field_marker),
+            "expected error mentioning {field_marker:?}, got: {dbg}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_each_guarded_field() {
+        assert_rejects(|c| c.general.poll_interval_secs = 5, "poll_interval_secs");
+        assert_rejects(
+            |c| c.general.max_concurrent_workflows = 0,
+            "max_concurrent_workflows",
+        );
+        assert_rejects(|c| c.jira.project_keys = vec!["bad-key".into()], "project_keys");
+        assert_rejects(|c| c.jira.item_types = vec![], "item_types");
+        assert_rejects(|c| c.web.port = 0, "port");
+        assert_rejects(|c| c.jira.done_status = "  ".into(), "done_status");
+        assert_rejects(|c| c.agent.step_timeout_secs = 0, "step_timeout_secs");
+        assert_rejects(
+            |c| c.agent.providers.cursor.base_url = "https://x".into(),
+            "base_url",
+        );
+        assert_rejects(|c| c.git.remote = "".into(), "remote");
+        assert_rejects(
+            |c| c.polling.jira.summary_keywords = vec!["".into()],
+            "summary_keywords",
+        );
+        // GitHub App partial config: id set but installation id missing.
+        assert_rejects(|c| c.github.app_id = 123, "app_installation_id");
+    }
+
+    #[test]
+    fn validate_rejects_opencode_without_endpoint() {
+        assert_rejects(
+            |c| {
+                c.agent.provider = AiAgentProvider::OpenCode;
+                c.agent.providers.opencode.base_url = "".into();
+            },
+            "base_url",
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_opencode_context_limit() {
+        assert_rejects(
+            |c| c.agent.providers.opencode.context_limit = Some(0),
+            "context_limit",
+        );
+    }
+}
