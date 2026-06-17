@@ -488,7 +488,10 @@ mod tests {
             |c| c.general.max_concurrent_workflows = 0,
             "max_concurrent_workflows",
         );
-        assert_rejects(|c| c.jira.project_keys = vec!["bad-key".into()], "project_keys");
+        assert_rejects(
+            |c| c.jira.project_keys = vec!["bad-key".into()],
+            "project_keys",
+        );
         assert_rejects(|c| c.jira.item_types = vec![], "item_types");
         assert_rejects(|c| c.web.port = 0, "port");
         assert_rejects(|c| c.jira.done_status = "  ".into(), "done_status");

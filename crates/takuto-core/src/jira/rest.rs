@@ -776,9 +776,10 @@ mod tests {
         let linked_body = r#"{"key":"PROJ-11","fields":{"summary":"Linked","issuetype":{"name":"Bug"},"status":{"name":"Done"}}}"#;
         // PROJ-11 has a canned response; PROJ-12 does NOT (→ fetch error, warned
         // and skipped); OTHER-1 is out of project (→ filtered before fetch).
-        let http = MockHttp::new()
-            .with(main_path, 200, main_body)
-            .with(linked_path, 200, linked_body);
+        let http =
+            MockHttp::new()
+                .with(main_path, 200, main_body)
+                .with(linked_path, 200, linked_body);
         let client = JiraRestClient::new(Arc::new(http), cred());
         let ticket = client
             .get_ticket_details("PROJ-10", &["PROJ".to_string()])

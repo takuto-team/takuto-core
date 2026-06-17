@@ -377,7 +377,10 @@ mod tests {
         assert!(cursor[1].ends_with(".cursor/skills"));
 
         // Codex / OpenCode have no user-level skills dir → worktree only.
-        assert_eq!(build_skill_search_paths(wt, AiAgentProvider::Codex).len(), 1);
+        assert_eq!(
+            build_skill_search_paths(wt, AiAgentProvider::Codex).len(),
+            1
+        );
         assert_eq!(
             build_skill_search_paths(wt, AiAgentProvider::OpenCode).len(),
             1

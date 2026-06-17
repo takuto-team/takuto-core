@@ -436,7 +436,10 @@ mod tests {
         });
         let md = jira_description_to_markdown(&adf);
         assert!(md.contains("- outer"), "got {md:?}");
-        assert!(md.contains("    - inner"), "nested item must be indented; got {md:?}");
+        assert!(
+            md.contains("    - inner"),
+            "nested item must be indented; got {md:?}"
+        );
     }
 
     #[test]
@@ -524,7 +527,10 @@ mod tests {
             ] }]
         });
         let md = jira_description_to_markdown(&adf);
-        assert!(md.contains("a  \n"), "hardBreak → two-space newline; got {md:?}");
+        assert!(
+            md.contains("a  \n"),
+            "hardBreak → two-space newline; got {md:?}"
+        );
         assert!(md.contains(":smile:"));
         assert!(md.contains("@alice"));
         assert!(md.contains("<https://card.test>"));
