@@ -13,9 +13,9 @@ firewall, on hardware you own.
 [Security](https://takuto-doc.alexandre-obellianne.workers.dev/security/) ·
 [CLI](https://github.com/takuto-team/takuto-cli)
 
-![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--3.0-8b7cf6)
-![Status: beta](https://img.shields.io/badge/status-beta-ffb454)
-![Self-hosted](https://img.shields.io/badge/self--hosted-yes-2ea043)
+![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--3.0-8b7cf6?style=flat)
+![Status: beta](https://img.shields.io/badge/status-beta-ffb454?style=flat)
+![Self-hosted](https://img.shields.io/badge/self--hosted-yes-2ea043?style=flat)
 
 </div>
 
