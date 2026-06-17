@@ -358,4 +358,193 @@ mod tests {
         assert!(md.contains("- One"));
         assert!(md.contains("- Two"));
     }
+
+    #[test]
+    fn null_description_is_empty() {
+        assert_eq!(jira_description_to_markdown(&Value::Null), "");
+    }
+
+    #[test]
+    fn code_block_fenced_with_language() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "codeBlock",
+                "attrs": { "language": "rust" },
+                "content": [{ "type": "text", "text": "fn main() {}" }]
+            }]
+        });
+        let md = jira_description_to_markdown(&adf);
+        assert!(md.contains("```rust\nfn main() {}"), "got {md:?}");
+        assert!(md.contains("```"));
+    }
+
+    #[test]
+    fn blockquote_prefixes_lines() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "quoted" }] }]
+            }]
+        });
+        let md = jira_description_to_markdown(&adf);
+        assert!(md.contains("> quoted"), "got {md:?}");
+    }
+
+    #[test]
+    fn horizontal_rules_render_as_dashes() {
+        for kind in ["rule", "horizontalRule"] {
+            let adf = json!({ "type": "doc", "content": [{ "type": kind }] });
+            assert_eq!(jira_description_to_markdown(&adf), "---");
+        }
+    }
+
+    #[test]
+    fn ordered_list_numbers_items() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "content": [
+                    { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "first" }] }] },
+                    { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "second" }] }] }
+                ]
+            }]
+        });
+        let md = jira_description_to_markdown(&adf);
+        assert!(md.contains("1. first"), "got {md:?}");
+        assert!(md.contains("2. second"), "got {md:?}");
+    }
+
+    #[test]
+    fn nested_bullet_list_is_indented() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "bulletList",
+                "content": [{
+                    "type": "listItem",
+                    "content": [
+                        { "type": "paragraph", "content": [{ "type": "text", "text": "outer" }] },
+                        { "type": "bulletList", "content": [
+                            { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "inner" }] }] }
+                        ]}
+                    ]
+                }]
+            }]
+        });
+        let md = jira_description_to_markdown(&adf);
+        assert!(md.contains("- outer"), "got {md:?}");
+        assert!(md.contains("    - inner"), "nested item must be indented; got {md:?}");
+    }
+
+    #[test]
+    fn panel_unwraps_inner_content() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "panel",
+                "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "noted" }] }]
+            }]
+        });
+        assert_eq!(jira_description_to_markdown(&adf), "noted");
+    }
+
+    #[test]
+    fn heading_level_clamps_to_six() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{ "type": "heading", "attrs": { "level": 9 }, "content": [{ "type": "text", "text": "deep" }] }]
+        });
+        assert!(jira_description_to_markdown(&adf).starts_with("###### deep"));
+    }
+
+    #[test]
+    fn inline_marks_em_strike_and_code_escaping() {
+        let para = |marks: serde_json::Value, text: &str| {
+            json!({
+                "type": "doc",
+                "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": text, "marks": marks }] }]
+            })
+        };
+        assert_eq!(
+            jira_description_to_markdown(&para(json!([{ "type": "em" }]), "x")),
+            "*x*"
+        );
+        assert_eq!(
+            jira_description_to_markdown(&para(json!([{ "type": "strike" }]), "x")),
+            "~~x~~"
+        );
+        // Backticks inside inline code are downgraded to single quotes.
+        assert_eq!(
+            jira_description_to_markdown(&para(json!([{ "type": "code" }]), "a`b")),
+            "`a'b`"
+        );
+    }
+
+    #[test]
+    fn link_mark_renders_destination_and_escapes_label() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{ "type": "paragraph", "content": [{
+                "type": "text", "text": "[click]",
+                "marks": [{ "type": "link", "attrs": { "href": "https://x.test" } }]
+            }] }]
+        });
+        // Brackets in the label are escaped; the href is kept verbatim.
+        assert_eq!(
+            jira_description_to_markdown(&adf),
+            "[\\[click\\]](https://x.test)"
+        );
+    }
+
+    #[test]
+    fn link_mark_without_href_keeps_label_only() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{ "type": "paragraph", "content": [{
+                "type": "text", "text": "bare", "marks": [{ "type": "link", "attrs": {} }]
+            }] }]
+        });
+        assert_eq!(jira_description_to_markdown(&adf), "bare");
+    }
+
+    #[test]
+    fn inline_nodes_hardbreak_emoji_mention_card_and_date() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{ "type": "paragraph", "content": [
+                { "type": "text", "text": "a" },
+                { "type": "hardBreak" },
+                { "type": "emoji", "attrs": { "shortName": "smile" } },
+                { "type": "mention", "attrs": { "text": "alice" } },
+                { "type": "inlineCard", "attrs": { "url": "https://card.test" } },
+                { "type": "date", "attrs": { "timestamp": 123 } }
+            ] }]
+        });
+        let md = jira_description_to_markdown(&adf);
+        assert!(md.contains("a  \n"), "hardBreak → two-space newline; got {md:?}");
+        assert!(md.contains(":smile:"));
+        assert!(md.contains("@alice"));
+        assert!(md.contains("<https://card.test>"));
+        assert!(md.contains("`123`"));
+    }
+
+    #[test]
+    fn mention_falls_back_to_id_when_no_text() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{ "type": "paragraph", "content": [
+                { "type": "mention", "attrs": { "id": "u-42" } }
+            ] }]
+        });
+        assert_eq!(jira_description_to_markdown(&adf), "@u-42");
+    }
+
+    #[test]
+    fn escape_helpers_are_targeted() {
+        assert_eq!(escape_inline_code("a`b`c"), "a'b'c");
+        assert_eq!(escape_link_destination_safe("[x]"), "\\[x\\]");
+    }
 }
