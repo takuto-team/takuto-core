@@ -96,13 +96,58 @@ async fn resolve_workflow_repo_path(
     PathBuf::from(&cfg.git.repo_path)
 }
 
+/// The env var an agent CLI reads its API key from (env-injectable providers).
+/// OpenCode reads a generated config file, not an env var → `None`.
+fn provider_api_key_env(provider: AiAgentProvider) -> Option<&'static str> {
+    match provider {
+        AiAgentProvider::Claude => Some("CLAUDE_CODE_OAUTH_TOKEN"),
+        AiAgentProvider::Cursor => Some("CURSOR_API_KEY"),
+        AiAgentProvider::Codex => Some("OPENAI_API_KEY"),
+        AiAgentProvider::OpenCode => None,
+    }
+}
+
+/// Resolve the caller's own provider API key as a `(VAR, value)` env pair for a
+/// main-container agent run. `None` → the user has no per-user key (or the
+/// provider isn't env-injectable / no master key) → the CLI inherits the main
+/// container's ambient (app-instance) credential. The value is returned by-value
+/// (per call), so concurrent invocations never share mutable global env.
+async fn resolve_user_credential_env(
+    auth_state: &AuthState,
+    provider: AiAgentProvider,
+    user_id: &str,
+) -> Option<(String, String)> {
+    let var = provider_api_key_env(provider)?;
+    let db = auth_state.db.as_ref()?;
+    let master = db.master_key()?;
+    let row = takuto_core::db::provider_credentials::find_active_with_kind(
+        db.adapter(),
+        user_id,
+        provider.as_str(),
+        takuto_core::db::provider_credentials::ProviderCredentialKind::ApiKey,
+    )
+    .await
+    .ok()??;
+    let sealed = takuto_core::auth::SealedBlob {
+        ciphertext: row.ciphertext,
+        nonce: row.nonce,
+        wrapped_dek: row.wrapped_dek,
+        wnonce: row.wnonce,
+    };
+    let plaintext = takuto_core::auth::open(&master.key, &sealed).ok()?;
+    let value = String::from_utf8(plaintext).ok()?;
+    Some((var.to_string(), value))
+}
+
 /// Run a description-editing AI session (improve / prompt) using the configured provider.
 ///
-/// Reads the workflow's `description_session_id` to resume the shared conversation, then
-/// writes the new session ID back so the next call continues in the same context.
-/// Falls back gracefully when the ticket has no associated workflow in the map — for
-/// non-ticket improve callers (e.g. flow step-prompt improvement) pass any unique key;
-/// the workflow lookup returns `None` and the session runs fresh each time.
+/// Runs the agent CLI directly in the main container with the caller's own provider
+/// credential (else the app-instance default) injected per-process. Reads the
+/// workflow's `description_session_id` to resume the shared conversation, then writes
+/// the new session ID back so the next call continues in the same context. Falls back
+/// gracefully when the ticket has no associated workflow in the map — for non-ticket
+/// improve callers (e.g. flow step-prompt improvement) pass any unique key; the
+/// workflow lookup returns `None` and the session runs fresh each time.
 pub(crate) async fn run_description_session(
     engine: &EngineState,
     auth_state: &AuthState,
@@ -113,16 +158,7 @@ pub(crate) async fn run_description_session(
     system_prompt: Option<&str>,
 ) -> Result<String, (StatusCode, String)> {
     // Snapshot the config fields we need before any await point.
-    let (
-        provider,
-        model,
-        cursor_cli,
-        cursor_model,
-        codex_model,
-        opencode_model,
-        improve_timeout,
-        worker_image,
-    ) = {
+    let (provider, model, cursor_cli, cursor_model, codex_model, opencode_model, improve_timeout) = {
         let cfg = cfg_state.config.read().await;
         (
             cfg.agent.provider,
@@ -150,7 +186,6 @@ pub(crate) async fn run_description_session(
                 }
             },
             cfg.agent.improve_timeout_secs,
-            cfg.general.worker_image.clone(),
         )
     };
 
@@ -165,90 +200,19 @@ pub(crate) async fn run_description_session(
     let worktree = std::env::temp_dir();
     let cancel = CancellationToken::new();
 
-    // Build an ephemeral container runner so the AI agent never runs in the main container.
-    // Falls back to None only when DinD is genuinely unavailable (dev/test env).
-    let container_runner: Option<ContainerRunner> = if ContainerRunner::is_available() {
-        let image = if worker_image.is_empty() {
-            ContainerRunner::discover_worker_image()
-                .await
-                .unwrap_or_else(|| "takuto:latest".to_string())
-        } else {
-            worker_image
-        };
-        // Note: no .with_isolate_workspace() here — the improve session uses a
-        // temp directory, not a real worktree under /workspace/worktrees/, so the
-        // per-issue isolation logic (which derives the repo root from the grandparent)
-        // does not apply.  The session is already sandboxed in its own ephemeral
-        // container; it does not need worktree-level isolation.
-        let mut runner = ContainerRunner::new(&format!("improve-{ticket_key}"), &worktree, &image);
-
-        // Attach a per-request `WorkerSecretsBundle` so the ephemeral worker
-        // reads the caller's per-user provider key + GitHub token from
-        // tmpfs files instead of `docker run -e`. Falls back to
-        // the legacy `PASSTHROUGH_ENV` path when:
-        //   - master key unavailable (degraded mode), OR
-        //   - user has no credential AND active provider's
-        //     `allow_shared_default = false`.
-        // The first case surfaces 503; the second surfaces 503 + a
-        // structured `credential_required` error so the dashboard can
-        // prompt the user to paste an API key.
-        if let Some(ref resolver) = auth_state.git_auth_resolver
-            && let Some(db) = auth_state.db.as_ref()
-        {
-            if db.master_key().is_none() {
-                return Err((
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "master_key_unavailable".into(),
-                ));
-            }
-            let cfg_snapshot = cfg_state.config.read().await.clone();
-            match takuto_core::auth::bundle::build_for_endpoint(
-                &cfg_snapshot,
-                db,
-                resolver,
-                user_id,
-            )
-            .await
-            {
-                Ok(bundle) => {
-                    tracing::info!(
-                        action = "improve_ticket",
-                        user_id = %user_id,
-                        ticket = %ticket_key,
-                        source = "user_credential",
-                        "Attached WorkerSecretsBundle to improve/prompt runner"
-                    );
-                    runner = runner.with_secrets_bundle(std::sync::Arc::new(bundle));
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("provider_credential_missing") {
-                        return Err((
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            serde_json::json!({
-                                "error": "credential_required",
-                                "provider": cfg_snapshot.agent.provider.as_str(),
-                            })
-                            .to_string(),
-                        ));
-                    }
-                    tracing::warn!(
-                        ticket = %ticket_key,
-                        error = %e,
-                        "Bundle build failed for improve/prompt — falling back to legacy passthrough"
-                    );
-                }
-            }
-        }
-
-        Some(runner)
-    } else {
-        tracing::warn!(
-            ticket = %ticket_key,
-            "DinD not available — running improve/prompt session directly in main container"
-        );
-        None
-    };
+    // "Improve with AI" / "Prompt ticket" runs the agent CLI **directly in the
+    // main container** — no DinD worker. Per-invocation credential isolation:
+    // inject the caller's own provider API key as a per-process env var when they
+    // have one; otherwise the CLI inherits the main container's ambient
+    // (app-instance) credential. Two concurrent improves stay isolated because
+    // each passes its own env to its own child process — no global env mutation.
+    let container_runner: Option<ContainerRunner> = None;
+    let cred_env: Option<(String, String)> =
+        resolve_user_credential_env(auth_state, provider, user_id).await;
+    let extra_env: Vec<(&str, &str)> = cred_env
+        .as_ref()
+        .map(|(k, v)| vec![(k.as_str(), v.as_str())])
+        .unwrap_or_default();
 
     // Run with the configured provider.
     let (session_id, output) = match provider {
@@ -269,6 +233,7 @@ pub(crate) async fn run_description_session(
                 } else {
                     system_prompt
                 },
+                &extra_env,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -291,6 +256,7 @@ pub(crate) async fn run_description_session(
                 resume_id.as_deref(),
                 container_runner.as_ref(),
                 0, // no idle nudge: improve runs non-streaming, bounded by improve_timeout
+                &extra_env,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -306,6 +272,7 @@ pub(crate) async fn run_description_session(
                 codex_model.as_deref(),
                 resume_id.as_deref(),
                 container_runner.as_ref(),
+                &extra_env,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -321,6 +288,7 @@ pub(crate) async fn run_description_session(
                 opencode_model.as_deref(),
                 resume_id.as_deref(),
                 container_runner.as_ref(),
+                &extra_env,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -770,6 +738,34 @@ mod tests {
             user_id: "test-user".to_string(),
             role: takuto_core::db::models::UserRole::User,
         }
+    }
+
+    #[test]
+    fn provider_api_key_env_maps_env_injectable_providers() {
+        assert_eq!(
+            provider_api_key_env(AiAgentProvider::Claude),
+            Some("CLAUDE_CODE_OAUTH_TOKEN")
+        );
+        assert_eq!(
+            provider_api_key_env(AiAgentProvider::Cursor),
+            Some("CURSOR_API_KEY")
+        );
+        assert_eq!(
+            provider_api_key_env(AiAgentProvider::Codex),
+            Some("OPENAI_API_KEY")
+        );
+        // OpenCode reads a config file, not an env var.
+        assert_eq!(provider_api_key_env(AiAgentProvider::OpenCode), None);
+    }
+
+    #[tokio::test]
+    async fn resolve_user_credential_env_none_without_db() {
+        // No DB → no per-user credential resolvable → the CLI inherits the main
+        // container's ambient (app-instance) credential.
+        let state = test_app_state_none();
+        let got =
+            resolve_user_credential_env(&state.auth, AiAgentProvider::Cursor, "test-user").await;
+        assert!(got.is_none());
     }
 
     /// Saving a description (without summary) updates `ticket_description` in memory.

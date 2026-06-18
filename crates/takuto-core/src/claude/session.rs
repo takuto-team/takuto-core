@@ -34,6 +34,10 @@ impl ClaudeSession {
         resume_session_id: Option<&str>,
         container_runner: Option<&ContainerRunner>,
         system_prompt: Option<&str>,
+        // Per-process env injected only on the non-container (main-container) path
+        // — e.g. a per-user `CLAUDE_CODE_OAUTH_TOKEN` for "Improve with AI". Empty
+        // when running in a worker container (credentials come via the bundle).
+        extra_env: &[(&str, &str)],
     ) -> Result<Self> {
         // === DEV-MODE MOCK ===
         // Off by default. Enabled by [dev] mock_agent = true OR TAKUTO_DEV_MOCK_AGENT=1
@@ -70,6 +74,7 @@ impl ClaudeSession {
             resume_session_id,
             container_runner,
             system_prompt,
+            extra_env,
         )
         .await?;
 
@@ -91,6 +96,7 @@ async fn run_claude_session(
     resume_session_id: Option<&str>,
     container_runner: Option<&ContainerRunner>,
     system_prompt: Option<&str>,
+    extra_env: &[(&str, &str)],
 ) -> Result<(String, String)> {
     // --system-prompt is ignored on --resume (the resumed session keeps its original
     // system prompt). When resuming with skill content, inject it into the -p prompt
@@ -169,7 +175,7 @@ async fn run_claude_session(
         let docker_arg_refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
         ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
     } else {
-        ProcessHandle::spawn("claude", args, worktree, cancel_token).await
+        ProcessHandle::spawn_with_env("claude", args, worktree, cancel_token, extra_env).await
     }?;
 
     let result = if let Some(tx) = line_tx {

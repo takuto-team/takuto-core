@@ -49,6 +49,10 @@ impl CodexSession {
         model: Option<&str>,
         resume_session_id: Option<&str>,
         container_runner: Option<&ContainerRunner>,
+        // Per-process env for the non-container (main-container) path — e.g. a
+        // per-user `OPENAI_API_KEY` for "Improve with AI". Empty in worker-container
+        // runs (credentials come via the bundle).
+        extra_env: &[(&str, &str)],
     ) -> Result<Self> {
         // === DEV-MODE MOCK ===
         // No dedicated codex mock yet — return a synthetic success so dev flows
@@ -79,6 +83,7 @@ impl CodexSession {
             model,
             resume_session_id,
             container_runner,
+            extra_env,
         )
         .await?;
 
@@ -97,6 +102,7 @@ async fn run_codex_session(
     model: Option<&str>,
     resume_session_id: Option<&str>,
     container_runner: Option<&ContainerRunner>,
+    extra_env: &[(&str, &str)],
 ) -> Result<(String, String)> {
     let workspace = worktree
         .to_str()
@@ -121,7 +127,7 @@ async fn run_codex_session(
         let docker_arg_refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
         ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
     } else {
-        ProcessHandle::spawn(CODEX_BIN, &arg_refs, worktree, cancel_token).await
+        ProcessHandle::spawn_with_env(CODEX_BIN, &arg_refs, worktree, cancel_token, extra_env).await
     }?;
 
     let result = if let Some(tx) = line_tx {

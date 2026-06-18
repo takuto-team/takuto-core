@@ -770,6 +770,7 @@ pub(super) async fn run_agent_step_sequence(
                         resume_id,
                         container_runner,
                         system_prompt.as_deref(),
+                        &[], // worker-container run: credentials come via the bundle
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),
@@ -784,6 +785,7 @@ pub(super) async fn run_agent_step_sequence(
                         resume_id,
                         container_runner,
                         session_idle_nudge_secs,
+                        &[], // worker-container run: credentials come via the bundle
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),
@@ -796,6 +798,7 @@ pub(super) async fn run_agent_step_sequence(
                         codex_model,
                         resume_id,
                         container_runner,
+                        &[], // worker-container run: credentials come via the bundle
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),
@@ -808,6 +811,7 @@ pub(super) async fn run_agent_step_sequence(
                         opencode_model,
                         resume_id,
                         container_runner,
+                        &[], // worker-container run: credentials come via the bundle
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),

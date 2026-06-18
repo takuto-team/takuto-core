@@ -47,6 +47,10 @@ impl OpenCodeSession {
         model: Option<&str>,
         resume_session_id: Option<&str>,
         container_runner: Option<&ContainerRunner>,
+        // Per-process env for the non-container path. OpenCode reads its key from
+        // a generated `opencode.json` (not an env var), so this is typically empty
+        // for OpenCode; threaded for signature parity with the other providers.
+        extra_env: &[(&str, &str)],
     ) -> Result<Self> {
         // === DEV-MODE MOCK ===
         // Off by default. Enabled by [dev] mock_agent = true OR TAKUTO_DEV_MOCK_AGENT=1
@@ -81,6 +85,7 @@ impl OpenCodeSession {
             model,
             resume_session_id,
             container_runner,
+            extra_env,
         )
         .await?;
 
@@ -99,6 +104,7 @@ async fn run_opencode_session(
     model: Option<&str>,
     resume_session_id: Option<&str>,
     container_runner: Option<&ContainerRunner>,
+    extra_env: &[(&str, &str)],
 ) -> Result<(String, String)> {
     let owned = build_opencode_args(prompt, model, resume_session_id);
     let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
@@ -117,7 +123,8 @@ async fn run_opencode_session(
         let docker_arg_refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
         ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, cancel_token).await
     } else {
-        ProcessHandle::spawn("opencode", &arg_refs, worktree, cancel_token).await
+        ProcessHandle::spawn_with_env("opencode", &arg_refs, worktree, cancel_token, extra_env)
+            .await
     }?;
 
     let result = if let Some(tx) = line_tx {

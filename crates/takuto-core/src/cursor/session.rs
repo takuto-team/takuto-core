@@ -51,6 +51,10 @@ impl CursorSession {
         resume_session_id: Option<&str>,
         container_runner: Option<&ContainerRunner>,
         idle_nudge_secs: u64,
+        // Per-process env for the non-container (main-container) path — e.g. a
+        // per-user `CURSOR_API_KEY` for "Improve with AI". Empty in worker-container
+        // runs (credentials come via the bundle).
+        extra_env: &[(&str, &str)],
     ) -> Result<Self> {
         // === DEV-MODE MOCK ===
         // Off by default. Enabled by [dev] mock_agent = true OR TAKUTO_DEV_MOCK_AGENT=1
@@ -88,6 +92,7 @@ impl CursorSession {
             resume_session_id,
             container_runner,
             idle_nudge_secs,
+            extra_env,
         )
         .await?;
 
@@ -202,6 +207,7 @@ async fn run_cursor_agent_session(
     resume_session_id: Option<&str>,
     container_runner: Option<&ContainerRunner>,
     idle_nudge_secs: u64,
+    extra_env: &[(&str, &str)],
 ) -> Result<(String, String)> {
     let workspace = worktree
         .to_str()
@@ -249,7 +255,14 @@ async fn run_cursor_agent_session(
             let docker_arg_refs: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
             ProcessHandle::spawn(&prog, &docker_arg_refs, worktree, attempt_token.clone()).await
         } else {
-            ProcessHandle::spawn(cursor_cli, &arg_refs, worktree, attempt_token.clone()).await
+            ProcessHandle::spawn_with_env(
+                cursor_cli,
+                &arg_refs,
+                worktree,
+                attempt_token.clone(),
+                extra_env,
+            )
+            .await
         }?;
 
         // No streaming channel → no line observation → no idle nudge possible.
