@@ -128,6 +128,31 @@ describe("TicketDetailModal — Add to Dashboard save-first", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   });
 
+  it("swaps Improve-with-AI for Back in edit mode and Back returns to read-only", async () => {
+    const { container } = renderModal();
+    await addButtonEnabled();
+
+    // Read-only: Improve + Edit present, no Back.
+    expect(screen.getByRole("button", { name: /improve with ai/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^back$/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    await waitFor(() => {
+      if (!container.querySelector("textarea")) throw new Error("not in edit mode");
+    });
+
+    // Edit mode: Back present, Improve-with-AI gone.
+    expect(screen.getByRole("button", { name: /^back$/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /improve with ai/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /^back$/i }));
+
+    // Back to read-only: textarea gone, Improve + Edit restored.
+    await waitFor(() => expect(container.querySelector("textarea")).toBeNull());
+    expect(screen.getByRole("button", { name: /improve with ai/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^edit$/i })).toBeTruthy();
+  });
+
   it("does not call save when the description was never edited", async () => {
     const { onStart } = renderModal();
     await addButtonEnabled();

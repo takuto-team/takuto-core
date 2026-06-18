@@ -143,6 +143,7 @@ export function TicketDetailModal({
               pendingImprovement={pendingImprovement}
               improving={i.improving} editMode={e.editMode} prompting={i.prompting}
               onImprove={i.handleImprove} onStartEdit={e.handleStartEdit}
+              onBack={e.handleCancelEdit}
             />
           </div>
           <StartWorkflowFooter
@@ -151,7 +152,6 @@ export function TicketDetailModal({
             markdown={markdown} summary={summary}
             repositoryId={repositoryId} loadingRepos={loadingRepos} saving={e.saving}
             onStart={onStart ? handleStartWithSave : undefined} onClose={onClose}
-            onCancelEdit={e.handleCancelEdit}
             onDiscardImprovement={i.handleDiscardImprovement}
             onConfirmImprovement={i.handleConfirmImprovement}
           />

@@ -28,7 +28,6 @@ interface Props {
   saving?: boolean;
   onStart?: (description: string, summary: string, repositoryId: string) => void;
   onClose: () => void;
-  onCancelEdit: () => void;
   onDiscardImprovement: () => void;
   onConfirmImprovement: () => void;
 }
@@ -46,25 +45,25 @@ export function StartWorkflowFooter({
   saving,
   onStart,
   onClose,
-  onCancelEdit,
   onDiscardImprovement,
   onConfirmImprovement,
 }: Props) {
-  const leftAction = pendingImprovement
-    ? onDiscardImprovement
-    : editMode
-    ? onCancelEdit
-    : onClose;
-  const leftLabel = pendingImprovement ? "Discard" : editMode ? "Cancel" : "Close";
+  // In edit mode the left-cluster "Back" button handles returning to read-only,
+  // so the right cluster shows no Cancel — only Discard (pending diff) or Close.
+  const showLeftButton = pendingImprovement !== null || !editMode;
+  const leftAction = pendingImprovement ? onDiscardImprovement : onClose;
+  const leftLabel = pendingImprovement ? "Discard" : "Close";
 
   return (
     <div className="flex gap-2">
-      <button
-        onClick={leftAction}
-        className="text-xs px-4 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-      >
-        {leftLabel}
-      </button>
+      {showLeftButton && (
+        <button
+          onClick={leftAction}
+          className="text-xs px-4 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+        >
+          {leftLabel}
+        </button>
+      )}
       {pendingImprovement ? (
         <button
           onClick={onConfirmImprovement}

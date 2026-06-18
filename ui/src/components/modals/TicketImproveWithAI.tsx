@@ -105,29 +105,41 @@ interface FooterButtonsProps {
   prompting: boolean;
   onImprove: () => void;
   onStartEdit: () => void;
+  /** Leaves edit mode and returns to the read-only description view. */
+  onBack: () => void;
 }
 
 function TicketImproveWithAIFooterButtons({
-  pendingImprovement, improving, editMode, prompting, onImprove, onStartEdit,
+  pendingImprovement, improving, editMode, prompting, onImprove, onStartEdit, onBack,
 }: FooterButtonsProps) {
   if (pendingImprovement) return null;
+  // In edit mode the only left-cluster action is "Back" to the read-only view;
+  // Improve-with-AI is read-only-only.
+  if (editMode) {
+    return (
+      <button
+        onClick={onBack}
+        className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+      >
+        Back
+      </button>
+    );
+  }
   return (
     <>
       <button
         onClick={onImprove}
-        disabled={improving || editMode || prompting}
+        disabled={improving || prompting}
         className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
       >
         {improving ? "Improving..." : "Improve with AI"}
       </button>
-      {!editMode && (
-        <button
-          onClick={onStartEdit}
-          className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-        >
-          Edit
-        </button>
-      )}
+      <button
+        onClick={onStartEdit}
+        className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
+      >
+        Edit
+      </button>
     </>
   );
 }
