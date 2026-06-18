@@ -96,6 +96,8 @@ pub struct CursorProviderPatch {
     pub extra_args: Option<Vec<String>>,
     #[serde(default)]
     pub allow_shared_default: Option<bool>,
+    #[serde(default)]
+    pub privacy_mode: Option<bool>,
 }
 
 /// OpenCode patch — the generic fields plus the two self-hosted-only token
@@ -179,6 +181,9 @@ fn apply_cursor_patch(target: &mut CursorProviderConfig, patch: CursorProviderPa
     }
     if let Some(v) = patch.allow_shared_default {
         target.allow_shared_default = v;
+    }
+    if let Some(v) = patch.privacy_mode {
+        target.privacy_mode = v;
     }
 }
 
@@ -374,6 +379,13 @@ pub async fn put_agent_config(
     } else {
         (false, None)
     };
+
+    // Best-effort: reflect the Cursor privacy toggle into Cursor's shared
+    // `cli-config.json` so it takes effect on the next agent run without a
+    // restart. Failures are logged inside the helper and never block the patch.
+    takuto_core::docker_hooks::apply_cursor_privacy_mode(
+        config_snapshot.agent.providers.cursor.privacy_mode,
+    );
 
     // Refresh `state.engine.system_status` so subsequent reads of
     // `/api/onboarding/status` and the three mirrored fields on
@@ -621,6 +633,55 @@ mod http_tests {
         assert_eq!(cfg.agent.step_timeout_secs, 900);
         assert_eq!(cfg.agent.improve_timeout_secs, 240);
         assert_eq!(cfg.agent.max_repeated_output_lines, 12);
+    }
+
+    #[tokio::test]
+    async fn cursor_privacy_mode_defaults_on_and_round_trips_through_patch() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        // Default is privacy ON.
+        assert!(
+            state
+                .config
+                .config
+                .read()
+                .await
+                .agent
+                .providers
+                .cursor
+                .privacy_mode,
+            "Cursor privacy mode must default to on"
+        );
+
+        // Toggling it off through the cursor sub-table patch persists.
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::put("/api/config/agent")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"providers":{"cursor":{"privacy_mode":false}}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            !state
+                .config
+                .config
+                .read()
+                .await
+                .agent
+                .providers
+                .cursor
+                .privacy_mode,
+            "privacy_mode=false must persist after the patch"
+        );
     }
 
     #[tokio::test]

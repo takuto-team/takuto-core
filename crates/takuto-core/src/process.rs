@@ -258,8 +258,23 @@ impl ProcessHandle {
     }
 
     pub async fn wait_with_streaming(
+        self,
+        line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
+    ) -> Result<CommandOutput> {
+        self.wait_with_streaming_until(line_tx, |_| false).await
+    }
+
+    /// Like [`wait_with_streaming`], but a provider may declare the stream
+    /// finished early via `is_complete` (called on each stdout line). This
+    /// exists because some agent CLIs (notably cursor-agent) finish their turn
+    /// but leave a background daemon holding the stdout pipe open, so the pipe
+    /// never EOFs and a plain EOF-based wait blocks until the wall-clock
+    /// timeout. When `is_complete` matches a line, we briefly drain any buffered
+    /// output, then reap or kill the process instead of waiting for EOF.
+    pub async fn wait_with_streaming_until(
         mut self,
         line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
+        is_complete: impl Fn(&str) -> bool,
     ) -> Result<CommandOutput> {
         // SAFETY: See `wait_with_output` — `ProcessHandle::spawn` pipes both
         // streams and `take()` is called exactly once per stream per handle.
@@ -278,6 +293,7 @@ impl ProcessHandle {
         let mut stderr_reader = BufReader::new(stderr).lines();
 
         let cancel = self.cancel_token.clone();
+        let mut completed_early = false;
 
         loop {
             tokio::select! {
@@ -294,7 +310,12 @@ impl ProcessHandle {
                                 content: line.clone(),
                                 stream: "stdout".to_string(),
                             });
+                            let done = is_complete(&line);
                             self.stdout_lines.push(line);
+                            if done {
+                                completed_early = true;
+                                break;
+                            }
                         }
                         Ok(None) => break,
                         Err(e) => {
@@ -320,6 +341,48 @@ impl ProcessHandle {
                     }
                 }
             }
+        }
+
+        if completed_early {
+            // The provider signalled completion. A background daemon may keep
+            // the stdout pipe open, so don't wait for EOF — briefly drain any
+            // buffered output, then reap quickly or kill the process group.
+            let grace = tokio::time::sleep(std::time::Duration::from_secs(2));
+            tokio::pin!(grace);
+            loop {
+                tokio::select! {
+                    _ = &mut grace => break,
+                    line = stdout_reader.next_line() => match line {
+                        Ok(Some(l)) => {
+                            let _ = line_tx.send(OutputLine { content: l.clone(), stream: "stdout".to_string() });
+                            self.stdout_lines.push(l);
+                        }
+                        _ => break, // stdout EOF/err → fully drained
+                    },
+                    line = stderr_reader.next_line() => {
+                        if let Ok(Some(l)) = line {
+                            let _ = line_tx.send(OutputLine { content: l.clone(), stream: "stderr".to_string() });
+                            self.stderr_lines.push(l);
+                        }
+                    }
+                }
+            }
+            let exit_code =
+                match tokio::time::timeout(std::time::Duration::from_secs(1), self.child.wait())
+                    .await
+                {
+                    Ok(Ok(status)) => status.code().unwrap_or(0),
+                    _ => {
+                        warn!("Agent signalled completion but did not exit; killing process group");
+                        kill_process_group(&mut self.child).await;
+                        0
+                    }
+                };
+            return Ok(CommandOutput {
+                exit_code,
+                stdout: self.stdout_lines.join("\n"),
+                stderr: self.stderr_lines.join("\n"),
+            });
         }
 
         // Drain remaining stderr
@@ -364,11 +427,24 @@ impl ProcessHandle {
         timeout_secs: u64,
         line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
     ) -> Result<CommandOutput> {
+        self.wait_with_streaming_timeout_until(timeout_secs, line_tx, |_| false)
+            .await
+    }
+
+    /// [`wait_with_streaming_timeout`] with an early-completion predicate (see
+    /// [`wait_with_streaming_until`]). The `timeout_secs` wall-clock cap still
+    /// applies as the outer bound.
+    pub async fn wait_with_streaming_timeout_until(
+        self,
+        timeout_secs: u64,
+        line_tx: tokio::sync::mpsc::UnboundedSender<OutputLine>,
+        is_complete: impl Fn(&str) -> bool,
+    ) -> Result<CommandOutput> {
         #[cfg(unix)]
         let child_pid = self.child.id();
 
         tokio::select! {
-            result = self.wait_with_streaming(line_tx) => result,
+            result = self.wait_with_streaming_until(line_tx, is_complete) => result,
             _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
                 warn!(timeout_secs = timeout_secs, "Process timed out, killing process group");
                 #[cfg(unix)]
@@ -514,5 +590,49 @@ mod tests {
         fs::create_dir_all(&cfg).unwrap();
         fs::write(cfg.join("config.toml"), "[tools]\n").unwrap();
         assert!(worktree_has_mise_config(dir.path()));
+    }
+
+    /// A process that prints a completion marker and then keeps its stdout pipe
+    /// open (a `sleep` after the marker stands in for cursor-agent's lingering
+    /// background daemon) must finish promptly via the predicate — not block
+    /// until the long timeout.
+    #[tokio::test]
+    async fn streaming_until_completes_on_marker_without_waiting_for_eof() {
+        let dir = tempdir().unwrap();
+        // 30s sleep keeps stdout open; the predicate must short-circuit well before that.
+        let handle = ProcessHandle::spawn_shell(
+            "printf 'working\\nDONE_MARKER\\n'; sleep 30",
+            dir.path(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputLine>();
+        let started = tokio::time::Instant::now();
+        let out = handle
+            .wait_with_streaming_until(tx, |line| line.contains("DONE_MARKER"))
+            .await
+            .expect("should complete on marker");
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "must finish via the marker, not the 30s sleep (took {:?})",
+            started.elapsed()
+        );
+        assert!(
+            out.stdout.contains("DONE_MARKER"),
+            "marker captured: {}",
+            out.stdout
+        );
+
+        let mut lines = Vec::new();
+        while let Ok(l) = rx.try_recv() {
+            lines.push(l.content);
+        }
+        assert!(
+            lines.iter().any(|l| l.contains("DONE_MARKER")),
+            "marker line streamed to receiver"
+        );
     }
 }

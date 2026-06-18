@@ -55,6 +55,7 @@ function draftFromConfig(provider: AgentProviderId, cfg: AgentConfig | undefined
         extra_args_text: (sub.extra_args ?? []).join("\n"),
         allow_shared_default: sub.allow_shared_default ?? false,
         cli: sub.cli ?? "agent",
+        privacy_mode: sub.privacy_mode ?? true,
       };
     }
     case "codex": {
@@ -129,7 +130,7 @@ function patchFromDraft(
     case "claude":
       return { claude: { ...common, base_url: draft.base_url } };
     case "cursor":
-      return { cursor: { ...common, cli: draft.cli } };
+      return { cursor: { ...common, cli: draft.cli, privacy_mode: draft.privacy_mode } };
     case "codex":
       return { codex: { ...common, base_url: draft.base_url, provider_name: draft.provider_name } };
     case "opencode":

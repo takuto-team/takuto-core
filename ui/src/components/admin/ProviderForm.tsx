@@ -31,6 +31,8 @@ export interface ProviderDraft {
   base_url: string;
   /** Cursor-only (the CLI binary name; default "agent"). */
   cli: string;
+  /** Cursor-only: Privacy Mode (ghost mode). Default on. */
+  privacy_mode: boolean;
   /** Codex-only (named entry in ~/.codex/config.toml). */
   provider_name: string;
   /** One arg per line — converted to `string[]` on save. */
@@ -46,6 +48,7 @@ export const EMPTY_DRAFT: ProviderDraft = {
   model: "",
   base_url: "",
   cli: "agent",
+  privacy_mode: true,
   provider_name: "",
   extra_args_text: "",
   allow_shared_default: false,
@@ -156,6 +159,32 @@ export function ProviderForm({
             placeholder="agent"
             className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
           />
+
+          <div className="flex items-start justify-between gap-4 mt-2">
+            <div className="min-w-0">
+              <span className="text-xs text-gray-400">Privacy Mode</span>
+              <p className="text-xs text-gray-500 mt-1">
+                Keep your code private — never stored or indexed on Cursor's servers (recommended).
+                Turning this off enables server-side codebase indexing (sends code to Cursor).
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={draft.privacy_mode}
+              aria-label="Cursor Privacy Mode"
+              onClick={() => update({ privacy_mode: !draft.privacy_mode })}
+              className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/50 cursor-pointer ${
+                draft.privacy_mode ? "bg-blue-600" : "bg-gray-700"
+              }`}
+            >
+              <span
+                className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                  draft.privacy_mode ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
         </section>
       )}
 

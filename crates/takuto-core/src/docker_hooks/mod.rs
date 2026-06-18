@@ -26,6 +26,7 @@ mod process;
 mod status;
 mod status_types;
 
+pub use cursor_auth::apply_cursor_privacy_mode;
 pub use hook_runner::run_hook_commands;
 #[allow(deprecated)]
 pub use status::preflight;

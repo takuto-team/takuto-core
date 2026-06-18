@@ -102,6 +102,8 @@ export interface AgentClaudeConfig extends AgentProviderConfigBase {
  */
 export interface AgentCursorConfig extends AgentProviderConfigBase {
   cli: string;
+  /** Cursor Privacy Mode (ghost mode). Default on; Cursor-specific. */
+  privacy_mode?: boolean;
 }
 
 export interface AgentCodexConfig extends AgentProviderConfigBase {

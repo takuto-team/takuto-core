@@ -116,6 +116,62 @@ fn cursor_data_tree_looks_populated(root: &Path) -> bool {
     walk(root, 0)
 }
 
+/// Best-effort: write Cursor **Privacy Mode** into the shared `cli-config.json`
+/// (`privacyCache.ghostMode` + `privacyCache.privacyMode`). Cursor owns this
+/// file; we read-modify-write only those two keys and preserve everything else.
+///
+/// These keys are undocumented and may change between Cursor versions, and a
+/// Cursor team/account policy can override a local value on the next login — so
+/// this is strictly best-effort: any failure is logged and ignored, and we do
+/// nothing when the file is absent (Cursor not yet logged in).
+///
+/// `privacyMode` integer convention observed in the CLI: `2` = privacy/ghost on
+/// (no server-side code indexing), `0` = off (indexing permitted).
+pub fn apply_cursor_privacy_mode(privacy_on: bool) {
+    let config_dir = std::env::var_os("CURSOR_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| preflight_home().join(".cursor"));
+    let path = config_dir.join("cli-config.json");
+
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(r) => r,
+        Err(_) => return, // not logged in yet — nothing to patch
+    };
+    let mut v: JsonValue = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "cli-config.json is not valid JSON; skipping Cursor privacy patch");
+            return;
+        }
+    };
+    let Some(obj) = v.as_object_mut() else {
+        return;
+    };
+    let cache = obj
+        .entry("privacyCache")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(cache_obj) = cache.as_object_mut() {
+        cache_obj.insert("ghostMode".to_string(), JsonValue::Bool(privacy_on));
+        cache_obj.insert(
+            "privacyMode".to_string(),
+            JsonValue::from(if privacy_on { 2 } else { 0 }),
+        );
+    }
+    match serde_json::to_string_pretty(&v) {
+        Ok(out) => match std::fs::write(&path, out) {
+            Ok(()) => tracing::info!(
+                path = %path.display(),
+                privacy_on,
+                "Applied Cursor privacy mode to cli-config.json"
+            ),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to write Cursor privacy mode")
+            }
+        },
+        Err(e) => tracing::warn!(error = %e, "Failed to serialize cli-config.json"),
+    }
+}
+
 fn json_config_suggests_auth(path: &Path) -> bool {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return false;

@@ -351,11 +351,12 @@ pub(super) async fn run_agent_step_sequence(
     // the whole flow is one conversation. Read once per flow run; a mid-run
     // config change applies to the next run, not this one. The no-progress
     // guardrail threshold is read on the same pass.
-    let (share_conversation, max_repeated_output_lines) = {
+    let (share_conversation, max_repeated_output_lines, session_idle_nudge_secs) = {
         let c = config.read().await;
         (
             c.agent.share_conversation_across_steps,
             c.agent.max_repeated_output_lines,
+            c.agent.session_idle_nudge_secs,
         )
     };
     // Resume the agent on the first step regardless of whether a
@@ -782,6 +783,7 @@ pub(super) async fn run_agent_step_sequence(
                         Some(cursor_model_pass),
                         resume_id,
                         container_runner,
+                        session_idle_nudge_secs,
                     )
                     .await
                     .map(|s| (s.session_id, s.output)),
@@ -910,22 +912,41 @@ pub(super) async fn run_agent_step_sequence(
                             )
                             .await;
                             add_step_log(workflows, ticket_key, step_log).await;
-                            error!(ticket = %ticket_key, "Agent step AI session failed — aborting workflow");
-                            let hint: &'static str = match ai_stream_provider {
-                                AiAgentProvider::Claude => {
-                                    "check that Claude Code is authenticated in the container"
-                                }
-                                AiAgentProvider::Cursor => {
-                                    "check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli"
-                                }
-                                AiAgentProvider::Codex => {
-                                    "check Codex (`codex login --with-api-key` or OPENAI_API_KEY) and agent.providers.codex.model"
-                                }
-                                AiAgentProvider::OpenCode => {
-                                    "check OpenCode (`opencode auth login` or a project opencode.json) and agent.providers.opencode.model"
-                                }
-                            };
-                            return Err(AgentError::AgentStepAborted { hint }.into());
+                            // Only auth-shaped failures (no output / non-zero
+                            // exit) warrant the "check agent login" hint. A
+                            // timeout, transport error, or stream failure must
+                            // surface its real cause — otherwise the dashboard
+                            // shows a misleading auth message for, e.g., a
+                            // 30-minute step timeout.
+                            let auth_shaped = matches!(
+                                &e,
+                                TakutoError::Agent(
+                                    AgentError::EmptyOutput { .. } | AgentError::NonZeroExit { .. }
+                                )
+                            );
+                            if auth_shaped {
+                                error!(ticket = %ticket_key, error = %e, "Agent step AI session failed (auth-shaped) — aborting workflow");
+                                let hint: &'static str = match ai_stream_provider {
+                                    AiAgentProvider::Claude => {
+                                        "check that Claude Code is authenticated in the container"
+                                    }
+                                    AiAgentProvider::Cursor => {
+                                        "check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli"
+                                    }
+                                    AiAgentProvider::Codex => {
+                                        "check Codex (`codex login --with-api-key` or OPENAI_API_KEY) and agent.providers.codex.model"
+                                    }
+                                    AiAgentProvider::OpenCode => {
+                                        "check OpenCode (`opencode auth login` or a project opencode.json) and agent.providers.opencode.model"
+                                    }
+                                };
+                                return Err(AgentError::AgentStepAborted { hint }.into());
+                            }
+                            error!(ticket = %ticket_key, error = %e, "Agent step AI session failed — aborting workflow");
+                            return Err(AgentError::AgentStepFailed {
+                                message: e.to_string(),
+                            }
+                            .into());
                         }
                     }
                 }

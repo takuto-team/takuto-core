@@ -124,10 +124,24 @@ pub struct AgentConfig {
     /// tripped. `0` disables the guardrail. Default `8`.
     #[serde(default = "default_max_repeated_output_lines")]
     pub max_repeated_output_lines: u32,
+    /// Idle-recovery nudge (Cursor only): when an agent session produces no new
+    /// output for this many seconds **and no tool call is in flight**, the
+    /// session is restarted with `--resume` and a "what's the status / finalize
+    /// if done" prompt. This recovers cursor-agent's known headless hang (it
+    /// finishes a turn but a background daemon holds the stdout pipe open so the
+    /// stream never ends). It never shortens `step_timeout_secs` — that wall
+    /// remains the hard cap across all attempts. `0` disables nudging. Default
+    /// `300`.
+    #[serde(default = "default_session_idle_nudge_secs")]
+    pub session_idle_nudge_secs: u64,
 }
 
 pub(super) fn default_share_conversation() -> bool {
     false
+}
+
+pub(super) fn default_session_idle_nudge_secs() -> u64 {
+    300
 }
 
 pub(super) fn default_max_repeated_output_lines() -> u32 {
@@ -255,7 +269,7 @@ impl Default for OpenCodeProviderConfig {
 /// `cli` resolves to the `"agent"` default via [`AgentConfig::effective_cursor_cli`],
 /// while an explicit `cli = ""` set alongside `provider = "cursor"` is a
 /// config error caught by `validate`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorProviderConfig {
     #[serde(default)]
     pub cli: String,
@@ -271,6 +285,31 @@ pub struct CursorProviderConfig {
     /// a stable, user-visible error so the operator removes it.
     #[serde(default)]
     pub base_url: String,
+    /// Cursor **Privacy Mode** (ghost mode): when `true` (default) the agent's
+    /// code is never stored/indexed on Cursor's servers — the privacy-first
+    /// posture for a self-hosted tool. It is written into Cursor's
+    /// `cli-config.json` (`ghostMode` / `privacyMode`) at provisioning time.
+    /// Cursor-specific; other providers have no equivalent. Turning it off
+    /// enables server-side codebase indexing (sends code to Cursor).
+    #[serde(default = "default_cursor_privacy_mode")]
+    pub privacy_mode: bool,
+}
+
+pub(super) fn default_cursor_privacy_mode() -> bool {
+    true
+}
+
+impl Default for CursorProviderConfig {
+    fn default() -> Self {
+        Self {
+            cli: String::new(),
+            model: String::new(),
+            extra_args: Vec::new(),
+            allow_shared_default: false,
+            base_url: String::new(),
+            privacy_mode: default_cursor_privacy_mode(),
+        }
+    }
 }
 
 /// Codex provider sub-table — adds `provider_name` (the named entry in
@@ -352,6 +391,7 @@ impl Default for AgentConfig {
             available_providers: default_available_providers(),
             share_conversation_across_steps: default_share_conversation(),
             max_repeated_output_lines: default_max_repeated_output_lines(),
+            session_idle_nudge_secs: default_session_idle_nudge_secs(),
         }
     }
 }

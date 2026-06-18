@@ -63,10 +63,20 @@ pub enum AgentError {
     #[error("Command step failed")]
     CommandStepFailed,
 
-    /// The step orchestrator aborted the workflow after the AI session failed.
-    /// `hint` is a pinned per-provider auth diagnostic selected at the call site.
+    /// The step orchestrator aborted the workflow after the AI session failed
+    /// with an **auth-shaped** error (no output / non-zero exit). `hint` is a
+    /// pinned per-provider auth diagnostic selected at the call site. Only used
+    /// when the underlying failure plausibly indicates a credential/CLI problem
+    /// — never for timeouts or transport errors.
     #[error("Agent step failed — {hint}")]
     AgentStepAborted { hint: &'static str },
+
+    /// The step orchestrator aborted the workflow after the AI session failed
+    /// for a **non-auth** reason (timeout, transport, stream error, …). Carries
+    /// the underlying cause verbatim so the dashboard shows what actually
+    /// happened instead of a misleading "check agent login" hint.
+    #[error("Agent step failed: {message}")]
+    AgentStepFailed { message: String },
 
     /// The step was aborted by the no-progress guardrail: the agent repeated
     /// the same output line `count` times in a row without making progress
@@ -122,6 +132,12 @@ mod tests {
                 "Agent step failed — check Cursor Agent (`agent login` or CURSOR_API_KEY) and agent.providers.cursor.cli",
             ),
             (
+                AgentError::AgentStepFailed {
+                    message: "operation timed out after 1800 seconds".to_string(),
+                },
+                "Agent step failed: operation timed out after 1800 seconds",
+            ),
+            (
                 AgentError::NoProgressLoop {
                     count: 8,
                     line: "It seems there is an issue with pushing the branch.".to_string(),
@@ -131,7 +147,7 @@ mod tests {
         ];
         // Drift detection: if a new variant is added without updating this test,
         // `cases.len()` will be stale and the assertion below trips.
-        assert_eq!(cases.len(), 7);
+        assert_eq!(cases.len(), 8);
         for (err, expected) in cases {
             assert_eq!(format!("{err}"), expected, "Display mismatch for {err:?}");
         }
@@ -159,12 +175,15 @@ mod tests {
             },
             AgentError::CommandStepFailed,
             AgentError::AgentStepAborted { hint: "hint" },
+            AgentError::AgentStepFailed {
+                message: "boom".to_string(),
+            },
             AgentError::NoProgressLoop {
                 count: 8,
                 line: "loop".to_string(),
             },
         ];
-        assert_eq!(cases.len(), 7);
+        assert_eq!(cases.len(), 8);
         for err in cases {
             let outer: TakutoError = err.into();
             assert!(

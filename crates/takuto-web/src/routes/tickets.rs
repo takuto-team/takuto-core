@@ -290,6 +290,7 @@ pub(crate) async fn run_description_session(
                 },
                 resume_id.as_deref(),
                 container_runner.as_ref(),
+                0, // no idle nudge: improve runs non-streaming, bounded by improve_timeout
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
