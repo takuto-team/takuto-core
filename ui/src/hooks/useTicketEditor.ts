@@ -56,6 +56,10 @@ export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorR
   const { summary, markdown, setMarkdown, ticketKey, repository, onSaved } = params;
   const { showToast } = useToast();
   const [editTitle, setEditTitle] = useState(summary);
+  // Last-persisted title. Saving stays in edit mode, so dirtiness is measured
+  // against what's been saved (not the original `summary` prop) — otherwise a
+  // saved title change would keep reading as unsaved.
+  const [savedSummary, setSavedSummary] = useState(summary);
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
@@ -70,7 +74,7 @@ export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorR
 
   const handleStartEdit = () => {
     setEditText(markdown);
-    setEditTitle(summary);
+    setEditTitle(savedSummary);
     setDebouncedText(markdown);
     setActiveTab("write");
     setSideBySide(false);
@@ -81,7 +85,7 @@ export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorR
     setSaving(true);
     try {
       const payload: Record<string, string> = { description: editText };
-      if (editTitle !== summary) {
+      if (editTitle !== savedSummary) {
         payload.summary = editTitle;
       }
       if (repository) {
@@ -92,12 +96,10 @@ export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorR
         const text = await res.text();
         throw new Error(text || `HTTP ${res.status}`);
       }
+      // Persist only — stay in edit mode. Advancing both baselines clears
+      // editDirty (so the Save button disables) without dismissing the editor.
       setMarkdown(editText);
-      requestAnimationFrame(() => {
-        setEditMode(false);
-        setActiveTab("write");
-        setSideBySide(false);
-      });
+      setSavedSummary(editTitle);
       onSaved?.();
       return true;
     } catch (e) {
@@ -130,7 +132,7 @@ export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorR
     }
   };
 
-  const editDirty = editMode && (editText !== markdown || editTitle !== summary);
+  const editDirty = editMode && (editText !== markdown || editTitle !== savedSummary);
 
   return {
     editMode,

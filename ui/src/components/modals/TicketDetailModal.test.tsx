@@ -106,6 +106,28 @@ describe("TicketDetailModal — Add to Dashboard save-first", () => {
     expect(onStart).toHaveBeenCalledWith("Edited body", "Original title", "r1");
   });
 
+  it("stays in edit mode after clicking Save", async () => {
+    const { container } = renderModal();
+    await addButtonEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    const textarea = await waitFor(() => {
+      const el = container.querySelector("textarea");
+      if (!el) throw new Error("textarea not mounted");
+      return el;
+    });
+    fireEvent.change(textarea, { target: { value: "Edited body" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.includes("/update-description"))).toBe(true),
+    );
+    // Editor is still mounted (the textarea and Save button remain).
+    expect(container.querySelector("textarea")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
   it("does not call save when the description was never edited", async () => {
     const { onStart } = renderModal();
     await addButtonEnabled();
