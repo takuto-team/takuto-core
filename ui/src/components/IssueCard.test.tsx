@@ -151,11 +151,11 @@ describe("IssueCard", () => {
     expect(screen.queryByText(/\(\d+\//)).toBeNull(); // no "(k/N" progress text
   });
 
-  it("shows the progress bar once the flow's first step runs (prep_state null)", () => {
+  it("shows the progress bar once the flow's first step runs (no prep_state)", () => {
+    // prep_state omitted (undefined) → not in a preparing phase → bar shows.
     renderCard({
       workflow: makeWorkflow({
         state: "AddressingTicket",
-        prep_state: null,
         progress_percent: 40,
         progress_steps_total: 5,
       }),
