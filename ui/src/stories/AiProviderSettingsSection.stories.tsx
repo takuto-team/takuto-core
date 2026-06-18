@@ -78,6 +78,7 @@ const EMPTY: ProviderDraft = {
   model: "",
   base_url: "",
   cli: "agent",
+  privacy_mode: true,
   provider_name: "",
   extra_args_text: "",
   allow_shared_default: false,
