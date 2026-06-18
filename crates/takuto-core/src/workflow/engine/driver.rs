@@ -83,10 +83,13 @@ pub(super) async fn drive_workflow_def(
     {
         let mut wf = workflows.write().await;
         if let Some(workflow) = wf.get_mut(&ticket_key) {
-            let bootstrap_est: u32 = if workflow.jira_available { 3 } else { 1 };
-            let mise_est: u32 = 1;
+            // Denominator is the flow's own step count only. Bootstrap (assign /
+            // retrieve / worktree / mise / init) is shown as a "Preparing
+            // worktree…" state, not as progress segments, and its `steps_log`
+            // rows are flagged `bootstrap` so they're excluded from the
+            // numerator. So the bar reads k/N over the flow's N steps.
             let agent_steps = u32::try_from(steps.len()).unwrap_or(u32::MAX);
-            workflow.current_def_total_steps = Some(bootstrap_est + mise_est + agent_steps + 1);
+            workflow.current_def_total_steps = Some(agent_steps.max(1));
         }
     }
 

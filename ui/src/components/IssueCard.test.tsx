@@ -135,6 +135,34 @@ describe("IssueCard", () => {
     expect(screen.getByText(/Repository not ready/i)).toBeTruthy();
   });
 
+  it("shows 'Preparing worktree' (no progress bar) during a running bootstrap phase", () => {
+    // A running workflow in bootstrap (e.g. CreatingWorktree) reports
+    // prep_state "preparing" — the card hides the step/progress bar.
+    renderCard({
+      workflow: makeWorkflow({
+        state: "CreatingWorktree",
+        can_start: false,
+        prep_state: "preparing",
+        progress_percent: 30,
+        progress_steps_total: 5,
+      }),
+    });
+    expect(screen.getByText(/Preparing worktree/i)).toBeTruthy();
+    expect(screen.queryByText(/\(\d+\//)).toBeNull(); // no "(k/N" progress text
+  });
+
+  it("shows the progress bar once the flow's first step runs (prep_state null)", () => {
+    renderCard({
+      workflow: makeWorkflow({
+        state: "AddressingTicket",
+        prep_state: null,
+        progress_percent: 40,
+        progress_steps_total: 5,
+      }),
+    });
+    expect(screen.queryByText(/Preparing worktree/i)).toBeNull();
+  });
+
   it("disables the console-output button when there are no terminal lines", () => {
     renderCard({ workflow: makeWorkflow() });
     const btn = screen.getByRole("button", { name: /show console output/i }) as HTMLButtonElement;

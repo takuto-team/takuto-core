@@ -864,6 +864,7 @@ mod facade_workflow_tests {
                     status: StepStatus::Success,
                     output: vec![],
                     error: None,
+                    bootstrap: false,
                 },
                 StepLog {
                     step_name: "running step".into(),
@@ -872,6 +873,7 @@ mod facade_workflow_tests {
                     status: StepStatus::Running,
                     output: vec![],
                     error: None,
+                    bootstrap: false,
                 },
             ],
             ..make_persisted_record(WorkflowState::AddressingTicket { pass: 1 }, true)
@@ -978,6 +980,7 @@ mod facade_workflow_tests {
                 status: StepStatus::Success,
                 output: vec!["line1".into()],
                 error: None,
+                bootstrap: false,
             }],
             branch_name: "feat/snap-1".into(),
             worktree_path: Some(PathBuf::from("/workspace/worktrees/snap-1")),

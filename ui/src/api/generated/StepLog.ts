@@ -5,4 +5,13 @@ export type StepLog = { step_name: string,
 /**
  * RFC3339 timestamp on the wire (serde serializes `DateTime<Utc>` as a string).
  */
-started_at: string, completed_at: string | null, status: StepStatus, output: Array<string>, error: string | null, };
+started_at: string, completed_at: string | null, status: StepStatus, output: Array<string>, error: string | null, 
+/**
+ * `true` for setup steps run during bootstrap (assign / retrieve / create
+ * worktree / mise install / worktree-init) rather than the flow's own
+ * agent/command steps. The dashboard progress bar counts only non-bootstrap
+ * steps, so the "k/N" reflects the flow's steps (bootstrap shows as a
+ * "Preparing worktree…" state instead). `#[serde(default)]` keeps old
+ * snapshots (where the field is absent) treated as flow steps.
+ */
+bootstrap: boolean, };

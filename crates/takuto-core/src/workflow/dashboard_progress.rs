@@ -22,10 +22,12 @@ pub fn workflow_progress_percent(w: &Workflow, cfg: &Config) -> u8 {
         return 0;
     }
 
+    // Count only the flow's own steps; bootstrap (setup) steps are shown as a
+    // "Preparing worktree…" state, not progress segments.
     let mut done = w
         .steps_log
         .iter()
-        .filter(|s| s.status != StepStatus::Running)
+        .filter(|s| !s.bootstrap && s.status != StepStatus::Running)
         .count() as f64;
 
     if in_flight_partial_credit(w) {
@@ -280,6 +282,40 @@ mod tests {
         assert!(
             total > 4,
             "expected estimate to exceed logged steps for in-progress workflow, got {total}"
+        );
+    }
+
+    #[test]
+    fn bootstrap_steps_excluded_from_progress_count() {
+        // 2 bootstrap setup steps + 2 flow steps, all done, in a 5-step flow.
+        let mut boot1 = StepLog::bootstrap("Create Worktree".into());
+        boot1.complete(StepStatus::Success);
+        let mut boot2 = StepLog::bootstrap("Mise install".into());
+        boot2.complete(StepStatus::Success);
+        let mut f1 = StepLog::new("Implement".into());
+        f1.complete(StepStatus::Success);
+        let mut f2 = StepLog::new("Review".into());
+        f2.complete(StepStatus::Success);
+
+        let mut w = wf_with(
+            WorkflowState::AddressingTicket { pass: 1 },
+            vec![boot1, boot2, f1, f2],
+            None,
+        );
+        w.current_def_total_steps = Some(5); // flow step count
+
+        let cfg = Config::default();
+        let (pct, total) = progress_fields(&w, &cfg, None);
+        assert_eq!(
+            total, 5,
+            "denominator must be the flow step count, not flow+bootstrap"
+        );
+        // Only the 2 completed FLOW steps count; bootstrap is excluded. (If they
+        // were counted, 4/5 would fill 4 segments instead of 2.)
+        assert_eq!(
+            workflow_progress_filled_segments(pct, total),
+            2,
+            "expected 2/5 from flow steps only, got {pct}%"
         );
     }
 }

@@ -210,6 +210,19 @@ pub(super) fn can_start_workflow(w: &Workflow) -> bool {
 /// repo list). Pure — never inferred from branch/worktree existence, so it
 /// cannot latch.
 pub(super) fn prep_state(w: &Workflow, repo_available: bool) -> Option<&'static str> {
+    // A running workflow in its bootstrap (setup) phase — before the flow's
+    // first step — shows "Preparing worktree…" instead of a progress bar. These
+    // states are only entered during bootstrap (assign / retrieve / create
+    // worktree / mise / init); the first flow step transitions to
+    // AddressingTicket, which clears this.
+    if matches!(
+        w.state,
+        WorkflowState::Assigning
+            | WorkflowState::RetrievingDetails
+            | WorkflowState::CreatingWorktree
+    ) {
+        return Some("preparing");
+    }
     if !can_start_workflow(w) {
         return None;
     }
@@ -385,6 +398,25 @@ mod tests {
         let mut done = wf_pending(false);
         done.state = WorkflowState::Done;
         assert_eq!(prep_state(&done, true), None);
+    }
+
+    #[test]
+    fn prep_state_preparing_during_bootstrap_states() {
+        // A running workflow in its bootstrap phase shows "Preparing worktree…"
+        // (the bar is hidden until the flow's first step).
+        for s in [
+            WorkflowState::Assigning,
+            WorkflowState::RetrievingDetails,
+            WorkflowState::CreatingWorktree,
+        ] {
+            let mut w = wf_pending(true);
+            w.state = s.clone();
+            assert_eq!(prep_state(&w, true), Some("preparing"), "{s:?}");
+        }
+        // Once the flow's first step runs, it's no longer "preparing".
+        let mut flow = wf_pending(true);
+        flow.state = WorkflowState::AddressingTicket { pass: 1 };
+        assert_eq!(prep_state(&flow, true), None);
     }
 
     /// Create a unique existing directory under the system temp dir to stand in

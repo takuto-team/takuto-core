@@ -288,7 +288,7 @@ pub(super) async fn bootstrap_new_workflow(
             db,
         )
         .await;
-        let mut step_log = StepLog::new("Assign Ticket".to_string());
+        let mut step_log = StepLog::bootstrap("Assign Ticket".to_string());
         check_cancelled(cancel_token)?;
 
         match actions.assign_ticket(&repo_path, ticket_key).await {
@@ -328,7 +328,7 @@ pub(super) async fn bootstrap_new_workflow(
             db,
         )
         .await;
-        let mut step_log = StepLog::new("Retrieve Details".to_string());
+        let mut step_log = StepLog::bootstrap("Retrieve Details".to_string());
         check_cancelled(cancel_token)?;
 
         // Prefer the workflow owner's per-user Jira credential (REST) when one
@@ -461,7 +461,7 @@ pub(super) async fn bootstrap_new_workflow(
             branch = %existing_branch,
             "Using pre-created worktree (created at ticket-add time)"
         );
-        let mut step_log = StepLog::new("Create Worktree".to_string());
+        let mut step_log = StepLog::bootstrap("Create Worktree".to_string());
         step_log.output.push(format!("Branch: {existing_branch}"));
         step_log
             .output
@@ -474,7 +474,7 @@ pub(super) async fn bootstrap_new_workflow(
         (existing_path, existing_branch)
     } else {
         // Full worktree creation path.
-        let mut step_log = StepLog::new("Create Worktree".to_string());
+        let mut step_log = StepLog::bootstrap("Create Worktree".to_string());
 
         // Configure the git credential helper / author identity on the repo root
         // BEFORE fetching, so `git fetch` can authenticate.
@@ -625,7 +625,7 @@ pub(super) async fn bootstrap_new_workflow(
     // Mise install (if project declares mise tools).
     if crate::process::worktree_has_mise_config(&worktree_path) {
         let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
-        let mut step_log = StepLog::new("Mise install".to_string());
+        let mut step_log = StepLog::bootstrap("Mise install".to_string());
         info!("Running mise install (project declares mise tools)");
         log_writer
             .write_step("Mise install", "Running: mise install")
@@ -719,7 +719,7 @@ pub(super) async fn bootstrap_new_workflow(
             let step_name = format!("Worktree init ({}/{}): {}", i + 1, total, snippet_display);
 
             let _shell_slot = acquire_agent_slot(agent_run_semaphore, cancel_token).await?;
-            let mut step_log = StepLog::new(step_name.clone());
+            let mut step_log = StepLog::bootstrap(step_name.clone());
             info!(
                 command = %cmd,
                 step = i + 1,

@@ -17,6 +17,14 @@ pub struct StepLog {
     pub status: StepStatus,
     pub output: Vec<String>,
     pub error: Option<String>,
+    /// `true` for setup steps run during bootstrap (assign / retrieve / create
+    /// worktree / mise install / worktree-init) rather than the flow's own
+    /// agent/command steps. The dashboard progress bar counts only non-bootstrap
+    /// steps, so the "k/N" reflects the flow's steps (bootstrap shows as a
+    /// "Preparing worktree…" state instead). `#[serde(default)]` keeps old
+    /// snapshots (where the field is absent) treated as flow steps.
+    #[serde(default)]
+    pub bootstrap: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -37,6 +45,15 @@ impl StepLog {
             status: StepStatus::Running,
             output: Vec::new(),
             error: None,
+            bootstrap: false,
+        }
+    }
+
+    /// A bootstrap (setup) step — excluded from the dashboard progress count.
+    pub fn bootstrap(step_name: String) -> Self {
+        Self {
+            bootstrap: true,
+            ..Self::new(step_name)
         }
     }
 
