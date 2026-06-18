@@ -18,6 +18,8 @@ interface Props {
   repositoryId: string;
   setRepositoryId: (id: string) => void;
   loadingRepos: boolean;
+  /** When true, the repo is fixed (GitHub issue's source) — show read-only, no dropdown. */
+  repoLocked: boolean;
   onClose: () => void;
 }
 
@@ -27,9 +29,21 @@ export function StartWorkflowRepoBanner({
   repositoryId,
   setRepositoryId,
   loadingRepos,
+  repoLocked,
   onClose,
 }: Props) {
   if (!showStartButton) return null;
+  // A GitHub issue belongs to its source repo — there is nothing to choose, so
+  // show the repo read-only instead of a selector.
+  if (repoLocked && !loadingRepos) {
+    const name = repos.find((r) => r.id === repositoryId)?.name ?? "";
+    return (
+      <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-3">
+        <label className="text-xs text-gray-400 shrink-0">Repository:</label>
+        <span className="text-xs text-gray-300 font-mono">{name}</span>
+      </div>
+    );
+  }
   return (
     <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-3">
       <label className="text-xs text-gray-400 shrink-0">Repository:</label>

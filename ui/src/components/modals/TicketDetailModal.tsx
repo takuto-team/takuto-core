@@ -23,6 +23,9 @@ interface Props {
   description?: string;
   ticketingSystem: string;
   showStartButton: boolean;
+  /** The repo whose issues the picker is browsing. For a GitHub issue this is
+   * the issue's source repo — the work item is pinned to it (no repo choice). */
+  activeRepoName?: string | null;
   /** Timeout in seconds for "Improve with AI" sessions, from server config. */
   improveTimeoutSecs?: number;
   /** When `showStartButton` is true, the caller receives the chosen repository_id. */
@@ -34,7 +37,7 @@ interface Props {
 
 export function TicketDetailModal({
   ticketKey, summary, description: initialDescription, ticketingSystem, showStartButton,
-  improveTimeoutSecs = DEFAULT_IMPROVE_TIMEOUT_SECS, onStart, onClose, onSaved,
+  activeRepoName, improveTimeoutSecs = DEFAULT_IMPROVE_TIMEOUT_SECS, onStart, onClose, onSaved,
 }: Props) {
   const { markdown, setMarkdown, loading } = useTicketDetail(ticketKey, initialDescription, ticketingSystem);
   const { countdown, start: startCountdown, stop: stopCountdown } = useTicketCountdown(improveTimeoutSecs);
@@ -46,7 +49,13 @@ export function TicketDetailModal({
     pendingImprovement, setPendingImprovement,
     applyImprovementToEditor: e.applyImprovement,
   });
-  const { repos, repositoryId, setRepositoryId, loadingRepos } = useStartWorkflow(showStartButton);
+  // A GitHub issue is pinned to its source repo (the repo the picker browsed);
+  // Jira / manual tickets aren't repo-bound, so the user picks one.
+  const lockedRepoName = ticketingSystem === "github" ? activeRepoName : null;
+  const { repos, repositoryId, setRepositoryId, loadingRepos, repoLocked } = useStartWorkflow(
+    showStartButton,
+    lockedRepoName,
+  );
 
   // When a diff is pending, widen the modal like side-by-side edit mode.
   const isWide = e.sideBySide || pendingImprovement !== null;
@@ -70,7 +79,7 @@ export function TicketDetailModal({
         <StartWorkflowRepoBanner
           showStartButton={showStartButton} repos={repos}
           repositoryId={repositoryId} setRepositoryId={setRepositoryId}
-          loadingRepos={loadingRepos} onClose={onClose}
+          loadingRepos={loadingRepos} repoLocked={repoLocked} onClose={onClose}
         />
         <TicketImproveWithAI.Banner
           pendingImprovement={pendingImprovement}

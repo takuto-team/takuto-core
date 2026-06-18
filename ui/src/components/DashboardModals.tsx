@@ -62,6 +62,7 @@ export function DashboardModals({
           summary={modal.ticket.summary}
           description={modal.ticket.description}
           ticketingSystem={ticketingSystem}
+          activeRepoName={activeRepoName}
           showStartButton={modal.ticket.showStart}
           improveTimeoutSecs={config?.agent?.improve_timeout_secs}
           onStart={onAddToDashboard}
