@@ -11,11 +11,13 @@
 //   - POST /api/tickets/{key}/update-description
 //
 // we assert:
-//   - G/W/T 2.x: bob calling alice's ticket → 404 Not Found (existence is not
-//     leaked).
-//   - G/W/T 2.5: any user calling a non-existent ticket → 404 (same response
-//     as the cross-user case).
-//   - G/W/T 2.4: alice calling her own ticket → non-404 (handler executes).
+//   - bob calling alice's *existing* ticket → 404 Not Found (ownership is
+//     enforced and existence is not leaked).
+//   - a non-existent ticket: improve/prompt are allowed (the Add-to-Dashboard
+//     preview flow has no work item yet and they operate only on the request
+//     body), while update-description still 404s in None mode (no preview
+//     target, so existence is not leaked).
+//   - alice calling her own ticket → non-404 (handler executes).
 //
 // The improve / prompt handlers normally invoke a real AI session. We flip the
 // dev-mock for this process via `MockGuard::on()` so they short-circuit to a
@@ -191,24 +193,35 @@ async fn bob_cannot_act_on_alices_ticket() {
 }
 
 #[tokio::test]
-async fn non_existent_ticket_returns_404_for_any_user() {
+async fn non_existent_ticket_allows_preview_endpoints_but_update_404s() {
     let _guard = MockGuard::on();
 
     let state = test_state_with_db();
     let alice_cookie = register_and_login(&state).await;
-    // No workflow inserted — every action against NOPE-999 should 404.
+    // No workflow inserted. improve/prompt are offered in the Add-to-Dashboard
+    // preview flow (no work item yet) and operate only on the caller-supplied
+    // body, so they must NOT 404 on an unknown key. update-description has no
+    // preview target in None mode, so it still 404s (existence is not leaked).
 
     for (suffix, body, name) in ENDPOINTS {
         let app = build_router(state.clone());
         let path = format!("/api/tickets/NOPE-999/{suffix}");
         let req = post(&state, &path, &alice_cookie, body);
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::NOT_FOUND,
-            "alice on non-existent ticket via {name}: expected 404, got {}",
-            resp.status()
-        );
+        if *name == "update-description" {
+            assert_eq!(
+                resp.status(),
+                StatusCode::NOT_FOUND,
+                "update-description on a non-existent ticket: expected 404, got {}",
+                resp.status()
+            );
+        } else {
+            assert_ne!(
+                resp.status(),
+                StatusCode::NOT_FOUND,
+                "{name} on a not-yet-added ticket should be allowed (preview flow), got 404"
+            );
+        }
     }
 }
 
