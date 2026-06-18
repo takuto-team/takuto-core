@@ -60,6 +60,19 @@ export function TicketDetailModal({
     lockedRepoName,
   );
 
+  // "Add to Dashboard" must not create a work item from a stale ticket: if the
+  // description was edited (manually or via Improve-with-AI, both of which land
+  // in edit mode) but not yet saved, persist it to the source ticket first and
+  // only proceed once the save succeeds.
+  const handleStartWithSave = async (description: string, title: string, repositoryId: string) => {
+    if (!onStart) return;
+    if (e.editMode && e.editDirty) {
+      const saved = await e.handleSaveDescription();
+      if (!saved) return;
+    }
+    onStart(description, title, repositoryId);
+  };
+
   // When a diff is pending, widen the modal like side-by-side edit mode.
   const isWide = e.sideBySide || pendingImprovement !== null;
   const contentClass = `flex-1 min-h-0 ${(e.editMode && e.sideBySide) || pendingImprovement ? "flex overflow-hidden" : "flex flex-col overflow-hidden"}`;
@@ -136,8 +149,8 @@ export function TicketDetailModal({
             showStartButton={showStartButton} pendingImprovement={pendingImprovement}
             editMode={e.editMode} editText={e.editText} editTitle={e.editTitle}
             markdown={markdown} summary={summary}
-            repositoryId={repositoryId} loadingRepos={loadingRepos}
-            onStart={onStart} onClose={onClose}
+            repositoryId={repositoryId} loadingRepos={loadingRepos} saving={e.saving}
+            onStart={onStart ? handleStartWithSave : undefined} onClose={onClose}
             onCancelEdit={e.handleCancelEdit}
             onDiscardImprovement={i.handleDiscardImprovement}
             onConfirmImprovement={i.handleConfirmImprovement}

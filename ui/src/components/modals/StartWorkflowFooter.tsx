@@ -23,6 +23,9 @@ interface Props {
   summary: string;
   repositoryId: string;
   loadingRepos: boolean;
+  /** True while an unsaved edit is being persisted before the work item is
+   *  created — disables the CTA so a double-click can't add twice. */
+  saving?: boolean;
   onStart?: (description: string, summary: string, repositoryId: string) => void;
   onClose: () => void;
   onCancelEdit: () => void;
@@ -40,6 +43,7 @@ export function StartWorkflowFooter({
   summary,
   repositoryId,
   loadingRepos,
+  saving,
   onStart,
   onClose,
   onCancelEdit,
@@ -71,10 +75,10 @@ export function StartWorkflowFooter({
       ) : showStartButton && onStart ? (
         <button
           onClick={() => onStart(editMode ? editText : markdown, editMode ? editTitle : summary, repositoryId)}
-          disabled={!repositoryId || loadingRepos}
+          disabled={!repositoryId || loadingRepos || saving}
           className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
-          Add to Dashboard
+          {saving ? "Saving…" : "Add to Dashboard"}
         </button>
       ) : null}
     </div>

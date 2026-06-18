@@ -43,7 +43,9 @@ export interface UseTicketEditorResult {
   setActiveTab: (next: "write" | "preview") => void;
   handleStartEdit: () => void;
   handleCancelEdit: () => void;
-  handleSaveDescription: () => Promise<void>;
+  /** Persists the description; resolves `true` on success, `false` if the
+   *  save failed (a toast is shown in that case). */
+  handleSaveDescription: () => Promise<boolean>;
   handleSideBySideChange: (checked: boolean) => void;
   /** Editor-side half of "confirm pending improvement". Called by the
    *  improve-with-AI hook when the user accepts the AI's diff. */
@@ -75,7 +77,7 @@ export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorR
     setEditMode(true);
   };
 
-  const handleSaveDescription = async () => {
+  const handleSaveDescription = async (): Promise<boolean> => {
     setSaving(true);
     try {
       const payload: Record<string, string> = { description: editText };
@@ -97,8 +99,10 @@ export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorR
         setSideBySide(false);
       });
       onSaved?.();
+      return true;
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Failed to save");
+      return false;
     } finally {
       setSaving(false);
     }
