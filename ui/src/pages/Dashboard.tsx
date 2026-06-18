@@ -1,7 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { apiPost } from "../api/client";
 import type { WorkflowEvent } from "../api/types";
@@ -17,6 +17,7 @@ import { usePolling } from "../hooks/usePolling";
 import { Header } from "../components/Header";
 import { PollingLabel } from "../components/PollingLabel";
 import { SummaryStats } from "../components/SummaryStats";
+import { workflowMatchesStatus, type StatusFilterKey } from "../components/statusFilter";
 import { WorkflowGrid } from "../components/WorkflowGrid";
 import { DashboardModals } from "../components/DashboardModals";
 import { OnboardingBanner } from "../components/OnboardingBanner";
@@ -45,6 +46,17 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     useWorkflowDefinitions();
   const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
   const modals = useDashboardModals(config);
+
+  // Clicking a summary-counter card filters the grid to that status; clicking
+  // the active card again clears the filter.
+  const [statusFilter, setStatusFilter] = useState<StatusFilterKey | null>(null);
+  const visibleOrderKeys = useMemo(() => {
+    if (!statusFilter) return orderKeys;
+    return orderKeys.filter((k) => {
+      const w = workflows[k];
+      return w != null && workflowMatchesStatus(w, statusFilter);
+    });
+  }, [orderKeys, workflows, statusFilter]);
 
   // Wrap handleEvent to also re-fetch definitions + onboarding on relevant events.
   const handleEventWithDefs = useCallback((evt: WorkflowEvent) => {
@@ -163,7 +175,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         </div>
       )}
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
-        <SummaryStats counts={counts} />
+        <SummaryStats counts={counts} activeFilter={statusFilter} onSelectFilter={setStatusFilter} />
         {hasAnyRepo === false ? (
           <div className="text-center py-16">
             <p className="text-gray-500 text-sm mb-4">
@@ -176,9 +188,19 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
               Go to My Repositories
             </Link>
           </div>
+        ) : statusFilter && visibleOrderKeys.length === 0 ? (
+          <div className="text-center py-16">
+            <p className="text-gray-500 text-sm mb-4">No {statusFilter} items.</p>
+            <button
+              onClick={() => setStatusFilter(null)}
+              className="inline-block text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors cursor-pointer"
+            >
+              Show all items
+            </button>
+          </div>
         ) : (
           <WorkflowGrid
-            workflows={workflows} orderKeys={orderKeys}
+            workflows={workflows} orderKeys={visibleOrderKeys}
             terminalStates={terminalStates} dynamicForwards={dynamicForwards}
             workflowDefs={workflowDefs} onRefresh={fetchWorkflows}
             onShowDescription={handleShowDescription} onReport={modals.openReport}
