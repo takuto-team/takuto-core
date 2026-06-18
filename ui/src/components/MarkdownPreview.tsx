@@ -29,12 +29,17 @@ let mermaidReady: Promise<(typeof import("mermaid"))["default"]> | null = null;
 function getMermaid() {
   if (!mermaidReady) {
     mermaidReady = import("mermaid").then(({ default: m }) => {
-      m.initialize({ startOnLoad: false, theme: "dark" });
+      m.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
       return m;
     });
   }
   return mermaidReady;
 }
+
+// Per-instance counter so the ids handed to mermaid.render() are unique across
+// every MarkdownPreview mounted on the page (read-only view + edit preview can
+// coexist), avoiding id collisions between their diagrams.
+let nextPreviewId = 0;
 
 interface Props {
   markdown: string;
@@ -43,6 +48,8 @@ interface Props {
 
 export const MarkdownPreview = memo(function MarkdownPreview({ markdown, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const idBaseRef = useRef(0);
+  if (idBaseRef.current === 0) idBaseRef.current = ++nextPreviewId;
 
   const { html, blocks } = useMemo(() => {
     mermaidBlocks = [];
@@ -54,29 +61,45 @@ export const MarkdownPreview = memo(function MarkdownPreview({ markdown, classNa
   }, [markdown]);
 
   useEffect(() => {
-    if (!containerRef.current || blocks.length === 0) return;
+    const container = containerRef.current;
+    if (!container || blocks.length === 0) return;
 
-    // Inject mermaid source into placeholder divs
-    const placeholders = containerRef.current.querySelectorAll<HTMLElement>(
-      "[data-mermaid-idx]"
+    const placeholders = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-mermaid-idx]")
     );
-    const nodes: HTMLElement[] = [];
-    placeholders.forEach((el) => {
-      const idx = parseInt(el.getAttribute("data-mermaid-idx") || "", 10);
-      if (!isNaN(idx) && blocks[idx]) {
-        el.textContent = blocks[idx];
-        el.className = "mermaid";
-        el.removeAttribute("data-mermaid-idx");
-        nodes.push(el);
-      }
-    });
-
-    if (nodes.length === 0) return;
+    if (placeholders.length === 0) return;
 
     let cancelled = false;
-    getMermaid().then((mermaid) => {
-      if (cancelled) return;
-      mermaid.run({ nodes }).catch(console.warn);
+    // Render each diagram imperatively with mermaid.render(): unlike
+    // mermaid.run(), it does not depend on node attributes surviving, never
+    // skips an "already processed" node, and is idempotent across re-renders
+    // and remounts — so the read-only view renders identically to the editor
+    // preview regardless of mount order or timing.
+    getMermaid().then(async (mermaid) => {
+      for (const el of placeholders) {
+        if (cancelled) return;
+        const idx = parseInt(el.getAttribute("data-mermaid-idx") || "", 10);
+        const source = isNaN(idx) ? undefined : blocks[idx];
+        if (!source) continue;
+        try {
+          const { svg } = await mermaid.render(`mmd-${idBaseRef.current}-${idx}`, source);
+          if (cancelled) return;
+          // Inject mermaid's SVG verbatim. DOMPurify strips <foreignObject>,
+          // which flowcharts use for their node labels (the labels would
+          // vanish). mermaid's securityLevel "strict" already encodes HTML and
+          // disables scripts/clicks in the diagram source, so the output is
+          // safe to inject — the same posture as mermaid.run() used before.
+          el.innerHTML = svg;
+          el.className = "mermaid-rendered flex justify-center my-4";
+        } catch (err) {
+          if (cancelled) return;
+          // Fall back to the legible source (newlines preserved) rather than
+          // collapsed text, so a bad diagram is still readable.
+          el.textContent = source;
+          el.className = "mermaid-error whitespace-pre-wrap font-mono text-xs text-red-300 block";
+          console.warn("mermaid render failed", err);
+        }
+      }
     });
     return () => {
       cancelled = true;
