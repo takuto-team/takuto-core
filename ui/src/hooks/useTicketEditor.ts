@@ -23,6 +23,9 @@ interface UseTicketEditorParams {
   markdown: string;
   setMarkdown: (next: string) => void;
   ticketKey: string;
+  /** Repo the ticket belongs to — sent so a not-yet-added GitHub issue saves to
+   * the right repo's issue (ignored once the ticket is a work item). */
+  repository?: string | null;
   onSaved?: () => void;
 }
 
@@ -48,7 +51,7 @@ export interface UseTicketEditorResult {
 }
 
 export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorResult {
-  const { summary, markdown, setMarkdown, ticketKey, onSaved } = params;
+  const { summary, markdown, setMarkdown, ticketKey, repository, onSaved } = params;
   const { showToast } = useToast();
   const [editTitle, setEditTitle] = useState(summary);
   const [editMode, setEditMode] = useState(false);
@@ -78,6 +81,9 @@ export function useTicketEditor(params: UseTicketEditorParams): UseTicketEditorR
       const payload: Record<string, string> = { description: editText };
       if (editTitle !== summary) {
         payload.summary = editTitle;
+      }
+      if (repository) {
+        payload.repository = repository;
       }
       const res = await apiPost(`/api/tickets/${encodeURIComponent(ticketKey)}/update-description`, payload);
       if (!res.ok) {

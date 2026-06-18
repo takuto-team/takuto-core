@@ -56,6 +56,13 @@ pub struct UpdateDescriptionBody {
     /// Optional summary/title update (used in no-ticketing mode).
     #[serde(default)]
     pub summary: Option<String>,
+    /// Repo name (`repositories.name`) the ticket belongs to. Used only when the
+    /// ticket is **not yet a work item** (the Add-to-Dashboard preview flow) to
+    /// resolve which GitHub repo's issue to PATCH; ignored once a work item
+    /// exists (the work item's own repo wins). Irrelevant for Jira (host-level
+    /// acli) and None mode.
+    #[serde(default)]
+    pub repository: Option<String>,
 }
 
 /// Maximum allowed length for the ticket description in an improve request (100 KB).
@@ -70,6 +77,9 @@ async fn resolve_workflow_repo_path(
     auth_state: &AuthState,
     cfg_state: &ConfigState,
     ticket_key: &str,
+    // Repo-name hint for tickets that aren't a work item yet (preview flow).
+    // Used only when no work item supplies a repo.
+    fallback_repo_name: Option<&str>,
 ) -> PathBuf {
     let (repo_id, ws_name) = {
         let wf_arc = engine.engine.workflows_arc();
@@ -88,6 +98,12 @@ async fn resolve_workflow_repo_path(
         if !ws_name.is_empty()
             && let Ok(Some(row)) =
                 takuto_core::db::repositories::get_by_name(adapter, &ws_name).await
+        {
+            return PathBuf::from(&row.local_path);
+        }
+        // No work item repo — fall back to the caller-supplied repo (preview flow).
+        if let Some(name) = fallback_repo_name.filter(|n| !n.is_empty())
+            && let Ok(Some(row)) = takuto_core::db::repositories::get_by_name(adapter, name).await
         {
             return PathBuf::from(&row.local_path);
         }
@@ -516,24 +532,35 @@ pub async fn update_ticket_description(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<UpdateDescriptionBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    // Only the workflow owner may invoke this.
-    require_workflow_access(&engine, &auth_state, &auth, &key)
-        .await
-        .map_err(|s| (s, String::new()))?;
-    // Resolve the cwd for `gh` / `acli` from the workflow's repository_id
-    // rather than the global cfg.git.repo_path.
-    let workflow_repo_path =
-        resolve_workflow_repo_path(&engine, &auth_state, &cfg_state, &key).await;
+    // Owner-only for live items; allowed for not-yet-added tickets (the
+    // Add-to-Dashboard preview flow saves the edited description before the item
+    // is on the board).
+    authorize_description_session(&engine, &auth_state, &auth, &key).await?;
+    // Resolve the cwd for `gh` / `acli` from the work item's repository_id, or —
+    // for a not-yet-added ticket — from the caller-supplied `repository` name;
+    // falls back to the global repo path.
+    let workflow_repo_path = resolve_workflow_repo_path(
+        &engine,
+        &auth_state,
+        &cfg_state,
+        &key,
+        body.repository.as_deref(),
+    )
+    .await;
     match cfg_state.ticketing_system {
         TicketingSystem::None => {
-            // No external ticketing system — persist to the in-memory workflow.
+            // No external ticketing system — persist to the in-memory work item.
+            // Unlike GitHub/Jira, a None-mode ticket has no existence outside the
+            // dashboard, so there is no preview flow: a missing work item is a
+            // 404 (and avoids leaking existence — see the IDOR fix).
             let wf_arc = engine.engine.workflows_arc();
             let mut workflows = wf_arc.write().await;
-            if let Some(wf) = workflows.get_mut(&key) {
-                wf.ticket_description = body.description.clone();
-                if let Some(ref s) = body.summary {
-                    wf.ticket_summary = s.clone();
-                }
+            let Some(wf) = workflows.get_mut(&key) else {
+                return Err((StatusCode::NOT_FOUND, String::new()));
+            };
+            wf.ticket_description = body.description.clone();
+            if let Some(ref s) = body.summary {
+                wf.ticket_summary = s.clone();
             }
             drop(workflows);
             // Best-effort snapshot sync so the edit survives a restart.
@@ -845,6 +872,7 @@ mod tests {
             Json(UpdateDescriptionBody {
                 description: "New description".to_string(),
                 summary: None,
+                repository: None,
             }),
         )
         .await;
@@ -880,6 +908,7 @@ mod tests {
             Json(UpdateDescriptionBody {
                 description: "New description".to_string(),
                 summary: Some("New Summary".to_string()),
+                repository: None,
             }),
         )
         .await;
@@ -911,6 +940,7 @@ mod tests {
             Json(UpdateDescriptionBody {
                 description: "Some description".to_string(),
                 summary: None,
+                repository: None,
             }),
         )
         .await;

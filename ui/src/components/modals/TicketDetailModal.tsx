@@ -41,7 +41,13 @@ export function TicketDetailModal({
 }: Props) {
   const { markdown, setMarkdown, loading } = useTicketDetail(ticketKey, initialDescription, ticketingSystem);
   const { countdown, start: startCountdown, stop: stopCountdown } = useTicketCountdown(improveTimeoutSecs);
-  const e = useTicketEditor({ summary, markdown, setMarkdown, ticketKey, onSaved });
+  // A GitHub issue is pinned to its source repo (the repo the picker browsed);
+  // Jira / manual tickets aren't repo-bound, so the user picks one.
+  const lockedRepoName = ticketingSystem === "github" ? activeRepoName : null;
+  const e = useTicketEditor({
+    summary, markdown, setMarkdown, ticketKey, onSaved,
+    repository: lockedRepoName,
+  });
   const [pendingImprovement, setPendingImprovement] = useState<PendingImprovement | null>(null);
   const i = useTicketImproveWithAI({
     ticketKey, markdown, editTitle: e.editTitle, improveTimeoutSecs,
@@ -49,9 +55,6 @@ export function TicketDetailModal({
     pendingImprovement, setPendingImprovement,
     applyImprovementToEditor: e.applyImprovement,
   });
-  // A GitHub issue is pinned to its source repo (the repo the picker browsed);
-  // Jira / manual tickets aren't repo-bound, so the user picks one.
-  const lockedRepoName = ticketingSystem === "github" ? activeRepoName : null;
   const { repos, repositoryId, setRepositoryId, loadingRepos, repoLocked } = useStartWorkflow(
     showStartButton,
     lockedRepoName,
