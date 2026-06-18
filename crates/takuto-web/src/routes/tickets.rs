@@ -310,6 +310,45 @@ pub(crate) async fn run_description_session(
     Ok(output)
 }
 
+/// True when `ticket_key` is a live work item (DB row or in-memory map),
+/// regardless of owner. Used to decide whether the description-editing
+/// endpoints must enforce ownership.
+async fn workflow_exists(engine: &EngineState, auth_state: &AuthState, ticket_key: &str) -> bool {
+    if let Some(db) = auth_state.db.as_ref()
+        && let Ok(Some(_)) =
+            takuto_core::db::work_items::get_access_fields_by_ticket_key(db.adapter(), ticket_key)
+                .await
+    {
+        return true;
+    }
+    engine
+        .engine
+        .workflows_arc()
+        .read()
+        .await
+        .contains_key(ticket_key)
+}
+
+/// Authorize an improve/prompt-description request. "Improve with AI" is offered
+/// both for live dashboard items **and** in the Add-to-Dashboard preview flow
+/// (where the ticket is not a work item yet). When the ticket IS a live work
+/// item, only its owner may touch it; when it isn't on any board, any
+/// authenticated caller may edit the preview description.
+async fn authorize_description_session(
+    engine: &EngineState,
+    auth_state: &AuthState,
+    auth: &AuthenticatedUser,
+    ticket_key: &str,
+) -> Result<(), (StatusCode, String)> {
+    if workflow_exists(engine, auth_state, ticket_key).await {
+        require_workflow_access(engine, auth_state, auth, ticket_key)
+            .await
+            .map_err(|s| (s, String::new()))
+    } else {
+        Ok(())
+    }
+}
+
 /// `POST /api/tickets/{key}/improve` — run a headless Claude session to improve the ticket description.
 pub async fn improve_ticket(
     State(engine): State<EngineState>,
@@ -319,12 +358,9 @@ pub async fn improve_ticket(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<ImproveTicketBody>,
 ) -> Result<Json<ImproveTicketResponse>, (StatusCode, String)> {
-    // Only the workflow owner may invoke this. The helper returns
-    // `NOT_FOUND` for both "missing" and "wrong owner" so existence is not
-    // leaked across users.
-    require_workflow_access(&engine, &auth_state, &auth, &key)
-        .await
-        .map_err(|s| (s, String::new()))?;
+    // Owner-only for live items; allowed for not-yet-added tickets (the
+    // Add-to-Dashboard preview flow has no work item yet).
+    authorize_description_session(&engine, &auth_state, &auth, &key).await?;
     if body.description.len() > MAX_IMPROVE_DESCRIPTION_LEN {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -413,10 +449,8 @@ pub async fn prompt_ticket(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<PromptTicketBody>,
 ) -> Result<Json<PromptTicketResponse>, (StatusCode, String)> {
-    // Only the workflow owner may invoke this.
-    require_workflow_access(&engine, &auth_state, &auth, &key)
-        .await
-        .map_err(|s| (s, String::new()))?;
+    // Owner-only for live items; allowed for not-yet-added tickets (preview flow).
+    authorize_description_session(&engine, &auth_state, &auth, &key).await?;
     // Validate prompt is not empty
     if body.prompt.trim().is_empty() {
         return Err((
@@ -766,6 +800,28 @@ mod tests {
         let got =
             resolve_user_credential_env(&state.auth, AiAgentProvider::Cursor, "test-user").await;
         assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn improve_allowed_for_ticket_not_on_any_board() {
+        // The Add-to-Dashboard preview flow improves a ticket that isn't a work
+        // item yet — authorization must NOT 404 it.
+        let state = test_app_state_none();
+        assert!(
+            !workflow_exists(&state.engine, &state.auth, "GH-NEVER-ADDED").await,
+            "ticket has no work item"
+        );
+        let res = authorize_description_session(
+            &state.engine,
+            &state.auth,
+            &test_auth(),
+            "GH-NEVER-ADDED",
+        )
+        .await;
+        assert!(
+            res.is_ok(),
+            "preview-flow improve must be allowed, got {res:?}"
+        );
     }
 
     /// Saving a description (without summary) updates `ticket_description` in memory.
