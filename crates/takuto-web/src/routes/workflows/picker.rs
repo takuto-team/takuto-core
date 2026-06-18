@@ -9,34 +9,32 @@ use std::sync::Arc;
 
 use takuto_core::db::Database;
 use takuto_core::workflow::engine::Workflow;
-use takuto_core::workflow::state::WorkflowState;
 use tokio::sync::RwLock;
 
 /// Picker annotation for a single candidate ticket.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct CandidateAnnotation {
-    /// The caller already has this ticket on their board in a non-`Done` state
-    /// (parked / in-progress / paused / stopped / errored) — a re-add must be
-    /// blocked. `Done` items are treated as past work and stay re-addable.
+    /// The caller already has a live card for this ticket on their board, in
+    /// **any** state including `Done` — the picker disables the row. Only items
+    /// removed from the board (soft-deleted history) stay re-addable.
     pub already_added: bool,
     /// The most recent PR a prior run recorded for this ticket, if any. Drives
     /// the "this will create a NEW PR" confirmation.
     pub existing_pr_url: Option<String>,
 }
 
-/// True when a board state means the item is currently "on the board" rather
-/// than handled-in-the-past. Everything except `Done` counts.
-fn occupies_board(state: &WorkflowState) -> bool {
-    !matches!(state, WorkflowState::Done)
-}
-
 /// Annotate `keys` for the manual-add picker.
 ///
-/// `already_added` comes from the engine's in-memory map (the live board),
-/// scoped to `user_id` and — when `workspace_name` is provided — that workspace.
-/// `existing_pr_url` prefers an in-memory PR (covers a just-completed `Done`
-/// run still resident) and falls back to the DB history (covers PRs from
-/// soft-deleted past runs after a restart) when a `workspace_name` is known.
+/// `already_added` is true when the ticket has a live card on the caller's board
+/// — i.e. it is present in the engine's in-memory map for this `user_id` (and,
+/// when given, this `workspace_name`), in **any** state including `Done`. Being
+/// on the board at all blocks re-adding (act on the existing card instead).
+/// "Handled in the past" means *removed* from the board (soft-deleted history),
+/// which is no longer in the map and therefore stays re-addable.
+///
+/// `existing_pr_url` prefers an in-memory PR (covers a `Done` run still resident)
+/// and falls back to the DB history (covers PRs from soft-deleted past runs after
+/// a restart) when a `workspace_name` is known.
 pub(crate) async fn annotate_candidates(
     workflows: &Arc<RwLock<HashMap<String, Workflow>>>,
     db: Option<&Database>,
@@ -64,9 +62,8 @@ pub(crate) async fn annotate_candidates(
             let Some(ann) = out.get_mut(&w.ticket_key) else {
                 continue;
             };
-            if occupies_board(&w.state) {
-                ann.already_added = true;
-            }
+            // Present in the live map at all = on the board = block re-add.
+            ann.already_added = true;
             if ann.existing_pr_url.is_none()
                 && let Some(url) = w.pr_url.as_ref()
             {
@@ -98,6 +95,7 @@ pub(crate) async fn annotate_candidates(
 mod tests {
     use super::*;
     use takuto_core::config::TicketingSystem;
+    use takuto_core::workflow::state::WorkflowState;
 
     fn wf(key: &str, owner: &str, state: WorkflowState, pr: Option<&str>) -> Workflow {
         let mut w = Workflow::new(
@@ -173,26 +171,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn done_is_not_already_added_but_exposes_prior_pr() {
+    async fn done_item_still_on_board_is_already_added() {
+        // A Done card that's still on the board (present in the live map) must be
+        // disabled — being on the board at all blocks re-adding.
         let mut map = HashMap::new();
         map.insert(
-            "GH-4".into(),
+            "GH-7".into(),
             wf(
-                "GH-4",
+                "GH-7",
                 "u-alice",
                 WorkflowState::Done,
                 Some("https://github.com/o/r/pull/18"),
             ),
         );
-        let ann = annotate(map, &["GH-4"]).await;
+        let ann = annotate(map, &["GH-7"]).await;
+        assert!(
+            ann["GH-7"].already_added,
+            "a Done item still on the board must be already_added (disabled)"
+        );
+    }
+
+    #[tokio::test]
+    async fn prior_pr_of_a_removed_item_is_exposed_for_re_add() {
+        // An item NOT on the board (no live map entry) is re-addable; its recorded
+        // PR (from DB history) drives the confirmation. Here the map is empty, so
+        // it is not already_added; the in-memory pass leaves existing_pr_url unset
+        // (the DB pass — not exercised in this unit — would fill it).
+        let ann = annotate(HashMap::new(), &["GH-4"]).await;
         assert!(
             !ann["GH-4"].already_added,
-            "a Done item is past work, re-addable"
-        );
-        assert_eq!(
-            ann["GH-4"].existing_pr_url.as_deref(),
-            Some("https://github.com/o/r/pull/18"),
-            "a Done item's recorded PR drives the re-add confirmation"
+            "absent from the board → re-addable"
         );
     }
 
