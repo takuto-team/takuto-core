@@ -19,7 +19,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::runner::{
     PASSTHROUGH_ENV, WORKER_ENV, apply_secrets_bundle_to_args, build_volume_args,
@@ -203,6 +203,13 @@ fn build_workspace_run_args(
 ///
 /// `spare_ports` are the host ports to publish (local mode) for the IDE,
 /// terminal, and run-command forwarding; ignored in DinD (`--network=host`).
+///
+/// `init_commands` are the workspace's per-user init commands; they run inside
+/// the container **whenever it is brought up** (created or started, not on
+/// reuse of an already-running container), before anything uses it — so the
+/// environment (e.g. a dev DB) is ready for run-commands, the terminal, and the
+/// IDE alike, not just for workflow agent steps.
+#[allow(clippy::too_many_arguments)]
 pub async fn ensure_workspace_container(
     ticket_key: &str,
     worktree_path: &Path,
@@ -210,6 +217,7 @@ pub async fn ensure_workspace_container(
     isolate_workspace: bool,
     secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
     spare_ports: &[u16],
+    init_commands: &[String],
 ) -> Result<WorkspaceInfo, String> {
     let lock = ws_lock_for(ticket_key).await;
     let _guard = lock.lock().await;
@@ -236,6 +244,9 @@ pub async fn ensure_workspace_container(
                     String::from_utf8_lossy(&out.stderr)
                 ));
             }
+            // Re-run init on every bring-up: external side-effects (e.g. a dev
+            // DB container) may have stopped while this one was down.
+            run_init_commands(&name, worktree_path, init_commands).await;
             return Ok(WorkspaceInfo {
                 name,
                 spare_ports: spare_ports.to_vec(),
@@ -268,11 +279,47 @@ pub async fn ensure_workspace_container(
         ));
     }
 
+    // Fresh container — run the workspace's init commands before it's used.
+    run_init_commands(&name, worktree_path, init_commands).await;
+
     Ok(WorkspaceInfo {
         name,
         spare_ports: spare_ports.to_vec(),
         created: true,
     })
+}
+
+/// Run the workspace's init commands inside the container, in the worktree,
+/// with `/etc/takuto/env` sourced. Best-effort: a failing command is logged and
+/// the others still run (the operation that needs them surfaces its own error).
+async fn run_init_commands(name: &str, worktree_path: &Path, init_commands: &[String]) {
+    if init_commands.is_empty() {
+        return;
+    }
+    let total = init_commands.len();
+    let wd = worktree_path.to_string_lossy();
+    for (i, cmd) in init_commands.iter().enumerate() {
+        let script = format!(
+            "cd {wd} 2>/dev/null || true; [ -f /etc/takuto/env ] && set -a && . /etc/takuto/env && set +a; {cmd}"
+        );
+        info!(name = %name, step = i + 1, total, "Running workspace init command");
+        let out = tokio::process::Command::new("docker")
+            .args(["exec", name, "bash", "-lc", &script])
+            .output()
+            .await;
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => warn!(
+                name = %name,
+                cmd = %cmd,
+                stderr = %String::from_utf8_lossy(&o.stderr),
+                "Workspace init command failed (continuing)"
+            ),
+            Err(e) => {
+                warn!(name = %name, cmd = %cmd, error = %e, "Workspace init command error (continuing)")
+            }
+        }
+    }
 }
 
 /// From all `takuto-ws-*` container names, the ones NOT in `live` — i.e.

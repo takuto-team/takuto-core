@@ -54,7 +54,7 @@ pub async fn open_editor(
         .await
         .map_err(|s| (s, "Workflow not found".into()))?;
     let wf_arc = engine.engine.workflows_arc();
-    let (existing_worktree, branch_name, worktree_lock, ticket_key) = {
+    let (existing_worktree, branch_name, worktree_lock, ticket_key, workspace_name) = {
         let workflows = wf_arc.read().await;
         let w = workflows
             .get(&id)
@@ -73,6 +73,7 @@ pub async fn open_editor(
             w.branch_name.clone(),
             w.worktree_lock.clone(),
             w.ticket_key.clone(),
+            w.workspace_name.clone(),
         )
     };
 
@@ -141,6 +142,16 @@ pub async fn open_editor(
         map.insert(ticket_key.clone(), b.clone());
     }
 
+    // Workspace init commands run when the workspace container is brought up,
+    // so the IDE (and any terminal/run-command sharing the container) starts
+    // against a ready environment.
+    let init_commands = takuto_core::workflow::engine::resolve_worktree_init_commands(
+        Some(&auth.user_id),
+        &workspace_name,
+        auth_state.db.as_ref(),
+    )
+    .await;
+
     let info = container::start_editor(
         &ticket_key,
         &worktree,
@@ -155,6 +166,7 @@ pub async fn open_editor(
         &git_editor,
         true, // isolate_workspace: restrict container to this issue's worktree
         secrets_bundle.as_deref(),
+        &init_commands,
     )
     .await
     .map_err(|e| {

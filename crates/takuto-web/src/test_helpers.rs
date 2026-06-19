@@ -174,6 +174,7 @@ impl crate::container_spawner::ContainerSpawner for FakeSpawner {
         _isolate_workspace: bool,
         _extra_env: &[(String, String)],
         _secrets_bundle: Option<&takuto_core::auth::WorkerSecretsBundle>,
+        _init_commands: &[String],
     ) -> Result<Vec<u16>, String> {
         self.started
             .lock()

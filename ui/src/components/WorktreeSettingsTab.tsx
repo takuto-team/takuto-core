@@ -126,9 +126,10 @@ export function WorktreeSettingsTab() {
       <header>
         <h2 className="text-base font-semibold text-gray-300 mb-1">Worktree Settings</h2>
         <p className="text-sm text-gray-500">
-          Per-workspace init commands (run before agent steps when a worktree is bootstrapped) and
-          run commands (buttons shown on your completed work item cards). These settings are
-          private to your user account — every user manages their own.
+          Per-workspace init commands (run when the item's container is brought up — before agent
+          steps, the IDE, the terminal, or a run command use it) and run commands (buttons shown on
+          your completed work item cards). These settings are private to your user account — every
+          user manages their own.
         </p>
       </header>
 
@@ -166,7 +167,8 @@ export function WorktreeSettingsTab() {
                 <div>
                   <h4 className="text-sm font-semibold text-gray-200">Init commands</h4>
                   <p className="text-xs text-gray-500">
-                    Run sequentially in the worktree before agent steps.
+                    Run sequentially in the worktree each time the item's container starts —
+                    before agent steps, the IDE, the terminal, or a run command use it.
                   </p>
                 </div>
                 <WorktreeCommandList

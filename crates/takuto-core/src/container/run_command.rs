@@ -182,6 +182,8 @@ pub async fn start_run_command(
     isolate_workspace: bool,
     extra_env: &[(&str, &str)],
     secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
+    // Workspace init commands — run when the workspace container is brought up.
+    init_commands: &[String],
 ) -> std::result::Result<Vec<u16>, String> {
     // Spare ports for socat forwarding. Allocated here and published when the
     // workspace container is created (local mode); in DinD (`--network=host`)
@@ -200,6 +202,7 @@ pub async fn start_run_command(
         isolate_workspace,
         secrets_bundle,
         &spare_ports,
+        init_commands,
     )
     .await?;
 

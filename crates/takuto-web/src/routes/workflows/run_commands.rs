@@ -157,6 +157,7 @@ pub async fn start_run_command(
     }
 
     let ticket_key = w.ticket_key.clone();
+    let workspace_name = w.workspace_name.clone();
     drop(workflows);
 
     // Check if already running
@@ -206,6 +207,15 @@ pub async fn start_run_command(
         map.insert((ticket_key.clone(), index), b.clone());
     }
 
+    // Workspace init commands run when the workspace container is brought up,
+    // so the run-command starts against a ready environment (e.g. a dev DB).
+    let init_commands = takuto_core::workflow::engine::resolve_worktree_init_commands(
+        Some(&auth.user_id),
+        &workspace_name,
+        auth_state.db.as_ref(),
+    )
+    .await;
+
     let spare_ports = run_command
         .spawner
         .start_run_command(
@@ -218,6 +228,7 @@ pub async fn start_run_command(
             true, // isolate_workspace: restrict container to this issue's worktree
             &[("TAKUTO_PROXY_BASE".to_string(), proxy_base.clone())],
             secrets_bundle.as_deref(),
+            &init_commands,
         )
         .await
         .map_err(|e| {

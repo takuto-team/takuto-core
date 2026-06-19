@@ -89,6 +89,8 @@ pub async fn start_editor(
     // editor's in-browser terminal via the file path, not `docker
     // inspect`.
     secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
+    // Workspace init commands — run when the workspace container is brought up.
+    init_commands: &[String],
 ) -> std::result::Result<EditorInfo, String> {
     // Idempotent: if the IDE is already running in the workspace container,
     // return its existing session info.
@@ -128,6 +130,7 @@ pub async fn start_editor(
         isolate_workspace,
         secrets_bundle,
         &ports,
+        init_commands,
     )
     .await
     .map_err(|e| format!("Failed to ensure workspace container: {e}"))?;

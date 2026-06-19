@@ -42,6 +42,8 @@ pub trait ContainerSpawner: Send + Sync {
         isolate_workspace: bool,
         extra_env: &[(String, String)],
         secrets_bundle: Option<&WorkerSecretsBundle>,
+        // Workspace init commands, run when the workspace container is brought up.
+        init_commands: &[String],
     ) -> Result<Vec<u16>, String>;
 
     /// Stop and remove the run-command container (best-effort).
@@ -72,6 +74,7 @@ impl ContainerSpawner for DockerSpawner {
         isolate_workspace: bool,
         extra_env: &[(String, String)],
         secrets_bundle: Option<&WorkerSecretsBundle>,
+        init_commands: &[String],
     ) -> Result<Vec<u16>, String> {
         let env: Vec<(&str, &str)> = extra_env
             .iter()
@@ -87,6 +90,7 @@ impl ContainerSpawner for DockerSpawner {
             isolate_workspace,
             &env,
             secrets_bundle,
+            init_commands,
         )
         .await
     }
