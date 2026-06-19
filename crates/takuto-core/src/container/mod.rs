@@ -31,6 +31,7 @@ pub mod runtime;
 pub(crate) mod secrets_bundle;
 pub(crate) mod terminal;
 pub(crate) mod volumes;
+pub mod workspace;
 pub(crate) mod wrap_command;
 
 // ---------------------------------------------------------------------------
