@@ -28,6 +28,19 @@ describe("RunCommands", () => {
     expect(screen.queryByText("Open")).toBeNull();
   });
 
+  it("disables the Run button while the workspace is preparing", () => {
+    render(
+      <RunCommands
+        ticketKey="GH-8"
+        commands={[cmd({ running: false })]}
+        withLoading={noop}
+        disabled
+      />,
+    );
+    const run = screen.getByRole("button", { name: /run run app/i }) as HTMLButtonElement;
+    expect(run.disabled).toBe(true);
+  });
+
   it("shows functional Copy/Open once a port is forwarded", () => {
     const { container } = renderCmds([
       cmd({ running: true, forwarded_port: [3001, "/p/3001/"] }),

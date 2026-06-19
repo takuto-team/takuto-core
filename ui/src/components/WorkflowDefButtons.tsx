@@ -16,6 +16,9 @@ interface WorkflowDefButtonsProps {
   onRefresh: () => void;
   /** When true, all buttons are disabled (main pipeline is actively running). */
   mainRunning?: boolean;
+  /** When true, all buttons are disabled for another reason (e.g. the item's
+   *  worktree is still being prepared). Combined with `mainRunning`. */
+  disabled?: boolean;
 }
 
 /**
@@ -49,9 +52,12 @@ export function WorkflowDefButtons({
   ticketKey,
   onRefresh,
   mainRunning,
+  disabled,
 }: WorkflowDefButtonsProps) {
   const { run, loadingDef } = useRunWorkflowDef(ticketKey, onRefresh);
   const [modalOpen, setModalOpen] = useState(false);
+  // Any reason that blocks starting a flow disables every button.
+  const blocked = mainRunning || disabled;
 
   const validDefs = definitions.filter((d) => d.valid);
   const sorted = topoSort(validDefs);
@@ -86,7 +92,7 @@ export function WorkflowDefButtons({
     }
 
     if (state === "error") {
-      if (mainRunning) {
+      if (blocked) {
         return (
           <span
             key={def.filename}
@@ -110,7 +116,7 @@ export function WorkflowDefButtons({
     }
 
     // idle state
-    if (!met || mainRunning) {
+    if (!met || blocked) {
       const waiting = !met ? unmetDeps(def, definitions, runStates) : [];
       return (
         <span
@@ -175,8 +181,9 @@ export function WorkflowDefButtons({
           {canCollapse ? (
             <button
               type="button"
-              className="action-btn wf-btn-primary inline-flex items-center gap-1"
+              className="action-btn wf-btn-primary inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={() => setModalOpen(true)}
+              disabled={blocked}
             >
               Start flow
             </button>
@@ -192,7 +199,7 @@ export function WorkflowDefButtons({
           runStates={runStates}
           ticketKey={ticketKey}
           onRefresh={onRefresh}
-          mainRunning={mainRunning}
+          mainRunning={blocked}
           onClose={() => setModalOpen(false)}
         />
       )}

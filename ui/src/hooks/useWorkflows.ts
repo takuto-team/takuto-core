@@ -205,6 +205,14 @@ export function useWorkflows() {
         return;
       }
 
+      // Work-item updated (e.g. worktree pre-creation finished) — re-fetch so
+      // server-computed fields like `prep_state` refresh; they are not carried
+      // on the event, so a plain patch would leave "Preparing worktree…" stale.
+      if (event_type === "work_item_updated") {
+        fetchWorkflows();
+        return;
+      }
+
       // Workflow state change.
       const current = queryClient.getQueryData<WorkflowSummary[]>(queryKeys.workItems);
       const wf = current?.find((w) => w.ticket_key === ticket_key);

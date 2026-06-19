@@ -29,10 +29,14 @@ export function RunCommands({
   ticketKey,
   commands,
   withLoading,
+  disabled,
 }: {
   ticketKey: string;
   commands: RunCommandStatus[];
   withLoading: (fn: () => Promise<void>, message?: string) => Promise<void>;
+  /** When true (e.g. the item's worktree is still preparing), the Run/Stop
+   *  controls are disabled. */
+  disabled?: boolean;
 }) {
   const startCmd = (index: number) => async () => {
     const res = await apiPost(`/api/work-items/${encodeURIComponent(ticketKey)}/run-commands/${index}/start`);
@@ -75,7 +79,8 @@ export function RunCommands({
               <>
                 <button
                   onClick={() => withLoading(stopCmd(cmd.index))}
-                  className="action-btn wf-btn-danger inline-flex items-center gap-1"
+                  disabled={disabled}
+                  className="action-btn wf-btn-danger inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <StopSquareIcon /> Stop {cmd.name}
                 </button>
@@ -107,7 +112,9 @@ export function RunCommands({
             ) : (
               <button
                 onClick={() => withLoading(startCmd(cmd.index), `Starting ${cmd.name}`)}
-                className="action-btn wf-btn-primary inline-flex items-center gap-1"
+                disabled={disabled}
+                title={disabled ? "Preparing worktree…" : undefined}
+                className="action-btn wf-btn-primary inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <PlayIcon /> Run {cmd.name}
               </button>

@@ -103,9 +103,15 @@ export function IssueCard({
           ticketKey={w.ticket_key}
           onRefresh={onRefresh}
           mainRunning={view.isActive}
+          disabled={view.prepState === "preparing"}
         />
         {w.run_commands && w.run_commands.length > 0 && (
-          <RunCommands ticketKey={w.ticket_key} commands={w.run_commands} withLoading={ctl.withLoading} />
+          <RunCommands
+            ticketKey={w.ticket_key}
+            commands={w.run_commands}
+            withLoading={ctl.withLoading}
+            disabled={view.prepState === "preparing"}
+          />
         )}
 
         {/* Console output button — always visible, disabled until workflow has run */}

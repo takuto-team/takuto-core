@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useWorkflows } from "./useWorkflows";
 import { createQueryWrapper } from "../test/queryWrapper";
-import type { WorkflowSummary, WorkflowEvent } from "../api/types";
+import type { WorkflowSummary } from "../api/types";
 
 function makeWorkflow(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary {
   return {
@@ -81,32 +81,36 @@ describe("useWorkflows", () => {
     expect(result.current.orderKeys).toEqual(["TEST-1", "TEST-2"]);
   });
 
-  it("workflow_updated event updates the correct entry", async () => {
-    const wf1 = makeWorkflow({ ticket_key: "TEST-1", progress_percent: 25 });
-    mockFetchWorkflows([wf1]);
+  it("work_item_updated event triggers re-fetch (refreshes server-computed prep_state)", async () => {
+    // Item starts "preparing" (worktree pre-creation in flight).
+    mockFetchWorkflows([
+      makeWorkflow({ ticket_key: "TEST-1", state: "Pending", prep_state: "preparing" }),
+    ]);
 
     const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
 
     await vi.waitFor(() => {
-      expect(result.current.workflows["TEST-1"]).toBeDefined();
+      expect(result.current.workflows["TEST-1"]?.prep_state).toBe("preparing");
     });
 
-    const event: WorkflowEvent = {
-      event_type: "work_item_updated",
-      workflow_id: "uuid-1",
-      ticket_key: "TEST-1",
-      state: "AddressingTicket",
-      progress_percent: 75,
-    };
+    // Prep finished server-side → next fetch reports "ready". prep_state is NOT
+    // carried on the event, so the handler must re-fetch (a patch would leave it stale).
+    mockFetchWorkflows([
+      makeWorkflow({ ticket_key: "TEST-1", state: "Pending", prep_state: "ready" }),
+    ]);
 
     act(() => {
-      result.current.handleEvent(event);
+      result.current.handleEvent({
+        event_type: "work_item_updated",
+        workflow_id: "uuid-1",
+        ticket_key: "TEST-1",
+        state: "Pending",
+        progress_percent: 0,
+      });
     });
 
-    // The local patch lands via `queryClient.setQueryData`; the observing
-    // `useQuery` re-renders on the next microtask, so await the propagation.
     await vi.waitFor(() => {
-      expect(result.current.workflows["TEST-1"].progress_percent).toBe(75);
+      expect(result.current.workflows["TEST-1"].prep_state).toBe("ready");
     });
   });
 
