@@ -11,7 +11,27 @@ export const COLOR_HEX: Record<string, { bg: string; text: string; border: strin
   blue:   { bg: "#3b82f6", text: "#60a5fa", border: "rgba(59,130,246,0.2)", bgFaint: "rgba(59,130,246,0.15)" },
 };
 
-export function ProgressBar({ pct, total, filled, color }: { pct: number; total: number; filled: number; color: string }) {
+/** The step currently in progress is light blue; completed steps take the
+ *  status colour (blue while the flow runs, green once it completes); pending
+ *  steps are grey. */
+const ACTIVE_SEGMENT_BG = "#93c5fd"; // light blue (in progress)
+const PENDING_SEGMENT_BG = "#4b5563"; // grey (pending)
+
+export function ProgressBar({
+  pct,
+  total,
+  filled,
+  color,
+  activeIndex,
+}: {
+  pct: number;
+  total: number;
+  filled: number;
+  color: string;
+  /** Index of the step currently in progress — rendered orange. `null` when no
+   *  step is actively running (idle / all complete). */
+  activeIndex?: number | null;
+}) {
   const c = COLOR_HEX[color] || COLOR_HEX.blue;
   if (total <= 0) {
     return (
@@ -20,15 +40,22 @@ export function ProgressBar({ pct, total, filled, color }: { pct: number; total:
       </div>
     );
   }
+  // Completed segments take the status colour: blue while the flow is running
+  // (status "Running" → blue), green once the flow completes (status
+  // "Completed" → green). The in-progress step is light blue; pending grey.
   return (
     <div className="flex gap-0.5">
-      {Array.from({ length: total }, (_, i) => (
-        <div
-          key={i}
-          className="h-2 flex-1 rounded-full transition-all"
-          style={{ backgroundColor: i < filled ? c.bg : "#4b5563" }}
-        />
-      ))}
+      {Array.from({ length: total }, (_, i) => {
+        const isActive = i === activeIndex && i >= filled;
+        const bg = isActive ? ACTIVE_SEGMENT_BG : i < filled ? c.bg : PENDING_SEGMENT_BG;
+        return (
+          <div
+            key={i}
+            className={`h-2 flex-1 rounded-full transition-all ${isActive ? "animate-pulse" : ""}`}
+            style={{ backgroundColor: bg }}
+          />
+        );
+      })}
     </div>
   );
 }

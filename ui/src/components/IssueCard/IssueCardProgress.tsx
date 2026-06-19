@@ -107,7 +107,17 @@ export function IssueCardProgress({
       </div>
       <div className="text-sm font-mono text-gray-300 mt-0.5">{stateDisplay}</div>
       <div className="mt-2">
-        <ProgressBar pct={pct} total={total} filled={filled} color={status.color} />
+        <ProgressBar
+          pct={pct}
+          total={total}
+          filled={filled}
+          color={status.color}
+          activeIndex={
+            isActive && (status.label === "Running" || status.label === "Paused") && filled < total
+              ? filled
+              : null
+          }
+        />
       </div>
     </div>
   );
