@@ -4,7 +4,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { SummaryStats } from "../components/SummaryStats";
 
-const zeroCounts = { running: 0, completed: 0, errors: 0, paused: 0 };
+const zeroCounts = { running: 0, completed: 0, errors: 0, paused: 0, pending: 0 };
 
 const meta = {
   title: "Components/SummaryStats",
@@ -32,13 +32,13 @@ export const ZeroCounts: Story = {
 export const ActiveWorkItems: Story = {
   name: "Active work items",
   args: {
-    counts: { running: 2, completed: 3, errors: 1, paused: 1 },
+    counts: { running: 2, completed: 3, errors: 1, paused: 1, pending: 2 },
   },
 };
 
 export const OnlyRunning: Story = {
   name: "Only running",
   args: {
-    counts: { running: 5, completed: 0, errors: 0, paused: 0 },
+    counts: { running: 5, completed: 0, errors: 0, paused: 0, pending: 0 },
   },
 };

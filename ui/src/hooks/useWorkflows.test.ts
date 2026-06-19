@@ -98,8 +98,8 @@ describe("useWorkflows", () => {
       expect(Object.keys(result.current.workflows)).toHaveLength(7);
     });
 
-    // Stopped buckets with errors (matches the backend); Pending is uncounted.
-    expect(result.current.counts).toEqual({ running: 1, completed: 2, errors: 2, paused: 1 });
+    // Stopped buckets with errors (matches the backend); Pending has its own bucket.
+    expect(result.current.counts).toEqual({ running: 1, completed: 2, errors: 2, paused: 1, pending: 1 });
   });
 
   it("work_item_updated event triggers re-fetch (refreshes server-computed prep_state)", async () => {

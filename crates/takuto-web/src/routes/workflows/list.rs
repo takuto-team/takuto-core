@@ -486,6 +486,7 @@ pub async fn workflow_counts(
     let mut completed = 0u32;
     let mut errors = 0u32;
     let mut paused = 0u32;
+    let mut pending = 0u32;
 
     let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
@@ -505,8 +506,8 @@ pub async fn workflow_counts(
             WorkflowState::Done => completed += 1,
             WorkflowState::Error { .. } | WorkflowState::Stopped => errors += 1,
             WorkflowState::Paused { .. } => paused += 1,
-            // Pending hasn't started yet — not counted in any active bucket.
-            WorkflowState::Pending => {}
+            // Added to the dashboard but not yet started.
+            WorkflowState::Pending => pending += 1,
             // Every active driver state counts as "running".
             _ => running += 1,
         }
@@ -517,6 +518,7 @@ pub async fn workflow_counts(
         completed,
         errors,
         paused,
+        pending,
     })
 }
 

@@ -16,7 +16,7 @@ export interface TerminalState {
 
 const TERMINAL_MAX_LINES = 500;
 
-const EMPTY_COUNTS: WorkflowCounts = { running: 0, completed: 0, errors: 0, paused: 0 };
+const EMPTY_COUNTS: WorkflowCounts = { running: 0, completed: 0, errors: 0, paused: 0, pending: 0 };
 
 /** Dynamic port forwards from API, keyed by ticket_key → [container_port, proxy_url][] */
 export type DynamicForwards = Record<string, [number, string][]>;
@@ -71,8 +71,8 @@ export function useWorkflows() {
       if (label === "Completed") c.completed += 1;
       else if (label === "Error" || label === "Stopped") c.errors += 1;
       else if (label === "Paused") c.paused += 1;
+      else if (label === "Pending") c.pending += 1;
       else if (label === "Running") c.running += 1;
-      // "Pending" is not counted in any bucket (matches the backend).
     }
     return c;
   }, [workflows]);

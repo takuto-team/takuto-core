@@ -4,8 +4,8 @@
 import type { WorkflowSummary } from "../api/types";
 import { getStatusInfo } from "./StatusBadge";
 
-/** The four summary-counter buckets the dashboard can filter by. */
-export type StatusFilterKey = "running" | "completed" | "errors" | "paused";
+/** The summary-counter buckets the dashboard can filter by. */
+export type StatusFilterKey = "pending" | "running" | "completed" | "errors" | "paused";
 
 /**
  * Whether a workflow falls in a counter bucket. Mirrors the server's
@@ -17,6 +17,8 @@ export type StatusFilterKey = "running" | "completed" | "errors" | "paused";
 export function workflowMatchesStatus(w: WorkflowSummary, key: StatusFilterKey): boolean {
   const label = getStatusInfo(w.state, w.can_start).label;
   switch (key) {
+    case "pending":
+      return label === "Pending";
     case "running":
       return label === "Running";
     case "completed":

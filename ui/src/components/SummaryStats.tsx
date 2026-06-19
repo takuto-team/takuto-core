@@ -13,6 +13,7 @@ interface Props {
 }
 
 const STATS: { key: StatusFilterKey; label: string; color: string; ring: string }[] = [
+  { key: "pending", label: "Pending", color: "text-gray-400", ring: "border-gray-500 ring-1 ring-gray-500/60" },
   { key: "running", label: "Running", color: "text-blue-400", ring: "border-blue-500 ring-1 ring-blue-500/60" },
   { key: "completed", label: "Completed", color: "text-green-400", ring: "border-green-500 ring-1 ring-green-500/60" },
   { key: "errors", label: "Errors", color: "text-red-400", ring: "border-red-500 ring-1 ring-red-500/60" },
@@ -20,17 +21,10 @@ const STATS: { key: StatusFilterKey; label: string; color: string; ring: string 
 ];
 
 export function SummaryStats({ counts, activeFilter = null, onSelectFilter }: Props) {
-  const valueFor = (key: StatusFilterKey): number =>
-    key === "running"
-      ? counts.running
-      : key === "completed"
-        ? counts.completed
-        : key === "errors"
-          ? counts.errors
-          : counts.paused;
+  const valueFor = (key: StatusFilterKey): number => counts[key];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
       {STATS.map((s) => {
         const active = activeFilter === s.key;
         return (

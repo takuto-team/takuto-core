@@ -140,6 +140,7 @@ pub struct WorkflowCountsResponse {
     pub completed: u32,
     pub errors: u32,
     pub paused: u32,
+    pub pending: u32,
 }
 
 /// Status of a single run command.
