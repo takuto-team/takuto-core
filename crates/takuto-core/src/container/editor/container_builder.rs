@@ -10,17 +10,13 @@ use std::path::Path;
 
 use tracing::{info, warn};
 
-use super::super::runner::{
-    PASSTHROUGH_ENV, WORKER_ENV, apply_secrets_bundle_to_args, build_volume_args,
-    passthrough_is_bundled,
+use super::super::workspace::{
+    WorkspaceStatus, ensure_workspace_container, workspace_container_name, workspace_status,
 };
-use super::super::{editor_host_port, is_dind_mode, shell_escape};
-use super::labels::{editor_container_name, parse_connection_token_from_labels, parse_label_value};
-use super::port_alloc::{
-    EDITOR_PORT_MAX, EDITOR_PORT_MIN, allocate_editor_ports, release_container_ports,
-};
+use super::super::{editor_host_port, shell_escape};
+use super::port_alloc::{EDITOR_PORT_MAX, EDITOR_PORT_MIN, allocate_editor_ports};
 use super::token_gen::{generate_connection_token, generate_session_path_token};
-use super::urls::{build_editor_url, session_publish_arg};
+use super::urls::build_editor_url;
 
 /// Convert a TOML value to a serde_json value for VS Code settings.json.
 fn toml_value_to_json(val: &toml::Value) -> serde_json::Value {
@@ -94,128 +90,56 @@ pub async fn start_editor(
     // inspect`.
     secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
 ) -> std::result::Result<EditorInfo, String> {
-    let name = editor_container_name(ticket_key);
-
-    // Check if already running
+    // Idempotent: if the IDE is already running in the workspace container,
+    // return its existing session info.
     if let Some(info) = get_editor_info(ticket_key).await {
         return Ok(info);
     }
 
-    // Remove any leftover stopped container with the same name so `docker run` doesn't
-    // fail with a name conflict (e.g., after a close-editor that raced with --rm).
-    let _ = tokio::process::Command::new("docker")
-        .args(["rm", "-f", &name])
-        .output()
-        .await;
+    let name = workspace_container_name(ticket_key);
 
-    // Allocate 1 port for VS Code + N spare ports for dynamic port forwarding
-    // (dev servers started by the user inside the container).
-    let total_ports = 1 + dynamic_ports;
-    let ports = allocate_editor_ports(total_ports).await.ok_or_else(|| {
-        format!("No free editor ports available (range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})")
-    })?;
-
+    // Reuse the workspace container's already-published ports when it is
+    // already up (e.g. a run-command created it, or the IDE was closed but the
+    // container persists); otherwise allocate a fresh vscode + spare set.
+    let ports: Vec<u16> = match read_ws_spare_ports(&name).await {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            let total_ports = 1 + dynamic_ports;
+            allocate_editor_ports(total_ports).await.ok_or_else(|| {
+                format!(
+                    "No free editor ports available (range {EDITOR_PORT_MIN}–{EDITOR_PORT_MAX})"
+                )
+            })?
+        }
+    };
     let vscode_port = ports[0];
     let spare_ports: Vec<u16> = ports[1..].to_vec();
-    let port_mappings: Vec<(u16, u16)> = Vec::new();
     let connection_token = generate_connection_token();
     let path_token = generate_session_path_token();
-    info!(ticket = %name, vscode_port, "Allocated editor port");
+    info!(ticket = %name, vscode_port, "Editor session ports");
 
-    let mut args: Vec<String> = vec![
-        "run".into(),
-        "-d".into(),
-        "--name".into(),
-        name.clone(),
-        "--cap-add=NET_ADMIN".into(),
-    ];
+    // Ensure the per-item workspace container exists and is running. It owns
+    // the env / volumes / secrets-bundle / port publishing; the IDE is just a
+    // process we exec into it.
+    ensure_workspace_container(
+        ticket_key,
+        worktree_path,
+        image,
+        isolate_workspace,
+        secrets_bundle,
+        &ports,
+    )
+    .await
+    .map_err(|e| format!("Failed to ensure workspace container: {e}"))?;
 
-    // Environment
-    for (k, v) in WORKER_ENV {
-        args.push("-e".into());
-        args.push(format!("{k}={v}"));
+    // One-time setup (apt installs, git editor) — gated by a marker file — plus
+    // per-open startup commands.
+    if !setup_commands.is_empty() || !git_editor.is_empty() {
+        run_editor_setup_as_root(&name, setup_commands, git_editor).await;
     }
-    let bundle_attached = secrets_bundle.is_some();
-    for key in PASSTHROUGH_ENV {
-        if bundle_attached && passthrough_is_bundled(key) {
-            // The bundle owns this secret; suppress the ambient host
-            // value so `docker inspect` cannot leak it.
-            continue;
-        }
-        if let Ok(val) = std::env::var(key)
-            && !val.is_empty()
-        {
-            args.push("-e".into());
-            args.push(format!("{key}={val}"));
-        }
-    }
+    run_editor_startup_commands(&name, startup_commands).await;
 
-    // Volumes — use per-issue isolation when enabled
-    for mount in build_volume_args(worktree_path, isolate_workspace) {
-        args.push("-v".into());
-        args.push(mount);
-    }
-
-    // Attach the bundle AFTER the standard volumes so the bundle's `-v`
-    // and `-e` flags are colocated.
-    if let Some(b) = secrets_bundle {
-        apply_secrets_bundle_to_args(&mut args, b);
-    }
-
-    // In DinD mode, use `--network=host` so the editor process binds
-    // directly to the DinD container's network namespace (shared with
-    // takuto via `network_mode: service:dind`).  This bypasses
-    // docker-proxy, which does not forward cross-container traffic on
-    // Docker Desktop for Mac.
-    //
-    // In local-Docker mode, publish each port on the host loopback only —
-    // external traffic must flow through the shared-port reverse proxy at
-    // `/s/<path-token>/`.  See GH-45 acceptance criterion #10.
-    if is_dind_mode() {
-        args.push("--network=host".into());
-    } else {
-        args.push("-p".into());
-        args.push(session_publish_arg(vscode_port, vscode_port));
-        for &sp in &spare_ports {
-            args.push("-p".into());
-            args.push(session_publish_arg(sp, sp));
-        }
-    }
-
-    // Working directory
-    args.push("-w".into());
-    args.push(worktree_path.to_string_lossy().into_owned());
-
-    // User
-    args.push("--user".into());
-    args.push("takuto:takuto".into());
-
-    // Entrypoint override
-    args.push("--entrypoint".into());
-    args.push("".into());
-
-    // Labels for get_editor_info() retrieval — essential for `--network=host`
-    // containers where `docker port` returns nothing.
-    args.push("--label".into());
-    args.push(format!("takuto.connection_token={connection_token}"));
-    args.push("--label".into());
-    args.push(format!("takuto.path_token={path_token}"));
-    args.push("--label".into());
-    args.push(format!("takuto.vscode_port={vscode_port}"));
-    if !spare_ports.is_empty() {
-        args.push("--label".into());
-        let sp_csv: String = spare_ports
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        args.push(format!("takuto.spare_ports={sp_csv}"));
-    }
-
-    // Image
-    args.push(image.into());
-
-    // Build settings.json content from theme + settings map
+    // Build settings.json content from theme + settings map.
     let folder = worktree_path.to_string_lossy();
     let mut settings_json = serde_json::Map::new();
     if !theme.is_empty() {
@@ -224,7 +148,6 @@ pub async fn start_editor(
             serde_json::Value::String(theme.to_string()),
         );
     }
-    // Set the browser tab title to the workflow name (with optional active editor info).
     settings_json.insert(
         "window.title".into(),
         serde_json::Value::String(format!(
@@ -235,74 +158,105 @@ pub async fn start_editor(
         settings_json.insert(key.clone(), toml_value_to_json(val));
     }
 
-    // Build shell script: source env, write settings, install extensions, launch
+    // Shell script: source env, write settings, install extensions, then exec
+    // openvscode-server. Run detached (`docker exec -d`) inside the workspace
+    // container — the exec'd process IS the editor (recoverable via pgrep).
     let mut script_parts: Vec<String> = Vec::new();
     script_parts.push("[ -f /etc/takuto/env ] && set -a && . /etc/takuto/env && set +a".into());
-
     if !settings_json.is_empty() {
         let json_str = serde_json::to_string(&settings_json).unwrap_or_default();
         let escaped = json_str.replace('\'', "'\\''");
         script_parts.push(format!(
-            "mkdir -p ~/.openvscode-server/data/Machine && echo '{}' > ~/.openvscode-server/data/Machine/settings.json",
-            escaped
+            "mkdir -p ~/.openvscode-server/data/Machine && echo '{escaped}' > ~/.openvscode-server/data/Machine/settings.json"
         ));
     }
-
     for ext in extensions {
         let escaped = shell_escape(ext);
         script_parts.push(format!(
             "openvscode-server --install-extension {escaped} --force 2>/dev/null || true"
         ));
     }
-
     script_parts.push(format!(
         "exec openvscode-server --port {vscode_port} --host 0.0.0.0 --connection-token {connection_token} --server-base-path /s/{path_token}"
     ));
-
     let cmd = script_parts.join("; ");
-    args.push("sh".into());
-    args.push("-c".into());
-    args.push(cmd);
-
-    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    info!(
-        name = %name,
-        vscode_port = vscode_port,
-        app_ports = ?port_mappings,
-        "Starting editor container"
-    );
 
     let output = tokio::process::Command::new("docker")
-        .args(&arg_refs)
+        .args(["exec", "-d", &name, "sh", "-c", &cmd])
         .output()
         .await
-        .map_err(|e| format!("Failed to start editor container: {e}"))?;
-
+        .map_err(|e| format!("Failed to launch editor in workspace container: {e}"))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("docker run failed: {stderr}"));
+        return Err(format!(
+            "openvscode-server launch failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
-
-    // Run one-time setup (apt installs, git editor) — gated by marker file.
-    if !setup_commands.is_empty() || !git_editor.is_empty() {
-        run_editor_setup_as_root(&name, setup_commands, git_editor).await;
-    }
-    // Run startup commands every time a fresh container is created (no marker file).
-    run_editor_startup_commands(&name, startup_commands).await;
 
     let host_vscode_port = editor_host_port(vscode_port);
     let url = build_editor_url(host_vscode_port, &connection_token, &folder);
-    let log_url = format!("http://localhost:{host_vscode_port}/?tkn=<redacted>&folder={folder}");
-    info!(url = %log_url, spare = ?spare_ports, "Editor container started");
+    info!(spare = ?spare_ports, "Editor launched in workspace container");
 
     Ok(EditorInfo {
         url,
         connection_token,
         vscode_port,
-        port_mappings,
+        port_mappings: Vec::new(),
         spare_ports,
         folder: folder.into_owned(),
         path_token,
+    })
+}
+
+/// Read the workspace container's `takuto.spare_ports` label as a port list,
+/// or `None` if the container is absent or the label is unset.
+async fn read_ws_spare_ports(name: &str) -> Option<Vec<u16>> {
+    let out = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            name,
+            "--format",
+            "{{index .Config.Labels \"takuto.spare_ports\"}}",
+        ])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    let s = s.trim();
+    if s.is_empty() || s == "<no value>" {
+        return None;
+    }
+    let ports: Vec<u16> = s.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+    if ports.is_empty() { None } else { Some(ports) }
+}
+
+/// Parse openvscode-server's `--port`, `--connection-token`, and
+/// `--server-base-path /s/<token>` from a `pgrep -af openvscode-server` line.
+/// Returns `None` if any is missing — mirrors `terminal::parse_terminal_auth_from_pgrep`
+/// so the IDE session is recoverable label-free and across restarts.
+pub(crate) fn parse_editor_from_pgrep(pgrep_output: &str) -> Option<(u16, String, String)> {
+    pgrep_output.lines().find_map(|line| {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let port = parts
+            .windows(2)
+            .find(|w| w[0] == "--port")
+            .and_then(|w| w[1].parse::<u16>().ok())?;
+        let token = parts
+            .windows(2)
+            .find(|w| w[0] == "--connection-token")
+            .map(|w| w[1].to_string())?;
+        let base = parts
+            .windows(2)
+            .find(|w| w[0] == "--server-base-path")
+            .map(|w| w[1])?;
+        let path_token = base.strip_prefix("/s/")?;
+        if token.is_empty() || path_token.is_empty() {
+            return None;
+        }
+        Some((port, token, path_token.to_string()))
     })
 }
 
@@ -499,127 +453,57 @@ async fn run_editor_startup_commands(container: &str, cmds: &[String]) {
     }
 }
 
-/// Stop and remove an editor container for a workflow.
+/// Stop the IDE for a workflow. Kills just the openvscode-server process; the
+/// per-item workspace container persists for the terminal and run-commands.
+/// Container removal happens when the item leaves the dashboard
+/// (`ContainerRunner::cleanup_for_ticket`).
 pub async fn stop_editor(ticket_key: &str) {
-    let name = editor_container_name(ticket_key);
-    // Release allocated ports before removing the container.
-    release_container_ports(&name).await;
+    let name = workspace_container_name(ticket_key);
     let _ = tokio::process::Command::new("docker")
-        .args(["rm", "-f", &name])
+        .args(["exec", &name, "pkill", "-f", "openvscode-server"])
         .output()
         .await;
-    info!(name = %name, "Editor container stopped");
+    info!(name = %name, "Editor process stopped (workspace container persists)");
 }
 
-/// Check if an editor container is running and return its info.
+/// Return the running IDE's info, or `None` if the workspace container isn't
+/// running or openvscode-server isn't alive in it. The session (port + tokens)
+/// is recovered from the process cmdline via `pgrep`, so it survives a Takuto
+/// restart without depending on container labels.
 pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
-    let name = editor_container_name(ticket_key);
+    if workspace_status(ticket_key).await != WorkspaceStatus::Running {
+        return None;
+    }
+    let name = workspace_container_name(ticket_key);
 
-    let label_output = tokio::process::Command::new("docker")
-        .args([
-            "inspect",
-            &name,
-            "--format",
-            "{{.State.Running}} {{json .Config.Labels}}",
-        ])
+    let out = tokio::process::Command::new("docker")
+        .args(["exec", &name, "pgrep", "-af", "openvscode-server"])
         .output()
         .await
         .ok()?;
-
-    if !label_output.status.success() {
-        return None;
+    if !out.status.success() {
+        return None; // IDE process not running in the container.
     }
+    let (vscode_port, connection_token, path_token) =
+        parse_editor_from_pgrep(&String::from_utf8_lossy(&out.stdout))?;
 
-    let label_stdout = String::from_utf8_lossy(&label_output.stdout);
-    let label_stdout = label_stdout.trim();
+    // Spare ports come from the container label, minus the vscode port.
+    let spare_ports: Vec<u16> = read_ws_spare_ports(&name)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|&p| p != vscode_port)
+        .collect();
 
-    // Parse "true {\"takuto.connection_token\":\"...\", ...}" format
-    // First word is running state, rest is JSON labels.
-    let (running_str, labels_json) = label_stdout.split_once(' ')?;
-    if running_str != "true" {
-        return None; // Container not running.
-    }
-
-    // Extract connection token from labels. Containers without the token
-    // (pre-existing from before this security feature) are treated as absent
-    // so the user must close and reopen the editor to get a secure session.
-    let connection_token = parse_connection_token_from_labels(labels_json)?;
-
-    // GH-45: path token is required for the shared-port proxy. Containers
-    // without it must be closed and reopened to get a proxied session.
-    let path_token = parse_label_value(labels_json, "takuto.path_token").unwrap_or_default();
-
-    // Port discovery: prefer labels (works for both `--network=host` and
-    // `-p` containers) with `docker port` as fallback for pre-label containers.
-    let (vscode_port, spare_ports, port_mappings) = if let Some(vp_str) =
-        parse_label_value(labels_json, "takuto.vscode_port")
-    {
-        let vp: u16 = vp_str.parse().ok()?;
-        let sp: Vec<u16> = parse_label_value(labels_json, "takuto.spare_ports")
-            .unwrap_or_default()
-            .split(',')
-            .filter(|s| !s.is_empty())
-            .filter_map(|s| s.parse().ok())
-            .collect();
-        (vp, sp, Vec::new())
-    } else {
-        // Fallback: parse `docker port` output (pre-label containers).
-        let port_output = tokio::process::Command::new("docker")
-            .args(["port", &name])
-            .output()
-            .await
-            .ok()?;
-        if !port_output.status.success() {
-            return None;
-        }
-        let stdout = String::from_utf8_lossy(&port_output.stdout);
-        let mut pm = Vec::new();
-        let mut erp: Vec<u16> = Vec::new();
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.split("->").collect();
-            if parts.len() != 2 {
-                continue;
-            }
-            let cp: u16 = parts[0]
-                .trim()
-                .split('/')
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            let hp: u16 = parts[1]
-                .trim()
-                .rsplit(':')
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            if cp == 0 || hp == 0 {
-                continue;
-            }
-            if (EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&cp) && cp == hp {
-                if !erp.contains(&hp) {
-                    erp.push(hp);
-                }
-            } else if !(EDITOR_PORT_MIN..=EDITOR_PORT_MAX).contains(&cp) && !pm.contains(&(cp, hp))
-            {
-                pm.push((cp, hp));
-            }
-        }
-        erp.sort();
-        let vp = *erp.first()?;
-        let sp: Vec<u16> = erp.into_iter().skip(1).collect();
-        (vp, sp, pm)
-    };
-
-    // Get the working directory to reconstruct the folder URL
     let wd_output = tokio::process::Command::new("docker")
         .args(["inspect", &name, "--format", "{{.Config.WorkingDir}}"])
         .output()
         .await
         .ok()?;
-
     let folder = String::from_utf8_lossy(&wd_output.stdout)
         .trim()
         .to_string();
+
     let host_vscode_port = editor_host_port(vscode_port);
     let url = build_editor_url(host_vscode_port, &connection_token, &folder);
 
@@ -627,9 +511,62 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
         url,
         connection_token,
         vscode_port,
-        port_mappings,
+        port_mappings: Vec::new(),
         spare_ports,
         folder,
         path_token,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_editor_from_pgrep;
+
+    #[test]
+    fn parse_editor_from_pgrep_extracts_port_and_tokens() {
+        let line = "57 openvscode-server --port 9100 --host 0.0.0.0 \
+                    --connection-token abcdef0123456789 --server-base-path /s/deadbeef00112233\n";
+        assert_eq!(
+            parse_editor_from_pgrep(line),
+            Some((
+                9100,
+                "abcdef0123456789".to_string(),
+                "deadbeef00112233".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_editor_from_pgrep_handles_reordered_flags() {
+        let line =
+            "57 openvscode-server --server-base-path /s/tok --connection-token conn --port 9201\n";
+        assert_eq!(
+            parse_editor_from_pgrep(line),
+            Some((9201, "conn".to_string(), "tok".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_editor_from_pgrep_missing_fields_returns_none() {
+        assert_eq!(parse_editor_from_pgrep(""), None);
+        // No --port.
+        assert_eq!(
+            parse_editor_from_pgrep(
+                "1 openvscode-server --connection-token c --server-base-path /s/t"
+            ),
+            None
+        );
+        // No --connection-token.
+        assert_eq!(
+            parse_editor_from_pgrep("1 openvscode-server --port 9100 --server-base-path /s/t"),
+            None
+        );
+        // base-path not under /s/.
+        assert_eq!(
+            parse_editor_from_pgrep(
+                "1 openvscode-server --port 9100 --connection-token c --server-base-path /x/t"
+            ),
+            None
+        );
+    }
 }

@@ -7,8 +7,13 @@
 use super::super::sanitize_ticket_key;
 
 /// Return the deterministic editor container name for a ticket.
+///
+/// This is the per-item **workspace container** (`takuto-ws-<ticket>`): the
+/// IDE (openvscode-server) and web terminal (ttyd) run as `docker exec`
+/// processes inside it rather than each owning a container. Kept in sync with
+/// [`super::super::workspace::workspace_container_name`] — same prefix + sanitizer.
 pub(crate) fn editor_container_name(ticket_key: &str) -> String {
-    format!("takuto-editor-{}", sanitize_ticket_key(ticket_key))
+    format!("takuto-ws-{}", sanitize_ticket_key(ticket_key))
 }
 
 /// Parse the `takuto.connection_token` value from a Docker inspect JSON labels string.

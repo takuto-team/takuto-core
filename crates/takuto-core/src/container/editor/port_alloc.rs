@@ -25,7 +25,7 @@ async fn used_editor_ports() -> Vec<u16> {
     // In --network=host mode (DinD), Docker's {{.Ports}} field is empty, so we
     // also read the takuto.vscode_port and takuto.spare_ports labels which are
     // always set on editor/run-command containers.
-    for filter in ["name=takuto-editor-", "name=takuto-run-"] {
+    for filter in ["name=takuto-ws-", "name=takuto-run-"] {
         // Method 1: Docker port mappings (works in local-Docker mode).
         let output = tokio::process::Command::new("docker")
             .args(["ps", "--filter", filter, "--format", "{{.Ports}}"])

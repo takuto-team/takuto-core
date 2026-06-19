@@ -170,10 +170,14 @@ impl ContainerRunner {
         super::reap::remove_containers_matching(&sanitized).await;
     }
 
-    /// Force-remove all worker containers for a given ticket key (no instance needed).
+    /// Force-remove all containers for a given ticket key (no instance needed):
+    /// the ephemeral worker containers AND the persistent per-item workspace
+    /// container (IDE/terminal/run-commands). Called when an item leaves the
+    /// dashboard (delete / mark-done).
     pub async fn cleanup_for_ticket(ticket_key: &str) {
         let sanitized = sanitize_ticket_key(ticket_key);
         super::reap::remove_containers_matching(&sanitized).await;
+        super::workspace::remove_workspace_container(ticket_key).await;
         super::reap::prune_dangling_images().await;
     }
 
