@@ -111,14 +111,26 @@ async function throwStructured(res: Response): Promise<never> {
   throw new UserFlowsError(body?.error ?? `HTTP ${res.status}`, body?.kind ?? "unknown");
 }
 
-/** GET /api/me/flows — current user's flow list for the active workspace. Lazy-seeds if absent. */
-export async function getMyFlows(): Promise<UserFlowsResponse> {
-  return apiJson<UserFlowsResponse>("/api/me/flows");
+/** Append `?workspace=<name>` when a specific repo is targeted (else the server uses the active workspace). */
+function withWorkspace(path: string, workspace?: string): string {
+  return workspace ? `${path}?workspace=${encodeURIComponent(workspace)}` : path;
+}
+
+/**
+ * GET /api/me/flows — current user's flow list. Targets `workspace` when given
+ * (the Workflows tab's repo sidebar), else the server's active workspace.
+ * Lazy-seeds if absent.
+ */
+export async function getMyFlows(workspace?: string): Promise<UserFlowsResponse> {
+  return apiJson<UserFlowsResponse>(withWorkspace("/api/me/flows", workspace));
 }
 
 /** PUT /api/me/flows — replace the full list. An empty list is a valid state. */
-export async function putMyFlows(flows: UserFlow[]): Promise<UserFlowsResponse> {
-  const res = await api("/api/me/flows", {
+export async function putMyFlows(
+  flows: UserFlow[],
+  workspace?: string,
+): Promise<UserFlowsResponse> {
+  const res = await api(withWorkspace("/api/me/flows", workspace), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ flows }),
@@ -130,8 +142,8 @@ export async function putMyFlows(flows: UserFlow[]): Promise<UserFlowsResponse> 
 }
 
 /** POST /api/me/flows/reseed — destructively overwrite with the TOML defaults. */
-export async function reseedMyFlows(): Promise<UserFlowsResponse> {
-  const res = await api("/api/me/flows/reseed", { method: "POST" });
+export async function reseedMyFlows(workspace?: string): Promise<UserFlowsResponse> {
+  const res = await api(withWorkspace("/api/me/flows/reseed", workspace), { method: "POST" });
   if (!res.ok) {
     return throwStructured(res);
   }

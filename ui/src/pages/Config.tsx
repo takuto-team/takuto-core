@@ -28,7 +28,7 @@ const ALL_TABS = [
   "Ticketing",
   "Users",
   "My Repositories",
-  "Worktree Settings",
+  "Repository Settings",
   "Workflows",
 ] as const;
 type Tab = (typeof ALL_TABS)[number];
@@ -157,7 +157,7 @@ function SecurityTabConnected() {
 // ---------------------------------------------------------------------------
 
 export function Config({ onLogout, authEnabled, isAdmin }: Props) {
-  // Admin-only tabs: "Users". "Worktree Settings" and "My Repositories" are
+  // Admin-only tabs: "Users". "Repository Settings" and "My Repositories" are
   // user-facing — no admin gate; each user manages their own data. Item polling
   // moved into the "Ticketing" tab, where it is admin-gated internally.
   const adminOnlyTabs: Tab[] = ["Users"];
@@ -177,7 +177,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
       return "Ticketing";
     }
     if (slug === "repositories") return "My Repositories";
-    if (slug === "worktree") return "Worktree Settings";
+    if (slug === "worktree") return "Repository Settings";
     if (slug === "Flows" || slug === "flows" || slug === "workflows") return "Workflows";
     if (slug === "users" && isAdmin) return "Users";
     if (slug === "security") return "Security";
@@ -235,7 +235,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
         {tab === "Ticketing" && <TicketingTab isAdmin={isAdmin} />}
         {tab === "Users" && <UsersTabConnected />}
         {tab === "My Repositories" && <MyRepositoriesTab isAdmin={isAdmin} />}
-        {tab === "Worktree Settings" && <WorktreeSettingsTab />}
+        {tab === "Repository Settings" && <WorktreeSettingsTab />}
         {tab === "Workflows" && <FlowsTab />}
       </main>
     </div>

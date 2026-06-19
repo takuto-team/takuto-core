@@ -3,15 +3,17 @@
 
 //! Per-user, per-workspace work-item flow CRUD: `/api/me/flows`.
 //!
-//! Every endpoint scopes to the **active workspace**, derived server-side from
-//! `config.git.repo_path` via [`crate::state::ConfigState::active_workspace_name`].
-//! There is no client-supplied `?workspace=` parameter — switching workspace is
-//! its own concern. The caller identity comes from the `AuthenticatedUser`
-//! extension installed by the auth middleware; the user can only ever read or
-//! write their own list.
+//! Every endpoint scopes to a workspace. The optional `?workspace=<name>` query
+//! param selects it (the Workflows settings tab passes the repo the user picked
+//! in its sidebar); when absent or blank it falls back to the **active
+//! workspace**, derived server-side from `config.git.repo_path` via
+//! [`crate::state::ConfigState::active_workspace_name`]. Rows are keyed by
+//! `(user_id, workspace)`, so the caller can only ever read or write their own
+//! list — the identity comes from the `AuthenticatedUser` extension installed
+//! by the auth middleware.
 
 use axum::Json;
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +36,22 @@ pub struct FlowsResponse {
 #[serde(deny_unknown_fields)]
 pub struct PutFlowsBody {
     pub flows: Vec<UserFlow>,
+}
+
+/// Query string for all three flow endpoints. `workspace` selects which repo's
+/// flows to read/write; absent or blank → the active workspace.
+#[derive(Debug, Default, Deserialize)]
+pub struct FlowsQuery {
+    pub workspace: Option<String>,
+}
+
+/// Resolve the target workspace: the trimmed `?workspace=` when non-empty, else
+/// the server's active workspace.
+async fn resolve_workspace(q: &FlowsQuery, config: &ConfigState) -> String {
+    match q.workspace.as_deref().map(str::trim) {
+        Some(w) if !w.is_empty() => w.to_string(),
+        _ => config.active_workspace_name().await,
+    }
 }
 
 fn db(auth: &AuthState) -> Result<takuto_core::db::Database, (StatusCode, String)> {
@@ -70,10 +88,11 @@ pub async fn get_my_flows(
     State(auth): State<AuthState>,
     State(config): State<ConfigState>,
     Extension(user): Extension<AuthenticatedUser>,
+    Query(q): Query<FlowsQuery>,
 ) -> Result<Json<FlowsResponse>, (StatusCode, String)> {
     let db = db(&auth)?;
     let adapter = db.adapter();
-    let workspace = config.active_workspace_name().await;
+    let workspace = resolve_workspace(&q, &config).await;
 
     let flows = match user_work_item_flows::get(adapter, &user.user_id, &workspace)
         .await
@@ -107,11 +126,12 @@ pub async fn put_my_flows(
     State(auth): State<AuthState>,
     State(config): State<ConfigState>,
     Extension(user): Extension<AuthenticatedUser>,
+    Query(q): Query<FlowsQuery>,
     Json(body): Json<PutFlowsBody>,
 ) -> Result<Json<FlowsResponse>, (StatusCode, String)> {
     let db = db(&auth)?;
     let adapter = db.adapter();
-    let workspace = config.active_workspace_name().await;
+    let workspace = resolve_workspace(&q, &config).await;
 
     if let Err(err) = user_work_item_flows::validate_user_flows(&body.flows) {
         return Err((
@@ -145,10 +165,11 @@ pub async fn reseed_my_flows(
     State(auth): State<AuthState>,
     State(config): State<ConfigState>,
     Extension(user): Extension<AuthenticatedUser>,
+    Query(q): Query<FlowsQuery>,
 ) -> Result<Json<FlowsResponse>, (StatusCode, String)> {
     let db = db(&auth)?;
     let adapter = db.adapter();
-    let workspace = config.active_workspace_name().await;
+    let workspace = resolve_workspace(&q, &config).await;
 
     let defaults = config.work_item_flow_defaults.as_ref().clone();
     user_work_item_flows::set(adapter, &user.user_id, &workspace, &defaults)

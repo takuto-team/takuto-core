@@ -19,6 +19,7 @@ import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import { Onboarding } from "./Onboarding";
 import { ToastProvider } from "../hooks/useToast";
+import { createQueryWrapper } from "../test/queryWrapper";
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
@@ -54,20 +55,25 @@ function stubFetch(ticketingSystem: "none" | "jira" | "github") {
     if (url === "/api/users/me/credentials") {
       return json({ provider: null, github: null, jira: null });
     }
-    if (url === "/api/me/flows") {
+    if (url.startsWith("/api/me/flows")) {
       return json({ flows: [], workspace: "takuto-core" });
+    }
+    if (url.startsWith("/api/repositories")) {
+      return json([]);
     }
     return json({});
   });
 }
 
 function renderWizard(isAdmin: boolean) {
+  const { wrapper } = createQueryWrapper();
   return render(
     <MemoryRouter>
       <ToastProvider>
         <Onboarding onLogout={() => {}} authEnabled={true} isAdmin={isAdmin} />
       </ToastProvider>
     </MemoryRouter>,
+    { wrapper },
   );
 }
 

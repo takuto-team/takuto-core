@@ -3,8 +3,24 @@
 
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useEffect, useState } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { FlowsTab } from "../components/FlowsTab";
 import type { UserFlow, UserFlowsResponse } from "../api/flows";
+
+/** Fresh QueryClient per story so `useMyRepositories` has context + isolation. */
+function WithQueryClient(Story: () => React.ReactNode) {
+  const [client] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+      }),
+  );
+  return (
+    <QueryClientProvider client={client}>
+      <Story />
+    </QueryClientProvider>
+  );
+}
 
 type FetchMock = {
   workspace: string;
@@ -32,41 +48,52 @@ function withFlowsMock(mock: FetchMock) {
         flows: mock.flows.map((f) => ({ ...f })),
       };
 
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+
       window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.toString();
-        if (url.startsWith("/api/me/flows")) {
-          const method = (init?.method ?? "GET").toUpperCase();
-          if (url === "/api/me/flows" && method === "GET") {
-            if (mock.getFails) {
-              return new Response("simulated server error", { status: 500 });
-            }
-            if (mock.getDelayMs) {
-              await new Promise((r) => setTimeout(r, mock.getDelayMs));
-            }
-            const body: UserFlowsResponse = {
-              flows: state.flows,
-              workspace: state.workspace,
-            };
-            return new Response(JSON.stringify(body), {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            });
-          }
-          if (url === "/api/me/flows" && method === "PUT") {
+        const path = url.split("?")[0];
+        const method = (init?.method ?? "GET").toUpperCase();
+
+        // Repo list — a single repo named after the mocked workspace, so the
+        // sidebar default-selects it and the flow list loads.
+        if (path === "/api/repositories" && method === "GET") {
+          return json([
+            {
+              id: "1",
+              name: state.workspace,
+              repo_url: null,
+              local_path: "/repo",
+              default_branch: "main",
+            },
+          ]);
+        }
+        // Report toggle's row lookup — no row yet.
+        if (path.startsWith("/api/worktree-commands/")) {
+          return new Response(null, { status: 404 });
+        }
+        if (path === "/api/me/flows/reseed" && method === "POST") {
+          state.flows = mock.flows.map((f) => ({ ...f }));
+          return json({ flows: state.flows, workspace: state.workspace });
+        }
+        if (path === "/api/me/flows") {
+          if (method === "PUT") {
             const parsed = JSON.parse((init?.body as string) ?? "{}") as { flows: UserFlow[] };
             state.flows = parsed.flows;
-            return new Response(
-              JSON.stringify({ flows: state.flows, workspace: state.workspace }),
-              { status: 200, headers: { "Content-Type": "application/json" } },
-            );
+            return json({ flows: state.flows, workspace: state.workspace });
           }
-          if (url === "/api/me/flows/reseed" && method === "POST") {
-            state.flows = mock.flows.map((f) => ({ ...f }));
-            return new Response(
-              JSON.stringify({ flows: state.flows, workspace: state.workspace }),
-              { status: 200, headers: { "Content-Type": "application/json" } },
-            );
+          if (mock.getFails) {
+            return new Response("simulated server error", { status: 500 });
           }
+          if (mock.getDelayMs) {
+            await new Promise((r) => setTimeout(r, mock.getDelayMs));
+          }
+          const body: UserFlowsResponse = { flows: state.flows, workspace: state.workspace };
+          return json(body);
         }
         return original(input as RequestInfo, init);
       }) as typeof window.fetch;
@@ -136,6 +163,7 @@ const filledToCap: UserFlow[] = Array.from({ length: 20 }, (_, i) => ({
 const meta = {
   title: "Pages/FlowsTab",
   component: FlowsTab,
+  decorators: [WithQueryClient],
   parameters: {
     layout: "padded",
     backgrounds: {

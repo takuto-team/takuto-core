@@ -25,6 +25,7 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { Onboarding } from "./Onboarding";
 import { ToastProvider } from "../hooks/useToast";
+import { createQueryWrapper } from "../test/queryWrapper";
 
 interface RecordedCall {
   url: string;
@@ -87,8 +88,11 @@ function stubFetch(opts: { failCredential?: boolean; failPat?: boolean } = {}) {
       if (url === "/api/users/me/credentials") {
         return json({ provider: null, github: null, jira: null });
       }
-      if (url === "/api/me/flows") {
+      if (url.startsWith("/api/me/flows")) {
         return json({ flows: [], workspace: "takuto-core" });
+      }
+      if (url.startsWith("/api/repositories")) {
+        return json([]);
       }
       if (url === "/api/config/agent") return json({});
       if (url === "/api/config/git") return json({});
@@ -119,12 +123,14 @@ function stubFetch(opts: { failCredential?: boolean; failPat?: boolean } = {}) {
 }
 
 function renderWizard() {
+  const { wrapper } = createQueryWrapper();
   return render(
     <MemoryRouter>
       <ToastProvider>
         <Onboarding onLogout={() => {}} authEnabled={true} isAdmin={true} />
       </ToastProvider>
     </MemoryRouter>,
+    { wrapper },
   );
 }
 

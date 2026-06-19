@@ -531,3 +531,54 @@ async fn valid_list_round_trips_across_requests() {
 
     assert_eq!(get_flow_names(&state, &cookie).await, vec!["Build", "Test"]);
 }
+
+/// `?workspace=<name>` targets a distinct repo's flow list, independent of the
+/// active workspace (the Workflows settings sidebar drives this).
+#[tokio::test]
+async fn workspace_query_param_targets_a_distinct_workspace() {
+    let (state, cookie) = state_with_defaults().await;
+
+    // PUT flows to an explicit workspace via ?workspace=.
+    let payload = json!({ "flows": [flow("Other-WS Flow", &[])] });
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::put("/api/me/flows?workspace=other-repo")
+                .header("Content-Type", "application/json")
+                .header("Origin", TEST_ORIGIN)
+                .header("Cookie", &cookie)
+                .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["workspace"], "other-repo");
+
+    // GET with the same ?workspace= returns those flows.
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::get("/api/me/flows?workspace=other-repo")
+                .header("Cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(resp).await;
+    assert_eq!(body["workspace"], "other-repo");
+    let names: Vec<&str> = body["flows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Other-WS Flow"]);
+
+    // The active workspace (no ?workspace=) is independent — still the defaults.
+    assert_eq!(
+        get_flow_names(&state, &cookie).await,
+        vec!["Implement Ticket", "Review"]
+    );
+}

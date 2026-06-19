@@ -28,8 +28,10 @@ import {
   MAX_FLOWS,
   type UserFlow,
 } from "../api/flows";
+import { useMyRepositories } from "../hooks/useMyRepositories";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { GenerateReportSwitch } from "./GenerateReportSwitch";
+import { RepoSidebar, type RepoSidebarItem } from "./RepoSidebar";
 import { FlowCard } from "./FlowCard";
 import { FlowEditor } from "./FlowEditor";
 import { EditableName } from "./EditableName";
@@ -38,8 +40,12 @@ import { EditableName } from "./EditableName";
 type Expanded = number | "new" | null;
 
 export function FlowsTab() {
+  const { myRepos, activeRepoName } = useMyRepositories();
+  // The repo whose flows are shown. Workflows are per-repository; this drives
+  // every read/write (`?workspace=`) and the report toggle.
+  const [selected, setSelected] = useState<string | null>(null);
+
   const [flows, setFlows] = useState<UserFlow[]>([]);
-  const [workspace, setWorkspace] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -58,32 +64,42 @@ export function FlowsTab() {
   const [newFlowName, setNewFlowName] = useState("");
   const [newFlowNameError, setNewFlowNameError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
+  const load = useCallback((ws: string) => {
     setLoading(true);
     setLoadError("");
-    getMyFlows()
+    getMyFlows(ws)
       .then((res) => {
         setFlows(res.flows);
-        setWorkspace(res.workspace);
       })
       .catch((e) => setLoadError(String((e as Error).message || e)))
       .finally(() => setLoading(false));
   }, []);
 
+  // Default selection: the active repo (else the first) once the list loads.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (myRepos === null || selected !== null) return;
+    const def =
+      activeRepoName && myRepos.some((r) => r.name === activeRepoName)
+        ? activeRepoName
+        : (myRepos[0]?.name ?? null);
+    if (def) setSelected(def);
+  }, [myRepos, activeRepoName, selected]);
+
+  // Load the selected repo's flows whenever the selection changes.
+  useEffect(() => {
+    if (selected !== null) load(selected);
+  }, [selected, load]);
 
   const submitList = useCallback(
     async (next: UserFlow[]) => {
+      if (selected === null) return;
       const prev = flows;
       setSaving(true);
       setActionError("");
       setFlows(next);
       try {
-        const res = await putMyFlows(next);
+        const res = await putMyFlows(next, selected);
         setFlows(res.flows);
-        setWorkspace(res.workspace);
       } catch (e) {
         setFlows(prev);
         setActionError(String((e as Error).message || e));
@@ -92,7 +108,7 @@ export function FlowsTab() {
         setSaving(false);
       }
     },
-    [flows],
+    [flows, selected],
   );
 
   const handleEditorSubmit = useCallback(
@@ -127,14 +143,14 @@ export function FlowsTab() {
   };
 
   const handleReseed = async () => {
+    if (selected === null) return;
     setConfirmReseed(false);
     setSaving(true);
     setActionError("");
     setExpanded(null);
     try {
-      const res = await reseedMyFlows();
+      const res = await reseedMyFlows(selected);
       setFlows(res.flows);
-      setWorkspace(res.workspace);
     } catch (e) {
       setActionError(String((e as Error).message || e));
     } finally {
@@ -183,8 +199,11 @@ export function FlowsTab() {
 
   const atCap = flows.length >= MAX_FLOWS;
   const capTooltip = atCap
-    ? "You've reached the 20-workflow limit for this workspace."
+    ? "You've reached the 20-workflow limit for this repository."
     : undefined;
+
+  const loadingRepos = myRepos === null;
+  const repos: RepoSidebarItem[] = (myRepos ?? []).map((r) => ({ name: r.name }));
 
   const addButton = (
     <button
@@ -211,56 +230,76 @@ export function FlowsTab() {
 
   return (
     <div className="space-y-4">
-      <header className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h2 className="text-base font-semibold text-gray-300 mb-1">
-            Workflows — <span className="font-mono">{workspace || "…"}</span>
-          </h2>
-          <p className="text-sm text-gray-500 max-w-2xl">
-            Click a workflow on a work-item card to run its steps in order. Dependencies require an
-            upstream workflow to have completed at least once on that work item.
-          </p>
-        </div>
-        <span className={`text-sm font-mono ${atCap ? "text-amber-400" : "text-gray-500"}`}>
-          {flows.length} / {MAX_FLOWS}
-        </span>
+      <header>
+        <h2 className="text-base font-semibold text-gray-300 mb-1">Workflows</h2>
+        <p className="text-sm text-gray-500 max-w-2xl">
+          Workflows are per repository. Click one on a work-item card to run its steps in order;
+          dependencies require an upstream workflow to have completed at least once on that work
+          item.
+        </p>
       </header>
 
-      {workspace && <GenerateReportSwitch workspace={workspace} />}
+      <div className="flex flex-col md:flex-row gap-4 min-h-[24rem]">
+        <RepoSidebar
+          repos={repos}
+          loading={loadingRepos}
+          selected={selected}
+          onSelect={setSelected}
+        />
 
-      {loading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
-      ) : loadError ? (
-        <p className="text-sm text-red-400">
-          Could not load flows.{" "}
-          <button
-            type="button"
-            onClick={load}
-            className="underline hover:text-red-300 cursor-pointer"
-          >
-            Retry
-          </button>
-        </p>
-      ) : flows.length === 0 && expanded !== "new" ? (
-        <div className="flex justify-center py-8">
-          <div className="border border-gray-800 rounded-lg bg-gray-950 p-6 max-w-md text-center space-y-4">
-            <p className="text-sm text-gray-400">
-              You have no workflows configured for <span className="font-mono">{workspace}</span>.
-            </p>
-            <p className="text-sm text-gray-500">
-              Work-item cards in this workspace will show an empty state until you add at least one.
-            </p>
-            {actionError && <p className="text-sm text-red-400">{actionError}</p>}
-            <div className="flex items-center justify-center gap-3">
-              {addButton}
-              {reseedButton}
+        <section className="flex-1 space-y-4">
+          {selected === null ? (
+            <div className="h-full flex items-center justify-center text-sm text-gray-500 italic min-h-[16rem]">
+              {loadingRepos ? "Loading…" : "Select a repository to configure its workflows."}
             </div>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div
-            className={`space-y-2 ${saving ? "opacity-50 pointer-events-none" : ""}`}
+          ) : (
+            <>
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <h3 className="text-base font-semibold text-gray-200">
+                  Workflows — <span className="font-mono">{selected}</span>
+                </h3>
+                <span className={`text-sm font-mono ${atCap ? "text-amber-400" : "text-gray-500"}`}>
+                  {flows.length} / {MAX_FLOWS}
+                </span>
+              </div>
+
+              <GenerateReportSwitch workspace={selected} />
+
+              {loading ? (
+                <p className="text-sm text-gray-500">Loading…</p>
+              ) : loadError ? (
+                <p className="text-sm text-red-400">
+                  Could not load workflows.{" "}
+                  <button
+                    type="button"
+                    onClick={() => load(selected)}
+                    className="underline hover:text-red-300 cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </p>
+              ) : flows.length === 0 && expanded !== "new" ? (
+                <div className="flex justify-center py-8">
+                  <div className="border border-gray-800 rounded-lg bg-gray-950 p-6 max-w-md text-center space-y-4">
+                    <p className="text-sm text-gray-400">
+                      You have no workflows configured for{" "}
+                      <span className="font-mono">{selected}</span>.
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      Work-item cards in this repository will show an empty state until you add at
+                      least one.
+                    </p>
+                    {actionError && <p className="text-sm text-red-400">{actionError}</p>}
+                    <div className="flex items-center justify-center gap-3">
+                      {addButton}
+                      {reseedButton}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div
+                    className={`space-y-2 ${saving ? "opacity-50 pointer-events-none" : ""}`}
             onDragOver={(e) => {
               // Allow drop anywhere in the list (including the gaps between
               // cards where the blue insertion line sits). The actual insert
@@ -350,17 +389,21 @@ export function FlowsTab() {
 
           {actionError && <p className="text-sm text-red-400">{actionError}</p>}
 
-          <div className="flex items-center gap-3 pt-3 border-t border-gray-800">
-            {addButton}
-            {reseedButton}
-          </div>
-        </>
-      )}
+                  <div className="flex items-center gap-3 pt-3 border-t border-gray-800">
+                    {addButton}
+                    {reseedButton}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </section>
+      </div>
 
       {confirmDelete !== null && (
         <ConfirmModal
           title="Delete workflow"
-          message={`Delete workflow "${flows[confirmDelete]?.name ?? ""}"? This removes it from every work-item card in this workspace.`}
+          message={`Delete workflow "${flows[confirmDelete]?.name ?? ""}"? This removes it from every work-item card in this repository.`}
           confirmLabel="Delete"
           onConfirm={handleDelete}
           onCancel={() => setConfirmDelete(null)}
@@ -370,7 +413,7 @@ export function FlowsTab() {
       {confirmReseed && (
         <ConfirmModal
           title="Re-seed workflows from defaults"
-          message={`This replaces all workflows for ${workspace} with the defaults shipped with Takuto. Your current workflows for this workspace will be lost. Other workspaces are unaffected.`}
+          message={`This replaces all workflows for ${selected} with the defaults shipped with Takuto. Your current workflows for this repository will be lost. Other repositories are unaffected.`}
           confirmLabel="Re-seed"
           onConfirm={handleReseed}
           onCancel={() => setConfirmReseed(false)}
