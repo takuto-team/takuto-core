@@ -70,5 +70,20 @@ describe("GenerateReportSwitch", () => {
     await waitFor(() =>
       expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true"),
     );
+    // A transient "Saved" confirmation appears after a successful flip.
+    await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
+  });
+
+  it("clears a pending Saved message when flipped again", async () => {
+    render(<GenerateReportSwitch workspace="ws" />);
+    await waitFor(() => expect(screen.getByRole("switch")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("switch")); // on → "Saved" shows
+    await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("switch")); // off → message cleared immediately
+    expect(screen.queryByText("Saved")).toBeNull();
+    // …then reappears once the second save lands.
+    await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
   });
 });

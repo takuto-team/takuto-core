@@ -13,7 +13,7 @@
  * Rendered at the top of the Workflows page (and so, in the setup wizard).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getMyWorktreeCommands,
   putMyWorktreeCommands,
@@ -34,6 +34,13 @@ export function GenerateReportSwitch({ workspace }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Transient "Saved" confirmation: shown on a successful flip, auto-hidden
+  // after 2s, and cleared immediately if the toggle is flipped again.
+  const [saved, setSaved] = useState(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Drop the pending hide-timer on unmount so it never fires after teardown.
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
 
   useEffect(() => {
     if (!workspace) return;
@@ -61,6 +68,9 @@ export function GenerateReportSwitch({ workspace }: Props) {
   const onChange = useCallback(
     async (next: boolean) => {
       if (saving || loading || !workspace) return;
+      // A fresh flip cancels any lingering "Saved" message from the last one.
+      clearTimeout(savedTimer.current);
+      setSaved(false);
       setEnabled(next); // optimistic
       setSaving(true);
       setError("");
@@ -69,6 +79,8 @@ export function GenerateReportSwitch({ workspace }: Props) {
         setEnabled(row.generate_report);
         setInitCommands(row.init_commands);
         setRunCommands(row.run_commands);
+        setSaved(true);
+        savedTimer.current = setTimeout(() => setSaved(false), 2000);
       } catch (e: unknown) {
         setEnabled(!next); // revert
         setError(e instanceof Error ? e.message : String(e));
@@ -82,6 +94,7 @@ export function GenerateReportSwitch({ workspace }: Props) {
   return (
     <div>
       <GenerateReportToggle value={enabled} onChange={onChange} disabled={loading || saving} />
+      {saved && <p className="text-sm text-green-400 mt-1">Saved</p>}
       {error && <p className="text-sm text-red-400 mt-1">Could not save: {error}</p>}
     </div>
   );
