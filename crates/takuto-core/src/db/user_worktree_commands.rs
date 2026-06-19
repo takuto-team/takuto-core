@@ -294,7 +294,11 @@ fn decode_full_row(row: &crate::db::DbRow) -> Result<UserWorktreeCommandsRow> {
     let workspace_name = row.get_text(1)?;
     let init_json = row.get_text(2)?;
     let run_json = row.get_text(3)?;
-    let generate_report = row.get_bool(4)?;
+    // Stored as INTEGER 0/1 (portable bool convention). Read as int — the
+    // Postgres `get_bool` path has no INT4 fallback, but `get_i64` does (see
+    // `users.suspended`). Reading via `get_bool` fails on Postgres with
+    // "Rust type `bool` is not compatible with SQL type `INT4`".
+    let generate_report = row.get_i64(4)? != 0;
     let updated_at = row.get_i64(5)?;
 
     let init_commands = serde_json::from_str::<Vec<String>>(&init_json).map_err(|e| {
