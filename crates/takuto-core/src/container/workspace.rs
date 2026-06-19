@@ -275,6 +275,50 @@ pub async fn ensure_workspace_container(
     })
 }
 
+/// From all `takuto-ws-*` container names, the ones NOT in `live` — i.e.
+/// workspace containers whose work item is gone (deleted/mark-done while Takuto
+/// was down). Pure so it is unit-testable without Docker.
+fn orphan_ws_names(all: &[String], live: &std::collections::HashSet<String>) -> Vec<String> {
+    all.iter()
+        .filter(|n| n.starts_with("takuto-ws-") && !live.contains(*n))
+        .cloned()
+        .collect()
+}
+
+/// Remove `takuto-ws-*` containers that don't correspond to a live work item.
+/// Called on startup after workflows are restored, to reap containers orphaned
+/// by an item deletion that raced with a Takuto restart. `live` is the set of
+/// workspace-container names for the currently-live work items.
+pub async fn sweep_orphan_workspaces(live: &std::collections::HashSet<String>) {
+    let out = tokio::process::Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "name=takuto-ws-",
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+        .await;
+    let Ok(out) = out else { return };
+    if !out.status.success() {
+        return;
+    }
+    let all: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    for name in orphan_ws_names(&all, live) {
+        info!(name = %name, "Reaping orphaned workspace container");
+        let _ = tokio::process::Command::new("docker")
+            .args(["rm", "-f", &name])
+            .output()
+            .await;
+    }
+}
+
 /// Force-remove the item's workspace container (best-effort).
 pub async fn remove_workspace_container(ticket_key: &str) {
     let name = workspace_container_name(ticket_key);
@@ -295,6 +339,19 @@ mod tests {
     fn name_is_sanitized_and_prefixed() {
         assert_eq!(workspace_container_name("PROJ-12"), "takuto-ws-proj-12");
         assert_eq!(workspace_container_name("a/b.c"), "takuto-ws-a-b-c");
+    }
+
+    #[test]
+    fn orphan_ws_names_keeps_only_dead_workspaces() {
+        let all = vec![
+            "takuto-ws-proj-1".to_string(),
+            "takuto-ws-proj-2".to_string(),
+            "takuto-editor-old".to_string(), // not a ws- container → ignored
+            "takuto-worker-proj-1-0".to_string(),
+        ];
+        let live: std::collections::HashSet<String> =
+            ["takuto-ws-proj-1".to_string()].into_iter().collect();
+        assert_eq!(orphan_ws_names(&all, &live), vec!["takuto-ws-proj-2"]);
     }
 
     #[test]

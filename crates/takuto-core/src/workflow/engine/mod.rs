@@ -352,14 +352,28 @@ impl WorkflowEngine {
 
     /// Load snapshot from disk, insert workflows, spawn drivers. Removes the snapshot file on success.
     pub async fn restore_persisted_workflows(&self) -> Result<usize> {
-        self.persistence
+        let restored = self
+            .persistence
             .restore(
                 &self.workflows_dir,
                 self.agent_run_semaphore.clone(),
                 self.suppress_cancelled_as_error.clone(),
                 self.db.clone(),
             )
+            .await?;
+
+        // Reap workspace containers orphaned by an item deletion that raced with
+        // a restart: keep only those whose work item is still live.
+        let live: std::collections::HashSet<String> = self
+            .workflows_arc()
+            .read()
             .await
+            .keys()
+            .map(|k| crate::container::workspace::workspace_container_name(k))
+            .collect();
+        crate::container::workspace::sweep_orphan_workspaces(&live).await;
+
+        Ok(restored)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<WorkflowEvent> {
