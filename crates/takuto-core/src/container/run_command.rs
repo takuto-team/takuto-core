@@ -53,6 +53,33 @@ fn log_path(cmd_index: usize) -> String {
 fn script_path(cmd_index: usize) -> String {
     format!("{RUNTIME_DIR}/run-{cmd_index}.sh")
 }
+/// Per-command service registry file (goal: cross-command URL handoff). Holds
+/// this command's forwarded ports so sibling run-commands / tests in the same
+/// workspace container can discover them under `$TAKUTO_RUNTIME_DIR`.
+fn service_path(cmd_index: usize) -> String {
+    format!("{RUNTIME_DIR}/service-{cmd_index}.json")
+}
+
+/// Serialize a command's active forwards (`container_port → host_port`) to the
+/// JSON published in its `service-<idx>.json`.
+fn service_json(cmd_index: usize, forwards: &HashMap<u16, u16>) -> String {
+    let mut list: Vec<(u16, u16)> = forwards
+        .iter()
+        .map(|(&detected, &spare)| (detected, editor_host_port(spare)))
+        .collect();
+    list.sort_unstable();
+    let services: Vec<serde_json::Value> = list
+        .into_iter()
+        .map(|(container_port, host_port)| {
+            serde_json::json!({
+                "container_port": container_port,
+                "host_port": host_port,
+                "url": format!("http://localhost:{container_port}"),
+            })
+        })
+        .collect();
+    serde_json::json!({ "command_index": cmd_index, "services": services }).to_string()
+}
 
 /// Information about a running run-command.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -368,6 +395,7 @@ pub async fn run_run_command_port_scanner(
 
     let mut active_forwards: HashMap<u16, u16> = HashMap::new();
     let mut available_spares: Vec<u16> = spare_ports;
+    let mut dirty = false;
 
     loop {
         tokio::select! {
@@ -375,6 +403,7 @@ pub async fn run_run_command_port_scanner(
                 for (&_detected, &spare) in &active_forwards {
                     kill_socat(&container, spare).await;
                 }
+                remove_service_file(&container, cmd_index).await;
                 info!(ticket = %ticket, cmd_index, "Run command port scanner stopped");
                 return;
             }
@@ -391,6 +420,7 @@ pub async fn run_run_command_port_scanner(
             for (&_detected, &spare) in &active_forwards {
                 kill_socat(&container, spare).await;
             }
+            remove_service_file(&container, cmd_index).await;
             let _ = event_tx.send(WorkflowEvent {
                 event_type: "run_command_stopped".to_string(),
                 ticket_key: ticket.clone(),
@@ -422,6 +452,7 @@ pub async fn run_run_command_port_scanner(
                 if start_socat(&container, spare, port, family).await {
                     info!(ticket = %ticket, cmd_index, detected = port, host_port = spare, "Run command: dynamic port forwarded");
                     active_forwards.insert(port, spare);
+                    dirty = true;
                     let host_spare = editor_host_port(spare);
                     let _ = event_tx.send(WorkflowEvent {
                         event_type: "run_command_port_forwarded".to_string(),
@@ -447,6 +478,7 @@ pub async fn run_run_command_port_scanner(
             if let Some(spare) = active_forwards.remove(&port) {
                 kill_socat(&container, spare).await;
                 available_spares.push(spare);
+                dirty = true;
                 let host_spare = editor_host_port(spare);
                 let _ = event_tx.send(WorkflowEvent {
                     event_type: "run_command_port_unforwarded".to_string(),
@@ -459,7 +491,27 @@ pub async fn run_run_command_port_scanner(
                 });
             }
         }
+
+        // Publish this command's forwards to its service registry file so
+        // sibling commands / tests can discover them.
+        if dirty {
+            let _ = write_file_in_container(
+                &container,
+                &service_path(cmd_index),
+                &service_json(cmd_index, &active_forwards),
+            )
+            .await;
+            dirty = false;
+        }
     }
+}
+
+/// Best-effort removal of a command's `service-<idx>.json`.
+async fn remove_service_file(container: &str, cmd_index: usize) {
+    let _ = tokio::process::Command::new("docker")
+        .args(["exec", container, "rm", "-f", &service_path(cmd_index)])
+        .output()
+        .await;
 }
 
 #[cfg(test)]
@@ -471,6 +523,25 @@ mod tests {
     fn runtime_paths_are_indexed() {
         assert_eq!(pid_path(2), "/home/takuto/.takuto-ws-runtime/run-2.pid");
         assert_eq!(exit_path(0), "/home/takuto/.takuto-ws-runtime/run-0.exit");
+        assert_eq!(
+            service_path(1),
+            "/home/takuto/.takuto-ws-runtime/service-1.json"
+        );
+    }
+
+    #[test]
+    fn service_json_lists_sorted_forwards_with_urls() {
+        let mut fwd = HashMap::new();
+        fwd.insert(4000u16, 9105u16); // detected → spare(host)
+        fwd.insert(3000u16, 9104u16);
+        let json: serde_json::Value = serde_json::from_str(&service_json(2, &fwd)).unwrap();
+        assert_eq!(json["command_index"], 2);
+        let services = json["services"].as_array().unwrap();
+        // Sorted by container_port ascending.
+        assert_eq!(services[0]["container_port"], 3000);
+        assert_eq!(services[0]["host_port"], 9104);
+        assert_eq!(services[0]["url"], "http://localhost:3000");
+        assert_eq!(services[1]["container_port"], 4000);
     }
 
     #[test]
