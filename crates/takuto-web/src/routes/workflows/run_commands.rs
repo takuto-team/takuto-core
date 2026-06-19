@@ -490,6 +490,7 @@ mod tests {
                 name: "dev".into(),
                 command: "npm run dev".into(),
             }],
+            false,
         )
         .await
         .expect("seed run command");

@@ -76,6 +76,8 @@ pub struct UserCommandsEntry {
     pub workspace_name: String,
     pub init_commands: Vec<String>,
     pub run_commands: Vec<RunCommand>,
+    /// Per-workspace report toggle: generate a per-flow report on workflow runs.
+    pub generate_report: bool,
     pub updated_at: i64,
 }
 
@@ -85,6 +87,7 @@ impl From<UserWorktreeCommandsRow> for UserCommandsEntry {
             workspace_name: row.workspace_name,
             init_commands: row.init_commands,
             run_commands: row.run_commands,
+            generate_report: row.generate_report,
             updated_at: row.updated_at,
         }
     }
@@ -97,6 +100,8 @@ pub struct PutBody {
     pub init_commands: Vec<String>,
     #[serde(default)]
     pub run_commands: Vec<RunCommand>,
+    #[serde(default)]
+    pub generate_report: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -436,6 +441,7 @@ pub async fn put_my_row(
         &lookup_name,
         &init_commands,
         &run_commands,
+        body.generate_report,
     )
     .await
     .map_err(db_error)?;

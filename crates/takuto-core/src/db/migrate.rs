@@ -138,6 +138,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "user_jira_credentials",
         sql: include_str!("../../migrations/20260615000001_user_jira_credentials.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_620_000_001,
+        description: "worktree_generate_report",
+        sql: include_str!("../../migrations/20260620000001_worktree_generate_report.sql"),
+    },
 ];
 
 /// A `sqlx::migrate::MigrationSource` impl that resolves the embedded

@@ -64,6 +64,9 @@ pub struct UserWorktreeCommandsRow {
     pub workspace_name: String,
     pub init_commands: Vec<String>,
     pub run_commands: Vec<RunCommand>,
+    /// When true, workflow flow runs for this workspace generate a per-flow
+    /// section in the work item's report (`lore/reports/<key>_report.md`).
+    pub generate_report: bool,
     pub updated_at: i64,
 }
 
@@ -80,7 +83,7 @@ pub async fn get(
 ) -> Result<Option<UserWorktreeCommandsRow>> {
     let row = adapter
         .query_optional(
-            "SELECT user_id, workspace_name, init_commands_json, run_commands_json, updated_at \
+            "SELECT user_id, workspace_name, init_commands_json, run_commands_json, generate_report, updated_at \
              FROM user_worktree_commands WHERE user_id = ? AND workspace_name = ?",
             vec![
                 DbValue::Text(user_id.to_string()),
@@ -101,7 +104,7 @@ pub async fn list_for_user(
 ) -> Result<Vec<UserWorktreeCommandsRow>> {
     let rows = adapter
         .query_all(
-            "SELECT user_id, workspace_name, init_commands_json, run_commands_json, updated_at \
+            "SELECT user_id, workspace_name, init_commands_json, run_commands_json, generate_report, updated_at \
              FROM user_worktree_commands WHERE user_id = ? ORDER BY updated_at DESC",
             vec![DbValue::Text(user_id.to_string())],
         )
@@ -134,6 +137,7 @@ pub async fn upsert(
     workspace_name: &str,
     init_commands: &[String],
     run_commands: &[RunCommand],
+    generate_report: bool,
 ) -> Result<()> {
     // NUL-byte guard across every string value we're about to persist.
     if user_id.contains('\0') || workspace_name.contains('\0') {
@@ -174,12 +178,17 @@ pub async fn upsert(
     let tail = super::upsert::build_update_tail(
         adapter.backend(),
         &["user_id", "workspace_name"],
-        &["init_commands_json", "run_commands_json", "updated_at"],
+        &[
+            "init_commands_json",
+            "run_commands_json",
+            "generate_report",
+            "updated_at",
+        ],
     );
     let sql = format!(
         "INSERT INTO user_worktree_commands \
-            (user_id, workspace_name, init_commands_json, run_commands_json, updated_at) \
-         VALUES (?, ?, ?, ?, ?) {tail}"
+            (user_id, workspace_name, init_commands_json, run_commands_json, generate_report, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?) {tail}"
     );
     adapter
         .execute(
@@ -189,6 +198,7 @@ pub async fn upsert(
                 DbValue::Text(workspace_name.to_string()),
                 DbValue::Text(init_json),
                 DbValue::Text(run_json),
+                DbValue::I64(generate_report as i64),
                 DbValue::I64(now),
             ],
         )
@@ -284,7 +294,8 @@ fn decode_full_row(row: &crate::db::DbRow) -> Result<UserWorktreeCommandsRow> {
     let workspace_name = row.get_text(1)?;
     let init_json = row.get_text(2)?;
     let run_json = row.get_text(3)?;
-    let updated_at = row.get_i64(4)?;
+    let generate_report = row.get_bool(4)?;
+    let updated_at = row.get_i64(5)?;
 
     let init_commands = serde_json::from_str::<Vec<String>>(&init_json).map_err(|e| {
         DbError::CommandsJsonDecode {
@@ -308,6 +319,7 @@ fn decode_full_row(row: &crate::db::DbRow) -> Result<UserWorktreeCommandsRow> {
         workspace_name,
         init_commands,
         run_commands,
+        generate_report,
         updated_at,
     })
 }
@@ -354,6 +366,67 @@ mod tests {
             .await
             .expect("seed user");
         id
+    }
+
+    /// Test wrapper preserving the historical 5-arg `upsert` call shape with
+    /// `generate_report` defaulted off. Shadows the glob-imported `super::upsert`
+    /// for the existing tests; the flag is exercised explicitly below.
+    async fn upsert(
+        adapter: &DbAdapter,
+        user_id: &str,
+        workspace_name: &str,
+        init_commands: &[String],
+        run_commands: &[RunCommand],
+    ) -> Result<()> {
+        super::upsert(
+            adapter,
+            user_id,
+            workspace_name,
+            init_commands,
+            run_commands,
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn generate_report_round_trips_and_defaults_false() {
+        let a = fresh_adapter().await;
+        let alice = seed_user(&a, "alice", "user").await;
+
+        // Default (via the 5-arg wrapper) is off.
+        upsert(&a, &alice, "frontend", &[], &[]).await.unwrap();
+        assert!(
+            !get(&a, &alice, "frontend")
+                .await
+                .unwrap()
+                .unwrap()
+                .generate_report
+        );
+
+        // Explicit on round-trips.
+        super::upsert(&a, &alice, "frontend", &[], &[], true)
+            .await
+            .unwrap();
+        assert!(
+            get(&a, &alice, "frontend")
+                .await
+                .unwrap()
+                .unwrap()
+                .generate_report
+        );
+
+        // And back off.
+        super::upsert(&a, &alice, "frontend", &[], &[], false)
+            .await
+            .unwrap();
+        assert!(
+            !get(&a, &alice, "frontend")
+                .await
+                .unwrap()
+                .unwrap()
+                .generate_report
+        );
     }
 
     #[tokio::test]

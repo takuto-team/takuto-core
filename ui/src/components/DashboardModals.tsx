@@ -25,7 +25,9 @@ interface Props {
   activeRepoName: string | null;
   config: ConfigResponse | null;
   /** Used to gate the report modal — only renders when the referenced
-   *  workflow exists, has `generate_report`, and has `has_report`. */
+   *  workflow exists and has `has_report` (the report file is present). The
+   *  toggle that produced it is per-workspace, so the file's existence — not a
+   *  global config flag — is the authoritative signal. */
   workflows: Record<string, WorkflowSummary>;
   onTicketSelected: (key: string, summary: string, description?: string, url?: string) => void;
   onAddToDashboard: (description: string, summary: string, repositoryId: string) => Promise<void>;
@@ -72,7 +74,7 @@ export function DashboardModals({
       );
     case "report": {
       const wf = workflows[modal.reportKey];
-      if (!wf || !wf.generate_report || !wf.has_report) return null;
+      if (!wf || !wf.has_report) return null;
       return <ReportModal workflow={wf} onClose={close} />;
     }
   }

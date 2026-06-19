@@ -45,6 +45,10 @@ export function WorktreeSettingsTab() {
 
   const init = useDiffForm<string[]>([]);
   const run = useDiffForm<RunCommand[]>([]);
+  // Preserved (not edited here): the per-workspace report toggle lives on the
+  // Workflows tab. We still load it and write it back unchanged so saving init
+  // /run commands never silently resets it.
+  const [generateReport, setGenerateReport] = useState(false);
 
   const loadWorkspace = useCallback(
     (name: string) => {
@@ -58,10 +62,12 @@ export function WorktreeSettingsTab() {
             setHasRow(true);
             init.replaceOriginal(row.init_commands);
             run.replaceOriginal(row.run_commands);
+            setGenerateReport(row.generate_report);
           } else {
             setHasRow(false);
             init.replaceOriginal([]);
             run.replaceOriginal([]);
+            setGenerateReport(false);
           }
         })
         .catch((e) => setError(String((e as Error).message || e)))
@@ -86,10 +92,11 @@ export function WorktreeSettingsTab() {
     setSuccess("");
     setSaving(true);
     try {
-      const row = await putMyWorktreeCommands(selected, init.value, run.value);
+      const row = await putMyWorktreeCommands(selected, init.value, run.value, generateReport);
       setHasRow(true);
       init.replaceOriginal(row.init_commands);
       run.replaceOriginal(row.run_commands);
+      setGenerateReport(row.generate_report);
       setSuccess("Commands saved.");
       setHasMyCommands(selected, true);
     } catch (e) {
@@ -110,6 +117,7 @@ export function WorktreeSettingsTab() {
       setHasRow(false);
       init.replaceOriginal([]);
       run.replaceOriginal([]);
+      setGenerateReport(false);
       setSuccess(
         "Commands deleted. Future work items on this workspace will run no init commands and show no run-command buttons.",
       );

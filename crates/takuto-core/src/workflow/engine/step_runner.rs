@@ -229,6 +229,28 @@ pub(super) async fn run_workflow_def_steps(
         Some(ctx) => (ctx.session_id.clone(), true),
         None => (None, false),
     };
+
+    // Per-(user, workspace) report toggle. When on, reset THIS flow's section
+    // in the item's report file before its agent steps run — so re-running a
+    // flow replaces only its own section while other flows' sections are
+    // preserved. The per-step injection (below, gated on the same flag) then
+    // appends `### Step:` subsections under the flow header.
+    let (report_user_id, report_workspace) = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| (w.user_id.clone(), w.workspace_name.clone()))
+            .unwrap_or((None, String::new()))
+    };
+    let generate_report = super::resolve::resolve_worktree_generate_report(
+        report_user_id.as_deref(),
+        &report_workspace,
+        db,
+    )
+    .await;
+    if generate_report {
+        reset_flow_report_section(worktree_path, ticket_key, def_name);
+    }
+
     let last_agent_output = run_agent_step_sequence(
         ticket_key,
         worktree_path,
@@ -255,7 +277,7 @@ pub(super) async fn run_workflow_def_steps(
         &skill_paths,
         initial_session_id,
         is_resume,
-        false, // no report injection
+        generate_report, // per-(user,workspace) report toggle
         db,
         Some(def_name),
     )
@@ -290,6 +312,31 @@ pub(super) async fn run_workflow_def_steps(
     }
 
     Ok(())
+}
+
+/// Reset the current flow's section in the item's report file before its agent
+/// steps run: strip the flow's existing marker-delimited section (preserving
+/// other flows') and append a fresh `## <flow>` header at the end, so the
+/// per-step `### Step:` subsections accumulate under it and a re-run replaces
+/// only this flow's section. Best-effort — a filesystem error just means the
+/// agent recreates the file via the injection prompt.
+fn reset_flow_report_section(worktree_path: &Path, ticket_key: &str, def_name: &str) {
+    use crate::agent_prompt::{flow_section_header, flow_slug, strip_flow_section};
+    let report_path = worktree_path
+        .join("lore")
+        .join("reports")
+        .join(format!("{ticket_key}_report.md"));
+    let slug = flow_slug(def_name);
+    let existing = std::fs::read_to_string(&report_path).unwrap_or_default();
+    let mut content = strip_flow_section(&existing, &slug);
+    if !content.is_empty() {
+        content.push_str("\n\n");
+    }
+    content.push_str(&flow_section_header(&slug, def_name));
+    if let Some(dir) = report_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&report_path, content);
 }
 
 /// Walk the agent-step matrix (`outer × steps × repeat`) for a workflow.

@@ -23,6 +23,8 @@ export interface WorktreeCommandsRow {
   workspace_name: string;
   init_commands: string[];
   run_commands: RunCommand[];
+  /** Per-workspace toggle: generate a per-flow report on workflow runs. */
+  generate_report: boolean;
   updated_at: number;
 }
 
@@ -65,6 +67,7 @@ export async function putMyWorktreeCommands(
   workspace: string,
   initCommands: string[],
   runCommands: RunCommand[],
+  generateReport: boolean,
 ): Promise<WorktreeCommandsRow> {
   const res = await api(`/api/worktree-commands/${encodeURIComponent(workspace)}`, {
     method: "PUT",
@@ -72,6 +75,7 @@ export async function putMyWorktreeCommands(
     body: JSON.stringify({
       init_commands: initCommands,
       run_commands: runCommands,
+      generate_report: generateReport,
     }),
   });
   if (!res.ok) {

@@ -162,3 +162,33 @@ pub async fn resolve_worktree_init_commands(
         }
     }
 }
+
+/// Resolve the per-`(user, workspace)` report toggle (`generate_report`).
+///
+/// Same resolution rules as [`resolve_worktree_init_commands`]: `false` when
+/// there's no `user_id` / no `db` / no row / a read error. This is the
+/// source of truth for whether workflow flow runs generate a per-flow report
+/// (the legacy global `[general] generate_report` is no longer consulted by
+/// the engine).
+pub async fn resolve_worktree_generate_report(
+    workflow_user_id: Option<&str>,
+    workspace_name: &str,
+    db: Option<&Database>,
+) -> bool {
+    let (Some(user_id), Some(db)) = (workflow_user_id, db) else {
+        return false;
+    };
+    match crate::db::user_worktree_commands::get(db.adapter(), user_id, workspace_name).await {
+        Ok(Some(row)) => row.generate_report,
+        Ok(None) => false,
+        Err(e) => {
+            warn!(
+                user_id = %user_id,
+                workspace = %workspace_name,
+                error = %e,
+                "Failed to read user_worktree_commands; report generation off"
+            );
+            false
+        }
+    }
+}

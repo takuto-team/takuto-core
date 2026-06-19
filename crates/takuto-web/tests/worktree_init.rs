@@ -64,6 +64,7 @@ async fn resolver_returns_init_commands_from_owner_row() {
         "frontend",
         &["echo from-row-1".to_string(), "echo from-row-2".to_string()],
         &[],
+        false,
     )
     .await
     .expect("upsert owner row");
@@ -90,6 +91,7 @@ async fn resolver_returns_empty_when_workflow_has_no_user() {
         "frontend",
         &["echo not-for-orphan".to_string()],
         &[],
+        false,
     )
     .await
     .expect("upsert alice's row");
@@ -129,6 +131,7 @@ async fn resolver_isolates_owners() {
         "frontend",
         &["echo alice".to_string()],
         &[],
+        false,
     )
     .await
     .expect("upsert alice");
@@ -138,6 +141,7 @@ async fn resolver_isolates_owners() {
         "frontend",
         &["echo bob".to_string()],
         &[],
+        false,
     )
     .await
     .expect("upsert bob");
@@ -169,6 +173,7 @@ async fn run_commands_surface_from_owner_row() {
         "frontend",
         &["echo init".to_string()],
         std::slice::from_ref(&rc),
+        false,
     )
     .await
     .expect("upsert with run command");
@@ -213,6 +218,7 @@ async fn run_commands_batched_lookup_returns_per_owner_data() {
         "frontend",
         &[],
         std::slice::from_ref(&alice_rc),
+        false,
     )
     .await
     .unwrap();
@@ -222,6 +228,7 @@ async fn run_commands_batched_lookup_returns_per_owner_data() {
         "frontend",
         &[],
         std::slice::from_ref(&bob_rc),
+        false,
     )
     .await
     .unwrap();

@@ -5,18 +5,71 @@
 
 use crate::config::AiAgentProvider;
 
-/// Instructions injected into each agent step prompt when `generate_report` is enabled.
-/// Directs the agent to append a summary section for this step to the report file.
+/// Marker prefix the engine uses to delimit a flow's section inside the
+/// per-item report. Each flow run resets its own section between
+/// `<!-- takuto-report:flow=<slug> -->` and the next such marker (or EOF), so
+/// re-running a flow replaces only its section while other flows are preserved.
+pub const FLOW_MARKER_PREFIX: &str = "<!-- takuto-report:flow=";
+
+/// Slugify a flow/definition name for use in a section marker (lowercase,
+/// non-alphanumerics → `-`).
+pub fn flow_slug(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// The exact marker line for a flow `slug`.
+pub fn flow_section_marker(slug: &str) -> String {
+    format!("{FLOW_MARKER_PREFIX}{slug} -->")
+}
+
+/// The fresh section header (marker + `## <name>`) appended when a flow runs.
+pub fn flow_section_header(slug: &str, name: &str) -> String {
+    format!("{}\n## {}\n", flow_section_marker(slug), name)
+}
+
+/// Remove the section for `slug` from `existing` — everything from its marker
+/// through the content up to the next `FLOW_MARKER_PREFIX` (or EOF) — and
+/// return the remaining report (other flows' sections untouched). Trailing
+/// whitespace is trimmed. If the slug has no section, `existing` is returned
+/// (trimmed).
+pub fn strip_flow_section(existing: &str, slug: &str) -> String {
+    let marker = flow_section_marker(slug);
+    let Some(start) = existing.find(&marker) else {
+        return existing.trim_end().to_string();
+    };
+    let after = start + marker.len();
+    let end = existing[after..]
+        .find(FLOW_MARKER_PREFIX)
+        .map(|i| after + i)
+        .unwrap_or(existing.len());
+    let mut out = String::with_capacity(existing.len());
+    out.push_str(&existing[..start]);
+    out.push_str(&existing[end..]);
+    out.trim_end().to_string()
+}
+
+/// Instructions injected into each agent step prompt when report generation is
+/// enabled. Directs the agent to append this step's summary under the flow's
+/// section (the engine writes the `## <flow>` header + marker before the
+/// steps run).
 pub fn report_injection_suffix(item_key: &str) -> String {
     format!(
-        "REPORT GENERATION: After completing this step, append a summary section to the file \
-         `lore/reports/{item_key}_report.md`. Create the file and parent directories if they do not exist. \
-         **Append** — never overwrite prior content in the file.\n\n\
-         Your section MUST include these three parts:\n\
+        "REPORT GENERATION: After completing this step, append a summary subsection to the file \
+         `lore/reports/{item_key}_report.md`. The file already exists with the current flow's \
+         section header at the end. **Append** to the end — never overwrite prior content.\n\n\
+         Your subsection MUST include these three parts:\n\
          1. **Key findings** — What you discovered or produced in this step.\n\
          2. **Issues encountered** — Problems, blockers, or anomalies (write \"None\" if there were none).\n\
          3. **Decisions taken** — Choices you made and their rationale.\n\n\
-         Format each section with a Markdown heading (## Step: <step name>) followed by the three bullet groups.\n\n\
+         Format each subsection with a Markdown heading (### Step: <step name>) followed by the three bullet groups.\n\n\
          EXCLUSIONS — do NOT include any of the following in the report:\n\
          - Commit hashes or SHAs\n\
          - Raw test-runner output (e.g., full Jest/Vitest/cargo test logs)\n\
@@ -96,6 +149,60 @@ mod tests {
         assert!(suffix.contains("Key findings"));
         assert!(suffix.contains("Issues encountered"));
         assert!(suffix.contains("Decisions taken"));
+        // Steps nest under the flow's `## <flow>` header (level-3 heading).
+        assert!(suffix.contains("### Step:"));
+    }
+
+    #[test]
+    fn flow_slug_sanitizes() {
+        assert_eq!(flow_slug("Address Comments"), "address-comments");
+        assert_eq!(flow_slug("Implement"), "implement");
+    }
+
+    #[test]
+    fn strip_flow_section_removes_only_target_flow() {
+        let existing = "\
+<!-- takuto-report:flow=implement -->
+## Implement
+### Step: code
+done
+<!-- takuto-report:flow=address-comments -->
+## Address Comments
+### Step: review
+ok";
+        let out = strip_flow_section(existing, "implement");
+        assert!(
+            !out.contains("## Implement"),
+            "implement section removed: {out}"
+        );
+        assert!(
+            out.contains("## Address Comments"),
+            "other flow preserved: {out}"
+        );
+        assert!(out.contains(&flow_section_marker("address-comments")));
+        // Re-appending implement's fresh header yields a clean two-section file.
+        let rebuilt = format!("{out}\n\n{}", flow_section_header("implement", "Implement"));
+        assert!(rebuilt.contains("## Address Comments"));
+        assert!(rebuilt.contains("## Implement"));
+    }
+
+    #[test]
+    fn strip_flow_section_absent_returns_input() {
+        let existing = "<!-- takuto-report:flow=other -->\n## Other\nx";
+        assert_eq!(
+            strip_flow_section(existing, "implement"),
+            existing.trim_end()
+        );
+    }
+
+    #[test]
+    fn strip_flow_section_at_eof() {
+        // Target flow is the last section (no following marker → strip to EOF).
+        let existing =
+            "<!-- takuto-report:flow=a -->\n## A\nx\n<!-- takuto-report:flow=b -->\n## B\ny";
+        let out = strip_flow_section(existing, "b");
+        assert!(out.contains("## A"));
+        assert!(!out.contains("## B"));
     }
 
     #[test]

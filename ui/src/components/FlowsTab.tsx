@@ -29,6 +29,7 @@ import {
   type UserFlow,
 } from "../api/flows";
 import { ConfirmModal } from "./modals/ConfirmModal";
+import { GenerateReportSwitch } from "./GenerateReportSwitch";
 import { FlowCard } from "./FlowCard";
 import { FlowEditor } from "./FlowEditor";
 import { EditableName } from "./EditableName";
@@ -224,6 +225,8 @@ export function FlowsTab() {
           {flows.length} / {MAX_FLOWS}
         </span>
       </header>
+
+      {workspace && <GenerateReportSwitch workspace={workspace} />}
 
       {loading ? (
         <p className="text-sm text-gray-500">Loading…</p>

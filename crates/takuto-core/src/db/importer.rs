@@ -240,6 +240,7 @@ const TABLES: &[(&str, &[&str])] = &[
             "workspace_name",
             "init_commands_json",
             "run_commands_json",
+            "generate_report",
             "updated_at",
         ],
     ),
