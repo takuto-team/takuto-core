@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "../api/client";
 import { queryKeys } from "../api/queryClient";
 import type { WorkflowSummary, WorkflowEvent, TerminalLine, WorkflowCounts } from "../api/types";
+import { getStatusInfo } from "../components/StatusBadge";
 
 export interface TerminalState {
   stepName: string;
@@ -41,10 +42,6 @@ export function useWorkflows() {
     queryKey: queryKeys.workItems,
     queryFn: () => apiJson<WorkflowSummary[]>("/api/work-items"),
   });
-  const { data: countsData } = useQuery({
-    queryKey: queryKeys.workItemCounts,
-    queryFn: () => apiJson<WorkflowCounts>("/api/work-items/counts"),
-  });
 
   // Workflows and dynamic forwards are pure projections of the server list.
   const workflows = useMemo(() => {
@@ -62,7 +59,23 @@ export function useWorkflows() {
     return next;
   }, [list]);
 
-  const counts = countsData ?? EMPTY_COUNTS;
+  // Counts are derived from the same workflow list the grid renders (kept in
+  // sync by patchWorkItem / refetch), bucketed by the exact status each card
+  // shows. This guarantees the summary bar never diverges from the cards —
+  // unlike a separate /counts query that only refetched on some events (so a
+  // running item could show 0 running, or a completed one go uncounted).
+  const counts = useMemo<WorkflowCounts>(() => {
+    const c: WorkflowCounts = { ...EMPTY_COUNTS };
+    for (const w of Object.values(workflows)) {
+      const label = getStatusInfo(w.state, w.can_start).label;
+      if (label === "Completed") c.completed += 1;
+      else if (label === "Error" || label === "Stopped") c.errors += 1;
+      else if (label === "Paused") c.paused += 1;
+      else if (label === "Running") c.running += 1;
+      // "Pending" is not counted in any bucket (matches the backend).
+    }
+    return c;
+  }, [workflows]);
 
   // Terminal output is streamed over the WebSocket and never re-fetched, so
   // it lives in local state seeded from each workflow's `terminal_lines`.
@@ -104,8 +117,11 @@ export function useWorkflows() {
     () => queryClient.invalidateQueries({ queryKey: queryKeys.workItems }),
     [queryClient]
   );
+  // Counts are derived client-side from the workflow list, so "refresh counts"
+  // just means "refresh the list". Kept as a named callback so existing call
+  // sites (and the Dashboard) stay unchanged.
   const fetchCounts = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: queryKeys.workItemCounts }),
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.workItems }),
     [queryClient]
   );
 

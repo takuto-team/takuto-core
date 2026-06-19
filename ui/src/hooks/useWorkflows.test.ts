@@ -81,6 +81,27 @@ describe("useWorkflows", () => {
     expect(result.current.orderKeys).toEqual(["TEST-1", "TEST-2"]);
   });
 
+  it("derives counts from the workflow list (matches the grid)", async () => {
+    mockFetchWorkflows([
+      makeWorkflow({ ticket_key: "DONE-1", state: "Done" }),
+      makeWorkflow({ ticket_key: "DONE-2", state: "Completed" }),
+      makeWorkflow({ ticket_key: "RUN-1", state: "AddressingTicket" }),
+      makeWorkflow({ ticket_key: "PAUSE-1", state: "Paused" }),
+      makeWorkflow({ ticket_key: "ERR-1", state: "Error: boom" }),
+      makeWorkflow({ ticket_key: "STOP-1", state: "Stopped" }),
+      makeWorkflow({ ticket_key: "PEND-1", state: "Pending", can_start: true }),
+    ]);
+
+    const { result } = renderHook(() => useWorkflows(), { wrapper: createQueryWrapper().wrapper });
+
+    await vi.waitFor(() => {
+      expect(Object.keys(result.current.workflows)).toHaveLength(7);
+    });
+
+    // Stopped buckets with errors (matches the backend); Pending is uncounted.
+    expect(result.current.counts).toEqual({ running: 1, completed: 2, errors: 2, paused: 1 });
+  });
+
   it("work_item_updated event triggers re-fetch (refreshes server-computed prep_state)", async () => {
     // Item starts "preparing" (worktree pre-creation in flight).
     mockFetchWorkflows([
