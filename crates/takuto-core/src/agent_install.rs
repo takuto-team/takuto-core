@@ -288,25 +288,31 @@ impl Installer {
     async fn cursor_install(&self, target: &VersionTarget) -> Result<(), String> {
         let bin_dir = self.bin_dir();
         let share = self.install_dir.join("share").join("cursor-agent");
-        // Resolve a concrete version: for `latest`, ask Cursor's installer index;
-        // the `latest` path segment on downloads.cursor.com serves the current
-        // lab build. Extract the tarball and symlink the launcher (its realpath
-        // lookup needs index.js beside the script, so we keep the tree).
-        let version = match target {
+        // Cursor has no `latest` download path: its official installer hardcodes
+        // the current version. For the unpinned case we fetch that script and
+        // parse the version out, then download the concrete versioned tarball.
+        // We extract the whole tree and symlink the launcher (its realpath
+        // lookup needs index.js beside the script).
+        let pinned = match target {
             VersionTarget::Pinned(v) => v.clone(),
-            VersionTarget::Latest => "latest".to_string(),
+            VersionTarget::Latest => String::new(),
         };
-        let url_x64 = cursor_tarball_url(&version, "x64");
-        let url_arm = cursor_tarball_url(&version, "arm64");
         let script = format!(
             r#"set -euo pipefail
 arch="$(dpkg --print-architecture)"
 case "$arch" in
-  amd64) url={x64} ;;
-  arm64) url={arm} ;;
+  amd64) carch=x64 ;;
+  arm64) carch=arm64 ;;
   *) echo "unsupported arch: $arch" >&2; exit 1 ;;
 esac
-dest={share}/{version}
+version={pinned}
+if [ -z "$version" ]; then
+  version="$(curl -fsSL https://cursor.com/install \
+    | grep -oE '[0-9]{{4}}\.[0-9]{{2}}\.[0-9]{{2}}-[0-9-]+-[0-9a-f]+' | head -n1)"
+  [ -n "$version" ] || {{ echo "could not resolve latest cursor version" >&2; exit 1; }}
+fi
+url="https://downloads.cursor.com/lab/$version/linux/$carch/agent-cli-package.tar.gz"
+dest={share}/$version
 mkdir -p "$dest" {bin}
 curl -fSL --retry 3 --retry-delay 5 "$url" -o /tmp/cursor-agent.tar.gz
 tar --strip-components=1 -xzf /tmp/cursor-agent.tar.gz -C "$dest"
@@ -315,11 +321,9 @@ ln -sf "$dest/cursor-agent" {bin}/agent
 ln -sf "$dest/cursor-agent" {bin}/cursor-agent
 test -f "$dest/index.js"
 "#,
-            x64 = shell_quote(&url_x64),
-            arm = shell_quote(&url_arm),
+            pinned = shell_quote(&pinned),
             share = shell_quote(&share.to_string_lossy()),
             bin = shell_quote(&bin_dir.to_string_lossy()),
-            version = shell_quote(&version),
         );
         self.run_shell(&script).await
     }
