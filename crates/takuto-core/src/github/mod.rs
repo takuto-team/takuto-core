@@ -213,6 +213,79 @@ pub async fn fetch_open_issues(
     Ok(issues)
 }
 
+/// The `head` filter value (`owner:branch`) for the GitHub pulls API, derived
+/// from an `owner/repo` string. `None` when `owner_repo` has no owner segment.
+pub fn pr_head_filter(owner_repo: &str, branch: &str) -> Option<String> {
+    let (owner, repo) = owner_repo.split_once('/')?;
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}:{branch}"))
+}
+
+/// Find a PR (any state) whose head branch is `branch` in `owner_repo`, returning
+/// its `html_url` if one exists. Used at add-time to warn when a ticket already
+/// has a PR opened directly on GitHub (outside Takuto's DB / in-memory state).
+///
+/// `gh_token` is injected as `GH_TOKEN` (App installation token or per-user PAT)
+/// so the call authenticates on deployments where `gh auth` was never set up.
+pub async fn find_pr_url_for_branch(
+    owner_repo: &str,
+    cwd: &std::path::Path,
+    branch: &str,
+    gh_token: Option<&str>,
+) -> crate::error::Result<Option<String>> {
+    let Some(head) = pr_head_filter(owner_repo, branch) else {
+        return Ok(None);
+    };
+    let endpoint = format!("repos/{owner_repo}/pulls");
+    let head_field = format!("head={head}");
+    let env: Vec<(&str, &str)> = gh_token.map(|t| vec![("GH_TOKEN", t)]).unwrap_or_default();
+    let output = crate::process::run_command_with_env(
+        "gh",
+        &[
+            "api",
+            "--method",
+            "GET",
+            &endpoint,
+            "--field",
+            &head_field,
+            "--field",
+            "state=all",
+            "--field",
+            "per_page=1",
+        ],
+        cwd,
+        tokio_util::sync::CancellationToken::new(),
+        &env,
+    )
+    .await?;
+
+    if !output.success() {
+        return Err(crate::config::ConfigError::Operational {
+            op: "gh api repos/<owner_repo>/pulls",
+            detail: gh_api_error_message(output.stderr.trim(), "Pull requests: Read"),
+        }
+        .into());
+    }
+
+    let json: serde_json::Value = serde_json::from_str(output.stdout.trim()).map_err(|e| {
+        crate::config::ConfigError::Operational {
+            op: "github pulls json parse",
+            detail: e.to_string(),
+        }
+    })?;
+
+    let url = json
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|pr| pr.get("html_url"))
+        .and_then(|u| u.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    Ok(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +351,20 @@ mod tests {
     #[test]
     fn parse_pr_url_non_numeric_returns_none() {
         assert_eq!(parse_pr_url("https://github.com/owner/repo/pull/abc"), None);
+    }
+
+    #[test]
+    fn pr_head_filter_builds_owner_colon_branch() {
+        assert_eq!(
+            pr_head_filter("octocat/hello", "feat/gh-15"),
+            Some("octocat:feat/gh-15".to_string())
+        );
+    }
+
+    #[test]
+    fn pr_head_filter_none_without_owner() {
+        assert_eq!(pr_head_filter("noslash", "feat/x"), None);
+        assert_eq!(pr_head_filter("/repo", "feat/x"), None);
     }
 
     // ── github_token_app_then_pat: App-token-first, per-user PAT fallback ──────
