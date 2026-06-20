@@ -70,26 +70,24 @@ pub fn build_volume_args(worktree_path: &Path, isolate_workspace: bool) -> Vec<S
             mounts.push("/workspace:/workspace".to_string());
         }
     }
-    // Mount the `takuto-tools` named volume read-only into every spawned
-    // worker / editor / run-command. The takuto container
-    // populates this volume at startup via the `[provisioning]` install
-    // commands (see `docs/extending-takuto.md`). The volume is a Docker
-    // NAMED volume — no host-path translation is needed even in DinD
-    // mode because the DinD daemon and takuto share the same volume by
-    // name (the takuto service mounts it RW; DinD inherits the same
-    // volume via `docker-compose.dind.yml`).
+    // Share the tools tree (runtime-installed agent CLIs + `[provisioning]`
+    // tools) read-only into every spawned worker / editor / run-command.
     //
-    // `:ro` so workers can't pollute the volume; only the takuto boot
-    // pass writes to it. The `ENV PATH` in the Dockerfile prepends
-    // `/opt/takuto-tools/bin` so anything dropped here shadows the
-    // baked-in tools (admin's lever for pinning a tool to a specific
-    // version).
+    // This is a **path bind-mount** (`/opt/takuto-tools`), NOT a named-volume
+    // reference (`takuto-tools:…`) — matching `/workspace` and `/shared-auth/*`
+    // above. In DinD the worker `docker run` is executed by the DinD daemon,
+    // whose `takuto-tools` named volume is its OWN, separate from the
+    // compose-managed volume the takuto container installs into; a named-volume
+    // reference therefore gives workers a stale/empty volume (proven: the
+    // install's files never reach it). The compose volume IS mounted into the
+    // dind container at `/opt/takuto-tools`, so bind-mounting that path shares
+    // the real install tree (`bin/` symlinks + their `lib/`/`share/` targets).
     //
-    // Mounted at the PARENT `/opt/takuto-tools` (not `/bin`): the runtime
-    // agent install lays down `bin/` symlinks plus their targets under
-    // `lib/` (npm) and `share/` (cursor), so the whole tree must be in the
-    // volume or the symlinks dangle in workers.
-    mounts.push("takuto-tools:/opt/takuto-tools:ro".to_string());
+    // Mounted at the PARENT `/opt/takuto-tools` (not `/bin`) so the symlink
+    // targets under `lib/` (npm) and `share/` (cursor) come along; `:ro` so
+    // workers can't pollute it. The Dockerfile/worker `PATH` prepends
+    // `/opt/takuto-tools/bin` so these resolve by bare name.
+    mounts.push("/opt/takuto-tools:/opt/takuto-tools:ro".to_string());
     mounts
 }
 
@@ -151,7 +149,7 @@ mod tests {
     ///   2. The exact isolated-mode mount list — `/workspace:/workspace`
     ///      replaced by the worktree + `.git` + `.takuto:ro` trio,
     ///      remaining mounts preserved in order, and the
-    ///      `takuto-tools:/opt/takuto-tools:ro` mount appended last.
+    ///      `/opt/takuto-tools:/opt/takuto-tools:ro` mount appended last.
     ///
     /// Any drift in mount strings, ordering, or the isolation splice
     /// fails this test.
@@ -175,7 +173,7 @@ mod tests {
             "/shared-auth/playwright-cache:/home/takuto/.cache/ms-playwright".to_string(),
             "/shared-auth/vscode:/home/takuto/.openvscode-server".to_string(),
             "/etc/takuto:/etc/takuto:ro".to_string(),
-            "takuto-tools:/opt/takuto-tools:ro".to_string(),
+            "/opt/takuto-tools:/opt/takuto-tools:ro".to_string(),
         ];
         assert_eq!(
             build_volume_args(&wt, false),
@@ -203,7 +201,7 @@ mod tests {
             "/workspace/worktrees/feat-proj-42:/workspace/worktrees/feat-proj-42".to_string(),
             "/workspace/.git:/workspace/.git".to_string(),
             "/workspace/.takuto:/workspace/.takuto:ro".to_string(),
-            "takuto-tools:/opt/takuto-tools:ro".to_string(),
+            "/opt/takuto-tools:/opt/takuto-tools:ro".to_string(),
         ];
         assert_eq!(
             build_volume_args(&wt, true),
