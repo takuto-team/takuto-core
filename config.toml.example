@@ -119,8 +119,9 @@ cors_origins = []
 # Host or https:// URL (token auth, egress, and Jira link in PR body; empty → jira.atlassian.net)
 site = "yourcompany.atlassian.net"
 email = "you@company.com"
-# Atlassian CLI (`acli`) is installed on startup (only in Jira mode), not baked
-# into the image. Pin a version here, or leave empty for the latest.
+# Atlassian CLI (`acli`) is installed on startup (always — so you can switch to
+# Jira without restarting), not baked into the image. Atlassian only serves the
+# latest binary, so this pin is currently advisory (latest is always installed).
 # acli_version = ""
 # --- UI-managed [jira] keys (deploy-time defaults; edit in the UI) ---
 # Managed in Configuration → Item Polling.

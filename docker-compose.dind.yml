@@ -30,12 +30,14 @@ services:
       - workspace:/workspace
       - workspaces:/workspaces
       - takuto-data:/shared-auth/takuto-data
-      # Task #48: mount the `takuto-tools` volume here too so the DinD
-      # daemon can reference it by name when bind-mounting into spawned
-      # workers / editors / run-commands via `-v takuto-tools:/opt/takuto-tools/bin:ro`.
+      # Mount the `takuto-tools` volume here too so the DinD daemon can
+      # reference it by name when bind-mounting into spawned workers / editors /
+      # run-commands via `-v takuto-tools:/opt/takuto-tools:ro`. Mounted at the
+      # PARENT `/opt/takuto-tools` so the runtime agent-install tree (bin +
+      # lib + share) is fully shared (bin-only would dangle the symlinks).
       # Named volumes resolve in DinD's own volume namespace, so DinD
       # MUST have a mount keeping the volume alive in its scope.
-      - takuto-tools:/opt/takuto-tools/bin
+      - takuto-tools:/opt/takuto-tools
       - dind-storage:/var/lib/docker
       # Auth volumes — workers bind-mount from /shared-auth/* into standard home paths
       - claude-auth:/shared-auth/claude

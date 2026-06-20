@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Config, TicketingSystem};
+use crate::config::Config;
 
 /// How a client binary is obtained.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub enum InstallKind {
     Npm { package: String },
     /// Cursor agent — official HTTPS download (no build-time sha; TLS-verified).
     Cursor,
-    /// Atlassian CLI — `.deb` from the Atlassian apt repo, extracted (amd64).
+    /// Atlassian CLI — direct HTTPS binary from acli.atlassian.com (cross-arch).
     Acli,
 }
 
@@ -116,7 +116,9 @@ pub fn cursor_tarball_url(version: &str, arch: &str) -> String {
 
 /// The set of clients to install, derived from config:
 /// the agents listed in `[agent].available_providers` (defaults to all four),
-/// plus `acli` only when the deployment is in Jira mode.
+/// plus `acli` **always** (the ticketing system can be switched at runtime
+/// without restarting, so acli must already be present if the user moves to
+/// Jira).
 pub fn specs_from_config(cfg: &Config) -> Vec<ClientSpec> {
     let mut specs = Vec::new();
     let p = &cfg.agent.providers;
@@ -160,14 +162,12 @@ pub fn specs_from_config(cfg: &Config) -> Vec<ClientSpec> {
             version: p.cursor.version.clone(),
         });
     }
-    if cfg.general.ticketing_system == TicketingSystem::Jira {
-        specs.push(ClientSpec {
-            name: "Atlassian CLI".into(),
-            bin: "acli".into(),
-            kind: InstallKind::Acli,
-            version: cfg.jira.acli_version.clone(),
-        });
-    }
+    specs.push(ClientSpec {
+        name: "Atlassian CLI".into(),
+        bin: "acli".into(),
+        kind: InstallKind::Acli,
+        version: cfg.jira.acli_version.clone(),
+    });
     specs
 }
 
@@ -329,38 +329,27 @@ test -f "$dest/index.js"
     }
 
     async fn acli_install(&self, target: &VersionTarget) -> Result<(), String> {
-        // Atlassian's apt repo only ships acli for amd64. On other arches
-        // (e.g. arm64) skip gracefully — matching the old image's `|| WARN` —
-        // so the overall install still reaches "ready" instead of erroring.
-        if std::env::consts::ARCH != "x86_64" {
-            tracing::warn!(
-                arch = std::env::consts::ARCH,
-                "acli is only distributed for amd64; skipping its install"
-            );
-            return Ok(());
-        }
         let bin_dir = self.bin_dir();
-        // Without root we fetch the matching `.deb` from the repo pool and
-        // extract the binary with `dpkg-deb -x`. `latest` = the index entry.
-        let version_filter = match target {
-            VersionTarget::Latest => String::new(),
-            VersionTarget::Pinned(v) => v.clone(),
-        };
+        // Atlassian publishes acli as a direct, cross-arch binary
+        // (acli_linux_amd64 / acli_linux_arm64) under `.../linux/latest/...`.
+        // Only `latest` is served (versioned URLs 403), so a pin can't be
+        // honoured — warn and install latest. `dpkg --print-architecture`
+        // already yields `amd64`/`arm64`, matching acli's naming.
+        if let VersionTarget::Pinned(v) = target {
+            tracing::warn!(
+                version = %v,
+                "acli has no versioned download (only `latest`); installing latest"
+            );
+        }
         let script = format!(
             r#"set -euo pipefail
-base=https://acli.atlassian.com/linux/deb
-pkgs="$(curl -fsSL "$base/dists/stable/main/binary-amd64/Packages")"
-filter={filter}
-fname="$(printf '%s\n' "$pkgs" | awk -v f="$filter" '/^Filename: / {{ if (f=="" || index($2,f)>0) last=$2 }} END {{ print last }}')"
-if [ -z "$fname" ]; then echo "acli package not found in index (filter='$filter')" >&2; exit 1; fi
-mkdir -p {bin} /tmp/acli-extract
-curl -fSL --retry 3 --retry-delay 5 "$base/$fname" -o /tmp/acli.deb
-dpkg-deb -x /tmp/acli.deb /tmp/acli-extract
-cp /tmp/acli-extract/usr/bin/acli {bin}/acli
+arch="$(dpkg --print-architecture)"
+url="https://acli.atlassian.com/linux/latest/acli_linux_$arch/acli"
+mkdir -p {bin}
+curl -fSL --retry 3 --retry-delay 5 "$url" -o {bin}/acli
 chmod +x {bin}/acli
-rm -rf /tmp/acli.deb /tmp/acli-extract
+{bin}/acli --version >/dev/null
 "#,
-            filter = shell_quote(&version_filter),
             bin = shell_quote(&bin_dir.to_string_lossy()),
         );
         self.run_shell(&script).await
@@ -467,29 +456,25 @@ mod tests {
     }
 
     #[test]
-    fn specs_include_agents_and_gate_acli_on_jira() {
-        let mut cfg = Config::default();
-        cfg.general.ticketing_system = TicketingSystem::None;
-        let names: Vec<_> = specs_from_config(&cfg)
-            .iter()
-            .map(|s| s.bin.clone())
-            .collect();
-        assert!(names.contains(&"claude".to_string()));
-        assert!(names.contains(&"agent".to_string()));
-        assert!(
-            !names.contains(&"acli".to_string()),
-            "no acli outside Jira mode"
-        );
-
-        cfg.general.ticketing_system = TicketingSystem::Jira;
-        let names: Vec<_> = specs_from_config(&cfg)
-            .iter()
-            .map(|s| s.bin.clone())
-            .collect();
-        assert!(
-            names.contains(&"acli".to_string()),
-            "acli installed in Jira mode"
-        );
+    fn specs_include_all_agents_and_always_acli() {
+        use crate::config::TicketingSystem;
+        // acli installs regardless of ticketing system — it can be switched at
+        // runtime without restarting, so it must already be present.
+        for ts in [
+            TicketingSystem::None,
+            TicketingSystem::Jira,
+            TicketingSystem::GitHub,
+        ] {
+            let mut cfg = Config::default();
+            cfg.general.ticketing_system = ts;
+            let names: Vec<_> = specs_from_config(&cfg)
+                .iter()
+                .map(|s| s.bin.clone())
+                .collect();
+            assert!(names.contains(&"claude".to_string()));
+            assert!(names.contains(&"agent".to_string()));
+            assert!(names.contains(&"acli".to_string()), "acli always installs");
+        }
     }
 
     #[test]
@@ -500,6 +485,7 @@ mod tests {
             .iter()
             .map(|s| s.bin.clone())
             .collect();
-        assert_eq!(names, vec!["claude".to_string()]);
+        // The agent set follows available_providers; acli is always appended.
+        assert_eq!(names, vec!["claude".to_string(), "acli".to_string()]);
     }
 }

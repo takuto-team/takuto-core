@@ -84,7 +84,12 @@ pub fn build_volume_args(worktree_path: &Path, isolate_workspace: bool) -> Vec<S
     // `/opt/takuto-tools/bin` so anything dropped here shadows the
     // baked-in tools (admin's lever for pinning a tool to a specific
     // version).
-    mounts.push("takuto-tools:/opt/takuto-tools/bin:ro".to_string());
+    //
+    // Mounted at the PARENT `/opt/takuto-tools` (not `/bin`): the runtime
+    // agent install lays down `bin/` symlinks plus their targets under
+    // `lib/` (npm) and `share/` (cursor), so the whole tree must be in the
+    // volume or the symlinks dangle in workers.
+    mounts.push("takuto-tools:/opt/takuto-tools:ro".to_string());
     mounts
 }
 
@@ -146,7 +151,7 @@ mod tests {
     ///   2. The exact isolated-mode mount list — `/workspace:/workspace`
     ///      replaced by the worktree + `.git` + `.takuto:ro` trio,
     ///      remaining mounts preserved in order, and the
-    ///      `takuto-tools:/opt/takuto-tools/bin:ro` mount appended last.
+    ///      `takuto-tools:/opt/takuto-tools:ro` mount appended last.
     ///
     /// Any drift in mount strings, ordering, or the isolation splice
     /// fails this test.
@@ -170,7 +175,7 @@ mod tests {
             "/shared-auth/playwright-cache:/home/takuto/.cache/ms-playwright".to_string(),
             "/shared-auth/vscode:/home/takuto/.openvscode-server".to_string(),
             "/etc/takuto:/etc/takuto:ro".to_string(),
-            "takuto-tools:/opt/takuto-tools/bin:ro".to_string(),
+            "takuto-tools:/opt/takuto-tools:ro".to_string(),
         ];
         assert_eq!(
             build_volume_args(&wt, false),
@@ -198,7 +203,7 @@ mod tests {
             "/workspace/worktrees/feat-proj-42:/workspace/worktrees/feat-proj-42".to_string(),
             "/workspace/.git:/workspace/.git".to_string(),
             "/workspace/.takuto:/workspace/.takuto:ro".to_string(),
-            "takuto-tools:/opt/takuto-tools/bin:ro".to_string(),
+            "takuto-tools:/opt/takuto-tools:ro".to_string(),
         ];
         assert_eq!(
             build_volume_args(&wt, true),

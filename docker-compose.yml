@@ -34,7 +34,7 @@ services:
       # every spawned worker / editor / run-command (see
       # `docs/extending-takuto.md`). RW here because the takuto
       # entrypoint writes into it during the SHA-gated install pass.
-      - takuto-tools:/opt/takuto-tools/bin
+      - takuto-tools:/opt/takuto-tools
       - claude-auth:/home/takuto/.claude
       - cursor-auth:/home/takuto/.cursor
       - agents-data:/home/takuto/.agents
