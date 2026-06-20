@@ -40,12 +40,13 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   const { showToast } = useToast();
   const config = useConfig();
   const { systemStatus, refresh: refreshOnboardingStatus } = useOnboardingStatus();
-  const wf = useWorkflows();
+  const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
+  // Counts are scoped to the active repo so the summary bar matches the grid.
+  const wf = useWorkflows(activeRepoName);
   const { workflows, orderKeys, terminalStates, dynamicForwards, systemErrors, counts,
           dismissError, fetchWorkflows, fetchCounts, handleEvent, resetState: _resetState } = wf;
   const { workflowDefs, refresh: fetchWorkflowDefs, scheduleRefresh: scheduleWorkflowDefsRefresh } =
     useWorkflowDefinitions();
-  const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
   const modals = useDashboardModals(config);
 
   // Live GitHub-access check for the active repo. Re-runs on every switch and on

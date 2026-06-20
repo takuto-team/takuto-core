@@ -35,7 +35,7 @@ function isTerminalState(state: string): boolean {
   return lower === "done" || lower.startsWith("error") || lower === "stopped";
 }
 
-export function useWorkflows() {
+export function useWorkflows(activeRepoName?: string | null) {
   const queryClient = useQueryClient();
 
   const { data: list } = useQuery({
@@ -64,9 +64,14 @@ export function useWorkflows() {
   // shows. This guarantees the summary bar never diverges from the cards —
   // unlike a separate /counts query that only refetched on some events (so a
   // running item could show 0 running, or a completed one go uncounted).
+  //
+  // Scoped to the active repository to match the grid (`WorkflowGrid` filters
+  // by `workspace_name === activeRepoName`); otherwise the counters tally items
+  // from repos that aren't visible on the dashboard.
   const counts = useMemo<WorkflowCounts>(() => {
     const c: WorkflowCounts = { ...EMPTY_COUNTS };
     for (const w of Object.values(workflows)) {
+      if (activeRepoName && w.workspace_name !== activeRepoName) continue;
       const label = getStatusInfo(w.state, w.can_start).label;
       if (label === "Completed") c.completed += 1;
       else if (label === "Error" || label === "Stopped") c.errors += 1;
@@ -75,7 +80,7 @@ export function useWorkflows() {
       else if (label === "Running") c.running += 1;
     }
     return c;
-  }, [workflows]);
+  }, [workflows, activeRepoName]);
 
   // Terminal output is streamed over the WebSocket and never re-fetched, so
   // it lives in local state seeded from each workflow's `terminal_lines`.
