@@ -1,0 +1,19 @@
+# cargo-about config — generates THIRD-PARTY-RUST.md (crate attribution).
+# Run: cargo about generate about.hbs > THIRD-PARTY-RUST.md
+# `accepted` mirrors the deny.toml license allow-list (FSL-1.1-ALv2-compatible).
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+    "0BSD",
+    "CDLA-Permissive-2.0",
+    "FSL-1.1-ALv2",
+]
