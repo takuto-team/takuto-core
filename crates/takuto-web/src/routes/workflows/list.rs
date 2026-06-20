@@ -231,10 +231,13 @@ pub async fn list_workflows(
             )
             .await
             {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(|r| (r.ticket_key.clone(), r))
-                    .collect(),
+                // Key by the work item's unique `id`, NOT `ticket_key`: a
+                // re-run leaves multiple non-deleted rows sharing a ticket_key,
+                // and a ticket_key-keyed collect would keep an arbitrary
+                // (oldest) duplicate — making the DTO render durable fields
+                // (pr_url, branch, summary) from the wrong run. Looked up below
+                // by the rendered workflow's own `w.id`.
+                Ok(rows) => rows.into_iter().map(|r| (r.id.clone(), r)).collect(),
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
@@ -250,9 +253,9 @@ pub async fn list_workflows(
     // Authoritative step count of each work item's latest completed flow,
     // keyed by work_items.id. Used as the progress denominator for completed
     // workflows, whose in-memory `steps_log` / `current_def_total_steps` do
-    // not survive a restart. Keyed by the rendered workflow's own id (NOT the
-    // ticket_key-deduped `db_rows`, which can collide when two work items share
-    // a ticket_key). One batched query for the whole list.
+    // not survive a restart. Keyed by the rendered workflow's own id (like
+    // `db_rows` above — never `ticket_key`, which collides across re-runs).
+    // One batched query for the whole list.
     let completed_step_counts: HashMap<String, u32> = match auth_state.db.as_ref() {
         Some(database) if !visible_workflows.is_empty() => {
             let ids: Vec<String> = visible_workflows.iter().map(|w| w.id.clone()).collect();
@@ -325,7 +328,7 @@ pub async fn list_workflows(
             // render durable fields from the cache so the row does not vanish
             // mid-migration. Engine-derived fields (state display, action
             // flags, port cache) come from the Workflow below.
-            let row = db_rows.get(&w.ticket_key);
+            let row = db_rows.get(&w.id);
             if row.is_none() {
                 tracing::warn!(
                     ticket = %w.ticket_key,
