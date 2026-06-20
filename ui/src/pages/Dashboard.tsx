@@ -3,7 +3,7 @@
 
 import { useEffect, useCallback, useRef, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { apiPost } from "../api/client";
+import { apiPost, listRepoAccess } from "../api/client";
 import type { WorkflowEvent } from "../api/types";
 import { useToast } from "../hooks/useToast";
 import { useConfig } from "../hooks/useConfig";
@@ -20,6 +20,7 @@ import { SummaryStats } from "../components/SummaryStats";
 import { workflowMatchesStatus, type StatusFilterKey } from "../components/statusFilter";
 import { WorkflowGrid } from "../components/WorkflowGrid";
 import { DashboardModals } from "../components/DashboardModals";
+import { ConfirmModal } from "../components/modals/ConfirmModal";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { SystemErrorAlert } from "../components/SystemErrorAlert";
 import { handleProviderChangedEvent } from "../utils/providerChanged";
@@ -46,6 +47,30 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     useWorkflowDefinitions();
   const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
   const modals = useDashboardModals(config);
+
+  // Live GitHub-access check for the active repo. Re-runs on every switch and on
+  // page load (no caching) so revoked access surfaces a warning and restored
+  // access clears it. The repo stays selected — the user can return to it.
+  const [noAccessRepo, setNoAccessRepo] = useState<string | null>(null);
+  useEffect(() => {
+    if (!activeRepoName) {
+      setNoAccessRepo(null);
+      return;
+    }
+    let cancelled = false;
+    listRepoAccess()
+      .then((rows) => {
+        if (cancelled) return;
+        const entry = rows.find((r) => r.name === activeRepoName);
+        setNoAccessRepo(entry && !entry.accessible ? activeRepoName : null);
+      })
+      .catch(() => {
+        /* best-effort: a failed check shows no warning */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRepoName]);
 
   // Clicking a summary-counter card filters the grid to that status; clicking
   // the active card again clears the filter.
@@ -219,6 +244,15 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         onPasteSubmit={handlePasteSubmit}
         onSaved={fetchWorkflows}
       />
+      {noAccessRepo && (
+        <ConfirmModal
+          title="No access to this repository"
+          message={`The connected GitHub App no longer has access to "${noAccessRepo}". You can still select it again if access is restored later.`}
+          confirmLabel="OK"
+          onConfirm={() => setNoAccessRepo(null)}
+          onCancel={() => setNoAccessRepo(null)}
+        />
+      )}
       <footer className="py-3 text-center">
         <span className="text-xs text-gray-600">Takuto v{__APP_VERSION__}</span>
       </footer>

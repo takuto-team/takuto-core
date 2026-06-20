@@ -61,6 +61,9 @@ function withFlowsMock(mock: FetchMock) {
 
         // Repo list — a single repo named after the mocked workspace, so the
         // sidebar default-selects it and the flow list loads.
+        if (path === "/api/repositories/access" && method === "GET") {
+          return json([{ name: state.workspace, accessible: true }]);
+        }
         if (path === "/api/repositories" && method === "GET") {
           return json([
             {

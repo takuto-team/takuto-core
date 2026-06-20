@@ -213,6 +213,46 @@ pub async fn fetch_open_issues(
     Ok(issues)
 }
 
+/// Classify the outcome of a `gh api repos/{owner}/{repo}` probe.
+///
+/// `Some(true)` = accessible; **`Some(false)` only on a definitive
+/// not-found/forbidden** (the App/PAT genuinely can't see the repo);
+/// `None` = indeterminate (network/transient/`gh` error) so callers can avoid
+/// false-flagging a repo as inaccessible on a hiccup.
+pub fn classify_repo_access(success: bool, stderr: &str) -> Option<bool> {
+    if success {
+        return Some(true);
+    }
+    let s = stderr.to_lowercase();
+    let denied = s.contains("404")
+        || s.contains("not found")
+        || s.contains("403")
+        || s.contains("resource not accessible");
+    if denied { Some(false) } else { None }
+}
+
+/// Probe whether the current token can see `owner_repo` via
+/// `gh api repos/{owner_repo}`. See [`classify_repo_access`] for the tri-state
+/// return. `gh_token` is injected as `GH_TOKEN` (App installation token or PAT).
+pub async fn repo_accessible(
+    owner_repo: &str,
+    cwd: &std::path::Path,
+    gh_token: Option<&str>,
+) -> Option<bool> {
+    let endpoint = format!("repos/{owner_repo}");
+    let env: Vec<(&str, &str)> = gh_token.map(|t| vec![("GH_TOKEN", t)]).unwrap_or_default();
+    let output = crate::process::run_command_with_env(
+        "gh",
+        &["api", "--method", "GET", &endpoint, "--jq", ".id"],
+        cwd,
+        tokio_util::sync::CancellationToken::new(),
+        &env,
+    )
+    .await
+    .ok()?;
+    classify_repo_access(output.success(), output.stderr.trim())
+}
+
 /// The `head` filter value (`owner:branch`) for the GitHub pulls API, derived
 /// from an `owner/repo` string. `None` when `owner_repo` has no owner segment.
 pub fn pr_head_filter(owner_repo: &str, branch: &str) -> Option<String> {
@@ -365,6 +405,36 @@ mod tests {
     fn pr_head_filter_none_without_owner() {
         assert_eq!(pr_head_filter("noslash", "feat/x"), None);
         assert_eq!(pr_head_filter("/repo", "feat/x"), None);
+    }
+
+    #[test]
+    fn classify_repo_access_success_is_accessible() {
+        assert_eq!(classify_repo_access(true, ""), Some(true));
+    }
+
+    #[test]
+    fn classify_repo_access_404_403_is_denied() {
+        assert_eq!(
+            classify_repo_access(false, "gh: Not Found (HTTP 404)"),
+            Some(false)
+        );
+        assert_eq!(
+            classify_repo_access(false, "HTTP 403: forbidden"),
+            Some(false)
+        );
+        assert_eq!(
+            classify_repo_access(false, "Resource not accessible by integration"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn classify_repo_access_transient_is_indeterminate() {
+        assert_eq!(
+            classify_repo_access(false, "could not resolve host: api.github.com"),
+            None
+        );
+        assert_eq!(classify_repo_access(false, ""), None);
     }
 
     // ── github_token_app_then_pat: App-token-first, per-user PAT fallback ──────

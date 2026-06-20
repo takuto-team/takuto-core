@@ -248,6 +248,84 @@ pub async fn list_mine(
     Ok(Json(dtos))
 }
 
+#[derive(Serialize)]
+pub struct RepoAccessDto {
+    pub name: String,
+    pub accessible: bool,
+}
+
+/// `GET /api/repositories/access` — for each repo the caller has, whether the
+/// connected GitHub App (or their PAT) can still reach it **right now**. Called
+/// live by the repo sidebars and the dashboard so a revoked-then-restored repo
+/// reflects immediately; nothing is cached. Only a definitive 404/403 marks a
+/// repo inaccessible — transient errors, missing tokens, and non-GitHub repos
+/// stay `accessible: true` to avoid false alarms.
+pub async fn list_access(
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<RepoAccessDto>>, (StatusCode, String)> {
+    let db = require_db(&auth_state)?;
+    let rows = takuto_core::db::repositories::list_for_user(db.adapter(), &auth.user_id)
+        .await
+        .map_err(db_error)?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let accessible = repo_is_accessible(&engine, &auth_state, &auth.user_id, row).await;
+        out.push(RepoAccessDto {
+            name: row.name.clone(),
+            accessible,
+        });
+    }
+    Ok(Json(out))
+}
+
+/// `owner/repo` for a repository row — from its stored `repo_url`, else its
+/// `origin` remote. `None` when it isn't a resolvable GitHub repo.
+async fn owner_repo_for(row: &takuto_core::db::repositories::RepositoryRow) -> Option<String> {
+    if let Some(url) = row.repo_url.as_deref()
+        && let Some(owner_repo) = takuto_core::github::parse_github_repo(url)
+    {
+        return Some(owner_repo);
+    }
+    let remote = takuto_core::git::remote::resolve_remote_url(
+        std::path::Path::new(&row.local_path),
+        "origin",
+    )
+    .await
+    .ok()?;
+    takuto_core::github::parse_github_repo(&remote)
+}
+
+/// Whether the current App-then-PAT token can see `row`'s GitHub repo. Returns
+/// `true` for anything we can't definitively prove inaccessible (unresolvable
+/// owner/repo, no token, transient error) so the UI never false-flags.
+async fn repo_is_accessible(
+    engine: &EngineState,
+    auth_state: &AuthState,
+    user_id: &str,
+    row: &takuto_core::db::repositories::RepositoryRow,
+) -> bool {
+    let Some(owner_repo) = owner_repo_for(row).await else {
+        return true;
+    };
+    let repo_path = std::path::Path::new(&row.local_path);
+    let app_token = engine
+        .engine
+        .actions()
+        .get_gh_installation_token(repo_path)
+        .await;
+    let gh_token = takuto_core::github::github_token_app_then_pat(
+        app_token,
+        auth_state.git_auth_resolver.as_ref(),
+        Some(user_id),
+        takuto_core::github::auth_resolver::GitAction::Clone,
+    )
+    .await;
+    takuto_core::github::repo_accessible(&owner_repo, repo_path, gh_token.as_deref()).await
+        != Some(false)
+}
+
 /// `GET /api/repositories/_available` — registered repos the caller has not
 /// yet added. Same shape as `GET /api/repositories` minus `added_at`.
 pub async fn list_available(
@@ -738,5 +816,32 @@ mod tests {
         let big = format!("https://github.com/owner/{}", "a".repeat(MAX_URL_LEN + 10));
         let err = validate_repo_url(&big);
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_access_returns_empty_array_when_no_repos() {
+        use crate::server::build_router;
+        use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/api/repositories/access")
+                    .header("Cookie", &cookie)
+                    .header("Origin", TEST_ORIGIN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(String::from_utf8_lossy(&body), "[]");
     }
 }

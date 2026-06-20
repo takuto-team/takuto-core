@@ -29,6 +29,8 @@ import {
 } from "../api/client";
 import { useDiffForm } from "../hooks/useDiffForm";
 import { useMyRepositories } from "../hooks/useMyRepositories";
+import { useRepoAccess } from "../hooks/useRepoAccess";
+import { pickDefaultRepo } from "../utils/pickDefaultRepo";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { RepoSidebar, type RepoSidebarItem } from "./RepoSidebar";
 import { WorktreeCommandList } from "./WorktreeCommandList";
@@ -37,6 +39,7 @@ import { validateCommands } from "./WorktreeSettings/validateCommands";
 
 export function WorktreeSettingsTab() {
   const { myRepos, activeRepoName } = useMyRepositories();
+  const { access } = useRepoAccess();
   // Names of repos the caller has a worktree-commands row for (badge source).
   const [withCommands, setWithCommands] = useState<Set<string>>(new Set());
 
@@ -96,20 +99,27 @@ export function WorktreeSettingsTab() {
     [init, run],
   );
 
-  // Default selection: the active repo (else the first) once the list loads.
+  // Default selection: the active repo if accessible, else the first accessible
+  // (falling back to the first), once the list loads.
   const loadingRepos = myRepos === null;
   useEffect(() => {
     if (myRepos === null || selected !== null) return;
-    const def =
-      activeRepoName && myRepos.some((r) => r.name === activeRepoName)
-        ? activeRepoName
-        : (myRepos[0]?.name ?? null);
+    const def = pickDefaultRepo(
+      myRepos.map((r) => r.name),
+      activeRepoName,
+      access,
+    );
     if (def) loadWorkspace(def);
-  }, [myRepos, activeRepoName, selected, loadWorkspace]);
+  }, [myRepos, activeRepoName, access, selected, loadWorkspace]);
 
   const repos: RepoSidebarItem[] = useMemo(
-    () => (myRepos ?? []).map((r) => ({ name: r.name, hasCommands: withCommands.has(r.name) })),
-    [myRepos, withCommands],
+    () =>
+      (myRepos ?? []).map((r) => ({
+        name: r.name,
+        hasCommands: withCommands.has(r.name),
+        accessible: access[r.name] !== false,
+      })),
+    [myRepos, withCommands, access],
   );
 
   const validationError = useMemo(

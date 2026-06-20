@@ -36,6 +36,22 @@ export async function listAvailableRepositories(): Promise<RepositoryRow[]> {
   return apiJson<RepositoryRow[]>("/api/repositories/_available");
 }
 
+/** One repo's live GitHub-access status (from `GET /api/repositories/access`). */
+export interface RepoAccess {
+  name: string;
+  accessible: boolean;
+}
+
+/**
+ * GET /api/repositories/access — for each repo the caller has, whether the
+ * connected GitHub App / PAT can still reach it right now. Not cached server-
+ * side; call it live (sidebar open, dashboard load/switch) so a revoked-then-
+ * restored repo reflects immediately.
+ */
+export async function listRepoAccess(): Promise<RepoAccess[]> {
+  return apiJson<RepoAccess[]>("/api/repositories/access");
+}
+
 /**
  * GET /api/github/repos — list GitHub repositories the deployment's GitHub App
  * installation (or PAT, fallback) can see. Pass `q` for server-side filtering

@@ -29,6 +29,8 @@ import {
   type UserFlow,
 } from "../api/flows";
 import { useMyRepositories } from "../hooks/useMyRepositories";
+import { useRepoAccess } from "../hooks/useRepoAccess";
+import { pickDefaultRepo } from "../utils/pickDefaultRepo";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { GenerateReportSwitch } from "./GenerateReportSwitch";
 import { RepoSidebar, type RepoSidebarItem } from "./RepoSidebar";
@@ -41,6 +43,7 @@ type Expanded = number | "new" | null;
 
 export function FlowsTab() {
   const { myRepos, activeRepoName } = useMyRepositories();
+  const { access } = useRepoAccess();
   // The repo whose flows are shown. Workflows are per-repository; this drives
   // every read/write (`?workspace=`) and the report toggle.
   const [selected, setSelected] = useState<string | null>(null);
@@ -75,15 +78,17 @@ export function FlowsTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Default selection: the active repo (else the first) once the list loads.
+  // Default selection: the active repo if accessible, else the first accessible
+  // (falling back to the first), once the list loads.
   useEffect(() => {
     if (myRepos === null || selected !== null) return;
-    const def =
-      activeRepoName && myRepos.some((r) => r.name === activeRepoName)
-        ? activeRepoName
-        : (myRepos[0]?.name ?? null);
+    const def = pickDefaultRepo(
+      myRepos.map((r) => r.name),
+      activeRepoName,
+      access,
+    );
     if (def) setSelected(def);
-  }, [myRepos, activeRepoName, selected]);
+  }, [myRepos, activeRepoName, access, selected]);
 
   // Load the selected repo's flows whenever the selection changes.
   useEffect(() => {
@@ -203,7 +208,10 @@ export function FlowsTab() {
     : undefined;
 
   const loadingRepos = myRepos === null;
-  const repos: RepoSidebarItem[] = (myRepos ?? []).map((r) => ({ name: r.name }));
+  const repos: RepoSidebarItem[] = (myRepos ?? []).map((r) => ({
+    name: r.name,
+    accessible: access[r.name] !== false,
+  }));
 
   const addButton = (
     <button

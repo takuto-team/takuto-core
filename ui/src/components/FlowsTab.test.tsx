@@ -41,6 +41,16 @@ beforeEach(() => {
       const url = typeof input === "string" ? input : String(input);
       const method = (init.method ?? "GET").toUpperCase();
 
+      // Repo access check — both accessible.
+      if (url.startsWith("/api/repositories/access")) {
+        return new Response(
+          JSON.stringify([
+            { name: "ws", accessible: true },
+            { name: "other", accessible: true },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       // Repo list — two repos; the first ("ws") is the default selection.
       if (url.startsWith("/api/repositories")) {
         const repos = [

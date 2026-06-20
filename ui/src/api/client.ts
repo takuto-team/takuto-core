@@ -43,9 +43,11 @@ export {
 } from "./worktreeCommands";
 export {
   type RepositoryRow,
+  type RepoAccess,
   addRepository,
   listAvailableRepositories,
   listGitHubAccessibleRepos,
   listMyRepositories,
+  listRepoAccess,
   removeRepository,
 } from "./repositories";

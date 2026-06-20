@@ -345,6 +345,10 @@ pub fn build_router(state: AppState) -> Router {
             "/repositories/_available",
             get(routes::repositories::list_available),
         )
+        .route(
+            "/repositories/access",
+            get(routes::repositories::list_access),
+        )
         .route("/repositories/{id}", delete(routes::repositories::delete))
         .route(
             "/tickets/{key}/improve",
