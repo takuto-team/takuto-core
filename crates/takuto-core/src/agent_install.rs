@@ -329,20 +329,25 @@ test -f "$dest/index.js"
     }
 
     async fn acli_install(&self, target: &VersionTarget) -> Result<(), String> {
+        // Atlassian's apt repo only ships acli for amd64. On other arches
+        // (e.g. arm64) skip gracefully — matching the old image's `|| WARN` —
+        // so the overall install still reaches "ready" instead of erroring.
+        if std::env::consts::ARCH != "x86_64" {
+            tracing::warn!(
+                arch = std::env::consts::ARCH,
+                "acli is only distributed for amd64; skipping its install"
+            );
+            return Ok(());
+        }
         let bin_dir = self.bin_dir();
-        // Atlassian ships acli through an apt repo (amd64). Without root we fetch
-        // the matching `.deb` from the repo pool and extract the binary with
-        // `dpkg-deb -x`. `latest` picks the highest version in the index.
+        // Without root we fetch the matching `.deb` from the repo pool and
+        // extract the binary with `dpkg-deb -x`. `latest` = the index entry.
         let version_filter = match target {
             VersionTarget::Latest => String::new(),
             VersionTarget::Pinned(v) => v.clone(),
         };
         let script = format!(
             r#"set -euo pipefail
-arch="$(dpkg --print-architecture)"
-if [ "$arch" != "amd64" ]; then
-  echo "acli is only distributed for amd64 (got $arch)" >&2; exit 1
-fi
 base=https://acli.atlassian.com/linux/deb
 pkgs="$(curl -fsSL "$base/dists/stable/main/binary-amd64/Packages")"
 filter={filter}
