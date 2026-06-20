@@ -196,6 +196,37 @@ pub async fn start_editor(
         ));
     }
 
+    // Wait until openvscode-server is actually accepting connections before
+    // handing back the URL. `docker exec -d` returns the instant the process is
+    // spawned, but the IDE needs a moment to bind its port; without this wait
+    // the browser hits the session proxy first and gets "upstream unavailable".
+    // Probe `/dev/tcp` inside the container (same approach as the web terminal),
+    // which works regardless of DinD network topology. Best-effort: on timeout
+    // we still return the URL and let the browser retry.
+    for attempt in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let probe = tokio::process::Command::new("docker")
+            .args([
+                "exec",
+                &name,
+                "bash",
+                "-c",
+                &format!("echo > /dev/tcp/127.0.0.1/{vscode_port}"),
+            ])
+            .output()
+            .await;
+        if matches!(probe, Ok(ref o) if o.status.success()) {
+            break;
+        }
+        if attempt == 39 {
+            tracing::warn!(
+                container = %name,
+                vscode_port,
+                "openvscode-server not listening after wait budget — returning URL anyway (browser will retry)"
+            );
+        }
+    }
+
     let host_vscode_port = editor_host_port(vscode_port);
     let url = build_editor_url(host_vscode_port, &connection_token, &folder);
     info!(spare = ?spare_ports, "Editor launched in workspace container");
