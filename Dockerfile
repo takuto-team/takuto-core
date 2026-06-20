@@ -399,7 +399,7 @@ RUN set -eux \
         'export MISE_CONFIG_DIR=/home/takuto/.config/mise' \
         'export MISE_TRUST_ALL_CONFIGS=1' \
         'export MISE_YES=1' \
-        'export PATH="$MISE_DATA_DIR/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+        'export PATH="/opt/takuto-tools/bin:$MISE_DATA_DIR/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
         > /etc/profile.d/zz-takuto-mise.sh \
     && chmod 644 /etc/profile.d/zz-takuto-mise.sh \
     && echo '[ -f /etc/takuto/env ] && set -a && . /etc/takuto/env && set +a' \
