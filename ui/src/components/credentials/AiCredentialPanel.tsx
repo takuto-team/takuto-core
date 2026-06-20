@@ -40,6 +40,12 @@ interface AiCredentialPanelProps {
    * scoped to the panel's `activeProvider` — never another provider.
    */
   onDelete?: (kind: ProviderCredentialKind) => Promise<boolean>;
+  /**
+   * Reports `true` when the api-key / session field holds a typed-but-unsaved
+   * value, so the parent can warn before the user navigates away and loses it.
+   * Informational only — the credential still saves via its own Save button.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /**
@@ -64,7 +70,7 @@ export const AiCredentialPanel = forwardRef<
   AiCredentialPanelHandle,
   AiCredentialPanelProps
 >(function AiCredentialPanel(
-  { activeProvider, credentials, onSave, onDelete }: AiCredentialPanelProps,
+  { activeProvider, credentials, onSave, onDelete, onDirtyChange }: AiCredentialPanelProps,
   ref,
 ) {
   const [apiKey, setApiKey] = useState("");
@@ -76,6 +82,11 @@ export const AiCredentialPanel = forwardRef<
   // round-trip (#40 T-CLAUDE-UI-006). Cleared on each edit.
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [claudeTab, setClaudeTab] = useState<ClaudeAuthMethod>("api_key");
+
+  // Report a typed-but-unsaved value so the tab can warn before navigation.
+  useEffect(() => {
+    onDirtyChange?.(apiKey.trim() !== "" || sessionJson.trim() !== "");
+  }, [apiKey, sessionJson, onDirtyChange]);
 
   // Reset all input state whenever the active provider changes. Without this,
   // a value typed for provider A survives a switch to provider B and would be

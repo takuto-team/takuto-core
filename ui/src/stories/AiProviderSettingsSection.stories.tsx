@@ -68,8 +68,6 @@ function FormHarness({
           prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p],
         )
       }
-      onSave={fn()}
-      saving={false}
     />
   );
 }

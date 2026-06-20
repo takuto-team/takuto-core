@@ -12,11 +12,18 @@
  * floors; this UI only surfaces the values and the persist warning.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useState,
+} from "react";
 import { apiJson } from "../../api/http";
 import { putAgentConfig, AgentConfigError } from "../../api/agentConfig";
 import { useToast } from "../../hooks/useToast";
 import type { AgentConfig, AgentConfigPatch, ConfigResponse } from "../../api/types";
+import type { ConfigSectionHandle, ConfigSectionProps } from "./configSection";
 
 /** Editable form state. Numeric inputs are strings so they stay controlled. */
 interface GuardrailsDraft {
@@ -66,18 +73,25 @@ function patchFromDraft(draft: GuardrailsDraft): AgentConfigPatch {
   };
 }
 
-export function StepGuardrailsSection() {
+export const StepGuardrailsSection = forwardRef<
+  ConfigSectionHandle,
+  ConfigSectionProps
+>(function StepGuardrailsSection({ onDirtyChange }: ConfigSectionProps, ref) {
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<GuardrailsDraft>(EMPTY_DRAFT);
+  // Persisted snapshot for dirty detection.
+  const [loaded, setLoaded] = useState<GuardrailsDraft>(EMPTY_DRAFT);
 
   useEffect(() => {
     let cancelled = false;
     apiJson<ConfigResponse>("/api/config")
       .then((c) => {
-        if (!cancelled) setDraft(draftFromConfig((c.agent ?? {}) as AgentConfig));
+        if (cancelled) return;
+        const d = draftFromConfig((c.agent ?? {}) as AgentConfig);
+        setDraft(d);
+        setLoaded(d);
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -92,30 +106,40 @@ export function StepGuardrailsSection() {
 
   const update = (patch: Partial<GuardrailsDraft>) => setDraft((d) => ({ ...d, ...patch }));
 
-  const handleSave = useCallback(() => {
-    setSaving(true);
-    putAgentConfig(patchFromDraft(draft))
-      .then((updated) => {
-        setDraft(draftFromConfig((updated.agent ?? {}) as AgentConfig));
-        if (updated.persisted === false) {
-          const reason = updated.persist_warning ?? "unknown error";
-          showToast(
-            `Step guardrails applied in memory but NOT persisted to disk: ${reason}. The change will be lost on next restart — fix the config volume and save again.`,
-            "error",
-          );
-        } else {
-          showToast("Step guardrails saved.", "success");
-        }
-      })
-      .catch((e: unknown) => {
-        if (e instanceof AgentConfigError) {
-          showToast(`${e.message} (code: ${e.code})`, "error");
-        } else {
-          showToast(e instanceof Error ? e.message : String(e), "error");
-        }
-      })
-      .finally(() => setSaving(false));
-  }, [draft, showToast]);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(loaded);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  const save = useCallback(async (): Promise<boolean> => {
+    if (JSON.stringify(draft) === JSON.stringify(loaded)) return true;
+    try {
+      const updated = await putAgentConfig(patchFromDraft(draft));
+      const next = draftFromConfig((updated.agent ?? {}) as AgentConfig);
+      setDraft(next);
+      setLoaded(next);
+      if (updated.persisted === false) {
+        const reason = updated.persist_warning ?? "unknown error";
+        showToast(
+          `Step guardrails applied in memory but NOT persisted to disk: ${reason}. The change will be lost on next restart — fix the config volume and save again.`,
+          "error",
+        );
+      } else {
+        showToast("Step guardrails saved.", "success");
+      }
+      return true;
+    } catch (e: unknown) {
+      if (e instanceof AgentConfigError) {
+        showToast(`${e.message} (code: ${e.code})`, "error");
+      } else {
+        showToast(e instanceof Error ? e.message : String(e), "error");
+      }
+      return false;
+    }
+  }, [draft, loaded, showToast]);
+
+  useImperativeHandle(ref, () => ({ isDirty: () => dirty, save }), [dirty, save]);
 
   return (
     <section aria-labelledby="step-guardrails-title" className="flex flex-col gap-3">
@@ -190,19 +214,8 @@ export function StepGuardrailsSection() {
               and fail the step. <code className="text-gray-400">0</code> = off.
             </p>
           </section>
-
-          <div className="flex justify-end">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={handleSave}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {saving ? "Saving…" : "Save changes"}
-            </button>
-          </div>
         </div>
       )}
     </section>
   );
-}
+});

@@ -47,9 +47,12 @@ interface Props {
    *  in a sibling section, so the credential card reflects the new provider
    *  without a manual page reload. */
   refreshKey?: number;
+  /** Reports `true` when a credential field holds a typed-but-unsaved value, so
+   *  the AI Settings tab can warn before navigation. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export function MyCredentialsSection({ refreshKey = 0 }: Props = {}) {
+export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = {}) {
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -180,6 +183,7 @@ export function MyCredentialsSection({ refreshKey = 0 }: Props = {}) {
           <AiCredentialPanel
             activeProvider={activeProvider}
             credentials={creds}
+            onDirtyChange={onDirtyChange}
             onSave={async (body) => {
               try {
                 // Body is the discriminated request shape (`{ api_key }`

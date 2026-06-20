@@ -156,6 +156,9 @@ export interface UseAiProviderSettingsResult {
   loading: boolean;
   error: string;
   saving: boolean;
+  /** True when the draft / selected provider / available list differ from the
+   *  loaded config — i.e. there are unsaved edits. */
+  isDirty: boolean;
   selectedProvider: AgentProviderId;
   draft: ProviderDraft;
   availableProviders: AgentProviderId[];
@@ -164,8 +167,19 @@ export interface UseAiProviderSettingsResult {
   setDraft: (draft: ProviderDraft) => void;
   toggleAvailable: (p: AgentProviderId) => void;
   requestSave: () => void;
+  /** Awaitable save used by the consolidated tab Save button. Resolves `true`
+   *  on a successful persist, `false` on error or when the user cancels the
+   *  provider-switch confirm. */
+  saveAsync: () => Promise<boolean>;
   confirmSwitch: () => void;
   cancelSwitch: () => void;
+}
+
+/** Order-insensitive equality for the available-providers list. */
+function sameProviderSet(a: AgentProviderId[], b: AgentProviderId[]): boolean {
+  if (a.length !== b.length) return false;
+  const sb = new Set(b);
+  return a.every((x) => sb.has(x));
 }
 
 export function useAiProviderSettings(
@@ -188,7 +202,10 @@ export function useAiProviderSettings(
 
   // Seed the controlled form from the loaded config exactly once — later
   // config updates (e.g. after a save) must not clobber an in-progress edit.
+  // `initialized` gates dirty detection so the empty initial form state isn't
+  // mistaken for unsaved edits before the seed runs.
   const initializedRef = useRef(false);
+  const [initialized, setInitialized] = useState(false);
   useEffect(() => {
     if (initializedRef.current || !config) return;
     initializedRef.current = true;
@@ -201,12 +218,35 @@ export function useAiProviderSettings(
         ? (agent.available_providers as AgentProviderId[])
         : V1_PROVIDERS,
     );
+    setInitialized(true);
   }, [config]);
 
   const savedProvider = useMemo<AgentProviderId>(
     () => (config?.agent?.provider as AgentProviderId) ?? "claude",
     [config],
   );
+
+  // Unsaved-edits detection: the selected provider, its draft sub-table, or the
+  // available-providers whitelist differs from the loaded config. Computed
+  // against the persisted config so a save (which updates the query cache)
+  // flips this back to false.
+  const isDirty = useMemo<boolean>(() => {
+    if (!config || !initialized) return false;
+    const agent = (config.agent ?? {}) as AgentConfig;
+    if (selectedProvider !== savedProvider) return true;
+    const savedAvailable =
+      Array.isArray(agent.available_providers) && agent.available_providers.length > 0
+        ? (agent.available_providers as AgentProviderId[])
+        : V1_PROVIDERS;
+    if (!sameProviderSet(availableProviders, savedAvailable)) return true;
+    const savedDraft = draftFromConfig(selectedProvider, agent);
+    return JSON.stringify(draft) !== JSON.stringify(savedDraft);
+  }, [config, initialized, selectedProvider, savedProvider, availableProviders, draft]);
+
+  // Resolver for the awaitable save path when a provider switch needs the
+  // confirm modal: `saveAsync` returns a promise that settles when the user
+  // confirms (→ persist result) or cancels (→ false).
+  const switchResolverRef = useRef<((ok: boolean) => void) | null>(null);
 
   const mutation = useMutation({
     mutationFn: (patch: AgentConfigPatch) => putAgentConfig(patch),
@@ -216,7 +256,7 @@ export function useAiProviderSettings(
   });
 
   const persist = useCallback(
-    async (patch: AgentConfigPatch) => {
+    async (patch: AgentConfigPatch): Promise<boolean> => {
       try {
         const updated = await mutation.mutateAsync(patch);
         onProviderSaved?.();
@@ -232,12 +272,14 @@ export function useAiProviderSettings(
         } else {
           showToast("AI provider settings saved.", "success");
         }
+        return true;
       } catch (e: unknown) {
         if (e instanceof AgentConfigError) {
           showToast(`${e.message} (code: ${e.code})`, "error");
         } else {
           showToast(e instanceof Error ? e.message : String(e), "error");
         }
+        return false;
       }
     },
     [mutation, showToast, onProviderSaved],
@@ -272,17 +314,49 @@ export function useAiProviderSettings(
     void persist(buildPatch());
   }, [selectedProvider, savedProvider, persist, buildPatch]);
 
+  // Awaitable save for the consolidated tab Save button. When the provider
+  // changed, opens the switch-confirm and resolves once the user confirms
+  // (persist result) or cancels (false); otherwise persists directly.
+  const saveAsync = useCallback((): Promise<boolean> => {
+    if (!isDirty) return Promise.resolve(true);
+    // OpenCode requires a base_url + model (validator returns 400 otherwise).
+    // Guard here so the consolidated Save surfaces the requirement without a
+    // server bounce; ProviderForm shows the inline message.
+    if (
+      selectedProvider === "opencode" &&
+      (draft.base_url.trim() === "" || draft.model.trim() === "")
+    ) {
+      showToast("OpenCode requires both a Base URL and a Model to save.", "error");
+      return Promise.resolve(false);
+    }
+    if (selectedProvider !== savedProvider) {
+      setPendingProviderSwitch({ from: savedProvider, to: selectedProvider });
+      return new Promise<boolean>((resolve) => {
+        switchResolverRef.current = resolve;
+      });
+    }
+    return persist(buildPatch());
+  }, [isDirty, selectedProvider, savedProvider, draft, persist, buildPatch, showToast]);
+
   const confirmSwitch = useCallback(() => {
     setPendingProviderSwitch(null);
-    void persist(buildPatch());
+    const resolve = switchResolverRef.current;
+    switchResolverRef.current = null;
+    void persist(buildPatch()).then((ok) => resolve?.(ok));
   }, [persist, buildPatch]);
 
-  const cancelSwitch = useCallback(() => setPendingProviderSwitch(null), []);
+  const cancelSwitch = useCallback(() => {
+    setPendingProviderSwitch(null);
+    const resolve = switchResolverRef.current;
+    switchResolverRef.current = null;
+    resolve?.(false);
+  }, []);
 
   return {
     loading: query.isPending,
     error: query.isError ? (query.error instanceof Error ? query.error.message : String(query.error)) : "",
     saving: mutation.isPending,
+    isDirty,
     selectedProvider,
     draft,
     availableProviders,
@@ -291,6 +365,7 @@ export function useAiProviderSettings(
     setDraft,
     toggleAvailable,
     requestSave,
+    saveAsync,
     confirmSwitch,
     cancelSwitch,
   };

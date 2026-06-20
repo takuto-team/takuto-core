@@ -1,9 +1,11 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useState, useEffect, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { apiJson, api } from "../api/client";
+import { UnsavedChangesModal } from "../components/UnsavedChangesModal";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { surfaceError } from "../utils/surfaceError";
 import type { User } from "../api/types";
 import { UsersTab } from "../components/UsersTab";
@@ -184,6 +186,25 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
     return tabs[0];
   })();
   const [tab, setTab] = useState<Tab>(initialTab);
+  const navigate = useNavigate();
+
+  // Unsaved-changes guard, scoped to the AI Settings tab for now. The tab
+  // reports its combined dirty state and registers a "save all" fn.
+  const [aiDirty, setAiDirty] = useState(false);
+  const aiSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
+  // The action to run once the user resolves the unsaved-changes modal (switch
+  // tab / go to dashboard / log out). Null when the modal is closed.
+  const [pendingLeave, setPendingLeave] = useState<{ run: () => void } | null>(null);
+
+  const guardActive = tab === "AI Settings" && aiDirty;
+  useUnsavedChangesGuard(guardActive);
+
+  // Route an intended departure through the modal when the guard is active.
+  // Plain function (no useCallback) so the React Compiler can memoize it.
+  const requestLeave = (run: () => void) => {
+    if (guardActive) setPendingLeave({ run });
+    else run();
+  };
 
   return (
     <div className="min-h-screen">
@@ -192,6 +213,12 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
           <div className="flex items-center justify-between h-14">
             <Link
               to="/"
+              onClick={(e) => {
+                if (guardActive) {
+                  e.preventDefault();
+                  requestLeave(() => navigate("/"));
+                }
+              }}
               className="flex items-center gap-2 text-gray-400 hover:text-gray-200 transition-colors text-sm"
             >
               &larr; Dashboard
@@ -199,7 +226,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
             <span className="text-lg font-bold text-white">Settings</span>
             {authEnabled && (
               <button
-                onClick={onLogout}
+                onClick={() => requestLeave(onLogout)}
                 className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer"
               >
                 Log out
@@ -215,7 +242,7 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
           {tabs.map((t) => (
             <button
               key={t}
-              onClick={() => setTab(t)}
+              onClick={() => requestLeave(() => setTab(t))}
               className={`py-3 text-sm font-medium border-b-2 cursor-pointer transition-colors ${
                 tab === t
                   ? "border-blue-500 text-blue-400"
@@ -230,7 +257,15 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
 
       <main className="w-full px-4 sm:px-6 lg:px-8 py-8">
         {tab === "Security" && <SecurityTabConnected />}
-        {tab === "AI Settings" && <AiSettingsTab isAdmin={!!isAdmin} />}
+        {tab === "AI Settings" && (
+          <AiSettingsTab
+            isAdmin={!!isAdmin}
+            onDirtyChange={setAiDirty}
+            registerSave={(fn) => {
+              aiSaveRef.current = fn;
+            }}
+          />
+        )}
         {tab === "GitHub" && <GitHubCredentialsSection />}
         {tab === "Ticketing" && <TicketingTab isAdmin={isAdmin} />}
         {tab === "Users" && <UsersTabConnected />}
@@ -238,6 +273,19 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
         {tab === "Repository Settings" && <WorktreeSettingsTab />}
         {tab === "Workflows" && <FlowsTab />}
       </main>
+
+      {pendingLeave && (
+        <UnsavedChangesModal
+          onSave={() => aiSaveRef.current()}
+          onProceed={() => {
+            const { run } = pendingLeave;
+            setPendingLeave(null);
+            setAiDirty(false);
+            run();
+          }}
+          onCancel={() => setPendingLeave(null)}
+        />
+      )}
     </div>
   );
 }

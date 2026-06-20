@@ -63,8 +63,6 @@ interface ProviderFormProps {
   onDraftChange: (d: ProviderDraft) => void;
   availableProviders: AgentProviderId[];
   onToggleAvailable: (p: AgentProviderId) => void;
-  onSave: () => void;
-  saving: boolean;
 }
 
 export function ProviderForm({
@@ -74,8 +72,6 @@ export function ProviderForm({
   onDraftChange,
   availableProviders,
   onToggleAvailable,
-  onSave,
-  saving,
 }: ProviderFormProps) {
   const cursorBaseUrlDisabled = selectedProvider === "cursor";
 
@@ -88,7 +84,6 @@ export function ProviderForm({
     selectedProvider === "opencode" && draft.base_url.trim() === "";
   const opencodeMissingModel =
     selectedProvider === "opencode" && draft.model.trim() === "";
-  const saveDisabled = saving || opencodeMissingBaseUrl || opencodeMissingModel;
 
   // Tiny helper to avoid spreading the same `onDraftChange({ ...draft, k })`
   // boilerplate at every <input>.
@@ -363,22 +358,11 @@ export function ProviderForm({
         </div>
       </section>
 
-      {/* Save */}
-      <div className="flex flex-col items-end gap-2">
-        {(opencodeMissingBaseUrl || opencodeMissingModel) && (
-          <p className="text-xs text-red-400">
-            OpenCode requires both a Base URL and a Model to save.
-          </p>
-        )}
-        <button
-          type="button"
-          disabled={saveDisabled}
-          onClick={onSave}
-          className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-        >
-          {saving ? "Saving…" : "Save changes"}
-        </button>
-      </div>
+      {(opencodeMissingBaseUrl || opencodeMissingModel) && (
+        <p className="text-xs text-red-400 text-right">
+          OpenCode requires both a Base URL and a Model to save.
+        </p>
+      )}
     </div>
   );
 }

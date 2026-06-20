@@ -14,24 +14,27 @@
  * for the previous provider as `inactive=1`.
  */
 
+import { forwardRef, useEffect, useImperativeHandle } from "react";
 import { useAiProviderSettings } from "../../hooks/useAiProviderSettings";
 import { PROVIDER_LABEL, ProviderForm } from "./ProviderForm";
 import { ProviderSwitchConfirm } from "./ProviderSwitchConfirm";
+import type { ConfigSectionHandle, ConfigSectionProps } from "./configSection";
 
 export { ProviderSwitchConfirm };
 export { PROVIDER_LABEL };
 
-interface Props {
+interface Props extends ConfigSectionProps {
   /** Called after a successful save so sibling sections (e.g. the per-user
    *  credentials card) can refetch and reflect the newly-selected provider. */
   onProviderSaved?: () => void;
 }
 
-export function AiProviderSettingsSection({ onProviderSaved }: Props = {}) {
+export const AiProviderSettingsSection = forwardRef<ConfigSectionHandle, Props>(
+  function AiProviderSettingsSection({ onProviderSaved, onDirtyChange }: Props, ref) {
   const {
     loading,
     error,
-    saving,
+    isDirty,
     selectedProvider,
     draft,
     availableProviders,
@@ -39,10 +42,19 @@ export function AiProviderSettingsSection({ onProviderSaved }: Props = {}) {
     selectProvider,
     setDraft,
     toggleAvailable,
-    requestSave,
+    saveAsync,
     confirmSwitch,
     cancelSwitch,
   } = useAiProviderSettings({ onProviderSaved });
+
+  useImperativeHandle(ref, () => ({ isDirty: () => isDirty, save: saveAsync }), [
+    isDirty,
+    saveAsync,
+  ]);
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   return (
     <section aria-labelledby="ai-provider-section-title" className="flex flex-col gap-3">
@@ -64,8 +76,6 @@ export function AiProviderSettingsSection({ onProviderSaved }: Props = {}) {
           onDraftChange={setDraft}
           availableProviders={availableProviders}
           onToggleAvailable={toggleAvailable}
-          onSave={requestSave}
-          saving={saving}
         />
       )}
 
@@ -79,4 +89,4 @@ export function AiProviderSettingsSection({ onProviderSaved }: Props = {}) {
       )}
     </section>
   );
-}
+});

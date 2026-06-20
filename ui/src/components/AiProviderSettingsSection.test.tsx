@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { createRef } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   render,
@@ -10,6 +11,7 @@ import {
   cleanup,
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import type { ConfigSectionHandle } from "./admin/configSection";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   AiProviderSettingsSection,
@@ -111,20 +113,35 @@ describe("ProviderSwitchConfirm", () => {
 // inspectable.
 // ---------------------------------------------------------------------------
 
+/**
+ * The section no longer renders its own Save button — the AI Settings tab owns
+ * a single Save that calls the section's imperative `save()` handle. The
+ * harness reproduces that: a ref + a "Save changes" button wired to it.
+ */
 function renderAdminPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
-  return render(
+  const ref = createRef<ConfigSectionHandle>();
+  render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <MemoryRouter>
-          <AiProviderSettingsSection />
+          <AiProviderSettingsSection ref={ref} />
+          <button type="button" onClick={() => void ref.current?.save()}>
+            Save changes
+          </button>
           <ToastContainer />
         </MemoryRouter>
       </ToastProvider>
     </QueryClientProvider>,
   );
+}
+
+/** Edit the model field so the section is dirty and `save()` actually PUTs. */
+function makeDirty() {
+  const input = document.getElementById("model-input") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "some-model" } });
 }
 
 /**
@@ -190,10 +207,11 @@ describe("AiProviderSettingsSection — persist_warning surfacing (#35)", () => 
     renderAdminPage();
 
     // Wait for initial /api/config GET to settle and the form to mount.
-    const saveBtn = await waitFor(() =>
-      screen.getByRole("button", { name: /^save changes$/i }),
+    await waitFor(() =>
+      expect(document.getElementById("model-input")).toBeTruthy(),
     );
-    fireEvent.click(saveBtn);
+    makeDirty();
+    fireEvent.click(screen.getByRole("button", { name: /^save changes$/i }));
 
     // The page should surface the persist warning verbatim AND warn the
     // admin that the change will be lost at restart.
@@ -222,10 +240,11 @@ describe("AiProviderSettingsSection — persist_warning surfacing (#35)", () => 
     });
     renderAdminPage();
 
-    const saveBtn = await waitFor(() =>
-      screen.getByRole("button", { name: /^save changes$/i }),
+    await waitFor(() =>
+      expect(document.getElementById("model-input")).toBeTruthy(),
     );
-    fireEvent.click(saveBtn);
+    makeDirty();
+    fireEvent.click(screen.getByRole("button", { name: /^save changes$/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/AI provider settings saved\./i)).toBeTruthy();
@@ -242,10 +261,11 @@ describe("AiProviderSettingsSection — persist_warning surfacing (#35)", () => 
     stubConfigFetch(baseConfig());
     renderAdminPage();
 
-    const saveBtn = await waitFor(() =>
-      screen.getByRole("button", { name: /^save changes$/i }),
+    await waitFor(() =>
+      expect(document.getElementById("model-input")).toBeTruthy(),
     );
-    fireEvent.click(saveBtn);
+    makeDirty();
+    fireEvent.click(screen.getByRole("button", { name: /^save changes$/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/AI provider settings saved\./i)).toBeTruthy();
@@ -260,10 +280,11 @@ describe("AiProviderSettingsSection — persist_warning surfacing (#35)", () => 
     });
     renderAdminPage();
 
-    const saveBtn = await waitFor(() =>
-      screen.getByRole("button", { name: /^save changes$/i }),
+    await waitFor(() =>
+      expect(document.getElementById("model-input")).toBeTruthy(),
     );
-    fireEvent.click(saveBtn);
+    makeDirty();
+    fireEvent.click(screen.getByRole("button", { name: /^save changes$/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/unknown error/i)).toBeTruthy();
