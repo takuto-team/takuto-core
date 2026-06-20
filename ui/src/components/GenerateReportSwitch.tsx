@@ -93,8 +93,12 @@ export function GenerateReportSwitch({ workspace }: Props) {
 
   return (
     <div>
-      <GenerateReportToggle value={enabled} onChange={onChange} disabled={loading || saving} />
-      {saved && <p className="text-sm text-green-400 mt-1">Saved</p>}
+      <GenerateReportToggle
+        value={enabled}
+        onChange={onChange}
+        disabled={loading || saving}
+        saved={saved}
+      />
       {error && <p className="text-sm text-red-400 mt-1">Could not save: {error}</p>}
     </div>
   );
