@@ -20,7 +20,6 @@ import { SummaryStats } from "../components/SummaryStats";
 import { workflowMatchesStatus, type StatusFilterKey } from "../components/statusFilter";
 import { WorkflowGrid } from "../components/WorkflowGrid";
 import { DashboardModals } from "../components/DashboardModals";
-import { ConfirmModal } from "../components/modals/ConfirmModal";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { SystemErrorAlert } from "../components/SystemErrorAlert";
 import { handleProviderChangedEvent } from "../utils/providerChanged";
@@ -47,13 +46,6 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     useWorkflowDefinitions();
   const { myRepos, hasAnyRepo, activeRepoName, setActiveRepoName } = useMyRepositories();
   const modals = useDashboardModals(config);
-
-  // Advisory "a PR already exists on GitHub" confirm: holds the original add
-  // payload + the PR URL so "Add anyway" can retry with the ack flag.
-  const [prWarning, setPrWarning] = useState<{
-    payload: Record<string, unknown>;
-    prUrl: string;
-  } | null>(null);
 
   // Clicking a summary-counter card filters the grid to that status; clicking
   // the active card again clears the filter.
@@ -113,22 +105,17 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
     [modals]
   );
 
-  // POST the add request, handling the advisory existing-PR 409 by surfacing a
-  // confirm (instead of a toast); the confirm retries with the ack flag set.
-  const submitStartManual = useCallback(
-    async (payload: Record<string, unknown>) => {
+  const handleAddToDashboard = useCallback(
+    async (description: string, summary: string, repositoryId: string) => {
+      if (modals.modal.kind !== "detail") return;
+      if (!repositoryId) { showToast("Pick a repository before adding a work item."); return; }
+      const ticket = modals.modal.ticket;
       try {
-        const res = await apiPost("/api/work-items/start-manual", payload);
-        if (res.status === 409) {
-          const text = await res.text();
-          let parsed: { kind?: string; pr_url?: string; error?: string } = {};
-          try { parsed = JSON.parse(text); } catch { /* plain-text 409 */ }
-          if (parsed.kind === "existing_pr" && parsed.pr_url) {
-            setPrWarning({ payload, prUrl: parsed.pr_url });
-            return;
-          }
-          throw new Error(parsed.error || text || `HTTP ${res.status}`);
-        }
+        const res = await apiPost("/api/work-items/start-manual", {
+          ticket_key: ticket.key, ticket_summary: summary, ticket_description: description,
+          repository_id: repositoryId,
+          ...(ticket.url ? { issue_url: ticket.url } : {}),
+        });
         if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
         modals.close();
         fetchWorkflows();
@@ -137,26 +124,21 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
       }
     }, [modals, fetchWorkflows, showToast]);
 
-  const handleAddToDashboard = useCallback(
-    async (description: string, summary: string, repositoryId: string) => {
-      if (modals.modal.kind !== "detail") return;
-      if (!repositoryId) { showToast("Pick a repository before adding a work item."); return; }
-      const ticket = modals.modal.ticket;
-      await submitStartManual({
-        ticket_key: ticket.key, ticket_summary: summary, ticket_description: description,
-        repository_id: repositoryId,
-        ...(ticket.url ? { issue_url: ticket.url } : {}),
-      });
-    }, [modals, submitStartManual, showToast]);
-
   const handlePasteSubmit = useCallback(
     async (name: string, description: string, repositoryId: string) => {
       if (!repositoryId) { showToast("Pick a repository before adding a work item."); return; }
-      await submitStartManual({
-        ticket_key: name, ticket_summary: name || "Manual item",
-        ticket_description: description, repository_id: repositoryId,
-      });
-    }, [submitStartManual, showToast]);
+      try {
+        const res = await apiPost("/api/work-items/start-manual", {
+          ticket_key: name, ticket_summary: name || "Manual item",
+          ticket_description: description, repository_id: repositoryId,
+        });
+        if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+        modals.close();
+        fetchWorkflows();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Failed to add work item");
+      }
+    }, [modals, fetchWorkflows, showToast]);
 
   const handleShowDescription = useCallback((key: string, summary: string, description?: string) => {
     // For Jira, don't pass cached description — the modal fetches fresh from the preview API.
@@ -237,19 +219,6 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         onPasteSubmit={handlePasteSubmit}
         onSaved={fetchWorkflows}
       />
-      {prWarning && (
-        <ConfirmModal
-          title="A pull request already exists"
-          message={`A pull request already exists on GitHub for this item: ${prWarning.prUrl}. Add it to the dashboard anyway?`}
-          confirmLabel="Add anyway"
-          onConfirm={() => {
-            const { payload } = prWarning;
-            setPrWarning(null);
-            submitStartManual({ ...payload, acknowledge_existing_pr: true });
-          }}
-          onCancel={() => setPrWarning(null)}
-        />
-      )}
       <footer className="py-3 text-center">
         <span className="text-xs text-gray-600">Takuto v{__APP_VERSION__}</span>
       </footer>

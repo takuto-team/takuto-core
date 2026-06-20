@@ -30,54 +30,6 @@ pub struct StartManualWorkflowBody {
     /// when the caller has none).
     #[serde(default)]
     pub repository_id: Option<String>,
-    /// Set by the UI's "Add anyway" retry to skip the GitHub existing-PR check
-    /// (which is advisory — a found PR returns a `409 {kind: "existing_pr"}`).
-    #[serde(default)]
-    pub acknowledge_existing_pr: bool,
-}
-
-/// Best-effort: return the URL of a PR that already exists on GitHub for
-/// `ticket_key` (its canonical `feat/`/`fix/` branch), or `None`. Any failure —
-/// no remote, unparseable owner/repo, no token, or a `gh` error — yields `None`
-/// so the check never blocks an add; it only ever *warns*.
-async fn existing_github_pr_url(
-    engine: &EngineState,
-    auth_state: &AuthState,
-    user_id: &str,
-    repo_path: &std::path::Path,
-    ticket_key: &str,
-) -> Option<String> {
-    let remote_url = takuto_core::git::remote::resolve_remote_url(repo_path, "origin")
-        .await
-        .ok()?;
-    let owner_repo = takuto_core::github::parse_github_repo(&remote_url)?;
-    let app_token = engine
-        .engine
-        .actions()
-        .get_gh_installation_token(repo_path)
-        .await;
-    let gh_token = takuto_core::github::github_token_app_then_pat(
-        app_token,
-        auth_state.git_auth_resolver.as_ref(),
-        Some(user_id),
-        takuto_core::github::auth_resolver::GitAction::Clone,
-    )
-    .await;
-    // Item type isn't known at add-time; check both branch-prefix conventions.
-    for item_type in ["Task", "Bug"] {
-        let branch = takuto_core::git::worktree::branch_name_for_ticket(ticket_key, item_type);
-        if let Ok(Some(url)) = takuto_core::github::find_pr_url_for_branch(
-            &owner_repo,
-            repo_path,
-            &branch,
-            gh_token.as_deref(),
-        )
-        .await
-        {
-            return Some(url);
-        }
-    }
-    None
 }
 
 #[derive(Serialize)]
@@ -269,33 +221,6 @@ pub async fn start_manual_workflow(
                     )
                 })?,
         };
-
-        // Advisory GitHub check: warn (don't block) when a PR already exists for
-        // this ticket on GitHub but isn't known to Takuto's DB/in-memory state.
-        // The UI surfaces the 409 as an "Add anyway" confirm, which retries with
-        // `acknowledge_existing_pr = true`.
-        if !body.acknowledge_existing_pr
-            && let Some(row) = user_repos.iter().find(|r| r.id == chosen_id)
-            && let Some(pr_url) = existing_github_pr_url(
-                &engine,
-                &auth_state,
-                &auth.user_id,
-                std::path::Path::new(&row.local_path),
-                &ticket_key,
-            )
-            .await
-        {
-            return Err((
-                StatusCode::CONFLICT,
-                serde_json::json!({
-                    "error": format!("A pull request already exists for {ticket_key}"),
-                    "kind": "existing_pr",
-                    "pr_url": pr_url,
-                })
-                .to_string(),
-            ));
-        }
-
         Some(chosen_id)
     } else {
         // No DB attached (legacy test paths). Fall through with None — the
@@ -520,24 +445,5 @@ mod tests {
             StatusCode::BAD_REQUEST,
             "Done re-add must clear the duplicate guard (then 400 for no repo)"
         );
-    }
-
-    #[tokio::test]
-    async fn manual_start_accepts_acknowledge_existing_pr_field() {
-        // The "Add anyway" retry sends `acknowledge_existing_pr: true`; it must
-        // deserialize and the flow proceed normally (here: 400 for no repo).
-        let state = test_state_with_db();
-        let cookie = register_and_login(&state).await;
-        let app = build_router(state);
-        let req = Request::post("/api/workflows/start-manual")
-            .header("Content-Type", "application/json")
-            .header("Origin", TEST_ORIGIN)
-            .header("Cookie", &cookie)
-            .body(Body::from(
-                r#"{"ticket_key":"ACK-1","ticket_summary":"x","acknowledge_existing_pr":true}"#,
-            ))
-            .unwrap();
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

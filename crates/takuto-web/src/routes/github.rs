@@ -169,6 +169,128 @@ pub async fn list_github_issues(
     Ok(Json(rows))
 }
 
+#[derive(Deserialize)]
+pub struct ExistingPrQuery {
+    pub repository: Option<String>,
+    pub ticket_key: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ExistingPrResponse {
+    /// URL of a PR already open on GitHub for the ticket's canonical branch, or
+    /// `null` when none is found (or the check could not run).
+    pub pr_url: Option<String>,
+}
+
+/// `GET /api/github/existing-pr?repository=<name>&ticket_key=<key>` — best-effort
+/// check, called by the add picker when a candidate row is clicked (alongside the
+/// local DB/in-memory check), for a PR that already exists on GitHub for the
+/// ticket's canonical `feat/<key>` / `fix/<key>` branch. Returns the PR URL or
+/// `null`. Resolution / token / `gh` failures yield `null` (never an error to the
+/// picker), so a failed check just means "no warning".
+pub async fn existing_pr_for_ticket(
+    State(engine): State<EngineState>,
+    State(auth_state): State<AuthState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+    Query(query): Query<ExistingPrQuery>,
+) -> Result<Json<ExistingPrResponse>, (StatusCode, String)> {
+    let repository = query
+        .repository
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "missing `repository` query param".to_string(),
+        ))?;
+    let ticket_key = query
+        .ticket_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "missing `ticket_key` query param".to_string(),
+        ))?;
+
+    let Some(db) = auth_state.db.clone() else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable".into(),
+        ));
+    };
+    let adapter = db.adapter();
+    let has = takuto_core::db::repositories::user_has(adapter, &auth.user_id, repository)
+        .await
+        .unwrap_or(false);
+    let row_opt = if has {
+        takuto_core::db::repositories::get_by_name(adapter, repository)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    } else {
+        None
+    };
+    let Some(row) = row_opt else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!("repository `{repository}` is not on your dashboard"),
+        ));
+    };
+
+    let pr_url = ticket_existing_pr_url(
+        &engine,
+        &auth_state,
+        &auth.user_id,
+        std::path::Path::new(&row.local_path),
+        ticket_key,
+    )
+    .await;
+    Ok(Json(ExistingPrResponse { pr_url }))
+}
+
+/// Best-effort: the URL of a PR already on GitHub for `ticket_key`'s canonical
+/// `feat/`/`fix/` branch, or `None`. Any failure — no remote, unparseable
+/// owner/repo, no token, or a `gh` error — yields `None` (advisory only).
+async fn ticket_existing_pr_url(
+    engine: &EngineState,
+    auth_state: &AuthState,
+    user_id: &str,
+    repo_path: &std::path::Path,
+    ticket_key: &str,
+) -> Option<String> {
+    let remote_url = takuto_core::git::remote::resolve_remote_url(repo_path, "origin")
+        .await
+        .ok()?;
+    let owner_repo = takuto_core::github::parse_github_repo(&remote_url)?;
+    let app_token = engine
+        .engine
+        .actions()
+        .get_gh_installation_token(repo_path)
+        .await;
+    let gh_token = takuto_core::github::github_token_app_then_pat(
+        app_token,
+        auth_state.git_auth_resolver.as_ref(),
+        Some(user_id),
+        takuto_core::github::auth_resolver::GitAction::Clone,
+    )
+    .await;
+    // Item type isn't known at pick-time; check both branch-prefix conventions.
+    for item_type in ["Task", "Bug"] {
+        let branch = takuto_core::git::worktree::branch_name_for_ticket(ticket_key, item_type);
+        if let Ok(Some(url)) = takuto_core::github::find_pr_url_for_branch(
+            &owner_repo,
+            repo_path,
+            &branch,
+            gh_token.as_deref(),
+        )
+        .await
+        {
+            return Some(url);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use axum::body::Body;
@@ -209,6 +331,46 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::get("/api/github/issues?repository=not-mine")
+                    .header("Cookie", &cookie)
+                    .header("Origin", TEST_ORIGIN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn existing_pr_400_when_ticket_key_missing() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/api/github/existing-pr?repository=repo")
+                    .header("Cookie", &cookie)
+                    .header("Origin", TEST_ORIGIN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("ticket_key"));
+    }
+
+    #[tokio::test]
+    async fn existing_pr_403_when_repository_not_associated() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/api/github/existing-pr?repository=not-mine&ticket_key=GH-1")
                     .header("Cookie", &cookie)
                     .header("Origin", TEST_ORIGIN)
                     .body(Body::empty())

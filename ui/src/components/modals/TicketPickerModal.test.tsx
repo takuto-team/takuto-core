@@ -9,9 +9,16 @@
  */
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { TicketPickerModal } from "./TicketPickerModal";
 import type { GitHubIssue } from "../../api/types";
+
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 const ISSUES: GitHubIssue[] = [
   { key: "GH-1", summary: "Plain issue", body: "b1", url: "https://x/1", already_added: false },
@@ -41,10 +48,13 @@ function renderPicker(onSelect = vi.fn(), onClose = vi.fn()) {
 }
 
 beforeEach(() => {
-  fetchMock = vi.fn(async () => new Response(JSON.stringify(ISSUES), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  }));
+  // URL-aware: the issue list returns ISSUES; the per-ticket GitHub PR check
+  // defaults to "no PR found" (individual tests override it).
+  fetchMock = vi.fn(async (input: string) => {
+    const url = typeof input === "string" ? input : String(input);
+    if (url.startsWith("/api/github/existing-pr")) return json({ pr_url: null });
+    return json(ISSUES);
+  });
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -62,11 +72,31 @@ describe("TicketPickerModal", () => {
     expect(screen.queryByRole("button", { name: /On the board/i })).toBeNull();
   });
 
-  it("adds a plain item immediately (no confirmation)", async () => {
+  it("adds an item with no PR (local or GitHub) after the on-click check", async () => {
     const { onSelect } = renderPicker();
     fireEvent.click(await screen.findByText("Plain issue"));
-    expect(onSelect).toHaveBeenCalledWith("GH-1", "Plain issue", "b1", "https://x/1");
+    // The GitHub check runs on click; once it returns "no PR" the item is added.
+    await waitFor(() =>
+      expect(onSelect).toHaveBeenCalledWith("GH-1", "Plain issue", "b1", "https://x/1"),
+    );
     expect(screen.queryByText(/already has/i)).toBeNull();
+  });
+
+  it("prompts when the on-click GitHub check finds a PR (no local PR)", async () => {
+    // No local existing_pr_url on GH-1, but GitHub reports an open PR.
+    fetchMock.mockImplementation(async (input: string) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url.startsWith("/api/github/existing-pr")) {
+        return json({ pr_url: "https://github.com/o/r/pull/77" });
+      }
+      return json(ISSUES);
+    });
+    const { onSelect } = renderPicker();
+    fireEvent.click(await screen.findByText("Plain issue"));
+    expect(await screen.findByText(/GH-1 already has #77/i)).toBeTruthy();
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /add anyway/i }));
+    expect(onSelect).toHaveBeenCalledWith("GH-1", "Plain issue", "b1", "https://x/1");
   });
 
   it("prompts before re-adding an item that already has a PR, and only adds after confirm", async () => {

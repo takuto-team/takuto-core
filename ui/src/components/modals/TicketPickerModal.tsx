@@ -41,6 +41,7 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [confirmReAdd, setConfirmReAdd] = useState<PickerTicket | null>(null);
+  const [checking, setChecking] = useState<string | null>(null);
   const needsRepoForGitHub = ticketingSystem === "github" && !activeRepoName;
 
   useEffect(() => {
@@ -75,14 +76,33 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
       .finally(() => setLoading(false));
   }, [ticketingSystem, activeRepoName, needsRepoForGitHub]);
 
-  // A ticket with no prior PR adds immediately; one with a prior PR routes
-  // through a confirmation (the new run opens a separate PR).
-  const handlePick = (t: PickerTicket) => {
+  // On click we run both checks for an existing PR: the local one (DB /
+  // in-memory `existingPrUrl`, precomputed when the list loaded) and a live
+  // GitHub lookup for a PR opened outside Takuto. Either hit routes through the
+  // confirmation (the new run opens a separate PR); the GitHub check is
+  // best-effort and only runs when a repository is known.
+  const handlePick = async (t: PickerTicket) => {
     if (t.existingPrUrl) {
       setConfirmReAdd(t);
-    } else {
-      onSelect(t.key, t.summary, t.body, t.url);
+      return;
     }
+    if (activeRepoName) {
+      setChecking(t.key);
+      try {
+        const res = await apiJson<{ pr_url: string | null }>(
+          `/api/github/existing-pr?repository=${encodeURIComponent(activeRepoName)}&ticket_key=${encodeURIComponent(t.key)}`,
+        );
+        if (res.pr_url) {
+          setConfirmReAdd({ ...t, existingPrUrl: res.pr_url });
+          return;
+        }
+      } catch {
+        /* best-effort: a failed check just means no warning */
+      } finally {
+        setChecking(null);
+      }
+    }
+    onSelect(t.key, t.summary, t.body, t.url);
   };
 
   return (
@@ -125,10 +145,14 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
               <button
                 key={t.key}
                 onClick={() => handlePick(t)}
-                className="w-full text-left px-4 py-3 rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-3 cursor-pointer"
+                disabled={checking !== null}
+                className="w-full text-left px-4 py-3 rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-3 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <span className="font-mono text-xs text-blue-400 flex-shrink-0">{t.key}</span>
                 <span className="text-sm text-gray-200 truncate">{t.summary}</span>
+                {checking === t.key && (
+                  <span className="ml-auto flex-shrink-0 text-xs text-gray-500">Checking…</span>
+                )}
               </button>
             )
           )}

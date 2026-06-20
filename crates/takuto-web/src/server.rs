@@ -329,6 +329,10 @@ pub fn build_router(state: AppState) -> Router {
             get(routes::jira::get_ticket_preview),
         )
         .route("/github/issues", get(routes::github::list_github_issues))
+        .route(
+            "/github/existing-pr",
+            get(routes::github::existing_pr_for_ticket),
+        )
         .route("/github/repos", get(routes::repos::list_github_repos))
         // Per-user repository associations. Any authenticated user may add
         // (cloning if necessary) or remove repos from their own dashboard;
