@@ -165,8 +165,14 @@ describe("Onboarding — save-on-continue, step 1 (item polling)", () => {
     const select = await screen.findByLabelText("Ticketing system");
     fireEvent.change(select, { target: { value: "github" } });
 
-    // Toggle "Enable item polling" off (defaults on).
-    const toggle = await screen.findByRole("switch", { name: "Enable item polling" });
+    // Toggle "Enable item polling" off (defaults on). Generous timeout: the
+    // polling section mounts its own data-loading component, and under the full
+    // parallel test gate (CPU contention) the default 1s findBy can flake.
+    const toggle = await screen.findByRole(
+      "switch",
+      { name: "Enable item polling" },
+      { timeout: 5000 },
+    );
     fireEvent.click(toggle);
 
     await clickContinue();
