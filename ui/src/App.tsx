@@ -96,6 +96,18 @@ function FirstRunRedirect() {
   return null;
 }
 
+/**
+ * Element for the `/login.html` route in the authenticated tree. The login
+ * form must never render for an already-authenticated user, so this redirects
+ * to the `?return=` target when it is a safe same-origin path, otherwise the
+ * dashboard. (A 401 redirect via `api()` lands here with `?return=<path>`.)
+ */
+export function LoginRouteRedirect() {
+  const ret = new URLSearchParams(window.location.search).get("return");
+  const to = ret && ret.startsWith("/") && !ret.startsWith("//") ? ret : "/";
+  return <Navigate to={to} replace />;
+}
+
 export function App() {
   const { authEnabled, loggedIn, setupRequired, currentUser, loading, login, logout, completeSetup } = useAuth();
 
@@ -130,7 +142,12 @@ export function App() {
             />
           }
         />
-        <Route path="/login.html" element={<Login onLogin={login} />} />
+        {/* Reaching this route means the top-level `!loggedIn` guard above did
+            NOT fire — i.e. the user IS authenticated. Showing the login form
+            here is the bug that left authenticated users stuck on /login.html
+            after a stray 401 redirect. Redirect to the `?return=` target (a
+            safe same-origin path) or the dashboard instead. */}
+        <Route path="/login.html" element={<LoginRouteRedirect />} />
         <Route path="/config.html" element={<Config onLogout={logout} authEnabled={authEnabled} isAdmin={currentUser?.role === "admin"} />} />
         {/* Legacy routes kept as redirects so old bookmarks and external
             links (e.g. notification emails) still land users in the right

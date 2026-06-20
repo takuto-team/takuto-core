@@ -14,7 +14,11 @@
  */
 export async function api(input: string, init: RequestInit = {}): Promise<Response> {
   const res = await fetch(input, { ...init, credentials: "same-origin" });
-  if (res.status === 401) {
+  // On 401, send the user to the login route — but never when we're already
+  // there. Without this guard a single stray 401 can ping-pong an
+  // already-authenticated user between the dashboard and /login.html (the
+  // login route redirects authenticated users straight back).
+  if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
     const ret = encodeURIComponent(window.location.pathname + window.location.search);
     window.location.href = `/login.html?return=${ret}`;
   }
