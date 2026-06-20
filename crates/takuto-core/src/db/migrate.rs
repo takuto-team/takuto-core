@@ -671,9 +671,9 @@ mod tests {
         // V1..V6 from the legacy schema.rs port, V7 = importer's
         // system_metadata, V8 = work_items, V9 = repository_id on
         // work_items, V10 = per-user work-item flows, V11 = work_items
-        // soft-delete, V12 = per-user Jira credentials. Bump when adding
-        // new migrations.
-        assert_eq!(MIGRATIONS.len(), 12);
+        // soft-delete, V12 = per-user Jira credentials, V13 =
+        // worktree_generate_report. Bump when adding new migrations.
+        assert_eq!(MIGRATIONS.len(), 13);
     }
 
     #[test]
@@ -783,8 +783,8 @@ mod tests {
             .await
             .expect("count rows");
         assert_eq!(
-            count.0, 12,
-            "expected 12 applied migrations recorded by sqlx, got {}",
+            count.0, 13,
+            "expected 13 applied migrations recorded by sqlx, got {}",
             count.0
         );
     }
