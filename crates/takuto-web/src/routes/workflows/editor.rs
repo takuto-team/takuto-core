@@ -761,11 +761,111 @@ pub struct OpenTerminalResponse {
     pub path_token: String,
 }
 
-/// Start a web terminal (ttyd) inside the running editor container.
-/// The editor container must already be running (use open-editor first).
+/// Ensure the shared per-item workspace container (`takuto-ws-<ticket>`) is up.
+///
+/// This is the SAME container the editor ([`container::start_editor`]) and
+/// custom commands ([`container::start_run_command`]) use — all three bring it
+/// up through the core `ensure_workspace_container` primitive and `docker exec`
+/// into it. Calling this from the terminal entry point lets opening the
+/// terminal first start the container without opening the editor first. Builds
+/// and stashes the per-user secrets bundle for the container's lifetime.
+/// Callers run `require_workflow_access` before invoking this.
+async fn ensure_workspace_container_up(
+    engine: &EngineState,
+    auth_state: &AuthState,
+    cfg_state: &ConfigState,
+    editor: &EditorState,
+    id: &str,
+    user_id: &str,
+    publish_ports: &[u16],
+) -> Result<(), (StatusCode, String)> {
+    let wf_arc = engine.engine.workflows_arc();
+    let (existing_worktree, branch_name, worktree_lock, ticket_key, workspace_name) = {
+        let workflows = wf_arc.read().await;
+        let w = workflows
+            .get(id)
+            .ok_or((StatusCode::NOT_FOUND, "Workflow not found".into()))?;
+        if !can_open_editor(w) {
+            return Err((
+                StatusCode::CONFLICT,
+                "Cannot open workspace: workflow is active, has no branch, or Docker is unavailable"
+                    .into(),
+            ));
+        }
+        (
+            w.worktree_path.clone(),
+            w.branch_name.clone(),
+            w.worktree_lock.clone(),
+            w.ticket_key.clone(),
+            w.workspace_name.clone(),
+        )
+    };
+
+    let worktree = ensure_worktree(
+        engine,
+        auth_state,
+        id,
+        user_id,
+        existing_worktree,
+        &branch_name,
+        worktree_lock,
+    )
+    .await?;
+
+    let image = ContainerRunner::discover_worker_image()
+        .await
+        .unwrap_or_else(|| "takuto:latest".to_string());
+
+    // Per-user secrets bundle so in-terminal `claude`/`cursor`/`gh` see the
+    // caller's credentials, same as the editor / run-command bring-up. The Arc
+    // is stashed for the container's lifetime so its TempDir mount isn't removed
+    // out from under the still-running container.
+    let secrets_bundle =
+        build_editor_or_run_command_bundle(engine, auth_state, cfg_state, id, user_id).await;
+    if let Some(ref b) = secrets_bundle {
+        editor
+            .editor_bundles
+            .write()
+            .await
+            .insert(ticket_key.clone(), b.clone());
+    }
+
+    let init_commands = takuto_core::workflow::engine::resolve_worktree_init_commands(
+        Some(user_id),
+        &workspace_name,
+        auth_state.db.as_ref(),
+    )
+    .await;
+
+    container::workspace::ensure_workspace_container(
+        &ticket_key,
+        &worktree,
+        &image,
+        true, // isolate_workspace: restrict the container to this issue's worktree
+        secrets_bundle.as_deref(),
+        publish_ports,
+        &init_commands,
+    )
+    .await
+    .map_err(|e| {
+        // Bring-up failed → drop the stashed bundle so its TempDir RAII fires.
+        let editor = editor.clone();
+        let tk = ticket_key.clone();
+        tokio::spawn(async move {
+            editor.editor_bundles.write().await.remove(&tk);
+        });
+        (StatusCode::INTERNAL_SERVER_ERROR, e)
+    })?;
+
+    Ok(())
+}
+
+/// Start a web terminal (ttyd) inside the shared per-item workspace container,
+/// bringing that container up on demand if it isn't already running.
 pub async fn open_terminal(
     State(engine): State<EngineState>,
     State(auth_state): State<AuthState>,
+    State(cfg_state): State<ConfigState>,
     State(editor): State<EditorState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
@@ -806,15 +906,13 @@ pub async fn open_terminal(
         }));
     }
 
-    // Editor container must be running.
-    let _info = container::get_editor_info(&id).await.ok_or((
-        StatusCode::CONFLICT,
-        "Editor container is not running — open the editor first.".into(),
-    ))?;
-
-    // Recover from a server restart: ttyd may already be running from a previous session.
-    // Ask the container for the actual port and token (via pgrep) rather than trusting the now-empty map.
-    if let Some((port, token)) = container::find_running_terminal(&id).await {
+    // Recover from a server restart: if the workspace container is already up, a
+    // ttyd from a previous session may still be running — reuse it (read the
+    // actual port + token via pgrep rather than the now-empty in-memory map).
+    if container::workspace::workspace_status(&id).await
+        == container::workspace::WorkspaceStatus::Running
+        && let Some((port, token)) = container::find_running_terminal(&id).await
+    {
         editor
             .terminal_ports
             .write()
@@ -841,12 +939,32 @@ pub async fn open_terminal(
         }));
     }
 
-    // Allocate a single port for ttyd from the shared editor port range.
-    let ports = container::allocate_single_port().await.ok_or((
+    // Allocate a single port for ttyd from the shared editor port range, up
+    // front so it can be published when the container is brought up on demand
+    // (local mode; ignored under DinD --network=host).
+    let port = container::allocate_single_port().await.ok_or((
         StatusCode::CONFLICT,
         "No free ports available for terminal.".into(),
     ))?;
-    let port = ports;
+
+    // Bring up the shared per-item workspace container (`takuto-ws-<ticket>` —
+    // the SAME container the editor and custom commands use) on demand when it
+    // isn't already running, so opening the terminal first works without first
+    // opening the editor.
+    if container::workspace::workspace_status(&id).await
+        != container::workspace::WorkspaceStatus::Running
+    {
+        ensure_workspace_container_up(
+            &engine,
+            &auth_state,
+            &cfg_state,
+            &editor,
+            &id,
+            &auth.user_id,
+            &[port],
+        )
+        .await?;
+    }
 
     let (_legacy_url, token) = container::start_terminal(&id, port)
         .await

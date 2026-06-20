@@ -5,10 +5,9 @@
 
 use tracing::{debug, info};
 
-use super::editor::{
-    build_terminal_url, editor_container_name, generate_connection_token, get_editor_info,
-};
+use super::editor::{build_terminal_url, editor_container_name, generate_connection_token};
 use super::editor_host_port;
+use super::workspace::{WorkspaceStatus, workspace_status};
 
 /// Start a web-based terminal (ttyd) inside the running editor container on `port`.
 /// Returns the URL on success. Setup commands (tool installs, etc.) are expected to
@@ -19,9 +18,11 @@ pub async fn start_terminal(
 ) -> std::result::Result<(String, String), String> {
     let name = editor_container_name(ticket_key);
 
-    // Check the editor container is actually running.
-    if get_editor_info(ticket_key).await.is_none() {
-        return Err("Editor container is not running — open the editor first.".into());
+    // The shared workspace container must be running — the caller
+    // (`open_terminal`) brings it up on demand. This checks the CONTAINER, not
+    // the IDE: a terminal does not require openvscode-server to be running.
+    if workspace_status(ticket_key).await != WorkspaceStatus::Running {
+        return Err("Workspace container is not running.".into());
     }
 
     // Build the shell script that runs in each ttyd terminal:
