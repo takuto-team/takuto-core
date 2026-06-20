@@ -186,6 +186,10 @@ pub struct AgentProviderConfig {
     /// (04_architecture.md §0 D6).
     #[serde(default)]
     pub allow_shared_default: bool,
+    /// Pinned CLI version to install at runtime; empty = latest. The agent CLIs
+    /// are installed on container startup, not baked into the image.
+    #[serde(default)]
+    pub version: String,
 }
 
 /// Default self-hosted context window (tokens) when the admin doesn't set one.
@@ -245,6 +249,9 @@ pub struct OpenCodeProviderConfig {
     /// `models.<id>.limit.output`.
     #[serde(default = "default_opencode_output_limit")]
     pub output_limit: Option<u32>,
+    /// Pinned CLI version to install at runtime; empty = latest.
+    #[serde(default)]
+    pub version: String,
 }
 
 impl Default for OpenCodeProviderConfig {
@@ -256,6 +263,7 @@ impl Default for OpenCodeProviderConfig {
             allow_shared_default: false,
             context_limit: default_opencode_context_limit(),
             output_limit: default_opencode_output_limit(),
+            version: String::new(),
         }
     }
 }
@@ -293,6 +301,9 @@ pub struct CursorProviderConfig {
     /// enables server-side codebase indexing (sends code to Cursor).
     #[serde(default = "default_cursor_privacy_mode")]
     pub privacy_mode: bool,
+    /// Pinned CLI version to install at runtime; empty = latest.
+    #[serde(default)]
+    pub version: String,
 }
 
 pub(super) fn default_cursor_privacy_mode() -> bool {
@@ -308,6 +319,7 @@ impl Default for CursorProviderConfig {
             allow_shared_default: false,
             base_url: String::new(),
             privacy_mode: default_cursor_privacy_mode(),
+            version: String::new(),
         }
     }
 }
@@ -326,6 +338,9 @@ pub struct CodexProviderConfig {
     pub extra_args: Vec<String>,
     #[serde(default)]
     pub allow_shared_default: bool,
+    /// Pinned CLI version to install at runtime; empty = latest.
+    #[serde(default)]
+    pub version: String,
 }
 
 /// Flags Takuto owns and clients must not override via `extra_args`.

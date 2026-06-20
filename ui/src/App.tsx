@@ -12,6 +12,7 @@ import { Config } from "./pages/Config";
 import { useAuth } from "./hooks/useAuth";
 import { ToastProvider, ToastContainer } from "./hooks/useToast";
 import { QueryErrorToaster } from "./components/QueryErrorToaster";
+import { DependencyInstallOverlay } from "./components/DependencyInstallOverlay";
 import { fetchOnboardingFirstRunState } from "./api/onboarding";
 
 /**
@@ -116,6 +117,7 @@ export function App() {
 
   return (
     <ToastProvider>
+      <DependencyInstallOverlay />
       <FirstRunRedirect />
       <Routes>
         <Route

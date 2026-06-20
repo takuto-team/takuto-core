@@ -119,6 +119,9 @@ pub fn build_router(state: AppState) -> Router {
             "/onboarding/status",
             get(routes::onboarding::onboarding_status),
         )
+        // Runtime agent/CLI install progress for the "Installing dependencies"
+        // overlay. Public so it shows even before login on first boot.
+        .route("/system/dependencies", get(dependency_install_status))
         .merge(login_rate_limited)
         // CSRF: reject cross-origin mutating requests before they hit the
         // login/register/recover handlers. Safe methods short-circuit inside
@@ -547,6 +550,13 @@ pub fn build_cors_layer(web_config: &takuto_core::config::WebConfig) -> CorsLaye
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// `GET /api/system/dependencies` — runtime agent/CLI install progress for the
+/// dashboard's "Installing dependencies" overlay.
+async fn dependency_install_status() -> axum::Json<crate::dependency_status::DependencyInstallStatus>
+{
+    axum::Json(crate::dependency_status::snapshot())
 }
 
 /// Serve embedded static files (dashboard UI assets). Public so the

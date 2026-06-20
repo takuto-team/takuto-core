@@ -128,7 +128,10 @@ RUN set -eux \
         curl \
         wget \
         gnupg2 \
-    # ── 3rd-party apt repos (mise / gh / acli) ─────────────────────────────
+    # ── 3rd-party apt repos (mise / gh) ────────────────────────────────────
+    # acli (Atlassian CLI) is NOT installed here — it is installed at runtime
+    # into the shared tools volume (see takuto_core::agent_install), alongside
+    # the agent CLIs, so it is not embedded in the image.
     && install -dm 755 /etc/apt/keyrings \
     && curl -fsSL https://mise.jdx.dev/gpg-key.pub \
          -o /etc/apt/keyrings/mise-archive-keyring.asc \
@@ -138,11 +141,6 @@ RUN set -eux \
          -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
          > /etc/apt/sources.list.d/github-cli.list \
-    && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc \
-         | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
-    && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/acli-archive-keyring.gpg] https://acli.atlassian.com/linux/deb stable main" \
-         > /etc/apt/sources.list.d/acli.list \
     # ── Install foundational + Playwright + apt-managed CLIs ───────────────
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -175,8 +173,6 @@ RUN set -eux \
         libpango-1.0-0 \
         libcairo2 \
         libasound2 \
-    && (apt-get install -y --no-install-recommends acli \
-        || echo "WARN: acli not available for $(dpkg --print-architecture)") \
     # ── Takuto user + sudoers ─────────────────────────────────────────────
     && groupadd takuto \
     && useradd -u "${TAKUTO_UID}" -g takuto -m -s /bin/bash takuto \
@@ -262,52 +258,14 @@ RUN set -eux \
 
 # gh CLI is installed in the foundational apt block above.
 
-# Baked AI provider CLIs. Versions pinned via ARG (audit §3.5 — no @latest in image build).
-# Each ARG is the one-line bump knob; refresh together with the per-CLI release cadence.
-#  • claude        — `@anthropic-ai/claude-code` (Claude Code CLI for [agent] provider = "claude")
-#  • codex         — `@openai/codex`             (Codex CLI for [agent] provider = "codex")
-#  • opencode      — `opencode-ai`               (OpenCode CLI for [agent] provider = "opencode";
-#                    canonical distribution is the `opencode-ai` package, NOT `opencode`)
-ARG CLAUDE_CODE_VERSION=2.1.178
-ARG CODEX_VERSION=0.140.0
-ARG OPENCODE_AI_VERSION=1.17.7
-RUN npm install -g \
-        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-        "@openai/codex@${CODEX_VERSION}" \
-        "opencode-ai@${OPENCODE_AI_VERSION}" \
-    && opencode --version
-
-# Cursor Agent CLI (for [agent] provider = "cursor"). The launcher resolves paths with realpath("$0");
-# the package must be installed as a directory tree so `index.js` sits next to the `cursor-agent` script
-# (a symlink alone to /usr/local/bin breaks the realpath lookup).
-#
-# Pinned tarball replaces upstream `curl … | bash` (audit §3.5):
-#   • reproducible — the installer URL pins to a moving lab build otherwise.
-#   • supply-chain — a compromised install script can no longer inject arbitrary code at build time.
-# To bump: download the new tarball from downloads.cursor.com/lab/<version>/linux/<arch>/agent-cli-package.tar.gz,
-# update CURSOR_AGENT_VERSION + the two per-arch sha256 ARGs.
-ARG CURSOR_AGENT_VERSION=2026.06.15-18-00-12-6f5a2cf
-ARG CURSOR_AGENT_SHA256_X64=33b22b0c4fd0397a89fc1b908e4536bb0a8fb09daff97acf519fbec76569ccb3
-ARG CURSOR_AGENT_SHA256_ARM64=703e3a47a47bbaae4d54b48f860a780adae56bfdbfb8cfccf578dddbd5721382
-RUN set -eux \
-    && ARCH="$(dpkg --print-architecture)" \
-    && case "$ARCH" in \
-         amd64) CURSOR_ARCH=x64; CURSOR_SHA256="${CURSOR_AGENT_SHA256_X64}" ;; \
-         arm64) CURSOR_ARCH=arm64; CURSOR_SHA256="${CURSOR_AGENT_SHA256_ARM64}" ;; \
-         *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;; \
-       esac \
-    && CURSOR_DEST="/usr/local/share/cursor-agent/versions/${CURSOR_AGENT_VERSION}" \
-    && mkdir -p "${CURSOR_DEST}" \
-    && curl -fSL --retry 3 --retry-delay 5 \
-         "https://downloads.cursor.com/lab/${CURSOR_AGENT_VERSION}/linux/${CURSOR_ARCH}/agent-cli-package.tar.gz" \
-         -o /tmp/cursor-agent.tar.gz \
-    && echo "${CURSOR_SHA256}  /tmp/cursor-agent.tar.gz" | sha256sum -c - \
-    && tar --strip-components=1 -xzf /tmp/cursor-agent.tar.gz -C "${CURSOR_DEST}" \
-    && rm -f /tmp/cursor-agent.tar.gz \
-    && ln -sf "${CURSOR_DEST}/cursor-agent" /usr/local/bin/agent \
-    && ln -sf "${CURSOR_DEST}/cursor-agent" /usr/local/bin/cursor-agent \
-    && chmod -R a+rX /usr/local/share/cursor-agent \
-    && test -f "${CURSOR_DEST}/index.js"
+# AI provider CLIs (claude / codex / opencode / cursor-agent) and the Atlassian
+# CLI (acli) are NOT baked into this image — we have no right to redistribute
+# claude-code / cursor-agent, and the rest follow the same path for consistency.
+# They are installed at container startup into the shared `takuto-tools` volume
+# (`/opt/takuto-tools/bin`, on the worker/workspace PATH) by
+# `takuto_core::agent_install`, pinned per `config.toml`
+# (`[agent.providers.*].version`, `[jira].acli_version`) or latest. Node + npm
+# (above) remain in the image so the npm-packaged CLIs can be installed at runtime.
 
 # Playwright is not baked into this image: isolated workflow workers use the project's @playwright/test
 # version and download Chromium into ~/.cache/ms-playwright (persisted via docker-compose.dind.yml

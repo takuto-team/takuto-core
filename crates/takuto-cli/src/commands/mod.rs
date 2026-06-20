@@ -5,6 +5,7 @@
 //! entrypoint and operators. The default (no subcommand) server path lives
 //! under [`crate::server`].
 
+mod agents;
 mod docker_hooks;
 mod egress_hosts;
 mod github_app_token;
@@ -12,6 +13,7 @@ mod keys;
 mod preflight;
 mod provisioning;
 
+pub(crate) use agents::run_agents_install;
 pub(crate) use docker_hooks::run_docker_hooks;
 pub(crate) use egress_hosts::run_egress_hosts;
 pub(crate) use github_app_token::run_github_app_token;

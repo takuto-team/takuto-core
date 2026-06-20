@@ -119,6 +119,9 @@ cors_origins = []
 # Host or https:// URL (token auth, egress, and Jira link in PR body; empty → jira.atlassian.net)
 site = "yourcompany.atlassian.net"
 email = "you@company.com"
+# Atlassian CLI (`acli`) is installed on startup (only in Jira mode), not baked
+# into the image. Pin a version here, or leave empty for the latest.
+# acli_version = ""
 # --- UI-managed [jira] keys (deploy-time defaults; edit in the UI) ---
 # Managed in Configuration → Item Polling.
 project_keys = ["PROJ"]
@@ -233,6 +236,15 @@ max_repeated_output_lines = 8
 
 # Per-provider sub-tables. Each provider keeps its own model / endpoint / args.
 # Managed in Configuration → AI Settings.
+#
+# The agent CLIs (claude/codex/opencode/cursor) are NOT baked into the image —
+# they are installed on container startup into the shared tools volume. Pin a
+# specific CLI version per provider with `version = "..."`; leave it empty (or
+# omit it) to install/refresh the latest on each start. Examples:
+#   [agent.providers.claude]
+#     version = "2.1.178"
+#   [agent.providers.codex]
+#     version = ""          # latest
 # [agent.providers.cursor]
 # cli = "agent"          # Cursor Agent executable (from https://cursor.com/install)
 # model = "Auto"         # "Auto" = automatic model selection; or pin a concrete id

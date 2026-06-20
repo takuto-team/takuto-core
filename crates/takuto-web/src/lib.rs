@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod container_spawner;
+pub mod dependency_status;
 pub mod middleware;
 pub mod routes;
 pub mod server;

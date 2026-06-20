@@ -61,6 +61,22 @@ pub enum Commands {
     /// opens exactly the active + admin-allowed providers (and any
     /// self-hosted `base_url`) instead of hard-coding one vendor.
     EgressHosts,
+    /// Install/refresh the agent + Atlassian CLIs into the shared tools volume.
+    /// These CLIs are not baked into the image; the setup-mode entrypoint runs
+    /// this before interactive auth, and the web server runs the equivalent at
+    /// startup with live progress.
+    Agents {
+        #[command(subcommand)]
+        action: AgentsAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AgentsAction {
+    /// Install/refresh the configured CLIs (claude/codex/opencode/cursor, plus
+    /// acli in Jira mode) at their pinned version (or latest) into
+    /// `/opt/takuto-tools/bin`.
+    Install,
 }
 
 #[derive(Subcommand)]

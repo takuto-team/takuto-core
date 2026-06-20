@@ -36,6 +36,9 @@ if [ "$(id -u)" = "0" ]; then
     chown_takuto_tree /home/takuto/.aws
     chown_takuto_tree /workspace
     chown_takuto_tree /workspaces
+    # The runtime agent/CLI install (server task in normal mode, `takuto agents
+    # install` in setup mode) writes here as the takuto user.
+    chown_takuto_tree /opt/takuto-tools
 
     if [ "${1:-}" != "setup" ] && [ "${1:-}" != "test-workflow" ]; then
         if iptables -L -n >/dev/null 2>&1; then
@@ -240,6 +243,13 @@ if [ "${1:-}" = "setup" ]; then
     echo "=== Takuto Setup ==="
     echo "Required: GitHub CLI + agent provider ($agent_provider). Atlassian CLI (acli) required only when ticketing_system = jira (current: $ticketing_system)."
     echo "Repository cloning is now handled via the dashboard (POST /api/repos/clone)."
+    echo ""
+
+    # The agent CLIs + acli are not baked into the image; install them now so the
+    # interactive auth steps below (claude / agent login / acli jira auth) work.
+    echo "--- Installing agent dependencies ---"
+    /usr/local/bin/takuto --config "$CONFIG_FILE" agents install \
+        || echo "WARN: dependency install reported errors; the auth steps below may fail"
     echo ""
 
     # Step 1: GitHub (required unless a GitHub App is configured)

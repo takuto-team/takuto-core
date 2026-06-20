@@ -42,6 +42,10 @@ pub struct JiraConfig {
     /// Max UTF-8 bytes per linked issue description when mode is `full` (`0` = unlimited).
     #[serde(default)]
     pub linked_issue_description_max_bytes: usize,
+    /// Pinned Atlassian CLI (`acli`) version to install at runtime; empty = latest.
+    /// `acli` is installed on startup (only in Jira mode), not baked into the image.
+    #[serde(default)]
+    pub acli_version: String,
 }
 
 fn default_item_types() -> Vec<String> {
@@ -64,6 +68,7 @@ impl Default for JiraConfig {
             linked_items_in_prompt: LinkedItemsPromptMode::default(),
             ticket_context_max_description_bytes: 0,
             linked_issue_description_max_bytes: 0,
+            acli_version: String::new(),
         }
     }
 }

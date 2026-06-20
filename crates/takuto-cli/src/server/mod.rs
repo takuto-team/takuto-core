@@ -62,6 +62,10 @@ pub(crate) struct EngineSetup {
 
 pub async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let boot = bootstrap::init(cli).await?;
+    // Install the agent + Atlassian CLIs at runtime (not baked into the image)
+    // into the shared tools volume, in the background, so the server keeps
+    // serving and the dashboard can show "Installing dependencies" progress.
+    takuto_web::dependency_status::spawn_install(boot.config.clone());
     let data_dir = takuto_core::workflow::snapshot::resolve_data_dir();
     let db = database::open_and_reconcile(&boot, data_dir.as_deref()).await;
     let eng = engine::build(&boot, &db).await;

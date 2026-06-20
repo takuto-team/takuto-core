@@ -1,0 +1,496 @@
+// Copyright 2026 Alexandre Obellianne
+// Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
+
+//! Runtime installation of the agent + Atlassian CLIs.
+//!
+//! These CLIs are **not** baked into the image (we have no right to
+//! redistribute claude-code / cursor-agent, and codex/opencode/acli follow the
+//! same path for consistency). Instead they are installed on container startup
+//! into the shared, persistent `takuto-tools` volume (`/opt/takuto-tools/bin`,
+//! which is on the worker + workspace `PATH`), so every container resolves them
+//! by bare name. Each client's version may be pinned in `config.toml`
+//! (`[agent.providers.*].version`, `[jira].acli_version`); empty = latest.
+//!
+//! Design: a pure [`plan_one`] decides per-client what to do given the detected
+//! installed version; an [`Installer`] executes, reporting progress through a
+//! [`ProgressSink`] so the same logic serves both the CLI (stdout, used in setup
+//! mode) and the web server (status + WebSocket).
+
+use std::path::PathBuf;
+
+use tokio_util::sync::CancellationToken;
+
+use crate::config::{Config, TicketingSystem};
+
+/// How a client binary is obtained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallKind {
+    /// npm global package; npm verifies integrity. `package` is the npm name.
+    Npm { package: String },
+    /// Cursor agent — official HTTPS download (no build-time sha; TLS-verified).
+    Cursor,
+    /// Atlassian CLI — `.deb` from the Atlassian apt repo, extracted (amd64).
+    Acli,
+}
+
+/// One installable CLI.
+#[derive(Debug, Clone)]
+pub struct ClientSpec {
+    /// Human label shown as the install step.
+    pub name: String,
+    /// Binary file name placed in `<dir>/bin` and resolved on `PATH`.
+    pub bin: String,
+    pub kind: InstallKind,
+    /// Pinned version; empty = latest.
+    pub version: String,
+}
+
+/// The target version for an install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionTarget {
+    Latest,
+    Pinned(String),
+}
+
+/// What to do for a client after consulting the installed version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Pinned version already installed — nothing to do.
+    Skip,
+    Install(VersionTarget),
+}
+
+impl VersionTarget {
+    /// Label fragment for progress messages.
+    pub fn label(&self) -> String {
+        match self {
+            VersionTarget::Latest => "latest".to_string(),
+            VersionTarget::Pinned(v) => v.clone(),
+        }
+    }
+}
+
+/// Decide the action for one client given its currently-installed version.
+///
+/// - unpinned → always (re)install **latest** (per the confirmed product
+///   decision: unpinned refreshes to latest on each startup);
+/// - pinned and the detected version matches → **Skip**;
+/// - pinned and missing/mismatched → install the **pinned** version.
+pub fn plan_one(spec: &ClientSpec, detected: Option<&str>) -> Action {
+    if spec.version.is_empty() {
+        Action::Install(VersionTarget::Latest)
+    } else if detected == Some(spec.version.as_str()) {
+        Action::Skip
+    } else {
+        Action::Install(VersionTarget::Pinned(spec.version.clone()))
+    }
+}
+
+/// Extract a version token from a CLI's `--version` output. Returns the first
+/// whitespace-separated token that starts with a digit (trimmed of surrounding
+/// punctuation), e.g. `"2.1.178 (Claude Code)"` → `"2.1.178"`,
+/// `"codex-cli 0.140.0"` → `"0.140.0"`.
+pub fn parse_version(output: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .find(|tok| tok.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(|tok| {
+            tok.trim_matches(|c: char| !c.is_ascii_alphanumeric())
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+}
+
+/// `package@version` (or `package@latest`) for `npm install -g`.
+pub fn npm_pkg_spec(package: &str, target: &VersionTarget) -> String {
+    match target {
+        VersionTarget::Latest => format!("{package}@latest"),
+        VersionTarget::Pinned(v) => format!("{package}@{v}"),
+    }
+}
+
+/// Cursor agent tarball URL for a concrete version + arch (`x64` / `arm64`).
+pub fn cursor_tarball_url(version: &str, arch: &str) -> String {
+    format!("https://downloads.cursor.com/lab/{version}/linux/{arch}/agent-cli-package.tar.gz")
+}
+
+/// The set of clients to install, derived from config:
+/// the agents listed in `[agent].available_providers` (defaults to all four),
+/// plus `acli` only when the deployment is in Jira mode.
+pub fn specs_from_config(cfg: &Config) -> Vec<ClientSpec> {
+    let mut specs = Vec::new();
+    let p = &cfg.agent.providers;
+    let want = |name: &str| cfg.agent.available_providers.iter().any(|x| x == name);
+
+    if want("claude") {
+        specs.push(ClientSpec {
+            name: "Claude Code".into(),
+            bin: "claude".into(),
+            kind: InstallKind::Npm {
+                package: "@anthropic-ai/claude-code".into(),
+            },
+            version: p.claude.version.clone(),
+        });
+    }
+    if want("codex") {
+        specs.push(ClientSpec {
+            name: "Codex".into(),
+            bin: "codex".into(),
+            kind: InstallKind::Npm {
+                package: "@openai/codex".into(),
+            },
+            version: p.codex.version.clone(),
+        });
+    }
+    if want("opencode") {
+        specs.push(ClientSpec {
+            name: "OpenCode".into(),
+            bin: "opencode".into(),
+            kind: InstallKind::Npm {
+                package: "opencode-ai".into(),
+            },
+            version: p.opencode.version.clone(),
+        });
+    }
+    if want("cursor") {
+        specs.push(ClientSpec {
+            name: "Cursor Agent".into(),
+            bin: "agent".into(),
+            kind: InstallKind::Cursor,
+            version: p.cursor.version.clone(),
+        });
+    }
+    if cfg.general.ticketing_system == TicketingSystem::Jira {
+        specs.push(ClientSpec {
+            name: "Atlassian CLI".into(),
+            bin: "acli".into(),
+            kind: InstallKind::Acli,
+            version: cfg.jira.acli_version.clone(),
+        });
+    }
+    specs
+}
+
+/// Receives install progress so the same executor can drive a CLI (stdout) and
+/// the web server (status struct + WebSocket).
+pub trait ProgressSink: Send + Sync {
+    /// Starting step `index` (0-based) of `total`, with a human `label`.
+    fn step(&self, index: usize, total: usize, label: &str);
+    /// All steps finished successfully.
+    fn finished(&self);
+    /// Step `label` failed with `error` (install aborts).
+    fn failed(&self, label: &str, error: &str);
+}
+
+/// Executes installs into `install_dir` (e.g. `/opt/takuto-tools`). Binaries
+/// land in `<install_dir>/bin`.
+pub struct Installer {
+    install_dir: PathBuf,
+}
+
+impl Installer {
+    pub fn new(install_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            install_dir: install_dir.into(),
+        }
+    }
+
+    fn bin_dir(&self) -> PathBuf {
+        self.install_dir.join("bin")
+    }
+
+    fn bin_path(&self, bin: &str) -> PathBuf {
+        self.bin_dir().join(bin)
+    }
+
+    /// Detect the installed version of `spec`'s binary, if present.
+    async fn detect_version(&self, spec: &ClientSpec) -> Option<String> {
+        let path = self.bin_path(&spec.bin);
+        if !path.exists() {
+            return None;
+        }
+        let out = crate::process::run_command(
+            &path.to_string_lossy(),
+            &["--version"],
+            &self.install_dir,
+            CancellationToken::new(),
+        )
+        .await
+        .ok()?;
+        if !out.success() {
+            return None;
+        }
+        parse_version(&out.stdout)
+    }
+
+    /// Plan + run every install for `cfg`, reporting through `sink`. Returns the
+    /// first error (and reports it to the sink) so callers can mark a failure.
+    pub async fn install_all(&self, cfg: &Config, sink: &dyn ProgressSink) -> Result<(), String> {
+        let specs = specs_from_config(cfg);
+        let total = specs.len();
+        for (i, spec) in specs.iter().enumerate() {
+            let detected = self.detect_version(spec).await;
+            let action = plan_one(spec, detected.as_deref());
+            let label = match &action {
+                Action::Skip => format!("{} (already installed)", spec.name),
+                Action::Install(t) => format!("{} ({})", spec.name, t.label()),
+            };
+            sink.step(i, total, &label);
+            let target = match action {
+                Action::Skip => continue,
+                Action::Install(t) => t,
+            };
+            if let Err(e) = self.install_one(spec, &target).await {
+                sink.failed(&spec.name, &e);
+                return Err(format!("{}: {e}", spec.name));
+            }
+        }
+        sink.finished();
+        Ok(())
+    }
+
+    async fn install_one(&self, spec: &ClientSpec, target: &VersionTarget) -> Result<(), String> {
+        match &spec.kind {
+            InstallKind::Npm { package } => self.npm_install(package, target).await,
+            InstallKind::Cursor => self.cursor_install(target).await,
+            InstallKind::Acli => self.acli_install(target).await,
+        }
+    }
+
+    async fn run_shell(&self, script: &str) -> Result<(), String> {
+        let out = crate::process::run_command(
+            "bash",
+            &["-c", script],
+            &self.install_dir,
+            CancellationToken::new(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        if out.success() {
+            Ok(())
+        } else {
+            Err(out.stderr.trim().to_string())
+        }
+    }
+
+    async fn npm_install(&self, package: &str, target: &VersionTarget) -> Result<(), String> {
+        let spec = npm_pkg_spec(package, target);
+        let prefix = self.install_dir.to_string_lossy();
+        // --prefix lands the binary in <prefix>/bin; npm verifies integrity.
+        self.run_shell(&format!(
+            "npm install -g --no-fund --no-audit --prefix {} {}",
+            shell_quote(&prefix),
+            shell_quote(&spec),
+        ))
+        .await
+    }
+
+    async fn cursor_install(&self, target: &VersionTarget) -> Result<(), String> {
+        let bin_dir = self.bin_dir();
+        let share = self.install_dir.join("share").join("cursor-agent");
+        // Resolve a concrete version: for `latest`, ask Cursor's installer index;
+        // the `latest` path segment on downloads.cursor.com serves the current
+        // lab build. Extract the tarball and symlink the launcher (its realpath
+        // lookup needs index.js beside the script, so we keep the tree).
+        let version = match target {
+            VersionTarget::Pinned(v) => v.clone(),
+            VersionTarget::Latest => "latest".to_string(),
+        };
+        let url_x64 = cursor_tarball_url(&version, "x64");
+        let url_arm = cursor_tarball_url(&version, "arm64");
+        let script = format!(
+            r#"set -euo pipefail
+arch="$(dpkg --print-architecture)"
+case "$arch" in
+  amd64) url={x64} ;;
+  arm64) url={arm} ;;
+  *) echo "unsupported arch: $arch" >&2; exit 1 ;;
+esac
+dest={share}/{version}
+mkdir -p "$dest" {bin}
+curl -fSL --retry 3 --retry-delay 5 "$url" -o /tmp/cursor-agent.tar.gz
+tar --strip-components=1 -xzf /tmp/cursor-agent.tar.gz -C "$dest"
+rm -f /tmp/cursor-agent.tar.gz
+ln -sf "$dest/cursor-agent" {bin}/agent
+ln -sf "$dest/cursor-agent" {bin}/cursor-agent
+test -f "$dest/index.js"
+"#,
+            x64 = shell_quote(&url_x64),
+            arm = shell_quote(&url_arm),
+            share = shell_quote(&share.to_string_lossy()),
+            bin = shell_quote(&bin_dir.to_string_lossy()),
+            version = shell_quote(&version),
+        );
+        self.run_shell(&script).await
+    }
+
+    async fn acli_install(&self, target: &VersionTarget) -> Result<(), String> {
+        let bin_dir = self.bin_dir();
+        // Atlassian ships acli through an apt repo (amd64). Without root we fetch
+        // the matching `.deb` from the repo pool and extract the binary with
+        // `dpkg-deb -x`. `latest` picks the highest version in the index.
+        let version_filter = match target {
+            VersionTarget::Latest => String::new(),
+            VersionTarget::Pinned(v) => v.clone(),
+        };
+        let script = format!(
+            r#"set -euo pipefail
+arch="$(dpkg --print-architecture)"
+if [ "$arch" != "amd64" ]; then
+  echo "acli is only distributed for amd64 (got $arch)" >&2; exit 1
+fi
+base=https://acli.atlassian.com/linux/deb
+pkgs="$(curl -fsSL "$base/dists/stable/main/binary-amd64/Packages")"
+filter={filter}
+fname="$(printf '%s\n' "$pkgs" | awk -v f="$filter" '/^Filename: / {{ if (f=="" || index($2,f)>0) last=$2 }} END {{ print last }}')"
+if [ -z "$fname" ]; then echo "acli package not found in index (filter='$filter')" >&2; exit 1; fi
+mkdir -p {bin} /tmp/acli-extract
+curl -fSL --retry 3 --retry-delay 5 "$base/$fname" -o /tmp/acli.deb
+dpkg-deb -x /tmp/acli.deb /tmp/acli-extract
+cp /tmp/acli-extract/usr/bin/acli {bin}/acli
+chmod +x {bin}/acli
+rm -rf /tmp/acli.deb /tmp/acli-extract
+"#,
+            filter = shell_quote(&version_filter),
+            bin = shell_quote(&bin_dir.to_string_lossy()),
+        );
+        self.run_shell(&script).await
+    }
+}
+
+/// Minimal single-quote shell escaping for interpolated paths/URLs.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// A [`ProgressSink`] that prints each step to stdout (used by the CLI / setup
+/// mode, where there is no web server to report to).
+pub struct StdoutSink;
+
+impl ProgressSink for StdoutSink {
+    fn step(&self, index: usize, total: usize, label: &str) {
+        println!("[{}/{}] {}", index + 1, total, label);
+    }
+    fn finished(&self) {
+        println!("Dependencies ready.");
+    }
+    fn failed(&self, label: &str, error: &str) {
+        eprintln!("Install failed for {label}: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(version: &str) -> ClientSpec {
+        ClientSpec {
+            name: "Claude Code".into(),
+            bin: "claude".into(),
+            kind: InstallKind::Npm {
+                package: "@anthropic-ai/claude-code".into(),
+            },
+            version: version.into(),
+        }
+    }
+
+    #[test]
+    fn unpinned_always_installs_latest() {
+        assert_eq!(
+            plan_one(&spec(""), Some("2.1.178")),
+            Action::Install(VersionTarget::Latest)
+        );
+        assert_eq!(
+            plan_one(&spec(""), None),
+            Action::Install(VersionTarget::Latest)
+        );
+    }
+
+    #[test]
+    fn pinned_matching_detected_skips() {
+        assert_eq!(plan_one(&spec("2.1.178"), Some("2.1.178")), Action::Skip);
+    }
+
+    #[test]
+    fn pinned_mismatch_or_absent_installs_pinned() {
+        assert_eq!(
+            plan_one(&spec("2.1.178"), Some("2.1.0")),
+            Action::Install(VersionTarget::Pinned("2.1.178".into()))
+        );
+        assert_eq!(
+            plan_one(&spec("2.1.178"), None),
+            Action::Install(VersionTarget::Pinned("2.1.178".into()))
+        );
+    }
+
+    #[test]
+    fn parse_version_handles_common_shapes() {
+        assert_eq!(
+            parse_version("2.1.178 (Claude Code)").as_deref(),
+            Some("2.1.178")
+        );
+        assert_eq!(
+            parse_version("codex-cli 0.140.0").as_deref(),
+            Some("0.140.0")
+        );
+        assert_eq!(parse_version("1.17.7\n").as_deref(), Some("1.17.7"));
+        assert_eq!(parse_version("no version here"), None);
+    }
+
+    #[test]
+    fn npm_pkg_spec_formats() {
+        assert_eq!(
+            npm_pkg_spec("opencode-ai", &VersionTarget::Latest),
+            "opencode-ai@latest"
+        );
+        assert_eq!(
+            npm_pkg_spec("@openai/codex", &VersionTarget::Pinned("0.140.0".into())),
+            "@openai/codex@0.140.0"
+        );
+    }
+
+    #[test]
+    fn cursor_url_builds_per_arch() {
+        assert_eq!(
+            cursor_tarball_url("1.2.3", "arm64"),
+            "https://downloads.cursor.com/lab/1.2.3/linux/arm64/agent-cli-package.tar.gz"
+        );
+    }
+
+    #[test]
+    fn specs_include_agents_and_gate_acli_on_jira() {
+        let mut cfg = Config::default();
+        cfg.general.ticketing_system = TicketingSystem::None;
+        let names: Vec<_> = specs_from_config(&cfg)
+            .iter()
+            .map(|s| s.bin.clone())
+            .collect();
+        assert!(names.contains(&"claude".to_string()));
+        assert!(names.contains(&"agent".to_string()));
+        assert!(
+            !names.contains(&"acli".to_string()),
+            "no acli outside Jira mode"
+        );
+
+        cfg.general.ticketing_system = TicketingSystem::Jira;
+        let names: Vec<_> = specs_from_config(&cfg)
+            .iter()
+            .map(|s| s.bin.clone())
+            .collect();
+        assert!(
+            names.contains(&"acli".to_string()),
+            "acli installed in Jira mode"
+        );
+    }
+
+    #[test]
+    fn specs_respect_available_providers() {
+        let mut cfg = Config::default();
+        cfg.agent.available_providers = vec!["claude".into()];
+        let names: Vec<_> = specs_from_config(&cfg)
+            .iter()
+            .map(|s| s.bin.clone())
+            .collect();
+        assert_eq!(names, vec!["claude".to_string()]);
+    }
+}

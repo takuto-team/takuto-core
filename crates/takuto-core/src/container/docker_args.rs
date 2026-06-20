@@ -26,8 +26,11 @@ pub(crate) const WORKER_ENV: &[(&str, &str)] = &[
     ("MISE_TRUST_ALL_CONFIGS", "1"),
     ("MISE_YES", "1"),
     (
+        // `/opt/takuto-tools/bin` first: it holds the runtime-installed agent
+        // CLIs (claude/codex/opencode/cursor/acli) — no longer baked into the
+        // image — and shadows any same-named baked tool.
         "PATH",
-        "/home/takuto/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "/opt/takuto-tools/bin:/home/takuto/.local/share/mise/shims:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ),
     ("TAKUTO_CONFIG", "/etc/takuto/config.toml"),
     // Persist user-level .npmrc across worker containers (aws codeartifact login writes here)
