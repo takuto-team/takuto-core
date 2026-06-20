@@ -14,7 +14,7 @@
  *     parent renders any error toast.
  */
 
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 interface Props {
   /** Label rendered above the input (e.g. "API key", "Personal access token"). */
@@ -33,6 +33,20 @@ interface Props {
   saving?: boolean;
   /** Save button copy. Defaults to "Save". */
   saveLabel?: string;
+  /**
+   * When true, render a danger-styled Delete button next to Save that wipes
+   * the stored credential for the current provider (api_key slot). Hidden
+   * entirely when false/undefined — there is nothing to delete.
+   */
+  canDelete?: boolean;
+  /**
+   * Called when the user confirms the delete (second click of the two-step
+   * inline confirm). Omitting it hides the Delete button regardless of
+   * `canDelete`.
+   */
+  onDelete?: () => void;
+  /** Delete-in-flight toggle — disables the delete button while the request runs. */
+  deleting?: boolean;
 }
 
 export function CredentialPasteField({
@@ -44,10 +58,38 @@ export function CredentialPasteField({
   placeholder,
   saving = false,
   saveLabel = "Save",
+  canDelete = false,
+  onDelete,
+  deleting = false,
 }: Props) {
   const inputId = useId();
   const [revealed, setRevealed] = useState(false);
-  const canSubmit = !saving && value.trim().length > 0;
+  // Two-click inline confirm for delete: first click arms ("Confirm"),
+  // second click fires. Auto-disarms after a few seconds so a stray first
+  // click never leaves the field primed to wipe on the next stray click.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDelete = canDelete && !!onDelete;
+  const canSubmit = !saving && !deleting && value.trim().length > 0;
+
+  useEffect(() => {
+    return () => {
+      if (disarmTimer.current) clearTimeout(disarmTimer.current);
+    };
+  }, []);
+
+  const handleDeleteClick = () => {
+    if (!onDelete) return;
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      if (disarmTimer.current) clearTimeout(disarmTimer.current);
+      disarmTimer.current = setTimeout(() => setConfirmingDelete(false), 4000);
+      return;
+    }
+    if (disarmTimer.current) clearTimeout(disarmTimer.current);
+    setConfirmingDelete(false);
+    onDelete();
+  };
 
   return (
     <div className="flex flex-col gap-2">
@@ -88,6 +130,29 @@ export function CredentialPasteField({
         >
           {saving ? "Saving…" : saveLabel}
         </button>
+        {showDelete && (
+          <button
+            type="button"
+            disabled={deleting || saving}
+            onClick={handleDeleteClick}
+            onBlur={() => {
+              if (disarmTimer.current) clearTimeout(disarmTimer.current);
+              setConfirmingDelete(false);
+            }}
+            aria-label={
+              confirmingDelete
+                ? `Confirm delete ${label}`
+                : `Delete ${label}`
+            }
+            className={`text-sm px-4 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
+              confirmingDelete
+                ? "bg-red-600 border-red-500 text-white hover:bg-red-500"
+                : "bg-transparent border-red-700/60 text-red-300 hover:bg-red-950/40"
+            }`}
+          >
+            {deleting ? "Deleting…" : confirmingDelete ? "Confirm" : "Delete"}
+          </button>
+        )}
       </div>
       {helper && <div className="text-xs text-gray-500">{helper}</div>}
     </div>

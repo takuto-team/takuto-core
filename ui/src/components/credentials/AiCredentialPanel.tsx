@@ -11,6 +11,7 @@
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useState,
@@ -19,6 +20,7 @@ import { ConnectedStatusPill } from "../ConnectedStatusPill";
 import { CredentialPasteField } from "../CredentialPasteField";
 import { parseClaudeSessionBlob } from "../../utils/claudeSession";
 import type {
+  ProviderCredentialKind,
   SetProviderCredentialRequest,
   UserCredentialsStatus,
 } from "../../api/types";
@@ -31,6 +33,13 @@ interface AiCredentialPanelProps {
   /** Persist the entered credential. Returns `true` on success, `false` on
    *  failure (the caller renders the error toast). */
   onSave: (body: SetProviderCredentialRequest) => Promise<boolean>;
+  /**
+   * Hard-delete the stored credential for the current provider + the given
+   * slot. Returns `true` on success. When omitted, no Delete button renders
+   * (e.g. the onboarding wizard, where deletion is meaningless). Always
+   * scoped to the panel's `activeProvider` — never another provider.
+   */
+  onDelete?: (kind: ProviderCredentialKind) => Promise<boolean>;
 }
 
 /**
@@ -55,17 +64,31 @@ export const AiCredentialPanel = forwardRef<
   AiCredentialPanelHandle,
   AiCredentialPanelProps
 >(function AiCredentialPanel(
-  { activeProvider, credentials, onSave }: AiCredentialPanelProps,
+  { activeProvider, credentials, onSave, onDelete }: AiCredentialPanelProps,
   ref,
 ) {
   const [apiKey, setApiKey] = useState("");
   const [sessionJson, setSessionJson] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   // Inline pre-flight validation error for the session blob. Set by the
   // Save path so the user sees structured feedback BEFORE the server
   // round-trip (#40 T-CLAUDE-UI-006). Cleared on each edit.
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [claudeTab, setClaudeTab] = useState<ClaudeAuthMethod>("api_key");
+
+  // Reset all input state whenever the active provider changes. Without this,
+  // a value typed for provider A survives a switch to provider B and would be
+  // persisted under B on the next Save / wizard "Continue" — the exact bug
+  // that created an orphaned credential row for a provider the user never
+  // entered a key for. The save is always scoped to `activeProvider`, so the
+  // field MUST be empty after a switch.
+  useEffect(() => {
+    setApiKey("");
+    setSessionJson("");
+    setSessionError(null);
+    setClaudeTab("api_key");
+  }, [activeProvider]);
 
   const isClaude = activeProvider === "claude";
 
@@ -113,6 +136,15 @@ export const AiCredentialPanel = forwardRef<
       setSaving(false);
     }
   }, [apiKey, onSave]);
+
+  const deleteKind = useCallback(
+    (kind: ProviderCredentialKind): void => {
+      if (!onDelete) return;
+      setDeleting(true);
+      void onDelete(kind).finally(() => setDeleting(false));
+    },
+    [onDelete],
+  );
 
   const submitSession = useCallback(async (): Promise<boolean> => {
     // #40 T-CLAUDE-UI-006: client-side validation BEFORE the POST. Surface
@@ -201,6 +233,9 @@ export const AiCredentialPanel = forwardRef<
               placeholder="sk-ant-… or CLAUDE_CODE_OAUTH_TOKEN"
               helper={apiKeyHelper}
               saveLabel={apiKeyActive ? "Replace" : "Save"}
+              canDelete={apiKeyActive}
+              deleting={deleting}
+              onDelete={onDelete ? () => deleteKind("api_key") : undefined}
             />
           ) : (
             <ClaudeSessionField
@@ -243,6 +278,9 @@ export const AiCredentialPanel = forwardRef<
           }
           helper={apiKeyHelper}
           saveLabel={apiKeyActive ? "Replace" : "Save"}
+          canDelete={apiKeyActive}
+          deleting={deleting}
+          onDelete={onDelete ? () => deleteKind("api_key") : undefined}
         />
       )}
     </section>

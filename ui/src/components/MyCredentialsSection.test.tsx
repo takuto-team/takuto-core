@@ -505,3 +505,48 @@ describe("MyCredentialsSection — #40 Claude auth-method selector", () => {
     expect(pill.textContent).toMatch(/Not connected/);
   });
 });
+
+describe("MyCredentialsSection — per-provider Delete button", () => {
+  it("deletes only the current provider's key, then refetches → pill flips to Not connected", async () => {
+    stubAuthStatus("cursor");
+    resetMocks({
+      provider: {
+        provider: "cursor",
+        api_key: {
+          provider: "cursor",
+          kind: "api_key",
+          active: true,
+          last_validated_at: "2026-06-15T08:00:00Z",
+          last_used_at: null,
+        },
+      },
+      github: null,
+    });
+    renderPage();
+
+    const section = (
+      await waitFor(() => screen.getByText(/AI provider — Cursor/i))
+    ).closest("section")!;
+    // Connected to start.
+    expect(within(section).getByText(/^Connected$/i)).toBeTruthy();
+
+    // Two-step confirm: first click arms, second click deletes.
+    fireEvent.click(
+      within(section).getByRole("button", { name: /Delete Cursor API key/i }),
+    );
+    fireEvent.click(
+      within(section).getByRole("button", {
+        name: /Confirm delete Cursor API key/i,
+      }),
+    );
+
+    // After delete + refetch the pill flips to Not connected and the Delete
+    // button is gone (nothing left to delete).
+    await waitFor(() => {
+      expect(within(section).getByText(/^Not connected$/i)).toBeTruthy();
+    });
+    expect(
+      within(section).queryByRole("button", { name: /^Delete/i }),
+    ).toBeNull();
+  });
+});

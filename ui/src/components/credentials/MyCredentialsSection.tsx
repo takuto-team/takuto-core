@@ -24,16 +24,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   apiJson,
-  // deleteProviderCredential intentionally NOT imported — task #31 removed
-  // the Disconnect / Remove buttons because the single Replace/Save flow
-  // covers rotation and revocation happens on the provider side
-  // (anthropic.com / cursor.com).
+  // An explicit per-provider Delete button is supported again: it scopes the
+  // hard-delete to the CURRENT provider + slot, so a stored key can be cleared
+  // without having to overwrite it (and without ever touching another
+  // provider's row). Rotation still flows through the Replace/Save button.
+  deleteProviderCredential,
   fetchUserCredentials,
   setProviderCredential,
   UserCredentialsError,
 } from "../../api/client";
 import { useToast } from "../../hooks/useToast";
-import type { AuthStatus, UserCredentialsStatus } from "../../api/types";
+import type {
+  AuthStatus,
+  ProviderCredentialKind,
+  UserCredentialsStatus,
+} from "../../api/types";
 import { AiCredentialPanel } from "./AiCredentialPanel";
 import { PROVIDER_LABEL } from "./helpers";
 
@@ -196,6 +201,21 @@ export function MyCredentialsSection({ refreshKey = 0 }: Props = {}) {
                 return true;
               } catch (e: unknown) {
                 handleSurfaceError(e, "Could not save your credential.");
+                return false;
+              }
+            }}
+            onDelete={async (kind: ProviderCredentialKind) => {
+              try {
+                // Scoped to the CURRENT provider + slot — never another
+                // provider's row.
+                await deleteProviderCredential(activeProvider, kind);
+                await refresh();
+                const providerLabel =
+                  PROVIDER_LABEL[activeProvider] ?? activeProvider;
+                showToast(`${providerLabel} key removed.`, "success");
+                return true;
+              } catch (e: unknown) {
+                handleSurfaceError(e, "Could not delete your credential.");
                 return false;
               }
             }}
