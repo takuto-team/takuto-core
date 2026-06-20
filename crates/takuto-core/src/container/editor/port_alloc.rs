@@ -91,7 +91,7 @@ async fn used_editor_ports() -> Vec<u16> {
 ///
 /// Uses an in-memory set (no Docker label race) plus a Docker query as a
 /// secondary check for ports allocated by a previous Takuto process.
-pub(crate) async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
+pub async fn allocate_editor_ports(count: usize) -> Option<Vec<u16>> {
     let mut allocated = ALLOCATED_PORTS.lock().await;
     // Also check Docker for ports from a previous process (restart recovery).
     let docker_used = used_editor_ports().await;

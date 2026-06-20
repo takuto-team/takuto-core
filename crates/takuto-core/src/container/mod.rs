@@ -39,9 +39,9 @@ pub(crate) mod wrap_command;
 // ---------------------------------------------------------------------------
 
 pub use editor::{
-    EditorInfo, allocate_single_port, build_editor_url, build_session_dynamic_port_url,
-    build_session_editor_url, build_session_terminal_url, build_terminal_url,
-    generate_connection_token, generate_session_path_token, get_editor_info,
+    EditorInfo, allocate_editor_ports, allocate_single_port, build_editor_url,
+    build_session_dynamic_port_url, build_session_editor_url, build_session_terminal_url,
+    build_terminal_url, generate_connection_token, generate_session_path_token, get_editor_info,
     parse_connection_token_from_labels, parse_label_value, release_editor_ports,
     session_publish_arg, start_editor, stop_editor,
 };

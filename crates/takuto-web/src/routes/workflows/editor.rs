@@ -777,7 +777,6 @@ async fn ensure_workspace_container_up(
     editor: &EditorState,
     id: &str,
     user_id: &str,
-    publish_ports: &[u16],
 ) -> Result<(), (StatusCode, String)> {
     let wf_arc = engine.engine.workflows_arc();
     let (existing_worktree, branch_name, worktree_lock, ticket_key, workspace_name) = {
@@ -837,13 +836,25 @@ async fn ensure_workspace_container_up(
     )
     .await;
 
+    // Allocate the container's editor port set (vscode + dynamic spares),
+    // exactly as the editor entry point does. `start_editor` reuses
+    // `spare_ports[0]` as the IDE port, so this MUST reserve a dedicated port
+    // for the editor — never the terminal's ttyd port (the caller allocated
+    // that separately, so it is excluded from this set). Seeding the container
+    // with the ttyd port instead would make the editor collide with ttyd on the
+    // same port and the editor proxy route would 404.
+    let dynamic_ports = cfg_state.config.read().await.editor.dynamic_ports;
+    let ws_ports = container::allocate_editor_ports(1 + dynamic_ports)
+        .await
+        .unwrap_or_default();
+
     container::workspace::ensure_workspace_container(
         &ticket_key,
         &worktree,
         &image,
         true, // isolate_workspace: restrict the container to this issue's worktree
         secrets_bundle.as_deref(),
-        publish_ports,
+        &ws_ports,
         &init_commands,
     )
     .await
@@ -961,7 +972,6 @@ pub async fn open_terminal(
             &editor,
             &id,
             &auth.user_id,
-            &[port],
         )
         .await?;
     }

@@ -35,9 +35,8 @@ pub use urls::{
 // `terminal`) keep their pre-split `super::editor::*` imports without
 // re-routing each call site through the new submodules.
 pub(crate) use labels::editor_container_name;
-pub(crate) use port_alloc::{
-    EDITOR_PORT_MAX, EDITOR_PORT_MIN, allocate_editor_ports, release_container_ports,
-};
+pub use port_alloc::allocate_editor_ports;
+pub(crate) use port_alloc::{EDITOR_PORT_MAX, EDITOR_PORT_MIN, release_container_ports};
 
 #[cfg(test)]
 mod tests {
