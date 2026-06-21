@@ -5,7 +5,16 @@ FROM node:23-bookworm-slim@sha256:86191b94d2a163be41f3dc7fe5e5fcaca8ba2f1be7275d
 
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
-RUN npm ci --legacy-peer-deps
+# `npm ci` can fail transiently with esbuild's `ETXTBSY`: its post-install
+# spawns the binary it just wrote to check `--version`, racing the filesystem
+# write handle (a known Linux/Docker race esbuild's maintainers say to retry).
+# Retry a few times; propagate the failure only if every attempt fails.
+RUN n=0; until [ "$n" -ge 3 ]; do \
+      npm ci --legacy-peer-deps && exit 0; \
+      n=$((n+1)); echo "npm ci failed (attempt $n) — retrying after esbuild ETXTBSY race"; \
+      rm -rf node_modules; sleep 3; \
+    done; \
+    echo "npm ci failed after $n attempts" >&2; exit 1
 COPY ui/ ./
 # VERSION file is read by vite.config.ts at build time (resolve("../VERSION"))
 COPY VERSION /VERSION
