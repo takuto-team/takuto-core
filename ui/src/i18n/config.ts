@@ -3,9 +3,9 @@
 
 /** Single source of truth for the supported languages and the switcher labels. */
 export const LANGUAGES = [
-  { code: "en", label: "EN" },
-  { code: "fr", label: "FR" },
-  { code: "es", label: "ES" },
+  { code: "en", label: "English" },
+  { code: "fr", label: "Français" },
+  { code: "es", label: "Espagnol" },
   { code: "zh", label: "中文" },
   { code: "ja", label: "日本" },
 ] as const;

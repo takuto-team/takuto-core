@@ -21,8 +21,8 @@ afterEach(async () => {
 describe("LanguageSwitcher", () => {
   it("shows the current language code on the trigger", () => {
     render(<LanguageSwitcher />);
-    // English is pinned by the test setup → trigger shows "EN".
-    expect(screen.getByRole("button", { name: /change language/i }).textContent).toBe("EN");
+    // English is pinned by the test setup → trigger shows the English label.
+    expect(screen.getByRole("button", { name: /change language/i }).textContent).toBe("English");
   });
 
   it("opens a menu listing all five language codes", () => {
@@ -37,7 +37,7 @@ describe("LanguageSwitcher", () => {
   it("changes language and updates <html lang> when a code is picked", async () => {
     render(<LanguageSwitcher />);
     fireEvent.click(screen.getByRole("button", { name: /change language/i }));
-    fireEvent.click(within(screen.getByRole("menu")).getByText("FR"));
+    fireEvent.click(within(screen.getByRole("menu")).getByText("Français"));
     // changeLanguage resolves asynchronously on the i18n singleton.
     await waitFor(() => expect(i18n.language).toBe("fr"));
     expect(document.documentElement.lang).toBe("fr");
