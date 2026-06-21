@@ -231,7 +231,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
             workflowDefs={workflowDefs} onRefresh={fetchWorkflows}
             onShowDescription={handleShowDescription} onReport={modals.openReport}
             onAddWorkflow={handleAddWorkflow}
-            canAddWorkflow={hasAnyRepo === true} repoExists={repoExists}
+            canAddWorkflow={hasAnyRepo === true && activeRepoName !== null} repoExists={repoExists}
             onSetupProject={undefined} activeRepoName={activeRepoName}
           />
         )}
