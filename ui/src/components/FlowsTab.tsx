@@ -20,6 +20,7 @@
  */
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import {
   getMyFlows,
   putMyFlows,
@@ -42,6 +43,7 @@ import { EditableName } from "./EditableName";
 type Expanded = number | "new" | null;
 
 export function FlowsTab() {
+  const { t } = useTranslation("config");
   const { myRepos, activeRepoName } = useMyRepositories();
   const { access } = useRepoAccess();
   // The repo whose flows are shown. Workflows are per-repository; this drives
@@ -204,7 +206,7 @@ export function FlowsTab() {
 
   const atCap = flows.length >= MAX_FLOWS;
   const capTooltip = atCap
-    ? "You've reached the 20-workflow limit for this repository."
+    ? t("flows.capTooltip")
     : undefined;
 
   const loadingRepos = myRepos === null;
@@ -221,7 +223,7 @@ export function FlowsTab() {
       title={capTooltip}
       className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
     >
-      + Add workflow
+      {t("flows.addWorkflow")}
     </button>
   );
 
@@ -232,18 +234,16 @@ export function FlowsTab() {
       disabled={saving}
       className="px-4 py-1.5 rounded-lg bg-gray-800 text-gray-300 text-sm font-medium border border-gray-700 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
     >
-      Re-seed from defaults
+      {t("flows.reseed")}
     </button>
   );
 
   return (
     <div className="space-y-4">
       <header>
-        <h2 className="text-base font-semibold text-gray-300 mb-1">Workflows</h2>
+        <h2 className="text-base font-semibold text-gray-300 mb-1">{t("flows.title")}</h2>
         <p className="text-sm text-gray-500 max-w-2xl">
-          Workflows are per repository. Click one on a work-item card to run its steps in order;
-          dependencies require an upstream workflow to have completed at least once on that work
-          item.
+          {t("flows.description")}
         </p>
       </header>
 
@@ -258,13 +258,18 @@ export function FlowsTab() {
         <section className="flex-1 space-y-4">
           {selected === null ? (
             <div className="h-full flex items-center justify-center text-sm text-gray-500 italic min-h-[16rem]">
-              {loadingRepos ? "Loading…" : "Select a repository to configure its workflows."}
+              {loadingRepos ? t("actions.loading") : t("flows.selectRepo")}
             </div>
           ) : (
             <>
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <h3 className="text-base font-semibold text-gray-200">
-                  Workflows — <span className="font-mono">{selected}</span>
+                  <Trans
+                    i18nKey="flows.heading"
+                    ns="config"
+                    values={{ repo: selected }}
+                    components={{ mono: <span className="font-mono" /> }}
+                  />
                 </h3>
                 <span className={`text-sm font-mono ${atCap ? "text-amber-400" : "text-gray-500"}`}>
                   {flows.length} / {MAX_FLOWS}
@@ -274,28 +279,31 @@ export function FlowsTab() {
               <GenerateReportSwitch workspace={selected} />
 
               {loading ? (
-                <p className="text-sm text-gray-500">Loading…</p>
+                <p className="text-sm text-gray-500">{t("actions.loading")}</p>
               ) : loadError ? (
                 <p className="text-sm text-red-400">
-                  Could not load workflows.{" "}
+                  {t("flows.loadError")}{" "}
                   <button
                     type="button"
                     onClick={() => load(selected)}
                     className="underline hover:text-red-300 cursor-pointer"
                   >
-                    Retry
+                    {t("actions.retry")}
                   </button>
                 </p>
               ) : flows.length === 0 && expanded !== "new" ? (
                 <div className="flex justify-center py-8">
                   <div className="border border-gray-800 rounded-lg bg-gray-950 p-6 max-w-md text-center space-y-4">
                     <p className="text-sm text-gray-400">
-                      You have no workflows configured for{" "}
-                      <span className="font-mono">{selected}</span>.
+                      <Trans
+                        i18nKey="flows.emptyTitle"
+                        ns="config"
+                        values={{ repo: selected }}
+                        components={{ mono: <span className="font-mono" /> }}
+                      />
                     </p>
                     <p className="text-sm text-gray-500">
-                      Work-item cards in this repository will show an empty state until you add at
-                      least one.
+                      {t("flows.emptyBody")}
                     </p>
                     {actionError && <p className="text-sm text-red-400">{actionError}</p>}
                     <div className="flex items-center justify-center gap-3">
@@ -376,7 +384,7 @@ export function FlowsTab() {
                   <EditableName
                     value={newFlowName}
                     onChange={setNewFlowName}
-                    placeholder="Untitled workflow"
+                    placeholder={t("flows.untitled")}
                     textClassName="text-sm font-medium"
                   />
                 </div>
@@ -410,9 +418,9 @@ export function FlowsTab() {
 
       {confirmDelete !== null && (
         <ConfirmModal
-          title="Delete workflow"
-          message={`Delete workflow "${flows[confirmDelete]?.name ?? ""}"? This removes it from every work-item card in this repository.`}
-          confirmLabel="Delete"
+          title={t("flows.deleteTitle")}
+          message={t("flows.deleteMessage", { name: flows[confirmDelete]?.name ?? "" })}
+          confirmLabel={t("actions.delete")}
           onConfirm={handleDelete}
           onCancel={() => setConfirmDelete(null)}
         />
@@ -420,9 +428,9 @@ export function FlowsTab() {
 
       {confirmReseed && (
         <ConfirmModal
-          title="Re-seed workflows from defaults"
-          message={`This replaces all workflows for ${selected} with the defaults shipped with Takuto. Your current workflows for this repository will be lost. Other repositories are unaffected.`}
-          confirmLabel="Re-seed"
+          title={t("flows.reseedTitle")}
+          message={t("flows.reseedMessage", { repo: selected })}
+          confirmLabel={t("flows.reseedConfirm")}
           onConfirm={handleReseed}
           onCancel={() => setConfirmReseed(false)}
         />

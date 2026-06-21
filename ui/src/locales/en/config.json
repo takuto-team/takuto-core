@@ -216,6 +216,7 @@
     "deleteTitle": "Delete workflow",
     "deleteMessage": "Delete workflow \"{{name}}\"? This removes it from every work-item card in this repository.",
     "reseedTitle": "Re-seed workflows from defaults",
+    "reseedConfirm": "Re-seed",
     "reseedMessage": "This replaces all workflows for {{repo}} with the defaults shipped with Takuto. Your current workflows for this repository will be lost. Other repositories are unaffected.",
     "card": {
       "stepCount_one": "{{count}} step",
