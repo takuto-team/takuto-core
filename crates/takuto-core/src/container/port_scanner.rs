@@ -271,15 +271,29 @@ pub async fn listening_ports_in_editor(ticket_key: &str) -> std::collections::Ha
 /// — used to rebuild the dashboard's port chips from the running container so
 /// they survive a server restart or scanner churn.
 pub async fn live_socat_forwards(container: &str) -> Vec<(u16, u16)> {
+    parse_socat_forwards(&process_cmdlines(container).await)
+}
+
+/// Read every process command line inside `container` from `/proc`, one per
+/// line, with NUL separators replaced by spaces.
+///
+/// This stands in for `pgrep`/`ps`, which are NOT installed in the workspace
+/// image — `/proc` always is. Returns an empty string if the exec fails.
+pub(crate) async fn process_cmdlines(container: &str) -> String {
     let out = tokio::process::Command::new("docker")
-        .args(["exec", container, "pgrep", "-af", "socat"])
+        .args([
+            "exec",
+            container,
+            "sh",
+            "-c",
+            r#"for d in /proc/[0-9]*; do tr '\0' ' ' < "$d/cmdline" 2>/dev/null; echo; done"#,
+        ])
         .output()
         .await;
-    let Ok(out) = out else { return Vec::new() };
-    if !out.status.success() {
-        return Vec::new();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+        _ => String::new(),
     }
-    parse_socat_forwards(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// Parse `(spare_host_port, target_app_port)` pairs from `pgrep -af socat`

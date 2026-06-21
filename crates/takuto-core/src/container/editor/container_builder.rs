@@ -510,16 +510,12 @@ pub async fn get_editor_info(ticket_key: &str) -> Option<EditorInfo> {
     }
     let name = workspace_container_name(ticket_key);
 
-    let out = tokio::process::Command::new("docker")
-        .args(["exec", &name, "pgrep", "-af", "openvscode-server"])
-        .output()
-        .await
-        .ok()?;
-    if !out.status.success() {
-        return None; // IDE process not running in the container.
-    }
-    let (vscode_port, connection_token, path_token) =
-        parse_editor_from_pgrep(&String::from_utf8_lossy(&out.stdout))?;
+    // `pgrep`/`ps` are not installed in the workspace image, so read the IDE
+    // process command line from `/proc` instead. `parse_editor_from_pgrep`
+    // matches on the `--port`/`--connection-token`/`--server-base-path` flags
+    // and ignores any leading PID, so the prefix-less `/proc` form is fine.
+    let cmdlines = crate::container::port_scanner::process_cmdlines(&name).await;
+    let (vscode_port, connection_token, path_token) = parse_editor_from_pgrep(&cmdlines)?;
 
     // Spare ports come from the container label, minus the vscode port.
     let spare_ports: Vec<u16> = read_ws_spare_ports(&name)
@@ -577,6 +573,23 @@ mod tests {
         assert_eq!(
             parse_editor_from_pgrep(line),
             Some((9201, "conn".to_string(), "tok".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_editor_from_proc_cmdline_without_pid_prefix() {
+        // Shape read from /proc/<pid>/cmdline (NULs→spaces, no leading PID),
+        // including the `sh /usr/local/bin/openvscode-server` wrapper.
+        let line = "sh /usr/local/bin/openvscode-server --port 9100 --host 0.0.0.0 \
+                    --connection-token d10fa54cd3964f67805966bee118e441 \
+                    --server-base-path /s/ad2a3f851d19ca1d7b510cddc6201f10 \n";
+        assert_eq!(
+            parse_editor_from_pgrep(line),
+            Some((
+                9100,
+                "d10fa54cd3964f67805966bee118e441".to_string(),
+                "ad2a3f851d19ca1d7b510cddc6201f10".to_string()
+            ))
         );
     }
 
