@@ -262,10 +262,20 @@ pub async fn list_workflows(
                     ),
                 );
             }
-            // Port chips: the live `socat` forwards are the ground truth. Reuse an
-            // existing DynamicPort token for the same (ticket, host_port) or mint a
-            // fresh one so the proxy URL resolves.
-            let forwards = container::live_socat_forwards(&name).await;
+            // Port chips: the live `socat` forwards are the ground truth — but a
+            // `fork` socat keeps its listener alive after the target app exits, so
+            // a forward only counts while its target port is still listening.
+            // Cross-check against `ss` so a stopped dev server clears its chip.
+            let forwards: Vec<(u16, u16)> = {
+                let raw = container::live_socat_forwards(&name).await;
+                if raw.is_empty() {
+                    continue;
+                }
+                let listening = container::listening_ports_in_editor(&w.ticket_key).await;
+                raw.into_iter()
+                    .filter(|(_, target)| listening.contains(target))
+                    .collect()
+            };
             if forwards.is_empty() {
                 continue;
             }
