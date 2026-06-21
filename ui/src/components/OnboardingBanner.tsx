@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { Link } from "react-router-dom";
+import { Trans, useTranslation } from "react-i18next";
 import type { StructuredWarning, SystemStatus } from "../api/types";
 
 interface Props {
@@ -43,73 +44,71 @@ const DOCS_URL = "https://github.com/takuto-team/takuto-cli/blob/main/AGENTS.md"
  * Codes not in this map render with no CTA (per the table's last row).
  */
 type CtaSpec =
-  | { kind: "internal"; to: string; label: string; adminOnly: boolean }
-  | { kind: "external"; href: string; label: string; adminOnly: boolean };
+  | { kind: "internal"; to: string; labelKey: string; adminOnly: boolean }
+  | { kind: "external"; href: string; labelKey: string; adminOnly: boolean };
 
 const CTA_BY_CODE: Record<string, CtaSpec> = {
   claude_not_authenticated: {
     kind: "internal",
     to: "/config.html?tab=ai",
-    label: "Set Claude credential",
+    labelKey: "banner.cta.setClaude",
     adminOnly: false,
   },
   cursor_not_authenticated: {
     kind: "internal",
     to: "/config.html?tab=ai",
-    label: "Set Cursor credential",
+    labelKey: "banner.cta.setCursor",
     adminOnly: false,
   },
   codex_not_authenticated: {
     kind: "internal",
     to: "/config.html?tab=ai",
-    label: "Set Codex credential",
+    labelKey: "banner.cta.setCodex",
     adminOnly: false,
   },
   opencode_not_authenticated: {
     kind: "internal",
     to: "/config.html?tab=ai",
-    label: "Set OpenCode credential",
+    labelKey: "banner.cta.setOpenCode",
     adminOnly: false,
   },
   gh_auth_missing: {
     kind: "internal",
     to: "/config.html?tab=ai",
-    label: "Set GitHub PAT",
+    labelKey: "banner.cta.setGithubPat",
     adminOnly: false,
   },
   provider_not_implemented: {
     kind: "internal",
     to: "/config.html?tab=ai",
-    label: "Change provider",
+    labelKey: "banner.cta.changeProvider",
     adminOnly: true,
   },
   master_key_unavailable: {
     kind: "external",
     href: DOCS_URL,
-    label: "Read docs",
+    labelKey: "banner.cta.readDocs",
     adminOnly: true,
   },
   secret_key_world_readable: {
     kind: "external",
     href: DOCS_URL,
-    label: "Read docs",
+    labelKey: "banner.cta.readDocs",
     adminOnly: true,
   },
   config_missing: {
     kind: "external",
     href: DOCS_URL,
-    label: "Read docs",
+    labelKey: "banner.cta.readDocs",
     adminOnly: true,
   },
   acli_missing: {
     kind: "external",
     href: DOCS_URL,
-    label: "Read docs",
+    labelKey: "banner.cta.readDocs",
     adminOnly: true,
   },
 };
-
-const NON_ADMIN_HINT = "Ask your admin to change the provider";
 
 /**
  * Dashboard banner derived from `GET /api/onboarding/status`. Renders one
@@ -123,6 +122,7 @@ export function OnboardingBanner({
   legacyPreflightError,
   isAdmin = false,
 }: Props) {
+  const { t } = useTranslation("onboarding");
   // While the fetch is in flight we render nothing — the dashboard already
   // handles its own loading state and we don't want a "loading…" flicker.
   if (status === undefined) {
@@ -146,7 +146,7 @@ export function OnboardingBanner({
           </span>
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-red-300 text-sm">
-              Takuto is not ready — setup required
+              {t("banner.notReady")}
             </p>
             {legacyPreflightError.split("\n").map((line, i) => (
               <p
@@ -157,11 +157,11 @@ export function OnboardingBanner({
               </p>
             ))}
             <p className="text-xs text-red-300/70 mt-1">
-              Run{" "}
-              <code className="bg-red-900/50 px-1 rounded">
-                docker compose run --rm -it takuto setup
-              </code>{" "}
-              to complete setup, then restart.
+              <Trans
+                i18nKey="banner.legacyRunHint"
+                ns="onboarding"
+                components={{ code: <code className="bg-red-900/50 px-1 rounded" /> }}
+              />
             </p>
           </div>
         </div>
@@ -189,7 +189,7 @@ export function OnboardingBanner({
         </span>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-red-300 text-sm">
-            Setup is not finished
+            {t("banner.notFinished")}
           </p>
           <ul className="mt-1 space-y-1.5">
             {criticals.map((w, i) => (
@@ -219,6 +219,7 @@ function WarningCta({
   warning: StructuredWarning;
   isAdmin: boolean;
 }) {
+  const { t } = useTranslation("onboarding");
   const spec = CTA_BY_CODE[warning.code];
   // Unknown code → render nothing on the right. The message still shows.
   if (!spec) return null;
@@ -232,8 +233,8 @@ function WarningCta({
     // /config.html?tab=ai destination when AI Settings was consolidated.
     const hint =
       warning.code === "provider_not_implemented"
-        ? NON_ADMIN_HINT
-        : "Ask your admin to fix this";
+        ? t("banner.askAdminProvider")
+        : t("banner.askAdminGeneric");
     return (
       <span
         className="text-xs text-red-300/60 italic flex-shrink-0"
@@ -244,6 +245,7 @@ function WarningCta({
     );
   }
 
+  const label = t(spec.labelKey);
   const className =
     "flex-shrink-0 text-xs px-2.5 py-1 rounded-md bg-red-900/60 text-red-100 border border-red-700/60 hover:bg-red-800/80 hover:text-white transition-colors whitespace-nowrap";
 
@@ -252,9 +254,9 @@ function WarningCta({
       <Link
         to={spec.to}
         className={className}
-        aria-label={`${spec.label} — fix: ${warning.message}`}
+        aria-label={t("banner.ctaAriaInternal", { label, message: warning.message })}
       >
-        {spec.label} →
+        {label} →
       </Link>
     );
   }
@@ -265,9 +267,9 @@ function WarningCta({
       target="_blank"
       rel="noopener noreferrer"
       className={className}
-      aria-label={`${spec.label} (opens documentation in a new tab) — fix: ${warning.message}`}
+      aria-label={t("banner.ctaAriaExternal", { label, message: warning.message })}
     >
-      {spec.label} →
+      {label} →
     </a>
   );
 }

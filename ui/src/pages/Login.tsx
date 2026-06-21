@@ -2,12 +2,14 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, type FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 interface Props {
   onLogin: (username: string, password: string) => Promise<boolean>;
 }
 
 function RecoveryForm({ onDone }: { onDone: () => void }) {
+  const { t } = useTranslation("auth");
   const [username, setUsername] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -44,10 +46,10 @@ function RecoveryForm({ onDone }: { onDone: () => void }) {
         setSuccess(true);
       } else {
         const body = await res.json().catch(() => null);
-        setError(body?.error ?? "Recovery failed");
+        setError(body?.error ?? t("recovery.error.failed"));
       }
     } catch {
-      setError("Could not reach the server.");
+      setError(t("recovery.error.unreachable"));
     } finally {
       setLoading(false);
     }
@@ -56,15 +58,13 @@ function RecoveryForm({ onDone }: { onDone: () => void }) {
   if (success) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-4">
-        <p className="text-sm text-green-400">
-          Password reset successfully. You can now sign in with your new password.
-        </p>
+        <p className="text-sm text-green-400">{t("recovery.success")}</p>
         <button
           type="button"
           onClick={onDone}
           className="w-full py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 cursor-pointer"
         >
-          Back to sign in
+          {t("recovery.backToSignIn")}
         </button>
       </div>
     );
@@ -76,7 +76,7 @@ function RecoveryForm({ onDone }: { onDone: () => void }) {
       className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-4"
     >
       <div>
-        <label className="block text-xs text-gray-400 mb-1">Username</label>
+        <label className="block text-xs text-gray-400 mb-1">{t("recovery.username")}</label>
         <input
           type="text"
           value={username}
@@ -87,7 +87,7 @@ function RecoveryForm({ onDone }: { onDone: () => void }) {
         />
       </div>
       <div>
-        <label className="block text-xs text-gray-400 mb-1">Recovery code</label>
+        <label className="block text-xs text-gray-400 mb-1">{t("recovery.code")}</label>
         <input
           type="text"
           value={recoveryCode}
@@ -98,7 +98,7 @@ function RecoveryForm({ onDone }: { onDone: () => void }) {
         />
       </div>
       <div>
-        <label className="block text-xs text-gray-400 mb-1">New password</label>
+        <label className="block text-xs text-gray-400 mb-1">{t("recovery.newPassword")}</label>
         <input
           type="password"
           value={newPassword}
@@ -107,11 +107,11 @@ function RecoveryForm({ onDone }: { onDone: () => void }) {
           className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200"
         />
         {newPassword && !passwordLongEnough && (
-          <p className="text-xs text-red-400 mt-1">Minimum 12 characters</p>
+          <p className="text-xs text-red-400 mt-1">{t("recovery.minChars")}</p>
         )}
       </div>
       <div>
-        <label className="block text-xs text-gray-400 mb-1">Confirm new password</label>
+        <label className="block text-xs text-gray-400 mb-1">{t("recovery.confirmPassword")}</label>
         <input
           type="password"
           value={confirmPassword}
@@ -122,7 +122,7 @@ function RecoveryForm({ onDone }: { onDone: () => void }) {
           }`}
         />
         {confirmPassword && !passwordsMatch && (
-          <p className="text-xs text-red-400 mt-1">Passwords do not match</p>
+          <p className="text-xs text-red-400 mt-1">{t("recovery.passwordMismatch")}</p>
         )}
       </div>
       {error && <p className="text-xs text-red-400">{error}</p>}
@@ -131,20 +131,21 @@ function RecoveryForm({ onDone }: { onDone: () => void }) {
         disabled={loading || !formValid}
         className="w-full py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
       >
-        {loading ? "Resetting..." : "Reset password"}
+        {loading ? t("recovery.resetting") : t("recovery.resetPassword")}
       </button>
       <button
         type="button"
         onClick={onDone}
         className="text-xs text-gray-500 hover:text-gray-300 text-center cursor-pointer"
       >
-        Back to sign in
+        {t("recovery.backToSignIn")}
       </button>
     </form>
   );
 }
 
 export function Login({ onLogin }: Props) {
+  const { t } = useTranslation("auth");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -157,9 +158,9 @@ export function Login({ onLogin }: Props) {
     setLoading(true);
     try {
       const ok = await onLogin(username, password);
-      if (!ok) setError("Invalid credentials");
+      if (!ok) setError(t("login.error.invalid"));
     } catch {
-      setError("Login failed");
+      setError(t("login.error.failed"));
     } finally {
       setLoading(false);
     }
@@ -177,7 +178,7 @@ export function Login({ onLogin }: Props) {
             className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-4"
           >
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Username</label>
+              <label className="block text-xs text-gray-400 mb-1">{t("login.username")}</label>
               <input
                 type="text"
                 value={username}
@@ -187,7 +188,7 @@ export function Login({ onLogin }: Props) {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Password</label>
+              <label className="block text-xs text-gray-400 mb-1">{t("login.password")}</label>
               <input
                 type="password"
                 value={password}
@@ -201,14 +202,14 @@ export function Login({ onLogin }: Props) {
               disabled={loading}
               className="w-full py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
             >
-              {loading ? "Signing in..." : "Sign in"}
+              {loading ? t("login.signingIn") : t("login.signIn")}
             </button>
             <button
               type="button"
               onClick={() => setShowRecovery(true)}
               className="text-xs text-gray-500 hover:text-gray-300 text-center cursor-pointer"
             >
-              Forgot password?
+              {t("login.forgotPassword")}
             </button>
           </form>
         )}
