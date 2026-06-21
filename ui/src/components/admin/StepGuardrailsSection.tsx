@@ -19,6 +19,7 @@ import {
   useImperativeHandle,
   useState,
 } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { apiJson } from "../../api/http";
 import { putAgentConfig, AgentConfigError } from "../../api/agentConfig";
 import { useToast } from "../../hooks/useToast";
@@ -77,6 +78,7 @@ export const StepGuardrailsSection = forwardRef<
   ConfigSectionHandle,
   ConfigSectionProps
 >(function StepGuardrailsSection({ onDirtyChange }: ConfigSectionProps, ref) {
+  const { t } = useTranslation("config");
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -121,46 +123,41 @@ export const StepGuardrailsSection = forwardRef<
       setLoaded(next);
       if (updated.persisted === false) {
         const reason = updated.persist_warning ?? "unknown error";
-        showToast(
-          `Step guardrails applied in memory but NOT persisted to disk: ${reason}. The change will be lost on next restart — fix the config volume and save again.`,
-          "error",
-        );
+        showToast(t("ai.guardrails.persistWarning", { reason }), "error");
       } else {
-        showToast("Step guardrails saved.", "success");
+        showToast(t("ai.guardrails.savedToast"), "success");
       }
       return true;
     } catch (e: unknown) {
       if (e instanceof AgentConfigError) {
-        showToast(`${e.message} (code: ${e.code})`, "error");
+        showToast(t("errors.withCode", { message: e.message, code: e.code }), "error");
       } else {
         showToast(e instanceof Error ? e.message : String(e), "error");
       }
       return false;
     }
-  }, [draft, loaded, showToast]);
+  }, [draft, loaded, showToast, t]);
 
   useImperativeHandle(ref, () => ({ isDirty: () => dirty, save }), [dirty, save]);
 
   return (
     <section aria-labelledby="step-guardrails-title" className="flex flex-col gap-3">
       <h2 id="step-guardrails-title" className="text-lg font-semibold text-white">
-        Step guardrails
+        {t("ai.guardrails.title")}
       </h2>
       <p className="text-xs text-gray-500">
-        Admin-only. Runtime limits applied to every agent step: how long a step
-        may run, how long the &ldquo;improve description&rdquo; call may run, and
-        the no-progress loop guard.
+        {t("ai.guardrails.help")}
       </p>
 
-      {loading && <p className="text-sm text-gray-500">Loading…</p>}
+      {loading && <p className="text-sm text-gray-500">{t("actions.loading")}</p>}
       {!loading && error && (
-        <p className="text-sm text-red-400">Could not load config: {error}</p>
+        <p className="text-sm text-red-400">{t("errors.loadConfig", { error })}</p>
       )}
       {!loading && !error && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-6">
           <section className="flex flex-col gap-2">
             <label htmlFor="step-timeout-input" className="text-xs text-gray-400">
-              Step timeout (seconds)
+              {t("ai.guardrails.stepTimeout")}
             </label>
             <input
               id="step-timeout-input"
@@ -168,18 +165,17 @@ export const StepGuardrailsSection = forwardRef<
               min={1}
               value={draft.step_timeout_secs}
               onChange={(e) => update({ step_timeout_secs: e.target.value })}
-              placeholder="Leave empty for the default"
+              placeholder={t("ai.guardrails.defaultPlaceholder")}
               className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
             />
             <p className="text-xs text-gray-500">
-              Maximum wall-clock time for a single agent or command step before
-              it is aborted.
+              {t("ai.guardrails.stepTimeoutHelp")}
             </p>
           </section>
 
           <section className="flex flex-col gap-2">
             <label htmlFor="improve-timeout-input" className="text-xs text-gray-400">
-              Improve-description timeout (seconds)
+              {t("ai.guardrails.improveTimeout")}
             </label>
             <input
               id="improve-timeout-input"
@@ -187,18 +183,17 @@ export const StepGuardrailsSection = forwardRef<
               min={1}
               value={draft.improve_timeout_secs}
               onChange={(e) => update({ improve_timeout_secs: e.target.value })}
-              placeholder="Leave empty for the default"
+              placeholder={t("ai.guardrails.defaultPlaceholder")}
               className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
             />
             <p className="text-xs text-gray-500">
-              Time budget for the one-shot &ldquo;improve description&rdquo; helper
-              used on the manual paste-description modal.
+              {t("ai.guardrails.improveTimeoutHelp")}
             </p>
           </section>
 
           <section className="flex flex-col gap-2">
             <label htmlFor="max-repeated-output-input" className="text-xs text-gray-400">
-              Max repeated output lines
+              {t("ai.guardrails.maxRepeatedLines")}
             </label>
             <input
               id="max-repeated-output-input"
@@ -210,8 +205,11 @@ export const StepGuardrailsSection = forwardRef<
               className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
             />
             <p className="text-xs text-gray-500">
-              Consecutive identical output lines that trip the no-progress guard
-              and fail the step. <code className="text-gray-400">0</code> = off.
+              <Trans
+                i18nKey="ai.guardrails.maxRepeatedLinesHelp"
+                ns="config"
+                components={{ code: <code className="text-gray-400" /> }}
+              />
             </p>
           </section>
         </div>

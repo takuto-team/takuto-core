@@ -9,6 +9,7 @@
  * (CODING_STANDARDS §1/§3).
  */
 
+import { Trans, useTranslation } from "react-i18next";
 import type { LinkedItemsInPrompt } from "../../api/types";
 import { ChipInput } from "./ChipInput";
 
@@ -41,13 +42,14 @@ export function JiraContextFields({
   onDoneStatusChange,
   onProjectKeysChange,
 }: JiraContextFieldsProps) {
+  const { t } = useTranslation("config");
   return (
     <section className="flex flex-col gap-4">
-      <h3 className="text-sm font-medium text-gray-300">Jira context</h3>
+      <h3 className="text-sm font-medium text-gray-300">{t("polling.jiraContext.title")}</h3>
 
       <div className="flex flex-col gap-2">
         <label htmlFor="linked-items-in-prompt-select" className="text-xs text-gray-400">
-          Linked items in prompt
+          {t("polling.jiraContext.linkedItems")}
         </label>
         <select
           id="linked-items-in-prompt-select"
@@ -57,13 +59,17 @@ export function JiraContextFields({
           }
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200"
         >
-          <option value="full">Full — include linked-issue descriptions</option>
-          <option value="summary_only">Summary only — keys + summaries</option>
-          <option value="omit">Omit — no linked issues</option>
+          <option value="full">{t("polling.jiraContext.linkedFull")}</option>
+          <option value="summary_only">{t("polling.jiraContext.linkedSummary")}</option>
+          <option value="omit">{t("polling.jiraContext.linkedOmit")}</option>
         </select>
         <p className="text-xs text-gray-500">
-          How linked Jira issues are embedded in{" "}
-          <code className="text-gray-400">{"{ticket_context}"}</code>.
+          <Trans
+            i18nKey="polling.jiraContext.linkedItemsHelp"
+            ns="config"
+            values={{ token: "{ticket_context}" }}
+            components={{ code: <code className="text-gray-400" /> }}
+          />
         </p>
       </div>
 
@@ -72,7 +78,7 @@ export function JiraContextFields({
           htmlFor="ticket-context-max-description-bytes-input"
           className="text-xs text-gray-400"
         >
-          Ticket description cap (bytes)
+          {t("polling.jiraContext.ticketCap")}
         </label>
         <input
           id="ticket-context-max-description-bytes-input"
@@ -84,8 +90,11 @@ export function JiraContextFields({
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          Byte cap on the main ticket description in context.{" "}
-          <code className="text-gray-400">0</code> = unlimited.
+          <Trans
+            i18nKey="polling.jiraContext.ticketCapHelp"
+            ns="config"
+            components={{ code: <code className="text-gray-400" /> }}
+          />
         </p>
       </div>
 
@@ -94,7 +103,7 @@ export function JiraContextFields({
           htmlFor="linked-issue-description-max-bytes-input"
           className="text-xs text-gray-400"
         >
-          Linked-issue description cap (bytes)
+          {t("polling.jiraContext.linkedCap")}
         </label>
         <input
           id="linked-issue-description-max-bytes-input"
@@ -106,32 +115,34 @@ export function JiraContextFields({
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          Byte cap on each linked-issue description.{" "}
-          <code className="text-gray-400">0</code> = unlimited.
+          <Trans
+            i18nKey="polling.jiraContext.linkedCapHelp"
+            ns="config"
+            components={{ code: <code className="text-gray-400" /> }}
+          />
         </p>
       </div>
 
       <div className="flex flex-col gap-2">
         <label htmlFor="jql-filter-input" className="text-xs text-gray-400">
-          JQL filter
+          {t("polling.jiraContext.jqlFilter")}
         </label>
         <input
           id="jql-filter-input"
           type="text"
           value={jqlFilter}
           onChange={(e) => onJqlFilterChange(e.target.value)}
-          placeholder='e.g. labels = "takuto"'
+          placeholder={t("polling.jiraContext.jqlPlaceholder")}
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          Extra JQL appended to the poller query. Leave empty for no extra
-          filter.
+          {t("polling.jiraContext.jqlHelp")}
         </p>
       </div>
 
       <div className="flex flex-col gap-2">
         <label htmlFor="done-status-input" className="text-xs text-gray-400">
-          Done status
+          {t("polling.jiraContext.doneStatus")}
         </label>
         <input
           id="done-status-input"
@@ -142,17 +153,17 @@ export function JiraContextFields({
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          Jira status the &ldquo;Mark as Done&rdquo; transition targets.
+          {t("polling.jiraContext.doneStatusHelp")}
         </p>
       </div>
 
       <ChipInput
         id="jira-project-keys-input"
-        label="Project keys"
+        label={t("polling.jiraContext.projectKeys")}
         values={projectKeys}
         onChange={onProjectKeysChange}
-        placeholder="PROJ, OPS…"
-        helpText="Jira project keys the poller pulls from. Empty = no project filter."
+        placeholder={t("polling.jiraContext.projectKeysPlaceholder")}
+        helpText={t("polling.jiraContext.projectKeysHelp")}
       />
     </section>
   );
