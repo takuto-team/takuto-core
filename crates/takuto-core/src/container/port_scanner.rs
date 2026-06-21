@@ -373,20 +373,31 @@ pub(crate) async fn kill_socat(container: &str, spare_port: u16) {
 /// Send SIGTERM to every process inside `container` whose `/proc` command line
 /// contains `needle`.
 ///
-/// Replaces `pkill -f`, which is NOT installed in the workspace image. The
-/// match is done in-shell with a `case` glob (not `grep`) so the matcher's own
-/// process never matches `needle` and kills itself. `kill` is a shell builtin,
-/// so this depends only on `sh`, `tr`, and `/proc` — all present.
+/// Replaces `pkill -f`, which is NOT installed in the workspace image. `kill`
+/// is a shell builtin, so this depends only on `sh`, `tr`, and `/proc` — all
+/// present.
 pub async fn pkill_in_container(container: &str, needle: &str) {
-    // `needle` is built from internal constants / numeric ports, never user
-    // input, so plain interpolation into the glob is safe here.
-    let script = format!(
-        r#"for d in /proc/[0-9]*; do cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null); case "$cmd" in *{needle}*) kill "${{d#/proc/}}" 2>/dev/null ;; esac; done"#
-    );
+    let script = build_pkill_script(needle);
     let _ = tokio::process::Command::new("docker")
         .args(["exec", container, "sh", "-c", &script])
         .output()
         .await;
+}
+
+/// Build the `/proc`-scanning kill script for [`pkill_in_container`].
+///
+/// CRITICAL: the script must skip its OWN shell (`$$`). The needle is
+/// interpolated into the script body, so the `sh -c "<script>"` process that
+/// runs this has the needle in its own `/proc/$$/cmdline` and would otherwise
+/// match and `kill $$` — terminating the loop before it reaches the real
+/// target (which is exactly how a "stop terminal" silently became a no-op).
+///
+/// `needle` is built from internal constants / numeric ports, never user
+/// input, so plain interpolation is safe here.
+fn build_pkill_script(needle: &str) -> String {
+    format!(
+        r#"self=$$; for d in /proc/[0-9]*; do pid=${{d#/proc/}}; [ "$pid" = "$self" ] && continue; cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null); case "$cmd" in *{needle}*) kill "$pid" 2>/dev/null ;; esac; done"#
+    )
 }
 
 #[cfg(test)]
@@ -443,5 +454,88 @@ socat TCP4-LISTEN:9112,fork,reuseaddr,bind=0.0.0.0 TCP6:[::1]:5173
     fn ignores_empty_input() {
         assert!(parse_socat_forwards("").is_empty());
         assert!(parse_socat_forwards("\n\n").is_empty());
+    }
+
+    use super::build_pkill_script;
+
+    #[test]
+    fn pkill_script_excludes_its_own_shell() {
+        // The needle is interpolated into the script body, so the running
+        // shell's own cmdline contains it. The script MUST skip `$$` or it
+        // kills itself before reaching the target.
+        let script = build_pkill_script("ttyd");
+        assert!(script.contains("self=$$"), "must capture its own pid");
+        assert!(
+            script.contains(r#"[ "$pid" = "$self" ] && continue"#),
+            "must skip its own pid in the loop"
+        );
+        assert!(script.contains("*ttyd*"), "must match the needle");
+    }
+
+    /// True only where `/proc/<pid>/cmdline` exists (Linux). The behavioral
+    /// kill tests below need it; on other platforms (macOS dev machines) they
+    /// skip. The CI gate runs on Linux, so the regression is still enforced.
+    fn has_proc() -> bool {
+        std::path::Path::new("/proc/self/cmdline").exists()
+    }
+
+    // Deterministic regression for the self-kill bug: running the generated
+    // script in a shell whose own cmdline contains the needle must NOT make the
+    // shell terminate itself.
+    #[tokio::test]
+    async fn pkill_script_does_not_suicide_on_self_match() {
+        if !has_proc() {
+            return;
+        }
+        // A needle unique enough to match no real process — except this very
+        // shell, whose cmdline embeds the script (and thus the needle).
+        let script = build_pkill_script("takuto_pkill_self_match_canary");
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .status()
+            .await
+            .expect("spawn sh");
+        // With the `$$` guard the loop completes and exits 0. Without it the
+        // shell SIGTERMs itself (status reflects the signal, not success).
+        assert!(
+            status.success(),
+            "kill script terminated its own shell (self-match) — status {status:?}"
+        );
+    }
+
+    // The script actually kills a matching target. Needs `/proc`.
+    #[tokio::test]
+    async fn pkill_script_kills_a_matching_process() {
+        if !has_proc() {
+            return;
+        }
+        let marker = "takuto_pkill_target_canary_8472";
+        // A long-lived child whose cmdline embeds the unique marker. Two
+        // statements (not one) keep `sh` from exec-optimizing into `sleep`,
+        // which would drop the marker from the process cmdline.
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("X={marker}; sleep 60"))
+            .spawn()
+            .expect("spawn target");
+
+        let script = build_pkill_script(marker);
+        let _ = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .status()
+            .await
+            .expect("run kill script");
+
+        // The child must have been signalled; give it a brief moment to reap.
+        for _ in 0..20 {
+            if child.try_wait().ok().flatten().is_some() {
+                return; // killed — success
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let _ = child.kill().await; // cleanup if the test is about to fail
+        panic!("kill script did not terminate the matching target process");
     }
 }
