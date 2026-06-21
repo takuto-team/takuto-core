@@ -1,1 +1,99 @@
-{}
+{
+  "dryMode": "Dry mode is enabled — Jira/GitHub side effects are skipped",
+  "footer": {
+    "version": "Takuto v{{version}}"
+  },
+  "polling": {
+    "pausedResume": "Polling: paused — click to resume",
+    "active": "Polling: active"
+  },
+  "stats": {
+    "pending": "Pending",
+    "running": "Running",
+    "completed": "Completed",
+    "errors": "Errors",
+    "paused": "Paused"
+  },
+  "emptyState": {
+    "noRepos": "You haven't added any repositories yet. Add a repository to get started.",
+    "goToRepositories": "Go to My Repositories",
+    "noStatusItems": "No {{status}} items.",
+    "showAllItems": "Show all items",
+    "noProject": "No project configured. Set up a project to get started.",
+    "setupProject": "Setup a New Project",
+    "noItemsInRepo": "No items in <name>{{repo}}</name> yet.",
+    "noItems": "No items yet. Click the button below to add an item.",
+    "newItem": "+ New Item"
+  },
+  "noAccess": {
+    "title": "No access to this repository",
+    "message": "The connected GitHub App no longer has access to \"{{repo}}\". You can still select it again if access is restored later.",
+    "ok": "OK"
+  },
+  "toast": {
+    "pickRepository": "Pick a repository before adding a work item.",
+    "addItemFailed": "Failed to add work item",
+    "actionFailed": "Action failed"
+  },
+  "card": {
+    "working": "Working...",
+    "showDetails": "Show details",
+    "showConsoleOutput": "Show console output",
+    "repositoryTitle": "Repository: {{name}}"
+  },
+  "progress": {
+    "preparingWorktree": "Preparing worktree…",
+    "repoNotReady": "Repository not ready",
+    "readyPickWorkflow": "Ready — pick a workflow to start",
+    "reportTitle": "View work item report",
+    "showReport": "Show Report",
+    "retryFromFailure": "Retry from last failure"
+  },
+  "view": {
+    "stepCurrent": "Current step",
+    "stepCompleted": "Completed",
+    "stepFailed": "Failed at step",
+    "stepPaused": "Paused at step",
+    "stepStopped": "Stopped at step",
+    "stepAdded": "Added to dashboard",
+    "allStepsPassed": "All steps passed"
+  },
+  "editorMenu": {
+    "editor": {
+      "title": "Editor",
+      "running": "Editor (open)",
+      "idle": "Open editor",
+      "stop": "Stop editor"
+    },
+    "terminal": {
+      "title": "Terminal",
+      "running": "Terminal (open)",
+      "idle": "Open terminal",
+      "stop": "Stop terminal"
+    },
+    "openInBrowser": "Open in browser"
+  },
+  "ports": {
+    "title": "Port mappings"
+  },
+  "loading": {
+    "preparingWorkspace": "Preparing workspace…",
+    "connectingEditor": "Setting up a secure connection to an editor",
+    "connectingTerminal": "Setting up a secure connection to a terminal"
+  },
+  "actions": {
+    "stop": "Stop",
+    "failedEndpoint": "Failed: {{endpoint}}",
+    "failedStartEditor": "Failed to start editor",
+    "failedPrepareWorkspace": "Failed to prepare workspace",
+    "failedStartTerminal": "Failed to start terminal",
+    "failedCloseEditor": "Failed to close editor",
+    "failedCloseTerminal": "Failed to close terminal"
+  },
+  "confirm": {
+    "message": "Are you sure you want to {{action}} work item {{ticketKey}}?",
+    "verb": {
+      "stop": "stop"
+    }
+  }
+}

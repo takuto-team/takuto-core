@@ -9,6 +9,7 @@
  * in the component).
  */
 
+import i18n from "../../i18n";
 import type { WorkflowSummary } from "../../api/types";
 import type { TerminalState } from "../../hooks/useWorkflows";
 import { getStatusInfo, type StatusInfo } from "../StatusBadge";
@@ -69,15 +70,15 @@ export function buildIssueCardView(
       ? formatDuration(new Date(w.started_at), new Date(w.updated_at))
       : null;
 
-  let stepLabel = "Current step";
-  if (status.status === "completed") stepLabel = "Completed";
-  else if (status.status === "error") stepLabel = "Failed at step";
-  else if (status.status === "paused") stepLabel = "Paused at step";
-  else if (status.status === "stopped") stepLabel = "Stopped at step";
-  else if (isPending) stepLabel = "Added to dashboard";
+  let stepLabel = i18n.t("dashboard:view.stepCurrent");
+  if (status.status === "completed") stepLabel = i18n.t("dashboard:view.stepCompleted");
+  else if (status.status === "error") stepLabel = i18n.t("dashboard:view.stepFailed");
+  else if (status.status === "paused") stepLabel = i18n.t("dashboard:view.stepPaused");
+  else if (status.status === "stopped") stepLabel = i18n.t("dashboard:view.stepStopped");
+  else if (isPending) stepLabel = i18n.t("dashboard:view.stepAdded");
 
   let stateDisplay = w.state;
-  if (status.status === "completed") stateDisplay = "All steps passed";
+  if (status.status === "completed") stateDisplay = i18n.t("dashboard:view.allStepsPassed");
   if (status.status === "error" && w.state.startsWith("Error:")) {
     stateDisplay = w.state.replace("Error: ", "");
   }

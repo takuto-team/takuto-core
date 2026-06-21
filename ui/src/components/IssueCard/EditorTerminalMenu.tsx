@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useTranslation } from "react-i18next";
 import { ExternalLinkIcon, StopSquareIcon, EditorIcon, TerminalIcon } from "../icons";
 
 type Kind = "editor" | "terminal";
@@ -23,23 +24,14 @@ interface Props {
   onStop: () => void;
 }
 
-const COPY: Record<Kind, { title: string; running: string; idle: string; stop: string }> = {
-  editor: {
-    title: "Editor",
-    running: "Editor (open)",
-    idle: "Open editor",
-    stop: "Stop editor",
-  },
-  terminal: {
-    title: "Terminal",
-    running: "Terminal (open)",
-    idle: "Open terminal",
-    stop: "Stop terminal",
-  },
-};
-
 export function EditorTerminalMenu({ kind, url, isMenuOpen, onToggleMenu, onStart, onStop }: Props) {
-  const copy = COPY[kind];
+  const { t } = useTranslation("dashboard");
+  const copy = {
+    title: t(`editorMenu.${kind}.title`),
+    running: t(`editorMenu.${kind}.running`),
+    idle: t(`editorMenu.${kind}.idle`),
+    stop: t(`editorMenu.${kind}.stop`),
+  };
   const Icon = kind === "editor" ? EditorIcon : TerminalIcon;
   const handleClick = () => {
     if (url) {
@@ -66,7 +58,7 @@ export function EditorTerminalMenu({ kind, url, isMenuOpen, onToggleMenu, onStar
               onClick={() => onToggleMenu(false)}
             >
               <ExternalLinkIcon />
-              Open in browser
+              {t("editorMenu.openInBrowser")}
             </a>
             <button
               onClick={() => {

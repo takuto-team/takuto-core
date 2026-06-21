@@ -3,6 +3,7 @@
 
 /** The IssueCard's three overlays: stop/action confirm, console output, delete confirm. */
 
+import { useTranslation } from "react-i18next";
 import type { TerminalState } from "../../hooks/useWorkflows";
 import { ConfirmModal } from "../modals/ConfirmModal";
 import { ConsoleOutputModal } from "../modals/ConsoleOutputModal";
@@ -37,12 +38,16 @@ export function IssueCardModals({
   onDelete,
   onDeleteCancel,
 }: Props) {
+  const { t } = useTranslation("dashboard");
   return (
     <>
       {confirm && (
         <ConfirmModal
           title={confirm.label}
-          message={`Are you sure you want to ${confirm.action} work item ${ticketKey}?`}
+          message={t("confirm.message", {
+            action: t(`confirm.verb.${confirm.action}`),
+            ticketKey,
+          })}
           onConfirm={onConfirm}
           onCancel={onConfirmCancel}
         />

@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useIssueCardActions } from "./useIssueCardActions";
 import { useToast } from "./useToast";
 
@@ -59,11 +60,12 @@ export function useIssueCardController(
   onRefresh: () => void,
   preparingWorkspace: boolean,
 ): IssueCardController {
+  const { t } = useTranslation("dashboard");
   const { showToast } = useToast();
   const { doAction, openEditor, openTerminal, closeEditor, closeTerminal } =
     useIssueCardActions(ticketKey);
 
-  const PREPARING_MESSAGE = "Preparing workspace…";
+  const PREPARING_MESSAGE = t("loading.preparingWorkspace");
 
   const [loading, setLoading] = useState<Loading>(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
@@ -78,17 +80,17 @@ export function useIssueCardController(
         await fn();
         onRefresh();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Action failed");
+        showToast(e instanceof Error ? e.message : t("toast.actionFailed"));
       } finally {
         setLoading(false);
       }
     },
-    [onRefresh, showToast],
+    [onRefresh, showToast, t],
   );
 
   const onStop = useCallback(() => {
-    setConfirm({ action: "stop", label: "Stop", fn: doAction("stop") });
-  }, [doAction]);
+    setConfirm({ action: "stop", label: t("actions.stop"), fn: doAction("stop") });
+  }, [doAction, t]);
 
   const onConfirm = useCallback(() => {
     const fn = confirm?.fn;
@@ -123,17 +125,17 @@ export function useIssueCardController(
       () =>
         void withLoading(
           openEditor,
-          preparingWorkspace ? PREPARING_MESSAGE : "Setting up a secure connection to an editor",
+          preparingWorkspace ? PREPARING_MESSAGE : t("loading.connectingEditor"),
         ),
-      [withLoading, openEditor, preparingWorkspace],
+      [withLoading, openEditor, preparingWorkspace, PREPARING_MESSAGE, t],
     ),
     onOpenTerminal: useCallback(
       () =>
         void withLoading(
           openTerminal,
-          preparingWorkspace ? PREPARING_MESSAGE : "Setting up a secure connection to a terminal",
+          preparingWorkspace ? PREPARING_MESSAGE : t("loading.connectingTerminal"),
         ),
-      [withLoading, openTerminal, preparingWorkspace],
+      [withLoading, openTerminal, preparingWorkspace, PREPARING_MESSAGE, t],
     ),
     onCloseEditor: useCallback(() => void withLoading(closeEditor), [withLoading, closeEditor]),
     onCloseTerminal: useCallback(() => void withLoading(closeTerminal), [withLoading, closeTerminal]),
