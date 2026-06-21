@@ -1,1 +1,174 @@
-{}
+{
+  "aiPrompt": {
+    "askAi": "Preguntar a la IA",
+    "remaining": "{{time}} restante",
+    "placeholder": "Da instrucciones a la IA para cambiar la descripción (p. ej. \"Añade criterios de aceptación\" o \"Hazla más concisa\")…",
+    "applyingChanges": "Aplicando cambios… {{time}}",
+    "ctrlEnter": "Ctrl+Enter para enviar",
+    "cancel": "Cancelar",
+    "apply": "Aplicar",
+    "retry": "Reintentar",
+    "requestFailedHttp": "La solicitud falló (HTTP {{status}})",
+    "requestFailed": "La solicitud falló"
+  },
+  "common": {
+    "cancel": "Cancelar"
+  },
+  "confirm": {
+    "defaultConfirm": "Confirmar"
+  },
+  "delete": {
+    "title": "¿Eliminar {{ticketKey}}?",
+    "cannotUndo": "Esta acción no se puede deshacer.",
+    "markDoneAndDelete": "Marcar como hecho y eliminar",
+    "delete": "Eliminar"
+  },
+  "paste": {
+    "title": "Nuevo elemento de trabajo",
+    "repository": "Repositorio",
+    "loadingRepos": "Cargando repositorios…",
+    "noReposLead": "No tienes ningún repositorio añadido.",
+    "noReposLink": "Añade uno desde la pestaña Mis repositorios",
+    "noReposTail": "antes de crear un elemento de trabajo.",
+    "nameLabel": "Nombre del elemento de trabajo (opcional)",
+    "namePlaceholder": "p. ej. add-user-login",
+    "descriptionLabel": "Descripción",
+    "descriptionPlaceholder": "Pega aquí la descripción de tu ticket...",
+    "submit": "Añadir al panel"
+  },
+  "ticketPicker": {
+    "githubTitle": "Incidencias de GitHub",
+    "todoTitle": "Tickets por hacer",
+    "needRepo": "Elige un repositorio concreto en la cabecera para ver sus incidencias de GitHub. \"Todos los repositorios\" no agrega las incidencias de varios repos.",
+    "loading": "Cargando...",
+    "noTickets": "No se encontraron tickets.",
+    "alreadyAdded": "Ya añadido",
+    "checking": "Comprobando…",
+    "prFallback": "un PR",
+    "hasPrTitle": "Esta incidencia ya tiene un PR",
+    "hasPrMessage": "{{ticketKey}} ya tiene {{prLabel}}. Añadirlo de nuevo creará un PR NUEVO e independiente. ¿Continuar?",
+    "addAnyway": "Añadir de todas formas"
+  },
+  "cloneProgress": {
+    "cloningTitle": "Clonando repositorio",
+    "cloningPrefix": "Clonando",
+    "cloningHint": "Puede tardar un momento según el tamaño del repositorio.",
+    "cancel": "Cancelar",
+    "successTitle": "Repositorio clonado",
+    "successSuffix": "se ha clonado correctamente.",
+    "continue": "Continuar",
+    "errorTitle": "Error al clonar",
+    "unknownError": "Ocurrió un error desconocido al clonar el repositorio.",
+    "retry": "Reintentar",
+    "close": "Cerrar"
+  },
+  "consoleOutput": {
+    "completed": "completado",
+    "waiting": "Esperando...",
+    "title": "Salida de consola",
+    "noOutput": "Aún no hay salida.",
+    "close": "Cerrar"
+  },
+  "noJira": {
+    "title": "Sin sistema de tickets",
+    "bodyPrefix": "No hay ningún sistema de tickets configurado. Los flujos de trabajo solo se pueden iniciar manualmente desde el panel. Configura",
+    "bodyIn": "en",
+    "bodySuffix": "para habilitar el sondeo de Jira o GitHub.",
+    "gotIt": "Entendido"
+  },
+  "report": {
+    "notFound": "Informe no encontrado",
+    "loadFailed": "No se pudo cargar el informe",
+    "title": "Informe del elemento de trabajo",
+    "loading": "Cargando informe…",
+    "empty": "No hay contenido de informe disponible.",
+    "copy": "Copiar",
+    "close": "Cerrar"
+  },
+  "repoPicker": {
+    "loadCheckedOutError": "No se pudieron cargar los repositorios extraídos",
+    "title": "Configurar un nuevo proyecto",
+    "searchPlaceholder": "Buscar repositorios...",
+    "loading": "Cargando repositorios...",
+    "noneFound": "No se encontraron repositorios.",
+    "private": "Privado",
+    "cloned": "Clonado",
+    "select": "Seleccionar"
+  },
+  "startWorkflowFooter": {
+    "discard": "Descartar",
+    "close": "Cerrar",
+    "confirm": "Confirmar",
+    "saving": "Guardando…",
+    "addToDashboard": "Añadir al panel"
+  },
+  "startWorkflowRepoBanner": {
+    "repositoryLabel": "Repositorio:",
+    "loading": "Cargando…",
+    "noReposPrefix": "No hay repositorios en tu panel.",
+    "addOne": "Añade uno",
+    "noReposSuffix": "antes de iniciar un elemento de trabajo."
+  },
+  "startFlow": {
+    "dependsOn": "depende de:",
+    "running": "en ejecución",
+    "done": "hecho",
+    "failed": "fallido",
+    "clickToRetry": "Haz clic para reintentar",
+    "retry": "Reintentar",
+    "start": "Iniciar",
+    "title": "Iniciar un flujo — {{ticketKey}}",
+    "close": "Cerrar",
+    "noFlows": "No hay flujos configurados.",
+    "waitingFor": "Esperando a: {{deps}}"
+  },
+  "stepEditor": {
+    "improveFailed": "La solicitud de mejora falló",
+    "improvingPrompt": "Mejorando el prompt…",
+    "cancel": "Cancelar",
+    "dragToReorder": "Arrastra para reordenar",
+    "untitledStep": "Paso sin título",
+    "needsOneStep": "Un flujo necesita al menos un paso.",
+    "remove": "Quitar",
+    "prompt": "Prompt",
+    "promptPlaceholder": "Texto enviado tal cual al agente para este paso.",
+    "improving": "Mejorando…",
+    "improveWithAi": "Mejorar con IA",
+    "revert": "Revertir",
+    "skills": "Habilidades",
+    "addSkill": "+ Añadir habilidad",
+    "skillNamePlaceholder": "nombre de la habilidad",
+    "argsPlaceholder": "argumentos (separados por comas)",
+    "removeSkill": "Quitar habilidad"
+  },
+  "dependsOn": {
+    "removeDependency": "Quitar la dependencia {{name}}",
+    "noDependencies": "Sin dependencias",
+    "addDependency": "Añadir dependencia"
+  },
+  "ticketDetailView": {
+    "loadingDescription": "Cargando descripción..."
+  },
+  "ticketEditor": {
+    "descriptionModified": "Descripción modificada — guarda para actualizar el ticket",
+    "editingDescription": "Editando descripción",
+    "discard": "Descartar",
+    "saving": "Guardando...",
+    "save": "Guardar",
+    "write": "Escribir",
+    "preview": "Vista previa",
+    "sideBySide": "Lado a lado"
+  },
+  "improveWithAI": {
+    "failed": "No se pudo mejorar la descripción del ticket",
+    "improvingDescription": "Mejorando descripción...",
+    "cancel": "Cancelar",
+    "reviewAiChanges": "Revisa los cambios de la IA — confirma para entrar en modo edición con la descripción actualizada",
+    "discard": "Descartar",
+    "confirm": "Confirmar",
+    "back": "Atrás",
+    "improving": "Mejorando...",
+    "improveWithAi": "Mejorar con IA",
+    "edit": "Editar"
+  }
+}

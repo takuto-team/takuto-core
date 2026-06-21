@@ -1,1 +1,124 @@
-{}
+{
+  "dryMode": "ドライモードが有効です — Jira/GitHub への副作用はスキップされます",
+  "runCommands": {
+    "heading": "コマンド",
+    "waitingToListen": "アプリの待ち受け開始を待っています…",
+    "startFailed": "実行コマンドの開始に失敗しました",
+    "stopFailed": "実行コマンドの停止に失敗しました",
+    "stop": "{{name}} を停止",
+    "copy": "コピー",
+    "open": "開く",
+    "run": "{{name}} を実行",
+    "copyTitle": "{{url}} をコピー",
+    "starting": "{{name}} を起動中",
+    "preparingWorktree": "ワークツリーを準備中…"
+  },
+  "workflowDefButtons": {
+    "heading": "ワークフロー",
+    "waitingFor": "待機中: {{deps}}",
+    "clickToRetry": "クリックして再試行",
+    "startFlow": "フローを開始",
+    "noFlows": "フローが設定されていません。",
+    "configureFlows": "フローを設定 →"
+  },
+  "footer": {
+    "version": "Takuto v{{version}}"
+  },
+  "polling": {
+    "pausedResume": "ポーリング: 一時停止中 — クリックで再開",
+    "active": "ポーリング: 実行中"
+  },
+  "stats": {
+    "pending": "待機中",
+    "running": "実行中",
+    "completed": "完了",
+    "errors": "エラー",
+    "paused": "一時停止中"
+  },
+  "emptyState": {
+    "noRepos": "リポジトリがまだ追加されていません。リポジトリを追加して始めましょう。",
+    "goToRepositories": "マイリポジトリへ移動",
+    "noStatusItems": "{{status}} の項目はありません。",
+    "showAllItems": "すべての項目を表示",
+    "noProject": "プロジェクトが設定されていません。プロジェクトをセットアップして始めましょう。",
+    "setupProject": "新しいプロジェクトをセットアップ",
+    "noItemsInRepo": "<name>{{repo}}</name> にはまだ項目がありません。",
+    "noItems": "まだ項目がありません。下のボタンをクリックして項目を追加してください。",
+    "newItem": "+ 新しい項目"
+  },
+  "noAccess": {
+    "title": "このリポジトリにアクセスできません",
+    "message": "接続されている GitHub App は「{{repo}}」へのアクセス権を持たなくなりました。後でアクセス権が復元された場合は、再度選択できます。",
+    "ok": "OK"
+  },
+  "toast": {
+    "pickRepository": "作業項目を追加する前にリポジトリを選択してください。",
+    "addItemFailed": "作業項目の追加に失敗しました",
+    "actionFailed": "操作に失敗しました"
+  },
+  "card": {
+    "working": "処理中...",
+    "showDetails": "詳細を表示",
+    "showConsoleOutput": "コンソール出力を表示",
+    "repositoryTitle": "リポジトリ: {{name}}"
+  },
+  "progress": {
+    "preparingWorktree": "ワークツリーを準備中…",
+    "repoNotReady": "リポジトリの準備ができていません",
+    "readyPickWorkflow": "準備完了 — 開始するワークフローを選択してください",
+    "reportTitle": "作業項目レポートを表示",
+    "showReport": "レポートを表示",
+    "retryFromFailure": "最後の失敗箇所から再試行",
+    "pauseItem": "作業項目を一時停止",
+    "resumeItem": "作業項目を再開",
+    "restartFromScratch": "最初からやり直す",
+    "stopItem": "作業項目を停止"
+  },
+  "view": {
+    "stepCurrent": "現在のステップ",
+    "stepCompleted": "完了",
+    "stepFailed": "失敗したステップ",
+    "stepPaused": "一時停止したステップ",
+    "stepStopped": "停止したステップ",
+    "stepAdded": "ダッシュボードに追加済み",
+    "allStepsPassed": "すべてのステップが成功しました"
+  },
+  "editorMenu": {
+    "editor": {
+      "title": "エディター",
+      "running": "エディター（開いています）",
+      "idle": "エディターを開く",
+      "stop": "エディターを停止"
+    },
+    "terminal": {
+      "title": "ターミナル",
+      "running": "ターミナル（開いています）",
+      "idle": "ターミナルを開く",
+      "stop": "ターミナルを停止"
+    },
+    "openInBrowser": "ブラウザで開く"
+  },
+  "ports": {
+    "title": "ポートマッピング"
+  },
+  "loading": {
+    "preparingWorkspace": "ワークスペースを準備中…",
+    "connectingEditor": "エディターへの安全な接続を確立しています",
+    "connectingTerminal": "ターミナルへの安全な接続を確立しています"
+  },
+  "actions": {
+    "stop": "停止",
+    "failedEndpoint": "失敗: {{endpoint}}",
+    "failedStartEditor": "エディターの起動に失敗しました",
+    "failedPrepareWorkspace": "ワークスペースの準備に失敗しました",
+    "failedStartTerminal": "ターミナルの起動に失敗しました",
+    "failedCloseEditor": "エディターのクローズに失敗しました",
+    "failedCloseTerminal": "ターミナルのクローズに失敗しました"
+  },
+  "confirm": {
+    "message": "作業項目 {{ticketKey}} を{{action}}してもよろしいですか？",
+    "verb": {
+      "stop": "停止"
+    }
+  }
+}

@@ -1,1 +1,8 @@
-{}
+{
+  "completed": "完了",
+  "error": "エラー",
+  "paused": "一時停止中",
+  "stopped": "停止済み",
+  "pending": "待機中",
+  "running": "実行中"
+}

@@ -1,1 +1,38 @@
-{}
+{
+  "language": {
+    "switch": "言語を変更"
+  },
+  "editableName": {
+    "clickToRename": "クリックして名前を変更"
+  },
+  "loading": "読み込み中...",
+  "connection": {
+    "connected": "接続済み",
+    "disconnected": "切断されました"
+  },
+  "nav": {
+    "menu": "メニュー",
+    "logout": "ログアウト"
+  },
+  "repo": {
+    "switchTitle": "アクティブなリポジトリを切り替え（ダッシュボードを絞り込みます）",
+    "allRepositories": "すべてのリポジトリ",
+    "manage": "リポジトリを管理…",
+    "myRepositories": "マイリポジトリ"
+  },
+  "github": {
+    "connected": "{{name}} に接続しました",
+    "appConnected": "アプリ接続済み",
+    "appConnectedTitle": "GitHub App が接続されています"
+  },
+  "tabs": {
+    "security": "セキュリティ",
+    "ai": "AI 設定",
+    "github": "GitHub",
+    "ticketing": "チケット管理",
+    "users": "ユーザー",
+    "repositories": "マイリポジトリ",
+    "repositorySettings": "リポジトリ設定",
+    "workflows": "ワークフロー"
+  }
+}

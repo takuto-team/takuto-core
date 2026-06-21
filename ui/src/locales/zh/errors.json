@@ -1,1 +1,20 @@
-{}
+{
+  "boundary": {
+    "title": "出现错误",
+    "body": "仪表盘遇到意外错误，无法渲染。重新加载通常可以解决问题。",
+    "reload": "重新加载"
+  },
+  "fetch": {
+    "unreachable": "无法连接服务器：{{message}}"
+  },
+  "system": {
+    "commandFailed": "命令执行失败 — {{ticketKey}}"
+  },
+  "dependencies": {
+    "installFailed": "无法安装依赖",
+    "installing": "正在安装依赖",
+    "preparing": "准备中…",
+    "errorHelp": "Agent CLI 会在启动时安装。请检查服务器日志，然后重启。",
+    "installingHelp": "首次启动时正在安装 agent CLI，稍候片刻即可。"
+  }
+}

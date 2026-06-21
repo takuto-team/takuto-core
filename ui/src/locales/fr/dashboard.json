@@ -1,1 +1,124 @@
-{}
+{
+  "dryMode": "Le mode simulation est activé — les effets sur Jira/GitHub sont ignorés",
+  "runCommands": {
+    "heading": "Commandes",
+    "waitingToListen": "En attente du démarrage de l'écoute de l'application…",
+    "startFailed": "Échec du démarrage de la commande d'exécution",
+    "stopFailed": "Échec de l'arrêt de la commande d'exécution",
+    "stop": "Arrêter {{name}}",
+    "copy": "Copier",
+    "open": "Ouvrir",
+    "run": "Exécuter {{name}}",
+    "copyTitle": "Copier {{url}}",
+    "starting": "Démarrage de {{name}}",
+    "preparingWorktree": "Préparation du worktree…"
+  },
+  "workflowDefButtons": {
+    "heading": "Workflows",
+    "waitingFor": "En attente de : {{deps}}",
+    "clickToRetry": "Cliquer pour réessayer",
+    "startFlow": "Démarrer le flux",
+    "noFlows": "Aucun flux configuré.",
+    "configureFlows": "Configurer les flux →"
+  },
+  "footer": {
+    "version": "Takuto v{{version}}"
+  },
+  "polling": {
+    "pausedResume": "Interrogation : en pause — cliquer pour reprendre",
+    "active": "Interrogation : active"
+  },
+  "stats": {
+    "pending": "En attente",
+    "running": "En cours",
+    "completed": "Terminé",
+    "errors": "Erreurs",
+    "paused": "En pause"
+  },
+  "emptyState": {
+    "noRepos": "Vous n'avez encore ajouté aucun dépôt. Ajoutez un dépôt pour commencer.",
+    "goToRepositories": "Aller à Mes dépôts",
+    "noStatusItems": "Aucun élément {{status}}.",
+    "showAllItems": "Afficher tous les éléments",
+    "noProject": "Aucun projet configuré. Configurez un projet pour commencer.",
+    "setupProject": "Configurer un nouveau projet",
+    "noItemsInRepo": "Aucun élément dans <name>{{repo}}</name> pour le moment.",
+    "noItems": "Aucun élément pour le moment. Cliquez sur le bouton ci-dessous pour ajouter un élément.",
+    "newItem": "+ Nouvel élément"
+  },
+  "noAccess": {
+    "title": "Aucun accès à ce dépôt",
+    "message": "L'application GitHub connectée n'a plus accès à « {{repo}} ». Vous pourrez le sélectionner à nouveau si l'accès est rétabli ultérieurement.",
+    "ok": "OK"
+  },
+  "toast": {
+    "pickRepository": "Choisissez un dépôt avant d'ajouter un élément de travail.",
+    "addItemFailed": "Échec de l'ajout de l'élément de travail",
+    "actionFailed": "Échec de l'action"
+  },
+  "card": {
+    "working": "Traitement en cours...",
+    "showDetails": "Afficher les détails",
+    "showConsoleOutput": "Afficher la sortie de la console",
+    "repositoryTitle": "Dépôt : {{name}}"
+  },
+  "progress": {
+    "preparingWorktree": "Préparation du worktree…",
+    "repoNotReady": "Dépôt non prêt",
+    "readyPickWorkflow": "Prêt — choisissez un workflow pour démarrer",
+    "reportTitle": "Voir le rapport de l'élément de travail",
+    "showReport": "Afficher le rapport",
+    "retryFromFailure": "Réessayer depuis le dernier échec",
+    "pauseItem": "Mettre l'élément de travail en pause",
+    "resumeItem": "Reprendre l'élément de travail",
+    "restartFromScratch": "Recommencer de zéro",
+    "stopItem": "Arrêter l'élément de travail"
+  },
+  "view": {
+    "stepCurrent": "Étape actuelle",
+    "stepCompleted": "Terminé",
+    "stepFailed": "Échec à l'étape",
+    "stepPaused": "En pause à l'étape",
+    "stepStopped": "Arrêté à l'étape",
+    "stepAdded": "Ajouté au tableau de bord",
+    "allStepsPassed": "Toutes les étapes ont réussi"
+  },
+  "editorMenu": {
+    "editor": {
+      "title": "Éditeur",
+      "running": "Éditeur (ouvert)",
+      "idle": "Ouvrir l'éditeur",
+      "stop": "Arrêter l'éditeur"
+    },
+    "terminal": {
+      "title": "Terminal",
+      "running": "Terminal (ouvert)",
+      "idle": "Ouvrir le terminal",
+      "stop": "Arrêter le terminal"
+    },
+    "openInBrowser": "Ouvrir dans le navigateur"
+  },
+  "ports": {
+    "title": "Mappages de ports"
+  },
+  "loading": {
+    "preparingWorkspace": "Préparation de l'espace de travail…",
+    "connectingEditor": "Établissement d'une connexion sécurisée à un éditeur",
+    "connectingTerminal": "Établissement d'une connexion sécurisée à un terminal"
+  },
+  "actions": {
+    "stop": "Arrêter",
+    "failedEndpoint": "Échec : {{endpoint}}",
+    "failedStartEditor": "Échec du démarrage de l'éditeur",
+    "failedPrepareWorkspace": "Échec de la préparation de l'espace de travail",
+    "failedStartTerminal": "Échec du démarrage du terminal",
+    "failedCloseEditor": "Échec de la fermeture de l'éditeur",
+    "failedCloseTerminal": "Échec de la fermeture du terminal"
+  },
+  "confirm": {
+    "message": "Êtes-vous sûr de vouloir {{action}} l'élément de travail {{ticketKey}} ?",
+    "verb": {
+      "stop": "arrêter"
+    }
+  }
+}

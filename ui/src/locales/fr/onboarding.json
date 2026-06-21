@@ -1,1 +1,149 @@
-{}
+{
+  "header": {
+    "skip": "Ignorer la configuration →",
+    "title": "Configurer Takuto"
+  },
+  "loading": "Chargement des paramètres actuels…",
+  "stepper": {
+    "ariaLabel": "Étapes de configuration"
+  },
+  "step": {
+    "ticketing": {
+      "title": "Gestion des tickets",
+      "body": "Bienvenue — voici la configuration initiale de Takuto. Choisissez la source de lecture des tâches. Vous pourrez modifier n'importe lequel de ces paramètres depuis la page Configuration plus tard."
+    },
+    "provider": {
+      "title": "Fournisseur d'IA",
+      "body": "Choisissez l'IA qui pilote vos éléments de travail, puis ajoutez votre propre clé de fournisseur."
+    },
+    "git": {
+      "title": "Git et GitHub",
+      "body": "Définissez la branche git et le dépôt distant utilisés par Takuto, puis connectez une GitHub App ou un token personnel."
+    },
+    "workflows": {
+      "title": "Workflows",
+      "body": "Passez en revue les flux que vous pouvez exécuter sur chaque élément de travail. Ajustez-les ou réinitialisez-les à tout moment."
+    }
+  },
+  "polling": {
+    "note": "Ces paramètres contrôlent la façon dont Takuto récupère automatiquement les nouveaux éléments de travail. Ils sont enregistrés lorsque vous continuez (le bouton Enregistrer ci-dessous les applique immédiatement)."
+  },
+  "stepTimeout": {
+    "heading": "Délai d'expiration d'étape",
+    "label": "Délai d'expiration (secondes)",
+    "invalid": "Le délai d'expiration d'étape doit être un nombre positif.",
+    "hint": "Nombre maximal de secondes pendant lesquelles une étape d'agent peut s'exécuter avant d'être annulée. Par défaut 1800 (30 min)."
+  },
+  "dbNote": "<strong>La base de données et le port du tableau de bord ne sont pas configurés dans cet assistant.</strong> Takuto écrit un fichier <code>config.toml</code> avec les valeurs par défaut (SQLite, port 8080). Modifiez ce fichier directement pour les changer.",
+  "nav": {
+    "back": "← Retour",
+    "skip": "Ignorer pour l'instant",
+    "continue": "Continuer",
+    "saving": "Enregistrement…",
+    "finish": "Terminer la configuration",
+    "finishing": "Finalisation…"
+  },
+  "ticketing": {
+    "label": "Système de gestion des tickets",
+    "adminOnly": "Seul un administrateur peut modifier le système de gestion des tickets du déploiement. Vous pouvez tout de même gérer votre propre identifiant Jira ci-dessous.",
+    "options": {
+      "none": {
+        "label": "Aucun",
+        "hint": "Aucune intégration de gestion des tickets. Démarrez les éléments de travail manuellement depuis le tableau de bord."
+      },
+      "github": {
+        "label": "GitHub",
+        "hint": "Interroge les GitHub Issues ouvertes depuis le dépôt distant. Aucun token ici — connectez un PAT ou une GitHub App à l'étape GitHub."
+      },
+      "jira": {
+        "label": "Jira",
+        "hint": "Interroge Jira pour les tickets À faire. Ajoutez votre site Atlassian, votre e-mail et votre token API ci-dessous."
+      }
+    },
+    "jira": {
+      "connectedAs": "✓ Connecté en tant que <strong>{{email}}</strong> sur <site>{{site}}</site>. Laissez le formulaire vide pour le conserver, ou saisissez un nouveau token pour le remplacer.",
+      "encryptedNote": "Vos identifiants Jira sont stockés de façon chiffrée et utilisés uniquement pour vos propres éléments de travail.",
+      "site": "Site Atlassian",
+      "sitePlaceholder": "https://your-org.atlassian.net",
+      "email": "E-mail du compte",
+      "emailPlaceholder": "you@your-org.com",
+      "token": "Token API",
+      "tokenPlaceholder": "Collez votre token API Atlassian",
+      "createTokenPrefix": "Créez-en un sur",
+      "tokenLinkText": "id.atlassian.com → API tokens →",
+      "tokenLinkAria": "Ouvrir la page des tokens API Atlassian (s'ouvre dans un nouvel onglet)"
+    }
+  },
+  "provider": {
+    "label": "Fournisseur",
+    "options": {
+      "claude": "Claude",
+      "cursor": "Cursor",
+      "codex": "Codex",
+      "opencode": "OpenCode (auto-hébergé)",
+      "gemini": "Gemini (v2)",
+      "none": "Aucun"
+    },
+    "opencodeHint": "OpenCode relie Takuto à votre endpoint compatible OpenAI auto-hébergé (LM Studio, Ollama, vLLM, passerelles privées). Pour utiliser Anthropic / OpenAI directement, choisissez plutôt le fournisseur Claude ou Codex.",
+    "baseUrl": "URL de base",
+    "baseUrlPlaceholderOpencode": "http://lm-studio:1234/v1",
+    "baseUrlPlaceholderDefault": "Laisser vide pour utiliser l'API publique du fournisseur",
+    "cursorNoUpstream": "Cursor CLI ne prend pas en charge les endpoints amont personnalisés",
+    "cursorNoUpstreamHint": "Cursor CLI ne prend pas en charge les endpoints amont personnalisés.",
+    "baseUrlOpencodeHint": "Requis pour OpenCode. Pointez ceci vers votre serveur compatible OpenAI auto-hébergé.",
+    "model": "Modèle",
+    "modelPlaceholderOpencode": "lmstudio/qwen3-coder",
+    "modelPlaceholderDefault": "Laisser vide pour la valeur par défaut du fournisseur",
+    "modelOpencodeHint": "Requis pour OpenCode. L'identifiant du modèle servi par votre endpoint (par ex. <code>lmstudio/qwen3-coder</code>).",
+    "extraArgs": "Arguments supplémentaires (un par ligne)"
+  },
+  "git": {
+    "heading": "Paramètres Git",
+    "intro": "La branche que Takuto extrait pour chaque élément de travail, et le dépôt distant git vers lequel il pousse.",
+    "baseBranch": "Branche de base",
+    "baseBranchPlaceholder": "main",
+    "baseBranchRequired": "La branche de base est requise.",
+    "baseBranchHint": "La branche à partir de laquelle les branches d'éléments de travail sont créées. Généralement « main » ou « master ».",
+    "remote": "Dépôt distant",
+    "remotePlaceholder": "origin",
+    "remoteRequired": "Le dépôt distant est requis.",
+    "remoteHint": "Le dépôt distant git depuis lequel Takuto récupère et vers lequel il pousse les branches.",
+    "adminOnly": "Seul un administrateur peut modifier les paramètres git du déploiement.",
+    "app": {
+      "labelPrefix": "GitHub App :",
+      "configured": "configurée",
+      "notConfigured": "non configurée",
+      "explainer": "Une GitHub App partagée permet à tout le monde sur ce déploiement de communiquer avec GitHub sans token personnel. Sa configuration est facultative — chaque membre de l'équipe peut à la place utiliser son propre token d'accès personnel ci-dessous.",
+      "setupLink": "Configurer une GitHub App →",
+      "setupLinkAria": "Lire le guide de configuration de la GitHub App Takuto (s'ouvre dans un nouvel onglet)"
+    },
+    "pat": {
+      "heading": "Votre token d'accès personnel (facultatif)",
+      "intro": "Ajoutez un PAT pour que les commits, les PR et les commentaires de revue sur vos éléments de travail vous soient attribués. Ignorez-le pour exécuter en tant que GitHub App partagée."
+    }
+  },
+  "aiKey": {
+    "loading": "Chargement de vos identifiants…",
+    "connected": "{{label}} connecté.",
+    "sessionUploaded": "Session {{label}} téléversée.",
+    "saveError": "Impossible d'enregistrer votre identifiant."
+  },
+  "banner": {
+    "notReady": "Takuto n'est pas prêt — configuration requise",
+    "notFinished": "La configuration n'est pas terminée",
+    "legacyRunHint": "Exécutez <code>docker compose run --rm -it takuto setup</code> pour terminer la configuration, puis redémarrez.",
+    "askAdminProvider": "Demandez à votre administrateur de changer de fournisseur",
+    "askAdminGeneric": "Demandez à votre administrateur de corriger cela",
+    "cta": {
+      "setClaude": "Définir l'identifiant Claude",
+      "setCursor": "Définir l'identifiant Cursor",
+      "setCodex": "Définir l'identifiant Codex",
+      "setOpenCode": "Définir l'identifiant OpenCode",
+      "setGithubPat": "Définir le PAT GitHub",
+      "changeProvider": "Changer de fournisseur",
+      "readDocs": "Lire la documentation"
+    },
+    "ctaAriaInternal": "{{label}} — corriger : {{message}}",
+    "ctaAriaExternal": "{{label}} (ouvre la documentation dans un nouvel onglet) — corriger : {{message}}"
+  }
+}

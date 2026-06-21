@@ -1,1 +1,20 @@
-{}
+{
+  "boundary": {
+    "title": "問題が発生しました",
+    "body": "ダッシュボードで予期しないエラーが発生し、表示できませんでした。通常は再読み込みで解決します。",
+    "reload": "再読み込み"
+  },
+  "fetch": {
+    "unreachable": "サーバーに接続できませんでした: {{message}}"
+  },
+  "system": {
+    "commandFailed": "コマンドが失敗しました — {{ticketKey}}"
+  },
+  "dependencies": {
+    "installFailed": "依存関係をインストールできませんでした",
+    "installing": "依存関係をインストール中",
+    "preparing": "準備中…",
+    "errorHelp": "エージェント CLI は起動時にインストールされます。サーバーログを確認してから再起動してください。",
+    "installingHelp": "初回起動時にエージェント CLI をインストールしています。少々お待ちください。"
+  }
+}

@@ -1,1 +1,174 @@
-{}
+{
+  "aiPrompt": {
+    "askAi": "AI に依頼",
+    "remaining": "残り {{time}}",
+    "placeholder": "説明を変更するための指示を AI に与えてください（例:「受け入れ基準を追加」「もっと簡潔に」）…",
+    "applyingChanges": "変更を適用中… {{time}}",
+    "ctrlEnter": "Ctrl+Enter で送信",
+    "cancel": "キャンセル",
+    "apply": "適用",
+    "retry": "再試行",
+    "requestFailedHttp": "リクエストに失敗しました（HTTP {{status}}）",
+    "requestFailed": "リクエストに失敗しました"
+  },
+  "common": {
+    "cancel": "キャンセル"
+  },
+  "confirm": {
+    "defaultConfirm": "確認"
+  },
+  "delete": {
+    "title": "{{ticketKey}} を削除しますか？",
+    "cannotUndo": "この操作は取り消せません。",
+    "markDoneAndDelete": "完了にして削除",
+    "delete": "削除"
+  },
+  "paste": {
+    "title": "新しい作業項目",
+    "repository": "リポジトリ",
+    "loadingRepos": "リポジトリを読み込み中…",
+    "noReposLead": "追加されたリポジトリがありません。",
+    "noReposLink": "マイリポジトリタブから追加してください",
+    "noReposTail": "作業項目を作成する前に。",
+    "nameLabel": "作業項目名（任意）",
+    "namePlaceholder": "例: add-user-login",
+    "descriptionLabel": "説明",
+    "descriptionPlaceholder": "ここにチケットの説明を貼り付けてください...",
+    "submit": "ダッシュボードに追加"
+  },
+  "ticketPicker": {
+    "githubTitle": "GitHub Issues",
+    "todoTitle": "To Do チケット",
+    "needRepo": "ヘッダーで特定のリポジトリを選択すると、その GitHub issue が表示されます。「すべてのリポジトリ」では複数のリポジトリにわたる issue を集約しません。",
+    "loading": "読み込み中...",
+    "noTickets": "チケットが見つかりませんでした。",
+    "alreadyAdded": "追加済み",
+    "checking": "確認中…",
+    "prFallback": "PR",
+    "hasPrTitle": "この issue にはすでに PR があります",
+    "hasPrMessage": "{{ticketKey}} にはすでに {{prLabel}} があります。再度追加すると、新しい別のプルリクエストが作成されます。続行しますか？",
+    "addAnyway": "それでも追加"
+  },
+  "cloneProgress": {
+    "cloningTitle": "リポジトリをクローン中",
+    "cloningPrefix": "クローン中",
+    "cloningHint": "リポジトリのサイズによっては少し時間がかかる場合があります。",
+    "cancel": "キャンセル",
+    "successTitle": "リポジトリをクローンしました",
+    "successSuffix": "のクローンが正常に完了しました。",
+    "continue": "続行",
+    "errorTitle": "クローンに失敗しました",
+    "unknownError": "リポジトリのクローン中に不明なエラーが発生しました。",
+    "retry": "再試行",
+    "close": "閉じる"
+  },
+  "consoleOutput": {
+    "completed": "完了",
+    "waiting": "待機中...",
+    "title": "コンソール出力",
+    "noOutput": "出力はまだありません。",
+    "close": "閉じる"
+  },
+  "noJira": {
+    "title": "チケット管理システムがありません",
+    "bodyPrefix": "チケット管理システムが設定されていません。ワークフローはダッシュボードから手動でのみ開始できます。",
+    "bodyIn": "の場所:",
+    "bodySuffix": "を設定すると、Jira または GitHub のポーリングを有効にできます。",
+    "gotIt": "了解"
+  },
+  "report": {
+    "notFound": "レポートが見つかりません",
+    "loadFailed": "レポートの読み込みに失敗しました",
+    "title": "作業項目レポート",
+    "loading": "レポートを読み込み中…",
+    "empty": "利用可能なレポート内容がありません。",
+    "copy": "コピー",
+    "close": "閉じる"
+  },
+  "repoPicker": {
+    "loadCheckedOutError": "チェックアウト済みのリポジトリを読み込めませんでした",
+    "title": "新しいプロジェクトをセットアップ",
+    "searchPlaceholder": "リポジトリを検索...",
+    "loading": "リポジトリを読み込み中...",
+    "noneFound": "リポジトリが見つかりませんでした。",
+    "private": "プライベート",
+    "cloned": "クローン済み",
+    "select": "選択"
+  },
+  "startWorkflowFooter": {
+    "discard": "破棄",
+    "close": "閉じる",
+    "confirm": "確認",
+    "saving": "保存中…",
+    "addToDashboard": "ダッシュボードに追加"
+  },
+  "startWorkflowRepoBanner": {
+    "repositoryLabel": "リポジトリ:",
+    "loading": "読み込み中…",
+    "noReposPrefix": "ダッシュボードにリポジトリがありません。",
+    "addOne": "追加してください",
+    "noReposSuffix": "作業項目を開始する前に。"
+  },
+  "startFlow": {
+    "dependsOn": "依存:",
+    "running": "実行中",
+    "done": "完了",
+    "failed": "失敗",
+    "clickToRetry": "クリックして再試行",
+    "retry": "再試行",
+    "start": "開始",
+    "title": "フローを開始 — {{ticketKey}}",
+    "close": "閉じる",
+    "noFlows": "フローが設定されていません。",
+    "waitingFor": "待機中: {{deps}}"
+  },
+  "stepEditor": {
+    "improveFailed": "改善リクエストに失敗しました",
+    "improvingPrompt": "プロンプトを改善中…",
+    "cancel": "キャンセル",
+    "dragToReorder": "ドラッグして並べ替え",
+    "untitledStep": "無題のステップ",
+    "needsOneStep": "フローには少なくとも 1 つのステップが必要です。",
+    "remove": "削除",
+    "prompt": "プロンプト",
+    "promptPlaceholder": "このステップでエージェントにそのまま送信されるテキストです。",
+    "improving": "改善中…",
+    "improveWithAi": "AI で改善",
+    "revert": "元に戻す",
+    "skills": "スキル",
+    "addSkill": "+ スキルを追加",
+    "skillNamePlaceholder": "スキル名",
+    "argsPlaceholder": "引数（カンマ区切り）",
+    "removeSkill": "スキルを削除"
+  },
+  "dependsOn": {
+    "removeDependency": "依存関係 {{name}} を削除",
+    "noDependencies": "依存関係なし",
+    "addDependency": "依存関係を追加"
+  },
+  "ticketDetailView": {
+    "loadingDescription": "説明を読み込み中..."
+  },
+  "ticketEditor": {
+    "descriptionModified": "説明が変更されました — チケットを更新するには保存してください",
+    "editingDescription": "説明を編集中",
+    "discard": "破棄",
+    "saving": "保存中...",
+    "save": "保存",
+    "write": "編集",
+    "preview": "プレビュー",
+    "sideBySide": "並べて表示"
+  },
+  "improveWithAI": {
+    "failed": "チケットの説明の改善に失敗しました",
+    "improvingDescription": "説明を改善中...",
+    "cancel": "キャンセル",
+    "reviewAiChanges": "AI の変更を確認 — 確定すると更新された説明で編集モードに入ります",
+    "discard": "破棄",
+    "confirm": "確認",
+    "back": "戻る",
+    "improving": "改善中...",
+    "improveWithAi": "AI で改善",
+    "edit": "編集"
+  }
+}

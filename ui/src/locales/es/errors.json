@@ -1,1 +1,20 @@
-{}
+{
+  "boundary": {
+    "title": "Algo salió mal",
+    "body": "El panel encontró un error inesperado y no se pudo mostrar. Recargar suele solucionarlo.",
+    "reload": "Recargar"
+  },
+  "fetch": {
+    "unreachable": "No se pudo conectar con el servidor: {{message}}"
+  },
+  "system": {
+    "commandFailed": "El comando falló — {{ticketKey}}"
+  },
+  "dependencies": {
+    "installFailed": "No se pudieron instalar las dependencias",
+    "installing": "Instalando dependencias",
+    "preparing": "Preparando…",
+    "errorHelp": "Los CLI de los agentes se instalan al iniciar. Revisa los registros del servidor y luego reinicia.",
+    "installingHelp": "Los CLI de los agentes se están instalando en el primer arranque. Solo tarda un momento."
+  }
+}

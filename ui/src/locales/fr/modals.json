@@ -1,1 +1,174 @@
-{}
+{
+  "aiPrompt": {
+    "askAi": "Demander à l'IA",
+    "remaining": "{{time}} restant",
+    "placeholder": "Donnez à l'IA des instructions pour modifier la description (par ex. « Ajouter des critères d'acceptation » ou « Rendre plus concis »)…",
+    "applyingChanges": "Application des modifications… {{time}}",
+    "ctrlEnter": "Ctrl+Entrée pour envoyer",
+    "cancel": "Annuler",
+    "apply": "Appliquer",
+    "retry": "Réessayer",
+    "requestFailedHttp": "Échec de la requête (HTTP {{status}})",
+    "requestFailed": "Échec de la requête"
+  },
+  "common": {
+    "cancel": "Annuler"
+  },
+  "confirm": {
+    "defaultConfirm": "Confirmer"
+  },
+  "delete": {
+    "title": "Supprimer {{ticketKey}} ?",
+    "cannotUndo": "Cette action est irréversible.",
+    "markDoneAndDelete": "Marquer comme terminé et supprimer",
+    "delete": "Supprimer"
+  },
+  "paste": {
+    "title": "Nouvel élément de travail",
+    "repository": "Dépôt",
+    "loadingRepos": "Chargement des dépôts…",
+    "noReposLead": "Vous n'avez ajouté aucun dépôt.",
+    "noReposLink": "Ajoutez-en un depuis l'onglet Mes dépôts",
+    "noReposTail": "avant de créer un élément de travail.",
+    "nameLabel": "Nom de l'élément de travail (facultatif)",
+    "namePlaceholder": "par ex. add-user-login",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "Collez la description de votre ticket ici...",
+    "submit": "Ajouter au tableau de bord"
+  },
+  "ticketPicker": {
+    "githubTitle": "GitHub Issues",
+    "todoTitle": "Tickets À faire",
+    "needRepo": "Choisissez un dépôt spécifique dans l'en-tête pour voir ses issues GitHub. « Tous les dépôts » n'agrège pas les issues de plusieurs dépôts.",
+    "loading": "Chargement...",
+    "noTickets": "Aucun ticket trouvé.",
+    "alreadyAdded": "Déjà ajouté",
+    "checking": "Vérification…",
+    "prFallback": "une PR",
+    "hasPrTitle": "Cette issue a déjà une PR",
+    "hasPrMessage": "{{ticketKey}} a déjà {{prLabel}}. L'ajouter de nouveau créera une NOUVELLE pull request distincte. Continuer ?",
+    "addAnyway": "Ajouter quand même"
+  },
+  "cloneProgress": {
+    "cloningTitle": "Clonage du dépôt",
+    "cloningPrefix": "Clonage",
+    "cloningHint": "Cela peut prendre un moment selon la taille du dépôt.",
+    "cancel": "Annuler",
+    "successTitle": "Dépôt cloné",
+    "successSuffix": "a été cloné avec succès.",
+    "continue": "Continuer",
+    "errorTitle": "Échec du clonage",
+    "unknownError": "Une erreur inconnue s'est produite lors du clonage du dépôt.",
+    "retry": "Réessayer",
+    "close": "Fermer"
+  },
+  "consoleOutput": {
+    "completed": "terminé",
+    "waiting": "En attente...",
+    "title": "Sortie de la console",
+    "noOutput": "Aucune sortie pour le moment.",
+    "close": "Fermer"
+  },
+  "noJira": {
+    "title": "Aucun système de gestion des tickets",
+    "bodyPrefix": "Aucun système de gestion des tickets n'est configuré. Les workflows ne peuvent être démarrés que manuellement via le tableau de bord. Configurez",
+    "bodyIn": "dans",
+    "bodySuffix": "pour activer l'interrogation de Jira ou GitHub.",
+    "gotIt": "Compris"
+  },
+  "report": {
+    "notFound": "Rapport introuvable",
+    "loadFailed": "Échec du chargement du rapport",
+    "title": "Rapport de l'élément de travail",
+    "loading": "Chargement du rapport…",
+    "empty": "Aucun contenu de rapport disponible.",
+    "copy": "Copier",
+    "close": "Fermer"
+  },
+  "repoPicker": {
+    "loadCheckedOutError": "Impossible de charger les dépôts extraits",
+    "title": "Configurer un nouveau projet",
+    "searchPlaceholder": "Rechercher des dépôts...",
+    "loading": "Chargement des dépôts...",
+    "noneFound": "Aucun dépôt trouvé.",
+    "private": "Privé",
+    "cloned": "Cloné",
+    "select": "Sélectionner"
+  },
+  "startWorkflowFooter": {
+    "discard": "Abandonner",
+    "close": "Fermer",
+    "confirm": "Confirmer",
+    "saving": "Enregistrement…",
+    "addToDashboard": "Ajouter au tableau de bord"
+  },
+  "startWorkflowRepoBanner": {
+    "repositoryLabel": "Dépôt :",
+    "loading": "Chargement…",
+    "noReposPrefix": "Aucun dépôt sur votre tableau de bord.",
+    "addOne": "Ajoutez-en un",
+    "noReposSuffix": "avant de démarrer un élément de travail."
+  },
+  "startFlow": {
+    "dependsOn": "dépend de :",
+    "running": "en cours",
+    "done": "terminé",
+    "failed": "échoué",
+    "clickToRetry": "Cliquer pour réessayer",
+    "retry": "Réessayer",
+    "start": "Démarrer",
+    "title": "Démarrer un flux — {{ticketKey}}",
+    "close": "Fermer",
+    "noFlows": "Aucun flux configuré.",
+    "waitingFor": "En attente de : {{deps}}"
+  },
+  "stepEditor": {
+    "improveFailed": "Échec de la demande d'amélioration",
+    "improvingPrompt": "Amélioration du prompt…",
+    "cancel": "Annuler",
+    "dragToReorder": "Glisser pour réordonner",
+    "untitledStep": "Étape sans titre",
+    "needsOneStep": "Un flux nécessite au moins une étape.",
+    "remove": "Supprimer",
+    "prompt": "Prompt",
+    "promptPlaceholder": "Texte envoyé tel quel à l'agent pour cette étape.",
+    "improving": "Amélioration…",
+    "improveWithAi": "Améliorer avec l'IA",
+    "revert": "Rétablir",
+    "skills": "Compétences",
+    "addSkill": "+ Ajouter une compétence",
+    "skillNamePlaceholder": "nom de la compétence",
+    "argsPlaceholder": "args (séparés par des virgules)",
+    "removeSkill": "Supprimer la compétence"
+  },
+  "dependsOn": {
+    "removeDependency": "Supprimer la dépendance {{name}}",
+    "noDependencies": "Aucune dépendance",
+    "addDependency": "Ajouter une dépendance"
+  },
+  "ticketDetailView": {
+    "loadingDescription": "Chargement de la description..."
+  },
+  "ticketEditor": {
+    "descriptionModified": "Description modifiée — enregistrez pour mettre à jour le ticket",
+    "editingDescription": "Modification de la description",
+    "discard": "Abandonner",
+    "saving": "Enregistrement...",
+    "save": "Enregistrer",
+    "write": "Écrire",
+    "preview": "Aperçu",
+    "sideBySide": "Côte à côte"
+  },
+  "improveWithAI": {
+    "failed": "Échec de l'amélioration de la description du ticket",
+    "improvingDescription": "Amélioration de la description...",
+    "cancel": "Annuler",
+    "reviewAiChanges": "Examinez les modifications de l'IA — confirmez pour passer en mode édition avec la description mise à jour",
+    "discard": "Abandonner",
+    "confirm": "Confirmer",
+    "back": "Retour",
+    "improving": "Amélioration...",
+    "improveWithAi": "Améliorer avec l'IA",
+    "edit": "Modifier"
+  }
+}

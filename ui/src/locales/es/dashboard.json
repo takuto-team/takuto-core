@@ -1,1 +1,124 @@
-{}
+{
+  "dryMode": "El modo de prueba está activado — se omiten los efectos en Jira/GitHub",
+  "runCommands": {
+    "heading": "Comandos",
+    "waitingToListen": "Esperando a que la app empiece a escuchar…",
+    "startFailed": "No se pudo iniciar el comando de ejecución",
+    "stopFailed": "No se pudo detener el comando de ejecución",
+    "stop": "Detener {{name}}",
+    "copy": "Copiar",
+    "open": "Abrir",
+    "run": "Ejecutar {{name}}",
+    "copyTitle": "Copiar {{url}}",
+    "starting": "Iniciando {{name}}",
+    "preparingWorktree": "Preparando worktree…"
+  },
+  "workflowDefButtons": {
+    "heading": "Flujos de trabajo",
+    "waitingFor": "Esperando a: {{deps}}",
+    "clickToRetry": "Haz clic para reintentar",
+    "startFlow": "Iniciar flujo",
+    "noFlows": "No hay flujos configurados.",
+    "configureFlows": "Configurar flujos →"
+  },
+  "footer": {
+    "version": "Takuto v{{version}}"
+  },
+  "polling": {
+    "pausedResume": "Sondeo: en pausa — haz clic para reanudar",
+    "active": "Sondeo: activo"
+  },
+  "stats": {
+    "pending": "Pendiente",
+    "running": "En ejecución",
+    "completed": "Completado",
+    "errors": "Errores",
+    "paused": "En pausa"
+  },
+  "emptyState": {
+    "noRepos": "Aún no has añadido ningún repositorio. Añade uno para empezar.",
+    "goToRepositories": "Ir a Mis repositorios",
+    "noStatusItems": "No hay elementos {{status}}.",
+    "showAllItems": "Mostrar todos los elementos",
+    "noProject": "No hay ningún proyecto configurado. Configura un proyecto para empezar.",
+    "setupProject": "Configurar un nuevo proyecto",
+    "noItemsInRepo": "Aún no hay elementos en <name>{{repo}}</name>.",
+    "noItems": "Aún no hay elementos. Haz clic en el botón de abajo para añadir uno.",
+    "newItem": "+ Nuevo elemento"
+  },
+  "noAccess": {
+    "title": "Sin acceso a este repositorio",
+    "message": "La App de GitHub conectada ya no tiene acceso a \"{{repo}}\". Aún puedes volver a seleccionarlo si se restablece el acceso más adelante.",
+    "ok": "Aceptar"
+  },
+  "toast": {
+    "pickRepository": "Elige un repositorio antes de añadir un elemento de trabajo.",
+    "addItemFailed": "No se pudo añadir el elemento de trabajo",
+    "actionFailed": "La acción falló"
+  },
+  "card": {
+    "working": "Trabajando...",
+    "showDetails": "Mostrar detalles",
+    "showConsoleOutput": "Mostrar salida de consola",
+    "repositoryTitle": "Repositorio: {{name}}"
+  },
+  "progress": {
+    "preparingWorktree": "Preparando worktree…",
+    "repoNotReady": "El repositorio no está listo",
+    "readyPickWorkflow": "Listo — elige un flujo de trabajo para empezar",
+    "reportTitle": "Ver el informe del elemento de trabajo",
+    "showReport": "Mostrar informe",
+    "retryFromFailure": "Reintentar desde el último fallo",
+    "pauseItem": "Pausar el elemento de trabajo",
+    "resumeItem": "Reanudar el elemento de trabajo",
+    "restartFromScratch": "Reiniciar desde cero",
+    "stopItem": "Detener el elemento de trabajo"
+  },
+  "view": {
+    "stepCurrent": "Paso actual",
+    "stepCompleted": "Completado",
+    "stepFailed": "Falló en el paso",
+    "stepPaused": "En pausa en el paso",
+    "stepStopped": "Detenido en el paso",
+    "stepAdded": "Añadido al panel",
+    "allStepsPassed": "Todos los pasos superados"
+  },
+  "editorMenu": {
+    "editor": {
+      "title": "Editor",
+      "running": "Editor (abierto)",
+      "idle": "Abrir editor",
+      "stop": "Detener editor"
+    },
+    "terminal": {
+      "title": "Terminal",
+      "running": "Terminal (abierta)",
+      "idle": "Abrir terminal",
+      "stop": "Detener terminal"
+    },
+    "openInBrowser": "Abrir en el navegador"
+  },
+  "ports": {
+    "title": "Asignaciones de puertos"
+  },
+  "loading": {
+    "preparingWorkspace": "Preparando el espacio de trabajo…",
+    "connectingEditor": "Estableciendo una conexión segura con un editor",
+    "connectingTerminal": "Estableciendo una conexión segura con una terminal"
+  },
+  "actions": {
+    "stop": "Detener",
+    "failedEndpoint": "Error: {{endpoint}}",
+    "failedStartEditor": "No se pudo iniciar el editor",
+    "failedPrepareWorkspace": "No se pudo preparar el espacio de trabajo",
+    "failedStartTerminal": "No se pudo iniciar la terminal",
+    "failedCloseEditor": "No se pudo cerrar el editor",
+    "failedCloseTerminal": "No se pudo cerrar la terminal"
+  },
+  "confirm": {
+    "message": "¿Seguro que quieres {{action}} el elemento de trabajo {{ticketKey}}?",
+    "verb": {
+      "stop": "detener"
+    }
+  }
+}

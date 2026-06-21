@@ -1,1 +1,124 @@
-{}
+{
+  "dryMode": "已启用试运行模式 — 跳过 Jira/GitHub 的副作用操作",
+  "runCommands": {
+    "heading": "命令",
+    "waitingToListen": "等待应用开始监听…",
+    "startFailed": "启动运行命令失败",
+    "stopFailed": "停止运行命令失败",
+    "stop": "停止 {{name}}",
+    "copy": "复制",
+    "open": "打开",
+    "run": "运行 {{name}}",
+    "copyTitle": "复制 {{url}}",
+    "starting": "正在启动 {{name}}",
+    "preparingWorktree": "正在准备工作树…"
+  },
+  "workflowDefButtons": {
+    "heading": "工作流",
+    "waitingFor": "等待：{{deps}}",
+    "clickToRetry": "点击重试",
+    "startFlow": "启动流程",
+    "noFlows": "未配置任何流程。",
+    "configureFlows": "配置流程 →"
+  },
+  "footer": {
+    "version": "Takuto v{{version}}"
+  },
+  "polling": {
+    "pausedResume": "轮询：已暂停 — 点击恢复",
+    "active": "轮询：进行中"
+  },
+  "stats": {
+    "pending": "等待中",
+    "running": "运行中",
+    "completed": "已完成",
+    "errors": "错误",
+    "paused": "已暂停"
+  },
+  "emptyState": {
+    "noRepos": "你还没有添加任何仓库。添加一个仓库即可开始。",
+    "goToRepositories": "前往「我的仓库」",
+    "noStatusItems": "没有「{{status}}」的项目。",
+    "showAllItems": "显示所有项目",
+    "noProject": "未配置任何项目。设置一个项目即可开始。",
+    "setupProject": "设置新项目",
+    "noItemsInRepo": "<name>{{repo}}</name> 中暂无项目。",
+    "noItems": "暂无项目。点击下方按钮添加项目。",
+    "newItem": "+ 新建项目"
+  },
+  "noAccess": {
+    "title": "无权访问此仓库",
+    "message": "已连接的 GitHub App 不再具有对「{{repo}}」的访问权限。如果之后恢复访问权限，你仍可再次选择它。",
+    "ok": "确定"
+  },
+  "toast": {
+    "pickRepository": "添加工作项前请先选择一个仓库。",
+    "addItemFailed": "添加工作项失败",
+    "actionFailed": "操作失败"
+  },
+  "card": {
+    "working": "处理中…",
+    "showDetails": "显示详情",
+    "showConsoleOutput": "显示控制台输出",
+    "repositoryTitle": "仓库：{{name}}"
+  },
+  "progress": {
+    "preparingWorktree": "正在准备工作树…",
+    "repoNotReady": "仓库尚未就绪",
+    "readyPickWorkflow": "已就绪 — 请选择一个工作流以开始",
+    "reportTitle": "查看工作项报告",
+    "showReport": "显示报告",
+    "retryFromFailure": "从上次失败处重试",
+    "pauseItem": "暂停工作项",
+    "resumeItem": "恢复工作项",
+    "restartFromScratch": "从头重新开始",
+    "stopItem": "停止工作项"
+  },
+  "view": {
+    "stepCurrent": "当前步骤",
+    "stepCompleted": "已完成",
+    "stepFailed": "在此步骤失败",
+    "stepPaused": "在此步骤暂停",
+    "stepStopped": "在此步骤停止",
+    "stepAdded": "已添加到仪表盘",
+    "allStepsPassed": "所有步骤均已通过"
+  },
+  "editorMenu": {
+    "editor": {
+      "title": "编辑器",
+      "running": "编辑器（已打开）",
+      "idle": "打开编辑器",
+      "stop": "关闭编辑器"
+    },
+    "terminal": {
+      "title": "终端",
+      "running": "终端（已打开）",
+      "idle": "打开终端",
+      "stop": "关闭终端"
+    },
+    "openInBrowser": "在浏览器中打开"
+  },
+  "ports": {
+    "title": "端口映射"
+  },
+  "loading": {
+    "preparingWorkspace": "正在准备工作区…",
+    "connectingEditor": "正在建立到编辑器的安全连接",
+    "connectingTerminal": "正在建立到终端的安全连接"
+  },
+  "actions": {
+    "stop": "停止",
+    "failedEndpoint": "失败：{{endpoint}}",
+    "failedStartEditor": "启动编辑器失败",
+    "failedPrepareWorkspace": "准备工作区失败",
+    "failedStartTerminal": "启动终端失败",
+    "failedCloseEditor": "关闭编辑器失败",
+    "failedCloseTerminal": "关闭终端失败"
+  },
+  "confirm": {
+    "message": "确定要{{action}}工作项 {{ticketKey}} 吗？",
+    "verb": {
+      "stop": "停止"
+    }
+  }
+}

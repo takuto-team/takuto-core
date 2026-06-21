@@ -1,1 +1,149 @@
-{}
+{
+  "header": {
+    "skip": "セットアップをスキップ →",
+    "title": "Takuto をセットアップ"
+  },
+  "loading": "現在の設定を読み込み中…",
+  "stepper": {
+    "ariaLabel": "セットアップの手順"
+  },
+  "step": {
+    "ticketing": {
+      "title": "チケット管理",
+      "body": "ようこそ — これは Takuto の初回セットアップです。タスクをどこから読み取るかを選択してください。これらの設定は後で設定ページからいつでも変更できます。"
+    },
+    "provider": {
+      "title": "AI プロバイダー",
+      "body": "作業項目を駆動する AI を選択し、ご自身のプロバイダーキーを追加してください。"
+    },
+    "git": {
+      "title": "Git と GitHub",
+      "body": "Takuto が作業する git ブランチとリモートを設定し、GitHub App または personal token を接続してください。"
+    },
+    "workflows": {
+      "title": "ワークフロー",
+      "body": "各作業項目で実行できるフローを確認してください。いつでも調整や再シードができます。"
+    }
+  },
+  "polling": {
+    "note": "これらの設定は、Takuto が新しい作業項目を自動的に取得する方法を制御します。続行時に保存されます（下の保存ボタンですぐに適用されます）。"
+  },
+  "stepTimeout": {
+    "heading": "ステップのタイムアウト",
+    "label": "タイムアウト（秒）",
+    "invalid": "ステップのタイムアウトは正の数である必要があります。",
+    "hint": "エージェントのステップがキャンセルされるまでに実行できる最大秒数です。デフォルトは 1800（30 分）です。"
+  },
+  "dbNote": "<strong>データベースとダッシュボードのポートはこのウィザードでは設定されません。</strong> Takuto はデフォルト値（SQLite、ポート 8080）で <code>config.toml</code> を書き込みます。変更するにはそのファイルを直接編集してください。",
+  "nav": {
+    "back": "← 戻る",
+    "skip": "今はスキップ",
+    "continue": "続行",
+    "saving": "保存中…",
+    "finish": "セットアップを完了",
+    "finishing": "完了中…"
+  },
+  "ticketing": {
+    "label": "チケット管理システム",
+    "adminOnly": "デプロイのチケット管理システムを変更できるのは管理者だけです。ご自身の Jira 認証情報は引き続き下で管理できます。",
+    "options": {
+      "none": {
+        "label": "なし",
+        "hint": "チケット管理との連携なし。ダッシュボードから作業項目を手動で開始します。"
+      },
+      "github": {
+        "label": "GitHub",
+        "hint": "リポジトリのリモートからオープンな GitHub Issues をポーリングします。ここではトークンは不要です — GitHub ステップで PAT または GitHub App を接続してください。"
+      },
+      "jira": {
+        "label": "Jira",
+        "hint": "Jira から To Do チケットをポーリングします。下に Atlassian サイト、メール、API token を追加してください。"
+      }
+    },
+    "jira": {
+      "connectedAs": "✓ <site>{{site}}</site> で <strong>{{email}}</strong> として接続済み。そのまま維持する場合はフォームを空欄にし、置き換える場合は新しいトークンを入力してください。",
+      "encryptedNote": "Jira の認証情報は暗号化して保存され、あなた自身の作業項目にのみ使用されます。",
+      "site": "Atlassian サイト",
+      "sitePlaceholder": "https://your-org.atlassian.net",
+      "email": "アカウントのメール",
+      "emailPlaceholder": "you@your-org.com",
+      "token": "API token",
+      "tokenPlaceholder": "Atlassian API token を貼り付けてください",
+      "createTokenPrefix": "作成はこちら:",
+      "tokenLinkText": "id.atlassian.com → API tokens →",
+      "tokenLinkAria": "Atlassian API token ページを開く（新しいタブで開きます）"
+    }
+  },
+  "provider": {
+    "label": "プロバイダー",
+    "options": {
+      "claude": "Claude",
+      "cursor": "Cursor",
+      "codex": "Codex",
+      "opencode": "OpenCode（自己ホスト型）",
+      "gemini": "Gemini (v2)",
+      "none": "なし"
+    },
+    "opencodeHint": "OpenCode は Takuto を自己ホスト型の OpenAI 互換エンドポイント（LM Studio、Ollama、vLLM、プライベートゲートウェイ）に接続します。Anthropic / OpenAI を直接使用するには、代わりに Claude または Codex プロバイダーを選択してください。",
+    "baseUrl": "Base URL",
+    "baseUrlPlaceholderOpencode": "http://lm-studio:1234/v1",
+    "baseUrlPlaceholderDefault": "ベンダーの公開 API を使用する場合は空欄のままにしてください",
+    "cursorNoUpstream": "Cursor CLI はカスタムのアップストリームエンドポイントをサポートしていません",
+    "cursorNoUpstreamHint": "Cursor CLI はカスタムのアップストリームエンドポイントをサポートしていません。",
+    "baseUrlOpencodeHint": "OpenCode には必須です。自己ホスト型の OpenAI 互換サーバーを指定してください。",
+    "model": "モデル",
+    "modelPlaceholderOpencode": "lmstudio/qwen3-coder",
+    "modelPlaceholderDefault": "ベンダーのデフォルトを使用する場合は空欄のままにしてください",
+    "modelOpencodeHint": "OpenCode には必須です。エンドポイントが提供するモデル ID です（例: <code>lmstudio/qwen3-coder</code>）。",
+    "extraArgs": "追加の引数（1 行に 1 つ）"
+  },
+  "git": {
+    "heading": "Git 設定",
+    "intro": "Takuto が各作業項目でチェックアウトするブランチと、プッシュ先の git リモートです。",
+    "baseBranch": "ベースブランチ",
+    "baseBranchPlaceholder": "main",
+    "baseBranchRequired": "ベースブランチは必須です。",
+    "baseBranchHint": "作業項目のブランチが切り出される元のブランチです。通常は「main」または「master」です。",
+    "remote": "リモート",
+    "remotePlaceholder": "origin",
+    "remoteRequired": "リモートは必須です。",
+    "remoteHint": "Takuto がフェッチし、ブランチをプッシュする git リモートです。",
+    "adminOnly": "デプロイの git 設定を変更できるのは管理者だけです。",
+    "app": {
+      "labelPrefix": "GitHub App:",
+      "configured": "設定済み",
+      "notConfigured": "未設定",
+      "explainer": "共有の GitHub App を使うと、このデプロイ上の全員が personal token なしで GitHub と通信できます。設定は任意です — 各メンバーは代わりに下でご自身の personal access token を持ち込むこともできます。",
+      "setupLink": "GitHub App をセットアップ →",
+      "setupLinkAria": "Takuto の GitHub App セットアップガイドを読む（新しいタブで開きます）"
+    },
+    "pat": {
+      "heading": "あなたの personal access token（任意）",
+      "intro": "PAT を追加すると、作業項目のコミット、PR、レビューコメントがあなたに帰属します。共有の GitHub App として実行する場合はスキップしてください。"
+    }
+  },
+  "aiKey": {
+    "loading": "認証情報を読み込み中…",
+    "connected": "{{label}} に接続しました。",
+    "sessionUploaded": "{{label}} のセッションをアップロードしました。",
+    "saveError": "認証情報を保存できませんでした。"
+  },
+  "banner": {
+    "notReady": "Takuto の準備ができていません — セットアップが必要です",
+    "notFinished": "セットアップが完了していません",
+    "legacyRunHint": "<code>docker compose run --rm -it takuto setup</code> を実行してセットアップを完了し、再起動してください。",
+    "askAdminProvider": "プロバイダーの変更を管理者に依頼してください",
+    "askAdminGeneric": "管理者にこの問題の解決を依頼してください",
+    "cta": {
+      "setClaude": "Claude 認証情報を設定",
+      "setCursor": "Cursor 認証情報を設定",
+      "setCodex": "Codex 認証情報を設定",
+      "setOpenCode": "OpenCode 認証情報を設定",
+      "setGithubPat": "GitHub PAT を設定",
+      "changeProvider": "プロバイダーを変更",
+      "readDocs": "ドキュメントを読む"
+    },
+    "ctaAriaInternal": "{{label}} — 修正: {{message}}",
+    "ctaAriaExternal": "{{label}}（ドキュメントを新しいタブで開きます）— 修正: {{message}}"
+  }
+}

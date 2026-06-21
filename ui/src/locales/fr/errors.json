@@ -1,1 +1,20 @@
-{}
+{
+  "boundary": {
+    "title": "Une erreur est survenue",
+    "body": "Le tableau de bord a rencontré une erreur inattendue et n'a pas pu s'afficher. Recharger la page résout généralement le problème.",
+    "reload": "Recharger"
+  },
+  "fetch": {
+    "unreachable": "Impossible de joindre le serveur : {{message}}"
+  },
+  "system": {
+    "commandFailed": "Échec de la commande — {{ticketKey}}"
+  },
+  "dependencies": {
+    "installFailed": "Impossible d'installer les dépendances",
+    "installing": "Installation des dépendances",
+    "preparing": "Préparation…",
+    "errorHelp": "Les CLI des agents sont installées au démarrage. Vérifiez les journaux du serveur, puis redémarrez.",
+    "installingHelp": "Les CLI des agents sont en cours d'installation lors du premier démarrage. Cela ne prend qu'un instant."
+  }
+}

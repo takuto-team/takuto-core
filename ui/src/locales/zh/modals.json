@@ -1,1 +1,174 @@
-{}
+{
+  "aiPrompt": {
+    "askAi": "询问 AI",
+    "remaining": "剩余 {{time}}",
+    "placeholder": "给 AI 指令以修改描述（例如「添加验收标准」或「让它更简洁」）…",
+    "applyingChanges": "正在应用更改… {{time}}",
+    "ctrlEnter": "按 Ctrl+Enter 发送",
+    "cancel": "取消",
+    "apply": "应用",
+    "retry": "重试",
+    "requestFailedHttp": "请求失败（HTTP {{status}}）",
+    "requestFailed": "请求失败"
+  },
+  "common": {
+    "cancel": "取消"
+  },
+  "confirm": {
+    "defaultConfirm": "确认"
+  },
+  "delete": {
+    "title": "删除 {{ticketKey}}？",
+    "cannotUndo": "此操作无法撤销。",
+    "markDoneAndDelete": "标记完成并删除",
+    "delete": "删除"
+  },
+  "paste": {
+    "title": "新建工作项",
+    "repository": "仓库",
+    "loadingRepos": "正在加载仓库…",
+    "noReposLead": "你还没有添加任何仓库。",
+    "noReposLink": "从「我的仓库」标签页添加一个",
+    "noReposTail": "然后再创建工作项。",
+    "nameLabel": "工作项名称（可选）",
+    "namePlaceholder": "例如 add-user-login",
+    "descriptionLabel": "描述",
+    "descriptionPlaceholder": "在此粘贴你的工单描述…",
+    "submit": "添加到仪表盘"
+  },
+  "ticketPicker": {
+    "githubTitle": "GitHub Issues",
+    "todoTitle": "To Do 工单",
+    "needRepo": "请在顶部选择一个具体仓库以查看其 GitHub issues。「所有仓库」不会跨多个仓库聚合 issues。",
+    "loading": "加载中…",
+    "noTickets": "未找到工单。",
+    "alreadyAdded": "已添加",
+    "checking": "检查中…",
+    "prFallback": "一个 PR",
+    "hasPrTitle": "此 issue 已有 PR",
+    "hasPrMessage": "{{ticketKey}} 已有 {{prLabel}}。再次添加将创建一个全新的、独立的 pull request。是否继续？",
+    "addAnyway": "仍然添加"
+  },
+  "cloneProgress": {
+    "cloningTitle": "正在克隆仓库",
+    "cloningPrefix": "正在克隆",
+    "cloningHint": "根据仓库大小，这可能需要一点时间。",
+    "cancel": "取消",
+    "successTitle": "仓库已克隆",
+    "successSuffix": "已成功克隆。",
+    "continue": "继续",
+    "errorTitle": "克隆失败",
+    "unknownError": "克隆仓库时发生未知错误。",
+    "retry": "重试",
+    "close": "关闭"
+  },
+  "consoleOutput": {
+    "completed": "已完成",
+    "waiting": "等待中…",
+    "title": "控制台输出",
+    "noOutput": "暂无输出。",
+    "close": "关闭"
+  },
+  "noJira": {
+    "title": "无工单系统",
+    "bodyPrefix": "未配置任何工单系统。工作流只能通过仪表盘手动启动。请配置",
+    "bodyIn": "于",
+    "bodySuffix": "以启用 Jira 或 GitHub 轮询。",
+    "gotIt": "知道了"
+  },
+  "report": {
+    "notFound": "未找到报告",
+    "loadFailed": "加载报告失败",
+    "title": "工作项报告",
+    "loading": "正在加载报告…",
+    "empty": "无可用的报告内容。",
+    "copy": "复制",
+    "close": "关闭"
+  },
+  "repoPicker": {
+    "loadCheckedOutError": "无法加载已检出的仓库",
+    "title": "设置新项目",
+    "searchPlaceholder": "搜索仓库…",
+    "loading": "正在加载仓库…",
+    "noneFound": "未找到仓库。",
+    "private": "私有",
+    "cloned": "已克隆",
+    "select": "选择"
+  },
+  "startWorkflowFooter": {
+    "discard": "放弃",
+    "close": "关闭",
+    "confirm": "确认",
+    "saving": "正在保存…",
+    "addToDashboard": "添加到仪表盘"
+  },
+  "startWorkflowRepoBanner": {
+    "repositoryLabel": "仓库：",
+    "loading": "加载中…",
+    "noReposPrefix": "你的仪表盘上没有任何仓库。",
+    "addOne": "添加一个",
+    "noReposSuffix": "然后再启动工作项。"
+  },
+  "startFlow": {
+    "dependsOn": "依赖于：",
+    "running": "运行中",
+    "done": "已完成",
+    "failed": "已失败",
+    "clickToRetry": "点击重试",
+    "retry": "重试",
+    "start": "启动",
+    "title": "启动流程 — {{ticketKey}}",
+    "close": "关闭",
+    "noFlows": "未配置任何流程。",
+    "waitingFor": "等待：{{deps}}"
+  },
+  "stepEditor": {
+    "improveFailed": "优化请求失败",
+    "improvingPrompt": "正在优化提示词…",
+    "cancel": "取消",
+    "dragToReorder": "拖动以重新排序",
+    "untitledStep": "未命名步骤",
+    "needsOneStep": "流程至少需要一个步骤。",
+    "remove": "移除",
+    "prompt": "提示词",
+    "promptPlaceholder": "原样发送给 agent 的本步骤文本。",
+    "improving": "优化中…",
+    "improveWithAi": "用 AI 优化",
+    "revert": "还原",
+    "skills": "技能",
+    "addSkill": "+ 添加技能",
+    "skillNamePlaceholder": "技能名称",
+    "argsPlaceholder": "参数（用逗号分隔）",
+    "removeSkill": "移除技能"
+  },
+  "dependsOn": {
+    "removeDependency": "移除依赖 {{name}}",
+    "noDependencies": "无依赖",
+    "addDependency": "添加依赖"
+  },
+  "ticketDetailView": {
+    "loadingDescription": "正在加载描述…"
+  },
+  "ticketEditor": {
+    "descriptionModified": "描述已修改 — 保存以更新工单",
+    "editingDescription": "正在编辑描述",
+    "discard": "放弃",
+    "saving": "正在保存…",
+    "save": "保存",
+    "write": "编写",
+    "preview": "预览",
+    "sideBySide": "并排显示"
+  },
+  "improveWithAI": {
+    "failed": "优化工单描述失败",
+    "improvingDescription": "正在优化描述…",
+    "cancel": "取消",
+    "reviewAiChanges": "查看 AI 更改 — 确认后进入编辑模式并使用更新后的描述",
+    "discard": "放弃",
+    "confirm": "确认",
+    "back": "返回",
+    "improving": "优化中…",
+    "improveWithAi": "用 AI 优化",
+    "edit": "编辑"
+  }
+}

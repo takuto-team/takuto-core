@@ -1,1 +1,38 @@
-{}
+{
+  "language": {
+    "switch": "Cambiar idioma"
+  },
+  "editableName": {
+    "clickToRename": "Haz clic para renombrar"
+  },
+  "loading": "Cargando...",
+  "connection": {
+    "connected": "Conectado",
+    "disconnected": "Desconectado"
+  },
+  "nav": {
+    "menu": "Menú",
+    "logout": "Cerrar sesión"
+  },
+  "repo": {
+    "switchTitle": "Cambiar el repositorio activo (filtra el panel)",
+    "allRepositories": "Todos los repositorios",
+    "manage": "Gestionar repositorios…",
+    "myRepositories": "Mis repositorios"
+  },
+  "github": {
+    "connected": "{{name}} conectado",
+    "appConnected": "App conectada",
+    "appConnectedTitle": "App de GitHub conectada"
+  },
+  "tabs": {
+    "security": "Seguridad",
+    "ai": "Ajustes de IA",
+    "github": "GitHub",
+    "ticketing": "Tickets",
+    "users": "Usuarios",
+    "repositories": "Mis repositorios",
+    "repositorySettings": "Ajustes del repositorio",
+    "workflows": "Flujos de trabajo"
+  }
+}

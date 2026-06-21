@@ -1,1 +1,149 @@
-{}
+{
+  "header": {
+    "skip": "Omitir configuración →",
+    "title": "Configurar Takuto"
+  },
+  "loading": "Cargando los ajustes actuales…",
+  "stepper": {
+    "ariaLabel": "Pasos de configuración"
+  },
+  "step": {
+    "ticketing": {
+      "title": "Tickets",
+      "body": "Bienvenido — esta es la configuración inicial de Takuto. Elige de dónde debe leer las tareas. Puedes cambiar cualquiera de estos ajustes más adelante en la página de Configuración."
+    },
+    "provider": {
+      "title": "Proveedor de IA",
+      "body": "Elige la IA que impulsa tus elementos de trabajo y luego añade tu propia clave de proveedor."
+    },
+    "git": {
+      "title": "Git y GitHub",
+      "body": "Define la rama y el remoto de git con los que trabaja Takuto y luego conecta una App de GitHub o un token personal."
+    },
+    "workflows": {
+      "title": "Flujos de trabajo",
+      "body": "Revisa los flujos que puedes ejecutar en cada elemento de trabajo. Ajústalos o vuelve a generarlos cuando quieras."
+    }
+  },
+  "polling": {
+    "note": "Estos ajustes controlan cómo Takuto recoge nuevos elementos de trabajo automáticamente. Se guardan al continuar (el botón Guardar de abajo los aplica de inmediato)."
+  },
+  "stepTimeout": {
+    "heading": "Tiempo de espera del paso",
+    "label": "Tiempo de espera (segundos)",
+    "invalid": "El tiempo de espera del paso debe ser un número positivo.",
+    "hint": "Máximo de segundos que un paso de agente puede ejecutarse antes de cancelarse. Predeterminado: 1800 (30 min)."
+  },
+  "dbNote": "<strong>La base de datos y el puerto del panel no se configuran en este asistente.</strong> Takuto escribe un <code>config.toml</code> con los valores predeterminados (SQLite, puerto 8080). Edita ese archivo directamente para cambiarlos.",
+  "nav": {
+    "back": "← Atrás",
+    "skip": "Omitir por ahora",
+    "continue": "Continuar",
+    "saving": "Guardando…",
+    "finish": "Finalizar configuración",
+    "finishing": "Finalizando…"
+  },
+  "ticketing": {
+    "label": "Sistema de tickets",
+    "adminOnly": "Solo un administrador puede cambiar el sistema de tickets del despliegue. Aun así, puedes gestionar tu propia credencial de Jira abajo.",
+    "options": {
+      "none": {
+        "label": "Ninguno",
+        "hint": "Sin integración de tickets. Inicia los elementos de trabajo manualmente desde el panel."
+      },
+      "github": {
+        "label": "GitHub",
+        "hint": "Sondea las incidencias (Issues) abiertas de GitHub desde el remoto del repositorio. Aquí no hay token — conecta un PAT o una App de GitHub en el paso de GitHub."
+      },
+      "jira": {
+        "label": "Jira",
+        "hint": "Sondea Jira en busca de tickets «Por hacer». Añade abajo tu sitio de Atlassian, correo y token de API."
+      }
+    },
+    "jira": {
+      "connectedAs": "✓ Conectado como <strong>{{email}}</strong> en <site>{{site}}</site>. Deja el formulario en blanco para mantenerlo, o introduce un nuevo token para reemplazarlo.",
+      "encryptedNote": "Tus credenciales de Jira se almacenan cifradas y solo se usan para tus propios elementos de trabajo.",
+      "site": "Sitio de Atlassian",
+      "sitePlaceholder": "https://tu-org.atlassian.net",
+      "email": "Correo de la cuenta",
+      "emailPlaceholder": "tu@tu-org.com",
+      "token": "Token de API",
+      "tokenPlaceholder": "Pega tu token de API de Atlassian",
+      "createTokenPrefix": "Crea uno en",
+      "tokenLinkText": "id.atlassian.com → tokens de API →",
+      "tokenLinkAria": "Abrir la página de tokens de API de Atlassian (se abre en una pestaña nueva)"
+    }
+  },
+  "provider": {
+    "label": "Proveedor",
+    "options": {
+      "claude": "Claude",
+      "cursor": "Cursor",
+      "codex": "Codex",
+      "opencode": "OpenCode (autoalojado)",
+      "gemini": "Gemini (v2)",
+      "none": "Ninguno"
+    },
+    "opencodeHint": "OpenCode conecta Takuto con tu endpoint compatible con OpenAI autoalojado (LM Studio, Ollama, vLLM, gateways privados). Para usar Anthropic / OpenAI directamente, elige el proveedor Claude o Codex en su lugar.",
+    "baseUrl": "URL base",
+    "baseUrlPlaceholderOpencode": "http://lm-studio:1234/v1",
+    "baseUrlPlaceholderDefault": "Déjalo vacío para usar la API pública del proveedor",
+    "cursorNoUpstream": "El CLI de Cursor no admite endpoints upstream personalizados",
+    "cursorNoUpstreamHint": "El CLI de Cursor no admite endpoints upstream personalizados.",
+    "baseUrlOpencodeHint": "Necesario para OpenCode. Apúntalo a tu servidor compatible con OpenAI autoalojado.",
+    "model": "Modelo",
+    "modelPlaceholderOpencode": "lmstudio/qwen3-coder",
+    "modelPlaceholderDefault": "Déjalo vacío para el modelo predeterminado del proveedor",
+    "modelOpencodeHint": "Necesario para OpenCode. El id del modelo servido por tu endpoint (p. ej. <code>lmstudio/qwen3-coder</code>).",
+    "extraArgs": "Argumentos adicionales (uno por línea)"
+  },
+  "git": {
+    "heading": "Ajustes de git",
+    "intro": "La rama que Takuto extrae para cada elemento de trabajo y el remoto de git al que hace push.",
+    "baseBranch": "Rama base",
+    "baseBranchPlaceholder": "main",
+    "baseBranchRequired": "La rama base es obligatoria.",
+    "baseBranchHint": "La rama de la que se cortan las ramas de los elementos de trabajo. Normalmente \"main\" o \"master\".",
+    "remote": "Remoto",
+    "remotePlaceholder": "origin",
+    "remoteRequired": "El remoto es obligatorio.",
+    "remoteHint": "El remoto de git desde el que Takuto hace fetch y al que envía las ramas.",
+    "adminOnly": "Solo un administrador puede cambiar los ajustes de git del despliegue.",
+    "app": {
+      "labelPrefix": "App de GitHub:",
+      "configured": "configurada",
+      "notConfigured": "no configurada",
+      "explainer": "Una App de GitHub compartida permite que todos en este despliegue se comuniquen con GitHub sin un token personal. Configurarla es opcional — cada compañero puede usar su propio token de acceso personal abajo.",
+      "setupLink": "Configurar una App de GitHub →",
+      "setupLinkAria": "Leer la guía de configuración de la App de GitHub de Takuto (se abre en una pestaña nueva)"
+    },
+    "pat": {
+      "heading": "Tu token de acceso personal (opcional)",
+      "intro": "Añade un PAT para que los commits, PR y comentarios de revisión de tus elementos de trabajo se atribuyan a ti. Omítelo para ejecutar como la App de GitHub compartida."
+    }
+  },
+  "aiKey": {
+    "loading": "Cargando tus credenciales…",
+    "connected": "{{label}} conectado.",
+    "sessionUploaded": "Sesión de {{label}} subida.",
+    "saveError": "No se pudo guardar tu credencial."
+  },
+  "banner": {
+    "notReady": "Takuto no está listo — se requiere configuración",
+    "notFinished": "La configuración no ha terminado",
+    "legacyRunHint": "Ejecuta <code>docker compose run --rm -it takuto setup</code> para completar la configuración y luego reinicia.",
+    "askAdminProvider": "Pide a tu administrador que cambie el proveedor",
+    "askAdminGeneric": "Pide a tu administrador que lo solucione",
+    "cta": {
+      "setClaude": "Configurar credencial de Claude",
+      "setCursor": "Configurar credencial de Cursor",
+      "setCodex": "Configurar credencial de Codex",
+      "setOpenCode": "Configurar credencial de OpenCode",
+      "setGithubPat": "Configurar PAT de GitHub",
+      "changeProvider": "Cambiar proveedor",
+      "readDocs": "Leer la documentación"
+    },
+    "ctaAriaInternal": "{{label}} — solución: {{message}}",
+    "ctaAriaExternal": "{{label}} (abre la documentación en una pestaña nueva) — solución: {{message}}"
+  }
+}

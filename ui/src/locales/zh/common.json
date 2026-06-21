@@ -1,1 +1,38 @@
-{}
+{
+  "language": {
+    "switch": "切换语言"
+  },
+  "editableName": {
+    "clickToRename": "点击重命名"
+  },
+  "loading": "加载中…",
+  "connection": {
+    "connected": "已连接",
+    "disconnected": "已断开"
+  },
+  "nav": {
+    "menu": "菜单",
+    "logout": "退出登录"
+  },
+  "repo": {
+    "switchTitle": "切换当前仓库（用于筛选仪表盘）",
+    "allRepositories": "所有仓库",
+    "manage": "管理仓库…",
+    "myRepositories": "我的仓库"
+  },
+  "github": {
+    "connected": "{{name}} 已连接",
+    "appConnected": "App 已连接",
+    "appConnectedTitle": "GitHub App 已连接"
+  },
+  "tabs": {
+    "security": "安全",
+    "ai": "AI 设置",
+    "github": "GitHub",
+    "ticketing": "工单系统",
+    "users": "用户",
+    "repositories": "我的仓库",
+    "repositorySettings": "仓库设置",
+    "workflows": "工作流"
+  }
+}

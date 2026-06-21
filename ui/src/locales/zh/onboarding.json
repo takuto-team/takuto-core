@@ -1,1 +1,149 @@
-{}
+{
+  "header": {
+    "skip": "跳过设置 →",
+    "title": "设置 Takuto"
+  },
+  "loading": "正在加载当前设置…",
+  "stepper": {
+    "ariaLabel": "设置步骤"
+  },
+  "step": {
+    "ticketing": {
+      "title": "工单系统",
+      "body": "欢迎 — 这是 Takuto 的首次设置。请选择它从何处读取任务。之后你可以在配置页面更改任何这些设置。"
+    },
+    "provider": {
+      "title": "AI 提供商",
+      "body": "选择驱动你工作项的 AI，然后添加你自己的提供商密钥。"
+    },
+    "git": {
+      "title": "Git 与 GitHub",
+      "body": "设置 Takuto 使用的 git 分支和远程仓库，然后连接 GitHub App 或个人令牌。"
+    },
+    "workflows": {
+      "title": "工作流",
+      "body": "查看可在每个工作项上运行的流程。你可以随时调整或重新初始化它们。"
+    }
+  },
+  "polling": {
+    "note": "这些设置控制 Takuto 如何自动拾取新的工作项。点击「继续」时会保存（下方的「保存」按钮会立即应用）。"
+  },
+  "stepTimeout": {
+    "heading": "步骤超时",
+    "label": "超时（秒）",
+    "invalid": "步骤超时必须为正数。",
+    "hint": "agent 步骤在被取消前可运行的最长秒数。默认 1800（30 分钟）。"
+  },
+  "dbNote": "<strong>数据库和仪表盘端口不在此向导中配置。</strong>Takuto 会写入一个使用默认值（SQLite，端口 8080）的 <code>config.toml</code>。请直接编辑该文件以更改它们。",
+  "nav": {
+    "back": "← 返回",
+    "skip": "暂时跳过",
+    "continue": "继续",
+    "saving": "正在保存…",
+    "finish": "完成设置",
+    "finishing": "正在完成…"
+  },
+  "ticketing": {
+    "label": "工单系统",
+    "adminOnly": "只有管理员才能更改部署的工单系统。你仍可在下方管理自己的 Jira 凭据。",
+    "options": {
+      "none": {
+        "label": "无",
+        "hint": "不集成工单系统。从仪表盘手动启动工作项。"
+      },
+      "github": {
+        "label": "GitHub",
+        "hint": "从仓库的远程拉取开放的 GitHub Issues。此处无需令牌 — 请在 GitHub 步骤中连接 PAT 或 GitHub App。"
+      },
+      "jira": {
+        "label": "Jira",
+        "hint": "轮询 Jira 中的 To Do 工单。请在下方添加你的 Atlassian 站点、邮箱和 API token。"
+      }
+    },
+    "jira": {
+      "connectedAs": "✓ 已在 <site>{{site}}</site> 上以 <strong>{{email}}</strong> 连接。留空表单以保留它，或输入新 token 进行替换。",
+      "encryptedNote": "你的 Jira 凭据已加密存储，仅用于你自己的工作项。",
+      "site": "Atlassian 站点",
+      "sitePlaceholder": "https://your-org.atlassian.net",
+      "email": "账户邮箱",
+      "emailPlaceholder": "you@your-org.com",
+      "token": "API token",
+      "tokenPlaceholder": "粘贴你的 Atlassian API token",
+      "createTokenPrefix": "创建地址：",
+      "tokenLinkText": "id.atlassian.com → API tokens →",
+      "tokenLinkAria": "打开 Atlassian API token 页面（在新标签页中打开）"
+    }
+  },
+  "provider": {
+    "label": "提供商",
+    "options": {
+      "claude": "Claude",
+      "cursor": "Cursor",
+      "codex": "Codex",
+      "opencode": "OpenCode（自托管）",
+      "gemini": "Gemini（v2）",
+      "none": "无"
+    },
+    "opencodeHint": "OpenCode 将 Takuto 接入你自托管的 OpenAI 兼容端点（LM Studio、Ollama、vLLM、私有网关）。若要直连 Anthropic / OpenAI，请改选 Claude 或 Codex 提供商。",
+    "baseUrl": "Base URL",
+    "baseUrlPlaceholderOpencode": "http://lm-studio:1234/v1",
+    "baseUrlPlaceholderDefault": "留空以使用厂商公共 API",
+    "cursorNoUpstream": "Cursor CLI 不支持自定义上游端点",
+    "cursorNoUpstreamHint": "Cursor CLI 不支持自定义上游端点。",
+    "baseUrlOpencodeHint": "OpenCode 必填。请将其指向你自托管的 OpenAI 兼容服务器。",
+    "model": "模型",
+    "modelPlaceholderOpencode": "lmstudio/qwen3-coder",
+    "modelPlaceholderDefault": "留空以使用厂商默认值",
+    "modelOpencodeHint": "OpenCode 必填。你的端点提供的模型 id（例如 <code>lmstudio/qwen3-coder</code>）。",
+    "extraArgs": "额外参数（每行一个）"
+  },
+  "git": {
+    "heading": "Git 设置",
+    "intro": "Takuto 为每个工作项检出的分支，以及它推送到的 git 远程。",
+    "baseBranch": "基础分支",
+    "baseBranchPlaceholder": "main",
+    "baseBranchRequired": "基础分支为必填项。",
+    "baseBranchHint": "工作项分支从该分支切出。通常为「main」或「master」。",
+    "remote": "远程",
+    "remotePlaceholder": "origin",
+    "remoteRequired": "远程为必填项。",
+    "remoteHint": "Takuto 从中拉取并向其推送分支的 git 远程。",
+    "adminOnly": "只有管理员才能更改部署的 git 设置。",
+    "app": {
+      "labelPrefix": "GitHub App：",
+      "configured": "已配置",
+      "notConfigured": "未配置",
+      "explainer": "共享的 GitHub App 让本部署的所有人无需个人令牌即可与 GitHub 通信。设置它是可选的 — 每位成员也可以在下方使用自己的个人访问令牌。",
+      "setupLink": "设置 GitHub App →",
+      "setupLinkAria": "阅读 Takuto GitHub App 设置指南（在新标签页中打开）"
+    },
+    "pat": {
+      "heading": "你的个人访问令牌（可选）",
+      "intro": "添加 PAT 后，你工作项上的提交、PR 和审阅评论将归属到你本人。跳过则以共享的 GitHub App 身份运行。"
+    }
+  },
+  "aiKey": {
+    "loading": "正在加载你的凭据…",
+    "connected": "{{label}} 已连接。",
+    "sessionUploaded": "{{label}} 会话已上传。",
+    "saveError": "无法保存你的凭据。"
+  },
+  "banner": {
+    "notReady": "Takuto 尚未就绪 — 需要完成设置",
+    "notFinished": "设置尚未完成",
+    "legacyRunHint": "运行 <code>docker compose run --rm -it takuto setup</code> 以完成设置，然后重启。",
+    "askAdminProvider": "请管理员更改提供商",
+    "askAdminGeneric": "请管理员修复此问题",
+    "cta": {
+      "setClaude": "设置 Claude 凭据",
+      "setCursor": "设置 Cursor 凭据",
+      "setCodex": "设置 Codex 凭据",
+      "setOpenCode": "设置 OpenCode 凭据",
+      "setGithubPat": "设置 GitHub PAT",
+      "changeProvider": "更改提供商",
+      "readDocs": "阅读文档"
+    },
+    "ctaAriaInternal": "{{label}} — 修复：{{message}}",
+    "ctaAriaExternal": "{{label}}（在新标签页中打开文档）— 修复：{{message}}"
+  }
+}
