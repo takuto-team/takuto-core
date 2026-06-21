@@ -178,10 +178,8 @@ pub fn parse_terminal_auth_from_pgrep(pgrep_output: &str) -> Option<(u16, String
 /// Kill the ttyd process inside the editor container.
 pub async fn stop_terminal(ticket_key: &str) {
     let name = editor_container_name(ticket_key);
-    let _ = tokio::process::Command::new("docker")
-        .args(["exec", &name, "pkill", "-x", "ttyd"])
-        .output()
-        .await;
+    // `pkill` is absent from the workspace image; kill via a `/proc` scan.
+    crate::container::pkill_in_container(&name, "ttyd").await;
 }
 
 #[cfg(test)]

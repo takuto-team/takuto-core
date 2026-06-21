@@ -367,9 +367,24 @@ pub(crate) async fn start_socat(
 /// Kill the `socat` process listening on `spare_port` inside the container.
 pub(crate) async fn kill_socat(container: &str, spare_port: u16) {
     // Match either TCP-LISTEN or TCP4-LISTEN with the spare port.
-    let pattern = format!("LISTEN:{spare_port}");
+    pkill_in_container(container, &format!("LISTEN:{spare_port}")).await;
+}
+
+/// Send SIGTERM to every process inside `container` whose `/proc` command line
+/// contains `needle`.
+///
+/// Replaces `pkill -f`, which is NOT installed in the workspace image. The
+/// match is done in-shell with a `case` glob (not `grep`) so the matcher's own
+/// process never matches `needle` and kills itself. `kill` is a shell builtin,
+/// so this depends only on `sh`, `tr`, and `/proc` — all present.
+pub async fn pkill_in_container(container: &str, needle: &str) {
+    // `needle` is built from internal constants / numeric ports, never user
+    // input, so plain interpolation into the glob is safe here.
+    let script = format!(
+        r#"for d in /proc/[0-9]*; do cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null); case "$cmd" in *{needle}*) kill "${{d#/proc/}}" 2>/dev/null ;; esac; done"#
+    );
     let _ = tokio::process::Command::new("docker")
-        .args(["exec", container, "pkill", "-f", &pattern])
+        .args(["exec", container, "sh", "-c", &script])
         .output()
         .await;
 }

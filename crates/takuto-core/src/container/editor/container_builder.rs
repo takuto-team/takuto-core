@@ -493,10 +493,10 @@ async fn run_editor_startup_commands(container: &str, cmds: &[String]) {
 /// (`ContainerRunner::cleanup_for_ticket`).
 pub async fn stop_editor(ticket_key: &str) {
     let name = workspace_container_name(ticket_key);
-    let _ = tokio::process::Command::new("docker")
-        .args(["exec", &name, "pkill", "-f", "openvscode-server"])
-        .output()
-        .await;
+    // `pkill` is absent from the workspace image; kill via a `/proc` scan. Every
+    // openvscode process (the `sh` wrapper, the server node, and its forks) runs
+    // out of `/opt/openvscode-server-*`, so the substring matches them all.
+    crate::container::port_scanner::pkill_in_container(&name, "openvscode-server").await;
     info!(name = %name, "Editor process stopped (workspace container persists)");
 }
 
