@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useTranslation } from "react-i18next";
 import type { WorkflowDefinition, WorkflowSummary } from "../api/types";
 import type { TerminalState } from "../hooks/useWorkflows";
 import { useIssueCardController } from "../hooks/useIssueCardController";
@@ -34,6 +35,9 @@ export function IssueCard({
   onShowDescription,
   onReport,
 }: Props) {
+  // Subscribing here also re-runs buildIssueCardView (which resolves its strings
+  // via i18n.t) whenever the language changes, refreshing the card's copy.
+  const { t } = useTranslation("dashboard");
   const view = buildIssueCardView(w, ts, dynamicForwards);
   // First open on a finished workflow may rebuild the worktree + container.
   const preparingWorkspace = view.isTerminal && !w.editor_url;
@@ -53,7 +57,7 @@ export function IssueCard({
             {ctl.loading !== "generic" ? (
               <ConnectionOverlay message={ctl.loading} />
             ) : (
-              <span className="text-sm text-gray-400">Working...</span>
+              <span className="text-sm text-gray-400">{t("card.working")}</span>
             )}
           </div>
         )}
@@ -72,7 +76,7 @@ export function IssueCard({
             onClick={() => onShowDescription(w.ticket_key, w.ticket_summary, w.ticket_description)}
             className="flex-shrink-0 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
           >
-            Show details <ExternalLinkIcon className="w-3 h-3" />
+            {t("card.showDetails")} <ExternalLinkIcon className="w-3 h-3" />
           </button>
         </div>
 
@@ -126,7 +130,7 @@ export function IssueCard({
           }`}
         >
           <TerminalIcon />
-          Show console output
+          {t("card.showConsoleOutput")}
         </button>
 
         <IssueCardFooter

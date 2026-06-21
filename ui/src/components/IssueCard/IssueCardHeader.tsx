@@ -3,6 +3,7 @@
 
 /** Presentational header row of an IssueCard: ticket key, workspace badge, status, PR link. */
 
+import { useTranslation } from "react-i18next";
 import type { WorkflowSummary } from "../../api/types";
 import { Label } from "../Label";
 import { StatusBadge } from "../StatusBadge";
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export function IssueCardHeader({ workflow: w, status, prUrl }: Props) {
+  const { t } = useTranslation("dashboard");
   const href = w.issue_url || w.jira_browse_url;
   const prNumber = prUrl.match(/\/(\d+)\/?$/)?.[1] ?? "";
   return (
@@ -35,7 +37,7 @@ export function IssueCardHeader({ workflow: w, status, prUrl }: Props) {
         {w.workspace_name && (
           <span
             className="text-[11px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700 shrink-0 truncate max-w-32"
-            title={`Repository: ${w.workspace_name}`}
+            title={t("card.repositoryTitle", { name: w.workspace_name })}
           >
             {w.workspace_name}
           </span>

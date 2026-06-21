@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getMyWorktreeCommands,
   putMyWorktreeCommands,
@@ -27,6 +28,7 @@ interface Props {
 }
 
 export function GenerateReportSwitch({ workspace }: Props) {
+  const { t } = useTranslation("config");
   const [enabled, setEnabled] = useState(false);
   // Preserve the row's commands so saving the toggle never wipes them.
   const [initCommands, setInitCommands] = useState<string[]>([]);
@@ -99,7 +101,7 @@ export function GenerateReportSwitch({ workspace }: Props) {
         disabled={loading || saving}
         saved={saved}
       />
-      {error && <p className="text-sm text-red-400 mt-1">Could not save: {error}</p>}
+      {error && <p className="text-sm text-red-400 mt-1">{t("errors.saveFailed", { error })}</p>}
     </div>
   );
 }

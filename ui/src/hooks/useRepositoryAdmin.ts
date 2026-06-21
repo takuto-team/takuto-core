@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addRepository,
@@ -43,6 +44,7 @@ function messageOf(e: unknown): string {
 }
 
 export function useRepositoryAdmin(): UseRepositoryAdminResult {
+  const { t } = useTranslation("config");
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [opError, setOpError] = useState("");
@@ -91,7 +93,7 @@ export function useRepositoryAdmin(): UseRepositoryAdminResult {
       setBusy(`add:${repo.full_name}`);
     },
     onSuccess: (row) => {
-      setSuccess(`Added "${row.name}" to your dashboard.`);
+      setSuccess(t("repositories.added", { name: row.name }));
       queryClient.invalidateQueries({ queryKey: queryKeys.repositories });
     },
     onError: (e) => setOpError(messageOf(e)),
@@ -107,7 +109,7 @@ export function useRepositoryAdmin(): UseRepositoryAdminResult {
       setBusy(`remove:${repo.id}`);
     },
     onSuccess: (_data, { repo }) => {
-      setSuccess(`Removed "${repo.name}" from your dashboard.`);
+      setSuccess(t("repositories.removed", { name: repo.name }));
       queryClient.invalidateQueries({ queryKey: queryKeys.repositories });
     },
     onError: (e) => setOpError(messageOf(e)),

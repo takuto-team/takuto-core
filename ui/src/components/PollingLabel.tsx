@@ -1,6 +1,8 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useTranslation } from "react-i18next";
+
 interface Props {
   paused: boolean;
   toggling: boolean;
@@ -9,6 +11,7 @@ interface Props {
 }
 
 export function PollingLabel({ paused, toggling, ticketingSystem, onToggle }: Props) {
+  const { t } = useTranslation("dashboard");
   if (ticketingSystem === "none") return null;
 
   return (
@@ -19,7 +22,7 @@ export function PollingLabel({ paused, toggling, ticketingSystem, onToggle }: Pr
           disabled={toggling}
           className="text-xs text-amber-400/80 hover:text-amber-300 transition-colors cursor-pointer disabled:opacity-50"
         >
-          Polling: paused &mdash; click to resume
+          {t("polling.pausedResume")}
         </button>
       ) : (
         <button
@@ -27,7 +30,7 @@ export function PollingLabel({ paused, toggling, ticketingSystem, onToggle }: Pr
           disabled={toggling}
           className="text-xs text-emerald-500/70 hover:text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
         >
-          Polling: active
+          {t("polling.active")}
         </button>
       )}
     </div>

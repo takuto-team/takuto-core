@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AiProviderSettingsSection } from "./admin/AiProviderSettingsSection";
 import { ShareConversationSwitch } from "./admin/ShareConversationSwitch";
 import { StepGuardrailsSection } from "./admin/StepGuardrailsSection";
@@ -35,6 +36,7 @@ interface Props {
 }
 
 export function AiSettingsTab({ isAdmin, onDirtyChange, registerSave }: Props) {
+  const { t } = useTranslation("config");
   // Bumped when the admin saves a new active provider so the per-user
   // credential card refetches and shows the right provider without a reload.
   const [credRefreshKey, setCredRefreshKey] = useState(0);
@@ -92,7 +94,7 @@ export function AiSettingsTab({ isAdmin, onDirtyChange, registerSave }: Props) {
       {isAdmin && (
         <div className="flex items-center justify-end gap-3 sticky bottom-0 bg-gray-950/80 backdrop-blur-sm py-3 border-t border-gray-800">
           {configDirty && (
-            <span className="text-xs text-amber-300">Unsaved changes</span>
+            <span className="text-xs text-amber-300">{t("ai.unsavedChanges")}</span>
           )}
           <button
             type="button"
@@ -100,7 +102,7 @@ export function AiSettingsTab({ isAdmin, onDirtyChange, registerSave }: Props) {
             onClick={() => void saveAll()}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            {saving ? "Saving…" : "Save changes"}
+            {saving ? t("actions.saving") : t("actions.saveChanges")}
           </button>
         </div>
       )}

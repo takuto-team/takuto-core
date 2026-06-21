@@ -15,6 +15,7 @@
  */
 
 import { forwardRef, useEffect, useImperativeHandle } from "react";
+import { useTranslation } from "react-i18next";
 import { useAiProviderSettings } from "../../hooks/useAiProviderSettings";
 import { PROVIDER_LABEL, ProviderForm } from "./ProviderForm";
 import { ProviderSwitchConfirm } from "./ProviderSwitchConfirm";
@@ -31,6 +32,7 @@ interface Props extends ConfigSectionProps {
 
 export const AiProviderSettingsSection = forwardRef<ConfigSectionHandle, Props>(
   function AiProviderSettingsSection({ onProviderSaved, onDirtyChange }: Props, ref) {
+  const { t } = useTranslation("config");
   const {
     loading,
     error,
@@ -59,15 +61,14 @@ export const AiProviderSettingsSection = forwardRef<ConfigSectionHandle, Props>(
   return (
     <section aria-labelledby="ai-provider-section-title" className="flex flex-col gap-3">
       <h2 id="ai-provider-section-title" className="text-lg font-semibold text-white">
-        Provider settings
+        {t("ai.providerSettings")}
       </h2>
       <p className="text-xs text-gray-500">
-        Admin-only. Pick the active AI provider, configure its sub-table, and choose which
-        providers users can pick from.
+        {t("ai.providerSettingsHelp")}
       </p>
 
-      {loading && <p className="text-sm text-gray-500">Loading…</p>}
-      {!loading && error && <p className="text-sm text-red-400">Could not load config: {error}</p>}
+      {loading && <p className="text-sm text-gray-500">{t("actions.loading")}</p>}
+      {!loading && error && <p className="text-sm text-red-400">{t("errors.loadConfig", { error })}</p>}
       {!loading && !error && (
         <ProviderForm
           selectedProvider={selectedProvider}

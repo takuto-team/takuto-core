@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { Trans, useTranslation } from "react-i18next";
 import type { WorkflowSummary, WorkflowDefinition } from "../api/types";
 import type { TerminalState, DynamicForwards } from "../hooks/useWorkflows";
 import { IssueCard } from "./IssueCard";
@@ -40,6 +41,7 @@ export function WorkflowGrid({
   onSetupProject,
   activeRepoName,
 }: Props) {
+  const { t } = useTranslation("dashboard");
   const fullList = orderKeys.map((k) => workflows[k]).filter(Boolean);
   const list = activeRepoName
     ? fullList.filter((w) => w.workspace_name === activeRepoName)
@@ -51,13 +53,13 @@ export function WorkflowGrid({
       return (
         <div className="text-center py-16">
           <p className="text-gray-500 text-sm mb-4">
-            No project configured. Set up a project to get started.
+            {t("emptyState.noProject")}
           </p>
           <button
             onClick={onSetupProject}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
           >
-            Setup a New Project
+            {t("emptyState.setupProject")}
           </button>
         </div>
       );
@@ -69,14 +71,18 @@ export function WorkflowGrid({
       return (
         <div className="text-center py-16">
           <p className="text-gray-500 text-sm mb-4">
-            No items in <span className="font-mono text-gray-400">{activeRepoName}</span> yet.
+            <Trans
+              i18nKey="dashboard:emptyState.noItemsInRepo"
+              values={{ repo: activeRepoName }}
+              components={{ name: <span className="font-mono text-gray-400" /> }}
+            />
           </p>
           {canAddWorkflow && (
             <button
               onClick={onAddWorkflow}
               className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
             >
-              + New Item
+              {t("emptyState.newItem")}
             </button>
           )}
         </div>
@@ -87,14 +93,14 @@ export function WorkflowGrid({
     return (
       <div className="text-center py-16">
         <p className="text-gray-500 text-sm mb-4">
-          No items yet. Click the button below to add an item.
+          {t("emptyState.noItems")}
         </p>
         {canAddWorkflow && (
           <button
             onClick={onAddWorkflow}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
           >
-            + New Item
+            {t("emptyState.newItem")}
           </button>
         )}
       </div>

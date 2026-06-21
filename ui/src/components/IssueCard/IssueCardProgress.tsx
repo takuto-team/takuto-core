@@ -3,6 +3,7 @@
 
 /** Presentational progress frame of an IssueCard: step label, state line, progress bar, action buttons. */
 
+import { useTranslation } from "react-i18next";
 import { ProgressBar } from "../ProgressBar";
 import { PauseIconButton } from "../PauseIconButton";
 import { RestartIconButton } from "../RestartIconButton";
@@ -50,6 +51,7 @@ export function IssueCardProgress({
   onStop,
   onReport,
 }: Props) {
+  const { t } = useTranslation("dashboard");
   const isTerminalish =
     status.status === "error" || status.status === "completed" || status.status === "stopped";
 
@@ -58,10 +60,10 @@ export function IssueCardProgress({
   if (prepState) {
     const readinessText =
       prepState === "preparing"
-        ? "Preparing worktree…"
+        ? t("progress.preparingWorktree")
         : prepState === "repo_not_ready"
-          ? "Repository not ready"
-          : "Ready — pick a workflow to start";
+          ? t("progress.repoNotReady")
+          : t("progress.readyPickWorkflow");
     return (
       <div className="bg-gray-800/50 rounded-lg px-3 pt-2.5 pb-2.5 relative h-[80px] flex flex-col justify-center">
         <div className="flex items-center leading-none gap-2 text-xs text-gray-500">
@@ -91,14 +93,14 @@ export function IssueCardProgress({
             <button
               onClick={onReport}
               className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer transition-colors"
-              title="View work item report"
+              title={t("progress.reportTitle")}
             >
-              Show Report
+              {t("progress.showReport")}
             </button>
           )}
           {isTerminalish && <RestartIconButton onClick={onRetry} />}
           {(status.status === "error" || status.status === "stopped") && canResumeFromError && (
-            <ResumeIconButton onClick={onResumeFromError} title="Retry from last failure" />
+            <ResumeIconButton onClick={onResumeFromError} title={t("progress.retryFromFailure")} />
           )}
           {isActive && status.status === "running" && <PauseIconButton onClick={onPause} />}
           {isActive && status.status === "paused" && <ResumeIconButton onClick={onResume} />}

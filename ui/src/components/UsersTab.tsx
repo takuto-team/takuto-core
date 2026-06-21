@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { User } from "../api/types";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { copyToClipboard } from "../utils/clipboard";
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, onRoleToggle }: Props) {
+  const { t } = useTranslation("config");
   const [newRow, setNewRow] = useState<NewUserRow | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
@@ -48,10 +50,10 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
       <div className="space-y-4">
         <div className="bg-amber-950 border border-amber-700 rounded-lg p-4">
           <h3 className="text-sm font-semibold text-amber-300 mb-2">
-            Recovery codes for {createdUsername}
+            {t("users.recoveryCodesFor", { username: createdUsername })}
           </h3>
           <p className="text-xs text-amber-200/80 mb-3">
-            Share these with the user. Each code can only be used once.
+            {t("users.shareWithUser")}
           </p>
           <div className="grid grid-cols-2 gap-2 mb-3 font-mono text-sm">
             {recoveryCodes.map((code) => (
@@ -71,7 +73,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
             }}
             className="w-full py-1.5 rounded-lg bg-gray-800 text-gray-300 text-xs font-medium hover:bg-gray-700 cursor-pointer"
           >
-            {codesCopied ? "Copied!" : "Copy all codes"}
+            {codesCopied ? t("actions.copied") : t("actions.copyAllCodes")}
           </button>
         </div>
         <button
@@ -83,7 +85,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
           }}
           className="text-sm text-blue-400 hover:text-blue-300 cursor-pointer"
         >
-          Done
+          {t("actions.done")}
         </button>
       </div>
     );
@@ -94,10 +96,10 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
       <table className="w-full text-base">
         <thead>
           <tr className="text-left text-sm text-gray-500 uppercase tracking-wider">
-            <th className="pb-3 font-medium">Username</th>
-            <th className="pb-3 font-medium">Role</th>
-            <th className="pb-3 font-medium">Status</th>
-            <th className="pb-3 font-medium text-right">Actions</th>
+            <th className="pb-3 font-medium">{t("users.colUsername")}</th>
+            <th className="pb-3 font-medium">{t("users.colRole")}</th>
+            <th className="pb-3 font-medium">{t("users.colStatus")}</th>
+            <th className="pb-3 font-medium text-right">{t("users.colActions")}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-800">
@@ -112,16 +114,18 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
                       ? "bg-blue-900/50 text-blue-300 border border-blue-700/50"
                       : "bg-gray-800 text-gray-400 border border-gray-700"
                   }`}
-                  title={`Click to make ${u.role === "admin" ? "user" : "admin"}`}
+                  title={t("users.makeRoleTitle", {
+                    role: u.role === "admin" ? t("users.roleUser") : t("users.roleAdmin"),
+                  })}
                 >
-                  {u.role}
+                  {u.role === "admin" ? t("users.roleAdmin") : t("users.roleUser")}
                 </button>
               </td>
               <td className="py-3">
                 {u.suspended ? (
-                  <span className="text-sm text-red-400">Suspended</span>
+                  <span className="text-sm text-red-400">{t("users.suspended")}</span>
                 ) : (
-                  <span className="text-sm text-green-400">Active</span>
+                  <span className="text-sm text-green-400">{t("users.active")}</span>
                 )}
               </td>
               <td className="py-3 text-right space-x-3">
@@ -129,13 +133,13 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
                   onClick={() => onSuspendToggle(u)}
                   className="text-sm text-gray-500 hover:text-gray-300 cursor-pointer"
                 >
-                  {u.suspended ? "Unsuspend" : "Suspend"}
+                  {u.suspended ? t("users.unsuspend") : t("users.suspend")}
                 </button>
                 <button
                   onClick={() => setConfirmDelete(u)}
                   className="text-sm text-red-500/70 hover:text-red-400 cursor-pointer"
                 >
-                  Delete
+                  {t("actions.delete")}
                 </button>
               </td>
             </tr>
@@ -149,7 +153,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
                   type="text"
                   value={newRow.username}
                   onChange={(e) => setNewRow({ ...newRow, username: e.target.value })}
-                  placeholder="Username"
+                  placeholder={t("users.usernamePlaceholder")}
                   autoFocus
                   className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-base text-gray-200"
                 />
@@ -162,8 +166,8 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
                   }
                   className="bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200"
                 >
-                  <option value="user">user</option>
-                  <option value="admin">admin</option>
+                  <option value="user">{t("users.roleUser")}</option>
+                  <option value="admin">{t("users.roleAdmin")}</option>
                 </select>
               </td>
               <td className="py-3">
@@ -172,14 +176,14 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
                     type={showPassword ? "text" : "password"}
                     value={newRow.password}
                     onChange={(e) => setNewRow({ ...newRow, password: e.target.value })}
-                    placeholder="Password (12+ chars)"
+                    placeholder={t("users.passwordPlaceholder")}
                     className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-1.5 pr-9 text-base text-gray-200"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 cursor-pointer"
-                    title={showPassword ? "Hide password" : "Show password"}
+                    title={showPassword ? t("actions.hidePassword") : t("actions.showPassword")}
                   >
                     {showPassword ? (
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4.5 h-4.5">
@@ -201,7 +205,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
                   disabled={!newRow.username.trim() || newRow.password.length < 12}
                   className="text-sm text-blue-400 hover:text-blue-300 disabled:text-gray-600 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  Save
+                  {t("actions.save")}
                 </button>
                 <button
                   onClick={() => {
@@ -211,7 +215,7 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
                   }}
                   className="text-sm text-gray-500 hover:text-gray-300 cursor-pointer"
                 >
-                  Cancel
+                  {t("actions.cancel")}
                 </button>
               </td>
             </tr>
@@ -226,14 +230,14 @@ export function UsersTab({ users, onCreateUser, onDeleteUser, onSuspendToggle, o
           onClick={() => { setNewRow({ username: "", password: "", role: "user" }); setShowPassword(false); }}
           className="text-base text-blue-400 hover:text-blue-300 cursor-pointer"
         >
-          + Add user
+          {t("users.addUser")}
         </button>
       )}
 
       {confirmDelete && (
         <ConfirmModal
-          title="Delete user"
-          message={`Delete user "${confirmDelete.username}"? This cannot be undone.`}
+          title={t("users.deleteTitle")}
+          message={t("users.deleteMessage", { username: confirmDelete.username })}
           onConfirm={async () => {
             await onDeleteUser(confirmDelete);
             setConfirmDelete(null);

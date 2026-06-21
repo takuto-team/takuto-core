@@ -10,6 +10,8 @@
  * it). Presentational — the parent owns the repo list, selection, and loading.
  */
 
+import { useTranslation } from "react-i18next";
+
 export interface RepoSidebarItem {
   name: string;
   /** When defined, render a "set"/"none" badge; when undefined, no badge. */
@@ -26,26 +28,28 @@ interface Props {
 }
 
 function CommandsBadge({ hasCommands }: { hasCommands: boolean }) {
+  const { t } = useTranslation("config");
   return hasCommands ? (
     <span
       className="inline-flex items-center gap-1 text-[11px] text-emerald-300"
-      title="You have commands set for this repository"
+      title={t("repositories.sidebar.commandsSetTitle")}
     >
       <span className="w-2 h-2 rounded-full bg-emerald-400" />
-      set
+      {t("repositories.sidebar.commandsSet")}
     </span>
   ) : (
     <span
       className="inline-flex items-center gap-1 text-[11px] text-gray-500"
-      title="No commands set for this repository"
+      title={t("repositories.sidebar.commandsNoneTitle")}
     >
       <span className="w-2 h-2 rounded-full bg-gray-600" />
-      none
+      {t("repositories.sidebar.commandsNone")}
     </span>
   );
 }
 
 export function RepoSidebar({ repos, loading, selected, onSelect }: Props) {
+  const { t } = useTranslation("config");
   // Accessible repos keep their order; inaccessible ones drop to the end.
   const ordered = [...repos].sort(
     (a, b) => Number(a.accessible === false) - Number(b.accessible === false),
@@ -54,12 +58,12 @@ export function RepoSidebar({ repos, loading, selected, onSelect }: Props) {
   return (
     <aside className="md:w-1/3 md:max-w-xs border border-gray-800 rounded-lg bg-gray-950 overflow-hidden">
       <div className="px-3 py-2 border-b border-gray-800 text-xs uppercase tracking-wide text-gray-500">
-        Repositories
+        {t("repositories.sidebar.header")}
       </div>
       {loading ? (
-        <p className="text-sm text-gray-500 p-3">Loading…</p>
+        <p className="text-sm text-gray-500 p-3">{t("actions.loading")}</p>
       ) : ordered.length === 0 ? (
-        <p className="text-sm text-gray-500 p-3">No repositories found.</p>
+        <p className="text-sm text-gray-500 p-3">{t("repositories.sidebar.none")}</p>
       ) : (
         <ul className="divide-y divide-gray-800">
           {ordered.map((r) =>
@@ -67,11 +71,11 @@ export function RepoSidebar({ repos, loading, selected, onSelect }: Props) {
               <li key={r.name}>
                 <div
                   aria-disabled="true"
-                  title="The connected GitHub App no longer has access to this repository"
+                  title={t("repositories.sidebar.noAccessTitle")}
                   className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-500 opacity-60 cursor-not-allowed"
                 >
                   <span className="truncate font-medium">{r.name}</span>
-                  <span className="shrink-0 text-[11px] font-medium text-red-400">No access</span>
+                  <span className="shrink-0 text-[11px] font-medium text-red-400">{t("repositories.sidebar.noAccess")}</span>
                 </div>
               </li>
             ) : (

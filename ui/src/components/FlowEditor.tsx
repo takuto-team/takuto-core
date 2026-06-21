@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { slugify, propagateRename, type UserFlow } from "../api/flows";
 import { StepEditor, type SkillDraft, type StepDraft } from "./modals/FlowEditor/StepEditor";
 import { DependsOnSelect } from "./modals/FlowEditor/DependsOnSelect";
@@ -82,6 +83,7 @@ export function FlowEditor({
   onSubmit,
   onCancel,
 }: FlowEditorProps) {
+  const { t } = useTranslation("config");
   const editing = editIndex !== null ? flows[editIndex] : null;
 
   const [dependsOn, setDependsOn] = useState<string[]>(editing?.depends_on ?? []);
@@ -120,17 +122,17 @@ export function FlowEditor({
   const nameError = useMemo(() => {
     if (trimmedName === "") return null;
     if (otherNames.includes(trimmedName)) {
-      return `A workflow named "${trimmedName}" already exists.`;
+      return t("flows.editor.nameExists", { name: trimmedName });
     }
     if (slug === "") {
-      return "A workflow name must contain at least one letter or number.";
+      return t("flows.editor.nameNeedsAlnum");
     }
     const collision = otherFlows.find((f) => slugify(f.name) === slug);
     if (collision) {
-      return `This name collides with "${collision.name}" — both become "${slug}".`;
+      return t("flows.editor.slugCollision", { name: collision.name, slug });
     }
     return null;
-  }, [trimmedName, slug, otherNames, otherFlows]);
+  }, [trimmedName, slug, otherNames, otherFlows, t]);
 
   useEffect(() => {
     if (onNameError) onNameError(nameError);
@@ -144,9 +146,9 @@ export function FlowEditor({
     ];
     const involved = detectCycle(graph);
     return involved
-      ? `These dependencies create a cycle involving "${involved}". Remove one link to save.`
+      ? t("flows.editor.cycle", { name: involved })
       : null;
-  }, [trimmedName, nameError, otherFlows, dependsOn]);
+  }, [trimmedName, nameError, otherFlows, dependsOn, t]);
 
   const stepsValid =
     steps.length >= 1 &&
@@ -229,20 +231,20 @@ export function FlowEditor({
       onKeyDown={handleKeyDown}
     >
       <div>
-        <label className="block text-sm text-gray-400 mb-1">Depends on</label>
+        <label className="block text-sm text-gray-400 mb-1">{t("flows.editor.dependsOn")}</label>
         <DependsOnSelect options={otherNames} selected={dependsOn} onChange={setDependsOn} />
         {cycleError && <p className="text-sm text-amber-400 mt-1">{cycleError}</p>}
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm text-gray-400">Steps</label>
+          <label className="text-sm text-gray-400">{t("flows.editor.steps")}</label>
           <button
             type="button"
             onClick={addStep}
             className="text-sm text-blue-400 hover:text-blue-300 cursor-pointer"
           >
-            + Add step
+            {t("flows.editor.addStep")}
           </button>
         </div>
         {steps.map((step, i) => (
@@ -271,7 +273,7 @@ export function FlowEditor({
             disabled={saving}
             className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            Cancel
+            {t("actions.cancel")}
           </button>
           <button
             type="button"
@@ -279,7 +281,7 @@ export function FlowEditor({
             disabled={!canSave}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            {saving ? "Saving…" : editIndex === null ? "Create workflow" : "Save workflow"}
+            {saving ? t("actions.saving") : editIndex === null ? t("flows.editor.create") : t("flows.editor.saveFlow")}
           </button>
         </div>
       </div>

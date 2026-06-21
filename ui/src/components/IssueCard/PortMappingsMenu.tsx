@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useTranslation } from "react-i18next";
 import { MonitorIcon, PortIcon } from "../icons";
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function PortMappingsMenu({ ports, isMenuOpen, onToggleMenu }: Props) {
+  const { t } = useTranslation("dashboard");
   if (ports.length === 0) return null;
 
   return (
@@ -21,7 +23,7 @@ export function PortMappingsMenu({ ports, isMenuOpen, onToggleMenu }: Props) {
           <div className="fixed inset-0" onClick={() => onToggleMenu(false)} />
           <div className="absolute bottom-full mb-2 right-0 bg-gray-800 border border-gray-700 rounded-lg py-1.5 shadow-xl z-20 min-w-[180px]">
             <div className="px-3 py-1 text-xs text-gray-500 font-medium border-b border-gray-700/60 mb-1">
-              Port mappings
+              {t("ports.title")}
             </div>
             {ports.map(([cp, proxyUrl]) => (
               <a
@@ -40,7 +42,7 @@ export function PortMappingsMenu({ ports, isMenuOpen, onToggleMenu }: Props) {
       )}
       <button
         onClick={() => onToggleMenu(!isMenuOpen)}
-        title="Port mappings"
+        title={t("ports.title")}
         className="text-green-400 cursor-pointer"
       >
         <MonitorIcon />

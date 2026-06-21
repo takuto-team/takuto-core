@@ -18,6 +18,7 @@ import {
   useImperativeHandle,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { apiJson } from "../../api/client";
 import { getMyFlows, slugify } from "../../api/flows";
 import {
@@ -152,6 +153,7 @@ export interface ItemPollingSettingsHandle {
 
 export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
   function ItemPollingSettingsSection(_props, ref) {
+  const { t } = useTranslation("config");
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -202,17 +204,14 @@ export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
       // until refresh. It can't change as a result of this save.
       setDraft(draftFromConfig(updated));
       if (persistWarning) {
-        showToast(
-          `Item polling settings applied in memory but NOT persisted to disk: ${persistWarning}. The change will be lost on next restart — fix the config volume and save again.`,
-          "error",
-        );
+        showToast(t("polling.persistWarning", { reason: persistWarning }), "error");
       } else {
-        showToast("Item polling settings saved.", "success");
+        showToast(t("polling.savedToast"), "success");
       }
       return true;
     } catch (e: unknown) {
       if (e instanceof ItemPollingConfigError || e instanceof JiraConfigError) {
-        showToast(`${e.message} (code: ${e.code})`, "error");
+        showToast(t("errors.withCode", { message: e.message, code: e.code }), "error");
       } else {
         showToast(e instanceof Error ? e.message : String(e), "error");
       }
@@ -220,23 +219,22 @@ export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
     } finally {
       setSaving(false);
     }
-  }, [draft, ticketingSystem, showToast]);
+  }, [draft, ticketingSystem, showToast, t]);
 
   useImperativeHandle(ref, () => ({ save: runSave }), [runSave]);
 
   return (
     <section aria-labelledby="item-polling-section-title" className="flex flex-col gap-3">
       <h2 id="item-polling-section-title" className="text-lg font-semibold text-white">
-        Item polling
+        {t("polling.title")}
       </h2>
       <p className="text-xs text-gray-500">
-        Admin-only. Control which polled work items become workflows: the flow
-        they auto-start, how many run in parallel, and the Jira / GitHub filters.
+        {t("polling.help")}
       </p>
 
-      {loading && <p className="text-sm text-gray-500">Loading…</p>}
+      {loading && <p className="text-sm text-gray-500">{t("actions.loading")}</p>}
       {!loading && error && (
-        <p className="text-sm text-red-400">Could not load config: {error}</p>
+        <p className="text-sm text-red-400">{t("errors.loadConfig", { error })}</p>
       )}
       {!loading && !error && (
         <ItemPollingForm

@@ -10,6 +10,8 @@
  * switch — no fetching, no saving.
  */
 
+import { Trans, useTranslation } from "react-i18next";
+
 interface GenerateReportToggleProps {
   value: boolean;
   onChange: (next: boolean) => void;
@@ -24,14 +26,18 @@ export function GenerateReportToggle({
   disabled,
   saved,
 }: GenerateReportToggleProps) {
+  const { t } = useTranslation("config");
   return (
     <section className="flex items-start justify-between gap-6 border border-gray-800 rounded-lg bg-gray-900/40 p-4">
       <div className="min-w-0">
-        <h4 className="text-sm font-semibold text-gray-200">Generate work-item reports</h4>
+        <h4 className="text-sm font-semibold text-gray-200">{t("repositories.report.title")}</h4>
         <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-          When on, each flow appends its own section to this workspace's work-item report (
-          <span className="font-mono">lore/reports/&lt;key&gt;_report.md</span>); re-running a flow
-          replaces only that flow's section. A "Show Report" button then appears on completed cards.
+          <Trans
+            i18nKey="repositories.report.help"
+            ns="config"
+            values={{ file: "lore/reports/<key>_report.md" }}
+            components={{ mono: <span className="font-mono" /> }}
+          />
         </p>
       </div>
 
@@ -40,7 +46,7 @@ export function GenerateReportToggle({
           type="button"
           role="switch"
           aria-checked={value}
-          aria-label="Generate work-item reports"
+          aria-label={t("repositories.report.title")}
           disabled={disabled}
           onClick={() => onChange(!value)}
           className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
@@ -53,7 +59,7 @@ export function GenerateReportToggle({
             }`}
           />
         </button>
-        {saved && <span className="text-xs text-green-400">Saved</span>}
+        {saved && <span className="text-xs text-green-400">{t("repositories.report.saved")}</span>}
       </div>
     </section>
   );

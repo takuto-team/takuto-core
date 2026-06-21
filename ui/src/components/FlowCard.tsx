@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { UserFlow } from "../api/flows";
 import { FlowEditor } from "./FlowEditor";
 import { EditableName } from "./EditableName";
@@ -30,10 +31,6 @@ interface FlowCardProps {
   onDragEnd: () => void;
 }
 
-function stepCountLabel(n: number): string {
-  return n === 1 ? "1 step" : `${n} steps`;
-}
-
 export function FlowCard({
   flow,
   flows,
@@ -51,6 +48,7 @@ export function FlowCard({
   onDrop,
   onDragEnd,
 }: FlowCardProps) {
+  const { t } = useTranslation("config");
   // Draft name is only meaningful while expanded; reset to the saved value on
   // every (re-)expansion or when the underlying flow's name changes. Cancel
   // therefore discards rename edits automatically.
@@ -104,7 +102,7 @@ export function FlowCard({
       >
         <span
           className={`text-gray-600 select-none ${draggable && !expanded ? "cursor-grab" : "cursor-default"}`}
-          title="Drag to reorder"
+          title={t("flows.card.dragToReorder")}
           aria-hidden="true"
         >
           ⠿
@@ -125,17 +123,17 @@ export function FlowCard({
               setNameDraft(flow.name);
             }
           }}
-          placeholder="Untitled workflow"
+          placeholder={t("flows.untitled")}
           textClassName="text-sm font-medium"
         />
 
         <span className="text-xs text-gray-500 whitespace-nowrap">
-          {stepCountLabel(flow.steps.length)}
+          {t("flows.card.stepCount", { count: flow.steps.length })}
         </span>
 
         {flow.depends_on.length > 0 && (
           <span className="flex items-center gap-1 text-xs text-gray-500 min-w-0">
-            <span className="whitespace-nowrap">depends on:</span>
+            <span className="whitespace-nowrap">{t("flows.card.dependsOn")}</span>
             {flow.depends_on.map((dep) => (
               <span
                 key={dep}
@@ -165,11 +163,11 @@ export function FlowCard({
             }}
             className="text-sm text-red-500/70 hover:text-red-400 cursor-pointer"
           >
-            Delete
+            {t("actions.delete")}
           </span>
           <span
             className="text-gray-500"
-            title={expanded ? "Collapse" : "Expand"}
+            title={expanded ? t("flows.card.collapse") : t("flows.card.expand")}
             aria-hidden="true"
           >
             <svg

@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, type FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { copyToClipboard } from "../utils/clipboard";
 
@@ -47,6 +48,7 @@ function PasswordInput({
   showPassword: boolean;
   onToggleShow: () => void;
 }) {
+  const { t } = useTranslation("config");
   return (
     <div className="relative">
       <input
@@ -61,7 +63,7 @@ function PasswordInput({
         type="button"
         onClick={onToggleShow}
         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 cursor-pointer"
-        title={showPassword ? "Hide password" : "Show password"}
+        title={showPassword ? t("actions.hidePassword") : t("actions.showPassword")}
       >
         <EyeIcon open={showPassword} />
       </button>
@@ -70,6 +72,7 @@ function PasswordInput({
 }
 
 export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Props) {
+  const { t } = useTranslation("config");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -115,19 +118,19 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
     <div className="space-y-10">
       {/* Password change section */}
       <section>
-        <h2 className="text-base font-semibold text-gray-300 mb-1">Change password</h2>
+        <h2 className="text-base font-semibold text-gray-300 mb-1">{t("security.changePassword")}</h2>
         <p className="text-sm text-gray-500 mb-5">
-          After changing your password, all other sessions will be signed out.
+          {t("security.changePasswordHelp")}
         </p>
         <form onSubmit={handleSubmit} className="space-y-4 max-w-md">
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-1.5">
-              Current password
+              {t("security.currentPassword")}
             </label>
             <PasswordInput
               value={currentPassword}
               onChange={setCurrentPassword}
-              placeholder="Enter current password"
+              placeholder={t("security.currentPasswordPlaceholder")}
               autoComplete="current-password"
               showPassword={showCurrent}
               onToggleShow={() => setShowCurrent(!showCurrent)}
@@ -135,42 +138,42 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-1.5">
-              New password
+              {t("security.newPassword")}
             </label>
             <PasswordInput
               value={newPassword}
               onChange={setNewPassword}
-              placeholder="Enter new password"
+              placeholder={t("security.newPasswordPlaceholder")}
               autoComplete="new-password"
               showPassword={showNew}
               onToggleShow={() => setShowNew(!showNew)}
             />
             {newPassword && !passwordLongEnough && (
               <p className="text-sm text-red-400 mt-1">
-                Minimum {MIN_PASSWORD_LENGTH} characters
+                {t("security.minChars", { min: MIN_PASSWORD_LENGTH })}
               </p>
             )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-1.5">
-              Confirm new password
+              {t("security.confirmNewPassword")}
             </label>
             <PasswordInput
               value={confirmPassword}
               onChange={setConfirmPassword}
-              placeholder="Confirm new password"
+              placeholder={t("security.confirmNewPasswordPlaceholder")}
               autoComplete="new-password"
               showPassword={showNew}
               onToggleShow={() => setShowNew(!showNew)}
             />
             {confirmPassword && !passwordsMatch && (
-              <p className="text-sm text-red-400 mt-1">Passwords do not match</p>
+              <p className="text-sm text-red-400 mt-1">{t("security.passwordsNoMatch")}</p>
             )}
           </div>
 
           {error && <p className="text-sm text-red-400">{error}</p>}
           {success && (
-            <p className="text-sm text-green-400">Password changed successfully.</p>
+            <p className="text-sm text-green-400">{t("security.passwordChanged")}</p>
           )}
 
           <button
@@ -178,7 +181,7 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
             disabled={loading || !formValid}
             className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            {loading ? "Saving..." : "Update password"}
+            {loading ? t("security.savingPassword") : t("security.updatePassword")}
           </button>
         </form>
       </section>
@@ -187,16 +190,16 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
 
       {/* Recovery codes section */}
       <section>
-        <h2 className="text-base font-semibold text-gray-300 mb-1">Recovery codes</h2>
+        <h2 className="text-base font-semibold text-gray-300 mb-1">{t("security.recoveryCodes")}</h2>
         <p className="text-sm text-gray-500 mb-4">
-          Single-use codes to regain access if you lose your password. Regenerating replaces all existing codes.
+          {t("security.recoveryCodesHelp")}
         </p>
 
         {recoveryCodes ? (
           <div className="space-y-3 max-w-md">
             <div className="bg-amber-950 border border-amber-700 rounded-lg p-4">
               <p className="text-xs text-amber-200/80 mb-3">
-                Save these codes now. They will not be shown again.
+                {t("security.saveCodesNow")}
               </p>
               <div className="grid grid-cols-2 gap-2 mb-3 font-mono text-sm">
                 {recoveryCodes.map((code) => (
@@ -216,7 +219,7 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
                 }}
                 className="w-full py-1.5 rounded-lg bg-gray-800 text-gray-300 text-xs font-medium hover:bg-gray-700 cursor-pointer"
               >
-                {codesCopied ? "Copied!" : "Copy all codes"}
+                {codesCopied ? t("actions.copied") : t("actions.copyAllCodes")}
               </button>
             </div>
             <button
@@ -224,7 +227,7 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
               onClick={() => { setRecoveryCodes(null); setCodesCopied(false); }}
               className="text-sm text-gray-500 hover:text-gray-300 cursor-pointer"
             >
-              Done
+              {t("actions.done")}
             </button>
           </div>
         ) : (
@@ -236,15 +239,15 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
               onClick={() => setConfirmRegenerate(true)}
               className="px-5 py-2 rounded-lg bg-gray-800 text-gray-300 text-sm font-medium border border-gray-700 hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
             >
-              {regenLoading ? "Generating..." : "Regenerate recovery codes"}
+              {regenLoading ? t("security.regenerating") : t("security.regenerate")}
             </button>
           </div>
         )}
 
         {confirmRegenerate && (
           <ConfirmModal
-            title="Regenerate recovery codes"
-            message="This will invalidate all your existing recovery codes. Make sure you save the new ones."
+            title={t("security.regenerateTitle")}
+            message={t("security.regenerateMessage")}
             onConfirm={async () => {
               setConfirmRegenerate(false);
               setRegenError("");
@@ -269,12 +272,12 @@ export function SecurityTab({ onChangePassword, onRegenerateRecoveryCodes }: Pro
 
       {/* Passkeys section */}
       <section>
-        <h2 className="text-base font-semibold text-gray-300 mb-1">Passkeys</h2>
+        <h2 className="text-base font-semibold text-gray-300 mb-1">{t("security.passkeys")}</h2>
         <p className="text-sm text-gray-500">
-          Sign in with biometrics or a hardware security key.
+          {t("security.passkeysHelp")}
         </p>
         <div className="mt-4 rounded-lg border border-gray-800 bg-gray-900/50 px-4 py-3">
-          <p className="text-sm text-gray-500">Coming soon</p>
+          <p className="text-sm text-gray-500">{t("security.comingSoon")}</p>
         </div>
       </section>
     </div>

@@ -7,6 +7,7 @@
  * auto-start flows (CODING_STANDARDS §3 — fetch and render are split).
  */
 
+import { Trans, useTranslation } from "react-i18next";
 import type { LinkedItemsInPrompt } from "../../api/types";
 import { ChipInput } from "./ChipInput";
 import { GeneralLimitsFields } from "./GeneralLimitsFields";
@@ -83,6 +84,7 @@ export function ItemPollingForm({
   onSave,
   saving,
 }: ItemPollingFormProps) {
+  const { t } = useTranslation("config");
   const update = (patch: Partial<ItemPollingDraft>) => onDraftChange({ ...draft, ...patch });
   // Filters are per-system; only the active ticketing system's block is
   // actionable. With no ticketing system the poller is idle, so neither shows.
@@ -99,17 +101,16 @@ export function ItemPollingForm({
       {/* Enable / disable item polling */}
       <section className="flex items-start justify-between gap-4">
         <div className="flex flex-col gap-0.5">
-          <span className="text-sm text-gray-200">Enable item polling</span>
+          <span className="text-sm text-gray-200">{t("polling.enable")}</span>
           <span className="text-xs text-gray-500">
-            When off, the poller is paused and no items are auto-added. Takes
-            effect immediately and persists across restarts.
+            {t("polling.enableHelp")}
           </span>
         </div>
         <button
           type="button"
           role="switch"
           aria-checked={draft.auto_polling}
-          aria-label="Enable item polling"
+          aria-label={t("polling.enable")}
           onClick={() => update({ auto_polling: !draft.auto_polling })}
           className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/50 cursor-pointer ${
             draft.auto_polling ? "bg-blue-600" : "bg-gray-700"
@@ -126,7 +127,7 @@ export function ItemPollingForm({
       {/* Poll interval */}
       <section className="flex flex-col gap-2">
         <label htmlFor="poll-interval-input" className="text-xs text-gray-400">
-          Poll interval (seconds)
+          {t("polling.interval")}
         </label>
         <input
           id="poll-interval-input"
@@ -138,15 +139,18 @@ export function ItemPollingForm({
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          How often the poller checks for new work items. Minimum{" "}
-          <code className="text-gray-400">10</code>.
+          <Trans
+            i18nKey="polling.intervalHelp"
+            ns="config"
+            components={{ code: <code className="text-gray-400" /> }}
+          />
         </p>
       </section>
 
       {/* Auto-start flow */}
       <section className="flex flex-col gap-2">
         <label htmlFor="auto-start-flow-select" className="text-xs text-gray-400">
-          Auto-start flow
+          {t("polling.autoStartFlow")}
         </label>
         <select
           id="auto-start-flow-select"
@@ -154,7 +158,7 @@ export function ItemPollingForm({
           onChange={(e) => update({ auto_start_flow: e.target.value })}
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200"
         >
-          <option value="">All dep-free flows (default)</option>
+          <option value="">{t("polling.autoStartAll")}</option>
           {flows.map((f) => (
             <option key={f.slug} value={f.slug}>
               {f.name}
@@ -162,20 +166,19 @@ export function ItemPollingForm({
           ))}
           {selectedMissing && (
             <option value={draft.auto_start_flow}>
-              {draft.auto_start_flow} (not in your flows)
+              {t("polling.autoStartMissing", { slug: draft.auto_start_flow })}
             </option>
           )}
         </select>
         <p className="text-xs text-gray-500">
-          The single flow each polled item auto-starts. Leave on the default to
-          start every dependency-free flow.
+          {t("polling.autoStartHelp")}
         </p>
       </section>
 
       {/* Parallel-item cap */}
       <section className="flex flex-col gap-2">
         <label htmlFor="max-parallel-items-input" className="text-xs text-gray-400">
-          Max parallel items
+          {t("polling.maxParallel")}
         </label>
         <input
           id="max-parallel-items-input"
@@ -187,7 +190,11 @@ export function ItemPollingForm({
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          Cap on items occupying a slot at once. <code className="text-gray-400">0</code> = unlimited.
+          <Trans
+            i18nKey="polling.maxParallelHelp"
+            ns="config"
+            components={{ code: <code className="text-gray-400" /> }}
+          />
         </p>
         <label
           htmlFor="max-parallel-per-user-input"
@@ -201,9 +208,9 @@ export function ItemPollingForm({
             className="mt-0.5 accent-blue-500"
           />
           <span>
-            Apply the cap per user
+            {t("polling.perUser")}
             <span className="block text-gray-500 mt-0.5">
-              When off, the cap is global across all users.
+              {t("polling.perUserHelp")}
             </span>
           </span>
         </label>
@@ -224,22 +231,22 @@ export function ItemPollingForm({
       {/* Jira filters — only when Jira is the active ticketing system */}
       {showJira && (
         <section className="flex flex-col gap-4">
-          <h3 className="text-sm font-medium text-gray-300">Jira</h3>
+          <h3 className="text-sm font-medium text-gray-300">{t("polling.jira")}</h3>
           <ChipInput
             id="jira-item-types-input"
-            label="Issue types"
+            label={t("polling.issueTypes")}
             values={draft.item_types}
             onChange={(item_types) => update({ item_types })}
-            placeholder="Bug, Task…"
-            helpText="Issue types the poller pulls. Empty = no type filter."
+            placeholder={t("polling.issueTypesPlaceholder")}
+            helpText={t("polling.issueTypesHelp")}
           />
           <ChipInput
             id="jira-summary-keywords-input"
-            label="Summary keywords"
+            label={t("polling.summaryKeywords")}
             values={draft.jira_summary_keywords}
             onChange={(jira_summary_keywords) => update({ jira_summary_keywords })}
-            placeholder="crash, regression…"
-            helpText="Case-insensitive substring match (ANY). Empty = no filter."
+            placeholder={t("polling.summaryKeywordsPlaceholder")}
+            helpText={t("polling.keywordsHelp")}
           />
         </section>
       )}
@@ -270,22 +277,22 @@ export function ItemPollingForm({
       {/* GitHub filters — only when GitHub is the active ticketing system */}
       {showGithub && (
         <section className="flex flex-col gap-4">
-          <h3 className="text-sm font-medium text-gray-300">GitHub</h3>
+          <h3 className="text-sm font-medium text-gray-300">{t("polling.github")}</h3>
           <ChipInput
             id="github-labels-input"
-            label="Labels"
+            label={t("polling.labels")}
             values={draft.github_labels}
             onChange={(github_labels) => update({ github_labels })}
-            placeholder="bug, good first issue…"
-            helpText="Exact label membership (ANY). Empty = no filter."
+            placeholder={t("polling.labelsPlaceholder")}
+            helpText={t("polling.labelsHelp")}
           />
           <ChipInput
             id="github-title-keywords-input"
-            label="Title keywords"
+            label={t("polling.titleKeywords")}
             values={draft.github_title_keywords}
             onChange={(github_title_keywords) => update({ github_title_keywords })}
-            placeholder="crash, regression…"
-            helpText="Case-insensitive substring match (ANY). Empty = no filter."
+            placeholder={t("polling.titleKeywordsPlaceholder")}
+            helpText={t("polling.keywordsHelp")}
           />
         </section>
       )}
@@ -293,9 +300,7 @@ export function ItemPollingForm({
       {/* No ticketing system → the poller is idle, so per-system filters don't apply */}
       {!showJira && !showGithub && (
         <p className="text-xs text-gray-500">
-          No ticketing system is configured, so the poller is idle and item
-          filters don&apos;t apply. Choose a ticketing system (Jira or GitHub)
-          to filter polled items.
+          {t("polling.noTicketing")}
         </p>
       )}
 
@@ -307,7 +312,7 @@ export function ItemPollingForm({
           onClick={onSave}
           className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
-          {saving ? "Saving…" : "Save changes"}
+          {saving ? t("actions.saving") : t("actions.saveChanges")}
         </button>
       </div>
     </div>

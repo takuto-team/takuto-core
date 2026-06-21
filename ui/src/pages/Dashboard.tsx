@@ -3,6 +3,7 @@
 
 import { useEffect, useCallback, useRef, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { apiPost, listRepoAccess } from "../api/client";
 import type { WorkflowEvent } from "../api/types";
 import { useToast } from "../hooks/useToast";
@@ -37,6 +38,7 @@ interface Props {
 }
 
 export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
+  const { t } = useTranslation("dashboard");
   const { showToast } = useToast();
   const config = useConfig();
   const { systemStatus, refresh: refreshOnboardingStatus } = useOnboardingStatus();
@@ -134,7 +136,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
   const handleAddToDashboard = useCallback(
     async (description: string, summary: string, repositoryId: string) => {
       if (modals.modal.kind !== "detail") return;
-      if (!repositoryId) { showToast("Pick a repository before adding a work item."); return; }
+      if (!repositoryId) { showToast(t("toast.pickRepository")); return; }
       const ticket = modals.modal.ticket;
       try {
         const res = await apiPost("/api/work-items/start-manual", {
@@ -146,13 +148,13 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         modals.close();
         fetchWorkflows();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Failed to add work item");
+        showToast(e instanceof Error ? e.message : t("toast.addItemFailed"));
       }
-    }, [modals, fetchWorkflows, showToast]);
+    }, [modals, fetchWorkflows, showToast, t]);
 
   const handlePasteSubmit = useCallback(
     async (name: string, description: string, repositoryId: string) => {
-      if (!repositoryId) { showToast("Pick a repository before adding a work item."); return; }
+      if (!repositoryId) { showToast(t("toast.pickRepository")); return; }
       try {
         const res = await apiPost("/api/work-items/start-manual", {
           ticket_key: name, ticket_summary: name || "Manual item",
@@ -162,9 +164,9 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         modals.close();
         fetchWorkflows();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Failed to add work item");
+        showToast(e instanceof Error ? e.message : t("toast.addItemFailed"));
       }
-    }, [modals, fetchWorkflows, showToast]);
+    }, [modals, fetchWorkflows, showToast, t]);
 
   const handleShowDescription = useCallback((key: string, summary: string, description?: string) => {
     // For Jira, don't pass cached description — the modal fetches fresh from the preview API.
@@ -197,7 +199,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
       />
       {dryMode && (
         <div className="bg-amber-900/30 border-b border-amber-700/50 px-4 py-2 text-center text-xs text-amber-300">
-          Dry mode is enabled &mdash; Jira/GitHub side effects are skipped
+          {t("dryMode")}
         </div>
       )}
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
@@ -205,23 +207,23 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
         {hasAnyRepo === false ? (
           <div className="text-center py-16">
             <p className="text-gray-500 text-sm mb-4">
-              You haven't added any repositories yet. Add a repository to get started.
+              {t("emptyState.noRepos")}
             </p>
             <Link
               to="/config.html?tab=repositories"
               className="inline-block text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
             >
-              Go to My Repositories
+              {t("emptyState.goToRepositories")}
             </Link>
           </div>
         ) : statusFilter && visibleOrderKeys.length === 0 ? (
           <div className="text-center py-16">
-            <p className="text-gray-500 text-sm mb-4">No {statusFilter} items.</p>
+            <p className="text-gray-500 text-sm mb-4">{t("emptyState.noStatusItems", { status: statusFilter })}</p>
             <button
               onClick={() => setStatusFilter(null)}
               className="inline-block text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors cursor-pointer"
             >
-              Show all items
+              {t("emptyState.showAllItems")}
             </button>
           </div>
         ) : (
@@ -247,15 +249,15 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
       />
       {noAccessRepo && (
         <ConfirmModal
-          title="No access to this repository"
-          message={`The connected GitHub App no longer has access to "${noAccessRepo}". You can still select it again if access is restored later.`}
-          confirmLabel="OK"
+          title={t("noAccess.title")}
+          message={t("noAccess.message", { repo: noAccessRepo })}
+          confirmLabel={t("noAccess.ok")}
           onConfirm={() => setNoAccessRepo(null)}
           onCancel={() => setNoAccessRepo(null)}
         />
       )}
       <footer className="py-3 text-center">
-        <span className="text-xs text-gray-600">Takuto v{__APP_VERSION__}</span>
+        <span className="text-xs text-gray-600">{t("footer.version", { version: __APP_VERSION__ })}</span>
       </footer>
       <SystemErrorAlert errors={systemErrors} onDismiss={dismissError} />
     </div>
