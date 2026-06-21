@@ -350,13 +350,22 @@ pub async fn list_workflows(
             )
             .await
             {
-                // Key by the work item's unique `id`, NOT `ticket_key`: a
-                // re-run leaves multiple non-deleted rows sharing a ticket_key,
-                // and a ticket_key-keyed collect would keep an arbitrary
-                // (oldest) duplicate — making the DTO render durable fields
-                // (pr_url, branch, summary) from the wrong run. Looked up below
-                // by the rendered workflow's own `w.id`.
-                Ok(rows) => rows.into_iter().map(|r| (r.id.clone(), r)).collect(),
+                // Match the single-item GET handler
+                // (`get_work_item_by_ticket_key`: newest non-deleted row per
+                // ticket_key). `list_work_items` returns rows newest-first
+                // (ORDER BY started_at DESC), so keep the FIRST row seen for
+                // each ticket_key — the newest run, never an arbitrary
+                // duplicate. Keyed by ticket_key (not id) so the lookup is
+                // consistent with GET regardless of whether the in-memory
+                // workflow's id matches the persisted row id.
+                Ok(rows) => {
+                    let mut map: HashMap<String, takuto_core::db::work_items::WorkItemRow> =
+                        HashMap::new();
+                    for r in rows {
+                        map.entry(r.ticket_key.clone()).or_insert(r);
+                    }
+                    map
+                }
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
@@ -440,7 +449,7 @@ pub async fn list_workflows(
             // render durable fields from the cache so the row does not vanish
             // mid-migration. Engine-derived fields (state display, action
             // flags, port cache) come from the Workflow below.
-            let row = db_rows.get(&w.id);
+            let row = db_rows.get(&w.ticket_key);
             if row.is_none() {
                 tracing::warn!(
                     ticket = %w.ticket_key,
