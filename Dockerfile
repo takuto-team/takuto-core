@@ -113,7 +113,7 @@ ENV TAKUTO_REGISTRY_IMAGE=ghcr.io/takuto-team/takuto-core:${TAKUTO_VERSION}
 ARG TAKUTO_UID=999
 
 # Foundational apt block — all apt-managed packages + 3rd-party apt repos
-# (mise, gh, acli) + the takuto user + sudoers, in ONE RUN. The runtime
+# (mise, gh) + the takuto user + sudoers, in ONE RUN. The runtime
 # stage was previously 26 RUN layers (audit §3.5); collapsing related apt
 # work into one cache-friendly layer is the bulk of the reduction.
 #
@@ -122,9 +122,6 @@ ARG TAKUTO_UID=999
 #   • sudo + the narrow `/bin/bash` sudoers rule serves [docker] hook commands;
 #     `bash` is explicit because `sudo env bash` matches /usr/bin/env and would
 #     fail the rule.
-#   • acli is amd64-only via apt; `|| echo WARN` keeps arm64 builds working
-#     (the few admins who need acli on arm64 install a binary release via
-#     `[provisioning]`).
 #   • The takuto user is created in the same layer so the sudoers entry can
 #     be `visudo -cf`-validated against a real user immediately.
 RUN set -eux \
@@ -280,9 +277,6 @@ RUN set -eux \
 # version and download Chromium into ~/.cache/ms-playwright (persisted via docker-compose.dind.yml
 # playwright-cache → /shared-auth/playwright-cache). Forcing a mismatched browser revision caused subtle
 # visual snapshot drift vs local/CI.
-
-# acli (Atlassian CLI) is installed in the foundational apt block above; the
-# `|| echo WARN` fallback there keeps arm64 builds working.
 
 # openvscode-server — browser-based VS Code for manual worktree editing via dashboard.
 # Release tarballs use x64/arm64/armhf, not dpkg's amd64/arm64.
