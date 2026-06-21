@@ -6,7 +6,7 @@ export const LANGUAGES = [
   { code: "en", label: "EN" },
   { code: "fr", label: "FR" },
   { code: "es", label: "ES" },
-  { code: "zh", label: "中" },
+  { code: "zh", label: "中文" },
   { code: "ja", label: "日本" },
 ] as const;
 
