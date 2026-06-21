@@ -11,6 +11,8 @@
  * are typically <10 entries.
  */
 
+import { useTranslation } from "react-i18next";
+
 interface Props {
   commands: string[];
   onChange: (next: string[]) => void;
@@ -18,6 +20,7 @@ interface Props {
 }
 
 export function WorktreeCommandList({ commands, onChange, disabled }: Props) {
+  const { t } = useTranslation("config");
   const updateAt = (index: number, value: string) => {
     const next = commands.slice();
     next[index] = value;
@@ -52,7 +55,7 @@ export function WorktreeCommandList({ commands, onChange, disabled }: Props) {
     <div className="space-y-3">
       {commands.length === 0 && (
         <p className="text-sm text-gray-500 italic">
-          No commands. Workspace bootstrap will skip directly to agent steps.
+          {t("repositories.commands.empty")}
         </p>
       )}
       <ol className="space-y-3 list-none">
@@ -70,7 +73,7 @@ export function WorktreeCommandList({ commands, onChange, disabled }: Props) {
               disabled={disabled}
               spellCheck={false}
               rows={Math.max(1, Math.min(8, cmd.split("\n").length))}
-              placeholder="e.g. npm install --legacy-peer-deps"
+              placeholder={t("repositories.commands.placeholder")}
               className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm font-mono text-gray-200 resize-y disabled:opacity-60"
             />
             <div className="flex flex-col gap-1">
@@ -78,8 +81,8 @@ export function WorktreeCommandList({ commands, onChange, disabled }: Props) {
                 type="button"
                 onClick={() => moveUp(i)}
                 disabled={disabled || i === 0}
-                aria-label="Move up"
-                title="Move up"
+                aria-label={t("repositories.commands.moveUp")}
+                title={t("repositories.commands.moveUp")}
                 className="px-2 py-0.5 rounded bg-gray-800 text-gray-300 text-xs hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
               >
                 ↑
@@ -88,8 +91,8 @@ export function WorktreeCommandList({ commands, onChange, disabled }: Props) {
                 type="button"
                 onClick={() => moveDown(i)}
                 disabled={disabled || i >= commands.length - 1}
-                aria-label="Move down"
-                title="Move down"
+                aria-label={t("repositories.commands.moveDown")}
+                title={t("repositories.commands.moveDown")}
                 className="px-2 py-0.5 rounded bg-gray-800 text-gray-300 text-xs hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
               >
                 ↓
@@ -98,8 +101,8 @@ export function WorktreeCommandList({ commands, onChange, disabled }: Props) {
                 type="button"
                 onClick={() => removeAt(i)}
                 disabled={disabled}
-                aria-label="Delete command"
-                title="Delete"
+                aria-label={t("repositories.commands.deleteCommand")}
+                title={t("repositories.commands.delete")}
                 className="px-2 py-0.5 rounded bg-red-900/40 text-red-300 text-xs hover:bg-red-900/70 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
               >
                 ✕
@@ -114,7 +117,7 @@ export function WorktreeCommandList({ commands, onChange, disabled }: Props) {
         disabled={disabled}
         className="px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 text-sm font-medium border border-gray-700 hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
       >
-        + Add command
+        {t("repositories.commands.addCommand")}
       </button>
     </div>
   );

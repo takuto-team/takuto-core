@@ -3,6 +3,7 @@
 
 /** Presentational list of the caller's added repositories with Remove / (admin) Force-purge actions. */
 
+import { useTranslation } from "react-i18next";
 import type { RepositoryRow } from "../../api/client";
 
 interface Props {
@@ -14,16 +15,17 @@ interface Props {
 }
 
 export function MyRepositoriesList({ repos, loading, busy, onRemove, isAdmin }: Props) {
+  const { t } = useTranslation("config");
   return (
     <section className="border border-gray-800 rounded-lg bg-gray-950 overflow-hidden">
       <div className="px-3 py-2 border-b border-gray-800 text-xs uppercase tracking-wide text-gray-500">
-        My repositories
+        {t("repositories.mine.header")}
       </div>
       {loading ? (
-        <p className="text-sm text-gray-500 p-3">Loading…</p>
+        <p className="text-sm text-gray-500 p-3">{t("actions.loading")}</p>
       ) : repos.length === 0 ? (
         <p className="text-sm text-gray-500 p-3 italic">
-          You haven't added any repositories yet. Pick one from the list below.
+          {t("repositories.mine.empty")}
         </p>
       ) : (
         <ul className="divide-y divide-gray-800">
@@ -53,17 +55,17 @@ export function MyRepositoriesList({ repos, loading, busy, onRemove, isAdmin }: 
                   disabled={busy !== null}
                   className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  {busy === `remove:${repo.id}` ? "Removing…" : "Remove"}
+                  {busy === `remove:${repo.id}` ? t("repositories.mine.removing") : t("repositories.mine.remove")}
                 </button>
                 {isAdmin && (
                   <button
                     type="button"
                     onClick={() => onRemove(repo, true)}
                     disabled={busy !== null}
-                    title="Admin: drop the repository for every user and purge the on-disk clone."
+                    title={t("repositories.mine.forcePurgeTitle")}
                     className="text-xs px-3 py-1.5 rounded-lg bg-red-900/40 text-red-300 border border-red-800 hover:bg-red-900/70 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                   >
-                    Force purge
+                    {t("repositories.mine.forcePurge")}
                   </button>
                 )}
               </div>

@@ -3,6 +3,7 @@
 
 /** Presentational list of GitHub-accessible repositories the caller can add, with a search box. */
 
+import { useTranslation } from "react-i18next";
 import type { GitHubRepo } from "../../api/types";
 
 interface Props {
@@ -24,28 +25,29 @@ export function AvailableRepositoriesList({
   onSearchChange,
   onAdd,
 }: Props) {
+  const { t } = useTranslation("config");
   const trimmed = search.trim();
   return (
     <section className="border border-gray-800 rounded-lg bg-gray-950 overflow-hidden">
       <div className="px-3 py-2 border-b border-gray-800 text-xs uppercase tracking-wide text-gray-500 flex items-center justify-between gap-3">
-        <span>Available repositories</span>
+        <span>{t("repositories.available.header")}</span>
         <input
           type="search"
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search…"
+          placeholder={t("repositories.available.searchPlaceholder")}
           className="flex-1 max-w-xs bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-500 normal-case tracking-normal"
         />
       </div>
       {error ? (
         <p className="text-sm text-red-400 p-3">{error}</p>
       ) : loading ? (
-        <p className="text-sm text-gray-500 p-3">Loading from GitHub…</p>
+        <p className="text-sm text-gray-500 p-3">{t("repositories.available.loading")}</p>
       ) : repos.length === 0 ? (
         <p className="text-sm text-gray-500 p-3 italic">
           {trimmed.length > 0
-            ? `No repositories matching "${trimmed}" available to add.`
-            : "No additional repositories accessible via the configured GitHub credentials."}
+            ? t("repositories.available.noMatch", { search: trimmed })
+            : t("repositories.available.none")}
         </p>
       ) : (
         <ul className="divide-y divide-gray-800">
@@ -64,9 +66,9 @@ export function AvailableRepositoriesList({
                   {repo.private && (
                     <span
                       className="text-[11px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700 shrink-0"
-                      title="Private repository"
+                      title={t("repositories.available.privateTitle")}
                     >
-                      private
+                      {t("repositories.available.private")}
                     </span>
                   )}
                 </div>
@@ -80,7 +82,7 @@ export function AvailableRepositoriesList({
                 disabled={busy !== null}
                 className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0"
               >
-                {busy === `add:${repo.full_name}` ? "Cloning…" : "Add"}
+                {busy === `add:${repo.full_name}` ? t("repositories.available.cloning") : t("repositories.available.add")}
               </button>
             </li>
           ))}

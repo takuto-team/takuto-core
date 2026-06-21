@@ -14,6 +14,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type RepositoryRow } from "../api/client";
 import { useRepositoryAdmin } from "../hooks/useRepositoryAdmin";
 import { ConfirmModal } from "./modals/ConfirmModal";
@@ -25,6 +26,7 @@ interface Props {
 }
 
 export function MyRepositoriesTab({ isAdmin }: Props) {
+  const { t } = useTranslation("config");
   const {
     mine,
     loadingMine,
@@ -57,23 +59,28 @@ export function MyRepositoriesTab({ isAdmin }: Props) {
         const { repo, forcePurge } = removeTarget;
         const co = repo.co_users_count ?? 0;
         if (forcePurge) {
-          return `Force-purge "${repo.name}": all ${co + 1} associated user(s) will lose access, and the on-disk clone at ${repo.local_path} will be deleted. This cannot be undone.`;
+          return t("repositories.forcePurgeMessage", {
+            count: co + 1,
+            name: repo.name,
+            path: repo.local_path,
+          });
         }
         if (co === 0) {
-          return `You are the last user associated with "${repo.name}". Removing it will also delete the on-disk clone at ${repo.local_path}. The repository can be re-added later (it will be re-cloned from the remote).`;
+          return t("repositories.lastUserMessage", {
+            name: repo.name,
+            path: repo.local_path,
+          });
         }
-        return `Remove "${repo.name}" from your dashboard. ${co} other user(s) still have it added — the on-disk clone will be kept.`;
+        return t("repositories.removeMessage", { count: co, name: repo.name });
       })()
     : "";
 
   return (
     <div className="space-y-6">
       <header>
-        <h2 className="text-base font-semibold text-gray-300 mb-1">My Repositories</h2>
+        <h2 className="text-base font-semibold text-gray-300 mb-1">{t("repositories.title")}</h2>
         <p className="text-sm text-gray-500">
-          Repositories you've added show up on your dashboard. Available repositories
-          come from the deployment's GitHub App installation (or fallback PAT). The on-disk
-          clone is shared between every user that adds the same repo.
+          {t("repositories.description")}
         </p>
       </header>
 
@@ -100,7 +107,7 @@ export function MyRepositoriesTab({ isAdmin }: Props) {
 
       {removeTarget && (
         <ConfirmModal
-          title={removeTarget.forcePurge ? "Force-purge repository" : "Remove repository"}
+          title={removeTarget.forcePurge ? t("repositories.forcePurgeTitle") : t("repositories.removeTitle")}
           message={removeConfirmMessage}
           onConfirm={handleRemove}
           onCancel={() => setRemoveTarget(null)}
