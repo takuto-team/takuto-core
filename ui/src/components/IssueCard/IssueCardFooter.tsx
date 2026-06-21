@@ -18,6 +18,7 @@ interface Props {
   onOpenEditor: () => void;
   onOpenTerminal: () => void;
   onCloseEditor: () => void;
+  onCloseTerminal: () => void;
 }
 
 export function IssueCardFooter({
@@ -30,6 +31,7 @@ export function IssueCardFooter({
   onOpenEditor,
   onOpenTerminal,
   onCloseEditor,
+  onCloseTerminal,
 }: Props) {
   if (ports.length === 0 && !canOpenEditor) return null;
   return (
@@ -51,7 +53,7 @@ export function IssueCardFooter({
           isMenuOpen={openMenu === "terminal"}
           onToggleMenu={(open) => onSetMenu(open ? "terminal" : null)}
           onStart={onOpenTerminal}
-          onStop={onCloseEditor}
+          onStop={onCloseTerminal}
         />
       )}
       <PortMappingsMenu

@@ -66,5 +66,13 @@ export function useIssueCardActions(ticketKey: string) {
     }
   }, [ticketKey]);
 
-  return { doAction, openEditor, openTerminal, closeEditor };
+  const closeTerminal = useCallback(async () => {
+    const res = await apiPost(`/api/work-items/${encodeURIComponent(ticketKey)}/close-terminal`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || "Failed to close terminal");
+    }
+  }, [ticketKey]);
+
+  return { doAction, openEditor, openTerminal, closeEditor, closeTerminal };
 }

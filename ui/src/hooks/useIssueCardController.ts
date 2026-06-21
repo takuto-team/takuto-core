@@ -39,6 +39,7 @@ export interface IssueCardController {
   onOpenEditor: () => void;
   onOpenTerminal: () => void;
   onCloseEditor: () => void;
+  onCloseTerminal: () => void;
   onConfirm: () => void;
   onConfirmCancel: () => void;
   onConsoleClose: () => void;
@@ -59,7 +60,8 @@ export function useIssueCardController(
   preparingWorkspace: boolean,
 ): IssueCardController {
   const { showToast } = useToast();
-  const { doAction, openEditor, openTerminal, closeEditor } = useIssueCardActions(ticketKey);
+  const { doAction, openEditor, openTerminal, closeEditor, closeTerminal } =
+    useIssueCardActions(ticketKey);
 
   const PREPARING_MESSAGE = "Preparing workspace…";
 
@@ -134,6 +136,7 @@ export function useIssueCardController(
       [withLoading, openTerminal, preparingWorkspace],
     ),
     onCloseEditor: useCallback(() => void withLoading(closeEditor), [withLoading, closeEditor]),
+    onCloseTerminal: useCallback(() => void withLoading(closeTerminal), [withLoading, closeTerminal]),
     onConfirm,
     onConfirmCancel: useCallback(() => setConfirm(null), []),
     onConsoleClose: useCallback(() => setConsoleOpen(false), []),

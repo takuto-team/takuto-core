@@ -139,6 +139,7 @@ export function IssueCard({
           onOpenEditor={ctl.onOpenEditor}
           onOpenTerminal={ctl.onOpenTerminal}
           onCloseEditor={ctl.onCloseEditor}
+          onCloseTerminal={ctl.onCloseTerminal}
         />
       </div>
 
