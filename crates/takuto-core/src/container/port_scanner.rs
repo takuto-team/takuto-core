@@ -412,4 +412,36 @@ mod tests {
 ";
         assert!(parse_socat_forwards(stdout).is_empty());
     }
+
+    #[test]
+    fn parses_prefixless_proc_cmdline_form() {
+        // /proc/<pid>/cmdline form: NULs→spaces, no leading PID, trailing space.
+        let stdout = "socat TCP4-LISTEN:9110,fork,reuseaddr,bind=0.0.0.0 TCP6:[::1]:5173 \n";
+        assert_eq!(parse_socat_forwards(stdout), vec![(9110, 5173)]);
+    }
+
+    #[test]
+    fn parses_multiple_forwards() {
+        let stdout = "\
+socat TCP4-LISTEN:9110,fork,reuseaddr,bind=0.0.0.0 TCP4:127.0.0.1:3000
+socat TCP4-LISTEN:9111,fork,reuseaddr,bind=0.0.0.0 TCP4:127.0.0.1:8080
+socat TCP4-LISTEN:9112,fork,reuseaddr,bind=0.0.0.0 TCP6:[::1]:5173
+";
+        assert_eq!(
+            parse_socat_forwards(stdout),
+            vec![(9110, 3000), (9111, 8080), (9112, 5173)]
+        );
+    }
+
+    #[test]
+    fn skips_listener_without_a_target() {
+        // A malformed/partial line with only the LISTEN side yields nothing.
+        assert!(parse_socat_forwards("socat TCP4-LISTEN:9110,fork\n").is_empty());
+    }
+
+    #[test]
+    fn ignores_empty_input() {
+        assert!(parse_socat_forwards("").is_empty());
+        assert!(parse_socat_forwards("\n\n").is_empty());
+    }
 }

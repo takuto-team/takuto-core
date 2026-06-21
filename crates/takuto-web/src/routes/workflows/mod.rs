@@ -14,6 +14,7 @@ mod list;
 mod log;
 mod manual;
 mod picker;
+pub mod port_chips;
 mod port_tracking;
 mod run_commands;
 mod steps;

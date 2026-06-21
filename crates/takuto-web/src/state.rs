@@ -14,7 +14,7 @@ use takuto_core::config::{Config, TicketingSystem};
 use takuto_core::config_writer::ConfigWriter;
 use takuto_core::workflow::engine::WorkflowEngine;
 
-use crate::session_registry::PathTokenRegistry;
+use crate::session_registry::{PathTokenRegistry, SessionRouteKind};
 
 /// A single dynamically forwarded port with its proxy metadata.
 #[derive(Debug, Clone)]
@@ -175,6 +175,41 @@ pub struct EditorState {
     /// every incoming request, and the workflow `open_*` / `close_*` handlers
     /// register/deregister entries as session containers come and go.
     pub path_token_registry: PathTokenRegistry,
+}
+
+impl EditorState {
+    /// Tear down the in-memory routing/state owned by the EDITOR session for
+    /// `ticket_key`: its proxy path token, the dynamically-forwarded app ports
+    /// (a feature of the editor's port scanner), the scanner itself, and the
+    /// dynamic-forward tracking.
+    ///
+    /// The terminal's path token and port are deliberately left untouched so
+    /// stopping the editor never tears down a terminal sharing the same
+    /// workspace container. The editor's secrets bundle is NOT dropped here —
+    /// the caller drops it only after the container teardown has read the
+    /// secret files (see `close_editor`).
+    pub async fn teardown_editor_state(&self, ticket_key: &str) {
+        self.path_token_registry
+            .remove_for_ticket_kind(ticket_key, SessionRouteKind::Editor)
+            .await;
+        self.path_token_registry
+            .remove_for_ticket_kind(ticket_key, SessionRouteKind::DynamicPort)
+            .await;
+        if let Some(token) = self.editor_scanners.write().await.remove(ticket_key) {
+            token.cancel();
+        }
+        self.dynamic_forwards.write().await.remove(ticket_key);
+    }
+
+    /// Tear down the in-memory routing/state owned by the TERMINAL session for
+    /// `ticket_key`: its proxy path token and allocated port. The editor's
+    /// token, scanner, and forwards are deliberately left untouched.
+    pub async fn teardown_terminal_state(&self, ticket_key: &str) {
+        self.path_token_registry
+            .remove_for_ticket_kind(ticket_key, SessionRouteKind::Terminal)
+            .await;
+        self.terminal_ports.write().await.remove(ticket_key);
+    }
 }
 
 /// Run-command companion to [`EditorState`].

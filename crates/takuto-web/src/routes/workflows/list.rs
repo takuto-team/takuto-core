@@ -272,9 +272,7 @@ pub async fn list_workflows(
                     continue;
                 }
                 let listening = container::listening_ports_in_editor(&w.ticket_key).await;
-                raw.into_iter()
-                    .filter(|(_, target)| listening.contains(target))
-                    .collect()
+                super::port_chips::retain_live_forwards(raw, &listening)
             };
             if forwards.is_empty() {
                 continue;

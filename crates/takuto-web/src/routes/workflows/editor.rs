@@ -719,20 +719,12 @@ pub async fn close_editor(
     {
         return StatusCode::NOT_FOUND;
     }
-    // Drop the path-token mapping BEFORE the port is torn down so any
-    // in-flight `/s/<token>/...` request gets a clean 404 instead of a
-    // hung connection or — worse — a successful upgrade right as the
-    // backend dies. Both editor and terminal entries for this ticket
-    // are removed because closing the editor implicitly tears down the
-    // terminal.
-    let _ = editor.path_token_registry.remove_for_ticket(&id).await;
-    // Cancel port scanner first so it doesn't try to scan a dying container.
-    if let Some(token) = editor.editor_scanners.write().await.remove(&id) {
-        token.cancel();
-    }
-    // Clean up dynamic forward tracking and terminal state.
-    editor.dynamic_forwards.write().await.remove(&id);
-    editor.terminal_ports.write().await.remove(&id);
+    // Drop the editor's path-token mapping (and port-scanner / forwards) BEFORE
+    // the IDE process is killed so any in-flight `/s/<token>/...` request gets a
+    // clean 404 instead of a hung connection or — worse — a successful upgrade
+    // right as the backend dies. The terminal's token and port are left intact
+    // so a terminal sharing this workspace container survives an editor stop.
+    editor.teardown_editor_state(&id).await;
     // Drop the bundle Arc — last strong reference triggers the
     // TempDir RAII cleanup. Done AFTER stop_editor below so the secret
     // files stay on disk for the container's final teardown read.
@@ -1031,11 +1023,7 @@ pub async fn close_terminal(
     // 404 instead of a hung connection. Editor entries for the same
     // ticket are intentionally left alone so closing the terminal doesn't
     // also break the editor.
-    let _ = editor
-        .path_token_registry
-        .remove_for_ticket_kind(&id, SessionRouteKind::Terminal)
-        .await;
-    editor.terminal_ports.write().await.remove(&id);
+    editor.teardown_terminal_state(&id).await;
     container::stop_terminal(&id).await;
     StatusCode::OK
 }
