@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AgentConfigError, apiJson, putAgentConfig } from "../api/client";
 import type {
   AgentConfig,
@@ -23,6 +24,7 @@ import { useToast } from "./useToast";
  * fetch — saves a duplicate round-trip.
  */
 export function useProviderForm() {
+  const { t } = useTranslation("config");
   const { showToast } = useToast();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,12 +105,12 @@ export function useProviderForm() {
     };
     try {
       await putAgentConfig(patch);
-      showToast("Provider configured.", "success");
+      showToast(t("ai.providerConfigured"), "success");
       return true;
     } catch (e: unknown) {
       const msg =
         e instanceof AgentConfigError
-          ? `${e.message} (code: ${e.code})`
+          ? t("errors.withCode", { message: e.message, code: e.code })
           : e instanceof Error
             ? e.message
             : String(e);
@@ -117,7 +119,7 @@ export function useProviderForm() {
     } finally {
       setSaving(false);
     }
-  }, [provider, baseUrl, model, extraArgsText, showToast]);
+  }, [provider, baseUrl, model, extraArgsText, showToast, t]);
 
   return {
     loading,

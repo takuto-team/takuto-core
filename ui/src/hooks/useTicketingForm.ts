@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   deleteJiraCredential,
   fetchUserCredentials,
@@ -22,21 +23,21 @@ interface Config {
   ready: boolean;
 }
 
-/** Human-readable copy for the structured error codes the Jira endpoint
- *  returns. Unmapped codes fall through to the raw message. */
-const JIRA_ERROR_COPY: Record<string, string> = {
-  invalid_token: "Jira rejected the token — check the site URL, email, and API token.",
-  unauthorized: "Your Jira account isn't authorized for that site.",
-  site_empty: "Enter your Atlassian site URL.",
-  site_too_long: "That site URL is too long.",
-  site_invalid: "Enter a full site URL starting with https://.",
-  email_invalid: "Enter the email tied to your Atlassian account.",
-  jira_transport_error: "Couldn't reach Jira — check the site URL and your network.",
-  master_key_unavailable: "The server can't seal credentials right now. Try again later.",
-  database_unavailable: "The server is unavailable right now. Try again later.",
-  seal_failed: "The server couldn't store the credential. Try again.",
-  write_failed: "The server couldn't store the credential. Try again.",
-};
+/** Structured error codes the Jira endpoint returns that have dedicated
+ *  human-readable copy. Unmapped codes fall through to the raw message. */
+const JIRA_ERROR_CODES = [
+  "invalid_token",
+  "unauthorized",
+  "site_empty",
+  "site_too_long",
+  "site_invalid",
+  "email_invalid",
+  "jira_transport_error",
+  "master_key_unavailable",
+  "database_unavailable",
+  "seal_failed",
+  "write_failed",
+] as const;
 
 /**
  * Onboarding step-1 state machine: which ticketing system the deployment
@@ -50,7 +51,15 @@ const JIRA_ERROR_COPY: Record<string, string> = {
  * credential. Returns `true` / `false` so the wizard flow can gate "Continue".
  */
 export function useTicketingForm({ initialSystem, ready }: Config) {
+  const { t } = useTranslation("config");
   const { showToast } = useToast();
+  const jiraErrorCopy = useCallback(
+    (code: string): string | undefined =>
+      (JIRA_ERROR_CODES as readonly string[]).includes(code)
+        ? t(`ticketing.jiraErrors.${code}`)
+        : undefined,
+    [t],
+  );
   const [system, setSystem] = useState<TicketingSystemId>("none");
   // The last-persisted ticketing system. We only PUT /api/config when the
   // selection differs from this — so a user who leaves the system untouched
@@ -94,10 +103,7 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
 
   const save = useCallback(async (): Promise<boolean> => {
     if (system === "jira" && jiraPartial) {
-      showToast(
-        "Fill in the Jira site, email, and API token — or clear them to keep your current Jira connection.",
-        "error",
-      );
+      showToast(t("ticketing.jiraPartial"), "error");
       return false;
     }
     setSaving(true);
@@ -120,20 +126,20 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
       // Toast the most specific thing that happened; stay silent on a no-op so
       // the wizard's "Continue" doesn't nag when nothing changed.
       if (connectedName) {
-        showToast(`Jira connected as ${connectedName}.`, "success");
+        showToast(t("ticketing.jiraConnected", { name: connectedName }), "success");
       } else if (systemChanged) {
-        showToast("Ticketing system saved.", "success");
+        showToast(t("ticketing.systemSaved"), "success");
       }
       return true;
     } catch (e: unknown) {
       let msg: string;
       if (e instanceof UserCredentialsError) {
-        msg = JIRA_ERROR_COPY[e.code] ?? `${e.message} (code: ${e.code})`;
+        msg = jiraErrorCopy(e.code) ?? t("errors.withCode", { message: e.message, code: e.code });
       } else if (e instanceof RuntimeConfigError) {
         msg =
           e.status === 403
-            ? "Only an admin can change the deployment's ticketing system. Ask an admin, or skip this step."
-            : `${e.message} (code: ${e.code})`;
+            ? t("ticketing.adminOnly")
+            : t("errors.withCode", { message: e.message, code: e.code });
       } else if (e instanceof Error) {
         msg = e.message;
       } else {
@@ -154,6 +160,8 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     token,
     refreshConnected,
     showToast,
+    t,
+    jiraErrorCopy,
   ]);
 
   const disconnect = useCallback(async (): Promise<boolean> => {
@@ -164,12 +172,12 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
       setSite("");
       setEmail("");
       setToken("");
-      showToast("Jira credential removed.", "success");
+      showToast(t("ticketing.jiraRemoved"), "success");
       return true;
     } catch (e: unknown) {
       const msg =
         e instanceof UserCredentialsError
-          ? JIRA_ERROR_COPY[e.code] ?? `${e.message} (code: ${e.code})`
+          ? jiraErrorCopy(e.code) ?? t("errors.withCode", { message: e.message, code: e.code })
           : e instanceof Error
             ? e.message
             : String(e);
@@ -178,7 +186,7 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     } finally {
       setSaving(false);
     }
-  }, [refreshConnected, showToast]);
+  }, [refreshConnected, showToast, t, jiraErrorCopy]);
 
   return {
     system,

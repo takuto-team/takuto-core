@@ -98,13 +98,13 @@ export function IssueCardProgress({
               {t("progress.showReport")}
             </button>
           )}
-          {isTerminalish && <RestartIconButton onClick={onRetry} />}
+          {isTerminalish && <RestartIconButton onClick={onRetry} title={t("progress.restartFromScratch")} />}
           {(status.status === "error" || status.status === "stopped") && canResumeFromError && (
             <ResumeIconButton onClick={onResumeFromError} title={t("progress.retryFromFailure")} />
           )}
-          {isActive && status.status === "running" && <PauseIconButton onClick={onPause} />}
-          {isActive && status.status === "paused" && <ResumeIconButton onClick={onResume} />}
-          {isActive && <StopIconButton onClick={onStop} />}
+          {isActive && status.status === "running" && <PauseIconButton onClick={onPause} title={t("progress.pauseItem")} />}
+          {isActive && status.status === "paused" && <ResumeIconButton onClick={onResume} title={t("progress.resumeItem")} />}
+          {isActive && <StopIconButton onClick={onStop} title={t("progress.stopItem")} />}
         </div>
       </div>
       <div className="text-sm font-mono text-gray-300 mt-0.5">{stateDisplay}</div>

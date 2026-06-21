@@ -2,6 +2,10 @@
   "language": {
     "switch": "Change language"
   },
+  "editableName": {
+    "clickToRename": "Click to rename"
+  },
+  "loading": "Loading...",
   "connection": {
     "connected": "Connected",
     "disconnected": "Disconnected"

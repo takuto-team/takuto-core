@@ -1,5 +1,26 @@
 {
   "dryMode": "Dry mode is enabled — Jira/GitHub side effects are skipped",
+  "runCommands": {
+    "heading": "Commands",
+    "waitingToListen": "Waiting for the app to start listening…",
+    "startFailed": "Failed to start run command",
+    "stopFailed": "Failed to stop run command",
+    "stop": "Stop {{name}}",
+    "copy": "Copy",
+    "open": "Open",
+    "run": "Run {{name}}",
+    "copyTitle": "Copy {{url}}",
+    "starting": "Starting {{name}}",
+    "preparingWorktree": "Preparing worktree…"
+  },
+  "workflowDefButtons": {
+    "heading": "Workflows",
+    "waitingFor": "Waiting for: {{deps}}",
+    "clickToRetry": "Click to retry",
+    "startFlow": "Start flow",
+    "noFlows": "No flows configured.",
+    "configureFlows": "Configure flows →"
+  },
   "footer": {
     "version": "Takuto v{{version}}"
   },
@@ -47,7 +68,11 @@
     "readyPickWorkflow": "Ready — pick a workflow to start",
     "reportTitle": "View work item report",
     "showReport": "Show Report",
-    "retryFromFailure": "Retry from last failure"
+    "retryFromFailure": "Retry from last failure",
+    "pauseItem": "Pause the work item",
+    "resumeItem": "Resume work item",
+    "restartFromScratch": "Restart from scratch",
+    "stopItem": "Stop work item"
   },
   "view": {
     "stepCurrent": "Current step",

@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface EditableNameProps {
   value: string;
@@ -31,6 +32,7 @@ export function EditableName({
   textClassName,
   title,
 }: EditableNameProps) {
+  const { t } = useTranslation("common");
   const [editing, setEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const escapingRef = useRef(false);
@@ -102,7 +104,7 @@ export function EditableName({
           setEditing(true);
         }
       }}
-      title={title ?? "Click to rename"}
+      title={title ?? t("editableName.clickToRename")}
       className={`${textClassName} truncate text-left rounded px-1 -mx-1 hover:bg-gray-800 cursor-pointer ${
         value.trim() === "" ? "text-gray-500 italic" : "text-gray-300"
       }`}

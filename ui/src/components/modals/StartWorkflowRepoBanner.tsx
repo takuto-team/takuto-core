@@ -48,7 +48,7 @@ export function StartWorkflowRepoBanner({
   }
   return (
     <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-3">
-      <label className="text-xs text-gray-400 shrink-0">Repository:</label>
+      <label className="text-xs text-gray-400 shrink-0">{t("startWorkflowRepoBanner.repositoryLabel")}</label>
       {loadingRepos ? (
         <span className="text-xs text-gray-500">{t("startWorkflowRepoBanner.loading")}</span>
       ) : repos.length === 0 ? (

@@ -20,6 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   deleteMyWorktreeCommands,
   getMyWorktreeCommands,
@@ -38,6 +39,7 @@ import { WorktreeRunCommandList } from "./WorktreeRunCommandList";
 import { validateCommands } from "./WorktreeSettings/validateCommands";
 
 export function WorktreeSettingsTab() {
+  const { t } = useTranslation("config");
   const { myRepos, activeRepoName } = useMyRepositories();
   const { access } = useRepoAccess();
   // Names of repos the caller has a worktree-commands row for (badge source).
@@ -143,7 +145,7 @@ export function WorktreeSettingsTab() {
       init.replaceOriginal(row.init_commands);
       run.replaceOriginal(row.run_commands);
       setGenerateReport(row.generate_report);
-      setSuccess("Commands saved.");
+      setSuccess(t("worktreeSettings.commandsSaved"));
       setWithCommands((prev) => new Set(prev).add(selected));
     } catch (e) {
       setError(String((e as Error).message || e));
@@ -164,9 +166,7 @@ export function WorktreeSettingsTab() {
       init.replaceOriginal([]);
       run.replaceOriginal([]);
       setGenerateReport(false);
-      setSuccess(
-        "Commands deleted. Future work items on this repository will run no init commands and show no run-command buttons.",
-      );
+      setSuccess(t("worktreeSettings.commandsDeleted"));
       setWithCommands((prev) => {
         const next = new Set(prev);
         next.delete(selected);
@@ -182,13 +182,8 @@ export function WorktreeSettingsTab() {
   return (
     <div className="space-y-4">
       <header>
-        <h2 className="text-base font-semibold text-gray-300 mb-1">Repository Settings</h2>
-        <p className="text-sm text-gray-500">
-          Per-repository init commands (run when the item's container is brought up — before agent
-          steps, the IDE, the terminal, or a run command use it) and run commands (buttons shown on
-          your completed work item cards). These settings are private to your user account — every
-          user manages their own.
-        </p>
+        <h2 className="text-base font-semibold text-gray-300 mb-1">{t("worktreeSettings.title")}</h2>
+        <p className="text-sm text-gray-500">{t("worktreeSettings.description")}</p>
       </header>
 
       <div className="flex flex-col md:flex-row gap-4 min-h-[24rem]">
@@ -202,32 +197,26 @@ export function WorktreeSettingsTab() {
         <section className="flex-1 border border-gray-800 rounded-lg bg-gray-950 p-4">
           {!selected ? (
             <div className="h-full flex items-center justify-center text-sm text-gray-500 italic min-h-[16rem]">
-              Select a repository to configure its commands.
+              {t("worktreeSettings.selectRepo")}
             </div>
           ) : loadingEditor ? (
-            <p className="text-sm text-gray-500">Loading…</p>
+            <p className="text-sm text-gray-500">{t("actions.loading")}</p>
           ) : (
             <div className="space-y-6">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <h3 className="text-base font-semibold text-gray-200">
-                  Repository: <span className="font-mono">{selected}</span>
+                  {t("worktreeSettings.repositoryLabel")} <span className="font-mono">{selected}</span>
                 </h3>
               </div>
 
               {!hasRow && !dirty && (
-                <p className="text-sm text-gray-500 italic">
-                  No commands set for this repository. Workflows here will run no init commands
-                  and show no run-command buttons. Add commands below to customize.
-                </p>
+                <p className="text-sm text-gray-500 italic">{t("worktreeSettings.noRowHint")}</p>
               )}
 
               <section className="space-y-2">
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-200">Init commands</h4>
-                  <p className="text-xs text-gray-500">
-                    Run sequentially in the worktree each time the item's container starts —
-                    before agent steps, the IDE, the terminal, or a run command use it.
-                  </p>
+                  <h4 className="text-sm font-semibold text-gray-200">{t("worktreeSettings.initCommands")}</h4>
+                  <p className="text-xs text-gray-500">{t("worktreeSettings.initCommandsHelp")}</p>
                 </div>
                 <WorktreeCommandList
                   commands={init.value}
@@ -238,10 +227,8 @@ export function WorktreeSettingsTab() {
 
               <section className="space-y-2">
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-200">Run commands</h4>
-                  <p className="text-xs text-gray-500">
-                    Buttons shown on your completed work item cards.
-                  </p>
+                  <h4 className="text-sm font-semibold text-gray-200">{t("worktreeSettings.runCommands")}</h4>
+                  <p className="text-xs text-gray-500">{t("worktreeSettings.runCommandsHelp")}</p>
                 </div>
                 <WorktreeRunCommandList
                   commands={run.value}
@@ -261,7 +248,7 @@ export function WorktreeSettingsTab() {
                   disabled={saving || !!validationError || !dirty}
                   className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  {saving ? "Saving…" : "Save"}
+                  {saving ? t("actions.saving") : t("actions.save")}
                 </button>
                 <button
                   type="button"
@@ -269,10 +256,10 @@ export function WorktreeSettingsTab() {
                   disabled={saving || !hasRow}
                   className="px-4 py-1.5 rounded-lg bg-red-900/40 text-red-300 text-sm font-medium border border-red-800 hover:bg-red-900/70 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  Delete commands for this repository
+                  {t("worktreeSettings.deleteForRepo")}
                 </button>
                 {dirty && !validationError && (
-                  <span className="text-xs text-gray-500 italic">Unsaved changes</span>
+                  <span className="text-xs text-gray-500 italic">{t("ai.unsavedChanges")}</span>
                 )}
               </div>
             </div>
@@ -282,8 +269,8 @@ export function WorktreeSettingsTab() {
 
       {confirmDelete && (
         <ConfirmModal
-          title="Delete commands for this repository"
-          message={`Remove your init commands and run commands for "${selected}"? Future work items on this repository will run no init commands and show no run-command buttons until you add them again.`}
+          title={t("worktreeSettings.deleteConfirmTitle")}
+          message={t("worktreeSettings.deleteConfirmMessage", { name: selected })}
           onConfirm={handleDelete}
           onCancel={() => setConfirmDelete(false)}
         />

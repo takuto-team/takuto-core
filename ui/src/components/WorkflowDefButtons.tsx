@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import type { WorkflowDefinition } from "../api/types";
 import { useRunWorkflowDef } from "../hooks/useRunWorkflowDef";
@@ -54,6 +55,7 @@ export function WorkflowDefButtons({
   mainRunning,
   disabled,
 }: WorkflowDefButtonsProps) {
+  const { t } = useTranslation("dashboard");
   const { run, loadingDef } = useRunWorkflowDef(ticketKey, onRefresh);
   const [modalOpen, setModalOpen] = useState(false);
   // Any reason that blocks starting a flow disables every button.
@@ -108,7 +110,7 @@ export function WorkflowDefButtons({
           className="action-btn wf-btn-danger inline-flex items-center gap-1"
           onClick={() => run(def, state)}
           disabled={isLoading}
-          title="Click to retry"
+          title={t("workflowDefButtons.clickToRetry")}
         >
           {isLoading ? <SpinnerIcon /> : <XIcon />} {def.name}
         </button>
@@ -122,7 +124,7 @@ export function WorkflowDefButtons({
         <span
           key={def.filename}
           className="action-btn wf-btn-secondary opacity-50 cursor-not-allowed inline-flex items-center gap-1"
-          title={!met ? `Waiting for: ${waiting.join(", ")}` : undefined}
+          title={!met ? t("workflowDefButtons.waitingFor", { deps: waiting.join(", ") }) : undefined}
         >
           {!met && <LockIcon />} {def.name}
         </span>
@@ -145,7 +147,7 @@ export function WorkflowDefButtons({
     <>
       <div className="border-t border-gray-800/60" />
       <div>
-        <div className="text-xs text-gray-500 mb-1.5">Workflows</div>
+        <div className="text-xs text-gray-500 mb-1.5">{t("workflowDefButtons.heading")}</div>
         {body}
       </div>
     </>
@@ -155,9 +157,9 @@ export function WorkflowDefButtons({
   if (definitions.length === 0) {
     return section(
       <p className="text-sm text-gray-500">
-        No flows configured.{" "}
+        {t("workflowDefButtons.noFlows")}{" "}
         <Link to="/config?tab=Flows" className="text-blue-400 hover:text-blue-300">
-          Configure flows &rarr;
+          {t("workflowDefButtons.configureFlows")}
         </Link>
       </p>,
     );
@@ -185,7 +187,7 @@ export function WorkflowDefButtons({
               onClick={() => setModalOpen(true)}
               disabled={blocked}
             >
-              Start flow
+              {t("workflowDefButtons.startFlow")}
             </button>
           ) : (
             <div className="flex flex-wrap gap-2">{sorted.map(renderButton)}</div>

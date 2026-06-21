@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson, putAgentConfig, AgentConfigError } from "../api/client";
 import { queryKeys } from "../api/queryClient";
@@ -186,6 +187,7 @@ export function useAiProviderSettings(
   opts: { onProviderSaved?: () => void } = {},
 ): UseAiProviderSettingsResult {
   const { onProviderSaved } = opts;
+  const { t } = useTranslation("config");
   const { showToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -264,25 +266,22 @@ export function useAiProviderSettings(
         // in-memory patch succeeded but the on-disk write failed. Strict
         // `=== false` so a legacy server (undefined) is treated as "assume OK".
         if (updated.persisted === false) {
-          const reason = updated.persist_warning ?? "unknown error";
-          showToast(
-            `AI provider settings applied in memory but NOT persisted to disk: ${reason}. The change will be lost on next restart — fix the config volume and save again.`,
-            "error",
-          );
+          const reason = updated.persist_warning ?? t("ai.unknownError");
+          showToast(t("ai.persistWarning", { reason }), "error");
         } else {
-          showToast("AI provider settings saved.", "success");
+          showToast(t("ai.savedToast"), "success");
         }
         return true;
       } catch (e: unknown) {
         if (e instanceof AgentConfigError) {
-          showToast(`${e.message} (code: ${e.code})`, "error");
+          showToast(t("errors.withCode", { message: e.message, code: e.code }), "error");
         } else {
           showToast(e instanceof Error ? e.message : String(e), "error");
         }
         return false;
       }
     },
-    [mutation, showToast, onProviderSaved],
+    [mutation, showToast, onProviderSaved, t],
   );
 
   const selectProvider = useCallback(
@@ -326,7 +325,7 @@ export function useAiProviderSettings(
       selectedProvider === "opencode" &&
       (draft.base_url.trim() === "" || draft.model.trim() === "")
     ) {
-      showToast("OpenCode requires both a Base URL and a Model to save.", "error");
+      showToast(t("ai.form.opencodeRequires"), "error");
       return Promise.resolve(false);
     }
     if (selectedProvider !== savedProvider) {
@@ -336,7 +335,7 @@ export function useAiProviderSettings(
       });
     }
     return persist(buildPatch());
-  }, [isDirty, selectedProvider, savedProvider, draft, persist, buildPatch, showToast]);
+  }, [isDirty, selectedProvider, savedProvider, draft, persist, buildPatch, showToast, t]);
 
   const confirmSwitch = useCallback(() => {
     setPendingProviderSwitch(null);

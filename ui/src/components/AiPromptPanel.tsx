@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import type { ImproveResponse } from "../api/types";
 
 const PROMPT_TIMEOUT_SECS = 300;
@@ -35,6 +36,7 @@ export function AiPromptPanel({
   onLoadingChange,
   onImprovement,
 }: AiPromptPanelProps) {
+  const { t } = useTranslation("modals");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +91,7 @@ export function AiPromptPanel({
 
       if (!res.ok) {
         const text = await res.text();
-        setError(text || `Request failed (HTTP ${res.status})`);
+        setError(text || t("aiPrompt.requestFailedHttp", { status: res.status }));
         return;
       }
 
@@ -104,7 +106,7 @@ export function AiPromptPanel({
     } catch (e) {
       abortRef.current = null;
       if (e instanceof Error && e.name !== "AbortError") {
-        setError(e.message || "Request failed");
+        setError(e.message || t("aiPrompt.requestFailed"));
       }
     } finally {
       setLoading(false);
@@ -113,7 +115,7 @@ export function AiPromptPanel({
         countdownRef.current = null;
       }
     }
-  }, [prompt, loading, ticketKey, ticketTitle, ticketDescription, onImprovement]);
+  }, [prompt, loading, ticketKey, ticketTitle, ticketDescription, onImprovement, t]);
 
   const handleCancel = useCallback(() => {
     abortRef.current?.abort();
@@ -135,10 +137,10 @@ export function AiPromptPanel({
         className="w-full flex items-center gap-2 px-4 py-2 text-xs text-purple-300 hover:bg-purple-600/10 cursor-pointer select-none"
       >
         <span className="text-[10px]">{collapsed ? "▶" : "▼"}</span>
-        <span>Ask AI</span>
+        <span>{t("aiPrompt.askAi")}</span>
         {loading && (
           <span className="ml-auto text-gray-500">
-            {formatCountdown(countdown)} remaining
+            {t("aiPrompt.remaining", { time: formatCountdown(countdown) })}
           </span>
         )}
       </button>
@@ -149,7 +151,7 @@ export function AiPromptPanel({
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder='Give the AI instructions to change the description (e.g. "Add acceptance criteria" or "Make it more concise")…'
+              placeholder={t("aiPrompt.placeholder")}
               disabled={inputDisabled}
               rows={3}
               className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 resize-none placeholder-gray-600 disabled:opacity-50"
@@ -163,8 +165,8 @@ export function AiPromptPanel({
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-gray-600">
                 {loading
-                  ? `Applying changes… ${formatCountdown(countdown)}`
-                  : "Ctrl+Enter to send"}
+                  ? t("aiPrompt.applyingChanges", { time: formatCountdown(countdown) })
+                  : t("aiPrompt.ctrlEnter")}
               </span>
               <div className="flex gap-2">
                 {loading ? (
@@ -176,7 +178,7 @@ export function AiPromptPanel({
                       onClick={handleCancel}
                       className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
                     >
-                      Cancel
+                      {t("aiPrompt.cancel")}
                     </button>
                   </>
                 ) : (
@@ -185,7 +187,7 @@ export function AiPromptPanel({
                     disabled={inputDisabled || prompt.trim() === ""}
                     className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
                   >
-                    Apply
+                    {t("aiPrompt.apply")}
                   </button>
                 )}
               </div>
@@ -200,7 +202,7 @@ export function AiPromptPanel({
                 disabled={loading}
                 className="text-xs px-2 py-1 rounded bg-red-600/20 text-red-300 border border-red-500/30 hover:bg-red-600/30 cursor-pointer flex-shrink-0"
               >
-                Retry
+                {t("aiPrompt.retry")}
               </button>
             </div>
           )}

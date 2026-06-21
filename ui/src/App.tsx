@@ -3,6 +3,7 @@
 
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
@@ -33,6 +34,7 @@ export function RequireAdmin({
   currentUser: { role: "admin" | "user" } | null;
   children: ReactNode;
 }) {
+  const { t } = useTranslation("common");
   // ALWAYS check loading first. A direct URL load on an admin-only route
   // renders this component during the auth-loading window before
   // currentUser has resolved. Returning Navigate here would bounce
@@ -40,7 +42,7 @@ export function RequireAdmin({
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <span className="text-gray-500 text-sm">Loading...</span>
+        <span className="text-gray-500 text-sm">{t("loading")}</span>
       </div>
     );
   }
@@ -109,12 +111,13 @@ export function LoginRouteRedirect() {
 }
 
 export function App() {
+  const { t } = useTranslation("common");
   const { authEnabled, loggedIn, setupRequired, currentUser, loading, login, logout, completeSetup } = useAuth();
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <span className="text-gray-500 text-sm">Loading...</span>
+        <span className="text-gray-500 text-sm">{t("loading")}</span>
       </div>
     );
   }

@@ -96,7 +96,7 @@ export function GitHubCredentialsSection({ panelRef }: Props = {}) {
     // The GitHubCredentialPanel renders its own "GitHub" header + connection
     // pill, so this tab wrapper carries no duplicate heading — just the
     // load/error gate around the panel.
-    <section aria-label="GitHub credentials" className="flex flex-col gap-3">
+    <section aria-label={t("github.sectionAria")} className="flex flex-col gap-3">
       {initialLoading && (
         <p className="text-sm text-gray-500">{t("loading")}</p>
       )}

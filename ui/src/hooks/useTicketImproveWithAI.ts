@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useToast } from "./useToast";
 import type { PendingImprovement } from "../components/modals/TicketImproveWithAI";
 
@@ -49,6 +50,7 @@ export function useTicketImproveWithAI(params: Params): UseTicketImproveWithAIRe
     startCountdown, stopCountdown,
     pendingImprovement, setPendingImprovement, applyImprovementToEditor,
   } = params;
+  const { t } = useTranslation("modals");
   const { showToast } = useToast();
   const [improving, setImproving] = useState(false);
   const [prompting, setPrompting] = useState(false);
@@ -76,7 +78,7 @@ export function useTicketImproveWithAI(params: Params): UseTicketImproveWithAIRe
       abortRef.current = null;
       if (!res.ok) {
         const text = await res.text();
-        showToast(text || "Failed to improve ticket description");
+        showToast(text || t("improveWithAI.failed"));
         return;
       }
       const data = await res.json() as { improved_description: string; improved_summary?: string };
@@ -88,7 +90,7 @@ export function useTicketImproveWithAI(params: Params): UseTicketImproveWithAIRe
     } catch (e) {
       abortRef.current = null;
       if (e instanceof Error && e.name !== "AbortError") {
-        showToast("Failed to improve ticket description");
+        showToast(t("improveWithAI.failed"));
       }
     } finally {
       setImproving(false);

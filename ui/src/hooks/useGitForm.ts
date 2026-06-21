@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { GitConfigError, putGitConfig } from "../api/gitConfig";
 import { useToast } from "./useToast";
 
@@ -39,6 +40,7 @@ export function useGitForm({
   ready,
   canSave = true,
 }: Config) {
+  const { t } = useTranslation("config");
   const { showToast } = useToast();
   const [baseBranch, setBaseBranch] = useState(DEFAULT_BASE_BRANCH);
   const [remote, setRemote] = useState(DEFAULT_REMOTE);
@@ -73,15 +75,15 @@ export function useGitForm({
     setSaving(true);
     try {
       await putGitConfig({ base_branch: baseBranch.trim(), remote: remote.trim() });
-      showToast("Git settings saved.", "success");
+      showToast(t("git.saved"), "success");
       return true;
     } catch (e: unknown) {
       let msg: string;
       if (e instanceof GitConfigError) {
         msg =
           e.status === 403
-            ? "Only an admin can change the git settings. Ask an admin, or skip this step."
-            : `${e.message} (code: ${e.code})`;
+            ? t("git.adminOnly")
+            : t("errors.withCode", { message: e.message, code: e.code });
       } else if (e instanceof Error) {
         msg = e.message;
       } else {
@@ -92,7 +94,7 @@ export function useGitForm({
     } finally {
       setSaving(false);
     }
-  }, [canSave, baseBranch, remote, baseBranchInvalid, remoteInvalid, showToast]);
+  }, [canSave, baseBranch, remote, baseBranchInvalid, remoteInvalid, showToast, t]);
 
   return {
     baseBranch,

@@ -1,4 +1,16 @@
 {
+  "aiPrompt": {
+    "askAi": "Ask AI",
+    "remaining": "{{time}} remaining",
+    "placeholder": "Give the AI instructions to change the description (e.g. \"Add acceptance criteria\" or \"Make it more concise\")…",
+    "applyingChanges": "Applying changes… {{time}}",
+    "ctrlEnter": "Ctrl+Enter to send",
+    "cancel": "Cancel",
+    "apply": "Apply",
+    "retry": "Retry",
+    "requestFailedHttp": "Request failed (HTTP {{status}})",
+    "requestFailed": "Request failed"
+  },
   "common": {
     "cancel": "Cancel"
   },
@@ -148,6 +160,7 @@
     "sideBySide": "Side by side"
   },
   "improveWithAI": {
+    "failed": "Failed to improve ticket description",
     "improvingDescription": "Improving description...",
     "cancel": "Cancel",
     "reviewAiChanges": "Review AI changes — confirm to enter edit mode with the updated description",

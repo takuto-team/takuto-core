@@ -77,10 +77,64 @@
   "ticketing": {
     "title": "Ticketing",
     "description": "Choose where Takuto reads work items from, and connect your personal Jira account.",
-    "disconnectJira": "Disconnect Jira"
+    "disconnectJira": "Disconnect Jira",
+    "systemSaved": "Ticketing system saved.",
+    "jiraConnected": "Jira connected as {{name}}.",
+    "jiraRemoved": "Jira credential removed.",
+    "jiraPartial": "Fill in the Jira site, email, and API token — or clear them to keep your current Jira connection.",
+    "adminOnly": "Only an admin can change the deployment's ticketing system. Ask an admin, or skip this step.",
+    "jiraErrors": {
+      "invalid_token": "Jira rejected the token — check the site URL, email, and API token.",
+      "unauthorized": "Your Jira account isn't authorized for that site.",
+      "site_empty": "Enter your Atlassian site URL.",
+      "site_too_long": "That site URL is too long.",
+      "site_invalid": "Enter a full site URL starting with https://.",
+      "email_invalid": "Enter the email tied to your Atlassian account.",
+      "jira_transport_error": "Couldn't reach Jira — check the site URL and your network.",
+      "master_key_unavailable": "The server can't seal credentials right now. Try again later.",
+      "database_unavailable": "The server is unavailable right now. Try again later.",
+      "seal_failed": "The server couldn't store the credential. Try again.",
+      "write_failed": "The server couldn't store the credential. Try again."
+    }
+  },
+  "git": {
+    "saved": "Git settings saved.",
+    "adminOnly": "Only an admin can change the git settings. Ask an admin, or skip this step."
+  },
+  "worktreeSettings": {
+    "title": "Repository Settings",
+    "description": "Per-repository init commands (run when the item's container is brought up — before agent steps, the IDE, the terminal, or a run command use it) and run commands (buttons shown on your completed work item cards). These settings are private to your user account — every user manages their own.",
+    "commandsSaved": "Commands saved.",
+    "commandsDeleted": "Commands deleted. Future work items on this repository will run no init commands and show no run-command buttons.",
+    "selectRepo": "Select a repository to configure its commands.",
+    "repositoryLabel": "Repository:",
+    "noRowHint": "No commands set for this repository. Workflows here will run no init commands and show no run-command buttons. Add commands below to customize.",
+    "initCommands": "Init commands",
+    "initCommandsHelp": "Run sequentially in the worktree each time the item's container starts — before agent steps, the IDE, the terminal, or a run command use it.",
+    "runCommands": "Run commands",
+    "runCommandsHelp": "Buttons shown on your completed work item cards.",
+    "deleteForRepo": "Delete commands for this repository",
+    "deleteConfirmTitle": "Delete commands for this repository",
+    "deleteConfirmMessage": "Remove your init commands and run commands for \"{{name}}\"? Future work items on this repository will run no init commands and show no run-command buttons until you add them again.",
+    "runList": {
+      "empty": "No run commands. The work item card will show no run-command buttons.",
+      "name": "Name",
+      "command": "Command",
+      "namePlaceholder": "e.g. Dashboard UI",
+      "commandPlaceholder": "e.g. cd ui && npm run dev",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "deleteRunCommand": "Delete run command",
+      "delete": "Delete",
+      "addRunCommand": "+ Add run command"
+    }
   },
   "ai": {
     "unsavedChanges": "Unsaved changes",
+    "savedToast": "AI provider settings saved.",
+    "persistWarning": "AI provider settings applied in memory but NOT persisted to disk: {{reason}}. The change will be lost on next restart — fix the config volume and save again.",
+    "unknownError": "unknown error",
+    "providerConfigured": "Provider configured.",
     "providerSettings": "Provider settings",
     "providerSettingsHelp": "Admin-only. Pick the active AI provider, configure its sub-table, and choose which providers users can pick from.",
     "form": {

@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AgentConfigError, putAgentConfig } from "../api/agentConfig";
 import { useToast } from "./useToast";
 
@@ -25,6 +26,7 @@ const DEFAULT_STEP_TIMEOUT = "1800";
  * flow can gate "Finish setup".
  */
 export function useStepTimeoutForm({ initialSecs, ready }: Config) {
+  const { t } = useTranslation("config");
   const { showToast } = useToast();
   const [value, setValue] = useState(DEFAULT_STEP_TIMEOUT);
   const [seeded, setSeeded] = useState(false);
@@ -53,12 +55,12 @@ export function useStepTimeoutForm({ initialSecs, ready }: Config) {
     setSaving(true);
     try {
       await putAgentConfig({ step_timeout_secs: parsed });
-      showToast("Step timeout saved.", "success");
+      showToast(t("ai.guardrails.savedToast"), "success");
       return true;
     } catch (e: unknown) {
       const msg =
         e instanceof AgentConfigError
-          ? `${e.message} (code: ${e.code})`
+          ? t("errors.withCode", { message: e.message, code: e.code })
           : e instanceof Error
             ? e.message
             : String(e);
@@ -67,7 +69,7 @@ export function useStepTimeoutForm({ initialSecs, ready }: Config) {
     } finally {
       setSaving(false);
     }
-  }, [parsed, invalid, showToast]);
+  }, [parsed, invalid, showToast, t]);
 
   return { value, setValue, invalid, saving, save };
 }
