@@ -45,7 +45,7 @@ pub use editor::{
     parse_connection_token_from_labels, parse_label_value, release_editor_ports,
     session_publish_arg, start_editor, stop_editor,
 };
-pub use port_scanner::{listening_ports_in_editor, run_port_scanner};
+pub use port_scanner::{listening_ports_in_editor, live_socat_forwards, run_port_scanner};
 pub use run_command::{
     RunCommandInfo, is_run_command_running, run_command_container_name,
     run_run_command_port_scanner, start_run_command, stop_all_run_commands, stop_run_command,

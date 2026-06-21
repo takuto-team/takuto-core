@@ -262,6 +262,51 @@ pub async fn listening_ports_in_editor(ticket_key: &str) -> std::collections::Ha
         .unwrap_or_default()
 }
 
+/// List the live `socat` forwards running inside `container`, as
+/// `(spare_host_port, target_app_port)` pairs.
+///
+/// Parses the `socat TCP4-LISTEN:<spare>,... TCP[46]:<addr>:<target>` command
+/// lines from `pgrep -af socat`. This is the ground truth for which dynamic
+/// port forwards are actually active, independent of any in-memory bookkeeping
+/// — used to rebuild the dashboard's port chips from the running container so
+/// they survive a server restart or scanner churn.
+pub async fn live_socat_forwards(container: &str) -> Vec<(u16, u16)> {
+    let out = tokio::process::Command::new("docker")
+        .args(["exec", container, "pgrep", "-af", "socat"])
+        .output()
+        .await;
+    let Ok(out) = out else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    parse_socat_forwards(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse `(spare_host_port, target_app_port)` pairs from `pgrep -af socat`
+/// output. Each forward line looks like:
+/// `<pid> socat TCP4-LISTEN:<spare>,fork,reuseaddr,bind=0.0.0.0 TCP4:127.0.0.1:<target>`
+/// (the target may instead be `TCP6:[::1]:<target>`).
+fn parse_socat_forwards(stdout: &str) -> Vec<(u16, u16)> {
+    let mut forwards = Vec::new();
+    for line in stdout.lines() {
+        let spare = line
+            .split_whitespace()
+            .find_map(|tok| tok.strip_prefix("TCP4-LISTEN:"))
+            .and_then(|rest| rest.split(',').next())
+            .and_then(|p| p.parse::<u16>().ok());
+        // Target token: "TCP4:127.0.0.1:<port>" or "TCP6:[::1]:<port>".
+        let target = line
+            .split_whitespace()
+            .find(|tok| tok.starts_with("TCP4:") || tok.starts_with("TCP6:"))
+            .and_then(|tok| tok.rsplit(':').next())
+            .and_then(|p| p.parse::<u16>().ok());
+        if let (Some(spare), Some(target)) = (spare, target) {
+            forwards.push((spare, target));
+        }
+    }
+    forwards
+}
+
 /// Start a `socat` process inside the container to forward `spare_port` → `target_port`.
 pub(crate) async fn start_socat(
     container: &str,
@@ -313,4 +358,29 @@ pub(crate) async fn kill_socat(container: &str, spare_port: u16) {
         .args(["exec", container, "pkill", "-f", &pattern])
         .output()
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_socat_forwards;
+
+    #[test]
+    fn parses_ipv4_and_ipv6_socat_forwards() {
+        let stdout = "\
+42 socat TCP4-LISTEN:9110,fork,reuseaddr,bind=0.0.0.0 TCP4:127.0.0.1:5173
+43 socat TCP4-LISTEN:9111,fork,reuseaddr,bind=0.0.0.0 TCP6:[::1]:6006
+";
+        let mut forwards = parse_socat_forwards(stdout);
+        forwards.sort();
+        assert_eq!(forwards, vec![(9110, 5173), (9111, 6006)]);
+    }
+
+    #[test]
+    fn ignores_non_forward_lines() {
+        let stdout = "\
+99 socat -V
+100 grep socat
+";
+        assert!(parse_socat_forwards(stdout).is_empty());
+    }
 }

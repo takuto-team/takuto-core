@@ -138,7 +138,6 @@ pub async fn list_workflows(
     let no_db = auth_state.db.is_none();
     let wf_arc = engine.engine.workflows_arc();
     let workflows = wf_arc.read().await;
-    let dyn_fwd = editor.dynamic_forwards.read().await;
     let run_cmds_state = run_command.run_commands.read().await;
     // Build terminal URLs via the path-token registry so the frontend uses
     // the `/s/<token>/...` proxy path instead of a direct `localhost:<port>` URL.
@@ -171,37 +170,6 @@ pub async fn list_workflows(
             .collect()
     };
 
-    // Editor URLs for the workflows whose IDE is currently open, so the
-    // dashboard card lights its editor icon green (matching the terminal). We
-    // probe ONLY tickets that have a registered Editor route — the handful of
-    // open editors, never every workflow — so the per-editor `get_editor_info`
-    // docker call stays bounded. `get_editor_info` returns `None` when
-    // openvscode isn't actually running, so a stale registry entry correctly
-    // leaves the icon grey.
-    let editor_open_tickets: Vec<String> = {
-        let registry = editor.path_token_registry.inner_read().await;
-        let mut tickets: Vec<String> = registry
-            .iter()
-            .filter(|(_, r)| r.kind == SessionRouteKind::Editor)
-            .map(|(_, r)| r.ticket_key.clone())
-            .collect();
-        tickets.sort();
-        tickets.dedup();
-        tickets
-    };
-    let mut editor_urls: HashMap<String, String> = HashMap::new();
-    for tk in editor_open_tickets {
-        if let Some(info) = container::get_editor_info(&tk).await {
-            editor_urls.insert(
-                tk,
-                container::build_session_editor_url(
-                    &info.path_token,
-                    &info.connection_token,
-                    &info.folder,
-                ),
-            );
-        }
-    }
     // Collect the unique (user_id, workspace_name) pairs for this user's
     // workflows in the current workspace, then do ONE batched DB read for
     // the configured run-commands. (At most one pair in practice, since the
@@ -228,6 +196,117 @@ pub async fn list_workflows(
             !w.workspace_name.is_empty() && allowed_repo_names.contains(&w.workspace_name)
         })
         .collect();
+
+    // Derive the editor icon (`editor_url`) and port chips (`editor_port_mappings`)
+    // from the ACTUAL running workspace containers rather than from in-memory
+    // bookkeeping, which gets churned by repeated open/close and lost on a server
+    // restart. One `docker ps` finds the running `takuto-ws-*` containers; for each
+    // visible workflow backed by one we read the live IDE process and the live
+    // `socat` forwards, re-registering the proxy path-tokens (idempotent) so the
+    // `/s/<token>/` links resolve even after a restart.
+    let mut editor_urls: HashMap<String, String> = HashMap::new();
+    let mut live_port_mappings: HashMap<String, Vec<(u16, String)>> = HashMap::new();
+    {
+        let running_ws: std::collections::HashSet<String> = {
+            let out = tokio::process::Command::new("docker")
+                .args([
+                    "ps",
+                    "--filter",
+                    "name=takuto-ws-",
+                    "--format",
+                    "{{.Names}}",
+                ])
+                .output()
+                .await;
+            match out {
+                Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+                _ => std::collections::HashSet::new(),
+            }
+        };
+        for w in &visible_workflows {
+            let name = container::workspace::workspace_container_name(&w.ticket_key);
+            if !running_ws.contains(&name) {
+                continue;
+            }
+            let user_id = match w.user_id.as_deref() {
+                Some(uid) => uid.to_string(),
+                None => continue,
+            };
+            // Editor icon: the live IDE process carries its own path token in its
+            // command line; re-register it so the proxy routes the link.
+            if let Some(info) = container::get_editor_info(&w.ticket_key).await
+                && !info.path_token.is_empty()
+            {
+                editor
+                    .path_token_registry
+                    .register_with_token(
+                        info.path_token.clone(),
+                        SessionRoute {
+                            kind: SessionRouteKind::Editor,
+                            host_port: info.vscode_port,
+                            ticket_key: w.ticket_key.clone(),
+                            user_id: user_id.clone(),
+                        },
+                    )
+                    .await;
+                editor_urls.insert(
+                    w.ticket_key.clone(),
+                    container::build_session_editor_url(
+                        &info.path_token,
+                        &info.connection_token,
+                        &info.folder,
+                    ),
+                );
+            }
+            // Port chips: the live `socat` forwards are the ground truth. Reuse an
+            // existing DynamicPort token for the same (ticket, host_port) or mint a
+            // fresh one so the proxy URL resolves.
+            let forwards = container::live_socat_forwards(&name).await;
+            if forwards.is_empty() {
+                continue;
+            }
+            let existing: HashMap<u16, String> = {
+                let registry = editor.path_token_registry.inner_read().await;
+                registry
+                    .iter()
+                    .filter(|(_, r)| {
+                        r.kind == SessionRouteKind::DynamicPort && r.ticket_key == w.ticket_key
+                    })
+                    .map(|(token, r)| (r.host_port, token.clone()))
+                    .collect()
+            };
+            let mut chips: Vec<(u16, String)> = Vec::new();
+            for (spare, target) in forwards {
+                let token = if let Some(tok) = existing.get(&spare) {
+                    tok.clone()
+                } else {
+                    match editor
+                        .path_token_registry
+                        .register(SessionRoute {
+                            kind: SessionRouteKind::DynamicPort,
+                            host_port: spare,
+                            ticket_key: w.ticket_key.clone(),
+                            user_id: user_id.clone(),
+                        })
+                        .await
+                    {
+                        Some(tok) => tok,
+                        None => continue,
+                    }
+                };
+                chips.push((target, container::build_session_dynamic_port_url(&token)));
+            }
+            chips.sort_by_key(|(port, _)| *port);
+            if !chips.is_empty() {
+                live_port_mappings.insert(w.ticket_key.clone(), chips);
+            }
+        }
+    }
+
     let pairs: Vec<(String, String)> = {
         let mut seen: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
@@ -325,17 +404,10 @@ pub async fn list_workflows(
         .map(|w| {
             let (can_address_pr_comments, can_merge_base, can_mark_done) = workflow_action_flags(w);
             let (started_manually, counts_toward_manual_cap) = manual_cap_fields(w);
-            // Use the server-side dynamic-forwards cache so that port buttons
-            // appear immediately on page load (no per-workflow Docker call).
-            let port_mappings: Vec<(u16, String)> = dyn_fwd
-                .get(&w.ticket_key)
-                .map(|forwards| {
-                    forwards
-                        .iter()
-                        .map(|f| (f.container_port, f.proxy_url.clone()))
-                        .collect()
-                })
-                .unwrap_or_default();
+            // Port buttons derived above from the live `socat` forwards in the
+            // running workspace container (survives restart / scanner churn).
+            let port_mappings: Vec<(u16, String)> =
+                live_port_mappings.get(&w.ticket_key).cloned().unwrap_or_default();
             let configured_run_cmds: &[takuto_core::db::user_worktree_commands::RunCommand] =
                 match w.user_id.as_deref() {
                     Some(uid) => run_commands_by_pair
