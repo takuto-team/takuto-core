@@ -51,7 +51,7 @@ export function IssueCardProgress({
   onReport,
 }: Props) {
   const isTerminalish =
-    status.label === "Error" || status.label === "Completed" || status.label === "Stopped";
+    status.status === "error" || status.status === "completed" || status.status === "stopped";
 
   // A parked item (added to the dashboard, not yet started) reports its
   // readiness via `prepState`; render that instead of a fake step/progress bar.
@@ -97,11 +97,11 @@ export function IssueCardProgress({
             </button>
           )}
           {isTerminalish && <RestartIconButton onClick={onRetry} />}
-          {(status.label === "Error" || status.label === "Stopped") && canResumeFromError && (
+          {(status.status === "error" || status.status === "stopped") && canResumeFromError && (
             <ResumeIconButton onClick={onResumeFromError} title="Retry from last failure" />
           )}
-          {isActive && status.label === "Running" && <PauseIconButton onClick={onPause} />}
-          {isActive && status.label === "Paused" && <ResumeIconButton onClick={onResume} />}
+          {isActive && status.status === "running" && <PauseIconButton onClick={onPause} />}
+          {isActive && status.status === "paused" && <ResumeIconButton onClick={onResume} />}
           {isActive && <StopIconButton onClick={onStop} />}
         </div>
       </div>
@@ -113,7 +113,7 @@ export function IssueCardProgress({
           filled={filled}
           color={status.color}
           activeIndex={
-            isActive && (status.label === "Running" || status.label === "Paused") && filled < total
+            isActive && (status.status === "running" || status.status === "paused") && filled < total
               ? filled
               : null
           }

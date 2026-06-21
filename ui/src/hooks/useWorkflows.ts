@@ -72,12 +72,12 @@ export function useWorkflows(activeRepoName?: string | null) {
     const c: WorkflowCounts = { ...EMPTY_COUNTS };
     for (const w of Object.values(workflows)) {
       if (activeRepoName && w.workspace_name !== activeRepoName) continue;
-      const label = getStatusInfo(w.state, w.can_start).label;
-      if (label === "Completed") c.completed += 1;
-      else if (label === "Error" || label === "Stopped") c.errors += 1;
-      else if (label === "Paused") c.paused += 1;
-      else if (label === "Pending") c.pending += 1;
-      else if (label === "Running") c.running += 1;
+      const status = getStatusInfo(w.state, w.can_start).status;
+      if (status === "completed") c.completed += 1;
+      else if (status === "error" || status === "stopped") c.errors += 1;
+      else if (status === "paused") c.paused += 1;
+      else if (status === "pending") c.pending += 1;
+      else if (status === "running") c.running += 1;
     }
     return c;
   }, [workflows, activeRepoName]);

@@ -54,31 +54,31 @@ export function buildIssueCardView(
   const total = w.progress_steps_total > 0 ? Math.floor(w.progress_steps_total) : 0;
   const filled = total > 0 ? Math.min(total, Math.round((pct * total) / 100)) : 0;
   const prUrl = w.pr_url?.trim() || "";
-  const isTerminal = ["Completed", "Error", "Stopped"].includes(status.label);
-  const isPending = status.label === "Pending" && w.can_start;
-  const isActive = status.label === "Running" || status.label === "Paused";
+  const isTerminal = ["completed", "error", "stopped"].includes(status.status);
+  const isPending = status.status === "pending" && w.can_start;
+  const isActive = status.status === "running" || status.status === "paused";
   const prepState = w.prep_state ?? null;
 
   const duration =
     isTerminal &&
-    status.label !== "Error" &&
-    status.label !== "Completed" &&
-    status.label !== "Stopped" &&
+    status.status !== "error" &&
+    status.status !== "completed" &&
+    status.status !== "stopped" &&
     w.started_at &&
     w.updated_at
       ? formatDuration(new Date(w.started_at), new Date(w.updated_at))
       : null;
 
   let stepLabel = "Current step";
-  if (status.label === "Completed") stepLabel = "Completed";
-  else if (status.label === "Error") stepLabel = "Failed at step";
-  else if (status.label === "Paused") stepLabel = "Paused at step";
-  else if (status.label === "Stopped") stepLabel = "Stopped at step";
+  if (status.status === "completed") stepLabel = "Completed";
+  else if (status.status === "error") stepLabel = "Failed at step";
+  else if (status.status === "paused") stepLabel = "Paused at step";
+  else if (status.status === "stopped") stepLabel = "Stopped at step";
   else if (isPending) stepLabel = "Added to dashboard";
 
   let stateDisplay = w.state;
-  if (status.label === "Completed") stateDisplay = "All steps passed";
-  if (status.label === "Error" && w.state.startsWith("Error:")) {
+  if (status.status === "completed") stateDisplay = "All steps passed";
+  if (status.status === "error" && w.state.startsWith("Error:")) {
     stateDisplay = w.state.replace("Error: ", "");
   }
   if (total > 0) stateDisplay += ` (${filled}/${total})`;

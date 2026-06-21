@@ -1,1 +1,8 @@
-{}
+{
+  "completed": "Completed",
+  "error": "Error",
+  "paused": "Paused",
+  "stopped": "Stopped",
+  "pending": "Pending",
+  "running": "Running"
+}

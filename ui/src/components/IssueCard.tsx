@@ -45,7 +45,7 @@ export function IssueCard({
     <>
       <div
         className={`work-item-card border ${view.borderClass} transition-colors ${
-          view.status.label === "Stopped" ? "opacity-60 hover:opacity-80" : ""
+          view.status.status === "stopped" ? "opacity-60 hover:opacity-80" : ""
         } relative`}
       >
         {ctl.loading && (

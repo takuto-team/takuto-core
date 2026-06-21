@@ -15,17 +15,17 @@ export type StatusFilterKey = "pending" | "running" | "completed" | "errors" | "
  * `state` (set by streaming events) still classifies as running.
  */
 export function workflowMatchesStatus(w: WorkflowSummary, key: StatusFilterKey): boolean {
-  const label = getStatusInfo(w.state, w.can_start).label;
+  const status = getStatusInfo(w.state, w.can_start).status;
   switch (key) {
     case "pending":
-      return label === "Pending";
+      return status === "pending";
     case "running":
-      return label === "Running";
+      return status === "running";
     case "completed":
-      return label === "Completed";
+      return status === "completed";
     case "errors":
-      return label === "Error" || label === "Stopped";
+      return status === "error" || status === "stopped";
     case "paused":
-      return label === "Paused";
+      return status === "paused";
   }
 }
