@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ChipInputProps {
   id: string;
@@ -20,6 +21,7 @@ interface ChipInputProps {
 }
 
 export function ChipInput({ id, label, values, onChange, placeholder, helpText }: ChipInputProps) {
+  const { t } = useTranslation("config");
   const [entry, setEntry] = useState("");
 
   const commit = useCallback(() => {
@@ -66,7 +68,7 @@ export function ChipInput({ id, label, values, onChange, placeholder, helpText }
             {value}
             <button
               type="button"
-              aria-label={`Remove ${value}`}
+              aria-label={t("chip.remove", { value })}
               onClick={() => remove(value)}
               className="text-gray-500 hover:text-gray-200 cursor-pointer"
             >

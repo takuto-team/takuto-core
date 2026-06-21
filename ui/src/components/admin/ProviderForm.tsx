@@ -7,6 +7,7 @@
  * save / confirm-switch flow (CODING_STANDARDS §3 one component per file).
  */
 
+import { Trans, useTranslation } from "react-i18next";
 import type { AgentProviderId } from "../../api/types";
 
 /** Providers wired in the v1 dashboard. `gemini` is a v2 placeholder. */
@@ -73,6 +74,7 @@ export function ProviderForm({
   availableProviders,
   onToggleAvailable,
 }: ProviderFormProps) {
+  const { t } = useTranslation("config");
   const cursorBaseUrlDisabled = selectedProvider === "cursor";
 
   // OpenCode self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md
@@ -95,7 +97,7 @@ export function ProviderForm({
       {/* Provider dropdown */}
       <section className="flex flex-col gap-2">
         <label htmlFor="provider-select" className="text-xs text-gray-400">
-          Provider
+          {t("ai.form.provider")}
         </label>
         <select
           id="provider-select"
@@ -114,7 +116,7 @@ export function ProviderForm({
       {/* Model */}
       <section className="flex flex-col gap-2">
         <label htmlFor="model-input" className="text-xs text-gray-400">
-          Model
+          {t("ai.form.model")}
           {selectedProvider === "opencode" && (
             <span className="text-red-400 ml-1">*</span>
           )}
@@ -127,15 +129,17 @@ export function ProviderForm({
           placeholder={
             selectedProvider === "opencode"
               ? "lmstudio/qwen3-coder"
-              : "Leave empty for the vendor default"
+              : t("ai.form.modelDefaultPlaceholder")
           }
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         {selectedProvider === "opencode" && (
           <p className="text-xs text-gray-500">
-            Required. The model id served by your self-hosted endpoint (e.g.{" "}
-            <code className="text-gray-400">lmstudio/qwen3-coder</code> or{" "}
-            <code className="text-gray-400">ollama/llama3</code>).
+            <Trans
+              i18nKey="ai.form.opencodeModelHelp"
+              ns="config"
+              components={{ code: <code className="text-gray-400" /> }}
+            />
           </p>
         )}
       </section>
@@ -144,7 +148,7 @@ export function ProviderForm({
       {selectedProvider === "cursor" && (
         <section className="flex flex-col gap-2">
           <label htmlFor="cli-input" className="text-xs text-gray-400">
-            CLI binary
+            {t("ai.form.cliBinary")}
           </label>
           <input
             id="cli-input"
@@ -157,17 +161,16 @@ export function ProviderForm({
 
           <div className="flex items-start justify-between gap-4 mt-2">
             <div className="min-w-0">
-              <span className="text-xs text-gray-400">Privacy Mode</span>
+              <span className="text-xs text-gray-400">{t("ai.form.privacyMode")}</span>
               <p className="text-xs text-gray-500 mt-1">
-                Keep your code private — never stored or indexed on Cursor's servers (recommended).
-                Turning this off enables server-side codebase indexing (sends code to Cursor).
+                {t("ai.form.privacyModeHelp")}
               </p>
             </div>
             <button
               type="button"
               role="switch"
               aria-checked={draft.privacy_mode}
-              aria-label="Cursor Privacy Mode"
+              aria-label={t("ai.form.privacyModeAria")}
               onClick={() => update({ privacy_mode: !draft.privacy_mode })}
               className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/50 cursor-pointer ${
                 draft.privacy_mode ? "bg-blue-600" : "bg-gray-700"
@@ -187,14 +190,14 @@ export function ProviderForm({
       {selectedProvider === "codex" && (
         <section className="flex flex-col gap-2">
           <label htmlFor="provider-name-input" className="text-xs text-gray-400">
-            Provider name (entry in ~/.codex/config.toml)
+            {t("ai.form.providerName")}
           </label>
           <input
             id="provider-name-input"
             type="text"
             value={draft.provider_name}
             onChange={(e) => update({ provider_name: e.target.value })}
-            placeholder="e.g. openai"
+            placeholder={t("ai.form.providerNamePlaceholder")}
             className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
           />
         </section>
@@ -203,7 +206,7 @@ export function ProviderForm({
       {/* Base URL */}
       <section className="flex flex-col gap-2">
         <label htmlFor="base-url-input" className="text-xs text-gray-400">
-          Base URL
+          {t("ai.form.baseUrl")}
           {selectedProvider === "opencode" && (
             <span className="text-red-400 ml-1">*</span>
           )}
@@ -216,12 +219,12 @@ export function ProviderForm({
           placeholder={
             selectedProvider === "opencode"
               ? "http://lm-studio:1234/v1"
-              : "Leave empty to use the vendor public API"
+              : t("ai.form.baseUrlDefaultPlaceholder")
           }
           disabled={cursorBaseUrlDisabled}
           title={
             cursorBaseUrlDisabled
-              ? "Cursor CLI does not support custom upstream endpoints"
+              ? t("ai.form.cursorNoBaseUrl")
               : undefined
           }
           className={`bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono ${
@@ -232,18 +235,16 @@ export function ProviderForm({
         />
         {cursorBaseUrlDisabled && (
           <p className="text-xs text-gray-500">
-            Cursor CLI does not support custom upstream endpoints.
+            {t("ai.form.cursorNoBaseUrl")}
           </p>
         )}
         {selectedProvider === "opencode" && (
           <p className="text-xs text-gray-500">
-            Required. OpenCode is the self-hosted adapter — point this at
-            your OpenAI-compatible model server. Examples:{" "}
-            <code className="text-gray-400">http://lm-studio:1234/v1</code>{" "}
-            (LM Studio),{" "}
-            <code className="text-gray-400">http://ollama:11434/v1</code>{" "}
-            (Ollama). To use Anthropic / OpenAI directly, pick the Claude
-            or Codex provider instead.
+            <Trans
+              i18nKey="ai.form.opencodeBaseUrlHelp"
+              ns="config"
+              components={{ code: <code className="text-gray-400" /> }}
+            />
           </p>
         )}
       </section>
@@ -252,11 +253,11 @@ export function ProviderForm({
           metadata, so OpenCode can't auto-discover the window). */}
       {selectedProvider === "opencode" && (
         <section className="flex flex-col gap-2">
-          <p className="text-xs text-gray-400">Token limits (optional)</p>
+          <p className="text-xs text-gray-400">{t("ai.form.tokenLimits")}</p>
           <div className="flex gap-4">
             <div className="flex flex-col gap-1 flex-1">
               <label htmlFor="context-limit-input" className="text-xs text-gray-500">
-                Context window
+                {t("ai.form.contextWindow")}
               </label>
               <input
                 id="context-limit-input"
@@ -270,7 +271,7 @@ export function ProviderForm({
             </div>
             <div className="flex flex-col gap-1 flex-1">
               <label htmlFor="output-limit-input" className="text-xs text-gray-500">
-                Max output
+                {t("ai.form.maxOutput")}
               </label>
               <input
                 id="output-limit-input"
@@ -284,10 +285,7 @@ export function ProviderForm({
             </div>
           </div>
           <p className="text-xs text-gray-500">
-            Tokens. Tells OpenCode the window of your self-hosted model so it
-            tracks remaining context (it can't look this up for a local
-            endpoint). Leave blank to let OpenCode choose. Match your server's
-            loaded context length (e.g. LM Studio's per-model setting).
+            {t("ai.form.tokenLimitsHelp")}
           </p>
         </section>
       )}
@@ -295,7 +293,7 @@ export function ProviderForm({
       {/* Extra args */}
       <section className="flex flex-col gap-2">
         <label htmlFor="extra-args-input" className="text-xs text-gray-400">
-          Extra args (one per line)
+          {t("ai.form.extraArgs")}
         </label>
         <textarea
           id="extra-args-input"
@@ -306,10 +304,11 @@ export function ProviderForm({
           className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
         />
         <p className="text-xs text-gray-500">
-          Takuto-owned flags (e.g.{" "}
-          <code className="text-gray-400">--dangerously-skip-permissions</code>,{" "}
-          <code className="text-gray-400">--resume</code>) are rejected
-          server-side.
+          <Trans
+            i18nKey="ai.form.extraArgsHelp"
+            ns="config"
+            components={{ code: <code className="text-gray-400" /> }}
+          />
         </p>
       </section>
 
@@ -323,18 +322,20 @@ export function ProviderForm({
           className="mt-0.5 accent-blue-500"
         />
         <label htmlFor="shared-default-input" className="text-xs text-gray-300">
-          Allow shared default token
+          {t("ai.form.allowSharedDefault")}
           <p className="text-gray-500 mt-0.5">
-            When on, users without their own credential fall back to the
-            deployment-default token configured in{" "}
-            <code className="text-gray-400">takuto.env</code>. Default off.
+            <Trans
+              i18nKey="ai.form.allowSharedDefaultHelp"
+              ns="config"
+              components={{ code: <code className="text-gray-400" /> }}
+            />
           </p>
         </label>
       </section>
 
       {/* Available providers whitelist */}
       <section className="flex flex-col gap-2">
-        <p className="text-xs text-gray-400">Available providers for users</p>
+        <p className="text-xs text-gray-400">{t("ai.form.availableProviders")}</p>
         <div className="flex flex-wrap gap-3">
           {V1_PROVIDERS.map((p) => {
             const inputId = `available-${p}`;
@@ -360,7 +361,7 @@ export function ProviderForm({
 
       {(opencodeMissingBaseUrl || opencodeMissingModel) && (
         <p className="text-xs text-red-400 text-right">
-          OpenCode requires both a Base URL and a Model to save.
+          {t("ai.form.opencodeRequires")}
         </p>
       )}
     </div>

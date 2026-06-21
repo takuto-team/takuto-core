@@ -17,6 +17,7 @@ import {
   useImperativeHandle,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { apiJson } from "../../api/http";
 import { putAgentConfig } from "../../api/agentConfig";
 import type { AgentConfig, ConfigResponse } from "../../api/types";
@@ -26,6 +27,7 @@ export const ShareConversationSwitch = forwardRef<
   ConfigSectionHandle,
   ConfigSectionProps
 >(function ShareConversationSwitch({ onDirtyChange }: ConfigSectionProps, ref) {
+  const { t } = useTranslation("config");
   // `loaded` is the persisted value; `enabled` is the draft. Dirty when they differ.
   const [loaded, setLoaded] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -79,23 +81,19 @@ export const ShareConversationSwitch = forwardRef<
       <div className="flex items-start justify-between gap-6">
         <div className="min-w-0">
           <h3 className="text-base font-semibold text-gray-200">
-            Share one conversation across a flow's steps
+            {t("ai.share.title")}
           </h3>
           <p className="text-sm text-gray-500 mt-1 max-w-2xl">
-            When on, each step resumes the previous step's session, so the agent
-            carries full context forward — it remembers what it implemented when it
-            reviews. When off, every step runs in a fresh session with no memory of
-            earlier steps (the default; safer for smaller local models that get
-            confused by long transcripts). Applies to all providers.
+            {t("ai.share.help")}
           </p>
-          {error && <p className="text-sm text-red-400 mt-2">Could not save: {error}</p>}
+          {error && <p className="text-sm text-red-400 mt-2">{t("errors.saveFailed", { error })}</p>}
         </div>
 
         <button
           type="button"
           role="switch"
           aria-checked={enabled}
-          aria-label="Share one conversation across a flow's steps"
+          aria-label={t("ai.share.title")}
           disabled={loading}
           onClick={() => setEnabled((v) => !v)}
           className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
