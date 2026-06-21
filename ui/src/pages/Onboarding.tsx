@@ -32,6 +32,7 @@
 
 import { useRef } from "react";
 import { Link } from "react-router-dom";
+import { Trans, useTranslation } from "react-i18next";
 import { useOnboardingFlow } from "../hooks/useOnboardingFlow";
 import type { AiCredentialPanelHandle } from "../components/credentials/AiCredentialPanel";
 import type { GitHubCredentialPanelHandle } from "../components/credentials/GitHubCredentialPanel";
@@ -58,6 +59,7 @@ interface Props {
 }
 
 export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
+  const { t } = useTranslation("onboarding");
   const {
     loading,
     saving,
@@ -145,15 +147,15 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
               to="/"
               className="flex items-center gap-2 text-gray-400 hover:text-gray-200 transition-colors text-sm"
             >
-              Skip setup &rarr;
+              {t("header.skip")}
             </Link>
-            <span className="text-lg font-bold text-white">Set up Takuto</span>
+            <span className="text-lg font-bold text-white">{t("header.title")}</span>
             {authEnabled && (
               <button
                 onClick={onLogout}
                 className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer"
               >
-                Log out
+                {t("common:nav.logout")}
               </button>
             )}
           </div>
@@ -166,13 +168,13 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-4">
           <div>
             <h2 className="text-lg font-semibold text-white">
-              {ONBOARDING_STEPS[step - 1].title}
+              {t(ONBOARDING_STEPS[step - 1].titleKey)}
             </h2>
-            <p className="text-sm text-gray-400 mt-1">{ONBOARDING_STEPS[step - 1].body}</p>
+            <p className="text-sm text-gray-400 mt-1">{t(ONBOARDING_STEPS[step - 1].bodyKey)}</p>
           </div>
 
           {loading ? (
-            <p className="text-sm text-gray-500">Loading current settings…</p>
+            <p className="text-sm text-gray-500">{t("loading")}</p>
           ) : (
             <>
               {step === 1 && (
@@ -191,11 +193,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                   />
                   {showPolling && (
                     <div className="border-t border-gray-800 pt-6">
-                      <p className="text-xs text-gray-500 mb-4">
-                        These settings control how Takuto picks up new work items
-                        automatically. They're saved when you continue (the Save
-                        button below applies them immediately).
-                      </p>
+                      <p className="text-xs text-gray-500 mb-4">{t("polling.note")}</p>
                       <ItemPollingSettingsSection ref={pollingRef} />
                     </div>
                   )}
@@ -232,10 +230,10 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
               {step === 4 && (
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-3">
-                    <h3 className="text-sm font-semibold text-gray-300 mb-1">Step timeout</h3>
+                    <h3 className="text-sm font-semibold text-gray-300 mb-1">{t("stepTimeout.heading")}</h3>
                     <div className="max-w-xs">
                       <label htmlFor="onb-step-timeout" className="block text-xs text-gray-400 mb-1">
-                        Timeout (seconds)
+                        {t("stepTimeout.label")}
                       </label>
                       <input
                         id="onb-step-timeout"
@@ -249,14 +247,9 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                         }`}
                       />
                       {timeout.invalid ? (
-                        <p className="text-xs text-red-400 mt-1">
-                          Step timeout must be a positive number.
-                        </p>
+                        <p className="text-xs text-red-400 mt-1">{t("stepTimeout.invalid")}</p>
                       ) : (
-                        <p className="text-xs text-gray-500 mt-1">
-                          Maximum seconds an agent step may run before it is
-                          cancelled. Default 1800 (30 min).
-                        </p>
+                        <p className="text-xs text-gray-500 mt-1">{t("stepTimeout.hint")}</p>
                       )}
                     </div>
                   </div>
@@ -270,9 +263,11 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
 
           {step === 4 && (
             <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-3 text-xs text-gray-400">
-              <strong>Database and dashboard port are not configured in this wizard.</strong>{" "}
-              Takuto writes a <code className="font-mono">config.toml</code> with the
-              defaults (SQLite, port 8080). Edit that file directly to change them.
+              <Trans
+                i18nKey="dbNote"
+                ns="onboarding"
+                components={{ strong: <strong />, code: <code className="font-mono" /> }}
+              />
             </div>
           )}
 
@@ -283,7 +278,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
               disabled={step === 1}
               className="text-xs text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
             >
-              &larr; Back
+              {t("nav.back")}
             </button>
             <div className="flex gap-3">
               <button
@@ -291,7 +286,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                 onClick={goSkip}
                 className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
               >
-                Skip for now
+                {t("nav.skip")}
               </button>
               <button
                 type="button"
@@ -316,11 +311,11 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
               >
                 {step === 4
                   ? completing
-                    ? "Finishing…"
-                    : "Finish setup"
+                    ? t("nav.finishing")
+                    : t("nav.finish")
                   : saving || ticketing.saving || git.saving
-                    ? "Saving…"
-                    : "Continue"}
+                    ? t("nav.saving")
+                    : t("nav.continue")}
               </button>
             </div>
           </div>

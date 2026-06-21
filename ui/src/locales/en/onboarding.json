@@ -1,1 +1,149 @@
-{}
+{
+  "header": {
+    "skip": "Skip setup →",
+    "title": "Set up Takuto"
+  },
+  "loading": "Loading current settings…",
+  "stepper": {
+    "ariaLabel": "Setup steps"
+  },
+  "step": {
+    "ticketing": {
+      "title": "Ticketing",
+      "body": "Welcome — this is Takuto's first-time setup. Pick where it should read tasks from. You can change any of these settings from the Configuration page later."
+    },
+    "provider": {
+      "title": "AI provider",
+      "body": "Choose the AI that drives your work items, then add your own provider key."
+    },
+    "git": {
+      "title": "Git & GitHub",
+      "body": "Set the git branch and remote Takuto works from, then connect a GitHub App or personal token."
+    },
+    "workflows": {
+      "title": "Workflows",
+      "body": "Review the flows you can run on each work item. Tweak or re-seed them any time."
+    }
+  },
+  "polling": {
+    "note": "These settings control how Takuto picks up new work items automatically. They're saved when you continue (the Save button below applies them immediately)."
+  },
+  "stepTimeout": {
+    "heading": "Step timeout",
+    "label": "Timeout (seconds)",
+    "invalid": "Step timeout must be a positive number.",
+    "hint": "Maximum seconds an agent step may run before it is cancelled. Default 1800 (30 min)."
+  },
+  "dbNote": "<strong>Database and dashboard port are not configured in this wizard.</strong> Takuto writes a <code>config.toml</code> with the defaults (SQLite, port 8080). Edit that file directly to change them.",
+  "nav": {
+    "back": "← Back",
+    "skip": "Skip for now",
+    "continue": "Continue",
+    "saving": "Saving…",
+    "finish": "Finish setup",
+    "finishing": "Finishing…"
+  },
+  "ticketing": {
+    "label": "Ticketing system",
+    "adminOnly": "Only an admin can change the deployment's ticketing system. You can still manage your own Jira credential below.",
+    "options": {
+      "none": {
+        "label": "None",
+        "hint": "No ticketing integration. Start work items manually from the dashboard."
+      },
+      "github": {
+        "label": "GitHub",
+        "hint": "Poll open GitHub Issues from the repo's remote. No token here — connect a PAT or GitHub App in the GitHub step."
+      },
+      "jira": {
+        "label": "Jira",
+        "hint": "Poll Jira for To Do tickets. Add your Atlassian site, email, and API token below."
+      }
+    },
+    "jira": {
+      "connectedAs": "✓ Connected as <strong>{{email}}</strong> on <site>{{site}}</site>. Leave the form blank to keep it, or enter a new token to replace it.",
+      "encryptedNote": "Your Jira credentials are stored encrypted and used only for your own work items.",
+      "site": "Atlassian site",
+      "sitePlaceholder": "https://your-org.atlassian.net",
+      "email": "Account email",
+      "emailPlaceholder": "you@your-org.com",
+      "token": "API token",
+      "tokenPlaceholder": "Paste your Atlassian API token",
+      "createTokenPrefix": "Create one at",
+      "tokenLinkText": "id.atlassian.com → API tokens →",
+      "tokenLinkAria": "Open the Atlassian API token page (opens in a new tab)"
+    }
+  },
+  "provider": {
+    "label": "Provider",
+    "options": {
+      "claude": "Claude",
+      "cursor": "Cursor",
+      "codex": "Codex",
+      "opencode": "OpenCode (self-hosted)",
+      "gemini": "Gemini (v2)",
+      "none": "None"
+    },
+    "opencodeHint": "OpenCode wires Takuto to your self-hosted OpenAI-compatible endpoint (LM Studio, Ollama, vLLM, private gateways). To use Anthropic / OpenAI directly, pick the Claude or Codex provider instead.",
+    "baseUrl": "Base URL",
+    "baseUrlPlaceholderOpencode": "http://lm-studio:1234/v1",
+    "baseUrlPlaceholderDefault": "Leave empty to use the vendor public API",
+    "cursorNoUpstream": "Cursor CLI does not support custom upstream endpoints",
+    "cursorNoUpstreamHint": "Cursor CLI does not support custom upstream endpoints.",
+    "baseUrlOpencodeHint": "Required for OpenCode. Point this at your self-hosted OpenAI-compatible server.",
+    "model": "Model",
+    "modelPlaceholderOpencode": "lmstudio/qwen3-coder",
+    "modelPlaceholderDefault": "Leave empty for the vendor default",
+    "modelOpencodeHint": "Required for OpenCode. The model id served by your endpoint (e.g. <code>lmstudio/qwen3-coder</code>).",
+    "extraArgs": "Extra args (one per line)"
+  },
+  "git": {
+    "heading": "Git settings",
+    "intro": "The branch Takuto checks out for each work item, and the git remote it pushes to.",
+    "baseBranch": "Base branch",
+    "baseBranchPlaceholder": "main",
+    "baseBranchRequired": "Base branch is required.",
+    "baseBranchHint": "The branch work-item branches are cut from. Usually \"main\" or \"master\".",
+    "remote": "Remote",
+    "remotePlaceholder": "origin",
+    "remoteRequired": "Remote is required.",
+    "remoteHint": "The git remote Takuto fetches from and pushes branches to.",
+    "adminOnly": "Only an admin can change the deployment's git settings.",
+    "app": {
+      "labelPrefix": "GitHub App:",
+      "configured": "configured",
+      "notConfigured": "not configured",
+      "explainer": "A shared GitHub App lets everyone on this deployment talk to GitHub without a personal token. Setting it up is optional — each teammate can instead bring their own personal access token below.",
+      "setupLink": "Set up a GitHub App →",
+      "setupLinkAria": "Read the Takuto GitHub App setup guide (opens in a new tab)"
+    },
+    "pat": {
+      "heading": "Your personal access token (optional)",
+      "intro": "Add a PAT so commits, PRs, and review comments on your work items are attributed to you. Skip it to run as the shared GitHub App."
+    }
+  },
+  "aiKey": {
+    "loading": "Loading your credentials…",
+    "connected": "{{label}} connected.",
+    "sessionUploaded": "{{label}} session uploaded.",
+    "saveError": "Could not save your credential."
+  },
+  "banner": {
+    "notReady": "Takuto is not ready — setup required",
+    "notFinished": "Setup is not finished",
+    "legacyRunHint": "Run <code>docker compose run --rm -it takuto setup</code> to complete setup, then restart.",
+    "askAdminProvider": "Ask your admin to change the provider",
+    "askAdminGeneric": "Ask your admin to fix this",
+    "cta": {
+      "setClaude": "Set Claude credential",
+      "setCursor": "Set Cursor credential",
+      "setCodex": "Set Codex credential",
+      "setOpenCode": "Set OpenCode credential",
+      "setGithubPat": "Set GitHub PAT",
+      "changeProvider": "Change provider",
+      "readDocs": "Read docs"
+    },
+    "ctaAriaInternal": "{{label}} — fix: {{message}}",
+    "ctaAriaExternal": "{{label}} (opens documentation in a new tab) — fix: {{message}}"
+  }
+}

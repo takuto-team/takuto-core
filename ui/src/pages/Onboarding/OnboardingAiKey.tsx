@@ -14,6 +14,7 @@
  */
 
 import { forwardRef, useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   fetchUserCredentials,
   setProviderCredential,
@@ -34,6 +35,7 @@ interface Props {
 
 export const OnboardingAiKey = forwardRef<AiCredentialPanelHandle, Props>(
   function OnboardingAiKey({ provider }: Props, ref) {
+  const { t } = useTranslation("onboarding");
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,8 +65,11 @@ export const OnboardingAiKey = forwardRef<AiCredentialPanelHandle, Props>(
         await setProviderCredential(provider, body);
         await refresh();
         const label = PROVIDER_LABEL[provider] ?? provider;
-        const what = body.kind === "cli_state" ? "session uploaded" : "connected";
-        showToast(`${label} ${what}.`, "success");
+        const msg =
+          body.kind === "cli_state"
+            ? t("aiKey.sessionUploaded", { label })
+            : t("aiKey.connected", { label });
+        showToast(msg, "success");
         return true;
       } catch (e: unknown) {
         const msg =
@@ -72,16 +77,16 @@ export const OnboardingAiKey = forwardRef<AiCredentialPanelHandle, Props>(
             ? `${e.message} (code: ${e.code})`
             : e instanceof Error
               ? e.message
-              : "Could not save your credential.";
+              : t("aiKey.saveError");
         showToast(msg, "error");
         return false;
       }
     },
-    [provider, refresh, showToast],
+    [provider, refresh, showToast, t],
   );
 
   if (loading) {
-    return <p className="text-sm text-gray-500">Loading your credentials…</p>;
+    return <p className="text-sm text-gray-500">{t("aiKey.loading")}</p>;
   }
 
   return (

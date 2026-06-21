@@ -1,34 +1,20 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useTranslation } from "react-i18next";
 import type { StepIndex } from "../../hooks/useOnboardingFlow";
 
-export const ONBOARDING_STEPS: { index: StepIndex; title: string; body: string }[] = [
-  {
-    index: 1,
-    title: "Ticketing",
-    body: "Welcome — this is Takuto's first-time setup. Pick where it should read tasks from. You can change any of these settings from the Configuration page later.",
-  },
-  {
-    index: 2,
-    title: "AI provider",
-    body: "Choose the AI that drives your work items, then add your own provider key.",
-  },
-  {
-    index: 3,
-    title: "Git & GitHub",
-    body: "Set the git branch and remote Takuto works from, then connect a GitHub App or personal token.",
-  },
-  {
-    index: 4,
-    title: "Workflows",
-    body: "Review the flows you can run on each work item. Tweak or re-seed them any time.",
-  },
+export const ONBOARDING_STEPS: { index: StepIndex; titleKey: string; bodyKey: string }[] = [
+  { index: 1, titleKey: "step.ticketing.title", bodyKey: "step.ticketing.body" },
+  { index: 2, titleKey: "step.provider.title", bodyKey: "step.provider.body" },
+  { index: 3, titleKey: "step.git.title", bodyKey: "step.git.body" },
+  { index: 4, titleKey: "step.workflows.title", bodyKey: "step.workflows.body" },
 ];
 
 export function Stepper({ current }: { current: StepIndex }) {
+  const { t } = useTranslation("onboarding");
   return (
-    <nav aria-label="Setup steps">
+    <nav aria-label={t("stepper.ariaLabel")}>
       <ol className="flex items-center justify-between gap-2 text-xs text-gray-400">
         {ONBOARDING_STEPS.map((s) => {
           const active = s.index === current;
@@ -45,7 +31,7 @@ export function Stepper({ current }: { current: StepIndex }) {
                     : "bg-gray-900 text-gray-500 border border-gray-800"
               }`}
             >
-              {s.index}. {s.title}
+              {s.index}. {t(s.titleKey)}
             </li>
           );
         })}
