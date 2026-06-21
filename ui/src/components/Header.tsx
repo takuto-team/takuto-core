@@ -3,22 +3,25 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import type { RepositoryRow } from "../api/client";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 
 /**
  * Every configuration tab, surfaced directly in the header menu (no
  * intermediate "Configuration" entry). `slug` matches the `?tab=` deep links
- * Config.tsx resolves; `adminOnly` mirrors its admin-gated tabs.
+ * Config.tsx resolves; `adminOnly` mirrors its admin-gated tabs. `labelKey` is
+ * a `common:tabs.*` i18n key resolved at render.
  */
-const CONFIG_MENU_TABS: { label: string; slug: string; adminOnly?: boolean }[] = [
-  { label: "Security", slug: "security" },
-  { label: "AI Settings", slug: "ai" },
-  { label: "GitHub", slug: "github" },
-  { label: "Ticketing", slug: "ticketing" },
-  { label: "Users", slug: "users", adminOnly: true },
-  { label: "My Repositories", slug: "repositories" },
-  { label: "Repository Settings", slug: "worktree" },
-  { label: "Workflows", slug: "flows" },
+const CONFIG_MENU_TABS: { labelKey: string; slug: string; adminOnly?: boolean }[] = [
+  { labelKey: "tabs.security", slug: "security" },
+  { labelKey: "tabs.ai", slug: "ai" },
+  { labelKey: "tabs.github", slug: "github" },
+  { labelKey: "tabs.ticketing", slug: "ticketing" },
+  { labelKey: "tabs.users", slug: "users", adminOnly: true },
+  { labelKey: "tabs.repositories", slug: "repositories" },
+  { labelKey: "tabs.repositorySettings", slug: "worktree" },
+  { labelKey: "tabs.workflows", slug: "flows" },
 ];
 
 interface Props {
@@ -70,6 +73,7 @@ export function Header({
   activeRepoName,
   onSelectRepo,
 }: Props) {
+  const { t } = useTranslation("common");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -101,7 +105,7 @@ export function Header({
   const activeRepo = activeRepoName
     ? (repos ?? []).find((r) => r.name === activeRepoName) ?? null
     : null;
-  const pickerLabel = activeRepo ? activeRepo.name : "All repositories";
+  const pickerLabel = activeRepo ? activeRepo.name : t("repo.allRepositories");
 
   return (
     <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
@@ -116,7 +120,7 @@ export function Header({
                   type="button"
                   onClick={() => setPickerOpen((v) => !v)}
                   className="inline-flex items-center gap-1.5 text-xs text-gray-300 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800 cursor-pointer"
-                  title="Switch active repository (filters the dashboard)"
+                  title={t("repo.switchTitle")}
                 >
                   <span className="font-medium">{pickerLabel}</span>
                   <svg className="w-3 h-3 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -134,7 +138,7 @@ export function Header({
                           : "text-gray-300 hover:bg-gray-800 hover:text-white"
                       }`}
                     >
-                      All repositories
+                      {t("repo.allRepositories")}
                     </button>
                     <div className="border-t border-gray-800 my-1" />
                     {(repos ?? []).map((r) => (
@@ -158,7 +162,7 @@ export function Header({
                       onClick={() => setPickerOpen(false)}
                       className="block px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
                     >
-                      Manage repositories…
+                      {t("repo.manage")}
                     </Link>
                   </div>
                 )}
@@ -168,7 +172,7 @@ export function Header({
                 to="/config.html?tab=repositories"
                 className="text-xs text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
               >
-                My Repositories
+                {t("repo.myRepositories")}
               </Link>
             )}
           </div>
@@ -180,7 +184,7 @@ export function Header({
                   connected ? "bg-green-500 animate-pulse" : "bg-gray-600"
                 }`}
               />
-              {connected ? "Connected" : "Disconnected"}
+              {connected ? t("connection.connected") : t("connection.disconnected")}
             </span>
 
             {githubAppConfigured && (
@@ -188,7 +192,7 @@ export function Header({
                 <span className="text-gray-700">|</span>
                 <span
                   className="inline-flex items-center gap-1.5 text-xs bg-violet-950/60 border border-violet-700/50 text-violet-300 px-2 py-0.5 rounded-full"
-                  title={githubAppName ? `${githubAppName} connected` : "GitHub App connected"}
+                  title={githubAppName ? t("github.connected", { name: githubAppName }) : t("github.appConnectedTitle")}
                 >
                   {githubAppInstallationId ? (
                     <img
@@ -199,17 +203,19 @@ export function Header({
                   ) : (
                     <GitHubIcon />
                   )}
-                  {githubAppName ? `${githubAppName} connected` : "App Connected"}
+                  {githubAppName ? t("github.connected", { name: githubAppName }) : t("github.appConnected")}
                 </span>
               </>
             )}
+
+            <LanguageSwitcher />
 
             {/* Hamburger menu */}
             <div className="relative" ref={menuRef}>
               <button
                 onClick={() => setMenuOpen((v) => !v)}
                 className="p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors cursor-pointer"
-                aria-label="Menu"
+                aria-label={t("nav.menu")}
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
@@ -217,14 +223,14 @@ export function Header({
               </button>
               {menuOpen && (
                 <div className="absolute right-0 mt-1 w-52 bg-gray-900 border border-gray-700 rounded-lg shadow-lg py-1 z-50">
-                  {CONFIG_MENU_TABS.filter((t) => !t.adminOnly || isAdmin).map((t) => (
+                  {CONFIG_MENU_TABS.filter((tab) => !tab.adminOnly || isAdmin).map((tab) => (
                     <Link
-                      key={t.slug}
-                      to={`/config.html?tab=${t.slug}`}
+                      key={tab.slug}
+                      to={`/config.html?tab=${tab.slug}`}
                       className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
                       onClick={() => setMenuOpen(false)}
                     >
-                      {t.label}
+                      {t(tab.labelKey)}
                     </Link>
                   ))}
                   {authEnabled && (
@@ -234,7 +240,7 @@ export function Header({
                         onClick={() => { setMenuOpen(false); onLogout(); }}
                         className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
                       >
-                        Log out
+                        {t("nav.logout")}
                       </button>
                     </>
                   )}

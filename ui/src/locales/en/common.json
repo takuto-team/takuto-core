@@ -1,1 +1,34 @@
-{}
+{
+  "language": {
+    "switch": "Change language"
+  },
+  "connection": {
+    "connected": "Connected",
+    "disconnected": "Disconnected"
+  },
+  "nav": {
+    "menu": "Menu",
+    "logout": "Log out"
+  },
+  "repo": {
+    "switchTitle": "Switch active repository (filters the dashboard)",
+    "allRepositories": "All repositories",
+    "manage": "Manage repositories…",
+    "myRepositories": "My Repositories"
+  },
+  "github": {
+    "connected": "{{name}} connected",
+    "appConnected": "App Connected",
+    "appConnectedTitle": "GitHub App connected"
+  },
+  "tabs": {
+    "security": "Security",
+    "ai": "AI Settings",
+    "github": "GitHub",
+    "ticketing": "Ticketing",
+    "users": "Users",
+    "repositories": "My Repositories",
+    "repositorySettings": "Repository Settings",
+    "workflows": "Workflows"
+  }
+}

@@ -49,3 +49,12 @@ describe("Header — dropdown lifecycle (existing behaviour preserved)", () => {
     expect(screen.queryByRole("link", { name: /^ai settings$/i })).toBeNull();
   });
 });
+
+describe("Header — language switcher", () => {
+  it("renders the language switcher (distinct from the hamburger menu)", () => {
+    renderHeader();
+    expect(screen.getByRole("button", { name: /change language/i })).toBeTruthy();
+    // The hamburger is still its own separate control.
+    expect(screen.getByRole("button", { name: /^menu$/i })).toBeTruthy();
+  });
+});
