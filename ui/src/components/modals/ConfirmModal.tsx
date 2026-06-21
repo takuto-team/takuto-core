@@ -1,6 +1,8 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useTranslation } from "react-i18next";
+
 interface Props {
   title: string;
   message: string;
@@ -9,7 +11,8 @@ interface Props {
   confirmLabel?: string;
 }
 
-export function ConfirmModal({ title, message, onConfirm, onCancel, confirmLabel = "Confirm" }: Props) {
+export function ConfirmModal({ title, message, onConfirm, onCancel, confirmLabel }: Props) {
+  const { t } = useTranslation("modals");
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div
@@ -23,13 +26,13 @@ export function ConfirmModal({ title, message, onConfirm, onCancel, confirmLabel
             onClick={onCancel}
             className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={onConfirm}
             className="text-sm px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-500 cursor-pointer"
           >
-            {confirmLabel}
+            {confirmLabel ?? t("confirm.defaultConfirm")}
           </button>
         </div>
       </div>

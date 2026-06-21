@@ -1,1 +1,20 @@
-{}
+{
+  "boundary": {
+    "title": "Something went wrong",
+    "body": "The dashboard hit an unexpected error and couldn't render. Reloading usually fixes it.",
+    "reload": "Reload"
+  },
+  "fetch": {
+    "unreachable": "Couldn't reach the server: {{message}}"
+  },
+  "system": {
+    "commandFailed": "Command failed — {{ticketKey}}"
+  },
+  "dependencies": {
+    "installFailed": "Could not install dependencies",
+    "installing": "Installing dependencies",
+    "preparing": "Preparing…",
+    "errorHelp": "Agent CLIs are installed at startup. Check the server logs, then restart.",
+    "installingHelp": "The agent CLIs are being installed on first start. This only takes a moment."
+  }
+}

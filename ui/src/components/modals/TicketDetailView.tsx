@@ -8,6 +8,7 @@
  * area animates identically.
  */
 
+import { useTranslation } from "react-i18next";
 import { MarkdownPreview } from "../MarkdownPreview";
 
 interface Props {
@@ -16,10 +17,11 @@ interface Props {
 }
 
 export function TicketDetailView({ markdown, loading }: Props) {
+  const { t } = useTranslation("modals");
   if (loading) {
     return (
       <div className="flex-1 overflow-y-auto p-6">
-        <p className="text-gray-500 text-sm">Loading description...</p>
+        <p className="text-gray-500 text-sm">{t("ticketDetailView.loadingDescription")}</p>
       </div>
     );
   }

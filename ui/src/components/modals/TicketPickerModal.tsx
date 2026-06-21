@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { apiJson } from "../../api/client";
 import type { TodoTicket, GitHubIssue } from "../../api/types";
 import { ConfirmModal } from "./ConfirmModal";
@@ -15,10 +16,10 @@ interface PickerTicket {
   existingPrUrl?: string;
 }
 
-/** "#18" from a PR URL, else "a PR" — used in the re-add confirmation copy. */
-function prLabel(prUrl: string): string {
+/** "#18" from a PR URL, else null — caller falls back to a localized "a PR". */
+function prNumber(prUrl: string): string | null {
   const m = prUrl.match(/\/(\d+)(?:[/?#].*)?$/);
-  return m ? `#${m[1]}` : "a PR";
+  return m ? `#${m[1]}` : null;
 }
 
 interface Props {
@@ -37,6 +38,7 @@ interface Props {
 }
 
 export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, onClose }: Props) {
+  const { t } = useTranslation("modals");
   const [tickets, setTickets] = useState<PickerTicket[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -113,45 +115,42 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
           <h3 className="text-lg font-medium text-white">
-            {ticketingSystem === "github" ? "GitHub Issues" : "To Do Tickets"}
+            {ticketingSystem === "github" ? t("ticketPicker.githubTitle") : t("ticketPicker.todoTitle")}
           </h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 cursor-pointer">&times;</button>
         </div>
 
         <div className="overflow-y-auto flex-1 p-4">
           {needsRepoForGitHub && (
-            <p className="text-gray-400 text-sm">
-              Pick a specific repository in the header to see its GitHub issues.
-              "All repositories" doesn't aggregate issues across multiple repos.
-            </p>
+            <p className="text-gray-400 text-sm">{t("ticketPicker.needRepo")}</p>
           )}
-          {!needsRepoForGitHub && loading && <p className="text-gray-500 text-sm">Loading...</p>}
+          {!needsRepoForGitHub && loading && <p className="text-gray-500 text-sm">{t("ticketPicker.loading")}</p>}
           {error && <p className="text-red-400 text-sm">{error}</p>}
           {!loading && !needsRepoForGitHub && tickets.length === 0 && (
-            <p className="text-gray-500 text-sm">No tickets found.</p>
+            <p className="text-gray-500 text-sm">{t("ticketPicker.noTickets")}</p>
           )}
-          {tickets.map((t) =>
-            t.alreadyAdded ? (
+          {tickets.map((ticket) =>
+            ticket.alreadyAdded ? (
               <div
-                key={t.key}
+                key={ticket.key}
                 aria-disabled="true"
                 className="w-full text-left px-4 py-3 rounded-lg flex items-center gap-3 opacity-50 cursor-not-allowed"
               >
-                <span className="font-mono text-xs text-blue-400 flex-shrink-0">{t.key}</span>
-                <span className="text-sm text-gray-200 truncate">{t.summary}</span>
-                <span className="ml-auto flex-shrink-0 text-xs text-gray-500">Already added</span>
+                <span className="font-mono text-xs text-blue-400 flex-shrink-0">{ticket.key}</span>
+                <span className="text-sm text-gray-200 truncate">{ticket.summary}</span>
+                <span className="ml-auto flex-shrink-0 text-xs text-gray-500">{t("ticketPicker.alreadyAdded")}</span>
               </div>
             ) : (
               <button
-                key={t.key}
-                onClick={() => handlePick(t)}
+                key={ticket.key}
+                onClick={() => handlePick(ticket)}
                 disabled={checking !== null}
                 className="w-full text-left px-4 py-3 rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-3 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <span className="font-mono text-xs text-blue-400 flex-shrink-0">{t.key}</span>
-                <span className="text-sm text-gray-200 truncate">{t.summary}</span>
-                {checking === t.key && (
-                  <span className="ml-auto flex-shrink-0 text-xs text-gray-500">Checking…</span>
+                <span className="font-mono text-xs text-blue-400 flex-shrink-0">{ticket.key}</span>
+                <span className="text-sm text-gray-200 truncate">{ticket.summary}</span>
+                {checking === ticket.key && (
+                  <span className="ml-auto flex-shrink-0 text-xs text-gray-500">{t("ticketPicker.checking")}</span>
                 )}
               </button>
             )
@@ -161,9 +160,12 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
 
       {confirmReAdd && (
         <ConfirmModal
-          title="This issue already has a PR"
-          message={`${confirmReAdd.key} already has ${prLabel(confirmReAdd.existingPrUrl!)}. Adding it again will create a NEW, separate pull request. Continue?`}
-          confirmLabel="Add anyway"
+          title={t("ticketPicker.hasPrTitle")}
+          message={t("ticketPicker.hasPrMessage", {
+            ticketKey: confirmReAdd.key,
+            prLabel: prNumber(confirmReAdd.existingPrUrl!) ?? t("ticketPicker.prFallback"),
+          })}
+          confirmLabel={t("ticketPicker.addAnyway")}
           onConfirm={() => {
             const t = confirmReAdd;
             setConfirmReAdd(null);

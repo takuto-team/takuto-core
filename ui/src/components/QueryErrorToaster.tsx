@@ -11,12 +11,14 @@
  */
 
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { onFetchError } from "../api/fetchErrorBus";
 import { useToast } from "../hooks/useToast";
 
 const DEDUPE_WINDOW_MS = 5000;
 
 export function QueryErrorToaster() {
+  const { t } = useTranslation("errors");
   const { showToast } = useToast();
   const last = useRef<{ message: string; at: number }>({ message: "", at: 0 });
 
@@ -25,9 +27,9 @@ export function QueryErrorToaster() {
       const now = Date.now();
       if (last.current.message === message && now - last.current.at < DEDUPE_WINDOW_MS) return;
       last.current = { message, at: now };
-      showToast(`Couldn't reach the server: ${message}`, "error");
+      showToast(t("fetch.unreachable", { message }), "error");
     });
-  }, [showToast]);
+  }, [showToast, t]);
 
   return null;
 }

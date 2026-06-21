@@ -9,6 +9,7 @@
  * respectively. State + handlers live in `useTicketImproveWithAI`.
  */
 
+import { useTranslation } from "react-i18next";
 import { AiPromptPanel } from "../AiPromptPanel";
 import { formatCountdown } from "../../hooks/useTicketCountdown";
 
@@ -38,18 +39,19 @@ function TicketImproveWithAIDefault({
   improving, countdown,
   onCancelImprove, onLoadingChange, onImprovement,
 }: DefaultProps) {
+  const { t } = useTranslation("modals");
   return (
     <>
       {improving && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-900/85 backdrop-blur-sm rounded-xl">
           <div className="w-8 h-8 border-2 border-gray-600 border-t-blue-400 rounded-full animate-spin" />
-          <p className="mt-4 text-sm text-gray-300">Improving description...</p>
+          <p className="mt-4 text-sm text-gray-300">{t("improveWithAI.improvingDescription")}</p>
           <p className="mt-1 text-xs text-gray-500">{formatCountdown(countdown)}</p>
           <button
             onClick={onCancelImprove}
             className="mt-4 text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
           >
-            Cancel
+            {t("improveWithAI.cancel")}
           </button>
         </div>
       )}
@@ -74,24 +76,25 @@ interface BannerProps {
 function TicketImproveWithAIBanner({
   pendingImprovement, onDiscardImprovement, onConfirmImprovement,
 }: BannerProps) {
+  const { t } = useTranslation("modals");
   if (!pendingImprovement) return null;
   return (
     <div className="border-b px-4 py-2 flex items-center justify-between bg-purple-900/20 border-purple-700/30">
       <span className="text-xs text-purple-300">
-        Review AI changes — confirm to enter edit mode with the updated description
+        {t("improveWithAI.reviewAiChanges")}
       </span>
       <div className="flex gap-2">
         <button
           onClick={onDiscardImprovement}
           className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
         >
-          Discard
+          {t("improveWithAI.discard")}
         </button>
         <button
           onClick={onConfirmImprovement}
           className="text-xs px-3 py-1 rounded-lg bg-green-700 text-white hover:bg-green-600 cursor-pointer"
         >
-          Confirm
+          {t("improveWithAI.confirm")}
         </button>
       </div>
     </div>
@@ -112,6 +115,7 @@ interface FooterButtonsProps {
 function TicketImproveWithAIFooterButtons({
   pendingImprovement, improving, editMode, prompting, onImprove, onStartEdit, onBack,
 }: FooterButtonsProps) {
+  const { t } = useTranslation("modals");
   if (pendingImprovement) return null;
   // In edit mode the only left-cluster action is "Back" to the read-only view;
   // Improve-with-AI is read-only-only.
@@ -121,7 +125,7 @@ function TicketImproveWithAIFooterButtons({
         onClick={onBack}
         className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
       >
-        Back
+        {t("improveWithAI.back")}
       </button>
     );
   }
@@ -132,13 +136,13 @@ function TicketImproveWithAIFooterButtons({
         disabled={improving || prompting}
         className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 disabled:opacity-50 cursor-pointer"
       >
-        {improving ? "Improving..." : "Improve with AI"}
+        {improving ? t("improveWithAI.improving") : t("improveWithAI.improveWithAi")}
       </button>
       <button
         onClick={onStartEdit}
         className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
       >
-        Edit
+        {t("improveWithAI.edit")}
       </button>
     </>
   );

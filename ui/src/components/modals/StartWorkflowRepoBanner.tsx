@@ -10,6 +10,7 @@
  */
 
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import type { RepositoryRow } from "../../api/client";
 
 interface Props {
@@ -32,6 +33,7 @@ export function StartWorkflowRepoBanner({
   repoLocked,
   onClose,
 }: Props) {
+  const { t } = useTranslation("modals");
   if (!showStartButton) return null;
   // A GitHub issue belongs to its source repo — there is nothing to choose, so
   // show the repo read-only instead of a selector.
@@ -39,7 +41,7 @@ export function StartWorkflowRepoBanner({
     const name = repos.find((r) => r.id === repositoryId)?.name ?? "";
     return (
       <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-3">
-        <label className="text-xs text-gray-400 shrink-0">Repository:</label>
+        <label className="text-xs text-gray-400 shrink-0">{t("startWorkflowRepoBanner.repositoryLabel")}</label>
         <span className="text-xs text-gray-300 font-mono">{name}</span>
       </div>
     );
@@ -48,18 +50,18 @@ export function StartWorkflowRepoBanner({
     <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-3">
       <label className="text-xs text-gray-400 shrink-0">Repository:</label>
       {loadingRepos ? (
-        <span className="text-xs text-gray-500">Loading…</span>
+        <span className="text-xs text-gray-500">{t("startWorkflowRepoBanner.loading")}</span>
       ) : repos.length === 0 ? (
         <span className="text-xs text-amber-300">
-          No repositories on your dashboard.{" "}
+          {t("startWorkflowRepoBanner.noReposPrefix")}{" "}
           <Link
             to="/config.html?tab=repositories"
             className="underline hover:text-amber-100"
             onClick={onClose}
           >
-            Add one
+            {t("startWorkflowRepoBanner.addOne")}
           </Link>{" "}
-          before starting a work item.
+          {t("startWorkflowRepoBanner.noReposSuffix")}
         </span>
       ) : repos.length === 1 ? (
         <span className="text-xs text-gray-300 font-mono">{repos[0].name}</span>

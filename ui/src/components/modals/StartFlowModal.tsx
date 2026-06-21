@@ -8,6 +8,7 @@
  * here calls the same endpoint as the inline button via `useRunWorkflowDef`.
  */
 
+import { useTranslation } from "react-i18next";
 import type { WorkflowDefinition } from "../../api/types";
 import { useRunWorkflowDef } from "../../hooks/useRunWorkflowDef";
 import { topoSort, runStateOf, depsAreMet, unmetDeps } from "../workflowDefState";
@@ -30,6 +31,7 @@ export function StartFlowModal({
   onClose,
   mainRunning,
 }: StartFlowModalProps) {
+  const { t } = useTranslation("modals");
   const { run, loadingDef } = useRunWorkflowDef(ticketKey, onRefresh);
 
   const validDefs = definitions.filter((d) => d.valid);
@@ -46,7 +48,7 @@ export function StartFlowModal({
   const depChips = (def: WorkflowDefinition) =>
     def.depends_on.length > 0 ? (
       <span className="flex items-center gap-1 text-xs text-gray-500 min-w-0">
-        <span className="whitespace-nowrap">depends on:</span>
+        <span className="whitespace-nowrap">{t("startFlow.dependsOn")}</span>
         {def.depends_on.map((dep) => (
           <span
             key={dep}
@@ -67,14 +69,14 @@ export function StartFlowModal({
     if (state === "running") {
       return (
         <span className="action-btn wf-btn-primary opacity-75 cursor-default inline-flex items-center gap-1">
-          <SpinnerIcon /> running
+          <SpinnerIcon /> {t("startFlow.running")}
         </span>
       );
     }
     if (state === "completed") {
       return (
         <span className="action-btn wf-btn-success cursor-default inline-flex items-center gap-1">
-          <CheckIcon /> done
+          <CheckIcon /> {t("startFlow.done")}
         </span>
       );
     }
@@ -82,7 +84,7 @@ export function StartFlowModal({
       if (mainRunning) {
         return (
           <span className="action-btn wf-btn-danger opacity-50 cursor-not-allowed inline-flex items-center gap-1">
-            <XIcon /> failed
+            <XIcon /> {t("startFlow.failed")}
           </span>
         );
       }
@@ -91,9 +93,9 @@ export function StartFlowModal({
           className="action-btn wf-btn-danger inline-flex items-center gap-1"
           onClick={() => run(def, state)}
           disabled={isLoading}
-          title="Click to retry"
+          title={t("startFlow.clickToRetry")}
         >
-          {isLoading ? <SpinnerIcon /> : <XIcon />} Retry
+          {isLoading ? <SpinnerIcon /> : <XIcon />} {t("startFlow.retry")}
         </button>
       );
     }
@@ -111,7 +113,7 @@ export function StartFlowModal({
         disabled={isLoading}
         autoFocus={def.filename === firstEnabledFile}
       >
-        {isLoading ? <SpinnerIcon /> : null} Start
+        {isLoading ? <SpinnerIcon /> : null} {t("startFlow.start")}
       </button>
     );
   };
@@ -123,12 +125,12 @@ export function StartFlowModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <h3 className="text-lg font-medium text-white">Start a flow — {ticketKey}</h3>
+          <h3 className="text-lg font-medium text-white">{t("startFlow.title", { ticketKey })}</h3>
           <button
             type="button"
             onClick={onClose}
             className="text-gray-500 hover:text-gray-300 cursor-pointer"
-            aria-label="Close"
+            aria-label={t("startFlow.close")}
           >
             &times;
           </button>
@@ -136,7 +138,7 @@ export function StartFlowModal({
 
         <div className="overflow-y-auto flex-1 p-4 space-y-2">
           {sorted.length === 0 ? (
-            <p className="text-sm text-gray-500">No flows configured.</p>
+            <p className="text-sm text-gray-500">{t("startFlow.noFlows")}</p>
           ) : (
             sorted.map((def) => {
               const state = runStateOf(def, runStates);
@@ -160,9 +162,9 @@ export function StartFlowModal({
                     {locked && (
                       <div
                         className="text-xs text-gray-500 mt-0.5"
-                        title={`Waiting for: ${waiting.join(", ")}`}
+                        title={t("startFlow.waitingFor", { deps: waiting.join(", ") })}
                       >
-                        Waiting for: {waiting.join(", ")}
+                        {t("startFlow.waitingFor", { deps: waiting.join(", ") })}
                       </div>
                     )}
                   </div>
@@ -180,7 +182,7 @@ export function StartFlowModal({
             autoFocus={!firstEnabledFile}
             className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
           >
-            Close
+            {t("startFlow.close")}
           </button>
         </div>
       </div>

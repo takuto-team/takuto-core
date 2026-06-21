@@ -8,6 +8,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface DependsOnSelectProps {
   options: string[];
@@ -16,6 +17,7 @@ interface DependsOnSelectProps {
 }
 
 export function DependsOnSelect({ options, selected, onChange }: DependsOnSelectProps) {
+  const { t } = useTranslation("modals");
   const [open, setOpen] = useState(false);
 
   const available = options.filter((o) => !selected.includes(o));
@@ -43,21 +45,21 @@ export function DependsOnSelect({ options, selected, onChange }: DependsOnSelect
               type="button"
               onClick={() => remove(name)}
               className="text-gray-500 hover:text-gray-200 cursor-pointer"
-              aria-label={`Remove dependency ${name}`}
+              aria-label={t("dependsOn.removeDependency", { name })}
             >
               &times;
             </button>
           </span>
         ))}
         {selected.length === 0 && (
-          <span className="text-sm text-gray-600">No dependencies</span>
+          <span className="text-sm text-gray-600">{t("dependsOn.noDependencies")}</span>
         )}
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           disabled={available.length === 0}
           className="ml-auto text-gray-500 hover:text-gray-300 disabled:text-gray-700 disabled:cursor-not-allowed cursor-pointer"
-          aria-label="Add dependency"
+          aria-label={t("dependsOn.addDependency")}
           aria-expanded={open}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import type { TerminalState } from "../../hooks/useWorkflows";
 
 interface Props {
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function ConsoleOutputModal({ state, onClose }: Props) {
+  const { t } = useTranslation("modals");
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -25,8 +27,8 @@ export function ConsoleOutputModal({ state, onClose }: Props) {
   }, [onClose]);
 
   const stepDisplay = state.completed
-    ? `${state.stepName} — completed`
-    : `$ ${state.stepName || "Waiting..."}`;
+    ? `${state.stepName} — ${t("consoleOutput.completed")}`
+    : `$ ${state.stepName || t("consoleOutput.waiting")}`;
 
   return (
     <div
@@ -39,7 +41,7 @@ export function ConsoleOutputModal({ state, onClose }: Props) {
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 flex-shrink-0">
-          <span className="text-sm font-medium text-gray-200">Console output</span>
+          <span className="text-sm font-medium text-gray-200">{t("consoleOutput.title")}</span>
           <span
             className={`text-xs font-mono px-2 py-0.5 rounded ${
               state.completed
@@ -57,7 +59,7 @@ export function ConsoleOutputModal({ state, onClose }: Props) {
           className="flex-1 overflow-y-auto bg-gray-950 px-4 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all"
         >
           {state.lines.length === 0 ? (
-            <span className="text-gray-600">No output yet.</span>
+            <span className="text-gray-600">{t("consoleOutput.noOutput")}</span>
           ) : (
             state.lines.map((line, i) => {
               const isWarn = /\bwarn(ing)?\b/i.test(line.text);
@@ -81,7 +83,7 @@ export function ConsoleOutputModal({ state, onClose }: Props) {
             onClick={onClose}
             className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer transition-colors"
           >
-            Close
+            {t("consoleOutput.close")}
           </button>
         </div>
       </div>

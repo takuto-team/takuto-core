@@ -8,9 +8,11 @@
  * (or on error). The current step updates as each CLI installs.
  */
 
+import { useTranslation } from "react-i18next";
 import { useDependencyStatus } from "../hooks/useDependencyStatus";
 
 export function DependencyInstallOverlay() {
+  const { t } = useTranslation("errors");
   const status = useDependencyStatus();
   if (!status || (status.phase !== "installing" && status.phase !== "error")) {
     return null;
@@ -23,7 +25,7 @@ export function DependencyInstallOverlay() {
       <div className="max-w-md w-full mx-4 rounded-xl border border-gray-800 bg-gray-900 p-8 text-center space-y-4">
         {isError ? (
           <h2 className="text-lg font-semibold text-red-400">
-            Could not install dependencies
+            {t("dependencies.installFailed")}
           </h2>
         ) : (
           <>
@@ -31,7 +33,7 @@ export function DependencyInstallOverlay() {
               className="mx-auto h-8 w-8 rounded-full border-2 border-gray-700 border-t-blue-500 animate-spin"
               aria-hidden="true"
             />
-            <h2 className="text-lg font-semibold text-gray-100">Installing dependencies</h2>
+            <h2 className="text-lg font-semibold text-gray-100">{t("dependencies.installing")}</h2>
           </>
         )}
 
@@ -39,7 +41,7 @@ export function DependencyInstallOverlay() {
           <p className="text-sm text-red-300 break-words">{status.error}</p>
         ) : (
           <>
-            <p className="text-sm text-gray-400">{status.current_step || "Preparing…"}</p>
+            <p className="text-sm text-gray-400">{status.current_step || t("dependencies.preparing")}</p>
             {status.total > 0 && (
               <p className="text-xs font-mono text-gray-500">
                 {Math.min(status.done + 1, status.total)} / {status.total}
@@ -50,8 +52,8 @@ export function DependencyInstallOverlay() {
 
         <p className="text-xs text-gray-500">
           {isError
-            ? "Agent CLIs are installed at startup. Check the server logs, then restart."
-            : "The agent CLIs are being installed on first start. This only takes a moment."}
+            ? t("dependencies.errorHelp")
+            : t("dependencies.installingHelp")}
         </p>
       </div>
     </div>

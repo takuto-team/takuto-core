@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { apiJson } from "../../api/client";
 import { surfaceError } from "../../utils/surfaceError";
 import type { GitHubRepo, Workspace } from "../../api/types";
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function RepoPickerModal({ onSelect, onClose }: Props) {
+  const { t } = useTranslation("modals");
   const [repos, setRepos] = useState<GitHubRepo[]>([]);
   const [checkedOut, setCheckedOut] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -37,8 +39,8 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
   useEffect(() => {
     apiJson<Workspace[]>("/api/workspaces")
       .then((ws) => setCheckedOut(new Set(ws.map((w) => w.name))))
-      .catch((e) => surfaceError(e, "Couldn't load checked-out repositories"));
-  }, []);
+      .catch((e) => surfaceError(e, t("repoPicker.loadCheckedOutError")));
+  }, [t]);
 
   // Debounced search (also fires immediately on mount with initial empty search)
   useEffect(() => {
@@ -58,7 +60,7 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <h3 className="text-lg font-medium text-white">Setup a New Project</h3>
+          <h3 className="text-lg font-medium text-white">{t("repoPicker.title")}</h3>
           <button
             onClick={onClose}
             className="text-gray-500 hover:text-gray-300 cursor-pointer"
@@ -70,7 +72,7 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
         <div className="p-4 border-b border-gray-800">
           <input
             type="text"
-            placeholder="Search repositories..."
+            placeholder={t("repoPicker.searchPlaceholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
@@ -79,10 +81,10 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
         </div>
 
         <div className="overflow-y-auto flex-1 p-4">
-          {loading && <p className="text-gray-500 text-sm">Loading repositories...</p>}
+          {loading && <p className="text-gray-500 text-sm">{t("repoPicker.loading")}</p>}
           {error && <p className="text-red-400 text-sm">{error}</p>}
           {!loading && repos.length === 0 && !error && (
-            <p className="text-gray-500 text-sm">No repositories found.</p>
+            <p className="text-gray-500 text-sm">{t("repoPicker.noneFound")}</p>
           )}
           {repos.map((r) => {
             const repoName = r.full_name.split("/")[1] ?? r.full_name;
@@ -99,12 +101,12 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
                     </span>
                     {r.private && (
                       <span className="text-xs bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded flex-shrink-0">
-                        Private
+                        {t("repoPicker.private")}
                       </span>
                     )}
                     {alreadyCloned && (
                       <span className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded flex-shrink-0">
-                        Cloned
+                        {t("repoPicker.cloned")}
                       </span>
                     )}
                   </div>
@@ -119,7 +121,7 @@ export function RepoPickerModal({ onSelect, onClose }: Props) {
                   disabled={alreadyCloned}
                   className="text-sm px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer flex-shrink-0"
                 >
-                  Select
+                  {t("repoPicker.select")}
                 </button>
               </div>
             );

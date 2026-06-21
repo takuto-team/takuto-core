@@ -8,8 +8,9 @@
  */
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { withTranslation, type WithTranslation } from "react-i18next";
 
-interface Props {
+interface Props extends WithTranslation {
   children: ReactNode;
 }
 
@@ -17,7 +18,7 @@ interface State {
   error: Error | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
+class ErrorBoundaryInner extends Component<Props, State> {
   state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
@@ -36,19 +37,18 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   render(): ReactNode {
+    const { t } = this.props;
     if (this.state.error) {
       return (
         <div className="flex flex-col items-center justify-center min-h-screen gap-4 px-6 text-center">
-          <h1 className="text-lg font-semibold text-red-300">Something went wrong</h1>
-          <p className="text-sm text-gray-400 max-w-md">
-            The dashboard hit an unexpected error and couldn't render. Reloading usually fixes it.
-          </p>
+          <h1 className="text-lg font-semibold text-red-300">{t("boundary.title")}</h1>
+          <p className="text-sm text-gray-400 max-w-md">{t("boundary.body")}</p>
           <button
             type="button"
             onClick={this.handleReload}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
           >
-            Reload
+            {t("boundary.reload")}
           </button>
         </div>
       );
@@ -56,3 +56,5 @@ export class ErrorBoundary extends Component<Props, State> {
     return this.props.children;
   }
 }
+
+export const ErrorBoundary = withTranslation("errors")(ErrorBoundaryInner);

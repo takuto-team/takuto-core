@@ -1,1 +1,161 @@
-{}
+{
+  "common": {
+    "cancel": "Cancel"
+  },
+  "confirm": {
+    "defaultConfirm": "Confirm"
+  },
+  "delete": {
+    "title": "Delete {{ticketKey}}?",
+    "cannotUndo": "This action cannot be undone.",
+    "markDoneAndDelete": "Mark done & delete",
+    "delete": "Delete"
+  },
+  "paste": {
+    "title": "New Work Item",
+    "repository": "Repository",
+    "loadingRepos": "Loading repositories…",
+    "noReposLead": "You have no repositories added.",
+    "noReposLink": "Add one from the My Repositories tab",
+    "noReposTail": "before creating a work item.",
+    "nameLabel": "Work item name (optional)",
+    "namePlaceholder": "e.g. add-user-login",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "Paste your ticket description here...",
+    "submit": "Add to Dashboard"
+  },
+  "ticketPicker": {
+    "githubTitle": "GitHub Issues",
+    "todoTitle": "To Do Tickets",
+    "needRepo": "Pick a specific repository in the header to see its GitHub issues. \"All repositories\" doesn't aggregate issues across multiple repos.",
+    "loading": "Loading...",
+    "noTickets": "No tickets found.",
+    "alreadyAdded": "Already added",
+    "checking": "Checking…",
+    "prFallback": "a PR",
+    "hasPrTitle": "This issue already has a PR",
+    "hasPrMessage": "{{ticketKey}} already has {{prLabel}}. Adding it again will create a NEW, separate pull request. Continue?",
+    "addAnyway": "Add anyway"
+  },
+  "cloneProgress": {
+    "cloningTitle": "Cloning Repository",
+    "cloningPrefix": "Cloning",
+    "cloningHint": "This may take a moment depending on the repository size.",
+    "cancel": "Cancel",
+    "successTitle": "Repository Cloned",
+    "successSuffix": "has been cloned successfully.",
+    "continue": "Continue",
+    "errorTitle": "Clone Failed",
+    "unknownError": "An unknown error occurred while cloning the repository.",
+    "retry": "Retry",
+    "close": "Close"
+  },
+  "consoleOutput": {
+    "completed": "completed",
+    "waiting": "Waiting...",
+    "title": "Console output",
+    "noOutput": "No output yet.",
+    "close": "Close"
+  },
+  "noJira": {
+    "title": "No Ticketing System",
+    "bodyPrefix": "No ticketing system is configured. Workflows can only be started manually via the dashboard. Configure",
+    "bodyIn": "in",
+    "bodySuffix": "to enable Jira or GitHub polling.",
+    "gotIt": "Got it"
+  },
+  "report": {
+    "notFound": "Report not found",
+    "loadFailed": "Failed to load report",
+    "title": "Work Item Report",
+    "loading": "Loading report…",
+    "empty": "No report content available.",
+    "copy": "Copy",
+    "close": "Close"
+  },
+  "repoPicker": {
+    "loadCheckedOutError": "Couldn't load checked-out repositories",
+    "title": "Setup a New Project",
+    "searchPlaceholder": "Search repositories...",
+    "loading": "Loading repositories...",
+    "noneFound": "No repositories found.",
+    "private": "Private",
+    "cloned": "Cloned",
+    "select": "Select"
+  },
+  "startWorkflowFooter": {
+    "discard": "Discard",
+    "close": "Close",
+    "confirm": "Confirm",
+    "saving": "Saving…",
+    "addToDashboard": "Add to Dashboard"
+  },
+  "startWorkflowRepoBanner": {
+    "repositoryLabel": "Repository:",
+    "loading": "Loading…",
+    "noReposPrefix": "No repositories on your dashboard.",
+    "addOne": "Add one",
+    "noReposSuffix": "before starting a work item."
+  },
+  "startFlow": {
+    "dependsOn": "depends on:",
+    "running": "running",
+    "done": "done",
+    "failed": "failed",
+    "clickToRetry": "Click to retry",
+    "retry": "Retry",
+    "start": "Start",
+    "title": "Start a flow — {{ticketKey}}",
+    "close": "Close",
+    "noFlows": "No flows configured.",
+    "waitingFor": "Waiting for: {{deps}}"
+  },
+  "stepEditor": {
+    "improveFailed": "Improve request failed",
+    "improvingPrompt": "Improving prompt…",
+    "cancel": "Cancel",
+    "dragToReorder": "Drag to reorder",
+    "untitledStep": "Untitled step",
+    "needsOneStep": "A flow needs at least one step.",
+    "remove": "Remove",
+    "prompt": "Prompt",
+    "promptPlaceholder": "Text sent verbatim to the agent for this step.",
+    "improving": "Improving…",
+    "improveWithAi": "Improve with AI",
+    "revert": "Revert",
+    "skills": "Skills",
+    "addSkill": "+ Add skill",
+    "skillNamePlaceholder": "skill name",
+    "argsPlaceholder": "args (comma-separated)",
+    "removeSkill": "Remove skill"
+  },
+  "dependsOn": {
+    "removeDependency": "Remove dependency {{name}}",
+    "noDependencies": "No dependencies",
+    "addDependency": "Add dependency"
+  },
+  "ticketDetailView": {
+    "loadingDescription": "Loading description..."
+  },
+  "ticketEditor": {
+    "descriptionModified": "Description modified — save to update the ticket",
+    "editingDescription": "Editing description",
+    "discard": "Discard",
+    "saving": "Saving...",
+    "save": "Save",
+    "write": "Write",
+    "preview": "Preview",
+    "sideBySide": "Side by side"
+  },
+  "improveWithAI": {
+    "improvingDescription": "Improving description...",
+    "cancel": "Cancel",
+    "reviewAiChanges": "Review AI changes — confirm to enter edit mode with the updated description",
+    "discard": "Discard",
+    "confirm": "Confirm",
+    "back": "Back",
+    "improving": "Improving...",
+    "improveWithAi": "Improve with AI",
+    "edit": "Edit"
+  }
+}

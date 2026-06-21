@@ -1,6 +1,7 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useTranslation } from "react-i18next";
 import type { SystemError } from "../hooks/useWorkflows";
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function SystemErrorAlert({ errors, onDismiss }: Props) {
+  const { t } = useTranslation("errors");
   if (errors.length === 0) return null;
 
   return (
@@ -35,7 +37,7 @@ export function SystemErrorAlert({ errors, onDismiss }: Props) {
               </svg>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-red-300">
-                  Command failed — {err.ticketKey}
+                  {t("system.commandFailed", { ticketKey: err.ticketKey })}
                 </p>
                 <pre className="mt-1 text-xs text-red-200/70 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto">
                   {err.message}

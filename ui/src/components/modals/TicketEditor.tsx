@@ -8,6 +8,7 @@
  * (textarea + preview). State + handlers live in `useTicketEditor`.
  */
 
+import { useTranslation } from "react-i18next";
 import { MarkdownPreview } from "../MarkdownPreview";
 
 interface BannerProps {
@@ -22,25 +23,26 @@ interface BannerProps {
 function TicketEditorBanner({
   editMode, pendingImprovement, editDirty, saving, onCancelEdit, onSaveDescription,
 }: BannerProps) {
+  const { t } = useTranslation("modals");
   if (!editMode || pendingImprovement) return null;
   return (
     <div className={`border-b px-4 py-2 flex items-center justify-between ${editDirty ? "bg-blue-900/20 border-blue-700/30" : "bg-gray-800/30 border-gray-800"}`}>
       <span className={`text-xs ${editDirty ? "text-blue-300" : "text-gray-500"}`}>
-        {editDirty ? "Description modified — save to update the ticket" : "Editing description"}
+        {editDirty ? t("ticketEditor.descriptionModified") : t("ticketEditor.editingDescription")}
       </span>
       <div className="flex gap-2">
         <button
           onClick={onCancelEdit}
           className="text-xs px-3 py-1 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
         >
-          Discard
+          {t("ticketEditor.discard")}
         </button>
         <button
           onClick={onSaveDescription}
           disabled={saving || !editDirty}
           className="text-xs px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
         >
-          {saving ? "Saving..." : "Save"}
+          {saving ? t("ticketEditor.saving") : t("ticketEditor.save")}
         </button>
       </div>
     </div>
@@ -59,6 +61,7 @@ interface TabBarProps {
 function TicketEditorTabBar({
   editMode, pendingImprovement, sideBySide, activeTab, setActiveTab, onSideBySideChange,
 }: TabBarProps) {
+  const { t } = useTranslation("modals");
   if (!editMode || pendingImprovement) return null;
   const writeClass = activeTab === "write"
     ? "bg-gray-800 text-gray-200 border border-gray-700"
@@ -70,8 +73,8 @@ function TicketEditorTabBar({
     <div className="flex items-center px-6 py-2 border-b border-gray-800 gap-2">
       {!sideBySide && (
         <div className="flex gap-1">
-          <button onClick={() => setActiveTab("write")} className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${writeClass}`}>Write</button>
-          <button onClick={() => setActiveTab("preview")} className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${previewClass}`}>Preview</button>
+          <button onClick={() => setActiveTab("write")} className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${writeClass}`}>{t("ticketEditor.write")}</button>
+          <button onClick={() => setActiveTab("preview")} className={`text-xs px-3 py-1.5 rounded-md cursor-pointer ${previewClass}`}>{t("ticketEditor.preview")}</button>
         </div>
       )}
       <label className="ml-auto flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
@@ -81,7 +84,7 @@ function TicketEditorTabBar({
           onChange={(e) => onSideBySideChange(e.target.checked)}
           className="w-3 h-3 accent-blue-500"
         />
-        Side by side
+        {t("ticketEditor.sideBySide")}
       </label>
     </div>
   );

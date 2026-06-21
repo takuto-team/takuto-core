@@ -11,6 +11,7 @@
  * and the repo list has finished loading (preserved verbatim).
  */
 
+import { useTranslation } from "react-i18next";
 import type { PendingImprovement } from "./TicketImproveWithAI";
 
 interface Props {
@@ -48,11 +49,12 @@ export function StartWorkflowFooter({
   onDiscardImprovement,
   onConfirmImprovement,
 }: Props) {
+  const { t } = useTranslation("modals");
   // In edit mode the left-cluster "Back" button handles returning to read-only,
   // so the right cluster shows no Cancel — only Discard (pending diff) or Close.
   const showLeftButton = pendingImprovement !== null || !editMode;
   const leftAction = pendingImprovement ? onDiscardImprovement : onClose;
-  const leftLabel = pendingImprovement ? "Discard" : "Close";
+  const leftLabel = pendingImprovement ? t("startWorkflowFooter.discard") : t("startWorkflowFooter.close");
 
   return (
     <div className="flex gap-2">
@@ -69,7 +71,7 @@ export function StartWorkflowFooter({
           onClick={onConfirmImprovement}
           className="text-xs px-4 py-1.5 rounded-lg bg-green-700 text-white hover:bg-green-600 cursor-pointer"
         >
-          Confirm
+          {t("startWorkflowFooter.confirm")}
         </button>
       ) : showStartButton && onStart ? (
         <button
@@ -77,7 +79,7 @@ export function StartWorkflowFooter({
           disabled={!repositoryId || loadingRepos || saving}
           className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
-          {saving ? "Saving…" : "Add to Dashboard"}
+          {saving ? t("startWorkflowFooter.saving") : t("startWorkflowFooter.addToDashboard")}
         </button>
       ) : null}
     </div>
