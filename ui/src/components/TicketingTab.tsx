@@ -20,6 +20,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { apiJson } from "../api/client";
 import type { ConfigResponse, TicketingSystemId } from "../api/types";
 import { TicketingStep } from "../pages/Onboarding/TicketingStep";
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export function TicketingTab({ isAdmin }: Props) {
+  const { t } = useTranslation("config");
   const [initialSystem, setInitialSystem] = useState<TicketingSystemId>("none");
   const [loading, setLoading] = useState(true);
 
@@ -67,16 +69,15 @@ export function TicketingTab({ isAdmin }: Props) {
       <div className="flex flex-col gap-4 max-w-2xl">
         <div>
           <h2 id="ticketing-tab-title" className="text-lg font-semibold text-white">
-            Ticketing
+            {t("ticketing.title")}
           </h2>
           <p className="text-sm text-gray-500 mt-1">
-            Choose where Takuto reads work items from, and connect your personal
-            Jira account.
+            {t("ticketing.description")}
           </p>
         </div>
 
         {loading ? (
-          <p className="text-sm text-gray-500">Loading…</p>
+          <p className="text-sm text-gray-500">{t("actions.loading")}</p>
         ) : (
           <>
             <TicketingStep
@@ -99,7 +100,7 @@ export function TicketingTab({ isAdmin }: Props) {
                 disabled={ticketing.saving}
                 className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
-                {ticketing.saving ? "Saving…" : "Save"}
+                {ticketing.saving ? t("actions.saving") : t("actions.save")}
               </button>
               {showDisconnect && (
                 <button
@@ -108,7 +109,7 @@ export function TicketingTab({ isAdmin }: Props) {
                   disabled={ticketing.saving}
                   className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  Disconnect Jira
+                  {t("ticketing.disconnectJira")}
                 </button>
               )}
             </div>
