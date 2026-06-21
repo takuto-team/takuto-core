@@ -170,6 +170,38 @@ pub async fn list_workflows(
             })
             .collect()
     };
+
+    // Editor URLs for the workflows whose IDE is currently open, so the
+    // dashboard card lights its editor icon green (matching the terminal). We
+    // probe ONLY tickets that have a registered Editor route — the handful of
+    // open editors, never every workflow — so the per-editor `get_editor_info`
+    // docker call stays bounded. `get_editor_info` returns `None` when
+    // openvscode isn't actually running, so a stale registry entry correctly
+    // leaves the icon grey.
+    let editor_open_tickets: Vec<String> = {
+        let registry = editor.path_token_registry.inner_read().await;
+        let mut tickets: Vec<String> = registry
+            .iter()
+            .filter(|(_, r)| r.kind == SessionRouteKind::Editor)
+            .map(|(_, r)| r.ticket_key.clone())
+            .collect();
+        tickets.sort();
+        tickets.dedup();
+        tickets
+    };
+    let mut editor_urls: HashMap<String, String> = HashMap::new();
+    for tk in editor_open_tickets {
+        if let Some(info) = container::get_editor_info(&tk).await {
+            editor_urls.insert(
+                tk,
+                container::build_session_editor_url(
+                    &info.path_token,
+                    &info.connection_token,
+                    &info.folder,
+                ),
+            );
+        }
+    }
     // Collect the unique (user_id, workspace_name) pairs for this user's
     // workflows in the current workspace, then do ONE batched DB read for
     // the configured run-commands. (At most one pair in practice, since the
@@ -414,7 +446,7 @@ pub async fn list_workflows(
                 jira_browse_url: ticket_browse_url(&cfg.jira.site, &w.ticket_key),
                 issue_url: build_issue_url(w, &cfg.jira.site),
                 can_open_editor: can_open_editor(w),
-                editor_url: None,
+                editor_url: editor_urls.get(&w.ticket_key).cloned(),
                 editor_port_mappings: port_mappings,
                 jira_available: w.jira_available,
                 ticketing_system: w.ticketing_system.to_string(),
