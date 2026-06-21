@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 interface Props {
   /** Label rendered above the input (e.g. "API key", "Personal access token"). */
@@ -57,11 +58,12 @@ export function CredentialPasteField({
   helper,
   placeholder,
   saving = false,
-  saveLabel = "Save",
+  saveLabel,
   canDelete = false,
   onDelete,
   deleting = false,
 }: Props) {
+  const { t } = useTranslation("credentials");
   const inputId = useId();
   const [revealed, setRevealed] = useState(false);
   // Two-click inline confirm for delete: first click arms ("Confirm"),
@@ -116,10 +118,10 @@ export function CredentialPasteField({
             type="button"
             onClick={() => setRevealed((v) => !v)}
             aria-pressed={revealed}
-            aria-label={revealed ? "Hide credential" : "Show credential"}
+            aria-label={revealed ? t("paste.concealAria") : t("paste.revealAria")}
             className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-300 cursor-pointer"
           >
-            {revealed ? "Hide" : "Show"}
+            {revealed ? t("paste.conceal") : t("paste.reveal")}
           </button>
         </div>
         <button
@@ -128,7 +130,7 @@ export function CredentialPasteField({
           onClick={onSubmit}
           className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
-          {saving ? "Saving…" : saveLabel}
+          {saving ? t("actions.saving") : (saveLabel ?? t("actions.save"))}
         </button>
         {showDelete && (
           <button
@@ -141,8 +143,8 @@ export function CredentialPasteField({
             }}
             aria-label={
               confirmingDelete
-                ? `Confirm delete ${label}`
-                : `Delete ${label}`
+                ? t("paste.confirmDeleteAria", { label })
+                : t("paste.deleteAria", { label })
             }
             className={`text-sm px-4 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
               confirmingDelete
@@ -150,7 +152,11 @@ export function CredentialPasteField({
                 : "bg-transparent border-red-700/60 text-red-300 hover:bg-red-950/40"
             }`}
           >
-            {deleting ? "Deleting…" : confirmingDelete ? "Confirm" : "Delete"}
+            {deleting
+              ? t("actions.deleting")
+              : confirmingDelete
+                ? t("actions.confirm")
+                : t("actions.delete")}
           </button>
         )}
       </div>

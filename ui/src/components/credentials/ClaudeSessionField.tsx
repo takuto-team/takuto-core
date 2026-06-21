@@ -8,6 +8,7 @@
  */
 
 import { useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 /**
  * Tab button for the Claude auth-method selector. Renders a small dot
@@ -25,6 +26,7 @@ export function ClaudeAuthTabButton({
   onClick: () => void;
   label: string;
 }) {
+  const { t } = useTranslation("credentials");
   return (
     <button
       type="button"
@@ -37,7 +39,7 @@ export function ClaudeAuthTabButton({
     >
       {connected && (
         <span
-          aria-label="connected"
+          aria-label={t("my.ai.connectedDot")}
           className="inline-block w-1.5 h-1.5 rounded-full bg-green-400"
         />
       )}
@@ -69,6 +71,7 @@ export function ClaudeSessionField({
   connected: boolean;
   helper: string;
 }) {
+  const { t } = useTranslation("credentials");
   const [showHelp, setShowHelp] = useState(false);
   const canSubmit = !saving && value.trim().length > 0;
   return (
@@ -77,14 +80,17 @@ export function ClaudeSessionField({
         htmlFor="claude-session-textarea"
         className="text-xs text-gray-400"
       >
-        Paste contents of your local{" "}
-        <code className="text-gray-300">~/.claude.json</code>
+        <Trans
+          i18nKey="my.claude.sessionLabel"
+          ns="credentials"
+          components={{ code: <code className="text-gray-300" /> }}
+        />
       </label>
       <textarea
         id="claude-session-textarea"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder='{ "oauthAccount": { "accountUuid": "…", "emailAddress": "you@example.com", "organizationUuid": "…" }, … }'
+        placeholder={t("my.claude.sessionPlaceholder")}
         rows={12}
         spellCheck={false}
         autoComplete="off"
@@ -110,27 +116,36 @@ export function ClaudeSessionField({
           className="text-blue-400 hover:text-blue-300 cursor-pointer"
           aria-expanded={showHelp}
         >
-          {showHelp ? "Hide" : "Where do I find it?"}
+          {showHelp ? t("my.claude.hideHelp") : t("my.claude.whereToFind")}
         </button>
       </p>
       {showHelp && (
         <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-3 text-xs text-gray-400 space-y-2">
           <p>
-            On macOS / Linux, run{" "}
-            <code className="text-gray-300">cat ~/.claude.json</code> in your
-            shell and copy the output.
+            <Trans
+              i18nKey="my.claude.help.shell"
+              ns="credentials"
+              components={{ code: <code className="text-gray-300" /> }}
+            />
           </p>
           <p>
-            Takuto only needs the{" "}
-            <code className="text-gray-300">oauthAccount</code> block (with{" "}
-            <code className="text-gray-300">accountUuid</code>,{" "}
-            <code className="text-gray-300">emailAddress</code>, and{" "}
-            <code className="text-gray-300">organizationUuid</code>) but
-            pasting the full file is fine — the server ignores extra fields.
+            <Trans
+              i18nKey="my.claude.help.fields"
+              ns="credentials"
+              components={{
+                code0: <code className="text-gray-300" />,
+                code1: <code className="text-gray-300" />,
+                code2: <code className="text-gray-300" />,
+                code3: <code className="text-gray-300" />,
+              }}
+            />
           </p>
           <p>
-            The bearer token is still set separately on the{" "}
-            <strong>API key</strong> tab.
+            <Trans
+              i18nKey="my.claude.help.bearer"
+              ns="credentials"
+              components={{ strong: <strong /> }}
+            />
           </p>
         </div>
       )}
@@ -141,7 +156,11 @@ export function ClaudeSessionField({
           onClick={onSubmit}
           className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
-          {saving ? "Saving…" : connected ? "Replace session" : "Save session"}
+          {saving
+            ? t("actions.saving")
+            : connected
+              ? t("my.claude.replaceSession")
+              : t("my.claude.saveSession")}
         </button>
       </div>
     </div>

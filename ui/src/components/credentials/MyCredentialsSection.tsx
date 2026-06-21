@@ -22,6 +22,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import {
   apiJson,
   // An explicit per-provider Delete button is supported again: it scopes the
@@ -53,6 +54,7 @@ interface Props {
 }
 
 export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = {}) {
+  const { t } = useTranslation("credentials");
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -88,8 +90,8 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = 
     ]);
     setCreds(c);
     setAuth(a);
-    setLoadError(c ? null : "Could not load your credentials.");
-  }, []);
+    setLoadError(c ? null : t("loadError"));
+  }, [t]);
 
   // Initial mount: refetch, then flip `initialLoading` once. After this
   // the panels are mounted for the lifetime of the section; save handlers
@@ -136,12 +138,15 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = 
   const handleSurfaceError = useCallback(
     (e: unknown, fallback: string) => {
       if (e instanceof UserCredentialsError) {
-        showToast(`${e.message} (code: ${e.code})`, "error");
+        showToast(
+          t("error.withCode", { message: e.message, code: e.code }),
+          "error",
+        );
         return;
       }
       showToast(e instanceof Error ? e.message : fallback, "error");
     },
-    [showToast],
+    [showToast, t],
   );
 
   return (
@@ -153,14 +158,13 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = 
         id="my-credentials-section-title"
         className="text-lg font-semibold text-white"
       >
-        My credentials
+        {t("my.title")}
       </h2>
-      <p className="text-xs text-gray-500">
-        Your personal AI provider token. Stored encrypted per-user; workflows
-        you start use this instead of the deployment default.
-      </p>
+      <p className="text-xs text-gray-500">{t("my.subtitle")}</p>
 
-      {initialLoading && <p className="text-sm text-gray-500">Loading…</p>}
+      {initialLoading && (
+        <p className="text-sm text-gray-500">{t("loading")}</p>
+      )}
       {!initialLoading && loadError && (
         <p className="text-sm text-red-400">{loadError}</p>
       )}
@@ -172,11 +176,15 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = 
               role="alert"
               className="bg-amber-950/40 border border-amber-700/50 rounded-lg p-3 text-xs text-amber-200"
             >
-              Your admin switched the AI provider to{" "}
-              <strong>{PROVIDER_LABEL[adminProvider] ?? adminProvider}</strong>
-              . Your <strong>{PROVIDER_LABEL[userProvider] ?? userProvider}</strong>{" "}
-              credential is paused — connect the new provider below to keep
-              running workflows.
+              <Trans
+                i18nKey="my.mismatch"
+                ns="credentials"
+                values={{
+                  adminProvider: PROVIDER_LABEL[adminProvider] ?? adminProvider,
+                  userProvider: PROVIDER_LABEL[userProvider] ?? userProvider,
+                }}
+                components={{ strong: <strong /> }}
+              />
             </div>
           )}
 
@@ -197,14 +205,14 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = 
                 await refresh();
                 const providerLabel =
                   PROVIDER_LABEL[activeProvider] ?? activeProvider;
-                const what =
+                const message =
                   body.kind === "cli_state"
-                    ? "session uploaded"
-                    : "connected";
-                showToast(`${providerLabel} ${what}.`, "success");
+                    ? t("my.toast.sessionUploaded", { provider: providerLabel })
+                    : t("my.toast.connected", { provider: providerLabel });
+                showToast(message, "success");
                 return true;
               } catch (e: unknown) {
-                handleSurfaceError(e, "Could not save your credential.");
+                handleSurfaceError(e, t("my.saveError"));
                 return false;
               }
             }}
@@ -216,10 +224,13 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = 
                 await refresh();
                 const providerLabel =
                   PROVIDER_LABEL[activeProvider] ?? activeProvider;
-                showToast(`${providerLabel} key removed.`, "success");
+                showToast(
+                  t("my.toast.keyRemoved", { provider: providerLabel }),
+                  "success",
+                );
                 return true;
               } catch (e: unknown) {
-                handleSurfaceError(e, "Could not delete your credential.");
+                handleSurfaceError(e, t("my.deleteError"));
                 return false;
               }
             }}

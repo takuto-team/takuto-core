@@ -7,6 +7,7 @@
  * needs. No React, no fetch — these are display-string formatters.
  */
 
+import i18n from "../../i18n";
 import type { GithubAuthMode } from "../../api/types";
 
 export const PROVIDER_LABEL: Record<string, string> = {
@@ -23,16 +24,16 @@ export function providerHelper(
 ): string {
   if (kind === "cli_state") {
     // Only Claude renders this branch (task #39 amendment).
-    return "Required for Pro/Team accounts whose local `claude` uses `/login`. Takuto reads `oauthAccount` from this blob and writes it to the worker's `.claude.json` at workflow start. The bearer token is still set separately on the API key tab.";
+    return i18n.t("credentials:provider.helper.claudeSession");
   }
   switch (provider) {
     case "cursor":
       // A1 regression guard: no ttyd / browser-flow vocabulary here.
-      return "Cursor accepts only an API key. Generate one at cursor.com/dashboard and paste it above.";
+      return i18n.t("credentials:provider.helper.cursor");
     case "claude":
-      return "For direct Anthropic API or proxies that accept the same API key format. If you're on Pro/Team and your local `claude` uses `/login`, use 'Claude Code session' instead.";
+      return i18n.t("credentials:provider.helper.claude");
     case "codex":
-      return "OpenAI API key (sk-…). The Codex CLI reads OPENAI_API_KEY from the worker environment — Takuto bridges this from the value you paste here.";
+      return i18n.t("credentials:provider.helper.codex");
     case "opencode":
       // Self-hosted spec (lore/audits/2026-05-27-opencode-self-hosted-spec.md
       // §2.5): OpenCode is the self-hosted adapter. The key field is an
@@ -40,23 +41,23 @@ export function providerHelper(
       // Leave blank for LM Studio / Ollama; required for authenticated
       // private gateways. Takuto materialises `opencode.json` per
       // workflow with this value as `options.apiKey`.
-      return "Optional bearer token for your self-hosted OpenAI-compatible endpoint. Leave blank for LM Studio / Ollama or any unauthenticated server. For private gateways requiring auth, paste the bearer the server expects.";
+      return i18n.t("credentials:provider.helper.opencode");
     default:
-      return "Paste the API key issued by your provider.";
+      return i18n.t("credentials:provider.helper.default");
   }
 }
 
 export function describeMode(mode: GithubAuthMode): string {
   switch (mode) {
     case "app":
-      return "App only";
+      return i18n.t("credentials:github.mode.app");
     case "app_plus_pat":
-      return "App + your PAT";
+      return i18n.t("credentials:github.mode.appPlusPat");
     case "pat_only":
-      return "PAT only";
+      return i18n.t("credentials:github.mode.patOnly");
     case "pat_required":
-      return "PAT required";
+      return i18n.t("credentials:github.mode.patRequired");
     case "missing":
-      return "Not connected";
+      return i18n.t("credentials:github.mode.missing");
   }
 }

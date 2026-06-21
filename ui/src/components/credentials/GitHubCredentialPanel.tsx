@@ -13,6 +13,7 @@ import {
   useImperativeHandle,
   useState,
 } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { ConnectedStatusPill } from "../ConnectedStatusPill";
 import { CredentialPasteField } from "../CredentialPasteField";
 import type { GithubAuthMode, UserCredentialsStatus } from "../../api/types";
@@ -49,6 +50,7 @@ export const GitHubCredentialPanel = forwardRef<
   { github, authMode, onSavePat, onToggleAttributeCommits }: GitHubCredentialPanelProps,
   ref,
 ) {
+  const { t } = useTranslation("credentials");
   const [pat, setPat] = useState("");
   const [attribute, setAttribute] = useState(github?.attribute_commits ?? true);
   const [saving, setSaving] = useState(false);
@@ -106,7 +108,7 @@ export const GitHubCredentialPanel = forwardRef<
     >
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h3 id="gh-card-title" className="text-lg font-semibold text-white">
-          GitHub
+          {t("github.title")}
         </h3>
         <ConnectedStatusPill
           state={hasPat ? "connected" : effectiveMode === "app" ? "connected" : "missing"}
@@ -115,33 +117,29 @@ export const GitHubCredentialPanel = forwardRef<
       </div>
 
       {effectiveMode === "app" && !hasPat && (
-        <p className="text-sm text-gray-400">
-          Takuto is using its GitHub App. Workflows run as the bot. Add a
-          personal access token below if you want commits and PRs attributed
-          to you.
-        </p>
+        <p className="text-sm text-gray-400">{t("github.appModeHint")}</p>
       )}
       {effectiveMode === "pat_only" && !hasPat && (
-        <p className="text-sm text-amber-300">
-          No shared GitHub App is configured. Takuto can only talk to GitHub
-          via a personal access token — without one, GitHub-touching workflows
-          won't start.
-        </p>
+        <p className="text-sm text-amber-300">{t("github.patOnlyHint")}</p>
       )}
       {hasPat && (
         <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-4 text-sm text-gray-300">
           <p>
-            Logged in as{" "}
-            <strong className="text-gray-200">@{github?.login ?? "?"}</strong>
+            <Trans
+              i18nKey="github.loggedInAs"
+              ns="credentials"
+              values={{ login: github?.login ?? "?" }}
+              components={{ strong: <strong className="text-gray-200" /> }}
+            />
             {github?.scopes && github.scopes.length > 0 && (
               <>
-                {" · "}Scopes: {github.scopes.join(", ")}
+                {" · "}
+                {t("github.scopes")}: {github.scopes.join(", ")}
               </>
             )}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            Your commits, PRs, and PR comments are attributed to you. The
-            GitHub App handles read-only API calls.
+            {t("github.attributedNote")}
           </p>
         </div>
       )}
@@ -161,41 +159,39 @@ export const GitHubCredentialPanel = forwardRef<
           htmlFor="attribute-commits-toggle"
           className="text-sm text-gray-300"
         >
-          Attribute commits to me
+          {t("github.attributeToggle")}
           <p className="text-xs text-gray-500 mt-0.5">
-            Your GitHub username and email will appear as the author on
-            commits, PRs, and review comments. Cryptographic signing is a v2
-            feature.
+            {t("github.attributeHelp")}
           </p>
         </label>
       </div>
 
       <CredentialPasteField
-        label={hasPat ? "Replace personal access token" : "Personal access token"}
+        label={hasPat ? t("github.patReplaceLabel") : t("github.patLabel")}
         value={pat}
         onChange={setPat}
         onSubmit={submit}
         saving={saving}
-        placeholder="ghp_…"
-        saveLabel={hasPat ? "Replace" : "Validate & save"}
+        placeholder={t("github.patPlaceholder")}
+        saveLabel={hasPat ? t("actions.replace") : t("github.patSaveLabel")}
         helper={
-          <>
-            Required scopes: <code className="text-gray-400">repo</code>{" "}
-            (classic) or{" "}
-            <code className="text-gray-400">
-              contents:write + pull_requests:write + issues:read
-            </code>{" "}
-            (fine-grained).{" "}
-            <a
-              href="https://github.com/settings/tokens"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-400 hover:text-blue-300"
-              aria-label="Open GitHub PAT creation page (opens in a new tab)"
-            >
-              Help me create one →
-            </a>
-          </>
+          <Trans
+            i18nKey="github.patHelp"
+            ns="credentials"
+            components={{
+              code0: <code className="text-gray-400" />,
+              code1: <code className="text-gray-400" />,
+              ghLink: (
+                <a
+                  href="https://github.com/settings/tokens"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300"
+                  aria-label={t("github.patHelpAria")}
+                />
+              ),
+            }}
+          />
         }
       />
     </section>

@@ -8,6 +8,8 @@
  * (`state="missing"` is easier to scan than `connected=false && ...`).
  */
 
+import { useTranslation } from "react-i18next";
+
 interface Props {
   state: "connected" | "missing" | "warning";
   /** Optional sub-text (e.g. "validated 12 minutes ago"). */
@@ -16,32 +18,33 @@ interface Props {
 
 const VARIANT: Record<
   Props["state"],
-  { bg: string; border: string; text: string; icon: string; title: string }
+  { bg: string; border: string; text: string; icon: string; titleKey: string }
 > = {
   connected: {
     bg: "bg-green-950/60",
     border: "border-green-700/50",
     text: "text-green-300",
     icon: "✅",
-    title: "Connected",
+    titleKey: "pill.connected",
   },
   missing: {
     bg: "bg-amber-950/60",
     border: "border-amber-700/50",
     text: "text-amber-300",
     icon: "⚠",
-    title: "Not connected",
+    titleKey: "pill.missing",
   },
   warning: {
     bg: "bg-red-950/60",
     border: "border-red-700/50",
     text: "text-red-300",
     icon: "❌",
-    title: "Rejected",
+    titleKey: "pill.rejected",
   },
 };
 
 export function ConnectedStatusPill({ state, label }: Props) {
+  const { t } = useTranslation("credentials");
   const v = VARIANT[state];
   return (
     <span
@@ -49,7 +52,7 @@ export function ConnectedStatusPill({ state, label }: Props) {
       role="status"
     >
       <span aria-hidden="true">{v.icon}</span>
-      <span className="font-medium">{v.title}</span>
+      <span className="font-medium">{t(v.titleKey)}</span>
       {label && <span className="text-gray-400">— {label}</span>}
     </span>
   );

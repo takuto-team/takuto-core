@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useState, type Ref } from "react";
+import { useTranslation } from "react-i18next";
 import {
   apiJson,
   fetchUserCredentials,
@@ -41,6 +42,7 @@ interface Props {
 }
 
 export function GitHubCredentialsSection({ panelRef }: Props = {}) {
+  const { t } = useTranslation("credentials");
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -56,8 +58,8 @@ export function GitHubCredentialsSection({ panelRef }: Props = {}) {
     ]);
     setCreds(c);
     setAuth(a);
-    setLoadError(c ? null : "Could not load your credentials.");
-  }, []);
+    setLoadError(c ? null : t("loadError"));
+  }, [t]);
 
   useEffect(() => {
     let mounted = true;
@@ -74,17 +76,20 @@ export function GitHubCredentialsSection({ panelRef }: Props = {}) {
       if (e instanceof UserCredentialsError) {
         if (e.code === "sso_authorization_required" && e.orgSsoUrl) {
           showToast(
-            `GitHub SSO required. Authorize at ${e.orgSsoUrl} and try again.`,
+            t("github.toast.ssoRequired", { url: e.orgSsoUrl }),
             "error",
           );
           return;
         }
-        showToast(`${e.message} (code: ${e.code})`, "error");
+        showToast(
+          t("error.withCode", { message: e.message, code: e.code }),
+          "error",
+        );
         return;
       }
       showToast(e instanceof Error ? e.message : fallback, "error");
     },
-    [showToast],
+    [showToast, t],
   );
 
   return (
@@ -92,7 +97,9 @@ export function GitHubCredentialsSection({ panelRef }: Props = {}) {
     // pill, so this tab wrapper carries no duplicate heading — just the
     // load/error gate around the panel.
     <section aria-label="GitHub credentials" className="flex flex-col gap-3">
-      {initialLoading && <p className="text-sm text-gray-500">Loading…</p>}
+      {initialLoading && (
+        <p className="text-sm text-gray-500">{t("loading")}</p>
+      )}
       {!initialLoading && loadError && (
         <p className="text-sm text-red-400">{loadError}</p>
       )}
@@ -110,12 +117,14 @@ export function GitHubCredentialsSection({ panelRef }: Props = {}) {
               });
               await refresh();
               showToast(
-                `GitHub token saved — you're @${next.github?.login ?? "?"}.`,
+                t("github.toast.saved", {
+                  login: next.github?.login ?? "?",
+                }),
                 "success",
               );
               return true;
             } catch (e: unknown) {
-              handleSurfaceError(e, "Could not save your GitHub token.");
+              handleSurfaceError(e, t("github.toast.saveError"));
               return false;
             }
           }}
@@ -124,7 +133,7 @@ export function GitHubCredentialsSection({ panelRef }: Props = {}) {
               await patchGithubSettings({ attribute_commits: attribute });
               await refresh();
             } catch (e: unknown) {
-              handleSurfaceError(e, "Could not update GitHub settings.");
+              handleSurfaceError(e, t("github.toast.settingsError"));
             }
           }}
         />

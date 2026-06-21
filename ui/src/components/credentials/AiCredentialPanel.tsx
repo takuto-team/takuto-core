@@ -16,6 +16,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { ConnectedStatusPill } from "../ConnectedStatusPill";
 import { CredentialPasteField } from "../CredentialPasteField";
 import { parseClaudeSessionBlob } from "../../utils/claudeSession";
@@ -73,6 +74,7 @@ export const AiCredentialPanel = forwardRef<
   { activeProvider, credentials, onSave, onDelete, onDirtyChange }: AiCredentialPanelProps,
   ref,
 ) {
+  const { t } = useTranslation("credentials");
   const [apiKey, setApiKey] = useState("");
   const [sessionJson, setSessionJson] = useState("");
   const [saving, setSaving] = useState(false);
@@ -131,11 +133,11 @@ export const AiCredentialPanel = forwardRef<
    *   - Neither                → undefined (pill shows base copy)
    */
   const pillLabel = useMemo(() => {
-    if (apiKeyActive && cliStateActive) return "API key + Session";
-    if (apiKeyActive) return "API key";
-    if (cliStateActive) return "Session";
+    if (apiKeyActive && cliStateActive) return t("my.ai.pill.both");
+    if (apiKeyActive) return t("my.ai.pill.apiKey");
+    if (cliStateActive) return t("my.ai.pill.session");
     return undefined;
-  }, [apiKeyActive, cliStateActive]);
+  }, [apiKeyActive, cliStateActive, t]);
 
   const submitApiKey = useCallback(async (): Promise<boolean> => {
     setSaving(true);
@@ -201,7 +203,7 @@ export const AiCredentialPanel = forwardRef<
     >
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h3 id="ai-card-title" className="text-lg font-semibold text-white">
-          AI provider — {label}
+          {t("my.ai.cardTitle", { provider: label })}
         </h3>
         <ConnectedStatusPill
           state={hasMatchingCredential ? "connected" : "missing"}
@@ -217,33 +219,33 @@ export const AiCredentialPanel = forwardRef<
               to (or instead of) a bearer API key. */}
           <div
             role="tablist"
-            aria-label="Claude auth method"
+            aria-label={t("my.ai.authMethod")}
             className="flex gap-1 p-1 bg-gray-950/60 border border-gray-800 rounded-lg w-fit"
           >
             <ClaudeAuthTabButton
               isActive={claudeTab === "api_key"}
               connected={apiKeyActive}
               onClick={() => setClaudeTab("api_key")}
-              label="API key"
+              label={t("my.ai.tabApiKey")}
             />
             <ClaudeAuthTabButton
               isActive={claudeTab === "cli_state"}
               connected={cliStateActive}
               onClick={() => setClaudeTab("cli_state")}
-              label="Claude Code session"
+              label={t("my.ai.tabSession")}
             />
           </div>
 
           {claudeTab === "api_key" ? (
             <CredentialPasteField
-              label="Claude API key"
+              label={t("my.ai.apiKeyLabel", { provider: label })}
               value={apiKey}
               onChange={setApiKey}
               onSubmit={submitApiKey}
               saving={saving}
-              placeholder="sk-ant-… or CLAUDE_CODE_OAUTH_TOKEN"
+              placeholder={t("my.ai.claudeApiKeyPlaceholder")}
               helper={apiKeyHelper}
-              saveLabel={apiKeyActive ? "Replace" : "Save"}
+              saveLabel={apiKeyActive ? t("actions.replace") : t("actions.save")}
               canDelete={apiKeyActive}
               deleting={deleting}
               onDelete={onDelete ? () => deleteKind("api_key") : undefined}
@@ -275,8 +277,8 @@ export const AiCredentialPanel = forwardRef<
         <CredentialPasteField
           label={
             activeProvider === "opencode"
-              ? "Bearer token (optional)"
-              : `${label} API key`
+              ? t("my.ai.bearerLabel")
+              : t("my.ai.apiKeyLabel", { provider: label })
           }
           value={apiKey}
           onChange={setApiKey}
@@ -284,11 +286,11 @@ export const AiCredentialPanel = forwardRef<
           saving={saving}
           placeholder={
             activeProvider === "opencode"
-              ? "Leave blank for LM Studio / Ollama"
-              : `Paste your ${label} API key`
+              ? t("my.ai.opencodePlaceholder")
+              : t("my.ai.apiKeyPlaceholder", { provider: label })
           }
           helper={apiKeyHelper}
-          saveLabel={apiKeyActive ? "Replace" : "Save"}
+          saveLabel={apiKeyActive ? t("actions.replace") : t("actions.save")}
           canDelete={apiKeyActive}
           deleting={deleting}
           onDelete={onDelete ? () => deleteKind("api_key") : undefined}
