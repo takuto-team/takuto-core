@@ -39,9 +39,14 @@ interface Props {
    *  onboarding wizard can persist a typed PAT on "Continue". The Config-page
    *  usage omits it and is unaffected. */
   panelRef?: Ref<GitHubCredentialPanelHandle>;
+  /** Reports a typed-but-unsaved PAT so a page-level Save can fold it in. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** When true, the panel's own Save button is hidden — the PAT is persisted by
+   *  a single page-level Save (wizard / settings footer). Defaults to false. */
+  deferSave?: boolean;
 }
 
-export function GitHubCredentialsSection({ panelRef }: Props = {}) {
+export function GitHubCredentialsSection({ panelRef, onDirtyChange, deferSave }: Props = {}) {
   const { t } = useTranslation("credentials");
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
@@ -109,6 +114,8 @@ export function GitHubCredentialsSection({ panelRef }: Props = {}) {
           ref={panelRef}
           github={creds?.github ?? null}
           authMode={auth?.github_mode as GithubAuthMode | undefined}
+          onDirtyChange={onDirtyChange}
+          deferSave={deferSave}
           onSavePat={async (pat, attribute) => {
             try {
               const next = await setGithubPat({

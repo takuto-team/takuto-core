@@ -22,6 +22,8 @@ interface Props {
   /** Forwarded to the per-user PAT panel so the wizard persists a typed PAT
    *  when the user clicks Continue. */
   patPanelRef?: Ref<GitHubCredentialPanelHandle>;
+  /** Reports a typed-but-unsaved PAT so the wizard gates "Save and Continue". */
+  onPatDirtyChange?: (dirty: boolean) => void;
 }
 
 const INPUT_BASE = "w-full bg-gray-950 border rounded-lg px-3 py-2 text-sm";
@@ -36,6 +38,7 @@ export function GitHubStep({
   remoteInvalid,
   canEditGit = true,
   patPanelRef,
+  onPatDirtyChange,
 }: Props) {
   const { t } = useTranslation("onboarding");
   const inputText = canEditGit ? "text-gray-200" : "text-gray-500 cursor-not-allowed";
@@ -116,7 +119,11 @@ export function GitHubStep({
       <div>
         <h3 className="text-sm font-semibold text-gray-300 mb-1">{t("git.pat.heading")}</h3>
         <p className="text-xs text-gray-500 mb-3">{t("git.pat.intro")}</p>
-        <GitHubCredentialsSection panelRef={patPanelRef} />
+        <GitHubCredentialsSection
+          panelRef={patPanelRef}
+          onDirtyChange={onPatDirtyChange}
+          deferSave
+        />
       </div>
     </div>
   );

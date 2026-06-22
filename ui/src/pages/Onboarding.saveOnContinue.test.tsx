@@ -138,15 +138,21 @@ async function continueButton() {
   return (await screen.findByRole("button", { name: /Continue/i })) as HTMLButtonElement;
 }
 
-/** Click "Continue" once and wait for the click's async work to settle. */
+/** Click "Save and Continue" once and wait for the click's async work to settle. */
 async function clickContinue() {
   fireEvent.click(await continueButton());
 }
 
-/** Advance from step 1 to step 2 via Continue (ticketing = none, no creds). */
+/** Click "Skip for now" — advances without saving (used for pure-advance steps
+ *  where the primary button is dirty-gated and disabled with no changes). */
+async function clickSkip() {
+  fireEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
+}
+
+/** Advance from step 1 to step 2 via Skip (ticketing = none, nothing dirty). */
 async function goToStep2() {
   await screen.findByLabelText("Ticketing system");
-  await clickContinue();
+  await clickSkip();
   await screen.findByLabelText(/Claude API key/i);
 }
 
@@ -214,8 +220,8 @@ describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
     renderWizard();
     await goToStep2();
 
-    // Do not type a key. Click Continue.
-    await clickContinue();
+    // Do not type a key — "Save and Continue" is disabled, so Skip advances.
+    await clickSkip();
 
     await waitFor(() => {
       expect(screen.getByLabelText("Base branch")).toBeTruthy();
@@ -246,8 +252,8 @@ describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
 describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
   async function goToStep3() {
     await goToStep2();
-    // Step 2 → 3 with a blank key (no credential POST).
-    await clickContinue();
+    // Step 2 → 3 with a blank key (Skip; "Save and Continue" is dirty-gated).
+    await clickSkip();
     await screen.findByLabelText("Base branch");
   }
 
@@ -272,7 +278,8 @@ describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
     renderWizard();
     await goToStep3();
 
-    await clickContinue();
+    // Blank PAT and blank git edits → "Save and Continue" is disabled; Skip.
+    await clickSkip();
 
     // Advanced to step 4 (Repositories step — the embedded MyRepositoriesTab).
     await waitFor(() => {

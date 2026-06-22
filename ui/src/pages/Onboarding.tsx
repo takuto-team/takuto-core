@@ -33,7 +33,7 @@
  * to the dashboard.
  */
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Trans, useTranslation } from "react-i18next";
 import { useOnboardingFlow } from "../hooks/useOnboardingFlow";
@@ -49,6 +49,7 @@ import {
   type ItemPollingSettingsHandle,
 } from "../components/admin/ItemPollingSettingsSection";
 import { MyRepositoriesTab } from "../components/MyRepositoriesTab";
+import { WizardFooter } from "../components/WizardFooter";
 import type { TicketingSystemId } from "../api/types";
 import { GitHubStep } from "./Onboarding/GitHubStep";
 import { OnboardingAiKey } from "./Onboarding/OnboardingAiKey";
@@ -80,6 +81,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
     gitBaseBranch,
     gitRemote,
     stepTimeoutSecs,
+    isDirty: providerDirty,
     save,
   } = useProviderForm();
 
@@ -103,6 +105,12 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
   const aiKeyRef = useRef<AiCredentialPanelHandle>(null);
   const githubPatRef = useRef<GitHubCredentialPanelHandle>(null);
   const pollingRef = useRef<ItemPollingSettingsHandle>(null);
+
+  // Typed-but-unsaved signals from the inline credential / polling sections,
+  // folded into each step's dirty state so "Save and Continue" enables.
+  const [pollingDirty, setPollingDirty] = useState(false);
+  const [aiKeyDirty, setAiKeyDirty] = useState(false);
+  const [patDirty, setPatDirty] = useState(false);
 
   const { step, completing, goNext, goSkip, goBack } = useOnboardingFlow({
     onBeforeNext: async (s) => {
@@ -144,8 +152,27 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
   // choosing "None" hides the section immediately (matching TicketingTab).
   const showPolling = !loading && !!isAdmin && ticketing.system !== "none";
 
+  // "Save and Continue" enables only when the current step has unsaved changes.
+  // Steps 4 (Repositories — advance-only, saved via its own buttons) and 5
+  // (Finish — terminal action) are always enabled.
+  const stepDirty =
+    step === 1
+      ? ticketing.isDirty || pollingDirty
+      : step === 2
+        ? providerDirty || aiKeyDirty
+        : step === 3
+          ? git.isDirty || patDirty
+          : true;
+  const anySaving = saving || ticketing.saving || git.saving || timeout.saving;
+  const continueDisabled =
+    !stepDirty ||
+    anySaving ||
+    completing ||
+    // Self-hosted spec: block step 2 when OpenCode lacks base_url + model.
+    (step === 2 && provider === "opencode" && (baseUrl.trim() === "" || model.trim() === ""));
+
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
         <div className="w-full px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-14">
@@ -168,7 +195,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
         </div>
       </header>
 
-      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
+      <main className="flex-1 min-h-0 overflow-y-auto w-full px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
         <Stepper current={step} />
 
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col gap-4">
@@ -200,7 +227,11 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                   {showPolling && (
                     <div className="border-t border-gray-800 pt-6">
                       <p className="text-xs text-gray-500 mb-4">{t("polling.note")}</p>
-                      <ItemPollingSettingsSection ref={pollingRef} />
+                      <ItemPollingSettingsSection
+                        ref={pollingRef}
+                        onDirtyChange={setPollingDirty}
+                        hideSave
+                      />
                     </div>
                   )}
                 </>
@@ -217,7 +248,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                     extraArgsText={extraArgsText}
                     onChangeExtraArgs={setExtraArgsText}
                   />
-                  <OnboardingAiKey ref={aiKeyRef} provider={provider} />
+                  <OnboardingAiKey ref={aiKeyRef} provider={provider} onDirtyChange={setAiKeyDirty} />
                 </div>
               )}
               {step === 3 && (
@@ -231,6 +262,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                   remoteInvalid={git.remoteInvalid}
                   canEditGit={!!isAdmin}
                   patPanelRef={githubPatRef}
+                  onPatDirtyChange={setPatDirty}
                 />
               )}
               {step === 4 && <MyRepositoriesTab isAdmin={isAdmin} />}
@@ -278,56 +310,19 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
             </div>
           )}
 
-          <div className="flex justify-between items-center mt-2">
-            <button
-              type="button"
-              onClick={goBack}
-              disabled={step === 1}
-              className="text-xs text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {t("nav.back")}
-            </button>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={goSkip}
-                className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-              >
-                {t("nav.skip")}
-              </button>
-              <button
-                type="button"
-                onClick={goNext}
-                disabled={
-                  saving ||
-                  ticketing.saving ||
-                  git.saving ||
-                  timeout.saving ||
-                  completing ||
-                  // Self-hosted spec (2026-05-27 §2.5): block Continue on
-                  // step 2 when OpenCode is selected without base_url +
-                  // model. The server returns 400 in that case; the
-                  // client-side guard makes the requirement visible up
-                  // front. The "Skip for now" button stays enabled — the
-                  // operator can come back to AI Settings later.
-                  (step === 2 &&
-                    provider === "opencode" &&
-                    (baseUrl.trim() === "" || model.trim() === ""))
-                }
-                className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              >
-                {step === 5
-                  ? completing
-                    ? t("nav.finishing")
-                    : t("nav.finish")
-                  : saving || ticketing.saving || git.saving
-                    ? t("nav.saving")
-                    : t("nav.continue")}
-              </button>
-            </div>
-          </div>
         </div>
       </main>
+
+      <WizardFooter
+        isFirstStep={step === 1}
+        isLastStep={step === 5}
+        continueDisabled={continueDisabled}
+        saving={anySaving}
+        completing={completing}
+        onBack={goBack}
+        onSkip={goSkip}
+        onContinue={goNext}
+      />
     </div>
   );
 }

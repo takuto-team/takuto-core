@@ -42,7 +42,7 @@
   "nav": {
     "back": "← Retour",
     "skip": "Ignorer pour l'instant",
-    "continue": "Continuer",
+    "continue": "Enregistrer et continuer",
     "saving": "Enregistrement…",
     "finish": "Terminer la configuration",
     "finishing": "Finalisation…"

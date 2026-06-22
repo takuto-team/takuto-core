@@ -42,7 +42,7 @@
   "nav": {
     "back": "← 戻る",
     "skip": "今はスキップ",
-    "continue": "続行",
+    "continue": "保存して続行",
     "saving": "保存中…",
     "finish": "セットアップを完了",
     "finishing": "完了中…"

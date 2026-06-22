@@ -31,10 +31,12 @@ import { useToast } from "../../hooks/useToast";
 interface Props {
   /** Provider selected in the step-2 form; the key entry is scoped to it. */
   provider: AgentProviderId;
+  /** Reports a typed-but-unsaved key/session so the wizard gates "Save and Continue". */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 export const OnboardingAiKey = forwardRef<AiCredentialPanelHandle, Props>(
-  function OnboardingAiKey({ provider }: Props, ref) {
+  function OnboardingAiKey({ provider, onDirtyChange }: Props, ref) {
   const { t } = useTranslation("onboarding");
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
@@ -95,6 +97,8 @@ export const OnboardingAiKey = forwardRef<AiCredentialPanelHandle, Props>(
       activeProvider={provider}
       credentials={creds}
       onSave={handleSave}
+      onDirtyChange={onDirtyChange}
+      deferSave
     />
   );
   },

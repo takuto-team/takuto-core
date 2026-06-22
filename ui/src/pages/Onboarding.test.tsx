@@ -145,6 +145,25 @@ describe("Onboarding wizard — Git & GitHub step", () => {
   });
 });
 
+describe("Onboarding wizard — fixed footer dirty-gating", () => {
+  it("disables 'Save and Continue' until the step is dirty; Skip always advances", async () => {
+    stubFetch("none");
+    renderWizard(true);
+    const select = await screen.findByLabelText("Ticketing system");
+
+    const saveContinue = () =>
+      screen.getByRole("button", { name: /save and continue/i }) as HTMLButtonElement;
+    const skip = () => screen.getByRole("button", { name: "Skip for now" }) as HTMLButtonElement;
+    // Nothing changed yet → primary button disabled; Skip stays enabled.
+    expect(saveContinue().disabled).toBe(true);
+    expect(skip().disabled).toBe(false);
+
+    // Change the ticketing system → step becomes dirty → button enables.
+    fireEvent.change(select, { target: { value: "github" } });
+    await waitFor(() => expect(saveContinue().disabled).toBe(false));
+  });
+});
+
 describe("Onboarding wizard — Repositories step", () => {
   it("renders the add-repositories UI at step 4 (before the Workflows step)", async () => {
     stubFetch("none");

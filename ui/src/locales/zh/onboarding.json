@@ -42,7 +42,7 @@
   "nav": {
     "back": "← 返回",
     "skip": "暂时跳过",
-    "continue": "继续",
+    "continue": "保存并继续",
     "saving": "正在保存…",
     "finish": "完成设置",
     "finishing": "正在完成…"
