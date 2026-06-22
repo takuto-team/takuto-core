@@ -183,7 +183,10 @@ describe("Onboarding — save-on-continue, step 1 (item polling)", () => {
       expect(pollingPuts().length).toBeGreaterThanOrEqual(1);
     });
     expect(pollingPuts()[0].body).toMatchObject({ auto_polling: false });
-  });
+    // Larger per-test timeout: the inline polling section data-loads on mount,
+    // and its 5s findBy above would otherwise collide with the default 5s test
+    // budget and time out under CI contention before the section appears.
+  }, 20000);
 });
 
 describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
