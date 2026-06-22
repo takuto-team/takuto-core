@@ -23,6 +23,10 @@
     "workflows": {
       "title": "工作流",
       "body": "查看可在每个工作项上运行的流程。你可以随时调整或重新初始化它们。"
+    },
+    "repositories": {
+      "title": "仓库",
+      "body": "添加 Takuto 可以处理的 GitHub 仓库 —— 您将在下一步为每个仓库设置工作流。"
     }
   },
   "polling": {

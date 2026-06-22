@@ -8,11 +8,11 @@
  * the wizard navigation state machine is in `../hooks/useOnboardingFlow`,
  * the provider-form state + `/api/config` fetch are in `../hooks/useProviderForm`,
  * the step-1 ticketing selector state is in `../hooks/useTicketingForm`,
- * the step-3 git settings in `../hooks/useGitForm`, and the step-4 step-timeout
+ * the step-3 git settings in `../hooks/useGitForm`, and the step-5 step-timeout
  * in `../hooks/useStepTimeoutForm`. All of them seed from the single
  * `/api/config` fetch in `useProviderForm`.
  *
- * 4 steps:
+ * 5 steps:
  *   1. Ticketing      — selector (None / GitHub / Jira); Jira shows a
  *                        site/email/token form saved per-user. Writes
  *                        `[general] ticketing_system` via PUT /api/config.
@@ -22,7 +22,10 @@
  *                        API-key entry (AiCredentialPanel).
  *   3. Git & GitHub   — git base branch + remote (PUT /api/config/git),
  *                        GitHub App status, and an optional per-user PAT.
- *   4. Workflows      — step timeout (PUT /api/config/agent) + the per-user /
+ *   4. Repositories   — add the GitHub repos Takuto can work in
+ *                        (MyRepositoriesTab) so step 5 has repos to attach
+ *                        flows to. Adds/removes persist via their own buttons.
+ *   5. Workflows      — step timeout (PUT /api/config/agent) + the per-user /
  *                        per-workspace flows editor (FlowsTab).
  *
  * Each step has Skip / Back / Continue; the last step has Finish instead of
@@ -45,6 +48,7 @@ import {
   ItemPollingSettingsSection,
   type ItemPollingSettingsHandle,
 } from "../components/admin/ItemPollingSettingsSection";
+import { MyRepositoriesTab } from "../components/MyRepositoriesTab";
 import type { TicketingSystemId } from "../api/types";
 import { GitHubStep } from "./Onboarding/GitHubStep";
 import { OnboardingAiKey } from "./Onboarding/OnboardingAiKey";
@@ -128,7 +132,9 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
         if (!patOk) return false;
         return git.save();
       }
-      if (s === 4) return timeout.save();
+      // Step 4 (repositories) saves via its own Add/Remove buttons — nothing
+      // to persist on Continue.
+      if (s === 5) return timeout.save();
       return true;
     },
   });
@@ -227,7 +233,8 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                   patPanelRef={githubPatRef}
                 />
               )}
-              {step === 4 && (
+              {step === 4 && <MyRepositoriesTab isAdmin={isAdmin} />}
+              {step === 5 && (
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-3">
                     <h3 className="text-sm font-semibold text-gray-300 mb-1">{t("stepTimeout.heading")}</h3>
@@ -261,7 +268,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
             </>
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-3 text-xs text-gray-400">
               <Trans
                 i18nKey="dbNote"
@@ -309,7 +316,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                 }
                 className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
-                {step === 4
+                {step === 5
                   ? completing
                     ? t("nav.finishing")
                     : t("nav.finish")

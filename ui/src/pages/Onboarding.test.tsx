@@ -145,12 +145,25 @@ describe("Onboarding wizard — Git & GitHub step", () => {
   });
 });
 
+describe("Onboarding wizard — Repositories step", () => {
+  it("renders the add-repositories UI at step 4 (before the Workflows step)", async () => {
+    stubFetch("none");
+    renderWizard(true);
+    await screen.findByLabelText("Ticketing system");
+    await skipToStep(4);
+    // MyRepositoriesTab is embedded — its "My Repositories" header is present
+    // and the step-5 timeout field is not yet shown.
+    expect(await screen.findByText("My Repositories")).toBeTruthy();
+    expect(screen.queryByLabelText("Timeout (seconds)")).toBeNull();
+  });
+});
+
 describe("Onboarding wizard — Workflows step", () => {
   it("renders the step-timeout field (seeded) and the database/port note", async () => {
     stubFetch("none");
     renderWizard(true);
     await screen.findByLabelText("Ticketing system");
-    await skipToStep(4);
+    await skipToStep(5);
     const timeout = (await screen.findByLabelText("Timeout (seconds)")) as HTMLInputElement;
     expect(timeout.value).toBe("2400");
     expect(

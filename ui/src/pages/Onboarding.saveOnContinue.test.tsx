@@ -274,9 +274,9 @@ describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
 
     await clickContinue();
 
-    // Advanced to step 4 (Workflows step — step-timeout field).
+    // Advanced to step 4 (Repositories step — the embedded MyRepositoriesTab).
     await waitFor(() => {
-      expect(screen.getByLabelText("Timeout (seconds)")).toBeTruthy();
+      expect(screen.getByText("My Repositories")).toBeTruthy();
     });
     expect(patPosts().length).toBe(0);
   });

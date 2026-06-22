@@ -5,7 +5,7 @@ import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiPost } from "../api/client";
 
-export type StepIndex = 1 | 2 | 3 | 4;
+export type StepIndex = 1 | 2 | 3 | 4 | 5;
 
 interface FlowConfig {
   /** Per-step pre-flight hook. Return `false` to block forward navigation
@@ -45,7 +45,7 @@ export function useOnboardingFlow({ onBeforeNext }: FlowConfig = {}) {
       const ok = await onBeforeNext(step);
       if (ok === false) return;
     }
-    if (step === 4) {
+    if (step === 5) {
       await completeWizard();
       return;
     }
@@ -53,7 +53,7 @@ export function useOnboardingFlow({ onBeforeNext }: FlowConfig = {}) {
   }, [step, onBeforeNext, completeWizard]);
 
   const goSkip = useCallback(() => {
-    if (step === 4) {
+    if (step === 5) {
       void completeWizard();
       return;
     }

@@ -23,6 +23,10 @@
     "workflows": {
       "title": "Flujos de trabajo",
       "body": "Revisa los flujos que puedes ejecutar en cada elemento de trabajo. Ajústalos o vuelve a generarlos cuando quieras."
+    },
+    "repositories": {
+      "title": "Repositorios",
+      "body": "Añade los repositorios de GitHub en los que Takuto puede trabajar; en el siguiente paso configurarás flujos de trabajo para cada uno."
     }
   },
   "polling": {

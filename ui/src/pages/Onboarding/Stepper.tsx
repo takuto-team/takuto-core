@@ -8,7 +8,8 @@ export const ONBOARDING_STEPS: { index: StepIndex; titleKey: string; bodyKey: st
   { index: 1, titleKey: "step.ticketing.title", bodyKey: "step.ticketing.body" },
   { index: 2, titleKey: "step.provider.title", bodyKey: "step.provider.body" },
   { index: 3, titleKey: "step.git.title", bodyKey: "step.git.body" },
-  { index: 4, titleKey: "step.workflows.title", bodyKey: "step.workflows.body" },
+  { index: 4, titleKey: "step.repositories.title", bodyKey: "step.repositories.body" },
+  { index: 5, titleKey: "step.workflows.title", bodyKey: "step.workflows.body" },
 ];
 
 export function Stepper({ current }: { current: StepIndex }) {

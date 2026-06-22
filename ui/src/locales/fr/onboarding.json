@@ -23,6 +23,10 @@
     "workflows": {
       "title": "Workflows",
       "body": "Passez en revue les flux que vous pouvez exécuter sur chaque élément de travail. Ajustez-les ou réinitialisez-les à tout moment."
+    },
+    "repositories": {
+      "title": "Dépôts",
+      "body": "Ajoutez les dépôts GitHub dans lesquels Takuto peut travailler — vous configurerez des workflows pour chacun à l'étape suivante."
     }
   },
   "polling": {

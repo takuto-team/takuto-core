@@ -23,6 +23,10 @@
     "workflows": {
       "title": "Workflows",
       "body": "Review the flows you can run on each work item. Tweak or re-seed them any time."
+    },
+    "repositories": {
+      "title": "Repositories",
+      "body": "Add the GitHub repositories Takuto can work in — you'll set up workflows for each in the next step."
     }
   },
   "polling": {
