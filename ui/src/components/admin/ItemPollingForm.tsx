@@ -127,6 +127,9 @@ export function ItemPollingForm({
         </button>
       </section>
 
+      {/* The rest of the settings only apply while polling is enabled. */}
+      {draft.auto_polling && (
+        <>
       {/* Poll interval */}
       <section className="flex flex-col gap-2">
         <label htmlFor="poll-interval-input" className="text-xs text-gray-400">
@@ -305,6 +308,8 @@ export function ItemPollingForm({
         <p className="text-xs text-gray-500">
           {t("polling.noTicketing")}
         </p>
+      )}
+        </>
       )}
 
       {/* Save */}
