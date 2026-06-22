@@ -100,6 +100,9 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
   const keepingExisting = connected !== null && filledCount === 0;
   const jiraPartial = !keepingExisting && filledCount > 0 && filledCount < 3;
   const systemChanged = system !== persistedSystem;
+  // Dirty when the system selection changed, or the user has typed into any
+  // Jira field (a connected user leaving the fields blank stays clean).
+  const isDirty = systemChanged || (system === "jira" && filledCount > 0);
 
   const save = useCallback(async (): Promise<boolean> => {
     if (system === "jira" && jiraPartial) {
@@ -204,6 +207,7 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     setToken,
     saving,
     connected,
+    isDirty,
     save,
     disconnect,
   };

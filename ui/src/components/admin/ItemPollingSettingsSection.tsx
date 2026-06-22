@@ -146,19 +146,34 @@ function jiraPatchFromDraft(draft: ItemPollingDraft): JiraConfigPatch {
 /** Imperative handle so a parent (e.g. the onboarding wizard) can persist the
  *  current draft on "Continue" instead of relying on the inline Save button. */
 export interface ItemPollingSettingsHandle {
+  /** Whether the draft differs from the loaded config. */
+  isDirty: () => boolean;
   /** Persist the current polling (+ Jira-context) draft. Resolves `false` on a
    *  hard error (so the wizard can stay on the step). */
   save: () => Promise<boolean>;
 }
 
-export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
-  function ItemPollingSettingsSection(_props, ref) {
+interface ItemPollingSettingsProps {
+  /** Reports draft-vs-loaded dirtiness so a parent page-level Save can fold
+   *  this section in and gate its combined dirty state. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** When true, hide this section's own Save button — the draft is persisted
+   *  by a single page-level Save (settings footer / wizard). Defaults to false. */
+  hideSave?: boolean;
+}
+
+export const ItemPollingSettingsSection = forwardRef<
+  ItemPollingSettingsHandle,
+  ItemPollingSettingsProps
+>(function ItemPollingSettingsSection({ onDirtyChange, hideSave = false }, ref) {
   const { t } = useTranslation("config");
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<ItemPollingDraft>(EMPTY_POLLING_DRAFT);
+  // Loaded baseline for the dirty check.
+  const [original, setOriginal] = useState<ItemPollingDraft>(EMPTY_POLLING_DRAFT);
   const [flows, setFlows] = useState<AutoStartFlowOption[]>([]);
   const [ticketingSystem, setTicketingSystem] = useState("none");
 
@@ -167,7 +182,9 @@ export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
     setError("");
     Promise.all([apiJson<ConfigResponse>("/api/config"), getMyFlows()])
       .then(([config, flowsResponse]) => {
-        setDraft(draftFromConfig(config));
+        const seeded = draftFromConfig(config);
+        setDraft(seeded);
+        setOriginal(seeded);
         setTicketingSystem(config.ticketing_system ?? "none");
         setFlows(
           flowsResponse.flows.map((f) => ({ slug: slugify(f.name), name: f.name })),
@@ -202,7 +219,11 @@ export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
       // Config without the synthesized `ticketing_system` field, so reading
       // it would clobber the loaded value with "none" and hide the filters
       // until refresh. It can't change as a result of this save.
-      setDraft(draftFromConfig(updated));
+      {
+        const fresh = draftFromConfig(updated);
+        setDraft(fresh);
+        setOriginal(fresh);
+      }
       if (persistWarning) {
         showToast(t("polling.persistWarning", { reason: persistWarning }), "error");
       } else {
@@ -221,7 +242,12 @@ export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
     }
   }, [draft, ticketingSystem, showToast, t]);
 
-  useImperativeHandle(ref, () => ({ save: runSave }), [runSave]);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(original);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useImperativeHandle(ref, () => ({ isDirty: () => dirty, save: runSave }), [dirty, runSave]);
 
   return (
     <section aria-labelledby="item-polling-section-title" className="flex flex-col gap-3">
@@ -244,6 +270,7 @@ export const ItemPollingSettingsSection = forwardRef<ItemPollingSettingsHandle>(
           ticketingSystem={ticketingSystem}
           onSave={() => void runSave()}
           saving={saving}
+          hideSave={hideSave}
         />
       )}
     </section>

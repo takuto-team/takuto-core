@@ -48,6 +48,13 @@ interface Props {
   onDelete?: () => void;
   /** Delete-in-flight toggle — disables the delete button while the request runs. */
   deleting?: boolean;
+  /**
+   * When true, hide the Save button and disable Enter-to-submit — the value is
+   * persisted by a single page-level Save (the wizard / settings footer) which
+   * calls the parent panel's deferred save. The Delete button still renders
+   * when `canDelete`. Defaults to false (the field owns its own Save).
+   */
+  hideSave?: boolean;
 }
 
 export function CredentialPasteField({
@@ -62,6 +69,7 @@ export function CredentialPasteField({
   canDelete = false,
   onDelete,
   deleting = false,
+  hideSave = false,
 }: Props) {
   const { t } = useTranslation("credentials");
   const inputId = useId();
@@ -106,7 +114,7 @@ export function CredentialPasteField({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && canSubmit) onSubmit();
+              if (e.key === "Enter" && canSubmit && !hideSave) onSubmit();
             }}
             placeholder={placeholder}
             disabled={saving}
@@ -124,14 +132,16 @@ export function CredentialPasteField({
             {revealed ? t("paste.conceal") : t("paste.reveal")}
           </button>
         </div>
-        <button
-          type="button"
-          disabled={!canSubmit}
-          onClick={onSubmit}
-          className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-        >
-          {saving ? t("actions.saving") : (saveLabel ?? t("actions.save"))}
-        </button>
+        {!hideSave && (
+          <button
+            type="button"
+            disabled={!canSubmit}
+            onClick={onSubmit}
+            className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {saving ? t("actions.saving") : (saveLabel ?? t("actions.save"))}
+          </button>
+        )}
         {showDelete && (
           <button
             type="button"

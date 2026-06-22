@@ -38,6 +38,9 @@ export function useProviderForm() {
   const [model, setModel] = useState("");
   const [extraArgsText, setExtraArgsText] = useState("");
   const [saving, setSaving] = useState(false);
+  // Seeded values from /api/config, used to compute `isDirty` (the wizard
+  // gates "Save and Continue" on it). Updated on load and after a save.
+  const [seed, setSeed] = useState({ provider: "claude", baseUrl: "", model: "", extraArgsText: "" });
 
   useEffect(() => {
     apiJson<ConfigResponse>("/api/config")
@@ -49,9 +52,13 @@ export function useProviderForm() {
         const sub = agent.providers?.[p as keyof typeof agent.providers] as
           | { base_url?: string; model?: string; extra_args?: string[] }
           | undefined;
-        setBaseUrl(sub?.base_url ?? "");
-        setModel(sub?.model ?? "");
-        setExtraArgsText((sub?.extra_args ?? []).join("\n"));
+        const seededBaseUrl = sub?.base_url ?? "";
+        const seededModel = sub?.model ?? "";
+        const seededExtra = (sub?.extra_args ?? []).join("\n");
+        setBaseUrl(seededBaseUrl);
+        setModel(seededModel);
+        setExtraArgsText(seededExtra);
+        setSeed({ provider: p, baseUrl: seededBaseUrl, model: seededModel, extraArgsText: seededExtra });
       })
       .catch(() => {
         // Server might still be coming up — wizard remains usable but the
@@ -77,6 +84,15 @@ export function useProviderForm() {
     const v = config?.agent?.step_timeout_secs;
     return typeof v === "number" ? v : undefined;
   }, [config]);
+
+  const isDirty = useMemo(
+    () =>
+      provider !== seed.provider ||
+      baseUrl !== seed.baseUrl ||
+      model !== seed.model ||
+      extraArgsText !== seed.extraArgsText,
+    [provider, baseUrl, model, extraArgsText, seed],
+  );
 
   const save = useCallback(async (): Promise<boolean> => {
     setSaving(true);
@@ -105,6 +121,7 @@ export function useProviderForm() {
     };
     try {
       await putAgentConfig(patch);
+      setSeed({ provider, baseUrl, model, extraArgsText });
       showToast(t("ai.providerConfigured"), "success");
       return true;
     } catch (e: unknown) {
@@ -137,6 +154,7 @@ export function useProviderForm() {
     gitBaseBranch,
     gitRemote,
     stepTimeoutSecs,
+    isDirty,
     save,
   };
 }

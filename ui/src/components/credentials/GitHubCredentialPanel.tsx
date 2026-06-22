@@ -26,6 +26,12 @@ interface GitHubCredentialPanelProps {
    *  (the caller renders the error toast). */
   onSavePat: (pat: string, attributeCommits: boolean) => Promise<boolean>;
   onToggleAttributeCommits: (next: boolean) => Promise<void>;
+  /** Reports `true` when a PAT is typed-but-unsaved, so a parent page-level
+   *  Save can fold it in and gate its dirty state. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** When true, hide the panel's own Save button — the PAT is persisted by a
+   *  single page-level Save that calls `saveIfDirty`. Defaults to false. */
+  deferSave?: boolean;
 }
 
 /**
@@ -47,7 +53,7 @@ export const GitHubCredentialPanel = forwardRef<
   GitHubCredentialPanelHandle,
   GitHubCredentialPanelProps
 >(function GitHubCredentialPanel(
-  { github, authMode, onSavePat, onToggleAttributeCommits }: GitHubCredentialPanelProps,
+  { github, authMode, onSavePat, onToggleAttributeCommits, onDirtyChange, deferSave = false }: GitHubCredentialPanelProps,
   ref,
 ) {
   const { t } = useTranslation("credentials");
@@ -58,6 +64,11 @@ export const GitHubCredentialPanel = forwardRef<
   useEffect(() => {
     setAttribute(github?.attribute_commits ?? true);
   }, [github?.attribute_commits]);
+
+  // Report a typed-but-unsaved PAT so a parent page-level Save can fold it in.
+  useEffect(() => {
+    onDirtyChange?.(pat.trim() !== "");
+  }, [pat, onDirtyChange]);
 
   // Wire-format note: presence of a PAT is derived from the parent's
   // `github` field being non-null. The backend never returns `has_pat` —
@@ -171,6 +182,7 @@ export const GitHubCredentialPanel = forwardRef<
         value={pat}
         onChange={setPat}
         onSubmit={submit}
+        hideSave={deferSave}
         saving={saving}
         placeholder={t("github.patPlaceholder")}
         saveLabel={hasPat ? t("actions.replace") : t("github.patSaveLabel")}

@@ -47,6 +47,9 @@ interface AiCredentialPanelProps {
    * Informational only — the credential still saves via its own Save button.
    */
   onDirtyChange?: (dirty: boolean) => void;
+  /** When true, hide the panel's own Save buttons — the credential is persisted
+   *  by a single page-level Save that calls `saveIfDirty`. Defaults to false. */
+  deferSave?: boolean;
 }
 
 /**
@@ -71,7 +74,7 @@ export const AiCredentialPanel = forwardRef<
   AiCredentialPanelHandle,
   AiCredentialPanelProps
 >(function AiCredentialPanel(
-  { activeProvider, credentials, onSave, onDelete, onDirtyChange }: AiCredentialPanelProps,
+  { activeProvider, credentials, onSave, onDelete, onDirtyChange, deferSave = false }: AiCredentialPanelProps,
   ref,
 ) {
   const { t } = useTranslation("credentials");
@@ -242,6 +245,7 @@ export const AiCredentialPanel = forwardRef<
               value={apiKey}
               onChange={setApiKey}
               onSubmit={submitApiKey}
+              hideSave={deferSave}
               saving={saving}
               placeholder={t("my.ai.claudeApiKeyPlaceholder")}
               helper={apiKeyHelper}
@@ -258,6 +262,7 @@ export const AiCredentialPanel = forwardRef<
                 if (sessionError) setSessionError(null);
               }}
               onSubmit={submitSession}
+              hideSave={deferSave}
               saving={saving}
               error={sessionError}
               connected={cliStateActive}
@@ -283,6 +288,7 @@ export const AiCredentialPanel = forwardRef<
           value={apiKey}
           onChange={setApiKey}
           onSubmit={submitApiKey}
+          hideSave={deferSave}
           saving={saving}
           placeholder={
             activeProvider === "opencode"

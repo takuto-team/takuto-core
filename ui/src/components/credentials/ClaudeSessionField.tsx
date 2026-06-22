@@ -62,6 +62,7 @@ export function ClaudeSessionField({
   error,
   connected,
   helper,
+  hideSave = false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -70,6 +71,8 @@ export function ClaudeSessionField({
   error: string | null;
   connected: boolean;
   helper: string;
+  /** Hide the field's own Save button — persisted by a page-level Save. */
+  hideSave?: boolean;
 }) {
   const { t } = useTranslation("credentials");
   const [showHelp, setShowHelp] = useState(false);
@@ -149,20 +152,22 @@ export function ClaudeSessionField({
           </p>
         </div>
       )}
-      <div className="flex justify-end">
-        <button
-          type="button"
-          disabled={!canSubmit}
-          onClick={onSubmit}
-          className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-        >
-          {saving
-            ? t("actions.saving")
-            : connected
-              ? t("my.claude.replaceSession")
-              : t("my.claude.saveSession")}
-        </button>
-      </div>
+      {!hideSave && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            disabled={!canSubmit}
+            onClick={onSubmit}
+            className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {saving
+              ? t("actions.saving")
+              : connected
+                ? t("my.claude.replaceSession")
+                : t("my.claude.saveSession")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

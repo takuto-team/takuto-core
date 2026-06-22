@@ -46,19 +46,29 @@ export function useGitForm({
   const [remote, setRemote] = useState(DEFAULT_REMOTE);
   const [seeded, setSeeded] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Seeded baseline for the dirty check (the wizard gates "Save and Continue").
+  const [seedVals, setSeedVals] = useState({
+    baseBranch: DEFAULT_BASE_BRANCH,
+    remote: DEFAULT_REMOTE,
+  });
 
   // Seed once the config has loaded. Guarded by `seeded` so a later re-render
   // of the parent doesn't clobber an edit the user has since made.
   useEffect(() => {
     if (ready && !seeded) {
-      setBaseBranch(initialBaseBranch.trim() || DEFAULT_BASE_BRANCH);
-      setRemote(initialRemote.trim() || DEFAULT_REMOTE);
+      const b = initialBaseBranch.trim() || DEFAULT_BASE_BRANCH;
+      const r = initialRemote.trim() || DEFAULT_REMOTE;
+      setBaseBranch(b);
+      setRemote(r);
+      setSeedVals({ baseBranch: b, remote: r });
       setSeeded(true);
     }
   }, [ready, seeded, initialBaseBranch, initialRemote]);
 
   const baseBranchInvalid = baseBranch.trim() === "";
   const remoteInvalid = remote.trim() === "";
+  // Non-admins have read-only inputs, so they can never be dirty.
+  const isDirty = canSave && (baseBranch !== seedVals.baseBranch || remote !== seedVals.remote);
 
   const save = useCallback(async (): Promise<boolean> => {
     // Git settings are deployment-level and admin-gated server-side. A
@@ -75,6 +85,7 @@ export function useGitForm({
     setSaving(true);
     try {
       await putGitConfig({ base_branch: baseBranch.trim(), remote: remote.trim() });
+      setSeedVals({ baseBranch, remote });
       showToast(t("git.saved"), "success");
       return true;
     } catch (e: unknown) {
@@ -104,6 +115,7 @@ export function useGitForm({
     baseBranchInvalid,
     remoteInvalid,
     saving,
+    isDirty,
     save,
   };
 }

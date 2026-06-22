@@ -29,22 +29,25 @@ export function useStepTimeoutForm({ initialSecs, ready }: Config) {
   const { t } = useTranslation("config");
   const { showToast } = useToast();
   const [value, setValue] = useState(DEFAULT_STEP_TIMEOUT);
+  const [seedValue, setSeedValue] = useState(DEFAULT_STEP_TIMEOUT);
   const [seeded, setSeeded] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (ready && !seeded) {
-      setValue(
+      const v =
         typeof initialSecs === "number" && initialSecs > 0
           ? String(initialSecs)
-          : DEFAULT_STEP_TIMEOUT,
-      );
+          : DEFAULT_STEP_TIMEOUT;
+      setValue(v);
+      setSeedValue(v);
       setSeeded(true);
     }
   }, [ready, seeded, initialSecs]);
 
   const parsed = Number.parseInt(value.trim(), 10);
   const invalid = !(Number.isFinite(parsed) && parsed > 0);
+  const isDirty = value !== seedValue;
 
   const save = useCallback(async (): Promise<boolean> => {
     if (invalid) {
@@ -55,6 +58,7 @@ export function useStepTimeoutForm({ initialSecs, ready }: Config) {
     setSaving(true);
     try {
       await putAgentConfig({ step_timeout_secs: parsed });
+      setSeedValue(value);
       showToast(t("ai.guardrails.savedToast"), "success");
       return true;
     } catch (e: unknown) {
@@ -69,7 +73,7 @@ export function useStepTimeoutForm({ initialSecs, ready }: Config) {
     } finally {
       setSaving(false);
     }
-  }, [parsed, invalid, showToast, t]);
+  }, [parsed, invalid, value, showToast, t]);
 
-  return { value, setValue, invalid, saving, save };
+  return { value, setValue, invalid, saving, isDirty, save };
 }
