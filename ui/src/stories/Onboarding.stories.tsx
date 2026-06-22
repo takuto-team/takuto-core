@@ -3,8 +3,9 @@
 
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useEffect, useState, type ReactNode } from "react";
-import { fn } from "storybook/test";
+import { fn, userEvent, within } from "storybook/test";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Onboarding } from "../pages/Onboarding";
 import { ToastProvider } from "../hooks/useToast";
 
@@ -15,12 +16,18 @@ interface ApiMock {
   jiraConnected?: { site: string; email: string };
 }
 
+/** A couple of GitHub-accessible repos the user can add on the Repositories step. */
+const AVAILABLE_REPOS = [
+  { id: "r1", name: "acme/web", default_branch: "main", private: false, cloned: false },
+  { id: "r2", name: "acme/api", default_branch: "main", private: true, cloned: false },
+];
+
 /**
- * Patches `window.fetch` for the endpoints the wizard touches so its
- * data-fetching steps (ticketing credentials, AI key, GitHub PAT, flows)
- * render deterministically without a backend. Installed in a `useState`
- * initializer so the patch lands before child mount effects fire — mirrors
- * `FlowsTab.stories.tsx`.
+ * Patches `window.fetch` for every endpoint the 5-step wizard touches so all
+ * steps — ticketing, AI provider, Git & GitHub, Repositories (MyRepositoriesTab),
+ * and Workflows (FlowsTab) — render deterministically without a backend.
+ * Installed in a `useState` initializer so the patch lands before child mount
+ * effects fire (mirrors `FlowsTab.stories.tsx`).
  */
 function withApiMock(mock: ApiMock = {}) {
   return function Decorator(Story: () => ReactNode) {
@@ -34,22 +41,24 @@ function withApiMock(mock: ApiMock = {}) {
 
       window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.toString();
+        const path = url.split("?")[0];
         const method = (init?.method ?? "GET").toUpperCase();
 
-        if (url === "/api/config" && method === "GET") {
+        if (path === "/api/config" && method === "GET") {
           return json({
             general: { ticketing_system: mock.ticketingSystem ?? "none" },
-            agent: { provider: "claude", providers: {} },
+            agent: { provider: "claude", providers: {}, step_timeout_secs: 1800 },
+            git: { base_branch: "main", remote: "origin" },
             jira: { project_keys: [], site: "" },
             github: { app_id: 0, app_installation_id: 0 },
             web: { dashboard_username: "admin" },
             jira_available: false,
             ticketing_system: mock.ticketingSystem ?? "none",
-            github_app_configured: false,
+            github_app_configured: true,
             repo_exists: true,
           });
         }
-        if (url === "/api/users/me/credentials" && method === "GET") {
+        if (path === "/api/users/me/credentials" && method === "GET") {
           return json({
             provider: null,
             github: null,
@@ -64,7 +73,7 @@ function withApiMock(mock: ApiMock = {}) {
               : null,
           });
         }
-        if (url === "/api/auth/status" && method === "GET") {
+        if (path === "/api/auth/status" && method === "GET") {
           return json({
             dashboard_auth_enabled: true,
             multi_user: true,
@@ -72,20 +81,17 @@ function withApiMock(mock: ApiMock = {}) {
             github_mode: "missing",
           });
         }
-        if (url === "/api/me/flows" && method === "GET") {
-          return json({ flows: [], workspace: "takuto-core" });
+        if (path === "/api/me/flows" && method === "GET") {
+          return json({ flows: [], workspace: "acme/web" });
         }
-        // Writes the wizard issues on Continue / Finish.
-        if (
-          method !== "GET" &&
-          (url === "/api/config" ||
-            url === "/api/config/agent" ||
-            url.startsWith("/api/users/me/credentials") ||
-            url === "/api/users/me/jira-credential" ||
-            url === "/api/users/me/github-pat" ||
-            url === "/api/onboarding/complete")
-        ) {
-          if (url === "/api/users/me/jira-credential") {
+        // Repositories step (MyRepositoriesTab → useRepositoryAdmin).
+        if (path === "/api/repositories" && method === "GET") return json([]);
+        if (path === "/api/repositories/_available" && method === "GET") return json(AVAILABLE_REPOS);
+        if (path === "/api/repositories/access" && method === "GET") return json([]);
+
+        // Writes the wizard issues on Continue / Finish / Add-repo.
+        if (method !== "GET") {
+          if (path === "/api/users/me/jira-credential") {
             return json({
               site: mock.jiraConnected?.site ?? "https://demo.atlassian.net",
               email: mock.jiraConnected?.email ?? "you@demo.com",
@@ -100,14 +106,24 @@ function withApiMock(mock: ApiMock = {}) {
       return original;
     });
 
-    useEffect(() => {
-      return () => {
+    useEffect(
+      () => () => {
         window.fetch = realFetch;
-      };
-    }, [realFetch]);
+      },
+      [realFetch],
+    );
 
     return <Story />;
   };
+}
+
+/** Click "Skip for now" `count` times, awaiting each next step to render. */
+async function skip(canvasElement: HTMLElement, count: number) {
+  const canvas = within(canvasElement);
+  for (let i = 0; i < count; i++) {
+    const btn = await canvas.findByText("Skip for now");
+    await userEvent.click(btn);
+  }
 }
 
 const meta = {
@@ -121,17 +137,31 @@ const meta = {
     },
   },
   decorators: [
-    (Story) => (
-      <ToastProvider>
-        <MemoryRouter>
-          <Story />
-        </MemoryRouter>
-      </ToastProvider>
-    ),
+    (Story) => {
+      // Fresh QueryClient per story — the Repositories + Workflows steps use
+      // react-query (useRepositoryAdmin / useMyRepositories).
+      const [client] = useState(
+        () =>
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+          }),
+      );
+      return (
+        <QueryClientProvider client={client}>
+          <ToastProvider>
+            <MemoryRouter>
+              <Story />
+            </MemoryRouter>
+          </ToastProvider>
+        </QueryClientProvider>
+      );
+    },
+    withApiMock(),
   ],
   args: {
     onLogout: fn(),
     authEnabled: true,
+    isAdmin: true,
   },
 } satisfies Meta<typeof Onboarding>;
 
@@ -139,16 +169,44 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Fresh install: no ticketing system selected yet. Click through
- * Continue / Skip to walk the four steps within a single story.
+ * The whole wizard, fully wired: start at step 1 and click Continue / Skip to
+ * walk all five steps (Ticketing → AI provider → Git & GitHub → Repositories →
+ * Workflows). Every step's data-fetching renders against the mock.
  */
-export const FreshInstall: Story = {
-  name: "Step 1 — fresh install (no ticketing system)",
-  decorators: [withApiMock()],
+export const FullWalkthrough: Story = {
+  name: "Full wizard (interactive — click through all 5 steps)",
 };
 
+// Per-step snapshots: each auto-advances to its step via "Skip for now" so the
+// Storybook sidebar showcases the entire wizard step by step.
+
+export const Step1Ticketing: Story = {
+  name: "Step 1 — Ticketing",
+};
+
+export const Step2Provider: Story = {
+  name: "Step 2 — AI provider",
+  play: async ({ canvasElement }) => skip(canvasElement, 1),
+};
+
+export const Step3GitHub: Story = {
+  name: "Step 3 — Git & GitHub",
+  play: async ({ canvasElement }) => skip(canvasElement, 2),
+};
+
+export const Step4Repositories: Story = {
+  name: "Step 4 — Repositories",
+  play: async ({ canvasElement }) => skip(canvasElement, 3),
+};
+
+export const Step5Workflows: Story = {
+  name: "Step 5 — Workflows",
+  play: async ({ canvasElement }) => skip(canvasElement, 4),
+};
+
+/** Variant: Jira already connected on the Ticketing step. */
 export const WithJiraTicketing: Story = {
-  name: "Step 1 — Jira already connected",
+  name: "Variant — Jira already connected",
   decorators: [
     withApiMock({
       ticketingSystem: "jira",

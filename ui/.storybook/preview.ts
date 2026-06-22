@@ -1,5 +1,8 @@
 import type { Preview } from '@storybook/react-vite'
 import '../src/styles/index.css'
+// Initialize i18next so components that call `t()` render real copy in stories
+// instead of raw translation keys.
+import '../src/i18n'
 
 const preview: Preview = {
   parameters: {
