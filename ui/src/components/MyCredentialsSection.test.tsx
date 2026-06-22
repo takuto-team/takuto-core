@@ -159,7 +159,7 @@ describe("MyCredentialsSection — wire-format regression (#28)", () => {
     const aiSection = aiHeading.closest("section");
     expect(aiSection).toBeTruthy();
     expect(
-      within(aiSection!).getByText(/^Connected$/i),
+      within(aiSection!).getByText(/^Token provided$/i),
     ).toBeTruthy();
     expect(
       within(aiSection!).queryByText(/^Not connected$/i),
@@ -259,7 +259,7 @@ describe("MyCredentialsSection — #31 issue C: pill flips to Connected synchron
       // Re-query the section because React replaced its children on
       // re-render — the closure-captured reference may be stale.
       const section = screen.getByText(/AI provider — Claude/i).closest("section")!;
-      expect(within(section).getByText(/^Connected$/i)).toBeTruthy();
+      expect(within(section).getByText(/^Token provided$/i)).toBeTruthy();
     });
 
     // Belt-and-braces: the "Not connected" pill must be gone from the AI
@@ -361,7 +361,7 @@ describe("MyCredentialsSection — #40 Claude auth-method selector", () => {
         .getByText(/AI provider — Claude/i)
         .closest("section")!;
       const pill = within(section).getByRole("status");
-      expect(pill.textContent).toMatch(/Connected/);
+      expect(pill.textContent).toMatch(/Token provided/);
       expect(pill.textContent).toMatch(/API key/);
       expect(pill.textContent).not.toMatch(/Session/);
     });
@@ -403,7 +403,7 @@ describe("MyCredentialsSection — #40 Claude auth-method selector", () => {
         .getByText(/AI provider — Claude/i)
         .closest("section")!;
       const pill = within(section).getByRole("status");
-      expect(pill.textContent).toMatch(/Connected/);
+      expect(pill.textContent).toMatch(/Token provided/);
       expect(pill.textContent).toMatch(/Session/);
       expect(pill.textContent).not.toMatch(/API key/);
     });
@@ -439,7 +439,7 @@ describe("MyCredentialsSection — #40 Claude auth-method selector", () => {
       .getByText(/AI provider — Claude/i)
       .closest("section")!;
     const pill = within(section).getByRole("status");
-    expect(pill.textContent).toMatch(/Connected/);
+    expect(pill.textContent).toMatch(/Token provided/);
     expect(pill.textContent).toMatch(/API key \+ Session/);
   });
 
@@ -466,7 +466,7 @@ describe("MyCredentialsSection — #40 Claude auth-method selector", () => {
       .getByText(/AI provider — Claude/i)
       .closest("section")!;
     const pill = within(section).getByRole("status");
-    expect(pill.textContent).toMatch(/Connected/);
+    expect(pill.textContent).toMatch(/Token provided/);
     expect(pill.textContent).toMatch(/Session/);
     // Pill must not contain "API key" or the combined label.
     expect(pill.textContent).not.toMatch(/API key/);
@@ -528,7 +528,7 @@ describe("MyCredentialsSection — per-provider Delete button", () => {
       await waitFor(() => screen.getByText(/AI provider — Cursor/i))
     ).closest("section")!;
     // Connected to start.
-    expect(within(section).getByText(/^Connected$/i)).toBeTruthy();
+    expect(within(section).getByText(/^Token provided$/i)).toBeTruthy();
 
     // Two-step confirm: first click arms, second click deletes.
     fireEvent.click(

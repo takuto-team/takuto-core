@@ -206,7 +206,7 @@ export const AiCredentialPanel = forwardRef<
           {t("my.ai.cardTitle", { provider: label })}
         </h3>
         <ConnectedStatusPill
-          state={hasMatchingCredential ? "connected" : "missing"}
+          state={hasMatchingCredential ? "token" : "missing"}
           label={pillLabel}
         />
       </div>

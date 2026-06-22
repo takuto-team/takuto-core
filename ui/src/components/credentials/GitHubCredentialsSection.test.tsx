@@ -76,7 +76,7 @@ afterEach(() => {
 });
 
 describe("GitHubCredentialsSection — wire-format regression #29", () => {
-  it("renders 'Connected' when github = { login, scopes, attribute_commits, last_validated_at } (real wire shape)", async () => {
+  it("renders 'Token provided' when github = { login, scopes, attribute_commits, last_validated_at } (real wire shape)", async () => {
     stubAuthStatus("app_plus_pat");
     resetMocks({
       provider: null,
@@ -94,7 +94,8 @@ describe("GitHubCredentialsSection — wire-format regression #29", () => {
     });
     const ghSection = screen.getByText(/^GitHub$/i).closest("section");
     expect(ghSection).toBeTruthy();
-    expect(within(ghSection!).getByText(/^Connected$/i)).toBeTruthy();
+    // A per-user PAT is present → "Token provided" (not the App-level "Connected").
+    expect(within(ghSection!).getByText(/^Token provided$/i)).toBeTruthy();
     expect(within(ghSection!).queryByText(/^Not connected$/i)).toBeNull();
     // Login surfaced confirms the PAT-present branch rendered, not the CTA.
     expect(within(ghSection!).getByText(/alice/)).toBeTruthy();

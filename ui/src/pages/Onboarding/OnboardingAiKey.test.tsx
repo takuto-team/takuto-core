@@ -9,7 +9,7 @@
  * pill on "Not connected" until the user hit "Continue" and revisited the
  * step — because the credentials GET was scoped to the persisted provider.
  * The fetch is now scoped to the selected provider (`?provider=`), so the
- * pill flips to "Connected" as soon as the inline Save succeeds.
+ * pill flips to "Token provided" as soon as the inline Save succeeds.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -80,7 +80,8 @@ describe("OnboardingAiKey — inline save flips the connection pill", () => {
     fireEvent.change(keyInput, { target: { value: "cur_test_key" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/i }));
 
-    // After the inline save + provider-scoped refresh, the pill flips.
-    await waitFor(() => expect(screen.getByText("Connected")).toBeTruthy());
+    // After the inline save + provider-scoped refresh, the pill flips to the
+    // per-user "Token provided" state.
+    await waitFor(() => expect(screen.getByText("Token provided")).toBeTruthy());
   });
 });

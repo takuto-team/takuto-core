@@ -111,7 +111,7 @@ export const GitHubCredentialPanel = forwardRef<
           {t("github.title")}
         </h3>
         <ConnectedStatusPill
-          state={hasPat ? "connected" : effectiveMode === "app" ? "connected" : "missing"}
+          state={hasPat ? "token" : effectiveMode === "app" ? "connected" : "missing"}
           label={describeMode(effectiveMode)}
         />
       </div>
