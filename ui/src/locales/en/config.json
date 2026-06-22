@@ -13,7 +13,8 @@
     "copyAllCodes": "Copy all codes",
     "copied": "Copied!",
     "showPassword": "Show password",
-    "hidePassword": "Hide password"
+    "hidePassword": "Hide password",
+    "unsavedChanges": "Unsaved changes"
   },
   "errors": {
     "serverUnreachable": "Could not reach the server.",

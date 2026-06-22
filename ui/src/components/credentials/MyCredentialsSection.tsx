@@ -21,7 +21,7 @@
  *     of Phase 4. Each renders a paste-an-API-key card.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Ref } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import {
   apiJson,
@@ -40,7 +40,7 @@ import type {
   ProviderCredentialKind,
   UserCredentialsStatus,
 } from "../../api/types";
-import { AiCredentialPanel } from "./AiCredentialPanel";
+import { AiCredentialPanel, type AiCredentialPanelHandle } from "./AiCredentialPanel";
 import { PROVIDER_LABEL } from "./helpers";
 
 interface Props {
@@ -51,9 +51,15 @@ interface Props {
   /** Reports `true` when a credential field holds a typed-but-unsaved value, so
    *  the AI Settings tab can warn before navigation. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Imperative handle, forwarded to the inner AI panel, so the AI Settings
+   *  tab's single page-level Save can persist a typed-but-unsaved key. */
+  panelRef?: Ref<AiCredentialPanelHandle>;
+  /** When true, the inner panel hides its own Save button — the key is
+   *  persisted by the page-level Save (folded into the tab's saveAll). */
+  deferSave?: boolean;
 }
 
-export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = {}) {
+export function MyCredentialsSection({ refreshKey = 0, onDirtyChange, panelRef, deferSave }: Props = {}) {
   const { t } = useTranslation("credentials");
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
@@ -189,9 +195,11 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange }: Props = 
           )}
 
           <AiCredentialPanel
+            ref={panelRef}
             activeProvider={activeProvider}
             credentials={creds}
             onDirtyChange={onDirtyChange}
+            deferSave={deferSave}
             onSave={async (body) => {
               try {
                 // Body is the discriminated request shape (`{ api_key }`

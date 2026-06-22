@@ -19,22 +19,31 @@
  * entirely.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { apiJson } from "../api/client";
 import type { ConfigResponse, TicketingSystemId } from "../api/types";
 import { TicketingStep } from "../pages/Onboarding/TicketingStep";
 import { useTicketingForm } from "../hooks/useTicketingForm";
-import { ItemPollingSettingsSection } from "./admin/ItemPollingSettingsSection";
+import {
+  ItemPollingSettingsSection,
+  type ItemPollingSettingsHandle,
+} from "./admin/ItemPollingSettingsSection";
 
 interface Props {
   isAdmin?: boolean;
+  /** Reports combined dirty (ticketing + polling) so Config's footer enables. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** Registers this tab's "save all" fn so the page-level Save can drive it. */
+  registerSave?: (save: () => Promise<boolean>) => void;
 }
 
-export function TicketingTab({ isAdmin }: Props) {
+export function TicketingTab({ isAdmin, onDirtyChange, registerSave }: Props) {
   const { t } = useTranslation("config");
   const [initialSystem, setInitialSystem] = useState<TicketingSystemId>("none");
   const [loading, setLoading] = useState(true);
+  const pollingRef = useRef<ItemPollingSettingsHandle>(null);
+  const [pollingDirty, setPollingDirty] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -63,6 +72,22 @@ export function TicketingTab({ isAdmin }: Props) {
   // selected, and only admins may edit them. Gate on the live selection so
   // choosing "None" hides the section immediately, without waiting for a save.
   const showPolling = !loading && !!isAdmin && ticketing.system !== "none";
+
+  // Combined dirty + a single saver, folded into the page-level Save footer.
+  const effectivePollingDirty = showPolling && pollingDirty;
+  const dirty = ticketing.isDirty || effectivePollingDirty;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  const saveAll = useCallback(async (): Promise<boolean> => {
+    const ok = await ticketing.save();
+    if (!ok) return false;
+    return pollingRef.current ? pollingRef.current.save() : true;
+  }, [ticketing]);
+  useEffect(() => {
+    registerSave?.(saveAll);
+  }, [registerSave, saveAll]);
 
   return (
     <section aria-labelledby="ticketing-tab-title" className="flex flex-col gap-8">
@@ -93,16 +118,10 @@ export function TicketingTab({ isAdmin }: Props) {
               canEditSystem={!!isAdmin}
             />
 
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => void ticketing.save()}
-                disabled={ticketing.saving}
-                className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              >
-                {ticketing.saving ? t("actions.saving") : t("actions.save")}
-              </button>
-              {showDisconnect && (
+            {/* The Save is the page-level footer; only the discrete Disconnect
+                action stays inline here. */}
+            {showDisconnect && (
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => void ticketing.disconnect()}
@@ -111,15 +130,15 @@ export function TicketingTab({ isAdmin }: Props) {
                 >
                   {t("ticketing.disconnectJira")}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </>
         )}
       </div>
 
       {showPolling && (
         <div className="border-t border-gray-800 pt-6">
-          <ItemPollingSettingsSection />
+          <ItemPollingSettingsSection ref={pollingRef} onDirtyChange={setPollingDirty} hideSave />
         </div>
       )}
     </section>

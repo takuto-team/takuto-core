@@ -14,7 +14,7 @@
  * `GitHubCredentialsSection.test.tsx`.
  */
 
-import { useCallback, useEffect, useState, type Ref } from "react";
+import { useCallback, useEffect, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import {
   apiJson,
@@ -44,9 +44,11 @@ interface Props {
   /** When true, the panel's own Save button is hidden — the PAT is persisted by
    *  a single page-level Save (wizard / settings footer). Defaults to false. */
   deferSave?: boolean;
+  /** Registers a save fn (persists a typed PAT) for the settings footer. */
+  registerSave?: (save: () => Promise<boolean>) => void;
 }
 
-export function GitHubCredentialsSection({ panelRef, onDirtyChange, deferSave }: Props = {}) {
+export function GitHubCredentialsSection({ panelRef, onDirtyChange, deferSave, registerSave }: Props = {}) {
   const { t } = useTranslation("credentials");
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
@@ -55,6 +57,16 @@ export function GitHubCredentialsSection({ panelRef, onDirtyChange, deferSave }:
   // the panel mounted (see MyCredentialsSection for the full rationale).
   const [initialLoading, setInitialLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Internal handle so the settings footer can persist a typed PAT. The wizard
+  // passes its own `panelRef` (and no `registerSave`); the Config tab passes
+  // `registerSave` (and no `panelRef`) — they are mutually exclusive, so we use
+  // whichever ref is supplied rather than merging (no prop mutation).
+  const innerRef = useRef<GitHubCredentialPanelHandle>(null);
+  const effectiveRef = panelRef ?? innerRef;
+  useEffect(() => {
+    registerSave?.(async () => (innerRef.current ? innerRef.current.saveIfDirty() : true));
+  }, [registerSave]);
 
   const refresh = useCallback(async () => {
     const [c, a] = await Promise.all([
@@ -111,7 +123,7 @@ export function GitHubCredentialsSection({ panelRef, onDirtyChange, deferSave }:
 
       {!initialLoading && (
         <GitHubCredentialPanel
-          ref={panelRef}
+          ref={effectiveRef}
           github={creds?.github ?? null}
           authMode={auth?.github_mode as GithubAuthMode | undefined}
           onDirtyChange={onDirtyChange}

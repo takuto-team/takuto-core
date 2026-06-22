@@ -17,6 +17,7 @@ import { AiSettingsTab } from "../components/AiSettingsTab";
 import { FlowsTab } from "../components/FlowsTab";
 import { TicketingTab } from "../components/TicketingTab";
 import { GitHubCredentialsSection } from "../components/credentials/GitHubCredentialsSection";
+import { SettingsFooter } from "../components/SettingsFooter";
 
 interface Props {
   onLogout: () => void;
@@ -35,6 +36,11 @@ const ALL_TABS = [
   "Workflows",
 ] as const;
 type Tab = (typeof ALL_TABS)[number];
+
+/** Tabs that are settings forms — they get the single page-level Save footer
+ *  and fold their sections (incl. typed tokens) into one Save. The other tabs
+ *  are action-based (CRUD / discrete actions) and keep their own buttons. */
+const FORM_TABS: Tab[] = ["AI Settings", "Ticketing", "Repository Settings", "GitHub"];
 
 /** Maps each stable tab identifier to its `common:tabs.*` display key. */
 const TAB_LABEL_KEY: Record<Tab, string> = {
@@ -204,16 +210,41 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const navigate = useNavigate();
 
-  // Unsaved-changes guard, scoped to the AI Settings tab for now. The tab
-  // reports its combined dirty state and registers a "save all" fn.
-  const [aiDirty, setAiDirty] = useState(false);
-  const aiSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
+  // Form-like tabs get the single page-level Save footer; each reports its
+  // combined dirty state via `onDirtyChange` and registers a "save all" fn via
+  // `registerSave`. Action-based tabs (Users, My Repositories, Security,
+  // Workflows) keep their own discrete buttons and show no footer.
+  const [formDirty, setFormDirty] = useState(false);
+  const [formSaving, setFormSaving] = useState(false);
+  const formSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
   // The action to run once the user resolves the unsaved-changes modal (switch
   // tab / go to dashboard / log out). Null when the modal is closed.
   const [pendingLeave, setPendingLeave] = useState<{ run: () => void } | null>(null);
 
-  const guardActive = tab === "AI Settings" && aiDirty;
+  const isFormTab = FORM_TABS.includes(tab);
+  const guardActive = isFormTab && formDirty;
   useUnsavedChangesGuard(guardActive);
+
+  // Reset the page-level dirty flag whenever the tab changes. The newly-mounted
+  // form tab re-reports its own (clean) state; action tabs never report, so
+  // without this reset a previous form tab's dirtiness would leak.
+  useEffect(() => {
+    setFormDirty(false);
+  }, [tab, setFormDirty]);
+
+  const handleFormSave = useCallback(async () => {
+    setFormSaving(true);
+    try {
+      await formSaveRef.current();
+    } finally {
+      setFormSaving(false);
+    }
+  }, []);
+
+  // Stable callback the active form tab uses to register its "save all" fn.
+  const registerFormSave = useCallback((fn: () => Promise<boolean>) => {
+    formSaveRef.current = fn;
+  }, []);
 
   // Route an intended departure through the modal when the guard is active.
   // Plain function (no useCallback) so the React Compiler can memoize it.
@@ -223,8 +254,8 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
   };
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
+    <div className="h-screen flex flex-col overflow-hidden">
+      <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm z-40">
         <div className="w-full px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-14">
             <Link
@@ -271,32 +302,48 @@ export function Config({ onLogout, authEnabled, isAdmin }: Props) {
         </div>
       </div>
 
-      <main className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 min-h-0 overflow-y-auto w-full px-4 sm:px-6 lg:px-8 py-8">
         {tab === "Security" && <SecurityTabConnected />}
         {tab === "AI Settings" && (
           <AiSettingsTab
             isAdmin={!!isAdmin}
-            onDirtyChange={setAiDirty}
-            registerSave={(fn) => {
-              aiSaveRef.current = fn;
-            }}
+            onDirtyChange={setFormDirty}
+            registerSave={registerFormSave}
           />
         )}
-        {tab === "GitHub" && <GitHubCredentialsSection />}
-        {tab === "Ticketing" && <TicketingTab isAdmin={isAdmin} />}
+        {tab === "GitHub" && (
+          <GitHubCredentialsSection
+            onDirtyChange={setFormDirty}
+            registerSave={registerFormSave}
+            deferSave
+          />
+        )}
+        {tab === "Ticketing" && (
+          <TicketingTab
+            isAdmin={isAdmin}
+            onDirtyChange={setFormDirty}
+            registerSave={registerFormSave}
+          />
+        )}
         {tab === "Users" && <UsersTabConnected />}
         {tab === "My Repositories" && <MyRepositoriesTab isAdmin={isAdmin} />}
-        {tab === "Repository Settings" && <WorktreeSettingsTab />}
+        {tab === "Repository Settings" && (
+          <WorktreeSettingsTab onDirtyChange={setFormDirty} registerSave={registerFormSave} />
+        )}
         {tab === "Workflows" && <FlowsTab />}
       </main>
 
+      {isFormTab && (
+        <SettingsFooter dirty={formDirty} saving={formSaving} onSave={() => void handleFormSave()} />
+      )}
+
       {pendingLeave && (
         <UnsavedChangesModal
-          onSave={() => aiSaveRef.current()}
+          onSave={() => formSaveRef.current()}
           onProceed={() => {
             const { run } = pendingLeave;
             setPendingLeave(null);
-            setAiDirty(false);
+            setFormDirty(false);
             run();
           }}
           onCancel={() => setPendingLeave(null)}

@@ -38,7 +38,14 @@ import { WorktreeCommandList } from "./WorktreeCommandList";
 import { WorktreeRunCommandList } from "./WorktreeRunCommandList";
 import { validateCommands } from "./WorktreeSettings/validateCommands";
 
-export function WorktreeSettingsTab() {
+interface Props {
+  /** Reports unsaved init/run command edits so Config's footer enables. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** Registers the per-repo save fn so the page-level Save can drive it. */
+  registerSave?: (save: () => Promise<boolean>) => void;
+}
+
+export function WorktreeSettingsTab({ onDirtyChange, registerSave }: Props = {}) {
   const { t } = useTranslation("config");
   const { myRepos, activeRepoName } = useMyRepositories();
   const { access } = useRepoAccess();
@@ -130,11 +137,11 @@ export function WorktreeSettingsTab() {
   );
   const dirty = init.dirty || run.dirty;
 
-  const handleSave = async () => {
-    if (!selected) return;
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (!selected) return true;
     if (validationError) {
       setError(validationError);
-      return;
+      return false;
     }
     setError("");
     setSuccess("");
@@ -147,12 +154,22 @@ export function WorktreeSettingsTab() {
       setGenerateReport(row.generate_report);
       setSuccess(t("worktreeSettings.commandsSaved"));
       setWithCommands((prev) => new Set(prev).add(selected));
+      return true;
     } catch (e) {
       setError(String((e as Error).message || e));
+      return false;
     } finally {
       setSaving(false);
     }
-  };
+  }, [selected, validationError, init, run, generateReport, t]);
+
+  // Fold into the page-level Save footer.
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    registerSave?.(handleSave);
+  }, [registerSave, handleSave]);
 
   const handleDelete = async () => {
     if (!selected) return;
@@ -241,15 +258,9 @@ export function WorktreeSettingsTab() {
               {error && <p className="text-sm text-red-400">{error}</p>}
               {success && <p className="text-sm text-green-400">{success}</p>}
 
+              {/* Save is the page-level footer; only the discrete Delete-for-repo
+                  action stays inline here. */}
               <div className="flex items-center gap-3 pt-2 border-t border-gray-800 flex-wrap">
-                <button
-                  type="button"
-                  onClick={handleSave}
-                  disabled={saving || !!validationError || !dirty}
-                  className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  {saving ? t("actions.saving") : t("actions.save")}
-                </button>
                 <button
                   type="button"
                   onClick={() => setConfirmDelete(true)}
@@ -258,9 +269,6 @@ export function WorktreeSettingsTab() {
                 >
                   {t("worktreeSettings.deleteForRepo")}
                 </button>
-                {dirty && !validationError && (
-                  <span className="text-xs text-gray-500 italic">{t("ai.unsavedChanges")}</span>
-                )}
               </div>
             </div>
           )}

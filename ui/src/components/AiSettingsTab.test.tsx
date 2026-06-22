@@ -2,16 +2,21 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * The AI Settings tab must expose a SINGLE "Save changes" button for the admin
- * config sections (provider + share + guardrails) — the multi-button layout is
- * what let a user miss saving a provider switch.
+ * The AI Settings tab folds its admin config sections (provider + share +
+ * guardrails) into ONE save: it reports combined dirty via `onDirtyChange` and
+ * registers `saveAll` via `registerSave`. The single visible Save button lives
+ * in the page-level SettingsFooter (rendered by Config). Here we wire the tab
+ * to the real SettingsFooter through a harness — exactly as Config does — so
+ * there is one Save button driven by the tab's contract.
  */
 
+import { useRef, useState } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AiSettingsTab } from "./AiSettingsTab";
+import { SettingsFooter } from "./SettingsFooter";
 import { ToastProvider, ToastContainer } from "../hooks/useToast";
 import {
   clearMocksOverride,
@@ -85,6 +90,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Mirrors how Config wires the tab to the page-level Save footer. */
+function Harness() {
+  const [dirty, setDirty] = useState(false);
+  const saveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
+  return (
+    <>
+      <AiSettingsTab
+        isAdmin
+        onDirtyChange={setDirty}
+        registerSave={(fn) => {
+          saveRef.current = fn;
+        }}
+      />
+      <SettingsFooter dirty={dirty} saving={false} onSave={() => void saveRef.current()} />
+    </>
+  );
+}
+
 function renderTab() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -93,7 +116,7 @@ function renderTab() {
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <MemoryRouter>
-          <AiSettingsTab isAdmin />
+          <Harness />
           <ToastContainer />
         </MemoryRouter>
       </ToastProvider>

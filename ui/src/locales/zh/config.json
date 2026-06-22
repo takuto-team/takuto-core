@@ -13,7 +13,8 @@
     "copyAllCodes": "复制全部恢复码",
     "copied": "已复制！",
     "showPassword": "显示密码",
-    "hidePassword": "隐藏密码"
+    "hidePassword": "隐藏密码",
+    "unsavedChanges": "有未保存的更改"
   },
   "errors": {
     "serverUnreachable": "无法连接服务器。",

@@ -13,7 +13,8 @@
     "copyAllCodes": "Copiar todos los códigos",
     "copied": "¡Copiado!",
     "showPassword": "Mostrar contraseña",
-    "hidePassword": "Ocultar contraseña"
+    "hidePassword": "Ocultar contraseña",
+    "unsavedChanges": "Cambios sin guardar"
   },
   "errors": {
     "serverUnreachable": "No se pudo conectar con el servidor.",
