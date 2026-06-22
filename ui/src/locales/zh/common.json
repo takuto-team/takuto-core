@@ -15,7 +15,7 @@
     "logout": "退出登录"
   },
   "repo": {
-    "switchTitle": "切换当前仓库（用于筛选仪表盘）",
+    "switchTitle": "切换当前仓库（用于筛选仪表板）",
     "allRepositories": "所有仓库",
     "manage": "管理仓库…",
     "myRepositories": "我的仓库"

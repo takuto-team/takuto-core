@@ -70,7 +70,7 @@ export function useGitForm({
   // Non-admins have read-only inputs, so they can never be dirty.
   const isDirty = canSave && (baseBranch !== seedVals.baseBranch || remote !== seedVals.remote);
 
-  const save = useCallback(async (): Promise<boolean> => {
+  const save = useCallback(async ({ silent }: { silent?: boolean } = {}): Promise<boolean> => {
     // Git settings are deployment-level and admin-gated server-side. A
     // non-admin reaching this step advances without an API call rather than
     // tripping a 403 (the inputs are read-only for them).
@@ -86,7 +86,7 @@ export function useGitForm({
     try {
       await putGitConfig({ base_branch: baseBranch.trim(), remote: remote.trim() });
       setSeedVals({ baseBranch, remote });
-      showToast(t("git.saved"), "success");
+      if (!silent) showToast(t("git.saved"), "success");
       return true;
     } catch (e: unknown) {
       let msg: string;

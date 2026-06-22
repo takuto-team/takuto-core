@@ -91,6 +91,22 @@ export function propagateRename(
 }
 
 /**
+ * Return a new list with `removedName` stripped from every remaining flow's
+ * `depends_on`. Used by the delete path: removing a flow that others depend on
+ * must also drop the now-dangling reference, otherwise the server's validator
+ * rejects the whole PUT with `unknown_dependency` and the delete is lost.
+ *
+ * Pure data manipulation; does not mutate the input.
+ */
+export function dropDependency(flows: UserFlow[], removedName: string): UserFlow[] {
+  return flows.map((f) =>
+    f.depends_on.includes(removedName)
+      ? { ...f, depends_on: f.depends_on.filter((d) => d !== removedName) }
+      : f,
+  );
+}
+
+/**
  * Structured validation failure surfaced by PUT / reseed. `kind` is one of the
  * backend's typed reasons: `too_many_flows`, `empty_flow_name`,
  * `duplicate_flow_name`, `duplicate_slug`, `empty_slug`, `no_steps`,

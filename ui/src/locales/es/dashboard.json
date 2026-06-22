@@ -54,7 +54,7 @@
   "toast": {
     "pickRepository": "Elige un repositorio antes de añadir un elemento de trabajo.",
     "addItemFailed": "No se pudo añadir el elemento de trabajo",
-    "actionFailed": "La acción falló"
+    "actionFailed": "No se pudo completar la acción"
   },
   "card": {
     "working": "Trabajando...",

@@ -43,7 +43,7 @@ import { useProviderForm } from "../hooks/useProviderForm";
 import { useTicketingForm } from "../hooks/useTicketingForm";
 import { useGitForm } from "../hooks/useGitForm";
 import { useStepTimeoutForm } from "../hooks/useStepTimeoutForm";
-import { FlowsTab } from "../components/FlowsTab";
+import { FlowsTab, type FlowsTabHandle } from "../components/FlowsTab";
 import {
   ItemPollingSettingsSection,
   type ItemPollingSettingsHandle,
@@ -81,7 +81,6 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
     gitBaseBranch,
     gitRemote,
     stepTimeoutSecs,
-    isDirty: providerDirty,
     save,
   } = useProviderForm();
 
@@ -105,14 +104,17 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
   const aiKeyRef = useRef<AiCredentialPanelHandle>(null);
   const githubPatRef = useRef<GitHubCredentialPanelHandle>(null);
   const pollingRef = useRef<ItemPollingSettingsHandle>(null);
+  // Lets "Finish" persist a workflow the user customized in step 5 but didn't
+  // explicitly save in the FlowsTab editor.
+  const flowsRef = useRef<FlowsTabHandle>(null);
 
-  // Typed-but-unsaved signals from the inline credential / polling sections,
-  // folded into each step's dirty state so "Save and Continue" enables.
-  const [pollingDirty, setPollingDirty] = useState(false);
+  // Typed-but-unsaved signals from the inline credential sections. When a token
+  // is being saved its panel shows the "connected" toast, so we silence the
+  // paired config-save toast to avoid two toasts on one "Save and Continue".
   const [aiKeyDirty, setAiKeyDirty] = useState(false);
   const [patDirty, setPatDirty] = useState(false);
 
-  const { step, completing, goNext, goSkip, goBack } = useOnboardingFlow({
+  const { step, completing, goNext, goBack } = useOnboardingFlow({
     onBeforeNext: async (s) => {
       if (s === 1) {
         const ok = await ticketing.save();
@@ -122,7 +124,9 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
         return pollingRef.current ? pollingRef.current.save() : true;
       }
       if (s === 2) {
-        const provider = await save();
+        // Silence the provider "configured" toast when a key save will show the
+        // "connected" toast — only one toast per Save and Continue.
+        const provider = await save({ silent: aiKeyDirty });
         if (!provider) return false;
         // Blank key → saveIfDirty resolves true (skip / deployment default).
         return aiKeyRef.current ? aiKeyRef.current.saveIfDirty() : true;
@@ -130,19 +134,23 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
       if (s === 3) {
         // Persist the per-user PAT first, then the deployment git settings.
         // A typed PAT that fails to save (e.g. a GitHub transport error)
-        // must block the step BEFORE git is saved — otherwise the user sees
-        // a misleading "Git settings saved." success toast alongside the PAT
-        // error in the same Continue. A blank PAT resolves true (no-op), so
-        // the common case still saves git and shows its own success toast.
+        // must block the step BEFORE git is saved. Silence the git toast when a
+        // PAT save will show its own "connected" toast (one toast per step).
         const patOk = githubPatRef.current
           ? await githubPatRef.current.saveIfDirty()
           : true;
         if (!patOk) return false;
-        return git.save();
+        return git.save({ silent: patDirty });
       }
       // Step 4 (repositories) saves via its own Add/Remove buttons — nothing
       // to persist on Continue.
-      if (s === 5) return timeout.save();
+      if (s === 5) {
+        // Flush an open-but-unsaved workflow editor first; block Finish if the
+        // draft is invalid (its inline validation stays visible).
+        const flushed = flowsRef.current ? await flowsRef.current.flushPendingEdit() : true;
+        if (!flushed) return false;
+        return timeout.save();
+      }
       return true;
     },
   });
@@ -152,24 +160,11 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
   // choosing "None" hides the section immediately (matching TicketingTab).
   const showPolling = !loading && !!isAdmin && ticketing.system !== "none";
 
-  // "Save and Continue" enables only when the current step has unsaved changes.
-  // Steps 4 (Repositories — advance-only, saved via its own buttons) and 5
-  // (Finish — terminal action) are always enabled.
-  const stepDirty =
-    step === 1
-      ? ticketing.isDirty || pollingDirty
-      : step === 2
-        ? providerDirty || aiKeyDirty
-        : step === 3
-          ? git.isDirty || patDirty
-          : true;
+  // "Save and Continue" is always clickable (clicking it saves the step then
+  // advances) — only blocked while a save / finish is actually in flight, to
+  // avoid a double-submit.
   const anySaving = saving || ticketing.saving || git.saving || timeout.saving;
-  const continueDisabled =
-    !stepDirty ||
-    anySaving ||
-    completing ||
-    // Self-hosted spec: block step 2 when OpenCode lacks base_url + model.
-    (step === 2 && provider === "opencode" && (baseUrl.trim() === "" || model.trim() === ""));
+  const continueDisabled = anySaving || completing;
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -227,11 +222,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                   {showPolling && (
                     <div className="border-t border-gray-800 pt-6">
                       <p className="text-xs text-gray-500 mb-4">{t("polling.note")}</p>
-                      <ItemPollingSettingsSection
-                        ref={pollingRef}
-                        onDirtyChange={setPollingDirty}
-                        hideSave
-                      />
+                      <ItemPollingSettingsSection ref={pollingRef} hideSave />
                     </div>
                   )}
                 </>
@@ -293,7 +284,7 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                     </div>
                   </div>
                   <div className="border-t border-gray-800 pt-4">
-                    <FlowsTab />
+                    <FlowsTab ref={flowsRef} />
                   </div>
                 </div>
               )}
@@ -320,7 +311,6 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
         saving={anySaving}
         completing={completing}
         onBack={goBack}
-        onSkip={goSkip}
         onContinue={goNext}
       />
     </div>

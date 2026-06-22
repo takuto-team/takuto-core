@@ -10,11 +10,11 @@
   "step": {
     "ticketing": {
       "title": "工单系统",
-      "body": "欢迎 — 这是 Takuto 的首次设置。请选择它从何处读取任务。之后你可以在配置页面更改任何这些设置。"
+      "body": "欢迎 — 这是 Takuto 的首次设置。请选择它从哪里读取任务。这些设置之后都可以在配置页面随时更改。"
     },
     "provider": {
       "title": "AI 提供商",
-      "body": "选择驱动你工作项的 AI，然后添加你自己的提供商密钥。"
+      "body": "选择处理你工作项的 AI，然后添加你自己的提供商密钥。"
     },
     "git": {
       "title": "Git 与 GitHub",
@@ -26,11 +26,11 @@
     },
     "repositories": {
       "title": "仓库",
-      "body": "添加 Takuto 可以处理的 GitHub 仓库 —— 您将在下一步为每个仓库设置工作流。"
+      "body": "添加 Takuto 可以处理的 GitHub 仓库 —— 你将在下一步为每个仓库设置工作流。"
     }
   },
   "polling": {
-    "note": "这些设置控制 Takuto 如何自动拾取新的工作项。点击「继续」时会保存（下方的「保存」按钮会立即应用）。"
+    "note": "这些设置控制 Takuto 如何自动获取新的工作项。点击「继续」时会保存（下方的「保存」按钮会立即生效）。"
   },
   "stepTimeout": {
     "heading": "步骤超时",
@@ -38,7 +38,7 @@
     "invalid": "步骤超时必须为正数。",
     "hint": "agent 步骤在被取消前可运行的最长秒数。默认 1800（30 分钟）。"
   },
-  "dbNote": "<strong>数据库和仪表盘端口不在此向导中配置。</strong>Takuto 会写入一个使用默认值（SQLite，端口 8080）的 <code>config.toml</code>。请直接编辑该文件以更改它们。",
+  "dbNote": "<strong>数据库和仪表板端口不在此向导中配置。</strong>Takuto 会写入一个使用默认值（SQLite，端口 8080）的 <code>config.toml</code>。如需更改，请直接编辑该文件。",
   "nav": {
     "back": "← 返回",
     "skip": "暂时跳过",
@@ -53,11 +53,11 @@
     "options": {
       "none": {
         "label": "无",
-        "hint": "不集成工单系统。从仪表盘手动启动工作项。"
+        "hint": "不集成工单系统。从仪表板手动启动工作项。"
       },
       "github": {
         "label": "GitHub",
-        "hint": "从仓库的远程拉取开放的 GitHub Issues。此处无需令牌 — 请在 GitHub 步骤中连接 PAT 或 GitHub App。"
+        "hint": "从仓库远程拉取处于 Open 状态的 GitHub Issues。此处无需令牌 — 请在 GitHub 步骤中连接 PAT 或 GitHub App。"
       },
       "jira": {
         "label": "Jira",

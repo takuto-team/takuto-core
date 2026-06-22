@@ -14,7 +14,7 @@
     "installFailed": "No se pudieron instalar las dependencias",
     "installing": "Instalando dependencias",
     "preparing": "Preparando…",
-    "errorHelp": "Los CLI de los agentes se instalan al iniciar. Revisa los registros del servidor y luego reinicia.",
+    "errorHelp": "Los CLI de los agentes se instalan al iniciar. Revisa los logs del servidor y luego reinicia.",
     "installingHelp": "Los CLI de los agentes se están instalando en el primer arranque. Solo tarda un momento."
   }
 }

@@ -14,7 +14,7 @@
  * the client missed surfaces as a structured error above the footer.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { slugify, propagateRename, type UserFlow } from "../api/flows";
 import { StepEditor, type SkillDraft, type StepDraft } from "./modals/FlowEditor/StepEditor";
@@ -75,14 +75,19 @@ function splitArgs(text: string): string[] {
 
 const blankStep = (): StepDraft => ({ name: "", prompt: "", skills: [] });
 
-export function FlowEditor({
-  flows,
-  editIndex,
-  name,
-  onNameError,
-  onSubmit,
-  onCancel,
-}: FlowEditorProps) {
+/** Imperative handle so a parent wizard can flush an open editor on "Finish". */
+export interface FlowEditorHandle {
+  /** True when the draft differs from the saved flow (or a non-empty new draft). */
+  isDirty: () => boolean;
+  /** Save if dirty + valid. Resolves true if saved or nothing to save, false if
+   *  the draft is invalid (validation is left visible) or the server rejected it. */
+  trySave: () => Promise<boolean>;
+}
+
+export const FlowEditor = forwardRef<FlowEditorHandle, FlowEditorProps>(function FlowEditor(
+  { flows, editIndex, name, onNameError, onSubmit, onCancel },
+  ref,
+) {
   const { t } = useTranslation("config");
   const editing = editIndex !== null ? flows[editIndex] : null;
 
@@ -190,8 +195,31 @@ export function FlowEditor({
     })),
   });
 
-  const handleSave = async () => {
-    if (!canSave) return;
+  // Dirty = the live draft differs from the saved flow, or a new draft the user
+  // has actually started filling in. Drives whether "Finish" flushes this editor.
+  const isDirty = useMemo(() => {
+    if (!editing) {
+      return (
+        trimmedName !== "" ||
+        dependsOn.length > 0 ||
+        steps.length > 1 ||
+        steps[0]?.name.trim() !== "" ||
+        steps[0]?.prompt.trim() !== "" ||
+        (steps[0]?.skills.length ?? 0) > 0
+      );
+    }
+    if (trimmedName !== editing.name) return true;
+    if (JSON.stringify(dependsOn) !== JSON.stringify(editing.depends_on)) return true;
+    const origSteps = editing.steps.map((s) => ({
+      name: s.name,
+      prompt: s.prompt,
+      skills: s.skills.map((k) => ({ name: k.name, argsText: k.args.join(", ") })),
+    }));
+    return JSON.stringify(steps) !== JSON.stringify(origSteps);
+  }, [editing, trimmedName, dependsOn, steps]);
+
+  const handleSave = async (): Promise<boolean> => {
+    if (!canSave) return false;
     const flow = buildFlow();
     // If the save is renaming this flow, rewrite every other flow's
     // `depends_on` to use the new name — otherwise the server rejects with
@@ -210,16 +238,33 @@ export function FlowEditor({
     setServerError("");
     try {
       await onSubmit(next);
+      return true;
     } catch (e) {
       setServerError(String((e as Error).message || e));
       setSaving(false);
+      return false;
     }
   };
+
+  // Flush hook for the onboarding wizard: a pristine draft is a no-op (true),
+  // a dirty+valid draft saves, a dirty+invalid draft blocks (false) so its
+  // inline validation stays on screen.
+  const trySave = async (): Promise<boolean> => {
+    if (!isDirty) return true;
+    if (!canSave) return false;
+    return handleSave();
+  };
+
+  // No dependency array: rebuild the handle every render so `isDirty` / `trySave`
+  // always close over the current `steps`. Memoizing on `[isDirty]` froze the
+  // handle once dirty stayed true, so a flush after several step deletions
+  // persisted only the first deletion's state.
+  useImperativeHandle(ref, () => ({ isDirty: () => isDirty, trySave }));
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
-      handleSave();
+      void handleSave();
     }
   };
 
@@ -277,7 +322,7 @@ export function FlowEditor({
           </button>
           <button
             type="button"
-            onClick={handleSave}
+            onClick={() => void handleSave()}
             disabled={!canSave}
             className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
@@ -287,4 +332,4 @@ export function FlowEditor({
       </div>
     </div>
   );
-}
+});

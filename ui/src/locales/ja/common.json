@@ -8,7 +8,7 @@
   "loading": "読み込み中...",
   "connection": {
     "connected": "接続済み",
-    "disconnected": "切断されました"
+    "disconnected": "切断"
   },
   "nav": {
     "menu": "メニュー",

@@ -27,9 +27,9 @@
     "title": "新しい作業項目",
     "repository": "リポジトリ",
     "loadingRepos": "リポジトリを読み込み中…",
-    "noReposLead": "追加されたリポジトリがありません。",
+    "noReposLead": "リポジトリがまだ追加されていません。作業項目を作成する前に、",
     "noReposLink": "マイリポジトリタブから追加してください",
-    "noReposTail": "作業項目を作成する前に。",
+    "noReposTail": "。",
     "nameLabel": "作業項目名（任意）",
     "namePlaceholder": "例: add-user-login",
     "descriptionLabel": "説明",
@@ -55,7 +55,7 @@
     "cloningHint": "リポジトリのサイズによっては少し時間がかかる場合があります。",
     "cancel": "キャンセル",
     "successTitle": "リポジトリをクローンしました",
-    "successSuffix": "のクローンが正常に完了しました。",
+    "successSuffix": "のクローンが完了しました。",
     "continue": "続行",
     "errorTitle": "クローンに失敗しました",
     "unknownError": "リポジトリのクローン中に不明なエラーが発生しました。",
@@ -72,8 +72,8 @@
   "noJira": {
     "title": "チケット管理システムがありません",
     "bodyPrefix": "チケット管理システムが設定されていません。ワークフローはダッシュボードから手動でのみ開始できます。",
-    "bodyIn": "の場所:",
-    "bodySuffix": "を設定すると、Jira または GitHub のポーリングを有効にできます。",
+    "bodyIn": "を",
+    "bodySuffix": "で設定すると、Jira または GitHub のポーリングを有効にできます。",
     "gotIt": "了解"
   },
   "report": {
@@ -105,9 +105,9 @@
   "startWorkflowRepoBanner": {
     "repositoryLabel": "リポジトリ:",
     "loading": "読み込み中…",
-    "noReposPrefix": "ダッシュボードにリポジトリがありません。",
+    "noReposPrefix": "ダッシュボードにリポジトリがありません。作業項目を開始する前に",
     "addOne": "追加してください",
-    "noReposSuffix": "作業項目を開始する前に。"
+    "noReposSuffix": "。"
   },
   "startFlow": {
     "dependsOn": "依存:",

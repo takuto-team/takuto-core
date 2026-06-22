@@ -94,7 +94,7 @@ export function useProviderForm() {
     [provider, baseUrl, model, extraArgsText, seed],
   );
 
-  const save = useCallback(async (): Promise<boolean> => {
+  const save = useCallback(async ({ silent }: { silent?: boolean } = {}): Promise<boolean> => {
     setSaving(true);
     const extraArgs = extraArgsText
       .split("\n")
@@ -122,7 +122,7 @@ export function useProviderForm() {
     try {
       await putAgentConfig(patch);
       setSeed({ provider, baseUrl, model, extraArgsText });
-      showToast(t("ai.providerConfigured"), "success");
+      if (!silent) showToast(t("ai.providerConfigured"), "success");
       return true;
     } catch (e: unknown) {
       const msg =

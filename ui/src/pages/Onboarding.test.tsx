@@ -10,8 +10,9 @@
  *   - the Workflows step renders the step-timeout field (seeded from config)
  *     and the database/port note.
  *
- * Navigation between steps here uses "Skip for now" so the steps render without
- * triggering the per-step save calls (those are covered by the hook tests).
+ * Navigation between steps here clicks "Save and Continue"; the per-step saves
+ * resolve against the stubbed PUT endpoints (covered in detail by the hook
+ * tests and Onboarding.saveOnContinue.test).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -61,6 +62,9 @@ function stubFetch(ticketingSystem: "none" | "jira" | "github") {
     if (url.startsWith("/api/repositories")) {
       return json([]);
     }
+    if (url.startsWith("/api/github/repos")) {
+      return json([]);
+    }
     return json({});
   });
 }
@@ -77,9 +81,19 @@ function renderWizard(isAdmin: boolean) {
   );
 }
 
+// A landmark unique to each step body, used to confirm a "Save and Continue"
+// click has fully advanced (its per-step save is async) before clicking again.
+const STEP_LANDMARK: Record<number, () => Promise<unknown>> = {
+  2: () => screen.findByLabelText(/Claude API key/i),
+  3: () => screen.findByLabelText("Base branch"),
+  4: () => screen.findByText("My Repositories"),
+  5: () => screen.findByLabelText("Timeout (seconds)"),
+};
+
 async function skipToStep(target: number) {
   for (let i = 1; i < target; i++) {
-    fireEvent.click(await screen.findByText("Skip for now"));
+    fireEvent.click(await screen.findByRole("button", { name: /save and continue/i }));
+    await STEP_LANDMARK[i + 1]();
   }
 }
 
@@ -145,22 +159,18 @@ describe("Onboarding wizard — Git & GitHub step", () => {
   });
 });
 
-describe("Onboarding wizard — fixed footer dirty-gating", () => {
-  it("disables 'Save and Continue' until the step is dirty; Skip always advances", async () => {
+describe("Onboarding wizard — fixed footer", () => {
+  it("keeps 'Save and Continue' enabled and offers no Skip button", async () => {
     stubFetch("none");
     renderWizard(true);
-    const select = await screen.findByLabelText("Ticketing system");
+    await screen.findByLabelText("Ticketing system");
 
     const saveContinue = () =>
       screen.getByRole("button", { name: /save and continue/i }) as HTMLButtonElement;
-    const skip = () => screen.getByRole("button", { name: "Skip for now" }) as HTMLButtonElement;
-    // Nothing changed yet → primary button disabled; Skip stays enabled.
-    expect(saveContinue().disabled).toBe(true);
-    expect(skip().disabled).toBe(false);
-
-    // Change the ticketing system → step becomes dirty → button enables.
-    fireEvent.change(select, { target: { value: "github" } });
-    await waitFor(() => expect(saveContinue().disabled).toBe(false));
+    // Always clickable, even with nothing changed yet.
+    expect(saveContinue().disabled).toBe(false);
+    // The "Skip for now" affordance has been removed.
+    expect(screen.queryByRole("button", { name: "Skip for now" })).toBeNull();
   });
 });
 

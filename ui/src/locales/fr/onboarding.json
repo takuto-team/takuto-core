@@ -10,19 +10,19 @@
   "step": {
     "ticketing": {
       "title": "Gestion des tickets",
-      "body": "Bienvenue — voici la configuration initiale de Takuto. Choisissez la source de lecture des tâches. Vous pourrez modifier n'importe lequel de ces paramètres depuis la page Configuration plus tard."
+      "body": "Bienvenue — voici la configuration initiale de Takuto. Indiquez où il doit lire les tâches à traiter. Vous pourrez modifier chacun de ces paramètres depuis la page Configuration par la suite."
     },
     "provider": {
       "title": "Fournisseur d'IA",
-      "body": "Choisissez l'IA qui pilote vos éléments de travail, puis ajoutez votre propre clé de fournisseur."
+      "body": "Choisissez l'IA qui pilotera vos éléments de travail, puis ajoutez votre propre clé de fournisseur."
     },
     "git": {
       "title": "Git et GitHub",
-      "body": "Définissez la branche git et le dépôt distant utilisés par Takuto, puis connectez une GitHub App ou un token personnel."
+      "body": "Définissez la branche git et le dépôt distant que Takuto utilise, puis connectez une GitHub App ou un token personnel."
     },
     "workflows": {
       "title": "Workflows",
-      "body": "Passez en revue les flux que vous pouvez exécuter sur chaque élément de travail. Ajustez-les ou réinitialisez-les à tout moment."
+      "body": "Passez en revue les workflows que vous pouvez exécuter sur chaque élément de travail. Ajustez-les ou réinitialisez-les à tout moment."
     },
     "repositories": {
       "title": "Dépôts",
@@ -30,13 +30,13 @@
     }
   },
   "polling": {
-    "note": "Ces paramètres contrôlent la façon dont Takuto récupère automatiquement les nouveaux éléments de travail. Ils sont enregistrés lorsque vous continuez (le bouton Enregistrer ci-dessous les applique immédiatement)."
+    "note": "Ces paramètres déterminent la façon dont Takuto récupère automatiquement les nouveaux éléments de travail. Ils sont enregistrés lorsque vous continuez (le bouton Enregistrer ci-dessous les applique immédiatement)."
   },
   "stepTimeout": {
     "heading": "Délai d'expiration d'étape",
     "label": "Délai d'expiration (secondes)",
     "invalid": "Le délai d'expiration d'étape doit être un nombre positif.",
-    "hint": "Nombre maximal de secondes pendant lesquelles une étape d'agent peut s'exécuter avant d'être annulée. Par défaut 1800 (30 min)."
+    "hint": "Durée maximale d'exécution d'une étape d'agent, en secondes, avant son annulation. Par défaut 1800 (30 min)."
   },
   "dbNote": "<strong>La base de données et le port du tableau de bord ne sont pas configurés dans cet assistant.</strong> Takuto écrit un fichier <code>config.toml</code> avec les valeurs par défaut (SQLite, port 8080). Modifiez ce fichier directement pour les changer.",
   "nav": {
@@ -49,24 +49,24 @@
   },
   "ticketing": {
     "label": "Système de gestion des tickets",
-    "adminOnly": "Seul un administrateur peut modifier le système de gestion des tickets du déploiement. Vous pouvez tout de même gérer votre propre identifiant Jira ci-dessous.",
+    "adminOnly": "Seul un administrateur peut modifier le système de gestion des tickets du déploiement. Vous pouvez néanmoins gérer votre propre identifiant Jira ci-dessous.",
     "options": {
       "none": {
         "label": "Aucun",
-        "hint": "Aucune intégration de gestion des tickets. Démarrez les éléments de travail manuellement depuis le tableau de bord."
+        "hint": "Aucune intégration de gestion des tickets. Lancez les éléments de travail manuellement depuis le tableau de bord."
       },
       "github": {
         "label": "GitHub",
-        "hint": "Interroge les GitHub Issues ouvertes depuis le dépôt distant. Aucun token ici — connectez un PAT ou une GitHub App à l'étape GitHub."
+        "hint": "Récupère les GitHub Issues ouvertes du dépôt distant. Aucun token ici — connectez un PAT ou une GitHub App à l'étape GitHub."
       },
       "jira": {
         "label": "Jira",
-        "hint": "Interroge Jira pour les tickets À faire. Ajoutez votre site Atlassian, votre e-mail et votre token API ci-dessous."
+        "hint": "Récupère les tickets « À faire » depuis Jira. Ajoutez votre site Atlassian, votre e-mail et votre token API ci-dessous."
       }
     },
     "jira": {
       "connectedAs": "✓ Connecté en tant que <strong>{{email}}</strong> sur <site>{{site}}</site>. Laissez le formulaire vide pour le conserver, ou saisissez un nouveau token pour le remplacer.",
-      "encryptedNote": "Vos identifiants Jira sont stockés de façon chiffrée et utilisés uniquement pour vos propres éléments de travail.",
+      "encryptedNote": "Vos identifiants Jira sont chiffrés au stockage et utilisés uniquement pour vos propres éléments de travail.",
       "site": "Site Atlassian",
       "sitePlaceholder": "https://your-org.atlassian.net",
       "email": "E-mail du compte",
@@ -88,13 +88,13 @@
       "gemini": "Gemini (v2)",
       "none": "Aucun"
     },
-    "opencodeHint": "OpenCode relie Takuto à votre endpoint compatible OpenAI auto-hébergé (LM Studio, Ollama, vLLM, passerelles privées). Pour utiliser Anthropic / OpenAI directement, choisissez plutôt le fournisseur Claude ou Codex.",
+    "opencodeHint": "OpenCode relie Takuto à votre endpoint auto-hébergé compatible OpenAI (LM Studio, Ollama, vLLM, passerelles privées). Pour utiliser Anthropic / OpenAI directement, choisissez plutôt le fournisseur Claude ou Codex.",
     "baseUrl": "URL de base",
     "baseUrlPlaceholderOpencode": "http://lm-studio:1234/v1",
     "baseUrlPlaceholderDefault": "Laisser vide pour utiliser l'API publique du fournisseur",
     "cursorNoUpstream": "Cursor CLI ne prend pas en charge les endpoints amont personnalisés",
     "cursorNoUpstreamHint": "Cursor CLI ne prend pas en charge les endpoints amont personnalisés.",
-    "baseUrlOpencodeHint": "Requis pour OpenCode. Pointez ceci vers votre serveur compatible OpenAI auto-hébergé.",
+    "baseUrlOpencodeHint": "Requis pour OpenCode. Faites pointer ce champ vers votre serveur auto-hébergé compatible OpenAI.",
     "model": "Modèle",
     "modelPlaceholderOpencode": "lmstudio/qwen3-coder",
     "modelPlaceholderDefault": "Laisser vide pour la valeur par défaut du fournisseur",
@@ -103,11 +103,11 @@
   },
   "git": {
     "heading": "Paramètres Git",
-    "intro": "La branche que Takuto extrait pour chaque élément de travail, et le dépôt distant git vers lequel il pousse.",
+    "intro": "La branche que Takuto extrait pour chaque élément de travail, et le dépôt distant git vers lequel il pousse ses modifications.",
     "baseBranch": "Branche de base",
     "baseBranchPlaceholder": "main",
     "baseBranchRequired": "La branche de base est requise.",
-    "baseBranchHint": "La branche à partir de laquelle les branches d'éléments de travail sont créées. Généralement « main » ou « master ».",
+    "baseBranchHint": "La branche depuis laquelle sont créées les branches des éléments de travail. Généralement « main » ou « master ».",
     "remote": "Dépôt distant",
     "remotePlaceholder": "origin",
     "remoteRequired": "Le dépôt distant est requis.",
@@ -117,19 +117,19 @@
       "labelPrefix": "GitHub App :",
       "configured": "configurée",
       "notConfigured": "non configurée",
-      "explainer": "Une GitHub App partagée permet à tout le monde sur ce déploiement de communiquer avec GitHub sans token personnel. Sa configuration est facultative — chaque membre de l'équipe peut à la place utiliser son propre token d'accès personnel ci-dessous.",
+      "explainer": "Une GitHub App partagée permet à toute l'équipe de ce déploiement de communiquer avec GitHub sans token personnel. Sa configuration est facultative — chaque membre peut sinon renseigner son propre token d'accès personnel ci-dessous.",
       "setupLink": "Configurer une GitHub App →",
       "setupLinkAria": "Lire le guide de configuration de la GitHub App Takuto (s'ouvre dans un nouvel onglet)"
     },
     "pat": {
       "heading": "Votre token d'accès personnel (facultatif)",
-      "intro": "Ajoutez un PAT pour que les commits, les PR et les commentaires de revue sur vos éléments de travail vous soient attribués. Ignorez-le pour exécuter en tant que GitHub App partagée."
+      "intro": "Ajoutez un PAT pour que les commits, les PR et les commentaires de revue de vos éléments de travail vous soient attribués. Ignorez cette étape pour agir via la GitHub App partagée."
     }
   },
   "aiKey": {
     "loading": "Chargement de vos identifiants…",
     "connected": "{{label}} connecté.",
-    "sessionUploaded": "Session {{label}} téléversée.",
+    "sessionUploaded": "Session {{label}} importée.",
     "saveError": "Impossible d'enregistrer votre identifiant."
   },
   "banner": {

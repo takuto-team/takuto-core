@@ -9,9 +9,10 @@
  * card header).
  */
 
+import { createRef } from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { FlowEditor } from "./FlowEditor";
+import { act, render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { FlowEditor, type FlowEditorHandle } from "./FlowEditor";
 import type { UserFlow } from "../api/flows";
 
 function flow(name: string, depends_on: string[] = []): UserFlow {
@@ -158,5 +159,44 @@ describe("FlowEditor — save", () => {
     const submitted = onSubmit.mock.calls[0][0] as UserFlow[];
     expect(submitted.map((f) => f.name)).toEqual(["Build", "Deploy"]);
     expect(submitted[1].steps[0]).toMatchObject({ name: "ship it", prompt: "Run the deploy" });
+  });
+});
+
+describe("FlowEditor — imperative flush after multiple step deletions", () => {
+  it("persists every deletion, not just the first, when flushed via the handle", async () => {
+    // Regression: the imperative handle was memoized on `[isDirty]`, so once
+    // dirty stayed true it froze `trySave` at the first deletion's `steps` —
+    // a flush after several deletions then saved only the first one.
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const editing: UserFlow = {
+      name: "Build",
+      depends_on: [],
+      steps: [0, 1, 2, 3].map((n) => ({ name: `step ${n}`, prompt: `do ${n}`, skills: [] })),
+    };
+    const ref = createRef<FlowEditorHandle>();
+    render(
+      <FlowEditor
+        ref={ref}
+        flows={[editing]}
+        editIndex={0}
+        name="Build"
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    // Delete the first step three times → only "step 3" should remain.
+    for (let n = 0; n < 3; n++) {
+      fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    }
+
+    await act(async () => {
+      await ref.current!.trySave();
+    });
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const submitted = onSubmit.mock.calls[0][0] as UserFlow[];
+    expect(submitted[0].steps).toHaveLength(1);
+    expect(submitted[0].steps[0]).toMatchObject({ name: "step 3", prompt: "do 3" });
   });
 });

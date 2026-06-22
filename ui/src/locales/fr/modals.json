@@ -2,7 +2,7 @@
   "aiPrompt": {
     "askAi": "Demander à l'IA",
     "remaining": "{{time}} restant",
-    "placeholder": "Donnez à l'IA des instructions pour modifier la description (par ex. « Ajouter des critères d'acceptation » ou « Rendre plus concis »)…",
+    "placeholder": "Indiquez à l'IA comment modifier la description (par ex. « Ajouter des critères d'acceptation » ou « Rendre plus concis »)…",
     "applyingChanges": "Application des modifications… {{time}}",
     "ctrlEnter": "Ctrl+Entrée pour envoyer",
     "cancel": "Annuler",
@@ -20,7 +20,7 @@
   "delete": {
     "title": "Supprimer {{ticketKey}} ?",
     "cannotUndo": "Cette action est irréversible.",
-    "markDoneAndDelete": "Marquer comme terminé et supprimer",
+    "markDoneAndDelete": "Marquer terminé et supprimer",
     "delete": "Supprimer"
   },
   "paste": {
@@ -39,7 +39,7 @@
   "ticketPicker": {
     "githubTitle": "GitHub Issues",
     "todoTitle": "Tickets À faire",
-    "needRepo": "Choisissez un dépôt spécifique dans l'en-tête pour voir ses issues GitHub. « Tous les dépôts » n'agrège pas les issues de plusieurs dépôts.",
+    "needRepo": "Choisissez un dépôt précis dans l'en-tête pour voir ses issues GitHub. L'option « Tous les dépôts » ne regroupe pas les issues de plusieurs dépôts.",
     "loading": "Chargement...",
     "noTickets": "Aucun ticket trouvé.",
     "alreadyAdded": "Déjà ajouté",
@@ -73,7 +73,7 @@
     "title": "Aucun système de gestion des tickets",
     "bodyPrefix": "Aucun système de gestion des tickets n'est configuré. Les workflows ne peuvent être démarrés que manuellement via le tableau de bord. Configurez",
     "bodyIn": "dans",
-    "bodySuffix": "pour activer l'interrogation de Jira ou GitHub.",
+    "bodySuffix": "pour activer la récupération depuis Jira ou GitHub.",
     "gotIt": "Compris"
   },
   "report": {
@@ -126,7 +126,7 @@
     "improveFailed": "Échec de la demande d'amélioration",
     "improvingPrompt": "Amélioration du prompt…",
     "cancel": "Annuler",
-    "dragToReorder": "Glisser pour réordonner",
+    "dragToReorder": "Glisser pour réorganiser",
     "untitledStep": "Étape sans titre",
     "needsOneStep": "Un flux nécessite au moins une étape.",
     "remove": "Supprimer",
@@ -163,7 +163,7 @@
     "failed": "Échec de l'amélioration de la description du ticket",
     "improvingDescription": "Amélioration de la description...",
     "cancel": "Annuler",
-    "reviewAiChanges": "Examinez les modifications de l'IA — confirmez pour passer en mode édition avec la description mise à jour",
+    "reviewAiChanges": "Vérifiez les modifications de l'IA — confirmez pour passer en mode édition avec la description mise à jour",
     "discard": "Abandonner",
     "confirm": "Confirmer",
     "back": "Retour",

@@ -1,10 +1,10 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
-import { useEffect, useState } from "react";
+import { forwardRef, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { UserFlow } from "../api/flows";
-import { FlowEditor } from "./FlowEditor";
+import { FlowEditor, type FlowEditorHandle } from "./FlowEditor";
 import { EditableName } from "./EditableName";
 
 interface FlowCardProps {
@@ -31,23 +31,26 @@ interface FlowCardProps {
   onDragEnd: () => void;
 }
 
-export function FlowCard({
-  flow,
-  flows,
-  index,
-  expanded,
-  draggable,
-  isDragging,
-  onToggleExpand,
-  onDelete,
-  onSubmit,
-  onInlineRename,
-  onCancelEdit,
-  onDragStart,
-  onDragOverCard,
-  onDrop,
-  onDragEnd,
-}: FlowCardProps) {
+export const FlowCard = forwardRef<FlowEditorHandle, FlowCardProps>(function FlowCard(
+  {
+    flow,
+    flows,
+    index,
+    expanded,
+    draggable,
+    isDragging,
+    onToggleExpand,
+    onDelete,
+    onSubmit,
+    onInlineRename,
+    onCancelEdit,
+    onDragStart,
+    onDragOverCard,
+    onDrop,
+    onDragEnd,
+  },
+  ref,
+) {
   const { t } = useTranslation("config");
   // Draft name is only meaningful while expanded; reset to the saved value on
   // every (re-)expansion or when the underlying flow's name changes. Cancel
@@ -190,6 +193,7 @@ export function FlowCard({
       {expanded && (
         <div id={`flow-${index}-editor`}>
           <FlowEditor
+            ref={ref}
             flows={flows}
             editIndex={index}
             name={nameDraft}
@@ -201,4 +205,4 @@ export function FlowCard({
       )}
     </div>
   );
-}
+});

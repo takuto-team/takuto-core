@@ -143,16 +143,10 @@ async function clickContinue() {
   fireEvent.click(await continueButton());
 }
 
-/** Click "Skip for now" — advances without saving (used for pure-advance steps
- *  where the primary button is dirty-gated and disabled with no changes). */
-async function clickSkip() {
-  fireEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
-}
-
-/** Advance from step 1 to step 2 via Skip (ticketing = none, nothing dirty). */
+/** Advance from step 1 to step 2 (ticketing = none, nothing to persist). */
 async function goToStep2() {
   await screen.findByLabelText("Ticketing system");
-  await clickSkip();
+  await clickContinue();
   await screen.findByLabelText(/Claude API key/i);
 }
 
@@ -220,8 +214,8 @@ describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
     renderWizard();
     await goToStep2();
 
-    // Do not type a key — "Save and Continue" is disabled, so Skip advances.
-    await clickSkip();
+    // Do not type a key — Save and Continue advances with no credential POST.
+    await clickContinue();
 
     await waitFor(() => {
       expect(screen.getByLabelText("Base branch")).toBeTruthy();
@@ -252,8 +246,8 @@ describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
 describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
   async function goToStep3() {
     await goToStep2();
-    // Step 2 → 3 with a blank key (Skip; "Save and Continue" is dirty-gated).
-    await clickSkip();
+    // Step 2 → 3 with a blank key (Save and Continue, no credential POST).
+    await clickContinue();
     await screen.findByLabelText("Base branch");
   }
 
@@ -278,8 +272,8 @@ describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
     renderWizard();
     await goToStep3();
 
-    // Blank PAT and blank git edits → "Save and Continue" is disabled; Skip.
-    await clickSkip();
+    // Blank PAT → Save and Continue advances with no PAT POST.
+    await clickContinue();
 
     // Advanced to step 4 (Repositories step — the embedded MyRepositoriesTab).
     await waitFor(() => {

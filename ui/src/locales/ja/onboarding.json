@@ -14,7 +14,7 @@
     },
     "provider": {
       "title": "AI プロバイダー",
-      "body": "作業項目を駆動する AI を選択し、ご自身のプロバイダーキーを追加してください。"
+      "body": "作業項目を動かす AI を選択し、自分のプロバイダーキーを追加してください。"
     },
     "git": {
       "title": "Git と GitHub",
@@ -122,8 +122,8 @@
       "setupLinkAria": "Takuto の GitHub App セットアップガイドを読む（新しいタブで開きます）"
     },
     "pat": {
-      "heading": "あなたの personal access token（任意）",
-      "intro": "PAT を追加すると、作業項目のコミット、PR、レビューコメントがあなたに帰属します。共有の GitHub App として実行する場合はスキップしてください。"
+      "heading": "個人用の personal access token（任意）",
+      "intro": "PAT を追加すると、作業項目のコミット・PR・レビューコメントが自分名義になります。共有の GitHub App として実行する場合はスキップしてください。"
     }
   },
   "aiKey": {

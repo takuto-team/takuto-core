@@ -2,7 +2,7 @@
   "aiPrompt": {
     "askAi": "询问 AI",
     "remaining": "剩余 {{time}}",
-    "placeholder": "给 AI 指令以修改描述（例如「添加验收标准」或「让它更简洁」）…",
+    "placeholder": "告诉 AI 如何修改描述（例如「添加验收标准」或「让它更简洁」）…",
     "applyingChanges": "正在应用更改… {{time}}",
     "ctrlEnter": "按 Ctrl+Enter 发送",
     "cancel": "取消",
@@ -34,7 +34,7 @@
     "namePlaceholder": "例如 add-user-login",
     "descriptionLabel": "描述",
     "descriptionPlaceholder": "在此粘贴你的工单描述…",
-    "submit": "添加到仪表盘"
+    "submit": "添加到仪表板"
   },
   "ticketPicker": {
     "githubTitle": "GitHub Issues",
@@ -71,7 +71,7 @@
   },
   "noJira": {
     "title": "无工单系统",
-    "bodyPrefix": "未配置任何工单系统。工作流只能通过仪表盘手动启动。请配置",
+    "bodyPrefix": "未配置任何工单系统。工作流只能通过仪表板手动启动。请配置",
     "bodyIn": "于",
     "bodySuffix": "以启用 Jira 或 GitHub 轮询。",
     "gotIt": "知道了"
@@ -100,12 +100,12 @@
     "close": "关闭",
     "confirm": "确认",
     "saving": "正在保存…",
-    "addToDashboard": "添加到仪表盘"
+    "addToDashboard": "添加到仪表板"
   },
   "startWorkflowRepoBanner": {
     "repositoryLabel": "仓库：",
     "loading": "加载中…",
-    "noReposPrefix": "你的仪表盘上没有任何仓库。",
+    "noReposPrefix": "你的仪表板上没有任何仓库。",
     "addOne": "添加一个",
     "noReposSuffix": "然后再启动工作项。"
   },
@@ -131,7 +131,7 @@
     "needsOneStep": "流程至少需要一个步骤。",
     "remove": "移除",
     "prompt": "提示词",
-    "promptPlaceholder": "原样发送给 agent 的本步骤文本。",
+    "promptPlaceholder": "本步骤将原样发送给 agent 的文本。",
     "improving": "优化中…",
     "improveWithAi": "用 AI 优化",
     "revert": "还原",

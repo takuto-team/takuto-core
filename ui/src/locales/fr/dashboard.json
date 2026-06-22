@@ -2,9 +2,9 @@
   "dryMode": "Le mode simulation est activé — les effets sur Jira/GitHub sont ignorés",
   "runCommands": {
     "heading": "Commandes",
-    "waitingToListen": "En attente du démarrage de l'écoute de l'application…",
-    "startFailed": "Échec du démarrage de la commande d'exécution",
-    "stopFailed": "Échec de l'arrêt de la commande d'exécution",
+    "waitingToListen": "En attente du démarrage de l'application…",
+    "startFailed": "Échec du démarrage de la commande",
+    "stopFailed": "Échec de l'arrêt de la commande",
     "stop": "Arrêter {{name}}",
     "copy": "Copier",
     "open": "Ouvrir",
@@ -25,8 +25,8 @@
     "version": "Takuto v{{version}}"
   },
   "polling": {
-    "pausedResume": "Interrogation : en pause — cliquer pour reprendre",
-    "active": "Interrogation : active"
+    "pausedResume": "Récupération : en pause — cliquer pour reprendre",
+    "active": "Récupération : actif"
   },
   "stats": {
     "pending": "En attente",
@@ -57,7 +57,7 @@
     "actionFailed": "Échec de l'action"
   },
   "card": {
-    "working": "Traitement en cours...",
+    "working": "En cours...",
     "showDetails": "Afficher les détails",
     "showConsoleOutput": "Afficher la sortie de la console",
     "repositoryTitle": "Dépôt : {{name}}"
@@ -99,12 +99,12 @@
     "openInBrowser": "Ouvrir dans le navigateur"
   },
   "ports": {
-    "title": "Mappages de ports"
+    "title": "Redirection des ports"
   },
   "loading": {
     "preparingWorkspace": "Préparation de l'espace de travail…",
-    "connectingEditor": "Établissement d'une connexion sécurisée à un éditeur",
-    "connectingTerminal": "Établissement d'une connexion sécurisée à un terminal"
+    "connectingEditor": "Établissement d'une connexion sécurisée à l'éditeur…",
+    "connectingTerminal": "Établissement d'une connexion sécurisée au terminal…"
   },
   "actions": {
     "stop": "Arrêter",

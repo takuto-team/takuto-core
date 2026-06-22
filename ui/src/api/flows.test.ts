@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import { describe, it, expect } from "vitest";
-import { propagateRename, type UserFlow } from "./flows";
+import { dropDependency, propagateRename, type UserFlow } from "./flows";
 
 function flow(name: string, depends_on: string[] = []): UserFlow {
   return { name, depends_on, steps: [{ name: "s", prompt: "p", skills: [] }] };
@@ -41,5 +41,31 @@ describe("propagateRename", () => {
     ];
     const after = propagateRename(before, "A", "Z");
     expect(after[2].depends_on).toEqual(["Z", "B"]);
+  });
+});
+
+describe("dropDependency", () => {
+  it("strips the removed flow's name from every dependent's depends_on", () => {
+    // The list already has the removed flow filtered out; only dangling
+    // references to it remain to be cleaned.
+    const remaining: UserFlow[] = [
+      flow("Build", ["Lint and test"]),
+      flow("Review changes", ["Build", "Lint and test"]),
+    ];
+    const after = dropDependency(remaining, "Lint and test");
+    expect(after[0].depends_on).toEqual([]);
+    expect(after[1].depends_on).toEqual(["Build"]);
+  });
+
+  it("leaves flows without a reference untouched (same object identity)", () => {
+    const remaining: UserFlow[] = [flow("A"), flow("B", ["A"])];
+    const after = dropDependency(remaining, "Z");
+    expect(after[0]).toBe(remaining[0]);
+    expect(after[1]).toBe(remaining[1]);
+  });
+
+  it("removes all occurrences when a name appears more than once", () => {
+    const remaining: UserFlow[] = [flow("C", ["X", "X", "Y"])];
+    expect(dropDependency(remaining, "X")[0].depends_on).toEqual(["Y"]);
   });
 });

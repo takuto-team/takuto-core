@@ -37,7 +37,7 @@
     "colRole": "Rol",
     "colStatus": "Estado",
     "colActions": "Acciones",
-    "makeRoleTitle": "Haz clic para asignar el rol {{role}}",
+    "makeRoleTitle": "Haz clic para cambiar el rol a {{role}}",
     "roleUser": "usuario",
     "roleAdmin": "administrador",
     "suspended": "Suspendido",
@@ -82,7 +82,7 @@
     "systemSaved": "Sistema de tickets guardado.",
     "jiraConnected": "Jira conectado como {{name}}.",
     "jiraRemoved": "Credencial de Jira eliminada.",
-    "jiraPartial": "Rellena el sitio de Jira, el correo y el token de API — o bórralos para mantener tu conexión de Jira actual.",
+    "jiraPartial": "Rellena el sitio de Jira, el correo y el token de API, o bórralos todos para mantener tu conexión de Jira actual.",
     "adminOnly": "Solo un administrador puede cambiar el sistema de tickets del despliegue. Pregunta a un administrador u omite este paso.",
     "jiraErrors": {
       "invalid_token": "Jira rechazó el token — comprueba la URL del sitio, el correo y el token de API.",
@@ -109,7 +109,7 @@
     "commandsDeleted": "Comandos eliminados. Los futuros elementos de trabajo en este repositorio no ejecutarán comandos de inicialización ni mostrarán botones de comandos de ejecución.",
     "selectRepo": "Selecciona un repositorio para configurar sus comandos.",
     "repositoryLabel": "Repositorio:",
-    "noRowHint": "No hay comandos definidos para este repositorio. Los flujos de trabajo aquí no ejecutarán comandos de inicialización ni mostrarán botones de comandos de ejecución. Añade comandos abajo para personalizar.",
+    "noRowHint": "No hay comandos definidos para este repositorio. Los flujos de trabajo de aquí no ejecutarán comandos de inicialización ni mostrarán botones de comandos de ejecución. Añade comandos abajo para personalizarlos.",
     "initCommands": "Comandos de inicialización",
     "initCommandsHelp": "Se ejecutan secuencialmente en el worktree cada vez que se inicia el contenedor del elemento — antes de que lo usen los pasos del agente, el IDE, la terminal o un comando de ejecución.",
     "runCommands": "Comandos de ejecución",
@@ -133,11 +133,11 @@
   "ai": {
     "unsavedChanges": "Cambios sin guardar",
     "savedToast": "Ajustes del proveedor de IA guardados.",
-    "persistWarning": "Los ajustes del proveedor de IA se aplicaron en memoria pero NO se guardaron en disco: {{reason}}. El cambio se perderá en el próximo reinicio — corrige el volumen de configuración y guarda de nuevo.",
+    "persistWarning": "Los ajustes del proveedor de IA se aplicaron en memoria pero NO se guardaron en disco: {{reason}}. El cambio se perderá en el próximo reinicio — corrige el volumen de configuración y vuelve a guardar.",
     "unknownError": "error desconocido",
     "providerConfigured": "Proveedor configurado.",
     "providerSettings": "Ajustes del proveedor",
-    "providerSettingsHelp": "Solo para administradores. Elige el proveedor de IA activo, configura su sub-tabla y elige de qué proveedores pueden escoger los usuarios.",
+    "providerSettingsHelp": "Solo administradores. Elige el proveedor de IA activo, configura sus opciones y define entre qué proveedores pueden elegir los usuarios.",
     "form": {
       "provider": "Proveedor",
       "model": "Modelo",
@@ -156,11 +156,11 @@
       "tokenLimits": "Límites de tokens (opcional)",
       "contextWindow": "Ventana de contexto",
       "maxOutput": "Salida máxima",
-      "tokenLimitsHelp": "Tokens. Indica a OpenCode la ventana de tu modelo autoalojado para que pueda rastrear el contexto restante (no puede consultarlo en un endpoint local). Déjalo en blanco para que OpenCode elija. Haz que coincida con la longitud de contexto cargada en tu servidor (p. ej. el ajuste por modelo de LM Studio).",
+      "tokenLimitsHelp": "Tokens. Indica a OpenCode la ventana de tu modelo autoalojado para que pueda calcular el contexto restante (no puede consultarla en un endpoint local). Déjalo en blanco para que OpenCode la elija. Debe coincidir con la longitud de contexto cargada en tu servidor (p. ej. el ajuste por modelo de LM Studio).",
       "extraArgs": "Argumentos adicionales (uno por línea)",
       "extraArgsHelp": "Las opciones gestionadas por Takuto (p. ej. <code>--dangerously-skip-permissions</code>, <code>--resume</code>) se rechazan en el servidor.",
       "allowSharedDefault": "Permitir el token predeterminado compartido",
-      "allowSharedDefaultHelp": "Cuando está activado, los usuarios sin su propia credencial usan el token predeterminado del despliegue configurado en <code>takuto.env</code>. Desactivado por defecto.",
+      "allowSharedDefaultHelp": "Cuando está activado, los usuarios sin credencial propia recurren al token predeterminado del despliegue configurado en <code>takuto.env</code>. Desactivado por defecto.",
       "availableProviders": "Proveedores disponibles para los usuarios",
       "opencodeRequires": "OpenCode requiere tanto una URL base como un modelo para guardar."
     },
@@ -174,27 +174,27 @@
     },
     "share": {
       "title": "Compartir una conversación entre los pasos de un flujo",
-      "help": "Cuando está activado, cada paso reanuda la sesión del paso anterior, de modo que el agente arrastra todo el contexto — recuerda lo que implementó cuando lo revisa. Cuando está desactivado, cada paso se ejecuta en una sesión nueva sin memoria de los pasos anteriores (el valor predeterminado; más seguro para modelos locales pequeños que se confunden con transcripciones largas). Se aplica a todos los proveedores."
+      "help": "Cuando está activado, cada paso reanuda la sesión del paso anterior, de modo que el agente conserva todo el contexto — recuerda lo que implementó al revisarlo. Cuando está desactivado, cada paso se ejecuta en una sesión nueva sin memoria de los pasos anteriores (es el valor predeterminado; más seguro para los modelos locales pequeños, que se confunden con transcripciones largas). Se aplica a todos los proveedores."
     },
     "guardrails": {
-      "title": "Salvaguardas de los pasos",
-      "help": "Solo para administradores. Límites de tiempo de ejecución aplicados a cada paso del agente: cuánto puede ejecutarse un paso, cuánto puede ejecutarse la llamada de «mejorar descripción» y la salvaguarda del bucle sin progreso.",
+      "title": "Límites de los pasos",
+      "help": "Solo administradores. Límites de ejecución que se aplican a cada paso del agente: cuánto puede durar un paso, cuánto puede durar la llamada de «mejorar descripción» y el control de bucles sin progreso.",
       "stepTimeout": "Tiempo de espera del paso (segundos)",
-      "defaultPlaceholder": "Déjalo vacío para el valor predeterminado",
-      "stepTimeoutHelp": "Tiempo máximo de reloj para un único paso de agente o comando antes de que se aborte.",
-      "improveTimeout": "Tiempo de espera de mejorar descripción (segundos)",
-      "improveTimeoutHelp": "Presupuesto de tiempo para el asistente puntual de «mejorar descripción» usado en el modal de pegar descripción manual.",
+      "defaultPlaceholder": "Déjalo vacío para usar el valor predeterminado",
+      "stepTimeoutHelp": "Tiempo máximo de ejecución de un único paso de agente o comando antes de cancelarlo.",
+      "improveTimeout": "Tiempo de espera de «mejorar descripción» (segundos)",
+      "improveTimeoutHelp": "Tiempo máximo para el asistente puntual de «mejorar descripción» que se usa en el cuadro de diálogo de pegar la descripción manualmente.",
       "maxRepeatedLines": "Máximo de líneas de salida repetidas",
-      "maxRepeatedLinesHelp": "Líneas de salida idénticas consecutivas que activan la salvaguarda de falta de progreso y hacen fallar el paso. <code>0</code> = desactivado.",
-      "savedToast": "Salvaguardas de los pasos guardadas.",
-      "persistWarning": "Las salvaguardas de los pasos se aplicaron en memoria pero NO se guardaron en disco: {{reason}}. El cambio se perderá en el próximo reinicio — corrige el volumen de configuración y guarda de nuevo."
+      "maxRepeatedLinesHelp": "Número de líneas de salida idénticas consecutivas que activan el control de falta de progreso y hacen fallar el paso. <code>0</code> = desactivado.",
+      "savedToast": "Límites de los pasos guardados.",
+      "persistWarning": "Los límites de los pasos se aplicaron en memoria pero NO se guardaron en disco: {{reason}}. El cambio se perderá en el próximo reinicio — corrige el volumen de configuración y vuelve a guardar."
     }
   },
   "polling": {
     "title": "Sondeo de elementos",
-    "help": "Solo para administradores. Controla qué elementos de trabajo sondeados se convierten en flujos de trabajo: el flujo que inician automáticamente, cuántos se ejecutan en paralelo y los filtros de Jira / GitHub.",
+    "help": "Solo administradores. Controla qué elementos de trabajo sondeados se convierten en flujos de trabajo: el flujo que inician automáticamente, cuántos se ejecutan en paralelo y los filtros de Jira / GitHub.",
     "savedToast": "Ajustes de sondeo de elementos guardados.",
-    "persistWarning": "Los ajustes de sondeo de elementos se aplicaron en memoria pero NO se guardaron en disco: {{reason}}. El cambio se perderá en el próximo reinicio — corrige el volumen de configuración y guarda de nuevo.",
+    "persistWarning": "Los ajustes de sondeo de elementos se aplicaron en memoria pero NO se guardaron en disco: {{reason}}. El cambio se perderá en el próximo reinicio — corrige el volumen de configuración y vuelve a guardar.",
     "enable": "Habilitar el sondeo de elementos",
     "enableHelp": "Cuando está desactivado, el sondeador se pausa y no se añaden elementos automáticamente. Surte efecto de inmediato y se mantiene entre reinicios.",
     "interval": "Intervalo de sondeo (segundos)",
@@ -230,7 +230,7 @@
       "logRetention": "Retención de registros de elementos de trabajo (días)",
       "logRetentionHelp": "Días de registros por elemento de trabajo que se conservan. <code>0</code> = conservar para siempre.",
       "generateReport": "Generar informe de ejecución",
-      "generateReportHelp": "Valor predeterminado de si cada flujo de trabajo produce un informe al final de la ejecución."
+      "generateReportHelp": "Define si, de forma predeterminada, cada flujo de trabajo genera un informe al final de la ejecución."
     },
     "jiraContext": {
       "title": "Contexto de Jira",
@@ -300,11 +300,11 @@
     "removed": "Se quitó \"{{name}}\" de tu panel.",
     "removeTitle": "Quitar repositorio",
     "forcePurgeTitle": "Purgar repositorio a la fuerza",
-    "forcePurgeMessage_one": "Purgar a la fuerza \"{{name}}\": el {{count}} usuario asociado perderá el acceso, y el clon en disco en {{path}} se eliminará. Esto no se puede deshacer.",
-    "forcePurgeMessage_other": "Purgar a la fuerza \"{{name}}\": los {{count}} usuarios asociados perderán el acceso, y el clon en disco en {{path}} se eliminará. Esto no se puede deshacer.",
+    "forcePurgeMessage_one": "Purgar a la fuerza \"{{name}}\": su {{count}} usuario asociado perderá el acceso y el clon en disco en {{path}} se eliminará. Esto no se puede deshacer.",
+    "forcePurgeMessage_other": "Purgar a la fuerza \"{{name}}\": sus {{count}} usuarios asociados perderán el acceso y el clon en disco en {{path}} se eliminará. Esto no se puede deshacer.",
     "lastUserMessage": "Eres el último usuario asociado a \"{{name}}\". Al quitarlo también se eliminará el clon en disco en {{path}}. El repositorio se puede volver a añadir más tarde (se volverá a clonar desde el remoto).",
-    "removeMessage_one": "Quitar \"{{name}}\" de tu panel. {{count}} otro usuario lo tiene añadido — el clon en disco se conservará.",
-    "removeMessage_other": "Quitar \"{{name}}\" de tu panel. Otros {{count}} usuarios lo tienen añadido — el clon en disco se conservará.",
+    "removeMessage_one": "Quitar \"{{name}}\" de tu panel. {{count}} usuario más lo tiene añadido, así que el clon en disco se conservará.",
+    "removeMessage_other": "Quitar \"{{name}}\" de tu panel. Otros {{count}} usuarios lo tienen añadido, así que el clon en disco se conservará.",
     "mine": {
       "header": "Mis repositorios",
       "empty": "Aún no has añadido ningún repositorio. Elige uno de la lista de abajo.",

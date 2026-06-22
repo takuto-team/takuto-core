@@ -14,7 +14,7 @@
     "installFailed": "Impossible d'installer les dépendances",
     "installing": "Installation des dépendances",
     "preparing": "Préparation…",
-    "errorHelp": "Les CLI des agents sont installées au démarrage. Vérifiez les journaux du serveur, puis redémarrez.",
-    "installingHelp": "Les CLI des agents sont en cours d'installation lors du premier démarrage. Cela ne prend qu'un instant."
+    "errorHelp": "Les CLI des agents sont installées au démarrage. Consultez les logs du serveur, puis redémarrez.",
+    "installingHelp": "Les CLI des agents s'installent lors du premier démarrage. Cela ne prend qu'un instant."
   }
 }

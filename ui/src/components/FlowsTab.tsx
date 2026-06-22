@@ -19,13 +19,22 @@
  *   flow just collapses the editor without writing.
  */
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  Fragment,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { Trans, useTranslation } from "react-i18next";
 import {
   getMyFlows,
   putMyFlows,
   reseedMyFlows,
   propagateRename,
+  dropDependency,
   MAX_FLOWS,
   type UserFlow,
 } from "../api/flows";
@@ -36,13 +45,21 @@ import { ConfirmModal } from "./modals/ConfirmModal";
 import { GenerateReportSwitch } from "./GenerateReportSwitch";
 import { RepoSidebar, type RepoSidebarItem } from "./RepoSidebar";
 import { FlowCard } from "./FlowCard";
-import { FlowEditor } from "./FlowEditor";
+import { FlowEditor, type FlowEditorHandle } from "./FlowEditor";
 import { EditableName } from "./EditableName";
 
 /** `expanded` selects an existing index, the literal "new" for the draft card, or none. */
 type Expanded = number | "new" | null;
 
-export function FlowsTab() {
+/** Imperative handle so a host wizard can persist an open editor before leaving. */
+export interface FlowsTabHandle {
+  /** Save any open, dirty+valid editor. Resolves true if there is nothing
+   *  pending or the save succeeded, false if an open draft is invalid/rejected
+   *  (its inline validation stays visible so the user can fix it). */
+  flushPendingEdit: () => Promise<boolean>;
+}
+
+export const FlowsTab = forwardRef<FlowsTabHandle>(function FlowsTab(_props, ref) {
   const { t } = useTranslation("config");
   const { myRepos, activeRepoName } = useMyRepositories();
   const { access } = useRepoAccess();
@@ -66,6 +83,9 @@ export function FlowsTab() {
   // intervening dragStart / dragOver events may not have committed yet.
   const dragIndexRef = useRef<number | null>(null);
   const dragInsertRef = useRef<number | null>(null);
+  // Points at whichever editor is currently open (existing card or new draft),
+  // so a host wizard can flush it on "Finish". Only one editor mounts at a time.
+  const editorRef = useRef<FlowEditorHandle>(null);
   const [newFlowName, setNewFlowName] = useState("");
   const [newFlowNameError, setNewFlowNameError] = useState<string | null>(null);
 
@@ -126,6 +146,21 @@ export function FlowsTab() {
     [submitList],
   );
 
+  // Persist an open editor before the host (onboarding wizard) navigates away.
+  // A pristine draft is discarded; a dirty+valid one is saved (its onSubmit
+  // closes the editor); a dirty+invalid one blocks and keeps its errors visible.
+  const flushPendingEdit = useCallback(async (): Promise<boolean> => {
+    if (expanded === null) return true;
+    const editor = editorRef.current;
+    if (!editor || !editor.isDirty()) {
+      setExpanded(null);
+      return true;
+    }
+    return editor.trySave();
+  }, [expanded]);
+
+  useImperativeHandle(ref, () => ({ flushPendingEdit }), [flushPendingEdit]);
+
   const handleInlineRename = useCallback(
     async (index: number, newName: string) => {
       const oldName = flows[index]?.name;
@@ -142,8 +177,14 @@ export function FlowsTab() {
     const idx = confirmDelete;
     setConfirmDelete(null);
     if (expanded === idx) setExpanded(null);
+    const removedName = flows[idx]?.name;
+    // Drop the removed flow AND any dangling `depends_on` references to it;
+    // leaving them would make the server reject the PUT (`unknown_dependency`)
+    // and silently roll the delete back.
+    const remaining = flows.filter((_, i) => i !== idx);
+    const next = removedName === undefined ? remaining : dropDependency(remaining, removedName);
     try {
-      await submitList(flows.filter((_, i) => i !== idx));
+      await submitList(next);
     } catch {
       /* error already surfaced by submitList */
     }
@@ -338,6 +379,7 @@ export function FlowsTab() {
                 <Fragment key={flow.name}>
                   {showLineBefore && <div className="h-0.5 bg-blue-500 rounded-full" />}
                   <FlowCard
+                    ref={expanded === i ? editorRef : undefined}
                     flow={flow}
                     flows={flows}
                     index={i}
@@ -392,6 +434,7 @@ export function FlowsTab() {
                   <p className="px-4 pt-2 text-sm text-red-400">{newFlowNameError}</p>
                 )}
                 <FlowEditor
+                  ref={editorRef}
                   flows={flows}
                   editIndex={null}
                   name={newFlowName}
@@ -437,4 +480,4 @@ export function FlowsTab() {
       )}
     </div>
   );
-}
+});

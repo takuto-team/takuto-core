@@ -80,7 +80,7 @@
     "stepFailed": "在此步骤失败",
     "stepPaused": "在此步骤暂停",
     "stepStopped": "在此步骤停止",
-    "stepAdded": "已添加到仪表盘",
+    "stepAdded": "已添加到仪表板",
     "allStepsPassed": "所有步骤均已通过"
   },
   "editorMenu": {
