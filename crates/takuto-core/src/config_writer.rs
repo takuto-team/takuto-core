@@ -393,7 +393,7 @@ step_timeout_secs = 600
         );
         assert_eq!(original.web.port, reloaded.web.port);
         assert_eq!(original.git.base_branch, reloaded.git.base_branch);
-        assert_eq!(original.jira.project_keys, reloaded.jira.project_keys);
+        assert_eq!(original.jira.done_status, reloaded.jira.done_status);
         assert_eq!(
             original.agent.step_timeout_secs,
             reloaded.agent.step_timeout_secs
@@ -550,7 +550,7 @@ step_timeout_secs = 600
                     let mut config = Config::load(&p).unwrap_or_default();
                     config.general.poll_interval_secs = 30;
                     config.general.max_concurrent_workflows = (i % 5) + 1;
-                    config.jira.item_types = vec!["Task".to_string()];
+                    config.jira.done_status = "Done".to_string();
                     config.agent.step_timeout_secs = 600;
                     w.write_config(&config).unwrap();
                 })

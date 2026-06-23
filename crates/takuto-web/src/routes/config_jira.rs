@@ -41,17 +41,10 @@ pub struct PutJiraConfigRequest {
     /// Max UTF-8 bytes per linked issue description when mode is `full` (`0` = unlimited).
     #[serde(default)]
     pub linked_issue_description_max_bytes: Option<usize>,
-    /// Extra JQL appended to the poll query.
-    #[serde(default)]
-    pub jql_filter: Option<String>,
     /// Jira transition target for **Mark as Done**. `Config::validate` enforces
     /// non-empty.
     #[serde(default)]
     pub done_status: Option<String>,
-    /// Project keys polled for work. `Config::validate` enforces non-empty
-    /// alphanumeric entries. Replaces the list wholesale when present.
-    #[serde(default)]
-    pub project_keys: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,14 +83,8 @@ pub async fn put_jira_config(
         if let Some(v) = patch.linked_issue_description_max_bytes {
             config.jira.linked_issue_description_max_bytes = v;
         }
-        if let Some(v) = patch.jql_filter {
-            config.jira.jql_filter = v;
-        }
         if let Some(v) = patch.done_status {
             config.jira.done_status = v;
-        }
-        if let Some(v) = patch.project_keys {
-            config.jira.project_keys = v;
         }
 
         config
@@ -194,7 +181,7 @@ mod tests {
                     .header("Origin", TEST_ORIGIN)
                     .header("Cookie", &cookie)
                     .body(Body::from(
-                        r#"{"linked_items_in_prompt":"summary_only","ticket_context_max_description_bytes":4096,"linked_issue_description_max_bytes":1024,"jql_filter":"labels = urgent","done_status":"Closed","project_keys":["PROJ","CORE"]}"#,
+                        r#"{"linked_items_in_prompt":"summary_only","ticket_context_max_description_bytes":4096,"linked_issue_description_max_bytes":1024,"done_status":"Closed"}"#,
                     ))
                     .unwrap(),
             )
@@ -209,12 +196,7 @@ mod tests {
         let cfg = state.config.config.read().await;
         assert_eq!(cfg.jira.ticket_context_max_description_bytes, 4096);
         assert_eq!(cfg.jira.linked_issue_description_max_bytes, 1024);
-        assert_eq!(cfg.jira.jql_filter, "labels = urgent");
         assert_eq!(cfg.jira.done_status, "Closed");
-        assert_eq!(
-            cfg.jira.project_keys,
-            vec!["PROJ".to_string(), "CORE".to_string()]
-        );
     }
 
     #[tokio::test]
@@ -238,7 +220,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn put_jira_config_invalid_project_key_returns_400() {
+    async fn put_jira_config_rejects_legacy_project_keys_field() {
+        // `project_keys` was removed from the [jira] config section (keys are
+        // now per-user-per-repository). The request body uses
+        // `deny_unknown_fields`, so a client still sending it gets a 400.
         let state = test_state_with_db();
         let cookie = register_and_login(&state).await;
 
@@ -249,7 +234,7 @@ mod tests {
                     .header("Content-Type", "application/json")
                     .header("Origin", TEST_ORIGIN)
                     .header("Cookie", &cookie)
-                    .body(Body::from(r#"{"project_keys":["bad key!"]}"#))
+                    .body(Body::from(r#"{"project_keys":["PROJ"]}"#))
                     .unwrap(),
             )
             .await

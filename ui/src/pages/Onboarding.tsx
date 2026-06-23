@@ -13,18 +13,21 @@
  * `/api/config` fetch in `useProviderForm`.
  *
  * 5 steps:
- *   1. Ticketing      — selector (None / GitHub / Jira); Jira shows a
- *                        site/email/token form saved per-user. Writes
- *                        `[general] ticketing_system` via PUT /api/config.
- *                        Admins also see the deployment item-polling section
- *                        (PUT /api/config/polling) when a system is selected.
- *   2. AI provider    — provider form (PUT /api/config/agent) + inline AI
- *                        API-key entry (AiCredentialPanel).
- *   3. Git & GitHub   — git base branch + remote (PUT /api/config/git),
+ *   1. Git & GitHub   — git base branch + remote (PUT /api/config/git),
  *                        GitHub App status, and an optional per-user PAT.
- *   4. Repositories   — add the GitHub repos Takuto can work in
- *                        (MyRepositoriesTab) so step 5 has repos to attach
- *                        flows to. Adds/removes persist via their own buttons.
+ *   2. Repositories   — add the GitHub repos Takuto can work in
+ *                        (MyRepositoriesTab), so the later per-repo polling and
+ *                        flows steps have repos to attach to. Adds/removes
+ *                        persist via their own buttons.
+ *   3. AI provider    — provider form (PUT /api/config/agent) + inline AI
+ *                        API-key entry (AiCredentialPanel).
+ *   4. Ticketing      — selector (None / GitHub / Jira); Jira shows a
+ *                        site/email/token form saved per-user. Writes
+ *                        `[general] ticketing_system` via PUT /api/config. Also
+ *                        shows the per-user per-repository polling section
+ *                        (RepoPollingSettingsSection) once a system is selected
+ *                        — repos exist by now (added at step 2). The global
+ *                        general-limits / Jira-context sections stay Config-only.
  *   5. Workflows      — step timeout (PUT /api/config/agent) + the per-user /
  *                        per-workspace flows editor (FlowsTab).
  *
@@ -44,11 +47,9 @@ import { useTicketingForm } from "../hooks/useTicketingForm";
 import { useGitForm } from "../hooks/useGitForm";
 import { useStepTimeoutForm } from "../hooks/useStepTimeoutForm";
 import { FlowsTab, type FlowsTabHandle } from "../components/FlowsTab";
-import {
-  ItemPollingSettingsSection,
-  type ItemPollingSettingsHandle,
-} from "../components/admin/ItemPollingSettingsSection";
 import { MyRepositoriesTab } from "../components/MyRepositoriesTab";
+import { RepoPollingSettingsSection } from "../components/admin/RepoPollingSettingsSection";
+import type { ConfigSectionHandle } from "../components/admin/configSection";
 import { WizardFooter } from "../components/WizardFooter";
 import type { TicketingSystemId } from "../api/types";
 import { GitHubStep } from "./Onboarding/GitHubStep";
@@ -103,10 +104,12 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
   // typed — the provider/git PUTs alone do not carry those credentials.
   const aiKeyRef = useRef<AiCredentialPanelHandle>(null);
   const githubPatRef = useRef<GitHubCredentialPanelHandle>(null);
-  const pollingRef = useRef<ItemPollingSettingsHandle>(null);
   // Lets "Finish" persist a workflow the user customized in step 5 but didn't
   // explicitly save in the FlowsTab editor.
   const flowsRef = useRef<FlowsTabHandle>(null);
+  // Persists the per-repo polling section (step 4) on Continue — it has no own
+  // Save in the wizard.
+  const pollingRef = useRef<ConfigSectionHandle>(null);
 
   // Typed-but-unsaved signals from the inline credential sections. When a token
   // is being saved its panel shows the "connected" toast, so we silence the
@@ -117,33 +120,33 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
   const { step, completing, goNext, goBack } = useOnboardingFlow({
     onBeforeNext: async (s) => {
       if (s === 1) {
-        const ok = await ticketing.save();
-        if (!ok) return false;
-        // Persist the embedded item-polling section too (it has no own Save in
-        // the wizard) so toggles like "disable polling" are actually saved.
-        return pollingRef.current ? pollingRef.current.save() : true;
-      }
-      if (s === 2) {
-        // Silence the provider "configured" toast when a key save will show the
-        // "connected" toast — only one toast per Save and Continue.
-        const provider = await save({ silent: aiKeyDirty });
-        if (!provider) return false;
-        // Blank key → saveIfDirty resolves true (skip / deployment default).
-        return aiKeyRef.current ? aiKeyRef.current.saveIfDirty() : true;
-      }
-      if (s === 3) {
-        // Persist the per-user PAT first, then the deployment git settings.
-        // A typed PAT that fails to save (e.g. a GitHub transport error)
-        // must block the step BEFORE git is saved. Silence the git toast when a
-        // PAT save will show its own "connected" toast (one toast per step).
+        // Git & GitHub: persist the per-user PAT first, then the deployment git
+        // settings. A typed PAT that fails to save (e.g. a GitHub transport
+        // error) must block the step BEFORE git is saved. Silence the git toast
+        // when a PAT save will show its own "connected" toast (one per step).
         const patOk = githubPatRef.current
           ? await githubPatRef.current.saveIfDirty()
           : true;
         if (!patOk) return false;
         return git.save({ silent: patDirty });
       }
-      // Step 4 (repositories) saves via its own Add/Remove buttons — nothing
+      // Step 2 (repositories) saves via its own Add/Remove buttons — nothing
       // to persist on Continue.
+      if (s === 3) {
+        // AI provider: silence the provider "configured" toast when a key save
+        // will show the "connected" toast — only one toast per Save and Continue.
+        const providerOk = await save({ silent: aiKeyDirty });
+        if (!providerOk) return false;
+        // Blank key → saveIfDirty resolves true (skip / deployment default).
+        return aiKeyRef.current ? aiKeyRef.current.saveIfDirty() : true;
+      }
+      if (s === 4) {
+        // Ticketing: persist the system selection / Jira credential, then the
+        // per-repo polling section (it has no own Save in the wizard).
+        const ok = await ticketing.save();
+        if (!ok) return false;
+        return pollingRef.current ? pollingRef.current.save() : true;
+      }
       if (s === 5) {
         // Flush an open-but-unsaved workflow editor first; block Finish if the
         // draft is invalid (its inline validation stays visible).
@@ -154,11 +157,6 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
       return true;
     },
   });
-
-  // Deployment-level polling settings only apply once a ticketing system is
-  // selected, and only admins may edit them. Gate on the live selection so
-  // choosing "None" hides the section immediately (matching TicketingTab).
-  const showPolling = !loading && !!isAdmin && ticketing.system !== "none";
 
   // "Save and Continue" is always clickable (clicking it saves the step then
   // advances) — only blocked while a save / finish is actually in flight, to
@@ -206,28 +204,21 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
           ) : (
             <>
               {step === 1 && (
-                <>
-                  <TicketingStep
-                    system={ticketing.system}
-                    onChangeSystem={ticketing.setSystem}
-                    site={ticketing.site}
-                    onChangeSite={ticketing.setSite}
-                    email={ticketing.email}
-                    onChangeEmail={ticketing.setEmail}
-                    token={ticketing.token}
-                    onChangeToken={ticketing.setToken}
-                    connected={ticketing.connected}
-                    canEditSystem={!!isAdmin}
-                  />
-                  {showPolling && (
-                    <div className="border-t border-gray-800 pt-6">
-                      <p className="text-xs text-gray-500 mb-4">{t("polling.note")}</p>
-                      <ItemPollingSettingsSection ref={pollingRef} hideSave />
-                    </div>
-                  )}
-                </>
+                <GitHubStep
+                  githubAppConfigured={githubAppConfigured}
+                  baseBranch={git.baseBranch}
+                  onChangeBaseBranch={git.setBaseBranch}
+                  remote={git.remote}
+                  onChangeRemote={git.setRemote}
+                  baseBranchInvalid={git.baseBranchInvalid}
+                  remoteInvalid={git.remoteInvalid}
+                  canEditGit={!!isAdmin}
+                  patPanelRef={githubPatRef}
+                  onPatDirtyChange={setPatDirty}
+                />
               )}
-              {step === 2 && (
+              {step === 2 && <MyRepositoriesTab isAdmin={isAdmin} />}
+              {step === 3 && (
                 <div className="flex flex-col gap-6">
                   <ProviderStep
                     provider={provider}
@@ -242,21 +233,30 @@ export function Onboarding({ onLogout, authEnabled, isAdmin }: Props) {
                   <OnboardingAiKey ref={aiKeyRef} provider={provider} onDirtyChange={setAiKeyDirty} />
                 </div>
               )}
-              {step === 3 && (
-                <GitHubStep
-                  githubAppConfigured={githubAppConfigured}
-                  baseBranch={git.baseBranch}
-                  onChangeBaseBranch={git.setBaseBranch}
-                  remote={git.remote}
-                  onChangeRemote={git.setRemote}
-                  baseBranchInvalid={git.baseBranchInvalid}
-                  remoteInvalid={git.remoteInvalid}
-                  canEditGit={!!isAdmin}
-                  patPanelRef={githubPatRef}
-                  onPatDirtyChange={setPatDirty}
-                />
+              {step === 4 && (
+                <div className="flex flex-col gap-6">
+                  <TicketingStep
+                    system={ticketing.system}
+                    onChangeSystem={ticketing.setSystem}
+                    site={ticketing.site}
+                    onChangeSite={ticketing.setSite}
+                    email={ticketing.email}
+                    onChangeEmail={ticketing.setEmail}
+                    token={ticketing.token}
+                    onChangeToken={ticketing.setToken}
+                    connected={ticketing.connected}
+                    canEditSystem={!!isAdmin}
+                  />
+                  {ticketing.system !== "none" && (
+                    <div className="border-t border-gray-800 pt-6">
+                      <RepoPollingSettingsSection
+                        ref={pollingRef}
+                        ticketingSystem={ticketing.system}
+                      />
+                    </div>
+                  )}
+                </div>
               )}
-              {step === 4 && <MyRepositoriesTab isAdmin={isAdmin} />}
               {step === 5 && (
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-3">

@@ -36,11 +36,11 @@ impl fmt::Display for TicketingSystem {
 pub struct GeneralConfig {
     #[serde(default)]
     pub dry_mode: bool,
+    /// How often (seconds) the single poller loop wakes to poll every
+    /// auto-polling-enabled repository. Deployment-global (one cadence for the
+    /// shared loop); per-repo enable lives in `user_repo_polling_settings`.
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
-    /// When **`true`** (default), Jira polling starts automatically on startup. Set to **`false`** to start in the same **paused** state as **Pause polling** on the dashboard (no **`poll_once`** until **Resume polling** or **`POST /api/polling/resume`**). Not persisted when toggled at runtime; restart re-reads this flag from **`config.toml`**.
-    #[serde(default = "default_auto_polling")]
-    pub auto_polling: bool,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_workflows: u32,
     /// Max **visible** workflows on the dashboard (rows still in the map: **Done**, paused, stopped, error, in-progress all count). `0` means use **`max_concurrent_workflows`**.
@@ -49,6 +49,11 @@ pub struct GeneralConfig {
     /// Max **manual** dashboard-started ticket workflows that still **occupy a slot** (not **Done**, **Stopped**, or **Error**). `0` means no limit.
     #[serde(default)]
     pub max_concurrent_manual_workflows: u32,
+    /// When `true`, the per-repo `max_parallel_items` cap is enforced per
+    /// workflow owner; `false` enforces it globally. Deployment-global
+    /// (cross-repo, per-user concurrency policy).
+    #[serde(default)]
+    pub max_parallel_per_user: bool,
     #[serde(default = "default_log_level")]
     pub log_level: String,
     /// Docker image for workflow worker containers. Empty = auto-detect from running Takuto container.
@@ -127,9 +132,6 @@ fn default_workflow_definitions_dir() -> String {
 fn default_poll_interval() -> u64 {
     60
 }
-fn default_auto_polling() -> bool {
-    true
-}
 fn default_max_concurrent() -> u32 {
     1
 }
@@ -156,10 +158,10 @@ impl Default for GeneralConfig {
         Self {
             dry_mode: false,
             poll_interval_secs: default_poll_interval(),
-            auto_polling: true,
             max_concurrent_workflows: default_max_concurrent(),
             max_active_workflows: 0,
             max_concurrent_manual_workflows: 0,
+            max_parallel_per_user: false,
             log_level: default_log_level(),
             worker_image: String::new(),
             ticketing_system: TicketingSystem::None,

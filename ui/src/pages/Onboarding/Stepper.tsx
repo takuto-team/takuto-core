@@ -5,10 +5,10 @@ import { useTranslation } from "react-i18next";
 import type { StepIndex } from "../../hooks/useOnboardingFlow";
 
 export const ONBOARDING_STEPS: { index: StepIndex; titleKey: string; bodyKey: string }[] = [
-  { index: 1, titleKey: "step.ticketing.title", bodyKey: "step.ticketing.body" },
-  { index: 2, titleKey: "step.provider.title", bodyKey: "step.provider.body" },
-  { index: 3, titleKey: "step.git.title", bodyKey: "step.git.body" },
-  { index: 4, titleKey: "step.repositories.title", bodyKey: "step.repositories.body" },
+  { index: 1, titleKey: "step.git.title", bodyKey: "step.git.body" },
+  { index: 2, titleKey: "step.repositories.title", bodyKey: "step.repositories.body" },
+  { index: 3, titleKey: "step.provider.title", bodyKey: "step.provider.body" },
+  { index: 4, titleKey: "step.ticketing.title", bodyKey: "step.ticketing.body" },
   { index: 5, titleKey: "step.workflows.title", bodyKey: "step.workflows.body" },
 ];
 

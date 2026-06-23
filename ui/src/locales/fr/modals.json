@@ -40,6 +40,7 @@
     "githubTitle": "GitHub Issues",
     "todoTitle": "Tickets À faire",
     "needRepo": "Choisissez un dépôt précis dans l'en-tête pour voir ses issues GitHub. L'option « Tous les dépôts » ne regroupe pas les issues de plusieurs dépôts.",
+    "needRepoJira": "Choisissez un dépôt précis dans l'en-tête pour voir ses tickets À faire. Les projets Jira récupérés se configurent par dépôt dans Configuration → Gestion des tickets.",
     "loading": "Chargement...",
     "noTickets": "Aucun ticket trouvé.",
     "alreadyAdded": "Déjà ajouté",

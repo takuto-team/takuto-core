@@ -37,7 +37,7 @@ use crate::db::Database;
 use crate::error::Result;
 use crate::process;
 
-use super::client::{JiraTicket, LinkedItem};
+use super::client::{JiraTicket, LinkedItem, TicketDescriptionPreview};
 use super::source::{TicketLister, TicketReader};
 
 /// A resolved (decrypted) per-user Jira credential.
@@ -269,6 +269,96 @@ impl JiraRestClient {
         serde_json::from_str(&resp.body)
             .map_err(|source| crate::jira::JiraError::ParseTicketListJson { source }.into())
     }
+
+    /// **To Do** issues for the dashboard manual-start picker — REST mirror of
+    /// [`super::client::JiraClient::list_todo_tickets_by_rank`]: **excludes
+    /// Epics**, all other issue types, **`ORDER BY rank ASC`** (board order),
+    /// `AND`-combining a non-empty `jql_filter`. Order from the API is
+    /// preserved (no key re-sort).
+    pub async fn list_todo_tickets_by_rank(
+        &self,
+        project_keys: &[String],
+        jql_filter: &str,
+    ) -> Result<Vec<JiraTicket>> {
+        if project_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let projects = project_keys
+            .iter()
+            .map(|k| k.trim())
+            .filter(|k| !k.is_empty())
+            .map(|k| format!("\"{}\"", k.replace('"', "")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let core = format!("project in ({projects}) AND status = \"To Do\" AND issuetype != Epic");
+        let extra = jql_filter.trim();
+        let jql = if extra.is_empty() {
+            format!("{core} ORDER BY rank ASC")
+        } else {
+            format!("({core}) AND ({extra}) ORDER BY rank ASC")
+        };
+        let encoded = url_encode(&jql);
+        // Enhanced search endpoint (`/search/jql`): Atlassian removed the
+        // classic `GET /rest/api/3/search` (now returns 410 Gone). Same query
+        // params; response still has `issues: [...]` (plus nextPageToken/isLast
+        // we ignore — the first page of 200 is enough for the picker).
+        let path = format!(
+            "rest/api/3/search/jql?jql={encoded}&maxResults=200&fields=summary,issuetype,status,description"
+        );
+        let value = self.get_json(&path).await?;
+        let issues = value
+            .get("issues")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        // Preserve the API's rank ordering; only drop empty-key and any Epic
+        // that slipped through (defence-in-depth — the JQL already excludes it).
+        let tickets: Vec<JiraTicket> = issues
+            .iter()
+            .map(|i| issue_to_ticket(i, "Task"))
+            .filter(|t| !t.key.is_empty() && !t.item_type.eq_ignore_ascii_case("Epic"))
+            .collect();
+        Ok(tickets)
+    }
+
+    /// **summary** + **description** for the manual-start preview modal — REST
+    /// mirror of [`super::client::JiraClient::get_ticket_description_preview`].
+    /// Rejects a key whose project prefix is not in `project_keys` with
+    /// [`crate::jira::JiraError::TicketNotInConfiguredProjects`] (the route maps
+    /// it to `403`).
+    pub async fn get_ticket_description_preview(
+        &self,
+        key: &str,
+        project_keys: &[String],
+    ) -> Result<TicketDescriptionPreview> {
+        let project = key.split('-').next().unwrap_or("").trim();
+        if project.is_empty() || !project_keys.iter().any(|p| p.trim() == project) {
+            return Err(crate::jira::JiraError::TicketNotInConfiguredProjects {
+                key: key.to_string(),
+            }
+            .into());
+        }
+        let path = format!("rest/api/3/issue/{key}?fields=summary,description");
+        let value = self.get_json(&path).await?;
+        let fields = value.get("fields").unwrap_or(&value);
+        let k = value
+            .get("key")
+            .and_then(Value::as_str)
+            .unwrap_or(key)
+            .to_string();
+        let summary = fields
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let desc_val = fields.get("description").cloned().unwrap_or(Value::Null);
+        let description_markdown = super::adf_markdown::jira_description_to_markdown(&desc_val);
+        Ok(TicketDescriptionPreview {
+            key: k,
+            summary,
+            description_markdown,
+        })
+    }
 }
 
 /// Build a [`JiraTicket`] from one `/rest/api/3` issue object.
@@ -331,8 +421,10 @@ impl TicketLister for JiraRestClient {
         }
         jql.push_str(" ORDER BY key ASC");
         let encoded = url_encode(&jql);
+        // Enhanced search endpoint — classic `GET /rest/api/3/search` was
+        // removed by Atlassian (410 Gone). See `list_todo_tickets_by_rank`.
         let path = format!(
-            "rest/api/3/search?jql={encoded}&maxResults=50&fields=summary,issuetype,status,description"
+            "rest/api/3/search/jql?jql={encoded}&maxResults=50&fields=summary,issuetype,status,description"
         );
         let value = self.get_json(&path).await?;
         let issues = value
@@ -646,7 +738,7 @@ mod tests {
             "project in (\"PROJ\") AND status = \"To Do\" AND issuetype in (\"Task\") ORDER BY key ASC",
         );
         let path = format!(
-            "rest/api/3/search?jql={jql}&maxResults=50&fields=summary,issuetype,status,description"
+            "rest/api/3/search/jql?jql={jql}&maxResults=50&fields=summary,issuetype,status,description"
         );
         let body = r#"{"issues":[
             {"key":"PROJ-2","fields":{"summary":"Two","issuetype":{"name":"Task"},"status":{"name":"To Do"}}},
@@ -662,6 +754,101 @@ mod tests {
         // Sorted by key ascending.
         assert_eq!(tickets[0].key, "PROJ-1");
         assert_eq!(tickets[1].key, "PROJ-2");
+    }
+
+    // ── list_todo_tickets_by_rank (manual picker REST path) ───────────────
+
+    #[tokio::test]
+    async fn list_by_rank_builds_jql_excludes_epic_and_preserves_order() {
+        // No jql_filter: core JQL with rank order, multi-project `in (...)`.
+        let jql = url_encode(
+            "project in (\"PROJ\", \"OPS\") AND status = \"To Do\" AND issuetype != Epic ORDER BY rank ASC",
+        );
+        let path = format!(
+            "rest/api/3/search/jql?jql={jql}&maxResults=200&fields=summary,issuetype,status,description"
+        );
+        // API returns PROJ-9 before PROJ-1 (board/rank order) — must be preserved
+        // (NOT re-sorted by key). An Epic is dropped defensively.
+        let body = r#"{"issues":[
+            {"key":"PROJ-9","fields":{"summary":"Nine","issuetype":{"name":"Task"},"status":{"name":"To Do"}}},
+            {"key":"PROJ-3","fields":{"summary":"Epic","issuetype":{"name":"Epic"},"status":{"name":"To Do"}}},
+            {"key":"PROJ-1","fields":{"summary":"One","issuetype":{"name":"Bug"},"status":{"name":"To Do"}}}
+        ]}"#;
+        let http = MockHttp::new().with(&path, 200, body);
+        let client = JiraRestClient::new(Arc::new(http), cred());
+        let tickets = client
+            .list_todo_tickets_by_rank(&["PROJ".to_string(), "OPS".to_string()], "")
+            .await
+            .unwrap();
+        let keys: Vec<&str> = tickets.iter().map(|t| t.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["PROJ-9", "PROJ-1"],
+            "rank order kept, Epic dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_by_rank_and_combines_jql_filter() {
+        let jql = url_encode(
+            "(project in (\"PROJ\") AND status = \"To Do\" AND issuetype != Epic) AND (labels = urgent) ORDER BY rank ASC",
+        );
+        let path = format!(
+            "rest/api/3/search/jql?jql={jql}&maxResults=200&fields=summary,issuetype,status,description"
+        );
+        let http = MockHttp::new().with(&path, 200, r#"{"issues":[]}"#);
+        let client = JiraRestClient::new(Arc::new(http), cred());
+        // Succeeds only if the exact AND-combined JQL path was requested.
+        let tickets = client
+            .list_todo_tickets_by_rank(&["PROJ".to_string()], "labels = urgent")
+            .await
+            .unwrap();
+        assert!(tickets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_by_rank_empty_keys_returns_empty_without_http() {
+        let client = JiraRestClient::new(Arc::new(MockHttp::new()), cred());
+        assert!(
+            client
+                .list_todo_tickets_by_rank(&[], "")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    // ── get_ticket_description_preview (manual picker REST path) ───────────
+
+    #[tokio::test]
+    async fn preview_returns_summary_and_markdown() {
+        let path = "rest/api/3/issue/PROJ-5?fields=summary,description";
+        let body = r#"{"key":"PROJ-5","fields":{"summary":"A title","description":"plain body"}}"#;
+        let http = MockHttp::new().with(path, 200, body);
+        let client = JiraRestClient::new(Arc::new(http), cred());
+        let preview = client
+            .get_ticket_description_preview("PROJ-5", &["PROJ".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(preview.key, "PROJ-5");
+        assert_eq!(preview.summary, "A title");
+        assert_eq!(preview.description_markdown, "plain body");
+    }
+
+    #[tokio::test]
+    async fn preview_rejects_out_of_project_key_without_http() {
+        // No canned response: if it tried an HTTP call it would error with a
+        // different message. It must reject BEFORE any call, with the
+        // "not in configured" error the route maps to 403.
+        let client = JiraRestClient::new(Arc::new(MockHttp::new()), cred());
+        let err = client
+            .get_ticket_description_preview("OTHER-1", &["PROJ".to_string()])
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not in configured"),
+            "expected not-in-configured error, got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -749,7 +936,7 @@ mod tests {
             "project in (\"P\") AND status = \"To Do\" AND issuetype in (\"Task\") ORDER BY key ASC",
         );
         let path = format!(
-            "rest/api/3/search?jql={jql}&maxResults=50&fields=summary,issuetype,status,description"
+            "rest/api/3/search/jql?jql={jql}&maxResults=50&fields=summary,issuetype,status,description"
         );
         let http = MockHttp::new().with(&path, 500, "boom");
         let client = JiraRestClient::new(Arc::new(http), cred());

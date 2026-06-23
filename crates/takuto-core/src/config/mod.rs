@@ -35,7 +35,7 @@ pub use general::{DevConfig, DockerConfig, GeneralConfig, ProvisioningConfig, Ti
 pub use git::{GitConfig, GitHubAppConfig};
 pub use jira::{JiraConfig, LinkedItemsPromptMode};
 pub use load::{detect_legacy_command_keys, resolve_config_relative_path};
-pub use polling::{PollingConfig, PollingGitHubFilter, PollingJiraFilter, matches_any_keyword};
+pub use polling::matches_any_keyword;
 pub use runtime::{EditorConfig, NetworkConfig, TerminalConfig};
 pub use template::{interpolate_agent_prompt, interpolate_command_template};
 pub use web::{
@@ -78,10 +78,6 @@ pub struct Config {
     /// deployment to that backend.
     #[serde(default)]
     pub database: DatabaseConfig,
-    /// Admin-tunable item-polling policy (auto-start flow, parallel-item caps,
-    /// per-system filtering). Read live by the Jira / GitHub pollers.
-    #[serde(default)]
-    pub polling: PollingConfig,
 }
 
 impl Config {

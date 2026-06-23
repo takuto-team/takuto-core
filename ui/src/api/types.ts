@@ -42,6 +42,9 @@ export type { StepLog } from "./generated/StepLog";
 export type { StepStatus } from "./generated/StepStatus";
 export type { WorkflowSummary } from "./generated/WorkflowSummary";
 export type { RunCommandStatus } from "./generated/RunCommandStatus";
+export type { RepoPollingSettingsRow } from "./generated/RepoPollingSettingsRow";
+export type { RepoPollingSettings } from "./generated/RepoPollingSettings";
+export type { LinkedItemsPromptMode } from "./generated/LinkedItemsPromptMode";
 
 export interface WorkflowEvent {
   event_type: string;
@@ -241,11 +244,11 @@ export interface GitConfigPatch {
 export type LinkedItemsInPrompt = "full" | "summary_only" | "omit";
 
 /**
- * Patch body for `PUT /api/config/jira` — the Jira-context portion of the
- * `[jira]` section. Every field is optional (replace-on-present; arrays
- * replace wholesale). Mirrors `agentConfig.ts` / `itemPollingConfig.ts`: a
- * single PUT returns the fresh redacted `ConfigResponse` (with `persisted` /
- * `persist_warning`).
+ * Patch body for `PUT /api/config/jira` — the deployment-global Jira-context
+ * *processing* fields of the `[jira]` section (how linked issues / the ticket
+ * description are embedded in agent prompts, and the Mark-as-Done target). The
+ * per-repo poll filters (project keys, item types, jql) live in
+ * `/api/me/polling-settings`, NOT here. Every field optional (replace-on-present).
  */
 export interface JiraConfigPatch {
   /** How linked issues are embedded in `{ticket_context}`. */
@@ -254,12 +257,8 @@ export interface JiraConfigPatch {
   ticket_context_max_description_bytes?: number;
   /** Byte cap on each linked-issue description in context; `0` = unlimited. */
   linked_issue_description_max_bytes?: number;
-  /** Extra JQL appended to the poller query. Empty string clears it. */
-  jql_filter?: string;
   /** Status the "Mark as Done" transition targets (default "Done"). */
   done_status?: string;
-  /** Jira project keys the poller pulls from. Replaces the list wholesale. */
-  project_keys?: string[];
 }
 
 export interface ConfigResponse {
@@ -287,7 +286,10 @@ export interface ConfigResponse {
     [key: string]: unknown;
   };
   jira: {
-    project_keys: string[];
+    /** Legacy global project-keys list. Per-user-per-repo keys now live under
+     *  `/api/me/jira-project-keys`; this stays optional only for back-compat
+     *  with older server responses. */
+    project_keys?: string[];
     site: string;
     /** Issue types the Jira poller pulls. Patched via PUT /api/config/polling. */
     item_types?: string[];

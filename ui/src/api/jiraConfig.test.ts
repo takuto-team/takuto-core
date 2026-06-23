@@ -17,16 +17,14 @@ const patch: JiraConfigPatch = {
   linked_items_in_prompt: "summary_only",
   ticket_context_max_description_bytes: 4096,
   linked_issue_description_max_bytes: 0,
-  jql_filter: 'labels = "takuto"',
   done_status: "Done",
-  project_keys: ["PROJ", "OPS"],
 };
 
 describe("putJiraConfig()", () => {
   it("PUTs the patch and returns the parsed ConfigResponse on 200", async () => {
     const updated = {
       general: { ticketing_system: "jira" },
-      jira: { project_keys: ["PROJ", "OPS"], site: "x.atlassian.net" },
+      jira: { site: "x.atlassian.net" },
       persisted: true,
     };
     const res = new Response(JSON.stringify(updated), {
@@ -47,7 +45,7 @@ describe("putJiraConfig()", () => {
   });
 
   it("throws JiraConfigError with structured code on 400", async () => {
-    const body = { error: "invalid_jql", message: "JQL failed to parse" };
+    const body = { error: "invalid_done_status", message: "blank status" };
     const res = new Response(JSON.stringify(body), { status: 400 });
     Object.defineProperty(res, "ok", { value: false });
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(res);
@@ -60,9 +58,9 @@ describe("putJiraConfig()", () => {
     }
     expect(caught).toBeInstanceOf(JiraConfigError);
     const err = caught as JiraConfigError;
-    expect(err.code).toBe("invalid_jql");
+    expect(err.code).toBe("invalid_done_status");
     expect(err.status).toBe(400);
-    expect(err.message).toBe("JQL failed to parse");
+    expect(err.message).toBe("blank status");
   });
 
   it("falls back to http_<status> when the server returns no JSON body", async () => {

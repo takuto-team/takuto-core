@@ -40,6 +40,7 @@
     "githubTitle": "GitHub Issues",
     "todoTitle": "To Do Tickets",
     "needRepo": "Pick a specific repository in the header to see its GitHub issues. \"All repositories\" doesn't aggregate issues across multiple repos.",
+    "needRepoJira": "Pick a specific repository in the header to see its To Do tickets. The Jira projects pulled are configured per repository in Configuration → Ticketing.",
     "loading": "Loading...",
     "noTickets": "No tickets found.",
     "alreadyAdded": "Already added",

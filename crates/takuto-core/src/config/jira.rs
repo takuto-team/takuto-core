@@ -4,9 +4,11 @@
 //! Jira site, polling, and prompt-mode policy for linked issues.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// How linked Jira issues are included in `{ticket_context}` for agent prompts.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
+#[ts(export_to = "LinkedItemsPromptMode.ts", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum LinkedItemsPromptMode {
     /// Key, summary, status, link type, and description (subject to byte caps).
@@ -20,12 +22,16 @@ pub enum LinkedItemsPromptMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JiraConfig {
-    #[serde(default)]
-    pub project_keys: Vec<String>,
-    #[serde(default = "default_item_types")]
-    pub item_types: Vec<String>,
-    #[serde(default)]
-    pub jql_filter: String,
+    // NOTE: `project_keys`, `item_types`, and `jql_filter` were removed from the
+    // global `[jira]` section — what a repository polls is now per-user,
+    // per-repository (`user_repo_polling_settings`, edited on the Ticketing
+    // tab). `JiraConfig` does NOT use `deny_unknown_fields`, so a legacy
+    // `config.toml` carrying those keys loads fine: serde silently ignores
+    // them (a startup warning is logged via `detect_legacy_command_keys`).
+    //
+    // The remaining Jira-context PROCESSING fields (`done_status`,
+    // `linked_items_in_prompt`, the two byte caps) stay deployment-global for
+    // now; moving their consumption per-repo is tracked as a follow-up.
     #[serde(default)]
     pub site: String,
     #[serde(default)]
@@ -48,10 +54,6 @@ pub struct JiraConfig {
     pub acli_version: String,
 }
 
-fn default_item_types() -> Vec<String> {
-    vec!["Task".to_string(), "Bug".to_string()]
-}
-
 fn default_jira_done_status() -> String {
     "Done".to_string()
 }
@@ -59,9 +61,6 @@ fn default_jira_done_status() -> String {
 impl Default for JiraConfig {
     fn default() -> Self {
         Self {
-            project_keys: Vec::new(),
-            item_types: default_item_types(),
-            jql_filter: String::new(),
             site: String::new(),
             email: String::new(),
             done_status: default_jira_done_status(),

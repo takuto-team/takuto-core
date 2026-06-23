@@ -8,22 +8,18 @@ import type { LinkedItemsInPrompt } from "../api/types";
 
 /**
  * Local-state harness so each story behaves like a real form (typing into
- * fields, changing the linked-items select, editing the project-keys chips).
+ * fields, changing the linked-items select, editing the JQL / done-status).
  */
 function Harness({
   initialLinkedItemsInPrompt = "full",
   initialTicketContextMaxDescriptionBytes = "0",
   initialLinkedIssueDescriptionMaxBytes = "0",
-  initialJqlFilter = "",
   initialDoneStatus = "",
-  initialProjectKeys = [],
 }: {
   initialLinkedItemsInPrompt?: LinkedItemsInPrompt;
   initialTicketContextMaxDescriptionBytes?: string;
   initialLinkedIssueDescriptionMaxBytes?: string;
-  initialJqlFilter?: string;
   initialDoneStatus?: string;
-  initialProjectKeys?: string[];
 }) {
   const [linkedItemsInPrompt, setLinkedItemsInPrompt] = useState<LinkedItemsInPrompt>(
     initialLinkedItemsInPrompt,
@@ -34,24 +30,18 @@ function Harness({
   const [linkedIssueDescriptionMaxBytes, setLinkedIssueDescriptionMaxBytes] = useState(
     initialLinkedIssueDescriptionMaxBytes,
   );
-  const [jqlFilter, setJqlFilter] = useState(initialJqlFilter);
   const [doneStatus, setDoneStatus] = useState(initialDoneStatus);
-  const [projectKeys, setProjectKeys] = useState<string[]>(initialProjectKeys);
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
       <JiraContextFields
         linkedItemsInPrompt={linkedItemsInPrompt}
         ticketContextMaxDescriptionBytes={ticketContextMaxDescriptionBytes}
         linkedIssueDescriptionMaxBytes={linkedIssueDescriptionMaxBytes}
-        jqlFilter={jqlFilter}
         doneStatus={doneStatus}
-        projectKeys={projectKeys}
         onLinkedItemsInPromptChange={setLinkedItemsInPrompt}
         onTicketContextMaxDescriptionBytesChange={setTicketContextMaxDescriptionBytes}
         onLinkedIssueDescriptionMaxBytesChange={setLinkedIssueDescriptionMaxBytes}
-        onJqlFilterChange={setJqlFilter}
         onDoneStatusChange={setDoneStatus}
-        onProjectKeysChange={setProjectKeys}
       />
     </div>
   );
@@ -87,9 +77,7 @@ export const Populated: Story = {
       initialLinkedItemsInPrompt="summary_only"
       initialTicketContextMaxDescriptionBytes="8192"
       initialLinkedIssueDescriptionMaxBytes="2048"
-      initialJqlFilter='labels = "takuto"'
       initialDoneStatus="Done"
-      initialProjectKeys={["PROJ", "OPS"]}
     />
   ),
 };

@@ -11,10 +11,14 @@
 import { Trans, useTranslation } from "react-i18next";
 
 interface GeneralLimitsFieldsProps {
+  pollInterval: string;
+  maxParallelPerUser: boolean;
   maxConcurrentManual: string;
   prMergePollInterval: string;
   generateReport: boolean;
   workItemLogRetention: string;
+  onPollIntervalChange: (value: string) => void;
+  onMaxParallelPerUserChange: (value: boolean) => void;
   onMaxConcurrentManualChange: (value: string) => void;
   onPrMergePollIntervalChange: (value: string) => void;
   onGenerateReportChange: (value: boolean) => void;
@@ -22,10 +26,14 @@ interface GeneralLimitsFieldsProps {
 }
 
 export function GeneralLimitsFields({
+  pollInterval,
+  maxParallelPerUser,
   maxConcurrentManual,
   prMergePollInterval,
   generateReport,
   workItemLogRetention,
+  onPollIntervalChange,
+  onMaxParallelPerUserChange,
   onMaxConcurrentManualChange,
   onPrMergePollIntervalChange,
   onGenerateReportChange,
@@ -35,6 +43,45 @@ export function GeneralLimitsFields({
   return (
     <section className="flex flex-col gap-4">
       <h3 className="text-sm font-medium text-gray-300">{t("polling.general.title")}</h3>
+
+      <div className="flex flex-col gap-2">
+        <label htmlFor="poll-interval-input" className="text-xs text-gray-400">
+          {t("polling.interval")}
+        </label>
+        <input
+          id="poll-interval-input"
+          type="number"
+          min={10}
+          value={pollInterval}
+          onChange={(e) => onPollIntervalChange(e.target.value)}
+          placeholder="60"
+          className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
+        />
+        <p className="text-xs text-gray-500">
+          <Trans
+            i18nKey="polling.intervalHelp"
+            ns="config"
+            components={{ code: <code className="text-gray-400" /> }}
+          />
+        </p>
+      </div>
+
+      <label
+        htmlFor="max-parallel-per-user-input"
+        className="flex items-start gap-2 text-xs text-gray-300"
+      >
+        <input
+          id="max-parallel-per-user-input"
+          type="checkbox"
+          checked={maxParallelPerUser}
+          onChange={(e) => onMaxParallelPerUserChange(e.target.checked)}
+          className="mt-0.5 accent-blue-500"
+        />
+        <span>
+          {t("polling.perUser")}
+          <span className="block text-gray-500 mt-0.5">{t("polling.perUserHelp")}</span>
+        </span>
+      </label>
 
       <div className="flex flex-col gap-2">
         <label htmlFor="max-concurrent-manual-input" className="text-xs text-gray-400">

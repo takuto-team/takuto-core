@@ -2,13 +2,13 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Admin-only Jira-context config patch — the Jira-context portion of the
- * `[jira]` section (linked-issue inclusion, byte caps, JQL filter, done
- * status, project keys).
+ * Admin-only Jira-context config patch — the deployment-global Jira-context
+ * *processing* fields of the `[jira]` section (linked-issue inclusion, byte
+ * caps, done status). The per-repo poll filters live in `pollingSettings.ts`.
  *
- * Mirrors `itemPollingConfig.ts`: a single `PUT /api/config/jira` call that
- * returns the fresh redacted `ConfigResponse` (with `persisted` /
- * `persist_warning`) on success, and throws a structured error on non-2xx.
+ * A single `PUT /api/config/jira` call returns the fresh redacted
+ * `ConfigResponse` (with `persisted` / `persist_warning`) on success, and
+ * throws a structured error on non-2xx.
  */
 
 import { api } from "./http";

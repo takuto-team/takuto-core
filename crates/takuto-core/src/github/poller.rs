@@ -52,6 +52,8 @@ impl GitHubPoller {
         }
 
         loop {
+            // One shared loop cadence (deployment-global). Per-repo enable
+            // (`auto_polling`) selects which repos are polled each cycle.
             let interval = {
                 let config = self.config.read().await;
                 config.general.poll_interval_secs
@@ -76,177 +78,195 @@ impl GitHubPoller {
     }
 
     async fn poll_once(&self) -> crate::error::Result<()> {
-        let config = self.config.read().await;
-
-        let remote = config.git.remote.clone();
-        let max_active = config.general.effective_max_active_workflows() as usize;
-        // In dry mode, external GitHub API writes (issue comments, etc.) are skipped by
-        // DryRunActions, but local workflow state (worktrees, steps_log) is still created.
-        // This matches the Jira poller's behaviour: dry_mode affects side-effects, not polling.
-        let dry_mode = config.general.dry_mode;
-        let repo_path = std::path::PathBuf::from(&config.git.repo_path);
-        let label_filter = config.polling.github.labels.clone();
-        let title_keywords = config.polling.github.title_keywords.clone();
-        let max_parallel_items = config.polling.max_parallel_items;
-        let max_parallel_per_user = config.polling.max_parallel_per_user;
-        drop(config);
-
-        let remote_url = match crate::git::remote::resolve_remote_url(&repo_path, &remote).await {
-            Ok(url) => url,
-            Err(e) => {
-                warn!(error = %e, "GitHub poller: cannot resolve git remote URL — skipping poll cycle");
+        let owner_id = match &self.resolved_owner_id {
+            Some(id) => id.clone(),
+            None => {
+                info!(
+                    "No resolved poller owner; skipping GitHub poll (no orphan workflows created)"
+                );
                 return Ok(());
             }
         };
 
-        let owner_repo = parse_github_repo(&remote_url).ok_or_else(|| {
-            crate::config::ConfigError::Operational {
-                op: "github poller parse remote",
-                detail: format!(
-                    "Cannot parse GitHub owner/repo from git remote URL: {remote_url:?}. \
-                     Expected format: https://github.com/owner/repo or owner/repo"
-                ),
-            }
-        })?;
+        let Some(db) = self.engine.db() else {
+            info!("No database available; skipping GitHub poll (per-repo settings unavailable)");
+            return Ok(());
+        };
+        let adapter = db.adapter();
 
-        let visible_count = self.engine.dashboard_workflow_count().await;
-        info!(
-            repo = %owner_repo,
-            dry_mode = dry_mode,
-            dashboard_workflows = visible_count,
-            max_active_workflows = max_active,
-            "Polling GitHub issues"
-        );
-
-        // Legacy ceiling: every dashboard row (including terminal Done/Stopped/
-        // Error) counts toward `max_active_workflows`.
-        let legacy_slots = max_active.saturating_sub(visible_count);
-
-        // New `[polling] max_parallel_items` ceiling: only items occupying a
-        // concurrency slot count (a different, narrower set than the legacy
-        // gate — terminal rows are excluded). When `0`, the cap is unlimited
-        // and only the legacy ceiling applies. `min()` picks the tighter limit.
-        let item_slots = if max_parallel_items > 0 {
-            let scope = if max_parallel_per_user {
-                self.resolved_owner_id.as_deref()
-            } else {
-                None
-            };
-            let in_use = self.engine.active_item_count(scope).await;
-            (max_parallel_items as usize).saturating_sub(in_use)
-        } else {
-            usize::MAX
+        let (remote, max_active, dry_mode, max_parallel_per_user) = {
+            let config = self.config.read().await;
+            (
+                config.git.remote.clone(),
+                config.general.effective_max_active_workflows() as usize,
+                config.general.dry_mode,
+                config.general.max_parallel_per_user,
+            )
         };
 
-        let slots_available = legacy_slots.min(item_slots);
-        if slots_available == 0 {
+        let repos = crate::db::repositories::list_for_user(adapter, &owner_id).await?;
+        if repos.is_empty() {
+            info!(owner = %owner_id, "Poller owner has no repositories; skipping GitHub poll");
+            return Ok(());
+        }
+        let settings_by_repo: std::collections::HashMap<
+            String,
+            crate::db::user_repo_polling_settings::RepoPollingSettings,
+        > = crate::db::user_repo_polling_settings::list_for_user(adapter, &owner_id)
+            .await?
+            .into_iter()
+            .map(|r| (r.workspace_name, r.settings))
+            .collect();
+
+        let visible_count = self.engine.dashboard_workflow_count().await;
+        // Global legacy ceiling stays deployment-wide; per-repo
+        // `max_parallel_items` lives in settings.
+        let legacy_slots = max_active.saturating_sub(visible_count);
+        if legacy_slots == 0 {
             info!(
                 visible = visible_count,
                 max = max_active,
-                max_parallel_items = max_parallel_items,
-                "No available item slots (legacy or parallel-item cap), skipping GitHub poll"
+                "No available item slots (global max_active_workflows), skipping GitHub poll"
             );
             return Ok(());
         }
 
-        // Fetch open issues via `gh api`. Prefer the GitHub App token; on
-        // PAT-only deployments fall back to the poller owner's per-user PAT.
-        // Label and title-keyword filtering from `[polling.github]` is applied below.
-        let app_token = self
-            .engine
-            .actions
-            .get_gh_installation_token(&repo_path)
-            .await;
-        let gh_token = crate::github::github_token_app_then_pat(
-            app_token,
-            self.engine.git_auth_resolver().as_ref(),
-            self.resolved_owner_id.as_deref(),
-            crate::github::auth_resolver::GitAction::Clone,
-        )
-        .await;
-        let mut issues = fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref()).await?;
+        let mut seen: std::collections::HashSet<String> =
+            self.engine.get_workflow_ids().await.into_iter().collect();
+        let mut started = 0usize;
 
-        // Apply the admin-configured label + title-keyword filters. Empty
-        // label list = no label filter; empty keyword list = no title filter.
-        let pre_filter = issues.len();
-        issues.retain(|i| {
-            let label_ok =
-                label_filter.is_empty() || i.labels.iter().any(|l| label_filter.contains(l));
-            let title_ok = crate::config::matches_any_keyword(&i.summary, &title_keywords);
-            label_ok && title_ok
-        });
-        if !label_filter.is_empty() || !title_keywords.is_empty() {
-            info!(
-                labels = ?label_filter,
-                title_keywords = ?title_keywords,
-                before = pre_filter,
-                after = issues.len(),
-                "Applied GitHub issue filters"
-            );
-        }
-
-        if issues.is_empty() {
-            info!("No open GitHub issues found");
-        }
-
-        let active_keys = self.engine.get_workflow_ids().await;
-
-        let mut started = 0;
-        for issue in issues {
-            if started >= slots_available {
+        for repo in &repos {
+            if started >= legacy_slots {
                 break;
             }
-            if active_keys.contains(&issue.key) {
+            let Some(settings) = settings_by_repo.get(&repo.name) else {
+                continue;
+            };
+            if !settings.auto_polling {
                 continue;
             }
 
-            info!(
-                key = %issue.key,
-                summary = %issue.summary,
-                "Starting workflow for GitHub issue"
-            );
-
-            let html_url = if issue.html_url.is_empty() {
-                None
-            } else {
-                Some(issue.html_url.clone())
+            let repo_path = std::path::PathBuf::from(&repo.local_path);
+            let remote_url = match crate::git::remote::resolve_remote_url(&repo_path, &remote).await
+            {
+                Ok(url) => url,
+                Err(e) => {
+                    warn!(repo = %repo.name, error = %e, "GitHub poller: cannot resolve git remote URL — skipping repository");
+                    continue;
+                }
+            };
+            let Some(owner_repo) = parse_github_repo(&remote_url) else {
+                warn!(repo = %repo.name, url = %remote_url, "GitHub poller: cannot parse owner/repo from remote — skipping");
+                continue;
             };
 
-            // Skip when no owner could be resolved at startup — creating an orphan
-            // workflow would hide it from every user's dashboard.
-            let owner_id = match &self.resolved_owner_id {
-                Some(id) => id.clone(),
-                None => {
-                    warn!(
-                        key = %issue.key,
-                        "No resolved poller owner; skipping start_workflow to avoid orphan creation"
-                    );
+            // Per-repo parallel-item cap (0 = unlimited).
+            let repo_item_slots = if settings.max_parallel_items > 0 {
+                let scope = if max_parallel_per_user {
+                    Some(owner_id.as_str())
+                } else {
+                    None
+                };
+                let in_use = self.engine.active_item_count(scope).await;
+                (settings.max_parallel_items as usize).saturating_sub(in_use)
+            } else {
+                usize::MAX
+            };
+            if repo_item_slots == 0 {
+                info!(repo = %repo.name, "Per-repo parallel-item cap reached; skipping repository");
+                continue;
+            }
+            let repo_budget = (legacy_slots - started).min(repo_item_slots);
+
+            info!(
+                repo = %owner_repo,
+                dry_mode = dry_mode,
+                dashboard_workflows = visible_count,
+                max_active_workflows = max_active,
+                "Polling GitHub issues"
+            );
+
+            let app_token = self
+                .engine
+                .actions
+                .get_gh_installation_token(&repo_path)
+                .await;
+            let gh_token = crate::github::github_token_app_then_pat(
+                app_token,
+                self.engine.git_auth_resolver().as_ref(),
+                Some(owner_id.as_str()),
+                crate::github::auth_resolver::GitAction::Clone,
+            )
+            .await;
+            let mut issues = match fetch_open_issues(&owner_repo, &repo_path, gh_token.as_deref())
+                .await
+            {
+                Ok(i) => i,
+                Err(e) => {
+                    warn!(repo = %repo.name, error = %e, "GitHub poll failed for repository, continuing");
                     continue;
                 }
             };
 
-            match self
-                .engine
-                .start_workflow(
-                    issue.key.clone(),
-                    issue.summary.clone(),
-                    false,
-                    Some(issue.body),
-                    html_url,
-                    Some(owner_id),
-                    // Auto-polling is disabled; this code path is
-                    // unreachable from normal startup. Leave repository_id
-                    // unset — per-repo association is plumbed in later.
-                    None,
-                )
-                .await
-            {
-                Ok(id) => {
-                    info!(key = %issue.key, workflow_id = %id, "Workflow started");
-                    started += 1;
+            // Per-repo label + title-keyword filters.
+            let pre_filter = issues.len();
+            issues.retain(|i| {
+                let label_ok = settings.github_labels.is_empty()
+                    || i.labels.iter().any(|l| settings.github_labels.contains(l));
+                let title_ok =
+                    crate::config::matches_any_keyword(&i.summary, &settings.github_title_keywords);
+                label_ok && title_ok
+            });
+            if !settings.github_labels.is_empty() || !settings.github_title_keywords.is_empty() {
+                info!(
+                    repo = %repo.name,
+                    labels = ?settings.github_labels,
+                    title_keywords = ?settings.github_title_keywords,
+                    before = pre_filter,
+                    after = issues.len(),
+                    "Applied GitHub issue filters"
+                );
+            }
+
+            let mut repo_started = 0usize;
+            for issue in issues {
+                if started >= legacy_slots || repo_started >= repo_budget {
+                    break;
                 }
-                Err(e) => {
-                    warn!(key = %issue.key, error = %e, "Failed to start workflow for GitHub issue");
+                if seen.contains(&issue.key) {
+                    continue;
+                }
+
+                info!(key = %issue.key, repo = %repo.name, summary = %issue.summary, "Starting workflow for GitHub issue");
+
+                let html_url = if issue.html_url.is_empty() {
+                    None
+                } else {
+                    Some(issue.html_url.clone())
+                };
+
+                match self
+                    .engine
+                    .start_workflow(
+                        issue.key.clone(),
+                        issue.summary.clone(),
+                        false,
+                        Some(issue.body),
+                        html_url,
+                        Some(owner_id.clone()),
+                        Some(repo.id.clone()),
+                    )
+                    .await
+                {
+                    Ok(id) => {
+                        info!(key = %issue.key, workflow_id = %id, "Workflow started");
+                        seen.insert(issue.key.clone());
+                        started += 1;
+                        repo_started += 1;
+                    }
+                    Err(e) => {
+                        warn!(key = %issue.key, error = %e, "Failed to start workflow for GitHub issue");
+                    }
                 }
             }
         }
@@ -257,3 +277,136 @@ impl GitHubPoller {
 
 // `GitHubIssue` and `fetch_open_issues` are defined in the parent module
 // (`crate::github`) and shared with the web route handler.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::actions::dry_run::DryRunActions;
+    use crate::actions::traits::ExternalActions;
+    use crate::config::TicketingSystem;
+    use crate::db::{Database, DbValue};
+
+    const REPO_NAME: &str = "takuto-core";
+
+    async fn seed_user(db: &Database, username: &str) -> String {
+        let id = format!("u-{username}");
+        db.adapter()
+            .execute(
+                "INSERT INTO users (id, username, role) VALUES (?, ?, 'admin')",
+                vec![
+                    DbValue::Text(id.clone()),
+                    DbValue::Text(username.to_string()),
+                ],
+            )
+            .await
+            .expect("seed user");
+        id
+    }
+
+    /// Build an engine backed by an in-memory DB. The owner gets one repository;
+    /// `auto_polling` controls whether a per-repo settings row enables polling.
+    /// The repo's `local_path` does not exist on disk, so any repo that *is*
+    /// enabled is skipped gracefully at the git-remote resolution step (no `gh`
+    /// binary is ever invoked) — exactly the early-exit branches under test.
+    async fn engine_with_owner_repo(auto_polling: bool) -> (Arc<WorkflowEngine>, String) {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let owner_id = seed_user(&db, "owner").await;
+        let repo_id = crate::db::repositories::upsert(
+            db.adapter(),
+            REPO_NAME,
+            None,
+            &format!("/workspaces/{REPO_NAME}"),
+            "main",
+            Some(&owner_id),
+        )
+        .await
+        .expect("seed repo");
+        crate::db::repositories::add_for_user(db.adapter(), &owner_id, &repo_id)
+            .await
+            .expect("add repo for user");
+        if auto_polling {
+            let settings = crate::db::user_repo_polling_settings::RepoPollingSettings {
+                auto_polling: true,
+                ..crate::db::user_repo_polling_settings::RepoPollingSettings::default()
+            };
+            crate::db::user_repo_polling_settings::set(
+                db.adapter(),
+                &owner_id,
+                REPO_NAME,
+                &settings,
+            )
+            .await
+            .expect("seed settings");
+        }
+
+        let mut config = Config::default();
+        config.general.max_concurrent_workflows = 10;
+        config.general.max_active_workflows = 0;
+        let config = Arc::new(RwLock::new(config));
+
+        let actions: Arc<dyn ExternalActions> = Arc::new(DryRunActions::new("origin".into(), None));
+        let jira_available = Arc::new(AtomicBool::new(false));
+        let workflows_dir =
+            std::env::temp_dir().join(format!("takuto-gh-poller-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+
+        let engine = Arc::new(WorkflowEngine::new_with_db(
+            config,
+            actions,
+            1,
+            jira_available,
+            TicketingSystem::GitHub,
+            workflows_dir,
+            Some(db),
+        ));
+        (engine, owner_id)
+    }
+
+    /// With no resolved owner, the poller must not create orphan workflows.
+    #[tokio::test]
+    async fn poll_once_skips_start_when_no_owner_resolved() {
+        let (engine, _owner) = engine_with_owner_repo(true).await;
+        let poller = GitHubPoller::new(
+            engine.config(),
+            engine.clone(),
+            CancellationToken::new(),
+            Arc::new(AtomicBool::new(false)),
+            None,
+        );
+        poller.poll_once().await.expect("poll_once should succeed");
+        assert!(engine.get_workflow_ids().await.is_empty());
+    }
+
+    /// A repository with no per-repo settings row (auto_polling defaults off) is
+    /// skipped entirely — no workflows started.
+    #[tokio::test]
+    async fn poll_once_skips_repo_without_settings() {
+        let (engine, owner_id) = engine_with_owner_repo(false).await;
+        let poller = GitHubPoller::new(
+            engine.config(),
+            engine.clone(),
+            CancellationToken::new(),
+            Arc::new(AtomicBool::new(false)),
+            Some(owner_id),
+        );
+        poller.poll_once().await.expect("poll_once should succeed");
+        assert!(engine.get_workflow_ids().await.is_empty());
+    }
+
+    /// An enabled repo whose local path / remote cannot be resolved is skipped
+    /// gracefully (no panic, no workflow) — the poll completes Ok.
+    #[tokio::test]
+    async fn poll_once_skips_enabled_repo_with_unresolvable_remote() {
+        let (engine, owner_id) = engine_with_owner_repo(true).await;
+        let poller = GitHubPoller::new(
+            engine.config(),
+            engine.clone(),
+            CancellationToken::new(),
+            Arc::new(AtomicBool::new(false)),
+            Some(owner_id),
+        );
+        poller.poll_once().await.expect("poll_once should succeed");
+        assert!(engine.get_workflow_ids().await.is_empty());
+    }
+}

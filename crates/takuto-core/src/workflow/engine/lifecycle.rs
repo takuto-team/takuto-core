@@ -88,6 +88,10 @@ impl WorkflowLifecycle {
         // construct workflows without a DB or a repo association.
         let ws_name =
             resolve_workspace_name(repository_id.as_deref(), self.db.as_ref(), &self.config).await;
+        // Keep copies for the per-repo auto-start-flow resolution below (the
+        // originals are moved into the Workflow).
+        let owner_for_flow = user_id.clone();
+        let ws_for_flow = ws_name.clone();
         let mut workflow = Workflow::new(
             ticket_key.clone(),
             ticket_summary,
@@ -129,14 +133,20 @@ impl WorkflowLifecycle {
             .map(|d| d.filename.clone())
             .collect();
 
-        // `[polling] auto_start_flow` narrows the set: empty slug → all dep-free
-        // (legacy); a slug present in the set → just that one; a slug that is
-        // absent → start nothing (the row still lands on the dashboard so the
-        // admin notices the misconfiguration — no silent fallback to "all").
-        let auto_start_flow = {
-            let cfg = self.config.read().await;
-            cfg.polling.auto_start_flow.clone()
-        };
+        // The per-repo `auto_start_flow` narrows the set: empty slug → all
+        // dep-free (legacy); a slug present in the set → just that one; a slug
+        // that is absent → start nothing (the row still lands on the dashboard
+        // so the admin notices the misconfiguration — no silent fallback to
+        // "all"). Resolved from the workflow owner's `user_repo_polling_settings`
+        // for this workspace.
+        let auto_start_flow = super::resolve::resolve_repo_polling_settings(
+            owner_for_flow.as_deref(),
+            &ws_for_flow,
+            self.db.as_ref(),
+        )
+        .await
+        .map(|s| s.auto_start_flow)
+        .unwrap_or_default();
         let defs_to_start: Vec<String> = if auto_start_flow.is_empty() {
             all_dep_free
         } else if all_dep_free.contains(&auto_start_flow) {

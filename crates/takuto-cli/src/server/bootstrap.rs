@@ -74,21 +74,15 @@ pub(super) async fn init(cli: &Cli) -> Result<Bootstrap, Box<dyn std::error::Err
         tracing::warn!("{msg}");
     }
 
-    // Item polling enable/disable is driven by `[general] auto_polling` (and
-    // the live Pause/Resume + Configuration → Item Polling toggle). It only
-    // actually polls when a ticketing system is configured (Jira with acli, or
-    // GitHub); with `ticketing_system = none` the poller stays idle regardless.
-    if config.general.auto_polling {
-        info!(
-            "Item polling is enabled ([general] auto_polling = true) — active when a \
-             ticketing system is configured. Disable it from Configuration → Item Polling."
-        );
-    } else {
-        info!(
-            "Item polling starts disabled ([general] auto_polling = false). Enable it \
-             from Configuration → Item Polling or POST /api/polling/resume."
-        );
-    }
+    // Item polling is opt-in PER REPOSITORY now (each repo's `auto_polling`
+    // toggle in Configuration → Ticketing). The dashboard Pause/Resume control
+    // (`/api/polling/{pause,resume}`) is the global master switch. The poller
+    // only actually polls when a ticketing system is configured (Jira with
+    // acli, or GitHub); with `ticketing_system = none` it stays idle regardless.
+    info!(
+        "Item polling is opt-in per repository (Configuration → Ticketing). The dashboard \
+         Pause/Resume control is the global master switch."
+    );
 
     if !cli.config.exists() {
         info!(

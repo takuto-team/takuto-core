@@ -40,6 +40,7 @@
     "githubTitle": "GitHub Issues",
     "todoTitle": "To Do 工单",
     "needRepo": "请在顶部选择一个具体仓库以查看其 GitHub issues。「所有仓库」不会跨多个仓库聚合 issues。",
+    "needRepoJira": "请在顶部选择一个具体仓库以查看其 To Do 工单。拉取的 Jira 项目在「设置 → 工单系统」中按仓库配置。",
     "loading": "加载中…",
     "noTickets": "未找到工单。",
     "alreadyAdded": "已添加",

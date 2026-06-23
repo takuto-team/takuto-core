@@ -2,45 +2,36 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * "Jira context" subsection of the Item Polling form. Pure presentational
- * fields for the Jira-context portion of the `[jira]` section, saved via
- * `PUT /api/config/jira`. Only rendered when Jira is the active ticketing
- * system. Extracted from `ItemPollingForm` so each subsection owns one file
- * (CODING_STANDARDS §1/§3).
+ * "Jira context" subsection — the deployment-global Jira-context *processing*
+ * fields of the `[jira]` section (linked-issue inclusion, byte caps, done
+ * status), saved via `PUT /api/config/jira`. Rendered (admin-only) by
+ * `GlobalJiraContextSection` when Jira is the active ticketing system. The
+ * per-repo `jql_filter` is NOT here — it lives in the per-repo polling form.
  */
 
 import { Trans, useTranslation } from "react-i18next";
 import type { LinkedItemsInPrompt } from "../../api/types";
-import { ChipInput } from "./ChipInput";
 
 interface JiraContextFieldsProps {
   linkedItemsInPrompt: LinkedItemsInPrompt;
   ticketContextMaxDescriptionBytes: string;
   linkedIssueDescriptionMaxBytes: string;
-  jqlFilter: string;
   doneStatus: string;
-  projectKeys: string[];
   onLinkedItemsInPromptChange: (value: LinkedItemsInPrompt) => void;
   onTicketContextMaxDescriptionBytesChange: (value: string) => void;
   onLinkedIssueDescriptionMaxBytesChange: (value: string) => void;
-  onJqlFilterChange: (value: string) => void;
   onDoneStatusChange: (value: string) => void;
-  onProjectKeysChange: (value: string[]) => void;
 }
 
 export function JiraContextFields({
   linkedItemsInPrompt,
   ticketContextMaxDescriptionBytes,
   linkedIssueDescriptionMaxBytes,
-  jqlFilter,
   doneStatus,
-  projectKeys,
   onLinkedItemsInPromptChange,
   onTicketContextMaxDescriptionBytesChange,
   onLinkedIssueDescriptionMaxBytesChange,
-  onJqlFilterChange,
   onDoneStatusChange,
-  onProjectKeysChange,
 }: JiraContextFieldsProps) {
   const { t } = useTranslation("config");
   return (
@@ -124,23 +115,6 @@ export function JiraContextFields({
       </div>
 
       <div className="flex flex-col gap-2">
-        <label htmlFor="jql-filter-input" className="text-xs text-gray-400">
-          {t("polling.jiraContext.jqlFilter")}
-        </label>
-        <input
-          id="jql-filter-input"
-          type="text"
-          value={jqlFilter}
-          onChange={(e) => onJqlFilterChange(e.target.value)}
-          placeholder={t("polling.jiraContext.jqlPlaceholder")}
-          className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
-        />
-        <p className="text-xs text-gray-500">
-          {t("polling.jiraContext.jqlHelp")}
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-2">
         <label htmlFor="done-status-input" className="text-xs text-gray-400">
           {t("polling.jiraContext.doneStatus")}
         </label>
@@ -156,15 +130,6 @@ export function JiraContextFields({
           {t("polling.jiraContext.doneStatusHelp")}
         </p>
       </div>
-
-      <ChipInput
-        id="jira-project-keys-input"
-        label={t("polling.jiraContext.projectKeys")}
-        values={projectKeys}
-        onChange={onProjectKeysChange}
-        placeholder={t("polling.jiraContext.projectKeysPlaceholder")}
-        helpText={t("polling.jiraContext.projectKeysHelp")}
-      />
     </section>
   );
 }

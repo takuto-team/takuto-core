@@ -79,18 +79,11 @@ pub async fn start_manual_workflow(
         }
     };
 
-    let (max_manual, max_parallel_items, max_parallel_per_user) = {
+    let (max_manual, max_parallel_per_user) = {
         let cfg_guard = cfg.config.read().await;
-        if jira_on && cfg_guard.jira.project_keys.is_empty() {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "No Jira project keys configured".into(),
-            ));
-        }
         (
             cfg_guard.general.max_concurrent_manual_workflows,
-            cfg_guard.polling.max_parallel_items,
-            cfg_guard.polling.max_parallel_per_user,
+            cfg_guard.general.max_parallel_per_user,
         )
     };
 
@@ -144,25 +137,10 @@ pub async fn start_manual_workflow(
         }
     }
 
-    // `[polling] max_parallel_items` is an independent ceiling on items
-    // occupying a concurrency slot (per-user when `max_parallel_per_user`,
-    // else global). Reuses the existing 409 → toast path on the dashboard.
-    if max_parallel_items > 0 {
-        let scope = if max_parallel_per_user {
-            Some(auth.user_id.as_str())
-        } else {
-            None
-        };
-        let in_use = engine.engine.active_item_count(scope).await;
-        if in_use >= max_parallel_items as usize {
-            return Err((
-                StatusCode::CONFLICT,
-                format!(
-                    "Maximum parallel items ({max_parallel_items}) reached; complete, stop, or delete an item first"
-                ),
-            ));
-        }
-    }
+    // The per-repo `max_parallel_items` ceiling is enforced below, after the
+    // selected repository (and its polling settings) is resolved — the cap is a
+    // per-repository setting now, scoped per-user when the global
+    // `[general] max_parallel_per_user` is set.
 
     let description = body
         .ticket_description
@@ -192,25 +170,25 @@ pub async fn start_manual_workflow(
                 "Add a repository before starting an item.".into(),
             ));
         }
-        let chosen_id = match body
+        let chosen = match body
             .repository_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            Some(requested) => {
-                if !user_repos.iter().any(|r| r.id == requested) {
+            Some(requested) => match user_repos.iter().find(|r| r.id == requested) {
+                Some(repo) => repo.clone(),
+                None => {
                     return Err((
                         StatusCode::FORBIDDEN,
                         "You do not have access to that repository".into(),
                     ));
                 }
-                requested.to_string()
-            }
+            },
             None => user_repos
                 .iter()
                 .max_by_key(|r| r.created_at)
-                .map(|r| r.id.clone())
+                .cloned()
                 // `user_repos.is_empty()` is rejected with 400 above, so the
                 // iterator is non-empty and `max_by_key` returns `Some`. The
                 // `?` keeps the impossible case off the handler's panic path.
@@ -221,7 +199,50 @@ pub async fn start_manual_workflow(
                     )
                 })?,
         };
-        Some(chosen_id)
+
+        // Per-repo polling settings for the selected repository drive both the
+        // Jira-keys guard (Jira mode) and the per-repo `max_parallel_items` cap.
+        let settings = takuto_core::db::user_repo_polling_settings::get(
+            database.adapter(),
+            &auth.user_id,
+            &chosen.name,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or_default();
+
+        // In Jira mode, the selected repository must have at least one Jira
+        // project key configured for this user (per-repo, replacing the old
+        // global `[jira] project_keys`). GitHub / no-ticketing modes skip this.
+        if jira_on && settings.project_keys.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "No Jira project keys configured for this repository".into(),
+            ));
+        }
+
+        // Per-repo parallel-item ceiling (0 = unlimited), scoped per-user when
+        // the global `[general] max_parallel_per_user` is set. Reuses the
+        // existing 409 → toast path on the dashboard.
+        if settings.max_parallel_items > 0 {
+            let scope = if max_parallel_per_user {
+                Some(auth.user_id.as_str())
+            } else {
+                None
+            };
+            let in_use = engine.engine.active_item_count(scope).await;
+            if in_use >= settings.max_parallel_items as usize {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!(
+                        "Maximum parallel items ({}) reached for this repository; complete, stop, or delete an item first",
+                        settings.max_parallel_items
+                    ),
+                ));
+            }
+        }
+
+        Some(chosen.id)
     } else {
         // No DB attached (legacy test paths). Fall through with None — the
         // engine will derive workspace_name from cfg.git.repo_path.
@@ -265,6 +286,26 @@ mod tests {
             .expect("query user")
             .expect("user exists")
             .id
+    }
+
+    /// Register a repository and associate it with `user_id`. Returns the
+    /// repository id.
+    async fn seed_repo(state: &AppState, user_id: &str, name: &str) -> String {
+        let db = state.auth.db.as_ref().expect("db");
+        let id = takuto_core::db::repositories::upsert(
+            db.adapter(),
+            name,
+            None,
+            &format!("/workspaces/{name}"),
+            "main",
+            Some(user_id),
+        )
+        .await
+        .expect("upsert repo");
+        takuto_core::db::repositories::add_for_user(db.adapter(), user_id, &id)
+            .await
+            .expect("add repo for user");
+        id
     }
 
     /// Seed a slot-occupying (Pending) workflow owned by `owner_id`.
@@ -316,17 +357,34 @@ mod tests {
         map.get_mut(ticket_key).expect("seeded item present").state = s;
     }
 
+    /// Seed the selected repo's per-repo polling settings with a parallel-item
+    /// cap (the cap is per-repository now).
+    async fn seed_repo_max_parallel(state: &AppState, user_id: &str, repo_name: &str, cap: u32) {
+        let db = state.auth.db.as_ref().expect("db");
+        let settings = takuto_core::db::user_repo_polling_settings::RepoPollingSettings {
+            max_parallel_items: cap,
+            ..takuto_core::db::user_repo_polling_settings::RepoPollingSettings::default()
+        };
+        takuto_core::db::user_repo_polling_settings::set(
+            db.adapter(),
+            user_id,
+            repo_name,
+            &settings,
+        )
+        .await
+        .expect("seed settings");
+    }
+
     #[tokio::test]
     async fn manual_start_409_when_global_parallel_cap_reached() {
         let state = test_state_with_db();
         let cookie = register_and_login(&state).await;
         let admin_id = user_id_for(&state, "admin").await;
 
-        {
-            let mut cfg = state.config.config.write().await;
-            cfg.polling.max_parallel_items = 1;
-            cfg.polling.max_parallel_per_user = false;
-        }
+        // max_parallel_per_user defaults false (global scope). Seeded repo with
+        // a per-repo cap of 1, one active item anywhere → next start hits 409.
+        seed_repo(&state, &admin_id, "takuto-core").await;
+        seed_repo_max_parallel(&state, &admin_id, "takuto-core", 1).await;
         seed_item(&state, "SEED-1", &admin_id).await;
 
         let app = build_router(state);
@@ -342,9 +400,10 @@ mod tests {
 
         {
             let mut cfg = state.config.config.write().await;
-            cfg.polling.max_parallel_items = 1;
-            cfg.polling.max_parallel_per_user = true;
+            cfg.general.max_parallel_per_user = true;
         }
+        seed_repo(&state, &admin_id, "takuto-core").await;
+        seed_repo_max_parallel(&state, &admin_id, "takuto-core", 1).await;
         // An item owned by the caller (admin) fills the caller's single slot.
         seed_item(&state, "SEED-1", &admin_id).await;
 
@@ -357,6 +416,7 @@ mod tests {
     async fn manual_start_per_user_cap_ignores_other_users_items() {
         let state = test_state_with_db();
         let cookie = register_and_login(&state).await;
+        let admin_id = user_id_for(&state, "admin").await;
 
         // A second user owns the only slot-occupying item.
         let other_id = "other-user";
@@ -372,17 +432,18 @@ mod tests {
         }
         {
             let mut cfg = state.config.config.write().await;
-            cfg.polling.max_parallel_items = 1;
-            cfg.polling.max_parallel_per_user = true;
+            cfg.general.max_parallel_per_user = true;
         }
+        seed_repo(&state, &admin_id, "takuto-core").await;
+        seed_repo_max_parallel(&state, &admin_id, "takuto-core", 1).await;
         seed_item(&state, "SEED-1", other_id).await;
 
         // The admin has zero items, so the per-user parallel cap does NOT fire;
-        // the request proceeds past it and is rejected later for having no repo
-        // (400), proving the cap counted only the caller's items.
+        // with a repo configured (Jira off in the harness) the request succeeds
+        // (200), proving the cap counted only the caller's items.
         let app = build_router(state);
         let resp = app.oneshot(start_manual_request(&cookie)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -418,6 +479,72 @@ mod tests {
                 "a non-Done board item must block re-add"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn manual_start_400_when_jira_on_and_repo_has_no_keys() {
+        use std::sync::atomic::Ordering;
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let admin_id = user_id_for(&state, "admin").await;
+        let repo_id = seed_repo(&state, &admin_id, "takuto-core").await;
+        state.config.jira_available.store(true, Ordering::Relaxed);
+
+        let body = format!(
+            r#"{{"ticket_key":"PROJ-1","ticket_summary":"x","repository_id":"{repo_id}"}}"#
+        );
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflows/start-manual")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn manual_start_succeeds_when_jira_on_and_repo_has_keys() {
+        use std::sync::atomic::Ordering;
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+        let admin_id = user_id_for(&state, "admin").await;
+        let repo_id = seed_repo(&state, &admin_id, "takuto-core").await;
+        let settings = takuto_core::db::user_repo_polling_settings::RepoPollingSettings {
+            project_keys: vec!["PROJ".to_string()],
+            ..takuto_core::db::user_repo_polling_settings::RepoPollingSettings::default()
+        };
+        takuto_core::db::user_repo_polling_settings::set(
+            state.auth.db.as_ref().unwrap().adapter(),
+            &admin_id,
+            "takuto-core",
+            &settings,
+        )
+        .await
+        .expect("seed settings");
+        state.config.jira_available.store(true, Ordering::Relaxed);
+
+        let body = format!(
+            r#"{{"ticket_key":"PROJ-1","ticket_summary":"x","repository_id":"{repo_id}"}}"#
+        );
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflows/start-manual")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

@@ -52,10 +52,14 @@ log_level = "info"
 # migrate_orphan_repo_associations = true
 
 # --- UI-managed [general] keys (deploy-time defaults; edit in the UI) ---
-# Enable/disable polling and the poll cadence.
-# Managed in Configuration → Item Polling.
-# auto_polling = true
+# Polling cadence for the single shared poll loop (seconds). Which repos are
+# actually polled is opt-in PER REPOSITORY (each repo's auto_polling toggle in
+# Configuration → Ticketing); the dashboard Pause/Resume control is the global
+# master switch. NOTE: a legacy `[general] auto_polling` key is ignored.
 poll_interval_secs = 60
+# When true, the per-repo max_parallel_items cap is counted per workflow owner;
+# false = global. Deployment-wide (cross-repo) policy.
+# max_parallel_per_user = false
 # Interval (seconds) for polling GitHub to check whether workflow PRs have been merged. 0 disables.
 # Managed in Configuration → Item Polling.
 pr_merge_poll_interval_secs = 60
@@ -123,14 +127,13 @@ email = "you@company.com"
 # Jira without restarting), not baked into the image. Atlassian only serves the
 # latest binary, so this pin is currently advisory (latest is always installed).
 # acli_version = ""
-# --- UI-managed [jira] keys (deploy-time defaults; edit in the UI) ---
-# Managed in Configuration → Item Polling.
-project_keys = ["PROJ"]
-item_types = ["Task", "Bug"]
+# NOTE: `project_keys`, `item_types`, and `jql_filter` were removed from [jira].
+# What a repository polls / offers in the manual picker (project keys, item
+# types, JQL filter, plus auto-start flow and parallel caps) is now a per-user,
+# per-repository setting edited from the Ticketing tab in the dashboard (stored
+# per user, not in this file). Legacy keys here are silently ignored.
 # Transition name for dashboard **Mark as Done** (must match your Jira workflow)
 done_status = "Done"
-# Optional: AND-merged into the dashboard **+** manual ticket picker JQL (e.g. board filter fragment) — Epics are always excluded there.
-jql_filter = ""
 # linked_items_in_prompt = "full"   # full | summary_only | omit — linked issue text in {ticket_context}
 # ticket_context_max_description_bytes = 100000   # 0 = unlimited
 # linked_issue_description_max_bytes = 32000    # 0 = unlimited (when mode is full)
@@ -266,36 +269,16 @@ max_repeated_output_lines = 8
 # output_limit = 8192
 
 # --- Item polling policy ---
-# Shapes what the Jira/GitHub pollers auto-add, which flow they auto-start, and
-# how many items run in parallel. Read live by the pollers each cycle (no restart).
-# Managed in Configuration → Item Polling (PUT /api/config/polling).
-[polling]
-# Slug of the single flow to auto-start for each polled item.
-# Empty (default) = start ALL dependency-free flows (legacy behavior).
-# A slug that does not match any dependency-free flow logs a warning and starts
-# nothing (the item is still added to the dashboard so you notice).
-auto_start_flow = ""
-# Cap on items occupying a concurrency slot at once. 0 = unlimited.
-# The poller takes the tighter of this and the legacy max_active_workflows;
-# manual starts enforce it as an independent 409 ceiling (alongside
-# max_concurrent_manual_workflows).
-max_parallel_items = 0
-# When true, max_parallel_items is counted per workflow owner; false = global.
-max_parallel_per_user = false
-
-# Jira poller filter. Empty list = no filter. Jira item TYPES are configured
-# under [jira] item_types (not duplicated here).
-[polling.jira]
-# Case-insensitive ANY-substring match against the ticket summary.
-# Blank/whitespace-only entries are rejected at save time.
-summary_keywords = []
-
-# GitHub poller filter. Empty list = no filter.
-[polling.github]
-# Exact label membership, ANY match (issue kept if it carries any listed label).
-labels = []
-# Case-insensitive ANY-substring match against the issue title.
-title_keywords = []
+# The `[polling]` section was REMOVED. Polling policy — project keys, item
+# types, summary keywords, GitHub labels / title keywords, the auto-start flow,
+# the per-repo parallel-item cap, and per-repo enable (auto_polling) — is now
+# PER-USER, PER-REPOSITORY, edited from the dashboard's Ticketing tab and stored
+# in the database (see `/api/me/polling-settings`). A legacy `[polling]` section
+# in this file is silently ignored (a startup warning is logged).
+#
+# Deployment-wide polling limits stay in [general]: poll_interval_secs,
+# max_parallel_per_user, max_concurrent_manual_workflows, pr_merge_poll_interval_secs,
+# generate_report (default), work_item_log_retention_days.
 
 
 # =============================================================================

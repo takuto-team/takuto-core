@@ -28,6 +28,7 @@ pub mod onboarding;
 pub mod pool;
 pub mod provider_credentials;
 pub mod repositories;
+pub mod user_repo_polling_settings;
 pub mod user_work_item_flows;
 pub mod user_worktree_commands;
 pub mod users;

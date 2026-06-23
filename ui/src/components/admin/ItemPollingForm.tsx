@@ -8,10 +8,7 @@
  */
 
 import { Trans, useTranslation } from "react-i18next";
-import type { LinkedItemsInPrompt } from "../../api/types";
 import { ChipInput } from "./ChipInput";
-import { GeneralLimitsFields } from "./GeneralLimitsFields";
-import { JiraContextFields } from "./JiraContextFields";
 
 /** A flow the auto-start <select> can target: stable slug + display name. */
 export interface AutoStartFlowOption {
@@ -19,51 +16,37 @@ export interface AutoStartFlowOption {
   name: string;
 }
 
-/** Editable form state. Numeric inputs are strings so they stay controlled. */
+/**
+ * Editable per-repository polling state. Numeric inputs are strings so they
+ * stay controlled. The deployment-global "general limits" are NOT here — they
+ * live in their own global admin section (`GeneralLimitsSection`).
+ */
 export interface ItemPollingDraft {
   auto_polling: boolean;
-  poll_interval_secs: string;
   auto_start_flow: string;
   max_parallel_items: string;
-  max_parallel_per_user: boolean;
   item_types: string[];
   jira_summary_keywords: string[];
+  /** Jira project keys the poller pulls from for this repository. */
+  project_keys: string[];
   github_labels: string[];
   github_title_keywords: string[];
-  // General limits — ride PUT /api/config/polling ([general] block).
-  max_concurrent_manual_workflows: string;
-  pr_merge_poll_interval_secs: string;
-  generate_report: boolean;
-  work_item_log_retention_days: string;
-  // Jira context — ride PUT /api/config/jira ([jira] block).
-  linked_items_in_prompt: LinkedItemsInPrompt;
-  ticket_context_max_description_bytes: string;
-  linked_issue_description_max_bytes: string;
+  /** Extra JQL appended to the poll/manual query for this repository. The
+   *  other Jira-context "processing" fields are deployment-global (see
+   *  GlobalJiraContextSection), so they are NOT here. */
   jql_filter: string;
-  done_status: string;
-  project_keys: string[];
 }
 
 export const EMPTY_POLLING_DRAFT: ItemPollingDraft = {
-  auto_polling: true,
-  poll_interval_secs: "60",
+  auto_polling: false,
   auto_start_flow: "",
   max_parallel_items: "0",
-  max_parallel_per_user: false,
   item_types: [],
   jira_summary_keywords: [],
+  project_keys: [],
   github_labels: [],
   github_title_keywords: [],
-  max_concurrent_manual_workflows: "0",
-  pr_merge_poll_interval_secs: "",
-  generate_report: false,
-  work_item_log_retention_days: "0",
-  linked_items_in_prompt: "full",
-  ticket_context_max_description_bytes: "0",
-  linked_issue_description_max_bytes: "0",
   jql_filter: "",
-  done_status: "",
-  project_keys: [],
 };
 
 interface ItemPollingFormProps {
@@ -127,32 +110,23 @@ export function ItemPollingForm({
         </button>
       </section>
 
+      {/* Jira project keys — ALWAYS shown for Jira, independent of the enable
+          toggle: they map this repository to its Jira projects and are required
+          by the manual "Add item" picker, not just auto-polling. */}
+      {showJira && (
+        <ChipInput
+          id="jira-project-keys-input"
+          label={t("polling.projectKeys")}
+          values={draft.project_keys}
+          onChange={(project_keys) => update({ project_keys })}
+          placeholder={t("polling.projectKeysPlaceholder")}
+          helpText={t("polling.projectKeysHelp")}
+        />
+      )}
+
       {/* The rest of the settings only apply while polling is enabled. */}
       {draft.auto_polling && (
         <>
-      {/* Poll interval */}
-      <section className="flex flex-col gap-2">
-        <label htmlFor="poll-interval-input" className="text-xs text-gray-400">
-          {t("polling.interval")}
-        </label>
-        <input
-          id="poll-interval-input"
-          type="number"
-          min={10}
-          value={draft.poll_interval_secs}
-          onChange={(e) => update({ poll_interval_secs: e.target.value })}
-          placeholder="60"
-          className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
-        />
-        <p className="text-xs text-gray-500">
-          <Trans
-            i18nKey="polling.intervalHelp"
-            ns="config"
-            components={{ code: <code className="text-gray-400" /> }}
-          />
-        </p>
-      </section>
-
       {/* Auto-start flow */}
       <section className="flex flex-col gap-2">
         <label htmlFor="auto-start-flow-select" className="text-xs text-gray-400">
@@ -202,39 +176,11 @@ export function ItemPollingForm({
             components={{ code: <code className="text-gray-400" /> }}
           />
         </p>
-        <label
-          htmlFor="max-parallel-per-user-input"
-          className="flex items-start gap-2 text-xs text-gray-300"
-        >
-          <input
-            id="max-parallel-per-user-input"
-            type="checkbox"
-            checked={draft.max_parallel_per_user}
-            onChange={(e) => update({ max_parallel_per_user: e.target.checked })}
-            className="mt-0.5 accent-blue-500"
-          />
-          <span>
-            {t("polling.perUser")}
-            <span className="block text-gray-500 mt-0.5">
-              {t("polling.perUserHelp")}
-            </span>
-          </span>
-        </label>
       </section>
 
-      {/* General limits — always shown; rides PUT /api/config/polling. */}
-      <GeneralLimitsFields
-        maxConcurrentManual={draft.max_concurrent_manual_workflows}
-        prMergePollInterval={draft.pr_merge_poll_interval_secs}
-        generateReport={draft.generate_report}
-        workItemLogRetention={draft.work_item_log_retention_days}
-        onMaxConcurrentManualChange={(v) => update({ max_concurrent_manual_workflows: v })}
-        onPrMergePollIntervalChange={(v) => update({ pr_merge_poll_interval_secs: v })}
-        onGenerateReportChange={(v) => update({ generate_report: v })}
-        onWorkItemLogRetentionChange={(v) => update({ work_item_log_retention_days: v })}
-      />
-
-      {/* Jira filters — only when Jira is the active ticketing system */}
+      {/* Jira filters — only when Jira is the active ticketing system. Project
+          keys are rendered above (always visible); these auto-polling filters
+          stay behind the enable toggle. */}
       {showJira && (
         <section className="flex flex-col gap-4">
           <h3 className="text-sm font-medium text-gray-300">{t("polling.jira")}</h3>
@@ -254,30 +200,21 @@ export function ItemPollingForm({
             placeholder={t("polling.summaryKeywordsPlaceholder")}
             helpText={t("polling.keywordsHelp")}
           />
+          <div className="flex flex-col gap-2">
+            <label htmlFor="jql-filter-input" className="text-xs text-gray-400">
+              {t("polling.jiraContext.jqlFilter")}
+            </label>
+            <input
+              id="jql-filter-input"
+              type="text"
+              value={draft.jql_filter}
+              onChange={(e) => update({ jql_filter: e.target.value })}
+              placeholder={t("polling.jiraContext.jqlPlaceholder")}
+              className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
+            />
+            <p className="text-xs text-gray-500">{t("polling.jiraContext.jqlHelp")}</p>
+          </div>
         </section>
-      )}
-
-      {/* Jira context — only when Jira is the active ticketing system. Saved
-          via the separate PUT /api/config/jira endpoint. */}
-      {showJira && (
-        <JiraContextFields
-          linkedItemsInPrompt={draft.linked_items_in_prompt}
-          ticketContextMaxDescriptionBytes={draft.ticket_context_max_description_bytes}
-          linkedIssueDescriptionMaxBytes={draft.linked_issue_description_max_bytes}
-          jqlFilter={draft.jql_filter}
-          doneStatus={draft.done_status}
-          projectKeys={draft.project_keys}
-          onLinkedItemsInPromptChange={(v) => update({ linked_items_in_prompt: v })}
-          onTicketContextMaxDescriptionBytesChange={(v) =>
-            update({ ticket_context_max_description_bytes: v })
-          }
-          onLinkedIssueDescriptionMaxBytesChange={(v) =>
-            update({ linked_issue_description_max_bytes: v })
-          }
-          onJqlFilterChange={(v) => update({ jql_filter: v })}
-          onDoneStatusChange={(v) => update({ done_status: v })}
-          onProjectKeysChange={(v) => update({ project_keys: v })}
-        />
       )}
 
       {/* GitHub filters — only when GitHub is the active ticketing system */}

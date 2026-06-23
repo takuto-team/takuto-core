@@ -116,4 +116,35 @@ describe("TicketPickerModal", () => {
     expect(onSelect).not.toHaveBeenCalled();
     expect(screen.queryByText(/already has #18/i)).toBeNull();
   });
+
+  it("fetches the GitHub issue list scoped to the active repository", async () => {
+    renderPicker();
+    await screen.findByText("Plain issue");
+    const issuesCall = fetchMock.mock.calls.find(([u]) =>
+      String(u).startsWith("/api/github/issues"),
+    );
+    expect(issuesCall).toBeTruthy();
+    expect(String(issuesCall![0])).toBe("/api/github/issues?repository=repo");
+  });
+
+  it("fetches the Jira manual list scoped to the active repository", async () => {
+    // Jira mode hits the manual-picker endpoint, which requires ?repository=.
+    fetchMock.mockImplementation(async () =>
+      json([{ key: "PROJ-1", summary: "A Jira ticket", item_type: "Task", already_added: false }]),
+    );
+    render(
+      <TicketPickerModal
+        ticketingSystem="jira"
+        activeRepoName="repo"
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByText("A Jira ticket");
+    const jiraCall = fetchMock.mock.calls.find(([u]) =>
+      String(u).startsWith("/api/jira/todo-tickets-manual"),
+    );
+    expect(jiraCall).toBeTruthy();
+    expect(String(jiraCall![0])).toBe("/api/jira/todo-tickets-manual?repository=repo");
+  });
 });

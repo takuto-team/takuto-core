@@ -39,7 +39,12 @@ export function TicketDetailModal({
   ticketKey, summary, description: initialDescription, ticketingSystem, showStartButton,
   activeRepoName, improveTimeoutSecs = DEFAULT_IMPROVE_TIMEOUT_SECS, onStart, onClose, onSaved,
 }: Props) {
-  const { markdown, setMarkdown, loading } = useTicketDetail(ticketKey, initialDescription, ticketingSystem);
+  const { markdown, setMarkdown, loading } = useTicketDetail(
+    ticketKey,
+    initialDescription,
+    ticketingSystem,
+    activeRepoName,
+  );
   const { countdown, start: startCountdown, stop: stopCountdown } = useTicketCountdown(improveTimeoutSecs);
   // A GitHub issue is pinned to its source repo (the repo the picker browsed);
   // Jira / manual tickets aren't repo-bound, so the user picks one.

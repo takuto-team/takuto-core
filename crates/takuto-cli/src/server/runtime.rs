@@ -155,13 +155,11 @@ pub(super) async fn run(
     // Start the background workflow definitions directory watcher.
     engine.start_definitions_watcher(cancel_token.clone());
 
-    let start_polling_paused = !config.read().await.general.auto_polling;
-    let polling_paused = Arc::new(AtomicBool::new(start_polling_paused));
-    if start_polling_paused {
-        info!(
-            "Jira polling starts paused ([general] auto_polling = false); use the dashboard Resume polling control or POST /api/polling/resume to pick up new To Do tickets"
-        );
-    }
+    // The global master switch starts ON (not paused); per-repository
+    // `auto_polling` (default off) gates which repos are actually polled, so a
+    // fresh deploy never auto-starts workflows. Runtime Pause/Resume
+    // (`/api/polling/{pause,resume}`) flips this flag.
+    let polling_paused = Arc::new(AtomicBool::new(false));
     let poller = JiraPoller::new(
         config.clone(),
         engine.clone(),

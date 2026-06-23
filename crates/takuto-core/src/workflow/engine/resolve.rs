@@ -163,6 +163,46 @@ pub async fn resolve_worktree_init_commands(
     }
 }
 
+/// Resolve the per-repository polling settings for the workflow owner's
+/// `(user, workspace)` pair. `None` when there's no `user_id` / no `db` / no
+/// row / a read error — callers fall back to defaults.
+pub async fn resolve_repo_polling_settings(
+    workflow_user_id: Option<&str>,
+    workspace_name: &str,
+    db: Option<&Database>,
+) -> Option<crate::db::user_repo_polling_settings::RepoPollingSettings> {
+    let (Some(user_id), Some(db)) = (workflow_user_id, db) else {
+        return None;
+    };
+    match crate::db::user_repo_polling_settings::get(db.adapter(), user_id, workspace_name).await {
+        Ok(opt) => opt,
+        Err(e) => {
+            warn!(
+                user_id = %user_id,
+                workspace = %workspace_name,
+                error = %e,
+                "Failed to read user_repo_polling_settings; using defaults"
+            );
+            None
+        }
+    }
+}
+
+/// Resolve the Jira project keys for the workflow owner's `(user, workspace)`
+/// pair (from per-repo polling settings). Used by bootstrap's "Retrieve
+/// Details" step to filter which linked issues are followed. Empty vec when no
+/// settings row / no keys configured.
+pub async fn resolve_jira_project_keys(
+    workflow_user_id: Option<&str>,
+    workspace_name: &str,
+    db: Option<&Database>,
+) -> Vec<String> {
+    resolve_repo_polling_settings(workflow_user_id, workspace_name, db)
+        .await
+        .map(|s| s.project_keys)
+        .unwrap_or_default()
+}
+
 /// Resolve the per-`(user, workspace)` report toggle (`generate_report`).
 ///
 /// Same resolution rules as [`resolve_worktree_init_commands`]: `false` when

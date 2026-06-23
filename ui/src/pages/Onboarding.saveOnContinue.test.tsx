@@ -6,12 +6,13 @@
  * the per-user credential the user typed inline, not just the provider/git
  * config PUTs.
  *
- *   Step 2 — a typed AI API key is POSTed to
+ *   Step 1 (Git & GitHub) — a typed GitHub PAT is POSTed to
+ *     `/api/users/me/github-pat` before the wizard advances; a blank PAT
+ *     advances with no POST; a failing PAT save blocks before git is saved.
+ *   Step 3 (AI provider) — a typed AI API key is POSTed to
  *     `/api/users/me/credentials/{provider}` before the wizard advances; a
  *     blank key advances with NO credential POST; a failing save keeps the
- *     wizard on step 2.
- *   Step 3 — a typed GitHub PAT is POSTed to `/api/users/me/github-pat`;
- *     a blank PAT advances with no POST.
+ *     wizard on the AI step.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -94,6 +95,12 @@ function stubFetch(opts: { failCredential?: boolean; failPat?: boolean } = {}) {
       if (url.startsWith("/api/repositories")) {
         return json([]);
       }
+      if (url.startsWith("/api/github/repos")) {
+        return json([]);
+      }
+      if (url === "/api/me/polling-settings") {
+        return json([]);
+      }
       if (url === "/api/config/agent") return json({});
       if (url === "/api/config/git") return json({});
       if (url.startsWith("/api/users/me/credentials/")) {
@@ -143,9 +150,15 @@ async function clickContinue() {
   fireEvent.click(await continueButton());
 }
 
-/** Advance from step 1 to step 2 (ticketing = none, nothing to persist). */
-async function goToStep2() {
-  await screen.findByLabelText("Ticketing system");
+/**
+ * Advance to step 3 (AI provider): step 1 (Git & GitHub, blank PAT) → step 2
+ * (Repositories) → step 3 (AI key). Nothing is persisted on the way except the
+ * deployment git PUT, which the stub accepts.
+ */
+async function goToAiKeyStep() {
+  await screen.findByLabelText("Base branch");
+  await clickContinue();
+  await screen.findByText("My Repositories");
   await clickContinue();
   await screen.findByLabelText(/Claude API key/i);
 }
@@ -154,46 +167,12 @@ const credentialPosts = () =>
   calls.filter((c) => c.url.startsWith("/api/users/me/credentials/"));
 const patPosts = () => calls.filter((c) => c.url === "/api/users/me/github-pat");
 const gitPuts = () => calls.filter((c) => c.url === "/api/config/git");
-const pollingPuts = () => calls.filter((c) => c.url === "/api/config/polling");
 
-describe("Onboarding — save-on-continue, step 1 (item polling)", () => {
-  it("persists the item-polling section (e.g. disabling polling) on Continue", async () => {
-    stubFetch();
-    renderWizard();
-
-    // Select a ticketing system so the admin-only polling section renders.
-    const select = await screen.findByLabelText("Ticketing system");
-    fireEvent.change(select, { target: { value: "github" } });
-
-    // Toggle "Enable item polling" off (defaults on). Generous timeout: the
-    // polling section mounts its own data-loading component, and under the full
-    // parallel test gate (CPU contention) the default 1s findBy can flake.
-    const toggle = await screen.findByRole(
-      "switch",
-      { name: "Enable item polling" },
-      { timeout: 5000 },
-    );
-    fireEvent.click(toggle);
-
-    await clickContinue();
-
-    // The polling section must be saved by Continue — not left unsaved as
-    // before — carrying the disabled flag through to the backend.
-    await waitFor(() => {
-      expect(pollingPuts().length).toBeGreaterThanOrEqual(1);
-    });
-    expect(pollingPuts()[0].body).toMatchObject({ auto_polling: false });
-    // Larger per-test timeout: the inline polling section data-loads on mount,
-    // and its 5s findBy above would otherwise collide with the default 5s test
-    // budget and time out under CI contention before the section appears.
-  }, 20000);
-});
-
-describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
+describe("Onboarding — save-on-continue, step 3 (AI key)", () => {
   it("POSTs the typed API key to the provider credential endpoint before advancing", async () => {
     stubFetch();
     renderWizard();
-    await goToStep2();
+    await goToAiKeyStep();
 
     const keyInput = await screen.findByLabelText(/Claude API key/i);
     fireEvent.change(keyInput, { target: { value: "sk-ant-test-key" } });
@@ -206,30 +185,30 @@ describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
     expect(credentialPosts()[0].url).toContain("/api/users/me/credentials/claude");
     expect(credentialPosts()[0].body).toMatchObject({ api_key: "sk-ant-test-key" });
 
-    // Wizard advanced to step 3 (Git & GitHub).
+    // Wizard advanced to step 4 (Ticketing).
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toBeTruthy();
+      expect(screen.getByLabelText("Ticketing system")).toBeTruthy();
     });
   });
 
   it("advances with NO credential POST when the API key is blank", async () => {
     stubFetch();
     renderWizard();
-    await goToStep2();
+    await goToAiKeyStep();
 
     // Do not type a key — Save and Continue advances with no credential POST.
     await clickContinue();
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toBeTruthy();
+      expect(screen.getByLabelText("Ticketing system")).toBeTruthy();
     });
     expect(credentialPosts().length).toBe(0);
   });
 
-  it("stays on step 2 when the credential save fails", async () => {
+  it("stays on the AI step when the credential save fails", async () => {
     stubFetch({ failCredential: true });
     renderWizard();
-    await goToStep2();
+    await goToAiKeyStep();
 
     const keyInput = await screen.findByLabelText(/Claude API key/i);
     fireEvent.change(keyInput, { target: { value: "sk-ant-bad" } });
@@ -240,24 +219,18 @@ describe("Onboarding — save-on-continue, step 2 (AI key)", () => {
     await waitFor(() => {
       expect(credentialPosts().length).toBe(1);
     });
-    // Still on step 2: the AI key field is present, the Git step is not.
+    // Still on the AI step: the key field is present, the Ticketing step is not.
     expect(screen.getByLabelText(/Claude API key/i)).toBeTruthy();
-    expect(screen.queryByLabelText("Base branch")).toBeNull();
+    expect(screen.queryByLabelText("Ticketing system")).toBeNull();
   });
 });
 
-describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
-  async function goToStep3() {
-    await goToStep2();
-    // Step 2 → 3 with a blank key (Save and Continue, no credential POST).
-    await clickContinue();
-    await screen.findByLabelText("Base branch");
-  }
-
+describe("Onboarding — save-on-continue, step 1 (GitHub PAT)", () => {
+  // GitHub is the first step now — no navigation needed to reach the PAT panel.
   it("POSTs the typed PAT to the github-pat endpoint before advancing", async () => {
     stubFetch();
     renderWizard();
-    await goToStep3();
+    await screen.findByLabelText("Base branch");
 
     const patInput = await screen.findByLabelText(/Personal access token/i);
     fireEvent.change(patInput, { target: { value: "ghp_testtoken" } });
@@ -273,12 +246,12 @@ describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
   it("advances with no PAT POST when the field is blank", async () => {
     stubFetch();
     renderWizard();
-    await goToStep3();
+    await screen.findByLabelText("Base branch");
 
     // Blank PAT → Save and Continue advances with no PAT POST.
     await clickContinue();
 
-    // Advanced to step 4 (Repositories step — the embedded MyRepositoriesTab).
+    // Advanced to step 2 (Repositories — the embedded MyRepositoriesTab).
     await waitFor(() => {
       expect(screen.getByText("My Repositories")).toBeTruthy();
     });
@@ -288,7 +261,7 @@ describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
   it("does NOT save git settings when the PAT save fails (no misleading success)", async () => {
     stubFetch({ failPat: true });
     renderWizard();
-    await goToStep3();
+    await screen.findByLabelText("Base branch");
 
     const patInput = await screen.findByLabelText(/Personal access token/i);
     fireEvent.change(patInput, { target: { value: "ghp_bad" } });
@@ -303,8 +276,8 @@ describe("Onboarding — save-on-continue, step 3 (GitHub PAT)", () => {
     // blocks the step, so the user never sees a "Git settings saved." toast
     // alongside the PAT error.
     expect(gitPuts().length).toBe(0);
-    // Still on step 3 (Git step visible, step 4 timeout field absent).
+    // Still on step 1 (Git step visible, step 2 repositories not).
     expect(screen.getByLabelText("Base branch")).toBeTruthy();
-    expect(screen.queryByLabelText("Timeout (seconds)")).toBeNull();
+    expect(screen.queryByText("My Repositories")).toBeNull();
   });
 });

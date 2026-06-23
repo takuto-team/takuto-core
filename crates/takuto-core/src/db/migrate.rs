@@ -143,6 +143,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "worktree_generate_report",
         sql: include_str!("../../migrations/20260620000001_worktree_generate_report.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_623_000_001,
+        description: "user_repo_polling_settings",
+        sql: include_str!("../../migrations/20260623000001_user_repo_polling_settings.sql"),
+    },
 ];
 
 /// A `sqlx::migrate::MigrationSource` impl that resolves the embedded
@@ -672,8 +677,9 @@ mod tests {
         // system_metadata, V8 = work_items, V9 = repository_id on
         // work_items, V10 = per-user work-item flows, V11 = work_items
         // soft-delete, V12 = per-user Jira credentials, V13 =
-        // worktree_generate_report. Bump when adding new migrations.
-        assert_eq!(MIGRATIONS.len(), 13);
+        // worktree_generate_report, V14 = per-user-per-repo polling
+        // settings. Bump when adding new migrations.
+        assert_eq!(MIGRATIONS.len(), 14);
     }
 
     #[test]
@@ -783,8 +789,8 @@ mod tests {
             .await
             .expect("count rows");
         assert_eq!(
-            count.0, 13,
-            "expected 13 applied migrations recorded by sqlx, got {}",
+            count.0, 14,
+            "expected 14 applied migrations recorded by sqlx, got {}",
             count.0
         );
     }

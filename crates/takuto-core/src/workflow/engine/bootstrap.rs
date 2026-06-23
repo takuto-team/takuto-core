@@ -33,7 +33,9 @@ use crate::workflow::step::{StepLog, StepStatus};
 
 use super::auth_pin::try_attach_secrets_bundle;
 use super::driver::{add_step_log, transition, wait_if_paused};
-use super::resolve::{resolve_repo_for_ticket, resolve_worktree_init_commands};
+use super::resolve::{
+    resolve_jira_project_keys, resolve_repo_for_ticket, resolve_worktree_init_commands,
+};
 use super::step_runner::{
     acquire_agent_slot, broadcast_step_completed, broadcast_step_started, spawn_output_relay,
 };
@@ -269,13 +271,22 @@ pub(super) async fn bootstrap_new_workflow(
     let identity_refs = identity.as_ref().map(|(n, e)| (n.as_str(), e.as_str()));
 
     // Repo path comes from the workflow's `repository_id` lookup, not
-    // from a global `cfg.git.repo_path`. `project_keys` stays in config —
-    // it is workflow-independent.
+    // from a global `cfg.git.repo_path`. Jira project keys are likewise
+    // per-(owner, workspace) now — resolved from `user_repo_polling_settings`,
+    // not from a global config field.
     let (repo_path, base_branch) = resolve_repo_for_ticket(ticket_key, workflows, config, db).await;
-    let project_keys = {
-        let cfg = config.read().await;
-        cfg.jira.project_keys.clone()
+    let workspace_name_for_keys = {
+        let wf = workflows.read().await;
+        wf.get(ticket_key)
+            .map(|w| w.workspace_name.clone())
+            .unwrap_or_default()
     };
+    let project_keys = resolve_jira_project_keys(
+        owner_user_id_for_auth.as_deref(),
+        &workspace_name_for_keys,
+        db,
+    )
+    .await;
 
     // Step 1: Assign + Retrieve ticket (or use in-memory data when Jira is unavailable).
     let ticket_detail = if jira_available {

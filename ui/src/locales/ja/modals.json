@@ -40,6 +40,7 @@
     "githubTitle": "GitHub Issues",
     "todoTitle": "To Do チケット",
     "needRepo": "ヘッダーで特定のリポジトリを選択すると、その GitHub issue が表示されます。「すべてのリポジトリ」では複数のリポジトリにわたる issue を集約しません。",
+    "needRepoJira": "ヘッダーで特定のリポジトリを選択すると、その To Do チケットが表示されます。取得する Jira プロジェクトは、設定 → チケット管理でリポジトリごとに設定します。",
     "loading": "読み込み中...",
     "noTickets": "チケットが見つかりませんでした。",
     "alreadyAdded": "追加済み",

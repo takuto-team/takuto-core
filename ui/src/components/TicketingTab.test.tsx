@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import { TicketingTab } from "./TicketingTab";
 import { ToastProvider } from "../hooks/useToast";
+import { createQueryWrapper } from "../test/queryWrapper";
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
@@ -49,15 +50,28 @@ function stubFetch(ticketingSystem: "none" | "jira" | "github") {
     if (url === "/api/me/flows") {
       return json({ flows: [], workspace: "takuto-core" });
     }
+    // The per-user per-repo polling section loads the repo list, access map,
+    // and the caller's polling-settings rows. Empty lists keep the section in
+    // its "select a repository" state without per-repo fetches.
+    if (
+      url === "/api/repositories" ||
+      url === "/api/repositories/access" ||
+      url === "/api/me/polling-settings"
+    ) {
+      return json([]);
+    }
     return json({});
   });
 }
 
 function renderTab(isAdmin: boolean) {
+  const { wrapper: QueryWrapper } = createQueryWrapper();
   return render(
-    <ToastProvider>
-      <TicketingTab isAdmin={isAdmin} />
-    </ToastProvider>,
+    <QueryWrapper>
+      <ToastProvider>
+        <TicketingTab isAdmin={isAdmin} />
+      </ToastProvider>
+    </QueryWrapper>,
   );
 }
 
@@ -78,11 +92,16 @@ describe("TicketingTab — item polling visibility", () => {
     });
   });
 
-  it("hides the polling section for a non-admin even when a system is configured", async () => {
+  it("shows per-repo polling but hides general limits for a non-admin", async () => {
     stubFetch("jira");
     renderTab(false);
     await screen.findByLabelText("Ticketing system");
-    expect(screen.queryByText("Item polling")).toBeNull();
+    // Per-repo polling is per-user (no admin gate) once a system is selected.
+    await waitFor(() => {
+      expect(screen.getByText("Item polling")).toBeTruthy();
+    });
+    // The deployment-global general limits stay admin-only.
+    expect(screen.queryByText("General limits")).toBeNull();
   });
 
   it("hides the polling section as soon as the admin selects None, before saving", async () => {

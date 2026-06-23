@@ -42,6 +42,15 @@ export {
   putMyWorktreeCommands,
 } from "./worktreeCommands";
 export {
+  type RepoPollingSettings,
+  type RepoPollingSettingsRow,
+  type RepoPollingSettingsInput,
+  deleteMyPollingSettings,
+  getMyPollingSettings,
+  listMyPollingSettings,
+  putMyPollingSettings,
+} from "./pollingSettings";
+export {
   type RepositoryRow,
   type RepoAccess,
   addRepository,

@@ -11,16 +11,22 @@ import { GeneralLimitsFields } from "../components/admin/GeneralLimitsFields";
  * local-only.
  */
 function Harness({
+  initialPollInterval = "60",
+  initialMaxParallelPerUser = false,
   initialMaxConcurrentManual = "0",
   initialPrMergePollInterval = "",
   initialGenerateReport = false,
   initialWorkItemLogRetention = "0",
 }: {
+  initialPollInterval?: string;
+  initialMaxParallelPerUser?: boolean;
   initialMaxConcurrentManual?: string;
   initialPrMergePollInterval?: string;
   initialGenerateReport?: boolean;
   initialWorkItemLogRetention?: string;
 }) {
+  const [pollInterval, setPollInterval] = useState(initialPollInterval);
+  const [maxParallelPerUser, setMaxParallelPerUser] = useState(initialMaxParallelPerUser);
   const [maxConcurrentManual, setMaxConcurrentManual] = useState(initialMaxConcurrentManual);
   const [prMergePollInterval, setPrMergePollInterval] = useState(initialPrMergePollInterval);
   const [generateReport, setGenerateReport] = useState(initialGenerateReport);
@@ -30,10 +36,14 @@ function Harness({
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
       <GeneralLimitsFields
+        pollInterval={pollInterval}
+        maxParallelPerUser={maxParallelPerUser}
         maxConcurrentManual={maxConcurrentManual}
         prMergePollInterval={prMergePollInterval}
         generateReport={generateReport}
         workItemLogRetention={workItemLogRetention}
+        onPollIntervalChange={setPollInterval}
+        onMaxParallelPerUserChange={setMaxParallelPerUser}
         onMaxConcurrentManualChange={setMaxConcurrentManual}
         onPrMergePollIntervalChange={setPrMergePollInterval}
         onGenerateReportChange={setGenerateReport}

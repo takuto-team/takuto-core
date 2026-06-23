@@ -49,6 +49,36 @@ pub fn detect_legacy_command_keys(toml_content: &str) -> Vec<&'static str> {
              Configure them in the dashboard's Configuration → Worktree Settings tab.",
         );
     }
+    let jira = table.get("jira").and_then(|j| j.as_table());
+    if jira.is_some_and(|j| {
+        j.contains_key("project_keys")
+            || j.contains_key("item_types")
+            || j.contains_key("jql_filter")
+    }) {
+        warnings.push(
+            "config.toml: `[jira]` polling keys (`project_keys` / `item_types` / `jql_filter`) are \
+             ignored — they are now per-user, per-repository. Configure them in the dashboard's \
+             Configuration → Ticketing tab.",
+        );
+    }
+    if table.contains_key("polling") {
+        warnings.push(
+            "config.toml: the `[polling]` section is ignored — polling filters, auto-start flow, \
+             and per-repo parallel caps are now per-user, per-repository (Configuration → \
+             Ticketing tab). Deployment-wide limits live in `[general]`.",
+        );
+    }
+    if table
+        .get("general")
+        .and_then(|g| g.as_table())
+        .is_some_and(|g| g.contains_key("auto_polling"))
+    {
+        warnings.push(
+            "config.toml: `[general] auto_polling` is ignored — polling is enabled per repository \
+             (Configuration → Ticketing tab) and the dashboard Pause/Resume control is the global \
+             master switch.",
+        );
+    }
     warnings
 }
 
@@ -114,28 +144,6 @@ impl Config {
                 field: "max_active_workflows",
                 detail: "must be at least 1 when set, or leave 0 to use max_concurrent_workflows"
                     .to_string(),
-            }
-            .into());
-        }
-
-        for key in &self.jira.project_keys {
-            if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
-                return Err(ConfigError::Validation {
-                    section: "jira",
-                    field: "project_keys",
-                    detail: format!(
-                        "invalid key '{key}': must be non-empty uppercase alphanumeric"
-                    ),
-                }
-                .into());
-            }
-        }
-
-        if self.jira.item_types.is_empty() {
-            return Err(ConfigError::Validation {
-                section: "jira",
-                field: "item_types",
-                detail: "at least one Jira item type must be configured".to_string(),
             }
             .into());
         }
@@ -291,40 +299,9 @@ impl Config {
             .into());
         }
 
-        // Polling filters: reject empty / whitespace-only entries so a stray
-        // `""` cannot silently degrade a filter into match-everything. No
-        // validation on `auto_start_flow` (slug resolved per-workspace/user at
-        // runtime) or `max_parallel_items` (`0` = unlimited is valid).
-        for kw in &self.polling.jira.summary_keywords {
-            if kw.trim().is_empty() {
-                return Err(ConfigError::Validation {
-                    section: "polling.jira",
-                    field: "summary_keywords",
-                    detail: "entries must be non-empty (remove blank keywords)".to_string(),
-                }
-                .into());
-            }
-        }
-        for label in &self.polling.github.labels {
-            if label.trim().is_empty() {
-                return Err(ConfigError::Validation {
-                    section: "polling.github",
-                    field: "labels",
-                    detail: "entries must be non-empty (remove blank labels)".to_string(),
-                }
-                .into());
-            }
-        }
-        for kw in &self.polling.github.title_keywords {
-            if kw.trim().is_empty() {
-                return Err(ConfigError::Validation {
-                    section: "polling.github",
-                    field: "title_keywords",
-                    detail: "entries must be non-empty (remove blank keywords)".to_string(),
-                }
-                .into());
-            }
-        }
+        // Polling filters (project keys, summary keywords, GitHub labels /
+        // title keywords) are per-user, per-repository now — validated in the
+        // `PUT /api/me/polling-settings` REST layer, not here.
 
         // GitHub App: if any field is set, validate consistency (all-or-nothing for required fields).
         let gh = &self.github;
@@ -442,6 +419,38 @@ mod tests {
         assert!(detect_legacy_command_keys("this is = = not toml").is_empty());
     }
 
+    #[test]
+    fn detects_legacy_jira_project_keys() {
+        let toml = "[jira]\nproject_keys = [\"PROJ\"]\n";
+        let warnings = detect_legacy_command_keys(toml);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("project_keys"));
+        assert!(warnings[0].contains("Ticketing"));
+        // item_types and jql_filter under [jira] also trip the same warning.
+        assert_eq!(
+            detect_legacy_command_keys("[jira]\nitem_types = [\"Task\"]\n").len(),
+            1
+        );
+        assert_eq!(
+            detect_legacy_command_keys("[jira]\njql_filter = \"x\"\n").len(),
+            1
+        );
+        // A clean [jira] with only kept fields → no warning.
+        assert!(detect_legacy_command_keys("[jira]\ndone_status = \"Done\"\n").is_empty());
+    }
+
+    #[test]
+    fn detects_legacy_polling_section_and_auto_polling() {
+        assert_eq!(
+            detect_legacy_command_keys("[polling]\nmax_parallel_items = 2\n").len(),
+            1
+        );
+        assert_eq!(
+            detect_legacy_command_keys("[general]\nauto_polling = false\n").len(),
+            1
+        );
+    }
+
     // ── load / load_from_str ──────────────────────────────────────────────
 
     #[test]
@@ -488,11 +497,6 @@ mod tests {
             |c| c.general.max_concurrent_workflows = 0,
             "max_concurrent_workflows",
         );
-        assert_rejects(
-            |c| c.jira.project_keys = vec!["bad-key".into()],
-            "project_keys",
-        );
-        assert_rejects(|c| c.jira.item_types = vec![], "item_types");
         assert_rejects(|c| c.web.port = 0, "port");
         assert_rejects(|c| c.jira.done_status = "  ".into(), "done_status");
         assert_rejects(|c| c.agent.step_timeout_secs = 0, "step_timeout_secs");
@@ -501,10 +505,6 @@ mod tests {
             "base_url",
         );
         assert_rejects(|c| c.git.remote = "".into(), "remote");
-        assert_rejects(
-            |c| c.polling.jira.summary_keywords = vec!["".into()],
-            "summary_keywords",
-        );
         // GitHub App partial config: id set but installation id missing.
         assert_rejects(|c| c.github.app_id = 123, "app_installation_id");
     }

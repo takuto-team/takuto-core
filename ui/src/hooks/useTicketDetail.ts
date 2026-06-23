@@ -24,6 +24,7 @@ export function useTicketDetail(
   ticketKey: string,
   initialDescription: string | undefined,
   ticketingSystem: string,
+  repository: string | null | undefined,
 ): UseTicketDetailResult {
   const [markdown, setMarkdown] = useState(initialDescription || "");
   const [loading, setLoading] = useState(
@@ -34,13 +35,16 @@ export function useTicketDetail(
     if (initialDescription || ticketingSystem === "none" || ticketingSystem === "github") {
       return;
     }
+    // The Jira preview resolves the caller's per-repo project keys, so it needs
+    // the repository name (required server-side). Append it when known.
+    const repoQuery = repository ? `?repository=${encodeURIComponent(repository)}` : "";
     apiJson<TicketPreview>(
-      `/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview`,
+      `/api/jira/tickets/${encodeURIComponent(ticketKey)}/preview${repoQuery}`,
     )
       .then((data) => setMarkdown(data.description_markdown || ""))
       .catch(() => setMarkdown("*Failed to load description*"))
       .finally(() => setLoading(false));
-  }, [ticketKey, initialDescription, ticketingSystem]);
+  }, [ticketKey, initialDescription, ticketingSystem, repository]);
 
   return { markdown, setMarkdown, loading };
 }

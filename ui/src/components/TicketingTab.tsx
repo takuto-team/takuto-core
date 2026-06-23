@@ -12,11 +12,12 @@
  * write only fires when the system selection actually changes, so a non-admin
  * managing only their credential never trips the 403.
  *
- * Item polling (deployment-level, admin-only) lives on this same page, rendered
- * below the ticketing controls — but only when a ticketing system is actually
- * configured (`persistedSystem !== "none"`) and the caller is an admin. With no
- * ticketing system the poller is idle, so the polling settings are hidden
- * entirely.
+ * Three settings sections live on this same page below the ticketing controls:
+ *  - Per-user-per-repository polling settings (`RepoPollingSettingsSection`),
+ *    shown to every user when a ticketing system is selected.
+ *  - Deployment-global Jira-context processing fields (`GlobalJiraContextSection`),
+ *    admin-only, shown when Jira is the active system.
+ *  - Deployment-global "general limits" (`GeneralLimitsSection`), admin-only.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -25,10 +26,10 @@ import { apiJson } from "../api/client";
 import type { ConfigResponse, TicketingSystemId } from "../api/types";
 import { TicketingStep } from "../pages/Onboarding/TicketingStep";
 import { useTicketingForm } from "../hooks/useTicketingForm";
-import {
-  ItemPollingSettingsSection,
-  type ItemPollingSettingsHandle,
-} from "./admin/ItemPollingSettingsSection";
+import { RepoPollingSettingsSection } from "./admin/RepoPollingSettingsSection";
+import { GlobalJiraContextSection } from "./admin/GlobalJiraContextSection";
+import { GeneralLimitsSection } from "./admin/GeneralLimitsSection";
+import type { ConfigSectionHandle } from "./admin/configSection";
 
 interface Props {
   isAdmin?: boolean;
@@ -42,8 +43,12 @@ export function TicketingTab({ isAdmin, onDirtyChange, registerSave }: Props) {
   const { t } = useTranslation("config");
   const [initialSystem, setInitialSystem] = useState<TicketingSystemId>("none");
   const [loading, setLoading] = useState(true);
-  const pollingRef = useRef<ItemPollingSettingsHandle>(null);
-  const [pollingDirty, setPollingDirty] = useState(false);
+  const repoPollingRef = useRef<ConfigSectionHandle>(null);
+  const [repoPollingDirty, setRepoPollingDirty] = useState(false);
+  const jiraContextRef = useRef<ConfigSectionHandle>(null);
+  const [jiraContextDirty, setJiraContextDirty] = useState(false);
+  const generalLimitsRef = useRef<ConfigSectionHandle>(null);
+  const [generalLimitsDirty, setGeneralLimitsDirty] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -68,14 +73,26 @@ export function TicketingTab({ isAdmin, onDirtyChange, registerSave }: Props) {
   const ticketing = useTicketingForm({ initialSystem, ready: !loading });
 
   const showDisconnect = ticketing.system === "jira" && ticketing.connected !== null;
-  // Deployment-level polling settings only apply once a ticketing system is
-  // selected, and only admins may edit them. Gate on the live selection so
-  // choosing "None" hides the section immediately, without waiting for a save.
-  const showPolling = !loading && !!isAdmin && ticketing.system !== "none";
+  // Per-user-per-repo polling — shown to every user (no admin gate) once a
+  // ticketing system is selected. Gate on the live selection so choosing "None"
+  // hides it immediately, without waiting for a save.
+  const showRepoPolling = !loading && ticketing.system !== "none";
+  // Deployment-global Jira-context processing fields — admin-only, shown when
+  // Jira is the active system (these patch [jira] via PUT /api/config/jira).
+  const showJiraContext = !loading && !!isAdmin && ticketing.system === "jira";
+  // Deployment-global general limits — admin-only, deployment-wide (apply even
+  // with no ticketing system), so gate on admin alone.
+  const showGeneralLimits = !loading && !!isAdmin;
 
   // Combined dirty + a single saver, folded into the page-level Save footer.
-  const effectivePollingDirty = showPolling && pollingDirty;
-  const dirty = ticketing.isDirty || effectivePollingDirty;
+  const effectiveRepoPollingDirty = showRepoPolling && repoPollingDirty;
+  const effectiveJiraContextDirty = showJiraContext && jiraContextDirty;
+  const effectiveGeneralLimitsDirty = showGeneralLimits && generalLimitsDirty;
+  const dirty =
+    ticketing.isDirty ||
+    effectiveRepoPollingDirty ||
+    effectiveJiraContextDirty ||
+    effectiveGeneralLimitsDirty;
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
@@ -83,7 +100,11 @@ export function TicketingTab({ isAdmin, onDirtyChange, registerSave }: Props) {
   const saveAll = useCallback(async (): Promise<boolean> => {
     const ok = await ticketing.save();
     if (!ok) return false;
-    return pollingRef.current ? pollingRef.current.save() : true;
+    const repoOk = repoPollingRef.current ? await repoPollingRef.current.save() : true;
+    if (!repoOk) return false;
+    const jiraOk = jiraContextRef.current ? await jiraContextRef.current.save() : true;
+    if (!jiraOk) return false;
+    return generalLimitsRef.current ? generalLimitsRef.current.save() : true;
   }, [ticketing]);
   useEffect(() => {
     registerSave?.(saveAll);
@@ -136,9 +157,25 @@ export function TicketingTab({ isAdmin, onDirtyChange, registerSave }: Props) {
         )}
       </div>
 
-      {showPolling && (
+      {showRepoPolling && (
         <div className="border-t border-gray-800 pt-6">
-          <ItemPollingSettingsSection ref={pollingRef} onDirtyChange={setPollingDirty} hideSave />
+          <RepoPollingSettingsSection
+            ref={repoPollingRef}
+            ticketingSystem={ticketing.system}
+            onDirtyChange={setRepoPollingDirty}
+          />
+        </div>
+      )}
+
+      {showJiraContext && (
+        <div className="border-t border-gray-800 pt-6">
+          <GlobalJiraContextSection ref={jiraContextRef} onDirtyChange={setJiraContextDirty} />
+        </div>
+      )}
+
+      {showGeneralLimits && (
+        <div className="border-t border-gray-800 pt-6">
+          <GeneralLimitsSection ref={generalLimitsRef} onDirtyChange={setGeneralLimitsDirty} />
         </div>
       )}
     </section>

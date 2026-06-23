@@ -40,9 +40,37 @@ fn test_load_valid_config() {
     f.write_all(valid_config_toml().as_bytes()).unwrap();
     let config = Config::load(f.path()).unwrap();
     assert!(config.general.dry_mode);
-    assert!(!config.general.auto_polling);
     assert_eq!(config.general.poll_interval_secs, 30);
-    assert_eq!(config.jira.project_keys, vec!["PROJ", "CORE"]);
+    // The fixture still carries legacy `[jira] project_keys` / `item_types`
+    // keys; both were removed (now per-user-per-repository), so this asserts
+    // the legacy keys are tolerated (silently ignored) and the rest of the
+    // config still parses.
+    assert_eq!(config.jira.done_status, "Done");
+}
+
+/// A legacy `config.toml` that still contains `[jira] project_keys = [...]`
+/// must load without error — the field was removed but `JiraConfig` does not
+/// `deny_unknown_fields`, so serde ignores the now-unknown key.
+#[test]
+fn test_legacy_project_keys_is_tolerated() {
+    let toml = r#"
+[jira]
+project_keys = ["PROJ", "LEGACY"]
+item_types = ["Task"]
+
+[git]
+repo_path = "/workspace"
+
+[web]
+port = 8080
+"#;
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(toml.as_bytes()).unwrap();
+    let config = Config::load(f.path()).expect("legacy project_keys must not break load");
+    config
+        .validate()
+        .expect("legacy project_keys must not fail validation");
+    assert_eq!(config.jira.done_status, "Done");
 }
 
 #[test]
@@ -55,7 +83,7 @@ fn test_load_missing_file() {
 fn test_defaults() {
     let config = Config::default();
     assert!(!config.general.dry_mode);
-    assert!(config.general.auto_polling);
+    assert!(!config.general.max_parallel_per_user);
     assert_eq!(config.general.poll_interval_secs, 60);
     assert_eq!(config.web.port, 8080);
     assert_eq!(config.agent.effective_cursor_model(), "Auto");
@@ -66,13 +94,6 @@ fn test_defaults() {
 fn test_validate_poll_interval_too_low() {
     let mut config = Config::default();
     config.general.poll_interval_secs = 5;
-    assert!(config.validate().is_err());
-}
-
-#[test]
-fn test_validate_empty_item_types() {
-    let mut config = Config::default();
-    config.jira.item_types.clear();
     assert!(config.validate().is_err());
 }
 
@@ -779,95 +800,7 @@ fn provisioning_sha_preserves_inner_whitespace() {
     assert_ne!(a.provisioning_sha(), b.provisioning_sha());
 }
 
-// ─── [polling] section ──────────────────────────────────────────────
-
-#[test]
-fn polling_defaults_are_empty_and_unlimited() {
-    let cfg = Config::default();
-    assert!(cfg.polling.auto_start_flow.is_empty());
-    assert_eq!(cfg.polling.max_parallel_items, 0);
-    assert!(!cfg.polling.max_parallel_per_user);
-    assert!(cfg.polling.jira.summary_keywords.is_empty());
-    assert!(cfg.polling.github.labels.is_empty());
-    assert!(cfg.polling.github.title_keywords.is_empty());
-}
-
-#[test]
-fn polling_omitted_in_toml_uses_defaults() {
-    let mut f = NamedTempFile::new().unwrap();
-    f.write_all(valid_config_toml().as_bytes()).unwrap();
-    let cfg = Config::load(f.path()).unwrap();
-    assert!(cfg.polling.auto_start_flow.is_empty());
-    assert_eq!(cfg.polling.max_parallel_items, 0);
-}
-
-#[test]
-fn polling_round_trips_through_toml() {
-    let mut cfg = Config::default();
-    cfg.polling.auto_start_flow = "implement-ticket".to_string();
-    cfg.polling.max_parallel_items = 5;
-    cfg.polling.max_parallel_per_user = true;
-    cfg.polling.jira.summary_keywords = vec!["crash".into(), "urgent".into()];
-    cfg.polling.github.labels = vec!["bug".into()];
-    cfg.polling.github.title_keywords = vec!["panic".into()];
-
-    let serialized = cfg.to_toml_string().expect("serialize");
-    let parsed: Config = toml::from_str(&serialized).expect("re-parse");
-
-    assert_eq!(parsed.polling.auto_start_flow, "implement-ticket");
-    assert_eq!(parsed.polling.max_parallel_items, 5);
-    assert!(parsed.polling.max_parallel_per_user);
-    assert_eq!(
-        parsed.polling.jira.summary_keywords,
-        vec!["crash", "urgent"]
-    );
-    assert_eq!(parsed.polling.github.labels, vec!["bug"]);
-    assert_eq!(parsed.polling.github.title_keywords, vec!["panic"]);
-}
-
-#[test]
-fn validate_rejects_blank_jira_summary_keyword() {
-    let mut cfg = Config::default();
-    cfg.polling.jira.summary_keywords = vec!["ok".into(), "   ".into()];
-    let err = cfg.validate().unwrap_err();
-    assert!(
-        err.to_string().contains("summary_keywords"),
-        "expected summary_keywords error: {err}"
-    );
-}
-
-#[test]
-fn validate_rejects_blank_github_label() {
-    let mut cfg = Config::default();
-    cfg.polling.github.labels = vec!["".into()];
-    let err = cfg.validate().unwrap_err();
-    assert!(
-        err.to_string().contains("labels"),
-        "expected labels error: {err}"
-    );
-}
-
-#[test]
-fn validate_rejects_blank_github_title_keyword() {
-    let mut cfg = Config::default();
-    cfg.polling.github.title_keywords = vec!["\t".into()];
-    let err = cfg.validate().unwrap_err();
-    assert!(
-        err.to_string().contains("title_keywords"),
-        "expected title_keywords error: {err}"
-    );
-}
-
-#[test]
-fn validate_accepts_non_empty_polling_filters() {
-    let mut cfg = Config::default();
-    cfg.polling.auto_start_flow = "anything".into();
-    cfg.polling.max_parallel_items = 0; // 0 = unlimited is valid
-    cfg.polling.jira.summary_keywords = vec!["crash".into()];
-    cfg.polling.github.labels = vec!["bug".into()];
-    cfg.polling.github.title_keywords = vec!["panic".into()];
-    assert!(cfg.validate().is_ok());
-}
+// ─── polling filter helper ──────────────────────────────────────────
 
 #[test]
 fn matches_any_keyword_empty_list_matches_everything() {

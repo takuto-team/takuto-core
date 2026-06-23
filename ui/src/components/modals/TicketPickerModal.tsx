@@ -30,7 +30,10 @@ interface Props {
    * (`/api/github/issues?repository=<name>`). When `null` ("All
    * repositories" is selected), the picker shows a CTA asking the user to
    * pick a specific repo first — there's no per-repo aggregation in v1.
-   * Ignored in Jira mode.
+   *
+   * For Jira mode it scopes the manual to-do list to the caller's per-repo
+   * project keys (`/api/jira/todo-tickets-manual?repository=<name>`); when
+   * `null` the server falls back to its default (no per-repo scoping).
    */
   activeRepoName?: string | null;
   onSelect: (key: string, summary: string, description?: string, url?: string) => void;
@@ -44,11 +47,15 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
   const [error, setError] = useState("");
   const [confirmReAdd, setConfirmReAdd] = useState<PickerTicket | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
-  const needsRepoForGitHub = ticketingSystem === "github" && !activeRepoName;
+  // Both pickers are repo-scoped now: GitHub issues come from the active repo,
+  // and the Jira manual to-do list resolves the caller's per-repo project keys
+  // (the `repository` query param is required server-side). With no repo
+  // selected ("All repositories") neither can resolve, so we show a CTA.
+  const needsRepo = !activeRepoName;
 
   useEffect(() => {
-    // GitHub mode: hold off and surface a clearer CTA when no repo is selected.
-    if (needsRepoForGitHub) {
+    // Hold off and surface a clearer CTA when no repo is selected.
+    if (needsRepo) {
       setLoading(false);
       setTickets([]);
       setError("");
@@ -56,10 +63,11 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
     }
     setLoading(true);
     setError("");
+    const repoParam = `repository=${encodeURIComponent(activeRepoName!)}`;
     const endpoint =
       ticketingSystem === "github"
-        ? `/api/github/issues?repository=${encodeURIComponent(activeRepoName!)}`
-        : "/api/jira/todo-tickets-manual";
+        ? `/api/github/issues?${repoParam}`
+        : `/api/jira/todo-tickets-manual?${repoParam}`;
 
     apiJson<TodoTicket[] | GitHubIssue[]>(endpoint)
       .then((data) => {
@@ -76,7 +84,7 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [ticketingSystem, activeRepoName, needsRepoForGitHub]);
+  }, [ticketingSystem, activeRepoName, needsRepo]);
 
   // On click we run both checks for an existing PR: the local one (DB /
   // in-memory `existingPrUrl`, precomputed when the list loaded) and a live
@@ -121,12 +129,16 @@ export function TicketPickerModal({ ticketingSystem, activeRepoName, onSelect, o
         </div>
 
         <div className="overflow-y-auto flex-1 p-4">
-          {needsRepoForGitHub && (
-            <p className="text-gray-400 text-sm">{t("ticketPicker.needRepo")}</p>
+          {needsRepo && (
+            <p className="text-gray-400 text-sm">
+              {ticketingSystem === "github"
+                ? t("ticketPicker.needRepo")
+                : t("ticketPicker.needRepoJira")}
+            </p>
           )}
-          {!needsRepoForGitHub && loading && <p className="text-gray-500 text-sm">{t("ticketPicker.loading")}</p>}
+          {!needsRepo && loading && <p className="text-gray-500 text-sm">{t("ticketPicker.loading")}</p>}
           {error && <p className="text-red-400 text-sm">{error}</p>}
-          {!loading && !needsRepoForGitHub && tickets.length === 0 && (
+          {!loading && !needsRepo && tickets.length === 0 && (
             <p className="text-gray-500 text-sm">{t("ticketPicker.noTickets")}</p>
           )}
           {tickets.map((ticket) =>

@@ -2,13 +2,13 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * Wizard-level coverage for the v2 enhancements:
- *   - the item-polling section embeds in the Ticketing step, gated by
- *     `isAdmin && system !== "none"` (reactive to the live selection);
- *   - the Git step is relabeled "Git & GitHub" and seeds base branch / remote
- *     from `/api/config`;
- *   - the Workflows step renders the step-timeout field (seeded from config)
- *     and the database/port note.
+ * Wizard-level coverage. Step order is:
+ *   1. Git & GitHub   — base branch / remote seeded from `/api/config`.
+ *   2. Repositories   — MyRepositoriesTab.
+ *   3. AI provider    — provider form + AI key.
+ *   4. Ticketing      — system selector + per-repo polling section (shown once
+ *                        a system is selected; repos exist from step 2).
+ *   5. Workflows      — step-timeout field + database/port note.
  *
  * Navigation between steps here clicks "Save and Continue"; the per-step saves
  * resolve against the stubbed PUT endpoints (covered in detail by the hook
@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Onboarding } from "./Onboarding";
 import { ToastProvider } from "../hooks/useToast";
@@ -65,6 +65,9 @@ function stubFetch(ticketingSystem: "none" | "jira" | "github") {
     if (url.startsWith("/api/github/repos")) {
       return json([]);
     }
+    if (url === "/api/me/polling-settings") {
+      return json([]);
+    }
     return json({});
   });
 }
@@ -83,10 +86,12 @@ function renderWizard(isAdmin: boolean) {
 
 // A landmark unique to each step body, used to confirm a "Save and Continue"
 // click has fully advanced (its per-step save is async) before clicking again.
+// Order: 1 Git&GitHub · 2 Repositories · 3 AI provider · 4 Ticketing · 5 Workflows.
 const STEP_LANDMARK: Record<number, () => Promise<unknown>> = {
-  2: () => screen.findByLabelText(/Claude API key/i),
-  3: () => screen.findByLabelText("Base branch"),
-  4: () => screen.findByText("My Repositories"),
+  1: () => screen.findByLabelText("Base branch"),
+  2: () => screen.findByText("My Repositories"),
+  3: () => screen.findByLabelText(/Claude API key/i),
+  4: () => screen.findByLabelText("Ticketing system"),
   5: () => screen.findByLabelText("Timeout (seconds)"),
 };
 
@@ -97,51 +102,17 @@ async function skipToStep(target: number) {
   }
 }
 
-describe("Onboarding wizard — item polling in the Ticketing step", () => {
-  it("hides the polling section when ticketing system is None", async () => {
+describe("Onboarding wizard — Git & GitHub step (step 1)", () => {
+  it("opens on Git & GitHub and seeds base branch + remote from config", async () => {
     stubFetch("none");
     renderWizard(true);
-    await screen.findByLabelText("Ticketing system");
-    expect(screen.queryByText("Item polling")).toBeNull();
-  });
-
-  it("shows the polling section for an admin when a system is configured", async () => {
-    stubFetch("github");
-    renderWizard(true);
-    await waitFor(() => {
-      expect(screen.getByText("Item polling")).toBeTruthy();
-    });
-  });
-
-  it("hides the polling section for a non-admin even with a system configured", async () => {
-    stubFetch("github");
-    renderWizard(false);
-    await screen.findByLabelText("Ticketing system");
-    expect(screen.queryByText("Item polling")).toBeNull();
-  });
-
-  it("hides the polling section reactively when the admin selects None", async () => {
-    stubFetch("github");
-    renderWizard(true);
-    await waitFor(() => expect(screen.getByText("Item polling")).toBeTruthy());
-    fireEvent.change(screen.getByLabelText("Ticketing system"), {
-      target: { value: "none" },
-    });
-    await waitFor(() => expect(screen.queryByText("Item polling")).toBeNull());
-  });
-});
-
-describe("Onboarding wizard — Git & GitHub step", () => {
-  it("relabels the step and seeds base branch + remote from config", async () => {
-    stubFetch("none");
-    renderWizard(true);
-    await screen.findByLabelText("Ticketing system");
-    await skipToStep(3);
-    // The stepper pill + heading read "Git & GitHub".
+    // Step 1 is now Git & GitHub — it renders first, no navigation needed.
     expect(screen.getAllByText("Git & GitHub").length).toBeGreaterThan(0);
     const baseBranch = (await screen.findByLabelText("Base branch")) as HTMLInputElement;
     const remote = screen.getByLabelText("Remote") as HTMLInputElement;
-    expect(baseBranch.value).toBe("develop");
+    // The git form seeds from /api/config one tick after the input first
+    // mounts, so wait for the seeded values to land.
+    await waitFor(() => expect(baseBranch.value).toBe("develop"));
     expect(remote.value).toBe("upstream");
     expect(baseBranch.disabled).toBe(false);
   });
@@ -149,8 +120,6 @@ describe("Onboarding wizard — Git & GitHub step", () => {
   it("renders the git inputs read-only for a non-admin", async () => {
     stubFetch("none");
     renderWizard(false);
-    await screen.findByLabelText("Ticketing system");
-    await skipToStep(3);
     const baseBranch = (await screen.findByLabelText("Base branch")) as HTMLInputElement;
     expect(baseBranch.disabled).toBe(true);
     expect(
@@ -163,7 +132,7 @@ describe("Onboarding wizard — fixed footer", () => {
   it("keeps 'Save and Continue' enabled and offers no Skip button", async () => {
     stubFetch("none");
     renderWizard(true);
-    await screen.findByLabelText("Ticketing system");
+    await screen.findByLabelText("Base branch");
 
     const saveContinue = () =>
       screen.getByRole("button", { name: /save and continue/i }) as HTMLButtonElement;
@@ -174,24 +143,45 @@ describe("Onboarding wizard — fixed footer", () => {
   });
 });
 
-describe("Onboarding wizard — Repositories step", () => {
-  it("renders the add-repositories UI at step 4 (before the Workflows step)", async () => {
+describe("Onboarding wizard — Repositories step (step 2)", () => {
+  it("renders the add-repositories UI before the AI / Ticketing steps", async () => {
     stubFetch("none");
     renderWizard(true);
-    await screen.findByLabelText("Ticketing system");
-    await skipToStep(4);
-    // MyRepositoriesTab is embedded — its "My Repositories" header is present
-    // and the step-5 timeout field is not yet shown.
+    await screen.findByLabelText("Base branch");
+    await skipToStep(2);
     expect(await screen.findByText("My Repositories")).toBeTruthy();
-    expect(screen.queryByLabelText("Timeout (seconds)")).toBeNull();
+    expect(screen.queryByLabelText("Ticketing system")).toBeNull();
   });
 });
 
-describe("Onboarding wizard — Workflows step", () => {
+describe("Onboarding wizard — Ticketing step (step 4)", () => {
+  it("embeds the per-repo polling section once a system is selected", async () => {
+    stubFetch("jira");
+    renderWizard(true);
+    await screen.findByLabelText("Base branch");
+    await skipToStep(4);
+    // The ticketing selector and the per-repo polling section render together;
+    // the global general-limits / Jira-context sections stay Config-only.
+    expect(await screen.findByText("Item polling")).toBeTruthy();
+    expect(screen.queryByText("General limits")).toBeNull();
+    expect(screen.queryByText("Jira context")).toBeNull();
+  });
+
+  it("does not embed the polling section when ticketing system is None", async () => {
+    stubFetch("none");
+    renderWizard(true);
+    await screen.findByLabelText("Base branch");
+    await skipToStep(4);
+    await screen.findByLabelText("Ticketing system");
+    expect(screen.queryByText("Item polling")).toBeNull();
+  });
+});
+
+describe("Onboarding wizard — Workflows step (step 5)", () => {
   it("renders the step-timeout field (seeded) and the database/port note", async () => {
     stubFetch("none");
     renderWizard(true);
-    await screen.findByLabelText("Ticketing system");
+    await screen.findByLabelText("Base branch");
     await skipToStep(5);
     const timeout = (await screen.findByLabelText("Timeout (seconds)")) as HTMLInputElement;
     expect(timeout.value).toBe("2400");

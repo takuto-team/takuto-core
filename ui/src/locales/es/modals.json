@@ -40,6 +40,7 @@
     "githubTitle": "Incidencias de GitHub",
     "todoTitle": "Tickets por hacer",
     "needRepo": "Elige un repositorio concreto en la cabecera para ver sus incidencias de GitHub. \"Todos los repositorios\" no agrega las incidencias de varios repos.",
+    "needRepoJira": "Elige un repositorio concreto en la cabecera para ver sus tickets por hacer. Los proyectos de Jira que se extraen se configuran por repositorio en Configuración → Tickets.",
     "loading": "Cargando...",
     "noTickets": "No se encontraron tickets.",
     "alreadyAdded": "Ya añadido",

@@ -438,6 +438,19 @@ pub fn build_router(state: AppState) -> Router {
                 .put(routes::worktree_commands::put_my_row)
                 .delete(routes::worktree_commands::delete_my_row),
         )
+        // Per-user-per-workspace polling settings. No admin gate — every
+        // authenticated user manages only their own rows (the URL never
+        // carries a `user_id`).
+        .route(
+            "/me/polling-settings",
+            get(routes::me_polling_settings::list_my_rows),
+        )
+        .route(
+            "/me/polling-settings/{workspace}",
+            get(routes::me_polling_settings::get_my_row)
+                .put(routes::me_polling_settings::put_my_row)
+                .delete(routes::me_polling_settings::delete_my_row),
+        )
         // Per-user-per-workspace work-item flows. Workspace is derived
         // server-side from the active config — no `{workspace}` segment.
         .route(
