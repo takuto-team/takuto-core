@@ -10,8 +10,7 @@
 //! | `GitAction`                       | Mode B (App + PAT) | Mode A (App only) | Mode C (PAT only) | Missing |
 //! |-----------------------------------|--------------------|-------------------|-------------------|---------|
 //! | `Clone` / `Fetch`                 | App                | App               | UserPat           | Err     |
-//! | `Push` (`attribute_commits=true`) | UserPat            | App               | UserPat           | Err     |
-//! | `Push` (`attribute_commits=false`)| App                | App               | UserPat           | Err     |
+//! | `Push`                            | UserPat            | App               | UserPat           | Err     |
 //! | `PullRequestCreate`               | UserPat            | App               | UserPat           | Err     |
 //! | `PullRequestComment` / `Review`   | UserPat            | App               | UserPat           | Err     |
 //! | `IssueComment`                    | UserPat            | App               | UserPat           | Err     |
@@ -21,7 +20,7 @@
 //! wires them up and re-exports the public surface so every existing
 //! `crate::github::auth_resolver::*` path keeps resolving:
 //!
-//! - [`decision`] — pure `(action, mode, attribute_commits)` → `TokenSource`.
+//! - [`decision`] — pure `(action, mode)` → `TokenSource`.
 //! - [`errors`] — `GitAuthError`, `SecretToken`, `GitToken`, payload helper.
 //! - [`audit`] — first-use debounce + `credential_audit` row writer.
 //! - [`validator`] — PAT / SSO revalidation via `GhClient`.

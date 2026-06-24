@@ -77,8 +77,9 @@ impl GitAuthResolver {
     /// Pick + materialise a token for `(action, user_id)`.
     pub async fn token_for(&self, action: GitAction, user_id: &str) -> GitAuthResult<GitToken> {
         let mode = self.mode_for_user(user_id).await?;
-        let attribute_commits = self.attribute_commits(user_id).await?;
-        let source = decide_token_source(action, mode, attribute_commits)?
+        // Attribution no longer depends on a per-user flag — the matrix routes
+        // by PAT presence alone (mode already captures that).
+        let source = decide_token_source(action, mode, false)?
             // None means "neither App nor PAT for this user"
             .ok_or_else(|| GitAuthError::UnauthenticatedGit {
                 user_id: user_id.to_string(),
@@ -133,18 +134,6 @@ impl GitAuthResolver {
                 message: format!("github_credentials::find failed: {e}"),
             })?;
         Ok(row.is_some())
-    }
-
-    async fn attribute_commits(&self, user_id: &str) -> GitAuthResult<bool> {
-        let row = github_credentials::find(self.db.adapter(), user_id)
-            .await
-            .map_err(|e| GitAuthError::Internal {
-                message: format!("github_credentials::find failed: {e}"),
-            })?;
-        // Default true when no row — the matrix treats missing-PAT users as
-        // "we'd attribute commits if they had one", which folds cleanly when
-        // the chooser falls back to App regardless.
-        Ok(row.map(|r| r.sign_commits).unwrap_or(true))
     }
 
     pub(super) async fn unseal_user_pat(&self, user_id: &str) -> GitAuthResult<SecretToken> {

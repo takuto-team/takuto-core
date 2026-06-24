@@ -41,38 +41,53 @@ use super::step_runner::{
 };
 use super::types::{Workflow, WorkflowEvent};
 
-/// Resolve a per-user GitHub token (bearer) and author identity for a workflow.
+/// Resolve a per-user GitHub token (bearer) and commit author identity for a
+/// workflow.
 ///
 /// Returns `(token, identity)` where `token` is the bearer to inject into the
 /// base-branch fetch and `identity` is `(author_name, author_email)` to set as
-/// the git author. Both are `None` when there is no resolver, no `user_id`, or
-/// the resolver could not produce a token (e.g. App-only mode, where the fetch
-/// keeps its ambient App-token behaviour and the author identity comes from the
-/// App / `gh` path instead).
+/// the git author.
+///
+/// The two are resolved with *different* git actions on purpose:
+///
+/// - The fetch bearer uses [`GitAction::Fetch`], so a read keeps the App token
+///   where one exists (the matrix spends the App's rate limit on reads, not the
+///   user's PAT).
+/// - The author identity uses [`GitAction::Push`], so commits are attributed to
+///   the user whenever a PAT is present (App-only → the bot). This matches the
+///   `GIT_AUTHOR_*` env the worker auth bundle injects — otherwise the
+///   repo-local `user.name`/`user.email` would carry the App (bot) identity and
+///   stamp commits as the bot even for PAT users.
 async fn resolve_fetch_token_and_identity(
     git_auth_resolver: Option<&Arc<crate::github::auth_resolver::GitAuthResolver>>,
     user_id: Option<&str>,
 ) -> (Option<String>, Option<(String, String)>) {
+    use crate::github::auth_resolver::GitAction;
     let (resolver, uid) = match (git_auth_resolver, user_id) {
         (Some(r), Some(u)) => (r, u),
         _ => return (None, None),
     };
-    match resolver
-        .token_for(crate::github::auth_resolver::GitAction::Fetch, uid)
-        .await
-    {
-        Ok(tok) => {
-            let identity = match (tok.author_name.clone(), tok.author_email.clone()) {
-                (Some(name), Some(email)) => Some((name, email)),
-                _ => None,
-            };
-            (Some(tok.bearer.expose().to_string()), identity)
-        }
+
+    let token = match resolver.token_for(GitAction::Fetch, uid).await {
+        Ok(tok) => Some(tok.bearer.expose().to_string()),
         Err(e) => {
             warn!(error = %e, "Could not resolve per-user GitHub token for worktree fetch; falling back to ambient auth");
-            (None, None)
+            None
         }
-    }
+    };
+
+    let identity = match resolver.token_for(GitAction::Push, uid).await {
+        Ok(tok) => match (tok.author_name, tok.author_email) {
+            (Some(name), Some(email)) => Some((name, email)),
+            _ => None,
+        },
+        Err(e) => {
+            warn!(error = %e, "Could not resolve commit author identity; commits will use the worktree's ambient git identity");
+            None
+        }
+    };
+
+    (token, identity)
 }
 
 /// Pre-create the git worktree immediately when a ticket is added to the dashboard.
@@ -252,9 +267,15 @@ pub(super) async fn bootstrap_new_workflow(
     wait_if_paused(workflows, ticket_key, cancel_token).await?;
     check_cancelled(cancel_token)?;
 
-    let jira_available = {
-        let wf = workflows.read().await;
-        wf.get(ticket_key).map(|w| w.jira_available).unwrap_or(true)
+    // Whether to drive Jira (assign / transition / retrieve) is gated on the
+    // configured **ticketing system**, NOT on `acli` auth: the write/read
+    // actions resolve the owner's per-user REST credential and only fall back
+    // to `acli` when none is stored. Gating on the old `acli_ok`-derived
+    // `jira_available` would skip Jira entirely for a REST-only user with no
+    // `acli` login.
+    let is_jira_mode = {
+        let cfg = config.read().await;
+        cfg.general.ticketing_system == crate::config::TicketingSystem::Jira
     };
 
     // Resolve the workflow owner's per-user GitHub token + author identity once
@@ -288,8 +309,8 @@ pub(super) async fn bootstrap_new_workflow(
     )
     .await;
 
-    // Step 1: Assign + Retrieve ticket (or use in-memory data when Jira is unavailable).
-    let ticket_detail = if jira_available {
+    // Step 1: Assign + Retrieve ticket (or use in-memory data when not in Jira mode).
+    let ticket_detail = if is_jira_mode {
         transition(
             workflows,
             event_tx,
@@ -302,7 +323,10 @@ pub(super) async fn bootstrap_new_workflow(
         let mut step_log = StepLog::bootstrap("Assign Ticket".to_string());
         check_cancelled(cancel_token)?;
 
-        match actions.assign_ticket(&repo_path, ticket_key).await {
+        match actions
+            .assign_ticket(&repo_path, ticket_key, owner_user_id_for_auth.as_deref())
+            .await
+        {
             Ok(()) => {
                 step_log
                     .output
@@ -314,7 +338,12 @@ pub(super) async fn bootstrap_new_workflow(
             }
         }
         match actions
-            .transition_ticket(&repo_path, ticket_key, "In Progress")
+            .transition_ticket(
+                &repo_path,
+                ticket_key,
+                "In Progress",
+                owner_user_id_for_auth.as_deref(),
+            )
             .await
         {
             Ok(()) => {
@@ -886,6 +915,33 @@ mod tests {
                 "alice".to_string(),
                 "alice@users.noreply.github.com".to_string()
             ))
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_fetch_identity_is_the_user_in_app_plus_pat_mode() {
+        // Regression: the commit author identity must follow the *push*
+        // decision (PAT → the user), not the *fetch* decision (App → the bot).
+        // With a deployment App present AND a user PAT, fetch routes to the App
+        // (its token fetch fails under the test manager, so the bearer is None)
+        // but the identity must still resolve to the user via the push path.
+        let db = in_mem_db();
+        seed_user(&db, "u-alice").await;
+        seed_pat(&db, "u-alice", "alice").await;
+        let app = Some(Arc::new(
+            crate::github_app::GitHubAppTokenManager::for_tests(7, 9),
+        ));
+        let resolver = Arc::new(GitAuthResolver::new(db, app));
+
+        let (_token, identity) =
+            resolve_fetch_token_and_identity(Some(&resolver), Some("u-alice")).await;
+        assert_eq!(
+            identity,
+            Some((
+                "alice".to_string(),
+                "alice@users.noreply.github.com".to_string()
+            )),
+            "App+PAT commits must be attributed to the user, not the bot"
         );
     }
 

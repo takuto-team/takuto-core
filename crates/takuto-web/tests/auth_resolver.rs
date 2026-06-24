@@ -96,11 +96,12 @@ async fn appstate_resolver_mode_b_push_with_attribution_picks_user_pat() {
 }
 
 // ---------------------------------------------------------------------------
-// Mode B — push with attribute_commits=false falls back to App
+// Mode B — push always picks the user PAT (attribution follows PAT presence,
+// independent of the legacy sign_commits column)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn appstate_resolver_mode_b_push_without_attribution_picks_app() {
+async fn appstate_resolver_mode_b_push_picks_user_pat_even_when_sign_commits_unset() {
     let state = takuto_web::test_helpers::test_state_with_db();
     let db = state.auth().db.as_ref().expect("db").clone();
     let app = Some(Arc::new(
@@ -111,11 +112,13 @@ async fn appstate_resolver_mode_b_push_without_attribution_picks_app() {
     seed_user(&db, "u-mode-b2").await;
     seed_pat(&db, "u-mode-b2", false, "bob").await;
 
-    let err = resolver
+    let token = resolver
         .token_for(GitAction::Push, "u-mode-b2")
         .await
-        .expect_err("App branch must be taken when attribute_commits=false");
-    assert_eq!(err.code(), "github_app_token_fetch_failed");
+        .expect("App+PAT push must use the user PAT regardless of sign_commits");
+    assert_eq!(token.source, TokenSource::UserPat);
+    assert_eq!(token.bearer.expose(), "ghp_alice_pat");
+    assert_eq!(token.author_name.as_deref(), Some("bob"));
 }
 
 // ---------------------------------------------------------------------------

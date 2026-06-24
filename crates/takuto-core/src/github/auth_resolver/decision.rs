@@ -6,7 +6,7 @@
 //! Defines the three enums the resolver pivots on ([`GitAction`],
 //! [`TokenSource`], [`GithubAuthMode`]) and the
 //! [`decide_token_source`] function — a side-effect-free routing rule that
-//! maps `(action, mode, attribute_commits)` to a [`TokenSource`].
+//! maps `(action, mode)` to a [`TokenSource`].
 //!
 //! No I/O, no async, no DB or network calls.
 
@@ -27,8 +27,8 @@ pub enum GitAction {
     Clone,
     /// Read-only fetch (subsequent updates of a repo we already cloned).
     Fetch,
-    /// Writes commits to the remote. The branch on user-pat vs App is
-    /// gated by the user's `attribute_commits` toggle (see arch A3).
+    /// Writes commits to the remote. Attributed to the user (UserPat) whenever
+    /// a PAT is present, otherwise the App identity (bot).
     Push,
     /// `gh pr create` — opens a pull request.
     PullRequestCreate,
@@ -116,7 +116,10 @@ impl fmt::Display for GithubAuthMode {
 pub fn decide_token_source(
     action: GitAction,
     mode: GithubAuthMode,
-    attribute_commits: bool,
+    // No longer consulted: attribution is decided by PAT presence alone
+    // (App+PAT → the user, for both commits and PRs; App-only → the bot).
+    // Kept in the signature so existing callers/tests need not change.
+    _attribute_commits: bool,
 ) -> GitAuthResult<Option<TokenSource>> {
     let source = match mode {
         GithubAuthMode::Missing => None,
@@ -126,17 +129,13 @@ pub fn decide_token_source(
             // Read-only + webhook → App (lower rate-limit cost, no user
             // attribution needed).
             GitAction::Clone | GitAction::Fetch | GitAction::WebhookEventIngest => TokenSource::App,
-            // Push toggles on `attribute_commits` — true means we want the
-            // commit to show as the user, so we use the user's PAT.
-            GitAction::Push => {
-                if attribute_commits {
-                    TokenSource::UserPat
-                } else {
-                    TokenSource::App
-                }
-            }
-            // Everything else is a write that should show as the user.
-            GitAction::PullRequestCreate
+            // Every write is attributed to the user when a PAT exists —
+            // pushing (commits), opening PRs, comments, reviews. Attribution is
+            // determined solely by PAT presence (PAT → the user, for both
+            // commits AND PRs; App-only → the bot), so Push uses the PAT here
+            // like the rest of the writes.
+            GitAction::Push
+            | GitAction::PullRequestCreate
             | GitAction::PullRequestComment
             | GitAction::PullRequestReview
             | GitAction::IssueComment => TokenSource::UserPat,
@@ -156,10 +155,11 @@ mod tests {
     /// ── Pure decision function: 28 cells (7 actions × 4 modes) ──────────
     ///
     /// Each cell asserts:
-    ///   (action, mode, attribute_commits) → expected_source
+    ///   (action, mode) → expected_source
     ///
-    /// Push is the only row that depends on `attribute_commits`, so we test
-    /// each Push cell twice (true, false).
+    /// The `attribute_commits` argument is retained for signature
+    /// compatibility but no longer affects the verdict; Push is tested with
+    /// both flag values to lock that in.
 
     #[test]
     fn matrix_clone_mode_app_plus_pat_picks_app() {
@@ -204,14 +204,17 @@ mod tests {
     }
 
     #[test]
-    fn matrix_push_attribute_true_mode_app_plus_pat_picks_user_pat() {
-        let got = decide_token_source(GitAction::Push, GithubAuthMode::AppPlusPat, true).unwrap();
-        assert_eq!(got, Some(TokenSource::UserPat));
-    }
-    #[test]
-    fn matrix_push_attribute_false_mode_app_plus_pat_picks_app() {
-        let got = decide_token_source(GitAction::Push, GithubAuthMode::AppPlusPat, false).unwrap();
-        assert_eq!(got, Some(TokenSource::App));
+    fn matrix_push_mode_app_plus_pat_picks_user_pat_regardless_of_attribute_flag() {
+        // App+PAT attributes commits to the user (PAT present), exactly like a
+        // PR. The legacy attribute flag no longer changes this.
+        assert_eq!(
+            decide_token_source(GitAction::Push, GithubAuthMode::AppPlusPat, true).unwrap(),
+            Some(TokenSource::UserPat)
+        );
+        assert_eq!(
+            decide_token_source(GitAction::Push, GithubAuthMode::AppPlusPat, false).unwrap(),
+            Some(TokenSource::UserPat)
+        );
     }
     #[test]
     fn matrix_push_mode_app_only_always_picks_app() {
@@ -492,14 +495,14 @@ mod tests {
             ),
             ((GitAction::Fetch, GithubAuthMode::Missing, true), None),
             ((GitAction::Fetch, GithubAuthMode::Missing, false), None),
-            // Push — only row where AppPlusPat depends on attribute_commits.
+            // Push — attributed write: App+PAT → user (PAT present), like a PR.
             (
                 (GitAction::Push, GithubAuthMode::AppPlusPat, true),
                 Some(TokenSource::UserPat),
             ),
             (
                 (GitAction::Push, GithubAuthMode::AppPlusPat, false),
-                Some(TokenSource::App),
+                Some(TokenSource::UserPat),
             ),
             (
                 (GitAction::Push, GithubAuthMode::AppOnly, true),
