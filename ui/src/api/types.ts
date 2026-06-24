@@ -607,8 +607,14 @@ export interface SetJiraCredentialRequest {
   site: string;
   /** Atlassian account email the API token belongs to. */
   email: string;
-  /** Atlassian API token. */
-  token: string;
+  /**
+   * Atlassian API token. OPTIONAL on the wire (keep/replace convention): when
+   * a credential is already stored, omitting `token` KEEPS the stored token and
+   * re-validates it live against the (possibly changed) `site`/`email`; sending
+   * it REPLACES the token. Required for first-time setup. Never send a masked
+   * sentinel — omit instead.
+   */
+  token?: string;
 }
 
 /**
@@ -665,6 +671,10 @@ export interface MarkDoneOutcome {
   worktree_ok: boolean;
   jira_error?: string;
   worktree_error?: string;
+  /** True when mark-done already removed the workflow (worktree + dashboard
+   *  item) — it does so on full success, so the caller must NOT issue a
+   *  separate delete (that would 404 "Workflow not found"). */
+  workflow_removed: boolean;
 }
 
 export interface WorkflowDefinition {

@@ -157,7 +157,6 @@ impl WorkflowEngine {
             config.clone(),
             agent_run_semaphore.clone(),
             suppress_cancelled_as_error.clone(),
-            jira_available.clone(),
             workflows_dir.clone(),
             db.clone(),
         );

@@ -32,7 +32,12 @@ impl DryRunActions {
 
 #[async_trait]
 impl ExternalActions for DryRunActions {
-    async fn assign_ticket(&self, _repo_path: &Path, key: &str) -> Result<()> {
+    async fn assign_ticket(
+        &self,
+        _repo_path: &Path,
+        key: &str,
+        _owner_user_id: Option<&str>,
+    ) -> Result<()> {
         info!(
             ticket = key,
             "[DRY] Would assign ticket to current Jira user (acli @me)"
@@ -40,7 +45,13 @@ impl ExternalActions for DryRunActions {
         Ok(())
     }
 
-    async fn transition_ticket(&self, _repo_path: &Path, key: &str, status: &str) -> Result<()> {
+    async fn transition_ticket(
+        &self,
+        _repo_path: &Path,
+        key: &str,
+        status: &str,
+        _owner_user_id: Option<&str>,
+    ) -> Result<()> {
         info!(
             ticket = key,
             status = status,
@@ -49,7 +60,12 @@ impl ExternalActions for DryRunActions {
         Ok(())
     }
 
-    async fn unassign_ticket(&self, _repo_path: &Path, key: &str) -> Result<()> {
+    async fn unassign_ticket(
+        &self,
+        _repo_path: &Path,
+        key: &str,
+        _owner_user_id: Option<&str>,
+    ) -> Result<()> {
         info!(ticket = key, "[DRY] Would unassign ticket");
         Ok(())
     }

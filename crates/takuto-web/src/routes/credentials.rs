@@ -43,7 +43,9 @@ use takuto_core::db::credential_audit::{self, CredentialAuditKind};
 use takuto_core::db::github_credentials;
 use takuto_core::db::jira_credentials;
 use takuto_core::db::provider_credentials::{self, ProviderCredentialKind, UpsertOutcome};
-use takuto_core::jira::{JiraRestCredential, JiraValidationError, validate_jira_credential};
+use takuto_core::jira::{
+    JiraRestCredential, JiraValidationError, resolve_rest_credential, validate_jira_credential,
+};
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
@@ -200,8 +202,13 @@ pub struct JiraCredentialBody {
     pub site: String,
     /// Account email — the Basic-auth username.
     pub email: String,
-    /// Jira API token — the sealed secret.
-    pub token: String,
+    /// Jira API token — the sealed secret. **Optional**: when omitted (or an
+    /// empty string), the stored token is kept and re-validated live against
+    /// the submitted `site`/`email` (so a user can change site/email without
+    /// re-pasting the token). When present and non-empty, it REPLACES the
+    /// stored token. Omitted with nothing stored → `400 jira_credential_not_set`.
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -888,9 +895,6 @@ pub async fn post_jira_credential(
     if email.is_empty() || email.len() > 320 {
         return Err(err(StatusCode::BAD_REQUEST, "email_invalid"));
     }
-    if body.token.trim().is_empty() || body.token.len() > MAX_API_KEY_LEN {
-        return Err(err(StatusCode::BAD_REQUEST, "invalid_token"));
-    }
 
     let master = require_master_key(&auth_state)?;
     // SAFETY: `require_master_key` returns `Err` when the DB is missing.
@@ -900,10 +904,30 @@ pub async fn post_jira_credential(
         .expect("require_master_key gated db.is_some()")
         .clone();
 
+    // Resolve the effective token: a present, non-empty `token` REPLACES the
+    // stored one; otherwise (omitted or empty) KEEP the stored token and
+    // re-validate it against the submitted site/email. KEEP with nothing
+    // stored is a 400 (`jira_credential_not_set`) — there is no token to keep.
+    let token = match body.token.as_deref().map(str::trim) {
+        Some(t) if !t.is_empty() => {
+            if t.len() > MAX_API_KEY_LEN {
+                return Err(err(StatusCode::BAD_REQUEST, "invalid_token"));
+            }
+            t.to_string()
+        }
+        _ => match resolve_rest_credential(&db, &auth.user_id).await {
+            Some(c) => c.token,
+            None => return Err(err(StatusCode::BAD_REQUEST, "jira_credential_not_set")),
+        },
+    };
+
     let cred = JiraRestCredential {
         site: site.clone(),
         email: email.clone(),
-        token: body.token.clone(),
+        token: token.clone(),
+        // Unknown until validation returns it; not needed for the `myself` call
+        // (Basic auth uses site/email/token only).
+        account_id: String::new(),
     };
     let account = match validate_jira_credential(auth_state.jira_http.as_ref(), &cred).await {
         Ok(a) => a,
@@ -928,7 +952,7 @@ pub async fn post_jira_credential(
         }
     };
 
-    let sealed = seal(&master, body.token.as_bytes()).map_err(|e| {
+    let sealed = seal(&master, token.as_bytes()).map_err(|e| {
         tracing::warn!(error = %e, "Jira token seal failed");
         err(StatusCode::INTERNAL_SERVER_ERROR, "seal_failed")
     })?;
@@ -1202,13 +1226,8 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl JiraHttp for FakeJiraHttp {
-        async fn get(
-            &self,
-            _cred: &JiraRestCredential,
-            _path: &str,
-        ) -> std::result::Result<JiraHttpResponse, String> {
+    impl FakeJiraHttp {
+        fn respond(&self) -> std::result::Result<JiraHttpResponse, String> {
             match self.status {
                 Some(status) => Ok(JiraHttpResponse {
                     status,
@@ -1219,8 +1238,37 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl JiraHttp for FakeJiraHttp {
+        async fn get(
+            &self,
+            _cred: &JiraRestCredential,
+            _path: &str,
+        ) -> std::result::Result<JiraHttpResponse, String> {
+            self.respond()
+        }
+        async fn post(
+            &self,
+            _cred: &JiraRestCredential,
+            _path: &str,
+            _body: &str,
+        ) -> std::result::Result<JiraHttpResponse, String> {
+            self.respond()
+        }
+        async fn put(
+            &self,
+            _cred: &JiraRestCredential,
+            _path: &str,
+            _body: &str,
+        ) -> std::result::Result<JiraHttpResponse, String> {
+            self.respond()
+        }
+    }
+
     #[tokio::test]
-    async fn post_jira_credential_rejects_empty_token() {
+    async fn post_jira_credential_omitted_token_with_nothing_stored_is_not_set() {
+        // An empty/omitted token means KEEP the stored secret — but with nothing
+        // stored there is nothing to keep → 400 jira_credential_not_set.
         let state = test_state_with_db();
         let cookie = register_and_login(&state).await;
 
@@ -1231,8 +1279,123 @@ mod tests {
                     .header("Content-Type", "application/json")
                     .header("Origin", TEST_ORIGIN)
                     .header("Cookie", &cookie)
+                    // token omitted entirely
                     .body(Body::from(
-                        r#"{"site":"https://acme.atlassian.net","email":"a@acme.com","token":""}"#,
+                        r#"{"site":"https://acme.atlassian.net","email":"a@acme.com"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "jira_credential_not_set");
+    }
+
+    #[tokio::test]
+    async fn post_jira_credential_keep_secret_changes_email_without_token() {
+        // Store a credential, then re-POST with the token OMITTED and a CHANGED
+        // email: the stored token is kept + re-validated against the new email,
+        // and the new email is persisted.
+        let mut state = test_state_with_db();
+        state.auth_mut().jira_http = Arc::new(FakeJiraHttp::ok_account());
+        let cookie = register_and_login(&state).await;
+
+        // 1) First-time store (token present).
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"old@acme.com","token":"good-tok"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 2) Change email only — token omitted (KEEP).
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"new@acme.com"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["email"], "new@acme.com",
+            "email updated without re-pasting token"
+        );
+
+        // GET reflects the new email + the credential is still present.
+        let app = build_router(state);
+        let get_resp = app
+            .oneshot(
+                Request::get("/api/users/me/credentials")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let get_body = get_resp.into_body().collect().await.unwrap().to_bytes();
+        let get_json: serde_json::Value = serde_json::from_slice(&get_body).unwrap();
+        assert_eq!(get_json["jira"]["email"], "new@acme.com");
+    }
+
+    #[tokio::test]
+    async fn post_jira_credential_keep_revalidation_failure_does_not_persist() {
+        // KEEP path: a connected user changes email but omits the token, and the
+        // live re-validation of the kept token fails (Jira 401). The request must
+        // return the existing `invalid_token` code AND leave the stored
+        // site/email untouched (no partial persist of the new email).
+        let mut state = test_state_with_db();
+        state.auth_mut().jira_http = Arc::new(FakeJiraHttp::ok_account());
+        let cookie = register_and_login(&state).await;
+
+        // 1) First-time store succeeds (token present, validation ok).
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"old@acme.com","token":"good-tok"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 2) Flip the upstream to 401, then KEEP (token omitted) with a new email.
+        state.auth_mut().jira_http = Arc::new(FakeJiraHttp::unauthorized());
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::post("/api/users/me/jira-credential")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(
+                        r#"{"site":"https://acme.atlassian.net","email":"new@acme.com"}"#,
                     ))
                     .unwrap(),
             )
@@ -1242,6 +1405,24 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "invalid_token");
+
+        // 3) The stored credential is unchanged — the new email was NOT persisted.
+        let app = build_router(state);
+        let get_resp = app
+            .oneshot(
+                Request::get("/api/users/me/credentials")
+                    .header("Cookie", &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let get_body = get_resp.into_body().collect().await.unwrap().to_bytes();
+        let get_json: serde_json::Value = serde_json::from_slice(&get_body).unwrap();
+        assert_eq!(
+            get_json["jira"]["email"], "old@acme.com",
+            "failed re-validation must not persist the changed email"
+        );
     }
 
     #[tokio::test]

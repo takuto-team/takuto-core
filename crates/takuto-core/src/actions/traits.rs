@@ -17,9 +17,32 @@ pub trait ExternalActions: Send + Sync {
     // global `cfg.git.repo_path`. The path is the cwd for the `acli`
     // subprocess (acli reads the workspace context from the cwd it's
     // spawned in).
-    async fn assign_ticket(&self, repo_path: &Path, key: &str) -> Result<()>;
-    async fn transition_ticket(&self, repo_path: &Path, key: &str, status: &str) -> Result<()>;
-    async fn unassign_ticket(&self, repo_path: &Path, key: &str) -> Result<()>;
+    //
+    // The write actions also take `owner_user_id: Option<&str>` — the workflow
+    // owner whose per-user Jira REST credential is preferred when present
+    // (`RealActions` resolves it via `resolve_rest_credential` and uses
+    // `JiraRestClient`); when `None` or the owner has no stored token, they
+    // fall back to the host-wide `acli` path. Mirrors the read-side
+    // `DbBackedJiraSourceFactory` / `GitAuthResolver::token_for(action, user_id)`.
+    async fn assign_ticket(
+        &self,
+        repo_path: &Path,
+        key: &str,
+        owner_user_id: Option<&str>,
+    ) -> Result<()>;
+    async fn transition_ticket(
+        &self,
+        repo_path: &Path,
+        key: &str,
+        status: &str,
+        owner_user_id: Option<&str>,
+    ) -> Result<()>;
+    async fn unassign_ticket(
+        &self,
+        repo_path: &Path,
+        key: &str,
+        owner_user_id: Option<&str>,
+    ) -> Result<()>;
     async fn get_ticket_details(&self, repo_path: &Path, key: &str) -> Result<String>;
 
     // Git/GitHub

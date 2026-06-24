@@ -202,6 +202,9 @@ impl WorkflowLifecycle {
             ticket_url,
             ws_name,
         );
+        // Keep a copy of the owner id for the best-effort Jira assign/transition
+        // spawn below (resolves the owner's per-user REST credential).
+        let owner_for_jira = user_id.clone();
         workflow.user_id = user_id;
         workflow.repository_id = repository_id;
         if let Some(desc) = ticket_description {
@@ -262,12 +265,16 @@ impl WorkflowLifecycle {
                 self.db.as_ref(),
             )
             .await;
+            let owner = owner_for_jira.clone();
             tokio::spawn(async move {
-                if let Err(e) = actions.assign_ticket(&repo_path, &key).await {
+                if let Err(e) = actions
+                    .assign_ticket(&repo_path, &key, owner.as_deref())
+                    .await
+                {
                     warn!(ticket = %key, error = ?e, "Failed to assign ticket at add-to-dashboard (best-effort)");
                 }
                 if let Err(e) = actions
-                    .transition_ticket(&repo_path, &key, "In Progress")
+                    .transition_ticket(&repo_path, &key, "In Progress", owner.as_deref())
                     .await
                 {
                     warn!(ticket = %key, error = ?e, "Failed to transition ticket at add-to-dashboard (best-effort)");
@@ -341,15 +348,7 @@ impl WorkflowLifecycle {
         ticket_key: &str,
         persistence: &WorkflowPersistence,
     ) -> Result<()> {
-        let (
-            workflow_id,
-            worktree_path,
-            cancel_token,
-            branch_name,
-            jira_available,
-            driver_started,
-            owner_user_id,
-        ) = {
+        let (workflow_id, worktree_path, cancel_token, branch_name, driver_started, owner_user_id) = {
             let wf_arc = self.repository.inner_arc();
             let map = wf_arc.read().await;
             let w = map
@@ -370,7 +369,6 @@ impl WorkflowLifecycle {
                 w.worktree_path.clone(),
                 w.cancel_token.clone(),
                 w.branch_name.clone(),
-                w.jira_available,
                 w.driver_started,
                 w.user_id.clone(),
             )
@@ -418,16 +416,20 @@ impl WorkflowLifecycle {
         persistence.git_worktree_prune().await;
 
         // Unstarted workflows had Jira assign+transition at add-to-dashboard time.
-        // Revert: unassign and move back to To Do.
-        if jira_available && !driver_started {
+        // Revert: unassign and move back to To Do. Gate on ticketing system
+        // (not `acli` auth) — the actions resolve the owner's REST credential.
+        if self.ticketing_system == TicketingSystem::Jira && !driver_started {
             let actions = self.actions.clone();
             let key = ticket_key.to_string();
             let repo_path_clone = repo_path.clone();
-            if let Err(e) = actions.unassign_ticket(&repo_path_clone, &key).await {
+            if let Err(e) = actions
+                .unassign_ticket(&repo_path_clone, &key, owner_user_id.as_deref())
+                .await
+            {
                 warn!(ticket = %key, error = ?e, "Failed to unassign ticket on delete (best-effort)");
             }
             if let Err(e) = actions
-                .transition_ticket(&repo_path_clone, &key, "To Do")
+                .transition_ticket(&repo_path_clone, &key, "To Do", owner_user_id.as_deref())
                 .await
             {
                 warn!(ticket = %key, error = ?e, "Failed to transition ticket back to To Do on delete (best-effort)");
@@ -535,14 +537,31 @@ impl WorkflowLifecycle {
 
         let mut jira_ok = true;
         let mut jira_error = None;
-        if self.jira_available.load(Ordering::Relaxed) {
-            // Jira mode: transition ticket to the configured done status.
+        let mut jira_credential_rejected = false;
+        if ticketing_system == TicketingSystem::Jira {
+            // Gate on the configured ticketing system, NOT `acli` auth: the
+            // transition resolves the owner's per-user REST credential (acli
+            // fallback). Gating on the old `acli_ok`-derived `jira_available`
+            // skipped the transition for a REST-only user with no acli login —
+            // the ticket was never moved and the item was silently deleted.
             if let Err(e) = self
                 .actions
-                .transition_ticket(&repo_path, ticket_key, done_status.trim())
+                .transition_ticket(
+                    &repo_path,
+                    ticket_key,
+                    done_status.trim(),
+                    owner_user_id.as_deref(),
+                )
                 .await
             {
                 jira_ok = false;
+                // A rejected per-user token surfaces as the modal code at the route.
+                jira_credential_rejected = matches!(
+                    e,
+                    crate::error::TakutoError::Jira(
+                        crate::jira::JiraError::CredentialRejected { .. }
+                    )
+                );
                 jira_error = Some(e.to_string());
                 warn!(ticket = %ticket_key, error = %e, "Jira transition to Done failed");
             }
@@ -657,6 +676,7 @@ impl WorkflowLifecycle {
             worktree_ok,
             worktree_error,
             workflow_removed,
+            jira_credential_rejected,
         })
     }
 
@@ -1177,7 +1197,6 @@ mod facade_engine_tests {
             config,
             engine.agent_run_semaphore.clone(),
             engine.suppress_cancelled_as_error.clone(),
-            jira_available,
             workflows_dir,
             Some(db.clone()),
         );
@@ -1279,7 +1298,6 @@ mod facade_engine_tests {
             config,
             engine.agent_run_semaphore.clone(),
             engine.suppress_cancelled_as_error.clone(),
-            jira_available,
             workflows_dir,
             Some(db.clone()),
         );
@@ -1627,6 +1645,167 @@ mod facade_engine_tests {
             insert(&engine, seed_workflow(WorkflowState::Pending, "GH-1", None)).await;
             assert!(engine.mark_work_done("GH-1").await.is_err());
             assert!(engine.mark_work_done("missing").await.is_err());
+        }
+
+        /// REGRESSION: mark-done must transition the Jira ticket even when
+        /// `jira_available` (acli auth) is **false** — the gate is the
+        /// configured ticketing system, not acli login. A REST-only user with
+        /// no acli login used to have the transition silently skipped, so the
+        /// item was deleted but the ticket never moved. Here the transition
+        /// action IS invoked and its failure surfaces in the outcome (so the
+        /// item is NOT removed and the error isn't hidden as success).
+        #[tokio::test]
+        async fn mark_work_done_jira_mode_invokes_transition_despite_acli_down() {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicBool, Ordering};
+
+            use crate::actions::dry_run::DryRunActions;
+            use crate::actions::traits::ExternalActions;
+            use crate::config::{Config, TicketingSystem};
+            use crate::db::Database;
+            use crate::process::CommandOutput;
+            use crate::workflow::engine::WorkflowEngine;
+
+            // Wraps DryRunActions but records the transition call and fails it,
+            // so we can assert the gate now invokes it (vs the old silent skip).
+            struct RecordingActions {
+                inner: DryRunActions,
+                transition_called: Arc<AtomicBool>,
+            }
+            #[async_trait::async_trait]
+            impl ExternalActions for RecordingActions {
+                async fn assign_ticket(
+                    &self,
+                    _r: &std::path::Path,
+                    _k: &str,
+                    _o: Option<&str>,
+                ) -> crate::error::Result<()> {
+                    Ok(())
+                }
+                async fn transition_ticket(
+                    &self,
+                    _r: &std::path::Path,
+                    key: &str,
+                    status: &str,
+                    _o: Option<&str>,
+                ) -> crate::error::Result<()> {
+                    self.transition_called.store(true, Ordering::SeqCst);
+                    Err(crate::jira::JiraError::TransitionFailed {
+                        key: key.to_string(),
+                        status: status.to_string(),
+                        stderr: "no transition to that status".into(),
+                    }
+                    .into())
+                }
+                async fn unassign_ticket(
+                    &self,
+                    _r: &std::path::Path,
+                    _k: &str,
+                    _o: Option<&str>,
+                ) -> crate::error::Result<()> {
+                    Ok(())
+                }
+                async fn get_ticket_details(
+                    &self,
+                    r: &std::path::Path,
+                    k: &str,
+                ) -> crate::error::Result<String> {
+                    self.inner.get_ticket_details(r, k).await
+                }
+                async fn create_worktree(
+                    &self,
+                    r: &std::path::Path,
+                    b: &str,
+                    base: &str,
+                    t: Option<&str>,
+                ) -> crate::error::Result<std::path::PathBuf> {
+                    self.inner.create_worktree(r, b, base, t).await
+                }
+                async fn remove_worktree(
+                    &self,
+                    r: &std::path::Path,
+                    w: &std::path::Path,
+                ) -> crate::error::Result<()> {
+                    self.inner.remove_worktree(r, w).await
+                }
+                async fn delete_local_branch(
+                    &self,
+                    r: &std::path::Path,
+                    b: &str,
+                ) -> crate::error::Result<()> {
+                    self.inner.delete_local_branch(r, b).await
+                }
+                async fn configure_git_author_from_github(
+                    &self,
+                    c: &std::path::Path,
+                    i: Option<(&str, &str)>,
+                ) -> crate::error::Result<()> {
+                    self.inner.configure_git_author_from_github(c, i).await
+                }
+                async fn get_gh_installation_token(&self, c: &std::path::Path) -> Option<String> {
+                    self.inner.get_gh_installation_token(c).await
+                }
+                async fn request_github_self_as_pr_reviewer(
+                    &self,
+                    c: &std::path::Path,
+                    p: &str,
+                ) -> crate::error::Result<bool> {
+                    self.inner.request_github_self_as_pr_reviewer(c, p).await
+                }
+                async fn run_command(
+                    &self,
+                    cmd: &str,
+                    cwd: &std::path::Path,
+                ) -> crate::error::Result<CommandOutput> {
+                    self.inner.run_command(cmd, cwd).await
+                }
+            }
+
+            let dir = tempfile::tempdir().unwrap();
+            let db = Database::open_in_memory().expect("in-memory db");
+            let mut cfg = Config::default();
+            cfg.general.ticketing_system = TicketingSystem::Jira;
+            cfg.jira.done_status = "Done".to_string();
+            let config = Arc::new(tokio::sync::RwLock::new(cfg));
+            let transition_called = Arc::new(AtomicBool::new(false));
+            let actions: Arc<dyn ExternalActions> = Arc::new(RecordingActions {
+                inner: DryRunActions::new("origin".to_string(), None),
+                transition_called: transition_called.clone(),
+            });
+            let engine = WorkflowEngine::new_with_db(
+                config,
+                actions,
+                4,
+                // jira_available = FALSE — the exact bug condition (acli down).
+                Arc::new(AtomicBool::new(false)),
+                TicketingSystem::Jira,
+                dir.path().to_path_buf(),
+                Some(db),
+            );
+
+            insert(&engine, seed_workflow(WorkflowState::Done, "PROJ-1", None)).await;
+            let outcome = engine
+                .mark_work_done("PROJ-1")
+                .await
+                .expect("mark done runs");
+
+            assert!(
+                transition_called.load(Ordering::SeqCst),
+                "transition MUST be invoked in Jira mode even with acli down"
+            );
+            assert!(!outcome.jira_ok, "transition failure must surface");
+            assert!(outcome.jira_error.is_some(), "jira_error must be populated");
+            assert!(
+                !outcome.workflow_removed,
+                "a failed transition must NOT delete the item (was the silent bug)"
+            );
+            assert!(
+                engine
+                    .get_workflow_ids()
+                    .await
+                    .contains(&"PROJ-1".to_string()),
+                "item stays on the board when the transition fails"
+            );
         }
 
         /// `stop_all_workflows` drives every active workflow to a terminal state.

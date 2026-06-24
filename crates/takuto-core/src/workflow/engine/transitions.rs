@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use chrono::Utc;
 use tokio::sync::{RwLock, Semaphore};
@@ -30,7 +30,6 @@ pub(crate) struct WorkflowTransitions {
     pub(crate) config: Arc<RwLock<Config>>,
     pub(crate) agent_run_semaphore: Arc<Semaphore>,
     pub(crate) suppress_cancelled_as_error: Arc<AtomicBool>,
-    pub(crate) jira_available: Arc<AtomicBool>,
     pub(crate) workflows_dir: PathBuf,
     pub(crate) db: Option<Database>,
     /// Resolver for pin + bundle build on resume-after-pause.
@@ -50,7 +49,6 @@ impl WorkflowTransitions {
         config: Arc<RwLock<Config>>,
         agent_run_semaphore: Arc<Semaphore>,
         suppress_cancelled_as_error: Arc<AtomicBool>,
-        jira_available: Arc<AtomicBool>,
         workflows_dir: PathBuf,
         db: Option<Database>,
     ) -> Self {
@@ -61,7 +59,6 @@ impl WorkflowTransitions {
             config,
             agent_run_semaphore,
             suppress_cancelled_as_error,
-            jira_available,
             workflows_dir,
             db,
             git_auth_resolver: None,
@@ -415,7 +412,15 @@ impl WorkflowTransitions {
 
         ContainerRunner::cleanup_for_ticket(&ticket_key_owned).await;
 
-        if self.jira_available.load(Ordering::Relaxed) {
+        // Gate the Jira unassign/To-Do on the configured ticketing system, not
+        // `acli` auth — the actions resolve the owner's per-user REST credential
+        // (acli fallback), so a REST-only user (no acli login) still gets the
+        // revert on stop.
+        let is_jira_mode = {
+            let cfg = self.config.read().await;
+            cfg.general.ticketing_system == crate::config::TicketingSystem::Jira
+        };
+        if is_jira_mode {
             let actions = self.actions.clone();
             let ticket_for_jira = ticket_key_owned.clone();
             let (repo_path, _base_branch) = super::driver::resolve_repo_for_ticket(
@@ -426,12 +431,16 @@ impl WorkflowTransitions {
             )
             .await;
 
+            let owner = owner_user_id.clone();
             tokio::spawn(async move {
-                if let Err(e) = actions.unassign_ticket(&repo_path, &ticket_for_jira).await {
+                if let Err(e) = actions
+                    .unassign_ticket(&repo_path, &ticket_for_jira, owner.as_deref())
+                    .await
+                {
                     warn!(error = ?e, ticket = %ticket_for_jira, "Failed to unassign ticket on stop");
                 }
                 if let Err(e) = actions
-                    .transition_ticket(&repo_path, &ticket_for_jira, "To Do")
+                    .transition_ticket(&repo_path, &ticket_for_jira, "To Do", owner.as_deref())
                     .await
                 {
                     warn!(error = ?e, ticket = %ticket_for_jira, "Failed to transition ticket back to To Do on stop");

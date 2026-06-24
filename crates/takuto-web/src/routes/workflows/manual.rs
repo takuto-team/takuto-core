@@ -213,8 +213,13 @@ pub async fn start_manual_workflow(
 
         // In Jira mode, the selected repository must have at least one Jira
         // project key configured for this user (per-repo, replacing the old
-        // global `[jira] project_keys`). GitHub / no-ticketing modes skip this.
-        if jira_on && settings.project_keys.is_empty() {
+        // global `[jira] project_keys`). Gate on the configured ticketing
+        // system, NOT acli auth (`jira_on`) — a REST-only user (acli not logged
+        // in) is still in Jira mode and must pass the same guard the picker
+        // applies. GitHub / no-ticketing modes skip this.
+        if cfg.ticketing_system == takuto_core::config::TicketingSystem::Jira
+            && settings.project_keys.is_empty()
+        {
             return Err((
                 StatusCode::BAD_REQUEST,
                 "No Jira project keys configured for this repository".into(),
@@ -482,13 +487,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_start_400_when_jira_on_and_repo_has_no_keys() {
-        use std::sync::atomic::Ordering;
-        let state = test_state_with_db();
+    async fn manual_start_400_when_jira_mode_and_repo_has_no_keys() {
+        let mut state = test_state_with_db();
         let cookie = register_and_login(&state).await;
         let admin_id = user_id_for(&state, "admin").await;
         let repo_id = seed_repo(&state, &admin_id, "takuto-core").await;
-        state.config.jira_available.store(true, Ordering::Relaxed);
+        // Jira mode (NOT acli auth) is what gates the no-keys guard now.
+        state.config_mut().ticketing_system = takuto_core::config::TicketingSystem::Jira;
 
         let body = format!(
             r#"{{"ticket_key":"PROJ-1","ticket_summary":"x","repository_id":"{repo_id}"}}"#
@@ -509,9 +514,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_start_succeeds_when_jira_on_and_repo_has_keys() {
-        use std::sync::atomic::Ordering;
-        let state = test_state_with_db();
+    async fn manual_start_succeeds_when_jira_mode_and_repo_has_keys() {
+        let mut state = test_state_with_db();
         let cookie = register_and_login(&state).await;
         let admin_id = user_id_for(&state, "admin").await;
         let repo_id = seed_repo(&state, &admin_id, "takuto-core").await;
@@ -527,7 +531,7 @@ mod tests {
         )
         .await
         .expect("seed settings");
-        state.config.jira_available.store(true, Ordering::Relaxed);
+        state.config_mut().ticketing_system = takuto_core::config::TicketingSystem::Jira;
 
         let body = format!(
             r#"{{"ticket_key":"PROJ-1","ticket_summary":"x","repository_id":"{repo_id}"}}"#

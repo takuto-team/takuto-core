@@ -14,6 +14,7 @@ use takuto_core::container;
 use takuto_core::workflow::engine::MarkDoneOutcome;
 
 use crate::auth::AuthenticatedUser;
+use crate::routes::jira::JiraRouteError;
 use crate::state::{AuthState, EditorState, EngineState, RunCommandState};
 
 use super::require_workflow_access;
@@ -151,18 +152,25 @@ pub async fn mark_work_done(
     State(run_command): State<RunCommandState>,
     Path(id): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
-) -> Result<Json<MarkDoneOutcome>, (StatusCode, String)> {
+) -> Result<Json<MarkDoneOutcome>, JiraRouteError> {
     require_workflow_access(&engine, &auth_state, &auth, &id)
         .await
-        .map_err(|s| (s, "Workflow not found".into()))?;
+        .map_err(|s| JiraRouteError::Plain(s, "Workflow not found".into()))?;
     cleanup_run_commands(&editor, &run_command, &id).await;
 
-    engine
+    let outcome = engine
         .engine
         .mark_work_done(&id)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))
+        .map_err(|e| JiraRouteError::Plain(StatusCode::CONFLICT, e.to_string()))?;
+
+    // The Jira Done-transition failed because the owner's per-user REST token
+    // was rejected → drive the global "Jira authentication failed" modal
+    // instead of returning a normal outcome. (One code covers 401/403.)
+    if outcome.jira_credential_rejected {
+        return Err(JiraRouteError::CredentialInvalid { status: 401 });
+    }
+    Ok(Json(outcome))
 }
 
 /// Remove workflow from the map (not **running**), best-effort worktree cleanup, no Jira changes.

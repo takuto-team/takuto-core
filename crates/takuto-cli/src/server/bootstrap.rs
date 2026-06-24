@@ -13,9 +13,6 @@ use tokio::sync::RwLock;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use takuto_core::actions::dry_run::DryRunActions;
-use takuto_core::actions::real::RealActions;
-use takuto_core::actions::traits::ExternalActions;
 use takuto_core::config::{Config, TicketingSystem};
 use takuto_core::docker_hooks;
 
@@ -110,23 +107,16 @@ pub(super) async fn init(cli: &Cli) -> Result<Bootstrap, Box<dyn std::error::Err
 
     let config = Arc::new(RwLock::new(config));
 
-    let (git_remote, dry_mode, github_app_mgr) = {
+    // The GitHub App token manager is reused by the auth resolver + token-file
+    // writer. The external-actions impl (dry vs real) is built later in
+    // `engine::build`, where the multi-user `Database` is open — `RealActions`
+    // needs it to resolve the workflow owner's per-user Jira REST credential.
+    let github_app_mgr = {
         let c = config.read().await;
-        let mgr = takuto_core::github_app::try_create_token_manager(&c.github);
-        (c.git.remote.clone(), c.general.dry_mode, mgr)
-    };
-
-    let actions: Arc<dyn ExternalActions> = if dry_mode {
-        info!("Running in DRY MODE — no external writes");
-        Arc::new(DryRunActions::new(git_remote, github_app_mgr.clone()))
-    } else {
-        // Pass the live config Arc so RealActions always reads the current
-        // repo_path — a post-clone update takes effect without restart.
-        Arc::new(RealActions::new(
-            config.clone(),
-            git_remote,
-            github_app_mgr.clone(),
-        ))
+        if c.general.dry_mode {
+            info!("Running in DRY MODE — no external writes");
+        }
+        takuto_core::github_app::try_create_token_manager(&c.github)
     };
 
     let ticketing_system = config.read().await.general.ticketing_system;
@@ -187,7 +177,6 @@ pub(super) async fn init(cli: &Cli) -> Result<Bootstrap, Box<dyn std::error::Err
 
     Ok(Bootstrap {
         config,
-        actions,
         github_app_mgr,
         ticketing_system,
         system_status,

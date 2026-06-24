@@ -24,9 +24,32 @@ pub(super) async fn build(boot: &Bootstrap, db: &Option<Database>) -> EngineSetu
         .as_ref()
         .map(|d| Arc::new(GitAuthResolver::new(d.clone(), boot.github_app_mgr.clone())));
 
+    // Build the external-actions impl here (not in `init`) because the
+    // real impl needs the now-open `Database` to resolve the workflow owner's
+    // per-user Jira REST credential for the write actions.
+    let actions: Arc<dyn takuto_core::actions::traits::ExternalActions> = {
+        let (git_remote, dry_mode) = {
+            let c = boot.config.read().await;
+            (c.git.remote.clone(), c.general.dry_mode)
+        };
+        if dry_mode {
+            Arc::new(takuto_core::actions::dry_run::DryRunActions::new(
+                git_remote,
+                boot.github_app_mgr.clone(),
+            ))
+        } else {
+            Arc::new(takuto_core::actions::real::RealActions::new(
+                boot.config.clone(),
+                git_remote,
+                boot.github_app_mgr.clone(),
+                db.clone(),
+            ))
+        }
+    };
+
     let mut engine = WorkflowEngine::new_with_db(
         boot.config.clone(),
-        boot.actions.clone(),
+        actions,
         boot.max_concurrent,
         boot.jira_available.clone(),
         boot.ticketing_system,

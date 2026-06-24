@@ -35,6 +35,17 @@ pub enum JiraError {
     #[error("ticket {key} is not in configured [jira] project_keys")]
     TicketNotInConfiguredProjects { key: String },
 
+    /// A per-user **REST** Jira request returned HTTP **401/403** — the stored
+    /// token was rejected by Jira (only possible when a token IS set, since
+    /// REST is used only then). Distinct from the acli/no-token failures and
+    /// from the validation-time `JiraValidationError`: the web layer maps this
+    /// to `401 { "code": "jira_credential_invalid", … }` to drive the global
+    /// "Jira authentication failed" modal. `status` is the upstream 401 or 403.
+    #[error(
+        "Your saved Jira API token was rejected by Jira (HTTP {status}). Update it in Ticketing settings to continue."
+    )]
+    CredentialRejected { status: u16 },
+
     // ── acli subprocess failures (output.success() == false) ────────────────
     /// `jira/client.rs:178` — `list_todo_tickets_by_rank`.
     #[error("acli list To Do tickets failed: {stderr}")]
@@ -57,7 +68,7 @@ pub enum JiraError {
     UnassignFailed { key: String, stderr: String },
 
     /// `jira/client.rs:360` + `actions/real.rs:127`.
-    #[error("acli transition ticket {key} to {status} failed: {stderr}")]
+    #[error("transition ticket {key} to {status} failed: {stderr}")]
     TransitionFailed {
         key: String,
         status: String,
@@ -214,7 +225,7 @@ mod tests {
                     stderr: "invalid transition".to_string()
                 }
             ),
-            "acli transition ticket PROJ-5 to In Progress failed: invalid transition"
+            "transition ticket PROJ-5 to In Progress failed: invalid transition"
         );
 
         // 8. UpdateDescriptionFailed — interpolates {key} + {stderr}.
@@ -285,6 +296,16 @@ mod tests {
             ),
             "failed to parse acli linked item JSON"
         );
+
+        // 14. CredentialRejected — interpolates {status}. The web layer maps
+        //     this variant to `401 { code: "jira_credential_invalid" }`; the
+        //     user-facing message must keep naming the upstream status so the
+        //     modal copy stays accurate.
+        assert_eq!(
+            format!("{}", JiraError::CredentialRejected { status: 403 }),
+            "Your saved Jira API token was rejected by Jira (HTTP 403). \
+             Update it in Ticketing settings to continue."
+        );
     }
 
     #[test]
@@ -342,8 +363,9 @@ mod tests {
             JiraError::ParseLinkedItemJson {
                 source: sample_serde_json_error(),
             },
+            JiraError::CredentialRejected { status: 401 },
         ];
-        assert_eq!(cases.len(), 13, "must cover every JiraError variant");
+        assert_eq!(cases.len(), 14, "must cover every JiraError variant");
 
         for err in cases {
             let wrapped: TakutoError = err.into();
@@ -364,6 +386,7 @@ mod tests {
                             | JiraError::ParseTicketListJson { .. }
                             | JiraError::ParseTicketDetailJson { .. }
                             | JiraError::ParseLinkedItemJson { .. }
+                            | JiraError::CredentialRejected { .. }
                     )
                 ),
                 "expected TakutoError::Jira(JiraError::<variant>), got {wrapped:?}"

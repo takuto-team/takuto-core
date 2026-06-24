@@ -26,6 +26,12 @@ pub struct MarkDoneOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_error: Option<String>,
     pub workflow_removed: bool,
+    /// Server-internal signal (never serialized): the Jira **Done** transition
+    /// failed because the owner's per-user REST token was rejected (401/403).
+    /// The route turns this into the `jira_credential_invalid` modal code
+    /// instead of the normal outcome JSON.
+    #[serde(skip)]
+    pub jira_credential_rejected: bool,
 }
 
 /// A single line of terminal output stored on the workflow for persistence

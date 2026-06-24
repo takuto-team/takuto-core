@@ -29,6 +29,10 @@ pub struct RealActions {
     config: Arc<RwLock<Config>>,
     git_remote: String,
     github_app: Option<Arc<GitHubAppTokenManager>>,
+    /// Multi-user DB handle, used to resolve the workflow owner's per-user Jira
+    /// REST credential for the write actions (assign / unassign / transition).
+    /// `None` for legacy / DB-less paths — those fall back to `acli`.
+    db: Option<crate::db::Database>,
 }
 
 impl RealActions {
@@ -36,12 +40,28 @@ impl RealActions {
         config: Arc<RwLock<Config>>,
         git_remote: String,
         github_app: Option<Arc<GitHubAppTokenManager>>,
+        db: Option<crate::db::Database>,
     ) -> Self {
         Self {
             config,
             git_remote,
             github_app,
+            db,
         }
+    }
+
+    /// Resolve the workflow owner's per-user Jira REST credential into a
+    /// [`crate::jira::JiraRestClient`] (production HTTP). `None` when there is no
+    /// DB / no `owner_user_id` / no stored credential — the caller then falls
+    /// back to the host-wide `acli` path.
+    async fn jira_rest_for(
+        &self,
+        owner_user_id: Option<&str>,
+    ) -> Option<crate::jira::JiraRestClient> {
+        let db = self.db.as_ref()?;
+        let owner = owner_user_id?;
+        let cred = crate::jira::resolve_rest_credential(db, owner).await?;
+        Some(crate::jira::JiraRestClient::real(cred))
     }
 
     /// Return `[("GH_TOKEN", token)]` when a GitHub App is configured, otherwise empty.
@@ -72,7 +92,18 @@ impl RealActions {
 
 #[async_trait]
 impl ExternalActions for RealActions {
-    async fn assign_ticket(&self, repo_path: &Path, key: &str) -> Result<()> {
+    async fn assign_ticket(
+        &self,
+        repo_path: &Path,
+        key: &str,
+        owner_user_id: Option<&str>,
+    ) -> Result<()> {
+        // Prefer the workflow owner's per-user Jira REST credential; fall back
+        // to host-wide `acli @me`.
+        if let Some(rest) = self.jira_rest_for(owner_user_id).await {
+            info!(ticket = key, "Assigning ticket via per-user Jira REST");
+            return rest.assign_ticket(key).await;
+        }
         info!(
             ticket = key,
             "Assigning ticket to current Jira user (acli @me)"
@@ -103,7 +134,21 @@ impl ExternalActions for RealActions {
         Ok(())
     }
 
-    async fn transition_ticket(&self, repo_path: &Path, key: &str, status: &str) -> Result<()> {
+    async fn transition_ticket(
+        &self,
+        repo_path: &Path,
+        key: &str,
+        status: &str,
+        owner_user_id: Option<&str>,
+    ) -> Result<()> {
+        if let Some(rest) = self.jira_rest_for(owner_user_id).await {
+            info!(
+                ticket = key,
+                status = status,
+                "Transitioning ticket via per-user Jira REST"
+            );
+            return rest.transition_ticket(key, status).await;
+        }
         info!(ticket = key, status = status, "Transitioning ticket");
         let output = process::run_command(
             "acli",
@@ -132,7 +177,16 @@ impl ExternalActions for RealActions {
         Ok(())
     }
 
-    async fn unassign_ticket(&self, repo_path: &Path, key: &str) -> Result<()> {
+    async fn unassign_ticket(
+        &self,
+        repo_path: &Path,
+        key: &str,
+        owner_user_id: Option<&str>,
+    ) -> Result<()> {
+        if let Some(rest) = self.jira_rest_for(owner_user_id).await {
+            info!(ticket = key, "Unassigning ticket via per-user Jira REST");
+            return rest.unassign_ticket(key).await;
+        }
         info!(ticket = key, "Unassigning ticket");
         let output = process::run_command(
             "acli",

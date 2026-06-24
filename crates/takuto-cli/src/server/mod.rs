@@ -23,7 +23,6 @@ use std::sync::atomic::AtomicBool;
 
 use tokio::sync::RwLock;
 
-use takuto_core::actions::traits::ExternalActions;
 use takuto_core::config::{Config, TicketingSystem};
 use takuto_core::db::user_work_item_flows::UserFlow;
 use takuto_core::docker_hooks::SystemStatus;
@@ -38,7 +37,6 @@ use crate::cli::Cli;
 /// shared handle (`config`, `github_app_mgr`, `work_item_flow_defaults`).
 pub(crate) struct Bootstrap {
     pub config: Arc<RwLock<Config>>,
-    pub actions: Arc<dyn ExternalActions>,
     /// GitHub App token manager (when the App is configured) — reused for both
     /// the auth resolver and the background token-file writer.
     pub github_app_mgr: Option<Arc<GitHubAppTokenManager>>,

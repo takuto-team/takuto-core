@@ -15,10 +15,12 @@ use takuto_core::config::{AiAgentProvider, TicketingSystem, cursor_model_for_cli
 use takuto_core::container::ContainerRunner;
 use takuto_core::cursor::session::CursorSession;
 use takuto_core::jira::client::JiraClient;
+use takuto_core::jira::{JiraRestClient, resolve_rest_credential};
 use takuto_core::opencode::OpenCodeSession;
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::github::parse_github_repo;
+use crate::routes::jira::{JiraRouteError, map_jira_err};
 use crate::routes::workflows::require_workflow_access;
 use crate::state::{AuthState, ConfigState, EngineState};
 
@@ -531,7 +533,7 @@ pub async fn update_ticket_description(
     Path(key): Path<String>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<UpdateDescriptionBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, JiraRouteError> {
     // Owner-only for live items; allowed for not-yet-added tickets (the
     // Add-to-Dashboard preview flow saves the edited description before the item
     // is on the board).
@@ -556,7 +558,7 @@ pub async fn update_ticket_description(
             let wf_arc = engine.engine.workflows_arc();
             let mut workflows = wf_arc.write().await;
             let Some(wf) = workflows.get_mut(&key) else {
-                return Err((StatusCode::NOT_FOUND, String::new()));
+                return Err((StatusCode::NOT_FOUND, String::new()).into());
             };
             wf.ticket_description = body.description.clone();
             if let Some(ref s) = body.summary {
@@ -651,7 +653,8 @@ pub async fn update_ticket_description(
                         "gh api PATCH issues/{issue_number} failed: {}",
                         output.stderr.trim()
                     ),
-                ));
+                )
+                    .into());
             }
 
             // Update in-memory description (and optionally summary) so the next
@@ -673,11 +676,26 @@ pub async fn update_ticket_description(
             Ok(Json(serde_json::json!({})))
         }
         TicketingSystem::Jira => {
-            let client = JiraClient::new(workflow_repo_path.clone());
-            client
-                .update_description(&key, &body.description)
-                .await
-                .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+            // Prefer the caller's per-user Jira REST credential (the editor is
+            // owner-gated above, so the caller IS the owner); fall back to acli.
+            // A REST 401/403 surfaces as the `jira_credential_invalid` modal code.
+            let rest_cred = match auth_state.db.as_ref() {
+                Some(db) => resolve_rest_credential(db, &auth.user_id).await,
+                None => None,
+            };
+            match rest_cred {
+                Some(cred) => {
+                    JiraRestClient::new(auth_state.jira_http.clone(), cred)
+                        .update_description(&key, &body.description)
+                        .await
+                }
+                None => {
+                    JiraClient::new(workflow_repo_path.clone())
+                        .update_description(&key, &body.description)
+                        .await
+                }
+            }
+            .map_err(|e| map_jira_err(e, StatusCode::BAD_GATEWAY))?;
 
             // Update in-memory description (and optionally summary) so the next
             // `GET /api/workflows` returns the freshly saved value — prevents the
@@ -946,6 +964,9 @@ mod tests {
         .await;
 
         let err = result.expect_err("missing workflow must be 404");
-        assert_eq!(err.0, StatusCode::NOT_FOUND);
+        assert!(
+            matches!(err, JiraRouteError::Plain(StatusCode::NOT_FOUND, _)),
+            "missing workflow must map to a plain 404"
+        );
     }
 }

@@ -16,6 +16,60 @@ use takuto_core::jira::{JiraRestClient, resolve_rest_credential};
 use crate::auth::AuthenticatedUser;
 use crate::state::{AuthState, ConfigState, EngineState};
 
+/// Error type for Jira route handlers that perform a per-user REST call.
+///
+/// Auth failures on the REST path (Jira 401/403, only reachable when a token is
+/// set) become a structured **`401 { "code": "jira_credential_invalid", … }`**
+/// body that drives the global "Jira authentication failed" modal. Every other
+/// failure stays a plain-text body at its existing status (unchanged behaviour).
+pub enum JiraRouteError {
+    /// Jira rejected the stored token (upstream 401/403) → modal code.
+    CredentialInvalid { status: u16 },
+    /// Any other error — preserved as plain text at the given status.
+    Plain(StatusCode, String),
+}
+
+impl From<(StatusCode, String)> for JiraRouteError {
+    fn from((status, msg): (StatusCode, String)) -> Self {
+        JiraRouteError::Plain(status, msg)
+    }
+}
+
+impl axum::response::IntoResponse for JiraRouteError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            JiraRouteError::CredentialInvalid { status } => {
+                let body = serde_json::json!({
+                    "code": "jira_credential_invalid",
+                    "message": format!(
+                        "Your saved Jira API token was rejected by Jira (HTTP {status}). \
+                         Update it in Ticketing settings to continue."
+                    ),
+                });
+                (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+            }
+            JiraRouteError::Plain(status, msg) => (status, msg).into_response(),
+        }
+    }
+}
+
+/// Map a `TakutoError` from a per-user Jira REST call to a [`JiraRouteError`]:
+/// `CredentialRejected` (401/403) → the modal code; the local
+/// `TicketNotInConfiguredProjects` guard → plain `403`; everything else →
+/// plain text at `fallback` (typically `502`).
+pub fn map_jira_err(e: takuto_core::error::TakutoError, fallback: StatusCode) -> JiraRouteError {
+    use takuto_core::jira::JiraError;
+    match &e {
+        takuto_core::error::TakutoError::Jira(JiraError::CredentialRejected { status }) => {
+            JiraRouteError::CredentialInvalid { status: *status }
+        }
+        takuto_core::error::TakutoError::Jira(JiraError::TicketNotInConfiguredProjects {
+            ..
+        }) => JiraRouteError::Plain(StatusCode::FORBIDDEN, e.to_string()),
+        _ => JiraRouteError::Plain(fallback, e.to_string()),
+    }
+}
+
 /// Query parameters for the manual picker / preview endpoints. The picker
 /// passes the repository (workspace name) the item is being added to so the
 /// Jira project keys can be resolved per-user-per-repository.
@@ -96,7 +150,7 @@ pub async fn list_todo_tickets_manual(
     State(auth_state): State<AuthState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Query(query): Query<RepositoryQuery>,
-) -> Result<Json<Vec<TodoTicketRow>>, (StatusCode, String)> {
+) -> Result<Json<Vec<TodoTicketRow>>, JiraRouteError> {
     let settings = resolve_repo_settings(&auth_state, &auth.user_id, &query.repository).await?;
     let project_keys = settings.project_keys;
     let jql_filter = settings.jql_filter;
@@ -115,7 +169,7 @@ pub async fn list_todo_tickets_manual(
     };
     let tickets = match rest_cred {
         Some(cred) => {
-            JiraRestClient::real(cred)
+            JiraRestClient::new(auth_state.jira_http.clone(), cred)
                 .list_todo_tickets_by_rank(&project_keys, &jql_filter)
                 .await
         }
@@ -125,7 +179,7 @@ pub async fn list_todo_tickets_manual(
                 .await
         }
     }
-    .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    .map_err(|e| map_jira_err(e, StatusCode::BAD_GATEWAY))?;
 
     // Jira keys are globally unique within the instance, so annotation is not
     // workspace-scoped (no repo context in this endpoint).
@@ -166,7 +220,7 @@ pub async fn get_ticket_preview(
     Extension(auth): Extension<AuthenticatedUser>,
     Path(key): Path<String>,
     Query(query): Query<RepositoryQuery>,
-) -> Result<Json<TicketDescriptionPreview>, (StatusCode, String)> {
+) -> Result<Json<TicketDescriptionPreview>, JiraRouteError> {
     let settings = resolve_repo_settings(&auth_state, &auth.user_id, &query.repository).await?;
     let project_keys = settings.project_keys;
 
@@ -181,7 +235,7 @@ pub async fn get_ticket_preview(
     };
     let preview = match rest_cred {
         Some(cred) => {
-            JiraRestClient::real(cred)
+            JiraRestClient::new(auth_state.jira_http.clone(), cred)
                 .get_ticket_description_preview(&key, &project_keys)
                 .await
         }
@@ -191,17 +245,67 @@ pub async fn get_ticket_preview(
                 .await
         }
     }
-    .map_err(|e| {
-        let msg = e.to_string();
-        let code = if msg.contains("not in configured") {
-            StatusCode::FORBIDDEN
-        } else {
-            StatusCode::BAD_GATEWAY
-        };
-        (code, msg)
-    })?;
+    .map_err(|e| map_jira_err(e, StatusCode::BAD_GATEWAY))?;
 
     Ok(Json(preview))
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+    use takuto_core::error::TakutoError;
+    use takuto_core::jira::JiraError;
+
+    #[tokio::test]
+    async fn credential_invalid_emits_401_json_envelope() {
+        let resp = JiraRouteError::CredentialInvalid { status: 403 }.into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "jira_credential_invalid");
+        // message names the upstream status so the user knows what happened.
+        assert!(json["message"].as_str().unwrap().contains("403"));
+    }
+
+    #[tokio::test]
+    async fn plain_error_stays_plain_text() {
+        let resp =
+            JiraRouteError::Plain(StatusCode::BAD_GATEWAY, "acli boom".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        // Not the JSON envelope — no `code` field (no false modal trigger).
+        assert_eq!(&body[..], b"acli boom");
+    }
+
+    #[test]
+    fn map_jira_err_classifies_each_case() {
+        // REST 401/403 → modal code.
+        assert!(matches!(
+            map_jira_err(
+                TakutoError::Jira(JiraError::CredentialRejected { status: 401 }),
+                StatusCode::BAD_GATEWAY
+            ),
+            JiraRouteError::CredentialInvalid { status: 401 }
+        ));
+        // Local "ticket not in configured projects" guard → plain 403 (no code).
+        assert!(matches!(
+            map_jira_err(
+                TakutoError::Jira(JiraError::TicketNotInConfiguredProjects { key: "X-1".into() }),
+                StatusCode::BAD_GATEWAY
+            ),
+            JiraRouteError::Plain(StatusCode::FORBIDDEN, _)
+        ));
+        // Anything else (e.g. acli/no-token failure) → plain fallback (no code).
+        assert!(matches!(
+            map_jira_err(
+                TakutoError::Jira(JiraError::ListTodoFailed { stderr: "x".into() }),
+                StatusCode::BAD_GATEWAY
+            ),
+            JiraRouteError::Plain(StatusCode::BAD_GATEWAY, _)
+        ));
+    }
 }
 
 #[cfg(test)]

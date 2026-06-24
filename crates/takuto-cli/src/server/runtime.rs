@@ -43,13 +43,21 @@ pub(super) enum PollerChoice {
     Idle,
 }
 
-/// Pure decision: Jira polls only when acli is authenticated; GitHub always
-/// polls; anything else (or unauthenticated Jira) stays idle.
-pub(super) fn select_poller(ticketing: TicketingSystem, acli_ok: bool) -> PollerChoice {
+/// Pure decision: Jira and GitHub each get their poller whenever that
+/// ticketing system is configured; anything else stays idle.
+///
+/// `acli` authentication does **not** gate the Jira poller: `poll_once`
+/// resolves each repo's per-user REST credential (with `acli` fallback) and
+/// skips repos with no creds / empty filters, so starting the loop is safe
+/// even when `acli` is not logged in. Gating on `acli_ok` here meant a
+/// REST-only Jira user's background polling never started — the whole point of
+/// the per-repo polling feature. The `_acli_ok` param is retained (callers
+/// pass the boot probe) but no longer influences the choice.
+pub(super) fn select_poller(ticketing: TicketingSystem, _acli_ok: bool) -> PollerChoice {
     match ticketing {
-        TicketingSystem::Jira if acli_ok => PollerChoice::Jira,
+        TicketingSystem::Jira => PollerChoice::Jira,
         TicketingSystem::GitHub => PollerChoice::GitHub,
-        _ => PollerChoice::Idle,
+        TicketingSystem::None => PollerChoice::Idle,
     }
 }
 
@@ -132,7 +140,6 @@ pub(super) async fn run(
         acli_ok,
         work_item_flow_defaults,
         // Consumed by earlier phases; not needed past bootstrap.
-        actions: _,
         max_concurrent: _,
         workflows_dir: _,
     } = boot;
@@ -355,8 +362,10 @@ pub(super) async fn run(
         }
     });
 
-    // Build the chosen poller future (each owns its poller). Jira polls only
-    // when acli is authenticated; GitHub always polls; otherwise idle forever.
+    // Build the chosen poller future (each owns its poller). Jira and GitHub
+    // each get their poller whenever that ticketing system is configured (acli
+    // auth no longer gates Jira — per-user REST is resolved at poll time);
+    // otherwise idle forever.
     let poller_fut: Pin<Box<dyn Future<Output = ()> + Send>> =
         match select_poller(ticketing_system, acli_ok) {
             PollerChoice::Jira => Box::pin(async move { poller.run().await }),
@@ -401,10 +410,12 @@ mod tests {
             select_poller(TicketingSystem::Jira, true),
             PollerChoice::Jira
         );
-        // Jira without acli falls back to idle (no polling).
+        // Jira polls regardless of acli auth — a REST-only user (acli not
+        // logged in) must still get the background poller (per-user REST is
+        // resolved at poll time, with acli fallback).
         assert_eq!(
             select_poller(TicketingSystem::Jira, false),
-            PollerChoice::Idle
+            PollerChoice::Jira
         );
         assert_eq!(
             select_poller(TicketingSystem::GitHub, false),

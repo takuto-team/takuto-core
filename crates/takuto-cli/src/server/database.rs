@@ -221,7 +221,6 @@ mod tests {
 
     use tokio::sync::RwLock;
 
-    use takuto_core::actions::dry_run::DryRunActions;
     use takuto_core::config::{Config, TicketingSystem};
     use takuto_core::docker_hooks::SystemStatus;
 
@@ -229,7 +228,6 @@ mod tests {
         let config = Arc::new(RwLock::new(Config::default()));
         Bootstrap {
             config,
-            actions: Arc::new(DryRunActions::new("origin".to_string(), None)),
             github_app_mgr: None,
             ticketing_system: TicketingSystem::None,
             system_status: SystemStatus::default(),
