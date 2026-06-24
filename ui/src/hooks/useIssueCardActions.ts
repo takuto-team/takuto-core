@@ -4,6 +4,7 @@
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { api, apiPost } from "../api/client";
+import type { MarkDoneOutcome } from "../api/types";
 
 /**
  * Stable action callbacks for a single workflow card.
@@ -29,6 +30,20 @@ export function useIssueCardActions(ticketKey: string) {
     },
     [ticketKey, t],
   );
+
+  /** POST mark-done and RETURN the outcome (rather than discarding it like
+   *  `doAction`). The endpoint returns 200 with `jira_ok=false` + `jira_error`
+   *  when the Jira transition didn't happen (e.g. the configured Done status
+   *  doesn't match any Jira transition), so the caller inspects the outcome and
+   *  surfaces the reason instead of silently treating it as success. */
+  const markDone = useCallback(async (): Promise<MarkDoneOutcome> => {
+    const res = await apiPost(`/api/work-items/${encodeURIComponent(ticketKey)}/mark-done`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || t("actions.failedEndpoint", { endpoint: "mark-done" }));
+    }
+    return (await res.json()) as MarkDoneOutcome;
+  }, [ticketKey, t]);
 
   const openEditor = useCallback(async () => {
     const res = await api(`/api/work-items/${encodeURIComponent(ticketKey)}/open-editor`, {
@@ -76,5 +91,5 @@ export function useIssueCardActions(ticketKey: string) {
     }
   }, [ticketKey, t]);
 
-  return { doAction, openEditor, openTerminal, closeEditor, closeTerminal };
+  return { doAction, markDone, openEditor, openTerminal, closeEditor, closeTerminal };
 }

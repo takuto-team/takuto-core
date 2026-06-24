@@ -120,5 +120,10 @@
     "verb": {
       "stop": "arrêter"
     }
+  },
+  "markDoneFailed": {
+    "title": "Impossible de marquer le ticket comme terminé",
+    "generic": "Takuto n’a pas pu déplacer ce ticket Jira vers le statut « Terminé ». Vérifiez le statut « Terminé » dans les paramètres de gestion des tickets.",
+    "openSettings": "Ouvrir les paramètres de gestion des tickets"
   }
 }

@@ -16,10 +16,13 @@ interface Props {
   consoleState: TerminalState | undefined;
   consoleOpen: boolean;
   deleteOpen: boolean;
+  markDoneError: string | null;
   onConfirm: () => void;
   onConfirmCancel: () => void;
   onConsoleClose: () => void;
   onMarkDoneAndDelete: () => void;
+  onMarkDoneErrorClose: () => void;
+  onOpenTicketingSettings: () => void;
   onDelete: () => void;
   onDeleteCancel: () => void;
 }
@@ -31,10 +34,13 @@ export function IssueCardModals({
   consoleState,
   consoleOpen,
   deleteOpen,
+  markDoneError,
   onConfirm,
   onConfirmCancel,
   onConsoleClose,
   onMarkDoneAndDelete,
+  onMarkDoneErrorClose,
+  onOpenTicketingSettings,
   onDelete,
   onDeleteCancel,
 }: Props) {
@@ -55,6 +61,16 @@ export function IssueCardModals({
 
       {consoleOpen && consoleState && (
         <ConsoleOutputModal state={consoleState} onClose={onConsoleClose} />
+      )}
+
+      {markDoneError && (
+        <ConfirmModal
+          title={t("markDoneFailed.title")}
+          message={markDoneError}
+          confirmLabel={t("markDoneFailed.openSettings")}
+          onConfirm={onOpenTicketingSettings}
+          onCancel={onMarkDoneErrorClose}
+        />
       )}
 
       {deleteOpen && (

@@ -120,5 +120,10 @@
     "verb": {
       "stop": "停止"
     }
+  },
+  "markDoneFailed": {
+    "title": "无法将工单标记为完成",
+    "generic": "Takuto 无法将此 Jira 工单转换到完成状态。请在工单设置中检查完成状态。",
+    "openSettings": "打开工单设置"
   }
 }

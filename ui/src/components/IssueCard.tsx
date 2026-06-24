@@ -154,10 +154,13 @@ export function IssueCard({
         consoleState={view.effectiveTs}
         consoleOpen={ctl.consoleOpen}
         deleteOpen={ctl.deleteOpen}
+        markDoneError={ctl.markDoneError}
         onConfirm={ctl.onConfirm}
         onConfirmCancel={ctl.onConfirmCancel}
         onConsoleClose={ctl.onConsoleClose}
         onMarkDoneAndDelete={ctl.onMarkDoneAndDelete}
+        onMarkDoneErrorClose={ctl.onMarkDoneErrorClose}
+        onOpenTicketingSettings={ctl.onOpenTicketingSettings}
         onDelete={ctl.onDelete}
         onDeleteCancel={ctl.onDeleteCancel}
       />

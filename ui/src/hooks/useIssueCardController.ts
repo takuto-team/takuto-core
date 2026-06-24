@@ -30,6 +30,12 @@ export interface IssueCardController {
   confirm: ConfirmState | null;
   consoleOpen: boolean;
   deleteOpen: boolean;
+  /** Reason the Jira "mark done" transition failed (token rejected, no
+   *  matching transition for the configured Done status, …); drives a modal so
+   *  the user can fix it. `null` when there's nothing to show. */
+  markDoneError: string | null;
+  onMarkDoneErrorClose: () => void;
+  onOpenTicketingSettings: () => void;
   onShowConsole: () => void;
   onRequestDelete: () => void;
   onRetry: () => void;
@@ -62,7 +68,7 @@ export function useIssueCardController(
 ): IssueCardController {
   const { t } = useTranslation("dashboard");
   const { showToast } = useToast();
-  const { doAction, openEditor, openTerminal, closeEditor, closeTerminal } =
+  const { doAction, markDone, openEditor, openTerminal, closeEditor, closeTerminal } =
     useIssueCardActions(ticketKey);
 
   const PREPARING_MESSAGE = t("loading.preparingWorkspace");
@@ -72,6 +78,7 @@ export function useIssueCardController(
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<MenuKind | null>(null);
+  const [markDoneError, setMarkDoneError] = useState<string | null>(null);
 
   const withLoading = useCallback(
     async (fn: () => Promise<void>, message?: string) => {
@@ -101,10 +108,23 @@ export function useIssueCardController(
   const onMarkDoneAndDelete = useCallback(() => {
     setDeleteOpen(false);
     void withLoading(async () => {
-      await doAction("mark-done")();
-      await doAction("delete")();
+      const outcome = await markDone();
+      // If the Jira transition didn't happen, surface why and STOP — don't
+      // delete the item, so the user can fix the Done-status setting (the
+      // reason lists the available Jira statuses) and retry.
+      if (!outcome.jira_ok) {
+        setMarkDoneError(outcome.jira_error || t("markDoneFailed.generic"));
+        return;
+      }
+      // mark-done already removes the workflow (worktree + dashboard item) on
+      // full success — issuing a separate delete then 404s ("Workflow not
+      // found"). Only delete if it wasn't auto-removed (e.g. a worktree-cleanup
+      // hiccup left it on the board).
+      if (!outcome.workflow_removed) {
+        await doAction("delete")();
+      }
     });
-  }, [doAction, withLoading]);
+  }, [markDone, doAction, withLoading, t]);
 
   return {
     loading,
@@ -114,6 +134,12 @@ export function useIssueCardController(
     confirm,
     consoleOpen,
     deleteOpen,
+    markDoneError,
+    onMarkDoneErrorClose: useCallback(() => setMarkDoneError(null), []),
+    onOpenTicketingSettings: useCallback(() => {
+      setMarkDoneError(null);
+      window.location.assign("/config.html?tab=ticketing");
+    }, []),
     onShowConsole: useCallback(() => setConsoleOpen(true), []),
     onRequestDelete: useCallback(() => setDeleteOpen(true), []),
     onRetry: useCallback(() => void withLoading(doAction("retry")), [withLoading, doAction]),

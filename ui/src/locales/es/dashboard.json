@@ -120,5 +120,10 @@
     "verb": {
       "stop": "detener"
     }
+  },
+  "markDoneFailed": {
+    "title": "No se pudo marcar el ticket como Hecho",
+    "generic": "Takuto no pudo mover este ticket de Jira al estado Hecho. Revisa el estado Hecho en la configuración de tickets.",
+    "openSettings": "Abrir configuración de tickets"
   }
 }
