@@ -7,8 +7,9 @@
  *   #29 — The "Connected / Not connected" pill is driven by the effective
  *         GitHub mode on `/api/auth/status::github_mode` (App-only still reads
  *         "Connected"), NOT by the per-user credentials response alone.
- *   A3  — The per-user toggle MUST be **"Attribute commits to me"**, NOT
- *         "Sign commits". v1 does NOT do GPG/SSH cryptographic signing.
+ *   Attribution — no toggle: commit/PR attribution follows PAT presence (PAT →
+ *         you; App-only → bot), explained in copy, and never claims to do
+ *         GPG/SSH cryptographic signing.
  *   #31 — No "Remove PAT" / "Disconnect" buttons (single Save/Replace flow).
  */
 
@@ -126,8 +127,8 @@ describe("GitHubCredentialsSection — wire-format regression #29", () => {
   });
 });
 
-describe("GitHubCredentialsSection — A3 regression (Attribute commits, not Sign commits)", () => {
-  it("renders the toggle as 'Attribute commits to me' and never says 'Sign commits'", async () => {
+describe("GitHubCredentialsSection — commit/PR attribution (no toggle)", () => {
+  it("explains commits/PRs are attributed to you when a PAT is set — no toggle, never 'Sign commits'", async () => {
     stubAuthStatus("app_plus_pat");
     resetMocks({
       provider: null,
@@ -140,15 +141,33 @@ describe("GitHubCredentialsSection — A3 regression (Attribute commits, not Sig
     });
     renderPage();
 
-    const toggle = await waitFor(() =>
-      screen.getByLabelText(/attribute commits to me/i),
-    );
-    expect(toggle).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
+    });
+    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
+    // PAT present → "attributed to you" explanation, not a toggle.
+    expect(within(ghSection!).getByText(/attributed to you/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/attribute commits to me/i)).toBeNull();
+    expect(within(ghSection!).queryByRole("checkbox")).toBeNull();
 
     const body = document.body.textContent ?? "";
     expect(/sign commits/i.test(body)).toBe(false);
     expect(/gpg sign/i.test(body)).toBe(false);
     expect(/ssh sign/i.test(body)).toBe(false);
+  });
+
+  it("explains the GitHub App (bot) authors commits when no PAT is set", async () => {
+    stubAuthStatus("app");
+    resetMocks({ provider: null, github: null });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/^GitHub$/i)).toBeTruthy();
+    });
+    const ghSection = screen.getByText(/^GitHub$/i).closest("section");
+    // App-only, no PAT → copy names the bot and how to attribute to yourself.
+    expect(within(ghSection!).getByText(/bot/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/attribute commits to me/i)).toBeNull();
   });
 });
 

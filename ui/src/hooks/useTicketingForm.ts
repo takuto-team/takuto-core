@@ -93,16 +93,40 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     void refreshConnected();
   }, [refreshConnected]);
 
+  // Pre-fill the non-secret site/email from the stored credential once it
+  // loads, so an already-connected user sees their values (the token stays
+  // masked). Only seeds while both inputs are still untouched/empty.
+  useEffect(() => {
+    if (connected && site === "" && email === "") {
+      setSite(connected.site);
+      setEmail(connected.email);
+    }
+    // Intentionally keyed on `connected` only: re-seeding on every keystroke
+    // would fight the user's edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
+
+  const hasConnected = connected !== null;
+  const tokenProvided = token.trim().length > 0;
+  // Compared against the stored values so a pre-filled-but-unchanged form reads
+  // as "keep" (no write), and an edit reads as a non-secret change.
+  const siteChanged = hasConnected ? site.trim() !== connected.site : site.trim().length > 0;
+  const emailChanged = hasConnected ? email.trim() !== connected.email : email.trim().length > 0;
   const filledCount = [site, email, token].filter((v) => v.trim().length > 0).length;
-  const jiraComplete = filledCount === 3;
-  // An already-connected user who leaves every field blank keeps their stored
-  // credential — no re-post, no validation block.
-  const keepingExisting = connected !== null && filledCount === 0;
-  const jiraPartial = !keepingExisting && filledCount > 0 && filledCount < 3;
+
+  // First-time setup needs all three fields. A connected user can save any
+  // combination: token alone (rotate), site/email alone (keep token, partial
+  // update), or nothing (no-op).
+  const jiraComplete = hasConnected
+    ? tokenProvided || siteChanged || emailChanged
+    : filledCount === 3;
+  const jiraPartial = !hasConnected && filledCount > 0 && filledCount < 3;
   const systemChanged = system !== persistedSystem;
-  // Dirty when the system selection changed, or the user has typed into any
-  // Jira field (a connected user leaving the fields blank stays clean).
-  const isDirty = systemChanged || (system === "jira" && filledCount > 0);
+  // Dirty when the system selection changed, or (Jira) a field diverges from
+  // the stored credential / a token was typed.
+  const isDirty =
+    systemChanged ||
+    (system === "jira" && (tokenProvided || siteChanged || emailChanged));
 
   const save = useCallback(async (): Promise<boolean> => {
     if (system === "jira" && jiraPartial) {
@@ -117,11 +141,15 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
       }
       let connectedName: string | null = null;
       if (system === "jira" && jiraComplete) {
-        const saved = await setJiraCredential({
+        // KEEP/REPLACE wire convention: include `token` only when the user
+        // entered a new one (REPLACE); omit it to KEEP the stored token and
+        // re-validate it against the (possibly changed) site/email.
+        const body: { site: string; email: string; token?: string } = {
           site: site.trim(),
           email: email.trim(),
-          token,
-        });
+        };
+        if (tokenProvided) body.token = token;
+        const saved = await setJiraCredential(body);
         await refreshConnected();
         setToken("");
         connectedName = saved.account.display_name;
@@ -158,6 +186,7 @@ export function useTicketingForm({ initialSystem, ready }: Config) {
     systemChanged,
     jiraComplete,
     jiraPartial,
+    tokenProvided,
     site,
     email,
     token,

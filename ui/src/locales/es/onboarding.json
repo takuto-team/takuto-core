@@ -75,7 +75,10 @@
       "tokenPlaceholder": "Pega tu token de API de Atlassian",
       "createTokenPrefix": "Crea uno en",
       "tokenLinkText": "id.atlassian.com → tokens de API →",
-      "tokenLinkAria": "Abrir la página de tokens de API de Atlassian (se abre en una pestaña nueva)"
+      "tokenLinkAria": "Abrir la página de tokens de API de Atlassian (se abre en una pestaña nueva)",
+      "replaceToken": "Reemplazar",
+      "tokenSetHelp": "Guardado. Déjalo sin cambios para conservar tu token actual, o reemplázalo para rotarlo.",
+      "editNote": "Editar tu sitio o tu correo vuelve a verificar la conexión con tu token guardado — no necesitas volver a pegarlo."
     }
   },
   "provider": {

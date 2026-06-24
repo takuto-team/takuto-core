@@ -1,10 +1,13 @@
 // Copyright 2026 Alexandre Obellianne
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
+import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { TicketingSystemId, UserJiraCredentialStatus } from "../../api/types";
 
 const TICKETING_OPTION_IDS: TicketingSystemId[] = ["none", "github", "jira"];
+/** Fixed "token is set" indicator — display-only, never sent on the wire. */
+const SECRET_MASK = "••••••";
 
 interface Props {
   system: TicketingSystemId;
@@ -35,6 +38,11 @@ export function TicketingStep({
 }: Props) {
   const { t } = useTranslation("onboarding");
   const activeHint = t(`ticketing.options.${system}.hint`);
+  // When a Jira credential is stored, the token field shows a masked indicator
+  // until the user opts to replace it. Typing then sends a new token (REPLACE);
+  // leaving it masked omits the token on save (KEEP).
+  const [replacingToken, setReplacingToken] = useState(false);
+  const tokenMasked = connected !== null && !replacingToken && token === "";
 
   return (
     <div className="flex flex-col gap-4">
@@ -106,28 +114,56 @@ export function TicketingStep({
             <label htmlFor="onb-jira-token" className="block text-xs text-gray-400 mb-1">
               {t("ticketing.jira.token")}
             </label>
-            <input
-              id="onb-jira-token"
-              type="password"
-              value={token}
-              onChange={(e) => onChangeToken(e.target.value)}
-              placeholder={t("ticketing.jira.tokenPlaceholder")}
-              autoComplete="off"
-              className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              {t("ticketing.jira.createTokenPrefix")}{" "}
-              <a
-                href="https://id.atlassian.com/manage-profile/security/api-tokens"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-400 hover:text-blue-300"
-                aria-label={t("ticketing.jira.tokenLinkAria")}
-              >
-                {t("ticketing.jira.tokenLinkText")}
-              </a>
-            </p>
+            {tokenMasked ? (
+              <div className="flex items-center gap-2">
+                <input
+                  id="onb-jira-token"
+                  type="text"
+                  value={SECRET_MASK}
+                  readOnly
+                  tabIndex={-1}
+                  aria-label={t("ticketing.jira.token")}
+                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-500 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setReplacingToken(true)}
+                  className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-200 border border-gray-700 hover:bg-gray-700 cursor-pointer whitespace-nowrap"
+                >
+                  {t("ticketing.jira.replaceToken")}
+                </button>
+              </div>
+            ) : (
+              <input
+                id="onb-jira-token"
+                type="password"
+                value={token}
+                onChange={(e) => onChangeToken(e.target.value)}
+                placeholder={t("ticketing.jira.tokenPlaceholder")}
+                autoComplete="off"
+                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono"
+              />
+            )}
+            {connected ? (
+              <p className="text-xs text-gray-500 mt-1">{t("ticketing.jira.tokenSetHelp")}</p>
+            ) : (
+              <p className="text-xs text-gray-500 mt-1">
+                {t("ticketing.jira.createTokenPrefix")}{" "}
+                <a
+                  href="https://id.atlassian.com/manage-profile/security/api-tokens"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300"
+                  aria-label={t("ticketing.jira.tokenLinkAria")}
+                >
+                  {t("ticketing.jira.tokenLinkText")}
+                </a>
+              </p>
+            )}
           </div>
+          {connected && (
+            <p className="text-xs text-gray-500">{t("ticketing.jira.editNote")}</p>
+          )}
         </div>
       )}
     </div>

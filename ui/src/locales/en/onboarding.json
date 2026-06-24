@@ -75,7 +75,10 @@
       "tokenPlaceholder": "Paste your Atlassian API token",
       "createTokenPrefix": "Create one at",
       "tokenLinkText": "id.atlassian.com → API tokens →",
-      "tokenLinkAria": "Open the Atlassian API token page (opens in a new tab)"
+      "tokenLinkAria": "Open the Atlassian API token page (opens in a new tab)",
+      "replaceToken": "Replace",
+      "tokenSetHelp": "Saved. Leave unchanged to keep your current token, or replace it to rotate.",
+      "editNote": "Editing your site or email re-checks the connection using your saved token — you don't need to paste it again."
     }
   },
   "provider": {

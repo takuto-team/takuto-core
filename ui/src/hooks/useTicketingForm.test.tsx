@@ -188,6 +188,70 @@ describe("useTicketingForm", () => {
     expect(callsTo("/api/users/me/jira-credential")).toHaveLength(1);
   });
 
+  it("pre-fills site/email and, on a non-secret change, saves with the token OMITTED (KEEP)", async () => {
+    stubFetch({
+      site: "https://acme.atlassian.net",
+      email: "dev@acme.com",
+      account_id: "a1",
+      account_name: "Dev",
+      last_validated_at: null,
+    });
+    const { result } = renderHook(
+      () => useTicketingForm({ initialSystem: "jira", ready: true }),
+      { wrapper },
+    );
+    // site/email pre-fill from the stored credential once it loads.
+    await waitFor(() => expect(result.current.site).toBe("https://acme.atlassian.net"));
+    expect(result.current.email).toBe("dev@acme.com");
+
+    // Change a non-secret (email), leave the token masked/blank.
+    act(() => result.current.setEmail("dev2@acme.com"));
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.save();
+    });
+
+    expect(ok).toBe(true);
+    const jira = callsTo("/api/users/me/jira-credential");
+    expect(jira).toHaveLength(1);
+    const body = JSON.parse(jira[0][1].body);
+    // KEEP: the token is omitted entirely (never an empty string, never a sentinel).
+    expect(body).toEqual({ site: "https://acme.atlassian.net", email: "dev2@acme.com" });
+    expect("token" in body).toBe(false);
+  });
+
+  it("sends the token when a connected user replaces it (REPLACE)", async () => {
+    stubFetch({
+      site: "https://acme.atlassian.net",
+      email: "dev@acme.com",
+      account_id: "a1",
+      account_name: "Dev",
+      last_validated_at: null,
+    });
+    const { result } = renderHook(
+      () => useTicketingForm({ initialSystem: "jira", ready: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.site).toBe("https://acme.atlassian.net"));
+
+    act(() => result.current.setToken("rotated-token"));
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.save();
+    });
+
+    expect(ok).toBe(true);
+    const jira = callsTo("/api/users/me/jira-credential");
+    expect(jira).toHaveLength(1);
+    expect(JSON.parse(jira[0][1].body)).toEqual({
+      site: "https://acme.atlassian.net",
+      email: "dev@acme.com",
+      token: "rotated-token",
+    });
+  });
+
   it("disconnect() deletes the per-user Jira credential", async () => {
     stubFetch({
       site: "https://acme.atlassian.net",

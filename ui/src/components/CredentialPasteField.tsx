@@ -55,7 +55,19 @@ interface Props {
    * when `canDelete`. Defaults to false (the field owns its own Save).
    */
   hideSave?: boolean;
+  /**
+   * When true, the secret is already stored on the server. The field renders a
+   * fixed masked indicator (`••••••`, read-only) plus a "Replace" affordance
+   * instead of an empty input — signalling "set" without ever holding or
+   * sending the real secret. Clicking Replace enters edit mode (empty input);
+   * leaving it masked/untouched means KEEP (the parent omits the secret on the
+   * wire). Defaults to false (first-time entry).
+   */
+  masked?: boolean;
 }
+
+/** Fixed "secret is set" indicator. Display-only — never sent on the wire. */
+const SECRET_MASK = "••••••";
 
 export function CredentialPasteField({
   label,
@@ -70,10 +82,16 @@ export function CredentialPasteField({
   onDelete,
   deleting = false,
   hideSave = false,
+  masked = false,
 }: Props) {
   const { t } = useTranslation("credentials");
   const inputId = useId();
   const [revealed, setRevealed] = useState(false);
+  // When the secret is stored, start in the masked "untouched" state until the
+  // user clicks Replace. Re-mask whenever the stored state flips back to set
+  // (e.g. after a successful save clears `value` and `masked` stays true).
+  const [editing, setEditing] = useState(false);
+  const showMask = masked && !editing && value.length === 0;
   // Two-click inline confirm for delete: first click arms ("Confirm"),
   // second click fires. Auto-disarms after a few seconds so a stray first
   // click never leaves the field primed to wipe on the next stray click.
@@ -87,6 +105,14 @@ export function CredentialPasteField({
       if (disarmTimer.current) clearTimeout(disarmTimer.current);
     };
   }, []);
+
+  // Re-mask after a successful rotate: the parent clears `value` to "" on save
+  // while the secret stays set (`masked` true), so drop back to the indicator.
+  const prevValue = useRef(value);
+  useEffect(() => {
+    if (prevValue.current !== "" && value === "" && masked) setEditing(false);
+    prevValue.current = value;
+  }, [value, masked]);
 
   const handleDeleteClick = () => {
     if (!onDelete) return;
@@ -107,32 +133,53 @@ export function CredentialPasteField({
         {label}
       </label>
       <div className="flex gap-2">
-        <div className="relative flex-1">
-          <input
-            id={inputId}
-            type={revealed ? "text" : "password"}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && canSubmit && !hideSave) onSubmit();
-            }}
-            placeholder={placeholder}
-            disabled={saving}
-            spellCheck={false}
-            autoComplete="off"
-            className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono pr-10"
-          />
-          <button
-            type="button"
-            onClick={() => setRevealed((v) => !v)}
-            aria-pressed={revealed}
-            aria-label={revealed ? t("paste.concealAria") : t("paste.revealAria")}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-300 cursor-pointer"
-          >
-            {revealed ? t("paste.conceal") : t("paste.reveal")}
-          </button>
-        </div>
-        {!hideSave && (
+        {showMask ? (
+          <div className="flex-1 flex items-center gap-2">
+            <input
+              id={inputId}
+              type="text"
+              value={SECRET_MASK}
+              readOnly
+              aria-label={label}
+              tabIndex={-1}
+              className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-500 font-mono"
+            />
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="text-sm px-4 py-2 rounded-lg bg-gray-800 text-gray-200 border border-gray-700 hover:bg-gray-700 cursor-pointer whitespace-nowrap"
+            >
+              {t("actions.replace")}
+            </button>
+          </div>
+        ) : (
+          <div className="relative flex-1">
+            <input
+              id={inputId}
+              type={revealed ? "text" : "password"}
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && canSubmit && !hideSave) onSubmit();
+              }}
+              placeholder={placeholder}
+              disabled={saving}
+              spellCheck={false}
+              autoComplete="off"
+              className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setRevealed((v) => !v)}
+              aria-pressed={revealed}
+              aria-label={revealed ? t("paste.concealAria") : t("paste.revealAria")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-300 cursor-pointer"
+            >
+              {revealed ? t("paste.conceal") : t("paste.reveal")}
+            </button>
+          </div>
+        )}
+        {!hideSave && !showMask && (
           <button
             type="button"
             disabled={!canSubmit}

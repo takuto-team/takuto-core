@@ -5,13 +5,10 @@
  * Per-user GitHub credentials section — visible to every authenticated user.
  *
  * Lives on its own "GitHub" tab of /config.html. Manages the caller's GitHub
- * PAT and the "Attribute commits to me" toggle. The deployment-level GitHub App
- * connection is reported via `/api/auth/status::github_mode`; the PAT is layered
- * on top per-user so commits/PRs can be attributed to the individual.
- *
- * Hard constraint (A3): the per-user toggle is **"Attribute commits to me"** —
- * NOT "Sign commits". v1 does not do GPG/SSH signing. Regression-guarded in
- * `GitHubCredentialsSection.test.tsx`.
+ * PAT. The deployment-level GitHub App connection is reported via
+ * `/api/auth/status::github_mode`; the PAT is layered on top per-user. Commit
+ * and PR attribution follows PAT presence: with a PAT, commits and PRs are
+ * authored by the user; with the App only, they are authored by the bot.
  */
 
 import { useCallback, useEffect, useRef, useState, type Ref } from "react";
@@ -19,7 +16,6 @@ import { useTranslation } from "react-i18next";
 import {
   apiJson,
   fetchUserCredentials,
-  patchGithubSettings,
   setGithubPat,
   UserCredentialsError,
 } from "../../api/client";
@@ -128,12 +124,9 @@ export function GitHubCredentialsSection({ panelRef, onDirtyChange, deferSave, r
           authMode={auth?.github_mode as GithubAuthMode | undefined}
           onDirtyChange={onDirtyChange}
           deferSave={deferSave}
-          onSavePat={async (pat, attribute) => {
+          onSavePat={async (pat) => {
             try {
-              const next = await setGithubPat({
-                pat,
-                attribute_commits: attribute,
-              });
+              const next = await setGithubPat({ pat, attribute_commits: true });
               await refresh();
               showToast(
                 t("github.toast.saved", {
@@ -145,14 +138,6 @@ export function GitHubCredentialsSection({ panelRef, onDirtyChange, deferSave, r
             } catch (e: unknown) {
               handleSurfaceError(e, t("github.toast.saveError"));
               return false;
-            }
-          }}
-          onToggleAttributeCommits={async (attribute) => {
-            try {
-              await patchGithubSettings({ attribute_commits: attribute });
-              await refresh();
-            } catch (e: unknown) {
-              handleSurfaceError(e, t("github.toast.settingsError"));
             }
           }}
         />

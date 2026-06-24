@@ -75,7 +75,10 @@
       "tokenPlaceholder": "粘贴你的 Atlassian API token",
       "createTokenPrefix": "创建地址：",
       "tokenLinkText": "id.atlassian.com → API tokens →",
-      "tokenLinkAria": "打开 Atlassian API token 页面（在新标签页中打开）"
+      "tokenLinkAria": "打开 Atlassian API token 页面（在新标签页中打开）",
+      "replaceToken": "替换",
+      "tokenSetHelp": "已保存。保持不变即可继续使用当前令牌，或替换以轮换。",
+      "editNote": "编辑站点或邮箱会使用已保存的令牌重新检查连接——无需再次粘贴。"
     }
   },
   "provider": {

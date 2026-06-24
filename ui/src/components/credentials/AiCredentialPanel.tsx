@@ -247,8 +247,9 @@ export const AiCredentialPanel = forwardRef<
               onSubmit={submitApiKey}
               hideSave={deferSave}
               saving={saving}
+              masked={apiKeyActive}
               placeholder={t("my.ai.claudeApiKeyPlaceholder")}
-              helper={apiKeyHelper}
+              helper={apiKeyActive ? t("my.ai.apiKeyHelpSet") : apiKeyHelper}
               saveLabel={apiKeyActive ? t("actions.replace") : t("actions.save")}
               canDelete={apiKeyActive}
               deleting={deleting}
@@ -290,12 +291,13 @@ export const AiCredentialPanel = forwardRef<
           onSubmit={submitApiKey}
           hideSave={deferSave}
           saving={saving}
+          masked={apiKeyActive}
           placeholder={
             activeProvider === "opencode"
               ? t("my.ai.opencodePlaceholder")
               : t("my.ai.apiKeyPlaceholder", { provider: label })
           }
-          helper={apiKeyHelper}
+          helper={apiKeyActive ? t("my.ai.apiKeyHelpSet") : apiKeyHelper}
           saveLabel={apiKeyActive ? t("actions.replace") : t("actions.save")}
           canDelete={apiKeyActive}
           deleting={deleting}

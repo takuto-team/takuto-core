@@ -75,7 +75,10 @@
       "tokenPlaceholder": "Atlassian API token を貼り付けてください",
       "createTokenPrefix": "作成はこちら:",
       "tokenLinkText": "id.atlassian.com → API tokens →",
-      "tokenLinkAria": "Atlassian API token ページを開く（新しいタブで開きます）"
+      "tokenLinkAria": "Atlassian API token ページを開く（新しいタブで開きます）",
+      "replaceToken": "置き換える",
+      "tokenSetHelp": "保存済み。現在のトークンを保持するには変更しないでください。ローテーションする場合は置き換えてください。",
+      "editNote": "サイトやメールを編集すると、保存済みのトークンを使って接続を再確認します。貼り直す必要はありません。"
     }
   },
   "provider": {

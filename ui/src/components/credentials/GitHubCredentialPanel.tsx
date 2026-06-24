@@ -2,8 +2,10 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 /**
- * GitHub auth card — PAT paste + "Attribute commits" toggle. Extracted from
- * `MyCredentialsSection.tsx` (CODING_STANDARDS §3 one component per file).
+ * GitHub auth card — PAT paste + a per-case explanation of who commits and PRs
+ * are attributed to (you when a PAT is present, the GitHub App bot otherwise).
+ * Extracted from `MyCredentialsSection.tsx` (CODING_STANDARDS §3 one component
+ * per file).
  */
 
 import {
@@ -24,8 +26,7 @@ interface GitHubCredentialPanelProps {
   authMode: GithubAuthMode | undefined;
   /** Persist the entered PAT. Returns `true` on success, `false` on failure
    *  (the caller renders the error toast). */
-  onSavePat: (pat: string, attributeCommits: boolean) => Promise<boolean>;
-  onToggleAttributeCommits: (next: boolean) => Promise<void>;
+  onSavePat: (pat: string) => Promise<boolean>;
   /** Reports `true` when a PAT is typed-but-unsaved, so a parent page-level
    *  Save can fold it in and gate its dirty state. */
   onDirtyChange?: (dirty: boolean) => void;
@@ -41,10 +42,9 @@ interface GitHubCredentialPanelProps {
  */
 export interface GitHubCredentialPanelHandle {
   /**
-   * Submit the entered PAT (with the attribute-commits toggle) if non-blank.
-   * A blank field is a no-op that resolves `true` (the user is skipping /
-   * running as the shared GitHub App). Resolves `false` only when a non-blank
-   * save fails.
+   * Submit the entered PAT if non-blank. A blank field is a no-op that
+   * resolves `true` (the user is skipping / running as the shared GitHub App).
+   * Resolves `false` only when a non-blank save fails.
    */
   saveIfDirty: () => Promise<boolean>;
 }
@@ -53,17 +53,12 @@ export const GitHubCredentialPanel = forwardRef<
   GitHubCredentialPanelHandle,
   GitHubCredentialPanelProps
 >(function GitHubCredentialPanel(
-  { github, authMode, onSavePat, onToggleAttributeCommits, onDirtyChange, deferSave = false }: GitHubCredentialPanelProps,
+  { github, authMode, onSavePat, onDirtyChange, deferSave = false }: GitHubCredentialPanelProps,
   ref,
 ) {
   const { t } = useTranslation("credentials");
   const [pat, setPat] = useState("");
-  const [attribute, setAttribute] = useState(github?.attribute_commits ?? true);
   const [saving, setSaving] = useState(false);
-  // Keep local toggle in sync with server state on refresh.
-  useEffect(() => {
-    setAttribute(github?.attribute_commits ?? true);
-  }, [github?.attribute_commits]);
 
   // Report a typed-but-unsaved PAT so a parent page-level Save can fold it in.
   useEffect(() => {
@@ -80,13 +75,13 @@ export const GitHubCredentialPanel = forwardRef<
   const submit = useCallback(async (): Promise<boolean> => {
     setSaving(true);
     try {
-      const ok = await onSavePat(pat, attribute);
+      const ok = await onSavePat(pat);
       if (ok) setPat("");
       return ok;
     } finally {
       setSaving(false);
     }
-  }, [pat, attribute, onSavePat]);
+  }, [pat, onSavePat]);
 
   useImperativeHandle(
     ref,
@@ -99,18 +94,8 @@ export const GitHubCredentialPanel = forwardRef<
     [pat, submit],
   );
 
-  // Issue B from #31: no "Remove PAT" button. PAT revocation happens on
-  // github.com; to wipe the local row the user saves a different token.
-
-  const toggle = async (next: boolean) => {
-    setAttribute(next);
-    try {
-      await onToggleAttributeCommits(next);
-    } catch {
-      // Revert on failure — parent surfaces the toast.
-      setAttribute((v) => !v);
-    }
-  };
+  // No "Remove PAT" button — PAT revocation happens on github.com; to wipe the
+  // local row the user saves a different token.
 
   return (
     <section
@@ -155,28 +140,6 @@ export const GitHubCredentialPanel = forwardRef<
         </div>
       )}
 
-      {/* A3 regression guard: this toggle is **"Attribute commits to me"** —
-          NOT "Sign commits". v1 does NOT GPG/SSH-sign. */}
-      <div className="flex items-start gap-2 bg-gray-950/40 border border-gray-800 rounded-lg p-3">
-        <input
-          id="attribute-commits-toggle"
-          type="checkbox"
-          checked={attribute}
-          disabled={!hasPat || saving}
-          onChange={(e) => void toggle(e.target.checked)}
-          className="mt-1 accent-blue-500"
-        />
-        <label
-          htmlFor="attribute-commits-toggle"
-          className="text-sm text-gray-300"
-        >
-          {t("github.attributeToggle")}
-          <p className="text-xs text-gray-500 mt-0.5">
-            {t("github.attributeHelp")}
-          </p>
-        </label>
-      </div>
-
       <CredentialPasteField
         label={hasPat ? t("github.patReplaceLabel") : t("github.patLabel")}
         value={pat}
@@ -184,9 +147,13 @@ export const GitHubCredentialPanel = forwardRef<
         onSubmit={submit}
         hideSave={deferSave}
         saving={saving}
+        masked={hasPat}
         placeholder={t("github.patPlaceholder")}
         saveLabel={hasPat ? t("actions.replace") : t("github.patSaveLabel")}
         helper={
+          hasPat ? (
+            t("github.patHelpSet")
+          ) : (
           <Trans
             i18nKey="github.patHelp"
             ns="credentials"
@@ -204,6 +171,7 @@ export const GitHubCredentialPanel = forwardRef<
               ),
             }}
           />
+          )
         }
       />
     </section>

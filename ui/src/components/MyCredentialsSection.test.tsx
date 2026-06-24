@@ -7,8 +7,8 @@
  *   A1 — The Cursor card MUST NOT mention ttyd / browser flows. Cursor is
  *        **API-key only** in v1 (per 04_architecture.md amendment A1).
  *
- * The GitHub-panel guards (A3 "Attribute commits", #29 pill, #31 no-remove)
- * moved with the panel to `credentials/GitHubCredentialsSection.test.tsx`.
+ * The GitHub-panel guards (attribution copy, #29 pill, #31 no-remove) moved
+ * with the panel to `credentials/GitHubCredentialsSection.test.tsx`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
