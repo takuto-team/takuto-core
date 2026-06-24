@@ -77,6 +77,12 @@
     "bodySuffix": "to enable Jira or GitHub polling.",
     "gotIt": "Got it"
   },
+  "jiraAuthFailed": {
+    "title": "Jira authentication failed",
+    "body": "Your Jira token was rejected — it may have expired or been revoked. Update your Jira token to keep loading tickets and running Jira actions.",
+    "cta": "Update Jira token",
+    "dismiss": "Dismiss"
+  },
   "report": {
     "notFound": "Report not found",
     "loadFailed": "Failed to load report",

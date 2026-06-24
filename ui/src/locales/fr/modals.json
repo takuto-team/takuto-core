@@ -77,6 +77,12 @@
     "bodySuffix": "pour activer la récupération depuis Jira ou GitHub.",
     "gotIt": "Compris"
   },
+  "jiraAuthFailed": {
+    "title": "Échec de l'authentification Jira",
+    "body": "Votre jeton Jira a été refusé — il a peut-être expiré ou été révoqué. Mettez à jour votre jeton Jira pour continuer à charger les tickets et à exécuter les actions Jira.",
+    "cta": "Mettre à jour le jeton Jira",
+    "dismiss": "Ignorer"
+  },
   "report": {
     "notFound": "Rapport introuvable",
     "loadFailed": "Échec du chargement du rapport",

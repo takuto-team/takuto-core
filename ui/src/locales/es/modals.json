@@ -77,6 +77,12 @@
     "bodySuffix": "para habilitar el sondeo de Jira o GitHub.",
     "gotIt": "Entendido"
   },
+  "jiraAuthFailed": {
+    "title": "Error de autenticación de Jira",
+    "body": "Tu token de Jira fue rechazado: puede haber caducado o haber sido revocado. Actualiza tu token de Jira para seguir cargando tickets y ejecutando acciones de Jira.",
+    "cta": "Actualizar el token de Jira",
+    "dismiss": "Descartar"
+  },
   "report": {
     "notFound": "Informe no encontrado",
     "loadFailed": "No se pudo cargar el informe",

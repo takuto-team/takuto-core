@@ -13,6 +13,7 @@ import { Config } from "./pages/Config";
 import { useAuth } from "./hooks/useAuth";
 import { ToastProvider, ToastContainer } from "./hooks/useToast";
 import { QueryErrorToaster } from "./components/QueryErrorToaster";
+import { JiraAuthFailedModalHost } from "./components/JiraAuthFailedModalHost";
 import { DependencyInstallOverlay } from "./components/DependencyInstallOverlay";
 import { fetchOnboardingFirstRunState } from "./api/onboarding";
 
@@ -179,6 +180,7 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <QueryErrorToaster />
+      <JiraAuthFailedModalHost />
       <ToastContainer />
     </ToastProvider>
   );

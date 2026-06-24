@@ -77,6 +77,12 @@
     "bodySuffix": "以启用 Jira 或 GitHub 轮询。",
     "gotIt": "知道了"
   },
+  "jiraAuthFailed": {
+    "title": "Jira 身份验证失败",
+    "body": "你的 Jira 令牌被拒绝——可能已过期或被吊销。请更新你的 Jira 令牌，以便继续加载工单并执行 Jira 操作。",
+    "cta": "更新 Jira 令牌",
+    "dismiss": "关闭"
+  },
   "report": {
     "notFound": "未找到报告",
     "loadFailed": "加载报告失败",
