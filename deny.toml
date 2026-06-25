@@ -38,6 +38,11 @@ allow = [
   "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.93
+# Takuto Core's own workspace crates are licensed under the FSL (license-file =
+# LICENSE) and are never published (publish = false). The FSL is not — and
+# should not be — in the dependency `allow` list above, which governs only
+# third-party crates. Skip license checks for these private members.
+private = { ignore = true }
 exceptions = [
   # Add per-crate license exceptions here with a justification comment.
 ]
