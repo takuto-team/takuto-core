@@ -3,12 +3,8 @@ set -euo pipefail
 
 # Verifies every source file carries the project's FSL license header.
 #
-# A file passes when one of these appears in its first 20 lines:
-#   - SPDX-License-Identifier: FSL-1.1-ALv2
-#   - the full "Functional Source License" notice
-#
-# Both forms are accepted because the tree mixes a short SPDX line and the
-# full notice; `scripts/add-license-header.sh` recognises the same two markers.
+# A file passes when "Functional Source License" or "FSL-1.1-ALv2" appears in
+# its first 20 lines (the header inserted by scripts/add-license-header.sh).
 #
 # Scope: *.rs under crates/ and *.ts / *.tsx under ui/src/. SQL migrations are
 # deliberately excluded — applied migration files are immutable (their on-disk
@@ -20,7 +16,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-HEADER_PATTERN='SPDX-License-Identifier: FSL|Functional Source License'
+HEADER_PATTERN='Functional Source License|FSL-1.1-ALv2'
 
 missing=()
 checked=0

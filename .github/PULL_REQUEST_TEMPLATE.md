@@ -1,5 +1,5 @@
 > **Note:** Takuto is **not currently accepting external code contributions.**
-> Dual-licensing (FSL + commercial) requires CLA infrastructure that is not
+> Accepting external contributions requires CLA infrastructure that is not
 > yet in place. Pull requests from outside the maintainer team will be closed.
 > Please open a [GitHub Issue](https://github.com/takuto-team/takuto-core/issues)
 > or [Discussion](https://github.com/takuto-team/takuto-core/discussions) instead,
@@ -26,7 +26,7 @@
 ## Checklist (maintainer PRs)
 
 - [ ] Commits signed off (DCO — `git commit -s`)
-- [ ] License headers on new files (FSL + SPDX)
+- [ ] License headers on new files (FSL)
 - [ ] `cargo fmt && cargo clippy && cargo test` pass locally
 - [ ] `cd ui && npm run lint && npm test && npm run build` pass locally
 - [ ] No secrets in commit (gitleaks)

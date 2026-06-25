@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License 1.1 (FSL-1.1-ALv2). See LICENSE.
 
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { fn } from "storybook/test";
+import { MemoryRouter } from "react-router-dom";
 import { PollingLabel } from "../components/PollingLabel";
 
 const meta = {
@@ -16,13 +16,19 @@ const meta = {
     },
   },
   tags: ["autodocs"],
+  decorators: [
+    (Story) => (
+      <MemoryRouter>
+        <Story />
+      </MemoryRouter>
+    ),
+  ],
   argTypes: {
     ticketingSystem: {
       control: "select",
       options: ["none", "jira", "github"],
     },
-    paused: { control: "boolean" },
-    toggling: { control: "boolean" },
+    autoPolling: { control: "boolean" },
   },
 } satisfies Meta<typeof PollingLabel>;
 
@@ -31,37 +37,22 @@ type Story = StoryObj<typeof meta>;
 
 export const Active: Story = {
   args: {
-    paused: false,
-    toggling: false,
+    autoPolling: true,
     ticketingSystem: "jira",
-    onToggle: fn(),
   },
 };
 
-export const Paused: Story = {
+export const Off: Story = {
   args: {
-    paused: true,
-    toggling: false,
+    autoPolling: false,
     ticketingSystem: "jira",
-    onToggle: fn(),
-  },
-};
-
-export const Toggling: Story = {
-  args: {
-    paused: false,
-    toggling: true,
-    ticketingSystem: "github",
-    onToggle: fn(),
   },
 };
 
 export const HiddenWhenNone: Story = {
   name: "Hidden (ticketingSystem = none)",
   args: {
-    paused: false,
-    toggling: false,
+    autoPolling: true,
     ticketingSystem: "none",
-    onToggle: fn(),
   },
 };

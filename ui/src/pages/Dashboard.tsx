@@ -4,7 +4,10 @@
 import { useEffect, useCallback, useRef, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useQuery } from "@tanstack/react-query";
 import { apiPost, listRepoAccess } from "../api/client";
+import { getMyPollingSettings } from "../api/pollingSettings";
+import { queryKeys } from "../api/queryClient";
 import type { WorkflowEvent } from "../api/types";
 import { useToast } from "../hooks/useToast";
 import { useConfig } from "../hooks/useConfig";
@@ -14,7 +17,6 @@ import { useWorkflowDefinitions } from "../hooks/useWorkflowDefinitions";
 import { useDashboardModals } from "../hooks/useDashboardModals";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useWorkflows } from "../hooks/useWorkflows";
-import { usePolling } from "../hooks/usePolling";
 import { Header } from "../components/Header";
 import { PollingLabel } from "../components/PollingLabel";
 import { SummaryStats } from "../components/SummaryStats";
@@ -102,7 +104,16 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
 
   const { connected } = useWebSocket(handleEventWithDefs);
   const prevConnected = useRef(false);
-  const polling = usePolling();
+
+  // Header polling label reflects the ACTIVE repo's per-repo "auto polling"
+  // toggle (the source of truth lives in Ticketing settings, keyed by the
+  // repo/workspace name). No row yet → defaults to off.
+  const { data: pollingRow } = useQuery({
+    queryKey: queryKeys.pollingSettings(activeRepoName ?? ""),
+    queryFn: () => getMyPollingSettings(activeRepoName as string),
+    enabled: !!activeRepoName,
+  });
+  const autoPolling = pollingRow?.settings.auto_polling ?? false;
 
   // Consolidated mount + reconnect refetch (designer plan). Fires once on
   // initial WebSocket connect (prevConnected.current false → connected true)
@@ -180,10 +191,7 @@ export function Dashboard({ onLogout, authEnabled, isAdmin = false }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <PollingLabel
-        paused={polling.paused} toggling={polling.toggling}
-        ticketingSystem={ticketingSystem} onToggle={polling.toggle}
-      />
+      <PollingLabel autoPolling={autoPolling} ticketingSystem={ticketingSystem} />
       <Header
         connected={connected} authEnabled={authEnabled}
         githubAppConfigured={githubAppConfigured}

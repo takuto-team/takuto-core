@@ -1,6 +1,6 @@
 name: Close external pull requests
 
-# Takuto is dual-licensed (FSL + commercial) and does not yet have CLA
+# Takuto is source-available under the FSL (FSL-1.1-ALv2) and does not yet have CLA
 # infrastructure to accept outside contributions. This workflow politely
 # closes any pull request whose author is not the repository owner, a member,
 # or a collaborator, and links them to the channels that *are* open.
@@ -36,7 +36,7 @@ jobs:
               ``,
               `**Takuto is not currently accepting external code contributions.**`,
               ``,
-              `The project is dual-licensed (FSL + commercial). Accepting outside`,
+              `The project is source-available under the FSL (FSL-1.1-ALv2). Accepting outside`,
               `code under that model requires a Contributor License Agreement (CLA) and`,
               `tooling to track sign-offs. That infrastructure is not yet in place, so`,
               `we cannot legally merge contributions today. This will change once a CLA`,

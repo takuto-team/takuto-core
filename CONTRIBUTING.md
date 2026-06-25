@@ -4,7 +4,7 @@
 
 Takuto is **not accepting external code contributions at this time**.
 
-Takuto is dual-licensed (FSL + commercial). Accepting outside code
+Takuto Core is source-available under the FSL (FSL-1.1-ALv2). Accepting outside code
 under that model requires a Contributor License Agreement (CLA) and the
 tooling to track sign-offs across every PR. That infrastructure is not yet
 in place, so we cannot legally accept contributions today.

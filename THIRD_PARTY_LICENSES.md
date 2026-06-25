@@ -743,4 +743,4 @@ Takuto includes the following third-party software.
 ---
 
 All listed dependencies use permissive licenses (MIT, Apache-2.0, BSD, ISC, Zlib,
-Unlicense, MPL-2.0) that are compatible with the FSL.0 license of this project.
+Unlicense, MPL-2.0) — all permissive and fine to redistribute in the Takuto Core image.

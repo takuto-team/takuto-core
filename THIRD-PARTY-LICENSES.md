@@ -1,7 +1,7 @@
 # Third-party software in the Takuto Core image
 
 The Takuto Core container image bundles the third-party software listed below, each under
-its own license. Takuto Core's own source is licensed separately under **FSL-1.1-ALv2** (see
+its own license. Takuto Core's own source is licensed separately under the **FSL (FSL-1.1-ALv2)** (see
 [`LICENSE`](LICENSE)); including these tools in the image is *mere aggregation* — they
 remain governed by the licenses below, and their licenses do not affect Takuto Core's.
 
@@ -51,7 +51,7 @@ Regenerate them per release:
 cargo install cargo-about
 cargo about generate about.hbs > THIRD-PARTY-RUST.md
 
-# Enforce a license allowlist (catches GPL/unknown/FSL-incompatible crates)
+# Enforce a license allowlist (catches GPL/unknown/incompatible crates)
 cargo install cargo-deny
 cargo deny check licenses
 
@@ -61,7 +61,7 @@ cd ui && npx license-checker-rseidelsohn --production --out ../THIRD-PARTY-NPM.t
 
 The vast majority of these dependencies are permissive (**MIT / Apache-2.0 / BSD / ISC**),
 which only requires preserving their notices — handled by the generated reports above.
-Because Takuto Core is **FSL-1.1-ALv2**, the dependency tree must stay FSL-compatible;
+Because Takuto Core ships these dependencies in its image, the dependency tree must stay permissively licensed;
 `cargo deny` (with a `deny.toml` license allowlist) is the gate that flags any
 GPL-2.0-only, proprietary, or unlicensed crate before release.
 

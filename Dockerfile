@@ -101,7 +101,7 @@ FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f206
 ARG TAKUTO_VERSION=dev
 LABEL org.opencontainers.image.version="${TAKUTO_VERSION}"
 LABEL org.opencontainers.image.source="https://github.com/takuto-team/takuto-core"
-LABEL org.opencontainers.image.licenses="FSL-1.1-ALv2"
+LABEL org.opencontainers.image.licenses="LicenseRef-FSL-1.1-ALv2"
 LABEL org.opencontainers.image.title="Takuto"
 LABEL org.opencontainers.image.description="Automated workflow orchestration for AI coding agents"
 

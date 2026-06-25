@@ -20,10 +20,9 @@ ignore = [
 ]
 
 [licenses]
-# Permitted SPDX license identifiers for all crates in the graph (the workspace
-# crates themselves are FSL-1.1-ALv2). Tighten by removing entries as the tree allows.
+# Permitted SPDX license identifiers for dependency crates in the graph.
+# (Takuto Core's own crates use the FSL — see LICENSE.) Tighten as the tree allows.
 allow = [
-  "FSL-1.1-ALv2",
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
   "BSD-2-Clause",

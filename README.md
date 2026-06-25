@@ -13,7 +13,7 @@ firewall, on hardware you own.
 [Security](https://takuto-doc.alexandre-obellianne.workers.dev/security/) ·
 [CLI](https://github.com/takuto-team/takuto-cli)
 
-![License: FSL-1.1-ALv2](docs/badges/license-agpl.svg)
+![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue.svg)
 ![Status: beta](docs/badges/status-beta.svg)
 ![Self-hosted](docs/badges/self-hosted.svg)
 
@@ -721,4 +721,4 @@ workflows/           # TOML workflow definitions (*.example.toml → copy and ed
 
 Takuto Core is source-available under the [Functional Source License 1.1 (FSL-1.1-ALv2)](LICENSE).
 
-Self-hosting is free. If you offer Takuto as a service to others, the FSL does not permit using it to offer a competing product or hosted service. For a commercial license, see morphet.contact@gmail.com.
+Use it freely for any non-competing purpose — internal use, evaluation, research, professional services. Two years after each release, that version converts to Apache-2.0. For commercial or competing-use licensing, contact morphet.contact@gmail.com.

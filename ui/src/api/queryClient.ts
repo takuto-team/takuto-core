@@ -42,6 +42,7 @@ export const queryKeys = {
   config: ["config"] as const,
   auth: ["auth"] as const,
   polling: ["polling"] as const,
+  pollingSettings: (workspace: string) => ["polling-settings", workspace] as const,
   repositories: ["repositories"] as const,
   workflowDefinitions: ["workflow-definitions"] as const,
   workItems: ["work-items"] as const,

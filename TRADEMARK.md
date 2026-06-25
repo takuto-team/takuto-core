@@ -17,6 +17,6 @@ If you are a trademark holder and believe the use of the name "Takuto" in
 this repository creates confusion with your mark, please contact
 `morphet.contact@gmail.com` so we can discuss the issue.
 
-The source code in this repository is licensed under the FSL General
-Public License v3.0 or later — see [`LICENSE`](./LICENSE). This trademark
+The source code in this repository is licensed under the Functional Source
+License 1.1 (FSL-1.1-ALv2) — see [`LICENSE`](./LICENSE). This trademark
 notice is informational and does not modify the license terms.

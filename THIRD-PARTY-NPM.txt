@@ -2,7 +2,7 @@
 
 Production dependencies bundled into the dashboard, with full license texts.
 Generated with: cd ui && npx license-checker-rseidelsohn --production --excludePrivatePackages --plainVertical
-The dashboard's own package (private) is excluded; Takuto Core is FSL-1.1-ALv2.
+The dashboard's own package (private) is excluded; Takuto Core is under the FSL (FSL-1.1-ALv2).
 
 ----------------------------------------------------------------------
 
