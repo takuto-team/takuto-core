@@ -8,3 +8,7 @@
 # pre-rename maestro-web commits. Not a credential.
 81e12d6d73bb3ec60399dc39de406579a579b470:crates/maestro-web/src/routes/auth/register.rs:generic-api-key:32
 ad068a0f81458b8ae4b547f22a830e257b84cb35:crates/maestro-web/src/routes/auth.rs:generic-api-key:690
+800692d790291109c6866e1f3061509c0eb27851:crates/maestro-web/src/routes/auth/register.rs:generic-api-key:26
+1effee42a94d76009f5c0cf509717b27a7752d42:crates/maestro-web/src/routes/auth/register.rs:generic-api-key:26
+cb847deee4d0810cb56b91f8ebf3b03fd38135ca:crates/maestro-web/src/routes/auth.rs:generic-api-key:684
+fab32fd8ccf9615152a4500ea4fb010198cd9096:crates/maestro-web/src/routes/auth.rs:generic-api-key:684

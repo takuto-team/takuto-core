@@ -1,0 +1,10 @@
+# cargo-audit configuration. Keeps the local `cargo audit` gate (run by
+# scripts/preflight.sh --full) in sync with the advisories ignored in CI's
+# rustsec/audit-check step and in deny.toml's `[advisories] ignore`.
+#
+#   RUSTSEC-2023-0071 — rsa Marvin attack timing sidechannel; no upstream fix
+#                       yet. Reaches us transitively via jsonwebtoken -> rsa.
+#   RUSTSEC-2026-0009 — time DoS via stack exhaustion; fixed in >=0.3.47 but
+#                       blocked by takuto-web's exact `time = "=0.3.45"` pin.
+[advisories]
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0009"]
