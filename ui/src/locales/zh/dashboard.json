@@ -25,8 +25,9 @@
     "version": "Takuto v{{version}}"
   },
   "polling": {
-    "pausedResume": "轮询：已暂停 — 点击恢复",
-    "active": "轮询：进行中"
+    "active": "轮询：已启用",
+    "off": "轮询：已关闭",
+    "openSettings": "打开工单设置"
   },
   "stats": {
     "pending": "等待中",

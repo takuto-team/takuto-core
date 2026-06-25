@@ -25,8 +25,9 @@
     "version": "Takuto v{{version}}"
   },
   "polling": {
-    "pausedResume": "ポーリング: 一時停止中 — クリックで再開",
-    "active": "ポーリング: 実行中"
+    "active": "ポーリング: 有効",
+    "off": "ポーリング: 無効",
+    "openSettings": "チケット設定を開く"
   },
   "stats": {
     "pending": "待機中",

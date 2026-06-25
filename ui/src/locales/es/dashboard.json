@@ -25,8 +25,9 @@
     "version": "Takuto v{{version}}"
   },
   "polling": {
-    "pausedResume": "Sondeo: en pausa — haz clic para reanudar",
-    "active": "Sondeo: activo"
+    "active": "Sondeo: activado",
+    "off": "Sondeo: desactivado",
+    "openSettings": "Abrir los ajustes de tickets"
   },
   "stats": {
     "pending": "Pendiente",

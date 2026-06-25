@@ -25,8 +25,9 @@
     "version": "Takuto v{{version}}"
   },
   "polling": {
-    "pausedResume": "Récupération : en pause — cliquer pour reprendre",
-    "active": "Récupération : actif"
+    "active": "Récupération : activée",
+    "off": "Récupération : désactivée",
+    "openSettings": "Ouvrir les paramètres de gestion des tickets"
   },
   "stats": {
     "pending": "En attente",
