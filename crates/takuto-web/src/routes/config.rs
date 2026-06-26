@@ -118,11 +118,8 @@ pub struct UpdateConfigResponse {
     pub persist_warning: Option<String>,
 }
 
-/// Stage `mutate` on a clone of the live config, validate it, and commit the
-/// clone back only if validation passes — so a rejected patch leaves the live
-/// config unchanged. Returns the committed snapshot for post-lock I/O. The
-/// write lock is held only across the clone, mutate, validate, and commit; all
-/// disk/side-effect work happens after it drops.
+/// Apply `mutate` to a clone, validate, and commit it back only on success, so
+/// a rejected patch leaves the live config unchanged. Returns the committed clone.
 pub(crate) async fn stage_and_commit<F>(
     config: &tokio::sync::RwLock<Config>,
     mutate: F,
