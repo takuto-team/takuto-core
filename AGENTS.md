@@ -694,13 +694,24 @@ A top-level `e2e/` Playwright workspace (isolated from `ui/`) drives the **onboa
 
 **Coverage:** the full **provider × ticketing × backend** matrix (`claude`/`cursor`/`codex`/`opencode` × `none`/`github`/`jira` × `sqlite`/`postgres`/`mysql`) for happy-path completion and **restart-persistence** (complete wizard → restart the takuto container against the same DB + pinned `TAKUTO_SECRET_KEY` → assert admin, completion, config, and encrypted credentials survive). Client/server validation and skip cases run once per backend. One Playwright project runs per backend.
 
+**Stack scope (deliberate trade-off):** the stack and first-admin are **worker-scoped** and the project runs `fullyParallel: false`, so every test on a worker runs sequentially against **one** container / DB / admin user. Each case re-runs the full wizard, overwriting the shared deployment config, then asserts only its own just-written values (assertions are scoped to the case's provider/ticketing, and writes-then-reads are synchronous within a case). This proves "each case completes on a stack a sibling case already onboarded" — slightly weaker than a pristine stack per case, but container boots dominate wall-clock, so per-case stacks would be far slower. Spin up isolated stacks per case only if cross-case state ever causes a real false result.
+
 **Run:** `cd e2e && npm install && npm run test:e2e` (~5 min at the default 2 workers). Scope down locally with comma-separated env knobs: `TAKUTO_E2E_BACKENDS` (e.g. `sqlite`), `TAKUTO_E2E_PROVIDERS`, `TAKUTO_E2E_TICKETING`; plus `TAKUTO_E2E_WORKERS` (default `2`), `TAKUTO_E2E_IMAGE` (use a pre-built image, skip the build), `TAKUTO_E2E_BUILD_TARGET` (default `runtime-base`), `TAKUTO_E2E_SECRET_KEY` (override the pinned 64-hex master key), and `TAKUTO_E2E_RUN_ID`.
 
 **Image:** built **from the working tree** once per run and cached by a source-content hash as `takuto-e2e:<hash>` (rebuilt only when `crates/`, `ui/src`, `Cargo.*`, `Dockerfile`, etc. change); `TAKUTO_E2E_IMAGE` overrides. The DB images `postgres:16` / `mariadb:11` are pre-pulled in global setup.
 
 **Stack bring-up:** each stack starts with **no app settings** so the wizard triggers, with two exceptions baked in by the harness: a minimal seed `config.toml` carrying only `[web] cors_origins` for the published random host port (without it, the CSRF Origin/Referer check rejects every wizard save, since `Config::default()` computes the allowlist from the container's internal `:8080`), and `TAKUTO_TOOLS_DIR` pointed at a nonexistent path so the server skips the runtime agent-CLI install overlay (the suite verifies persistence, not live agent execution). The pinned `TAKUTO_SECRET_KEY` + same data volume are what make the restart-persistence assertions possible.
 
-**Ephemeral Docker model:** every container/network/volume gets a randomized name (`takuto-e2e-<backend>-<role>-<rand>`) and the labels `com.takuto.e2e=true`, `com.takuto.e2e.run=<runId>`, `com.takuto.e2e.stack=<id>`. Global teardown sweeps everything by the run label, so a clean **or failed** run leaves zero residual resources (verify with `docker ps -a`/`network ls`/`volume ls` filtered by `label=com.takuto.e2e=true`).
+**Ephemeral Docker model:** every container/network/volume gets a randomized name (`takuto-e2e-<backend>-<role>-<rand>`) and the labels `com.takuto.e2e=true`, `com.takuto.e2e.run=<runId>`, `com.takuto.e2e.stack=<id>`. Cleanup is **label-authoritative** at three levels: each stack tears itself down by stack label, the per-worker fixture tears down in a `finally`, and global teardown sweeps everything by the run label — so a clean run, a failed run, a thrown test, or a mid-boot failure all leave **zero** residual resources. A `SIGINT`/`SIGTERM` (Ctrl-C, `kill`) handler in global setup also sweeps the run label before exiting. The **only** uncovered case is `SIGKILL` / `kill -9`, which no process can trap; recover those manually:
+
+```sh
+# (swap the filter for label=com.takuto.e2e.run=<runId> to scope to one run)
+docker ps -aq      --filter label=com.takuto.e2e=true | xargs -r docker rm -f
+docker network ls -q --filter label=com.takuto.e2e=true | xargs -r docker network rm
+docker volume ls -q  --filter label=com.takuto.e2e=true | xargs -r docker volume rm -f
+```
+
+Verify a run left nothing behind with `docker ps -a` / `network ls` / `volume ls` filtered by `label=com.takuto.e2e=true`.
 
 **Credential-persistence coverage caveat:** the GitHub PAT and Jira credential saves validate **live** against GitHub/Atlassian, so dummy values cannot be stored in an offline stack. Credential-encryption persistence across a restart is therefore proven via the AI provider `api_key` path (which stores without a live check), not the GitHub/Jira paths.
 

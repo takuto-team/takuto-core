@@ -1,5 +1,10 @@
-import { type Locator, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import type { ProviderId } from '../api/types.js';
+
+/** Server validation code surfaced in a toast when opencode lacks a base URL. */
+export const PROVIDER_ERRORS = {
+  opencodeBaseUrlRequired: /opencode_base_url_required/,
+} as const;
 
 /**
  * Step 3 — AI provider. Wraps the provider `<select>` (`#onb-provider`), the
@@ -72,5 +77,10 @@ export class ProviderStep {
   /** Whether the base URL field is disabled (true for `cursor`). */
   async isBaseUrlDisabled(): Promise<boolean> {
     return this.baseUrlInput().isDisabled();
+  }
+
+  /** Assert the opencode-base-URL-required error toast is shown. */
+  async expectOpencodeBaseUrlRequiredError(): Promise<void> {
+    await expect(this.page.getByText(PROVIDER_ERRORS.opencodeBaseUrlRequired)).toBeVisible();
   }
 }
