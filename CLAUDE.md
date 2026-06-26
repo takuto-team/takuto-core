@@ -37,6 +37,10 @@ If you need to record context about a change, the commit message and the PR desc
 
 Apply the same rule to commit messages going forward when reasonable — the code itself should not require knowing what slice introduced it.
 
+## Pull requests
+
+**Never open a standalone PR for a trivial or comment-only change** — comment edits, doc-string tweaks, typo fixes, formatting, renames with no API impact. A dedicated PR for that is pure overhead. Fold the change into the related in-flight PR (or the change that motivated it); if none exists and it is genuinely trivial, batch it with the next substantive change. Open a separate PR only when the change is independently meaningful and reviewable on its own (a feature, a behavioral fix, a migration). When in doubt, prefer fewer PRs.
+
 ## Migrations are immutable
 
 Once a migration file under `crates/takuto-core/migrations/` has been merged and applied to any environment, **never edit the file again — not even comments, whitespace, or trailing newlines**. sqlx stores a SHA256 checksum of each migration in `_sqlx_migrations` at apply time and refuses to boot when the on-disk content drifts (`migration X was previously applied but has been modified`).
