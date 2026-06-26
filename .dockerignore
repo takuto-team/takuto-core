@@ -13,6 +13,7 @@ docker-compose.dind.yml
 *.log
 tests/
 design/
+e2e/
 # User-specific config files must NOT be baked into the distributed image.
 # They are volume-mounted at runtime (see docker-compose.yml).
 config.toml
