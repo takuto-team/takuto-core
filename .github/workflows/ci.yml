@@ -16,10 +16,14 @@ name: CI
 # toolchain issue surfaces a warning we cannot fix today, pin the toolchain in
 # rust-toolchain.toml — do not relax the gate.
 
+# Checks gate merges (pull_request) and releases (a v* tag runs the checks,
+# then the build/publish jobs in the SAME run). Deliberately NOT run on direct
+# `push: main` so the checks run exactly once per release — on the tag —
+# instead of once for the code push and again for the tag.
 on:
   pull_request:
   push:
-    branches: [main]
+    tags: ['v*']
 
 # Cancel superseded runs on the same ref so we don't pay for stale CI when
 # someone pushes a fix-up commit.
@@ -30,6 +34,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  REGISTRY: ghcr.io
+  IMAGE_NAME: takuto-team/takuto-core
 
 jobs:
   db-postgres:
@@ -306,3 +312,184 @@ jobs:
           tags: takuto:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ── Release ────────────────────────────────────────────────────────────────
+  # Build + publish the multi-arch image. Gated: only on a `v*` tag, and only
+  # after EVERY check job above succeeds. On PRs the `if` is false so these are
+  # skipped — the checks still gate merges without building anything.
+  build:
+    name: Build image (${{ matrix.arch }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - db-postgres
+      - db-mysql
+      - ts-types-drift
+      - ui
+      - audit-ui
+      - license-headers
+      - cargo-deny
+      - cargo-audit
+      - config-doc
+      - container-build
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # The runtime image is large (Playwright Chromium, four AI CLIs,
+      # openvscode-server, build toolchain) and Trivy exports the whole image to
+      # scan it — which exhausted the ubuntu-latest runner's disk ("no space
+      # left on device"). Reclaim the preinstalled SDKs/toolchains we don't use
+      # (~25-30 GB on ubuntu-latest; a no-op where the paths are absent).
+      - name: Free up runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /usr/local/lib/android /usr/local/share/boost \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          sudo docker image prune -af || true
+          df -h /
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          # The image is this repo's own GHCR package, so the built-in
+          # GITHUB_TOKEN can publish it (the job declares packages: write).
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build into the local daemon first so it can be scanned and an SBOM
+      # generated BEFORE anything is published. The matrix runner is native for
+      # its platform, so `load: true` works without emulation; the subsequent
+      # push-by-digest build is a cache hit on this layer set.
+      - name: Build image for scanning (load locally)
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          tags: takuto:scan-${{ matrix.arch }}
+          build-args: |
+            TAKUTO_VERSION=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/takuto-team/takuto-core
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      # Fail the release on any fixable HIGH/CRITICAL OS vulnerability, before
+      # the push step — a vulnerable image never reaches a published tag. Gated
+      # on OS packages only: our own supply chain is covered by cargo-deny +
+      # cargo-audit + npm audit above; the remaining library findings are
+      # third-party bundled tool internals (openvscode-server, npm's vendored
+      # deps) we cannot patch, so scanning them yields only unactionable noise.
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: takuto:scan-${{ matrix.arch }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+          vuln-type: 'os'
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: takuto:scan-${{ matrix.arch }}
+          format: spdx-json
+          output-file: takuto-${{ matrix.arch }}.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: sbom-${{ matrix.arch }}
+          path: takuto-${{ matrix.arch }}.spdx.json
+          if-no-files-found: error
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
+        with:
+          context: .
+          push: true
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            TAKUTO_VERSION=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/takuto-team/takuto-core
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: digest-${{ matrix.runner }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish manifest
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }} \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
