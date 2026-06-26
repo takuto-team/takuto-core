@@ -8,6 +8,13 @@
  * passing without per-test provider wrapping.
  */
 
+import { configure } from "@testing-library/react";
+
 import i18n from "../i18n";
 
 void i18n.changeLanguage("en");
+
+// CI runners are markedly slower than local, so the 1000ms default lets
+// `waitFor`/`findBy` race multi-hop async chains (e.g. save → refetch →
+// re-render). Give them more headroom; passing assertions still resolve fast.
+configure({ asyncUtilTimeout: 5000 });
