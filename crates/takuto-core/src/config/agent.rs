@@ -269,8 +269,8 @@ impl Default for OpenCodeProviderConfig {
 }
 
 /// Cursor provider sub-table — diverges from the generic shape because it
-/// carries a CLI binary name and **no** `base_url` (amendment A1: Cursor's
-/// CLI does not support custom endpoints).
+/// carries a CLI binary name and **no** `base_url` (Cursor's CLI does not
+/// support custom endpoints).
 ///
 /// All fields default to **empty / false** (not the runtime defaults like
 /// `"agent"` and `"Auto"`). The "empty" sentinel is meaningful: an empty
