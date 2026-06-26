@@ -9,7 +9,52 @@ env:
   IMAGE_NAME: takuto-team/takuto-core
 
 jobs:
+  # Gate the build/publish on the checks. A `v*` tag points at a commit that
+  # was already pushed to `main`, which already triggered `ci.yml` — so we wait
+  # for THAT run's conclusion instead of re-running the checks here (checks run
+  # once per release, on the code push). No CI success ⇒ no image is built.
+  await-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for this commit's CI run to pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 1800 ))  # 30 minutes
+          echo "Gating release on the CI run for commit $SHA"
+          while :; do
+            read -r status conclusion < <(
+              gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=1" \
+                --jq '(.workflow_runs[0] // {}) | "\(.status // "none") \(.conclusion // "none")"' \
+                2>/dev/null || echo "none none"
+            )
+            if [ "$status" = "none" ]; then
+              echo "No CI run found yet for $SHA; waiting…"
+            else
+              echo "CI run: status=$status conclusion=$conclusion"
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" = "success" ]; then
+                  echo "CI passed — proceeding with build."
+                  exit 0
+                fi
+                echo "::error::CI for $SHA concluded '$conclusion' (not success) — refusing to build/publish."
+                exit 1
+              fi
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Timed out after 30m waiting for CI on $SHA. Push the commit to main (so CI runs) before tagging."
+              exit 1
+            fi
+            sleep 15
+          done
+
   build:
+    needs: await-checks
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
