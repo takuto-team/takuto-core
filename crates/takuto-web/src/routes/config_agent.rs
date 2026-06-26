@@ -26,7 +26,7 @@ use takuto_core::workflow::engine::WorkflowEvent;
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
-use crate::routes::config::UpdateConfigResponse;
+use crate::routes::config::{UpdateConfigResponse, stage_and_commit};
 use crate::state::{AuthState, ConfigState, EngineState};
 
 // ---------------------------------------------------------------------------
@@ -308,64 +308,57 @@ pub async fn put_agent_config(
         }
     }
 
-    // Stage mutations on a clone and commit only after validation, so a
-    // rejected patch leaves the live config unchanged.
-    let (config_snapshot, provider_change) = {
-        let mut config = cfg_state.config.write().await;
-        let previous_provider = config.agent.provider.as_str().to_string();
-
-        let mut next = config.clone();
+    // `stage_and_commit` re-validates the whole config before committing —
+    // catches denied extra_args on a sub-table the request didn't touch, and
+    // any other invariant — and discards the staged clone on failure.
+    let mut previous_provider = String::new();
+    let config_snapshot = stage_and_commit(&cfg_state.config, |config| {
+        previous_provider = config.agent.provider.as_str().to_string();
 
         if let Some(provider_str) = patch.provider {
-            // parse() already validated above; unwrap is safe here.
+            // Already validated before the lock; re-parsing here cannot fail.
             let p = AiAgentProvider::parse(&provider_str)
                 .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-            next.agent.provider = p;
+            config.agent.provider = p;
         }
         if let Some(list) = patch.available_providers {
-            next.agent.available_providers = list;
+            config.agent.available_providers = list;
         }
         if let Some(share) = patch.share_conversation_across_steps {
-            next.agent.share_conversation_across_steps = share;
+            config.agent.share_conversation_across_steps = share;
         }
         if let Some(v) = patch.step_timeout_secs {
-            next.agent.step_timeout_secs = v;
+            config.agent.step_timeout_secs = v;
         }
         if let Some(v) = patch.improve_timeout_secs {
-            next.agent.improve_timeout_secs = v;
+            config.agent.improve_timeout_secs = v;
         }
         if let Some(v) = patch.max_repeated_output_lines {
-            next.agent.max_repeated_output_lines = v;
+            config.agent.max_repeated_output_lines = v;
         }
         if let Some(providers_patch) = patch.providers {
             if let Some(p) = providers_patch.claude {
-                apply_generic_patch(&mut next.agent.providers.claude, p);
+                apply_generic_patch(&mut config.agent.providers.claude, p);
             }
             if let Some(p) = providers_patch.cursor {
-                apply_cursor_patch(&mut next.agent.providers.cursor, p);
+                apply_cursor_patch(&mut config.agent.providers.cursor, p);
             }
             if let Some(p) = providers_patch.codex {
-                apply_codex_patch(&mut next.agent.providers.codex, p);
+                apply_codex_patch(&mut config.agent.providers.codex, p);
             }
             if let Some(p) = providers_patch.opencode {
-                apply_opencode_patch(&mut next.agent.providers.opencode, p);
+                apply_opencode_patch(&mut config.agent.providers.opencode, p);
             }
         }
+        Ok(())
+    })
+    .await?;
 
-        // Re-validate the whole config: catches denied extra_args on a
-        // sub-table the request didn't touch, and any other invariant.
-        next.validate()
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-
-        *config = next;
-
-        let new_provider = config.agent.provider.as_str().to_string();
-        let change = if previous_provider != new_provider {
-            Some((previous_provider, new_provider))
-        } else {
-            None
-        };
-        (config.clone(), change)
+    let new_provider = config_snapshot.agent.provider.as_str().to_string();
+    let provider_change = if previous_provider != new_provider {
+        Some((previous_provider, new_provider))
+    } else {
+        None
     };
 
     // Persist to disk OUTSIDE the lock.
@@ -713,21 +706,19 @@ mod http_tests {
         let state = test_state_with_db();
         let cookie = register_and_login(&state).await;
 
-        let original_provider = state
-            .config
-            .config
-            .read()
-            .await
-            .agent
-            .provider
-            .as_str()
-            .to_string();
+        let (original_provider, original_claude_model) = {
+            let cfg = state.config.config.read().await;
+            (
+                cfg.agent.provider.as_str().to_string(),
+                cfg.agent.providers.claude.model.clone(),
+            )
+        };
 
         // Switching to opencode without a base_url fails whole-config
-        // validation (opencode requires a base_url). The rejected patch must
-        // NOT leave provider=opencode in the live in-memory config — otherwise
-        // it poisons every later config write, which re-validates the whole
-        // config.
+        // validation. The rejected patch must roll back ENTIRELY: neither the
+        // top-level provider nor the unrelated claude sub-table edit in the same
+        // body may survive — otherwise it poisons every later config write,
+        // which re-validates the whole config.
         let app = build_router(state.clone());
         let resp = app
             .oneshot(
@@ -735,7 +726,9 @@ mod http_tests {
                     .header("Content-Type", "application/json")
                     .header("Origin", TEST_ORIGIN)
                     .header("Cookie", &cookie)
-                    .body(Body::from(r#"{"provider":"opencode"}"#))
+                    .body(Body::from(
+                        r#"{"provider":"opencode","providers":{"claude":{"model":"rollback-canary"}}}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -747,6 +740,10 @@ mod http_tests {
             cfg.agent.provider.as_str(),
             original_provider,
             "a rejected PUT must leave the live provider untouched"
+        );
+        assert_eq!(
+            cfg.agent.providers.claude.model, original_claude_model,
+            "a rejected PUT must also roll back sub-table edits in the same body"
         );
     }
 

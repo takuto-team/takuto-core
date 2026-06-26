@@ -20,7 +20,7 @@ use takuto_core::config::LinkedItemsPromptMode;
 
 use crate::auth::AuthenticatedUser;
 use crate::routes::admin::require_admin_for;
-use crate::routes::config::UpdateConfigResponse;
+use crate::routes::config::{UpdateConfigResponse, stage_and_commit};
 use crate::state::{AuthState, ConfigState};
 
 // ---------------------------------------------------------------------------
@@ -71,9 +71,7 @@ pub async fn put_jira_config(
         (StatusCode::BAD_REQUEST, body)
     })?;
 
-    let config_snapshot = {
-        let mut config = cfg_state.config.write().await;
-
+    let config_snapshot = stage_and_commit(&cfg_state.config, |config| {
         if let Some(v) = patch.linked_items_in_prompt {
             config.jira.linked_items_in_prompt = v;
         }
@@ -86,13 +84,9 @@ pub async fn put_jira_config(
         if let Some(v) = patch.done_status {
             config.jira.done_status = v;
         }
-
-        config
-            .validate()
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-
-        config.clone()
-    };
+        Ok(())
+    })
+    .await?;
 
     let (persisted, persist_warning) = if let Some(ref writer) = cfg_state.config_writer {
         match writer.write_config(&config_snapshot) {
