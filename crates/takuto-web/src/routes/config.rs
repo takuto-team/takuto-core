@@ -118,6 +118,27 @@ pub struct UpdateConfigResponse {
     pub persist_warning: Option<String>,
 }
 
+/// Stage `mutate` on a clone of the live config, validate it, and commit the
+/// clone back only if validation passes — so a rejected patch leaves the live
+/// config unchanged. Returns the committed snapshot for post-lock I/O. The
+/// write lock is held only across the clone, mutate, validate, and commit; all
+/// disk/side-effect work happens after it drops.
+pub(crate) async fn stage_and_commit<F>(
+    config: &tokio::sync::RwLock<Config>,
+    mutate: F,
+) -> Result<Config, (StatusCode, String)>
+where
+    F: FnOnce(&mut Config) -> Result<(), (StatusCode, String)>,
+{
+    let mut guard = config.write().await;
+    let mut next = guard.clone();
+    mutate(&mut next)?;
+    next.validate()
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    *guard = next;
+    Ok(guard.clone())
+}
+
 pub async fn update_config(
     State(auth_state): State<AuthState>,
     State(cfg): State<ConfigState>,
@@ -127,14 +148,12 @@ pub async fn update_config(
     require_admin_for(&auth_state, &auth)
         .await
         .map_err(|s| (s, String::new()))?;
-    // Apply patch under write lock, then clone and release.
-    let config_snapshot = {
-        let mut config = cfg.config.write().await;
+    let config_snapshot = stage_and_commit(&cfg.config, |config| {
         config
             .apply_runtime_dashboard_patch(patch)
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-        config.clone()
-    }; // write lock dropped here
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+    })
+    .await?;
 
     // Persist to disk OUTSIDE the lock — blocking I/O no longer holds the
     // write guard, so concurrent readers are not stalled.
