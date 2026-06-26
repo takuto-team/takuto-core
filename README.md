@@ -8,9 +8,9 @@ Turn Jira and GitHub tickets into pull requests: fully autonomous, or steered ti
 ticket from a live dashboard. Every agent runs in its own container, behind an egress
 firewall, on hardware you own.
 
-[Documentation](https://takuto-doc.alexandre-obellianne.workers.dev) ·
-[Quick start](https://takuto-doc.alexandre-obellianne.workers.dev/docs/quick-start/) ·
-[Security](https://takuto-doc.alexandre-obellianne.workers.dev/security/) ·
+[Documentation](https://takuto.io) ·
+[Quick start](https://takuto.io/docs/quick-start/) ·
+[Security](https://takuto.io/security/) ·
 [CLI](https://github.com/takuto-team/takuto-cli)
 
 ![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue.svg)
@@ -32,7 +32,7 @@ models), and there is **no telemetry** — your code and tickets go only to the 
 configure.
 
 The rest of this README goes from the high-level picture down to full operational detail.
-For the polished guides, see the **[documentation site](https://takuto-doc.alexandre-obellianne.workers.dev)**.
+For the polished guides, see the **[documentation site](https://takuto.io)**.
 
 ---
 
