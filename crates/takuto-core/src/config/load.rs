@@ -198,10 +198,10 @@ impl Config {
             .into());
         }
 
-        // T-CFG-002 (Phase 1, amendment A1): the Cursor CLI does not honour
-        // custom endpoints, so a non-empty `[agent.providers.cursor].base_url`
-        // is silently ignored at runtime and would lull the operator into
-        // thinking proxying works. Reject loudly at validate time.
+        // The Cursor CLI does not honour custom endpoints, so a non-empty
+        // `[agent.providers.cursor].base_url` is silently ignored at runtime
+        // and would lull the operator into thinking proxying works. Reject
+        // loudly at validate time.
         if !self.agent.providers.cursor.base_url.trim().is_empty() {
             return Err(ConfigError::Validation {
                 section: "agent.providers.cursor",
