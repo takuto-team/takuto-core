@@ -309,51 +309,63 @@ pub async fn put_agent_config(
     }
 
     // Apply under write lock, then clone + release before any I/O.
+    //
+    // Mutations are staged on a clone and validated BEFORE being committed to
+    // the shared config. A rejected patch (e.g. opencode with a blank
+    // base_url) must leave the live config untouched — committing in place and
+    // relying on `validate()?` to bail leaves the bad values under the lock,
+    // poisoning every later config write (which re-validate the whole config).
     let (config_snapshot, provider_change) = {
         let mut config = cfg_state.config.write().await;
         let previous_provider = config.agent.provider.as_str().to_string();
+
+        let mut next = config.clone();
 
         if let Some(provider_str) = patch.provider {
             // parse() already validated above; unwrap is safe here.
             let p = AiAgentProvider::parse(&provider_str)
                 .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-            config.agent.provider = p;
+            next.agent.provider = p;
         }
         if let Some(list) = patch.available_providers {
-            config.agent.available_providers = list;
+            next.agent.available_providers = list;
         }
         if let Some(share) = patch.share_conversation_across_steps {
-            config.agent.share_conversation_across_steps = share;
+            next.agent.share_conversation_across_steps = share;
         }
         if let Some(v) = patch.step_timeout_secs {
-            config.agent.step_timeout_secs = v;
+            next.agent.step_timeout_secs = v;
         }
         if let Some(v) = patch.improve_timeout_secs {
-            config.agent.improve_timeout_secs = v;
+            next.agent.improve_timeout_secs = v;
         }
         if let Some(v) = patch.max_repeated_output_lines {
-            config.agent.max_repeated_output_lines = v;
+            next.agent.max_repeated_output_lines = v;
         }
         if let Some(providers_patch) = patch.providers {
             if let Some(p) = providers_patch.claude {
-                apply_generic_patch(&mut config.agent.providers.claude, p);
+                apply_generic_patch(&mut next.agent.providers.claude, p);
             }
             if let Some(p) = providers_patch.cursor {
-                apply_cursor_patch(&mut config.agent.providers.cursor, p);
+                apply_cursor_patch(&mut next.agent.providers.cursor, p);
             }
             if let Some(p) = providers_patch.codex {
-                apply_codex_patch(&mut config.agent.providers.codex, p);
+                apply_codex_patch(&mut next.agent.providers.codex, p);
             }
             if let Some(p) = providers_patch.opencode {
-                apply_opencode_patch(&mut config.agent.providers.opencode, p);
+                apply_opencode_patch(&mut next.agent.providers.opencode, p);
             }
         }
 
-        // Re-validate the resulting config (catches denied extra_args set on
-        // a sub-table the request did not touch, and any other invariant).
-        config
-            .validate()
+        // Validate the staged config (catches denied extra_args set on a
+        // sub-table the request did not touch, and any other invariant). On
+        // failure we return WITHOUT writing `next` back, so the live config is
+        // left exactly as it was.
+        next.validate()
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+        // Commit the validated config.
+        *config = next;
 
         let new_provider = config.agent.provider.as_str().to_string();
         let change = if previous_provider != new_provider {
@@ -702,6 +714,48 @@ mod http_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn rejected_patch_leaves_live_config_unchanged() {
+        let state = test_state_with_db();
+        let cookie = register_and_login(&state).await;
+
+        let original_provider = state
+            .config
+            .config
+            .read()
+            .await
+            .agent
+            .provider
+            .as_str()
+            .to_string();
+
+        // Switching to opencode without a base_url fails whole-config
+        // validation (opencode requires a base_url). The rejected patch must
+        // NOT leave provider=opencode in the live in-memory config — otherwise
+        // it poisons every later config write, which re-validates the whole
+        // config.
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::put("/api/config/agent")
+                    .header("Content-Type", "application/json")
+                    .header("Origin", TEST_ORIGIN)
+                    .header("Cookie", &cookie)
+                    .body(Body::from(r#"{"provider":"opencode"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let cfg = state.config.config.read().await;
+        assert_eq!(
+            cfg.agent.provider.as_str(),
+            original_provider,
+            "a rejected PUT must leave the live provider untouched"
+        );
     }
 
     #[tokio::test]
