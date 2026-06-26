@@ -22,6 +22,8 @@ Skip updates only for changes that do not alter documented behavior (e.g. commen
 
 **Default to writing no comments.** Most code does not need a comment. A reader can already see what the code does; a well-named function or variable is worth more than a paragraph above it. Add a comment only when it carries information the reader cannot derive from the code itself: a hidden constraint, a subtle invariant, a workaround tied to a specific bug, or behavior that would genuinely surprise someone.
 
+**When a comment is warranted, keep it to the minimum — usually one line.** State only the non-obvious fact (the *why* or the constraint) and stop. Do not restate the code or a function signature, narrate the control flow ("clone, then validate, then commit"), explain mechanics a reader can already see, or recount the bug/decision history that motivated the change — that belongs in the commit message and PR, not the source. If you find yourself writing three lines to explain a few lines of code, cut it down or delete it.
+
 **Never reference internal planning artifacts in code, log messages, error strings, or user-facing text.** That includes:
 
 - Plan documents (`Plan-NN`, `plan-NN`, `tmp/plan-XX-*.md`, etc.)

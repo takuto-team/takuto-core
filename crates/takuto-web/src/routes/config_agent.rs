@@ -308,15 +308,11 @@ pub async fn put_agent_config(
         }
     }
 
-    // `stage_and_commit` re-validates the whole config before committing —
-    // catches denied extra_args on a sub-table the request didn't touch, and
-    // any other invariant — and discards the staged clone on failure.
     let mut previous_provider = String::new();
     let config_snapshot = stage_and_commit(&cfg_state.config, |config| {
         previous_provider = config.agent.provider.as_str().to_string();
 
         if let Some(provider_str) = patch.provider {
-            // Already validated before the lock; re-parsing here cannot fail.
             let p = AiAgentProvider::parse(&provider_str)
                 .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
             config.agent.provider = p;
