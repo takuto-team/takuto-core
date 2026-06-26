@@ -62,7 +62,7 @@ test.describe('onboarding wizard — validation', () => {
 
     // Server rejects with `opencode_base_url_required`; the wizard surfaces the
     // code in an error toast and stays on step 3.
-    await expect(page.getByText(/opencode_base_url_required/)).toBeVisible();
+    await provider.expectOpencodeBaseUrlRequiredError();
     await wizard.expectStep(3);
 
     // Repair the shared deployment config. The rejected PUT mutates the
@@ -87,7 +87,7 @@ test.describe('onboarding wizard — validation', () => {
     await ticketing.jiraSiteInput().fill(JIRA_INPUT.site);
     await wizard.saveAndContinue();
 
-    await expect(page.getByText(/Fill in the Jira site/)).toBeVisible();
+    await ticketing.expectJiraPartialError();
     await wizard.expectStep(4);
   });
 

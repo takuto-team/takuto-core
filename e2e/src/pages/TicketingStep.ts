@@ -1,9 +1,13 @@
-import { type Locator, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import type { TicketingId } from '../api/types.js';
 
-/** Inline message when the Jira form is partially filled (`onboarding.json`). */
+/**
+ * Message shown when the Jira form is partially filled. Substring of the
+ * `jiraPartial` string in `ui/src/locales/en/config.json` ("Fill in the Jira
+ * site, email, and API token …").
+ */
 export const TICKETING_ERRORS = {
-  jiraPartial: 'jiraPartial',
+  jiraPartial: /Fill in the Jira site/,
 } as const;
 
 /**
@@ -55,5 +59,10 @@ export class TicketingStep {
   /** Whether the system selector is disabled (true for a non-admin caller). */
   async isSystemDisabled(): Promise<boolean> {
     return this.systemSelect().isDisabled();
+  }
+
+  /** Assert the partial-Jira-form error is shown (Continue was blocked). */
+  async expectJiraPartialError(): Promise<void> {
+    await expect(this.page.getByText(TICKETING_ERRORS.jiraPartial)).toBeVisible();
   }
 }
