@@ -123,9 +123,12 @@ describe("TicketDetailModal — Add to Dashboard save-first", () => {
     await waitFor(() =>
       expect(calls.some((c) => c.url.includes("/update-description"))).toBe(true),
     );
-    // Editor is still mounted (the textarea and Save button remain).
+    // Editor is still mounted (the textarea and Save button remain). The Save
+    // button passes through a transient state as the mutation settles, so wait
+    // for it rather than querying synchronously (the sync query races the
+    // re-render on slower runners).
     expect(container.querySelector("textarea")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
   });
 
   it("swaps Improve-with-AI for Back in edit mode and Back returns to read-only", async () => {
