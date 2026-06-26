@@ -308,13 +308,8 @@ pub async fn put_agent_config(
         }
     }
 
-    // Apply under write lock, then clone + release before any I/O.
-    //
-    // Mutations are staged on a clone and validated BEFORE being committed to
-    // the shared config. A rejected patch (e.g. opencode with a blank
-    // base_url) must leave the live config untouched — committing in place and
-    // relying on `validate()?` to bail leaves the bad values under the lock,
-    // poisoning every later config write (which re-validate the whole config).
+    // Stage mutations on a clone and commit only after validation, so a
+    // rejected patch leaves the live config unchanged.
     let (config_snapshot, provider_change) = {
         let mut config = cfg_state.config.write().await;
         let previous_provider = config.agent.provider.as_str().to_string();
@@ -357,14 +352,11 @@ pub async fn put_agent_config(
             }
         }
 
-        // Validate the staged config (catches denied extra_args set on a
-        // sub-table the request did not touch, and any other invariant). On
-        // failure we return WITHOUT writing `next` back, so the live config is
-        // left exactly as it was.
+        // Re-validate the whole config: catches denied extra_args on a
+        // sub-table the request didn't touch, and any other invariant.
         next.validate()
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-        // Commit the validated config.
         *config = next;
 
         let new_provider = config.agent.provider.as_str().to_string();
