@@ -278,4 +278,49 @@ test.describe.serial('opencode implement-workflow via the dashboard UI (Part B)'
       })
       .toBe(200);
   });
+
+  test('B7: all agent CLIs are reachable from inside the workflow container during a run', async () => {
+    test.setTimeout(SURFACE_TIMEOUT_MS + 120_000);
+    const card = new WorkItemCard(page, ticketKey);
+    await card.waitFor();
+
+    // Bring up the per-item workspace container if it isn't already. This is the
+    // container that hosts the worktree and the agent steps during a workflow
+    // run; it mounts `/opt/takuto-tools` through DinD and prepends its `bin/` to
+    // the login-shell PATH. Opening the IDE ensures `takuto-ws-<ticket>` is live.
+    if (!(await card.isEditorRunning())) {
+      await card.clickEditor();
+      await expect
+        .poll(() => card.isEditorRunning(), {
+          timeout: SURFACE_TIMEOUT_MS,
+          message: 'workspace container never came up',
+        })
+        .toBe(true);
+    }
+
+    // Locate the live workflow container inside the DinD daemon.
+    const ps = await dind.exec(['ps', '--format', '{{.Names}}']);
+    const workflowContainer = ps.stdout
+      .split('\n')
+      .map((s) => s.trim())
+      .find((n) => n.startsWith('takuto-ws-'));
+    expect(
+      workflowContainer,
+      `a workflow/workspace container should be running (ps: ${ps.stdout})`,
+    ).toBeTruthy();
+
+    // Every agent CLI must resolve and run FROM INSIDE that container — i.e. the
+    // tools volume + PATH reach the workflow runtime, not just the takuto server.
+    // `bash -lc` uses the login-shell PATH the worker entrypoint sets; `2>&1`
+    // captures CLIs that print their version to stderr.
+    for (const bin of ['claude', 'cursor-agent', 'codex', 'opencode']) {
+      const r = await dind.exec(['exec', workflowContainer!, 'bash', '-lc', `${bin} --version 2>&1`]);
+      expect(r.exitCode, `${bin} --version inside the workflow container (out: ${r.stdout})`).toBe(
+        0,
+      );
+      expect(r.stdout, `${bin} --version produced no version token (out: ${r.stdout})`).toMatch(
+        /\d+\.\d+/,
+      );
+    }
+  });
 });
