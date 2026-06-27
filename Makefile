@@ -68,7 +68,7 @@ TAKUTO_IMAGE = $(shell $(COMPOSE) $(COMPOSE_FILES) images takuto --format '{{.Re
 # Docker image registry for push targets.
 REGISTRY ?= ghcr.io/takuto-team/takuto-core
 
-.PHONY: help build build-local start stop auth test logs logs-takuto ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full checked-push coverage backup-postgres backup-mariadb
+.PHONY: help build build-local start stop auth test logs logs-takuto ps bash exec worker-bash restart load-worker clean-dind ui-build push push-arm64 push-amd64 check check-full checked-push coverage backup-postgres backup-mariadb e2e e2e-report
 
 # Output directory for `backup-postgres` / `backup-mariadb`. Gitignored.
 DUMP_DIR ?= dump
@@ -407,3 +407,23 @@ backup-mariadb: ## Dump the MariaDB DB to dump/mariadb-<timestamp>.sql.gz
 	  mariadb-dump --single-transaction --add-drop-table -u root "$$DB" \
 	  | gzip > "$$OUT"; \
 	echo "Backup complete: $$OUT ($$(du -h "$$OUT" | cut -f1))"
+
+# ── End-to-end tests (Playwright) ─────────────────────────────────────
+# Drives ephemeral Docker stacks via Playwright. The Part B
+# (implement-workflow) specs bring up a Docker-in-Docker sidecar + mock
+# LM Studio and MUST run serially, so the whole run is pinned to one
+# worker. The HTML report is written to e2e/playwright-report/ by the
+# config's default reporter (do not pass --reporter, which would suppress
+# it). Scope with ARGS (e.g. ARGS="agent-reachability workflow-implement").
+# Part B requires the sqlite backend (its DinD stack is single-backend).
+
+E2E_BACKEND ?= sqlite
+
+e2e: ## Run the Playwright e2e suite serially (HTML report -> e2e/playwright-report). ARGS="<spec>" to scope
+	cd e2e && npm install --silent && npx playwright install chromium
+	cd e2e && TAKUTO_E2E_WORKERS=1 TAKUTO_E2E_BACKENDS=$(E2E_BACKEND) npx playwright test $(ARGS)
+	@echo ""
+	@echo "HTML report: e2e/playwright-report/ — open it with: make e2e-report"
+
+e2e-report: ## Open the last Playwright HTML report in a browser
+	cd e2e && npx playwright show-report

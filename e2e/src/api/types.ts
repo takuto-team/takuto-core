@@ -137,3 +137,196 @@ export interface ProviderCredentialRequest {
   /** Credential kind; defaults to `api_key` server-side. */
   kind?: 'api_key';
 }
+
+// ---------------------------------------------------------------------------
+// Implement-workflow surface (`IMPLEMENT_WORKFLOW_CONTRACT.md`). Only the fields
+// the Part-B specs assert on are modelled; the server returns more.
+// ---------------------------------------------------------------------------
+
+/** A repository the caller has added (`repositories.ts:RepositoryRow`). */
+export interface RepositoryRow {
+  id: string;
+  name: string;
+  repo_url: string | null;
+  local_path: string;
+  default_branch: string;
+}
+
+/**
+ * `POST /api/repositories` body. `{ repository_id }` adds an existing registered
+ * repo to the caller's dashboard; `{ repo_url }` clones+adds a new one
+ * (`repositories.rs`). Idempotent when already associated.
+ */
+export interface AddRepositoryRequest {
+  repository_id?: string;
+  repo_url?: string;
+}
+
+/** One run-command's name + shell command (`RunCommand`, `worktree_commands`). */
+export interface RunCommand {
+  name: string;
+  command: string;
+}
+
+/**
+ * `PUT /api/worktree-commands/{workspace}` body (`deny_unknown_fields`;
+ * `worktree_commands.rs:96-105`). For the fixture: `init_commands = ["npm ci"]`
+ * and one `run_commands` entry `{ name: "dev", command: "npm run dev" }`.
+ */
+export interface WorktreeCommandsRequest {
+  init_commands: string[];
+  run_commands: RunCommand[];
+  generate_report: boolean;
+}
+
+/** A persisted `user_worktree_commands` row (`worktreeCommands.ts`). */
+export interface WorktreeCommandsRow {
+  workspace_name: string;
+  init_commands: string[];
+  run_commands: RunCommand[];
+  generate_report: boolean;
+  updated_at: number;
+}
+
+/**
+ * `POST /api/workflows/start-manual` body (`manual.rs:18-33`). `ticket_key` may
+ * be empty when Jira is off (a synthetic `MANUAL-{ts}` key is generated). With
+ * `ticketing_system = none`, pass a non-empty key to drive the branch/worktree.
+ */
+export interface StartManualWorkflowRequest {
+  ticket_key: string;
+  ticket_summary: string;
+  ticket_description?: string;
+  issue_url?: string;
+  /** A `repositories` row id the caller owns; omitted → most-recently-added. */
+  repository_id?: string;
+}
+
+/** `POST /api/workflows/start-manual` response (`manual.rs:36-39`). */
+export interface StartManualWorkflowResponse {
+  workflow_id: string;
+  ticket_key: string;
+}
+
+/**
+ * One run-command's live status (`RunCommandStatus`, `dto.rs:146-158`).
+ * `forwarded_port` is `[container_port, proxy_url]` once a listening port is
+ * detected and forwarded (e.g. `[5173, "/s/<token>/"]`).
+ */
+export interface RunCommandStatus {
+  index: number;
+  name: string;
+  running: boolean;
+  forwarded_port: [number, string] | null;
+}
+
+/** `POST /api/workflows/{id}/run-commands/{index}/start` response (`run_commands.rs:35-39`). */
+export interface StartRunCommandResponse {
+  index: number;
+  name: string;
+}
+
+/** `POST /api/workflows/{id}/open-editor` response (`editor.rs:29-42`). */
+export interface OpenEditorResponse {
+  /** `/s/<path_token>/?tkn=<connection_token>&folder=<…>` (proxied). */
+  url: string;
+  connection_token: string;
+  vscode_port: number;
+  port_mappings: [number, number][];
+  path_token: string;
+}
+
+/** `POST /api/workflows/{id}/open-terminal` response (`editor.rs:743-754`). */
+export interface OpenTerminalResponse {
+  /** `/s/<path_token>/<ttyd-token>/` (proxied). */
+  url: string;
+  credential: string;
+  path_token: string;
+}
+
+/**
+ * Subset of `WorkflowSummary` (`dto.rs:33-`) the Part-B specs poll: enough to
+ * observe run-command status, the forwarded ports, and the editor/terminal URLs.
+ */
+export interface WorkflowSummary {
+  id: string;
+  ticket_key: string;
+  state: string;
+  error?: string | null;
+  workspace_name: string;
+  branch_name: string;
+  can_open_editor: boolean;
+  editor_url: string | null;
+  terminal_url: string | null;
+  run_commands: RunCommandStatus[];
+  worktree_path: string | null;
+  /** Bootstrap + flow step log (`StepLog`, `step.rs:10`); used for diagnostics. */
+  steps_log?: WorkflowStepLog[];
+  /**
+   * Per-definition run state, keyed by the flow slug → display name
+   * (`idle` / `running` / `completed` / `error`). Wire field is `definition_runs`
+   * (`dto.rs:106`). The terminal-state signal for a flow run.
+   */
+  definition_runs?: Record<string, string>;
+}
+
+/** One step row of a workflow's log (`StepLog`, `step.rs:10`). */
+export interface WorkflowStepLog {
+  step_name: string;
+  status: string;
+  error?: string | null;
+  bootstrap?: boolean;
+}
+
+/**
+ * One runnable workflow definition (`DiscoveredWorkflow`, `definitions.rs:74`).
+ * `filename` is the flow slug passed to `run-workflow/{def}`.
+ */
+export interface WorkflowDefinition {
+  filename: string;
+  name: string;
+  valid: boolean;
+  error?: string;
+}
+
+/** One step of a user flow seeded via `PUT /api/me/flows` (`user_work_item_flows.rs:44`). */
+export interface UserFlowStepInput {
+  name: string;
+  prompt: string;
+  skills?: { name: string; args?: string[] }[];
+}
+
+/** A user flow definition (`UserFlow`, `user_work_item_flows.rs:57`). */
+export interface UserFlowInput {
+  name: string;
+  depends_on?: string[];
+  steps: UserFlowStepInput[];
+}
+
+/** `GET`/`PUT /api/me/flows` response (`me_flows.rs:30-32`). */
+export interface MyFlowsResponse {
+  flows: UserFlowInput[];
+  workspace: string;
+}
+
+/**
+ * A `WorkflowEvent` as serialised onto `GET /ws` (`engine/types.rs:75-129`).
+ * `event_type` is the discriminator; `forwarded_port` is `(container_port,
+ * host_port)` on the port-forward events.
+ */
+export interface WorkflowEvent {
+  event_type: string;
+  workflow_id: string;
+  ticket_key: string;
+  state: string;
+  error?: string | null;
+  step_name?: string;
+  forwarded_port?: [number, number];
+}
+
+/** Result of a `GET /s/{path_token}/…` proxied request via the authed context. */
+export interface ProxyResponse {
+  status: number;
+  body: string;
+  contentType: string;
+}

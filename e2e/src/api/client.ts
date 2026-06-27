@@ -198,6 +198,22 @@ export class OnboardingApi {
     }
   }
 
+  /**
+   * `POST /api/onboarding/complete` — mark the caller's wizard finished so the
+   * dashboard renders instead of auto-launching the wizard. Rewrites
+   * `config.toml` from the live in-memory config (which was loaded from the
+   * seed at boot), so pre-seeded settings — the opencode provider + mock
+   * `base_url` — are preserved.
+   */
+  async completeOnboarding(): Promise<void> {
+    const res = await this.api.post(this.url('/api/onboarding/complete'), {
+      headers: this.mutatingHeaders(),
+    });
+    if (!res.ok()) {
+      throw new ApiError('POST /api/onboarding/complete failed', res.status(), await res.text());
+    }
+  }
+
   /** `POST /api/users/me/jira-credential` — store a Jira credential for the user. */
   async setJiraCredential(body: JiraCredentialRequest): Promise<void> {
     const res = await this.api.post(this.url('/api/users/me/jira-credential'), {
