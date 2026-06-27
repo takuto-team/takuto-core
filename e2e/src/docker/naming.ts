@@ -11,6 +11,13 @@ export const LABEL_E2E = 'com.takuto.e2e';
 export const LABEL_RUN = 'com.takuto.e2e.run';
 /** Label carrying the per-stack id, used to tear down a single stack. */
 export const LABEL_STACK = 'com.takuto.e2e.stack';
+/**
+ * Label for the persistent tools-cache volume. Deliberately NOT `LABEL_E2E`:
+ * the cache must survive both sweeps AND must not register as a leftover in the
+ * zero-residual checks that filter on `LABEL_E2E=true`. Inspect/purge with
+ * `docker volume ls --filter label=com.takuto.e2e.cache=true`.
+ */
+export const LABEL_CACHE = 'com.takuto.e2e.cache';
 
 /**
  * Stable id for the whole test run. Taken from `TAKUTO_E2E_RUN_ID` when set
@@ -20,7 +27,16 @@ export const LABEL_STACK = 'com.takuto.e2e.stack';
 export const RUN_ID: string = process.env.TAKUTO_E2E_RUN_ID || `r${rand(8)}`;
 
 /** Roles a container/volume/network can play inside one stack. */
-export type ResourceRole = 'net' | 'db' | 'app' | 'data' | 'dbdata';
+export type ResourceRole =
+  | 'net'
+  | 'db'
+  | 'app'
+  | 'data'
+  | 'dbdata'
+  // Part-B (DinD): sidecar container + the shared workspace volumes.
+  | 'dind'
+  | 'ws'
+  | 'wss';
 
 /** Random lowercase-hex token of `len` characters. */
 export function rand(len: number): string {

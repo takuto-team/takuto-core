@@ -12,6 +12,9 @@ export default tseslint.config(
       'playwright-report/',
       'playwright/.cache/',
       'eslint.config.js',
+      // The React app fixture is a standalone Vite project with its own
+      // tsconfig; it is not part of the e2e TS program.
+      'fixtures/react-app/',
     ],
   },
   js.configs.recommended,
