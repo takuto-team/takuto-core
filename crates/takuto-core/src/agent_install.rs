@@ -296,63 +296,51 @@ impl Installer {
 
     async fn cursor_install(&self, target: &VersionTarget) -> Result<(), String> {
         let bin_dir = self.bin_dir();
-        match target {
-            // Pinned: download the exact versioned tarball into our tools tree and
-            // symlink the launcher (its realpath lookup needs index.js beside the
-            // binary). Versioned tarballs are stable at `downloads.cursor.com/lab/`.
-            VersionTarget::Pinned(version) => {
-                let share = self.install_dir.join("share").join("cursor-agent");
-                let script = format!(
-                    r#"set -euo pipefail
+        let share = self.install_dir.join("share").join("cursor-agent");
+        // Cursor ships no stable "latest" download URL: its official installer
+        // (`cursor.com/install`) hardcodes the current version inside a
+        // `downloads.cursor.com/lab/<version>/…` URL. For the unpinned case we
+        // parse the version out of THAT URL — the installer's own source of
+        // truth, resilient to its version-string format changing — then download
+        // the concrete versioned tarball ourselves (silently, `-fsSL`). We do
+        // NOT pipe the installer into `bash`: its progress meter spews thousands
+        // of lines with no TTY and floods the install output. We extract the
+        // tree and symlink the launcher (its realpath lookup needs index.js
+        // beside the script).
+        let pinned = match target {
+            VersionTarget::Pinned(v) => v.clone(),
+            VersionTarget::Latest => String::new(),
+        };
+        let script = format!(
+            r#"set -euo pipefail
 arch="$(dpkg --print-architecture)"
 case "$arch" in
   amd64) carch=x64 ;;
   arm64) carch=arm64 ;;
   *) echo "unsupported arch: $arch" >&2; exit 1 ;;
 esac
-version={version}
+version={pinned}
+if [ -z "$version" ]; then
+  version="$(curl -fsSL https://cursor.com/install \
+    | grep -oE 'downloads\.cursor\.com/lab/[^/"]+/' | head -n1 \
+    | sed -E 's#.*/lab/([^/]+)/#\1#')"
+  [ -n "$version" ] || {{ echo "could not resolve latest cursor version from cursor.com/install" >&2; exit 1; }}
+fi
 url="https://downloads.cursor.com/lab/$version/linux/$carch/agent-cli-package.tar.gz"
 dest={share}/$version
 mkdir -p "$dest" {bin}
-curl -fSL --retry 3 --retry-delay 5 "$url" -o /tmp/cursor-agent.tar.gz
+curl -fsSL --retry 3 --retry-delay 5 "$url" -o /tmp/cursor-agent.tar.gz
 tar --strip-components=1 -xzf /tmp/cursor-agent.tar.gz -C "$dest"
 rm -f /tmp/cursor-agent.tar.gz
 ln -sf "$dest/cursor-agent" {bin}/agent
 ln -sf "$dest/cursor-agent" {bin}/cursor-agent
 test -f "$dest/index.js"
 "#,
-                    version = shell_quote(version),
-                    share = shell_quote(&share.to_string_lossy()),
-                    bin = shell_quote(&bin_dir.to_string_lossy()),
-                );
-                self.run_shell(&script).await
-            }
-            // Unpinned: defer to Cursor's official installer to resolve AND fetch
-            // the current version. Cursor ships no stable "latest" download URL and
-            // its version string format is not contractual, so resolving it
-            // ourselves is brittle; let the upstream installer decide. It hardcodes
-            // its install location under `$HOME`, so point `HOME` at our tools dir
-            // and then symlink our `bin/` launchers at whatever it installed
-            // (index.js sits beside the resolved binary, so realpath still works).
-            VersionTarget::Latest => {
-                let home = self.install_dir.to_string_lossy();
-                let script = format!(
-                    r#"set -euo pipefail
-export HOME={home}
-curl -fsSL https://cursor.com/install | bash
-real="$(readlink -f "$HOME/.local/bin/cursor-agent" 2>/dev/null || true)"
-[ -n "$real" ] && [ -f "$real" ] || {{ echo "official Cursor installer did not produce cursor-agent" >&2; exit 1; }}
-mkdir -p {bin}
-ln -sf "$real" {bin}/agent
-ln -sf "$real" {bin}/cursor-agent
-test -f "$(dirname "$real")/index.js"
-"#,
-                    home = shell_quote(&home),
-                    bin = shell_quote(&bin_dir.to_string_lossy()),
-                );
-                self.run_shell(&script).await
-            }
-        }
+            pinned = shell_quote(&pinned),
+            share = shell_quote(&share.to_string_lossy()),
+            bin = shell_quote(&bin_dir.to_string_lossy()),
+        );
+        self.run_shell(&script).await
     }
 
     async fn acli_install(&self, target: &VersionTarget) -> Result<(), String> {
