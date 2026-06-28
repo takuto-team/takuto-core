@@ -48,6 +48,12 @@ interface Props {
    *  in a sibling section, so the credential card reflects the new provider
    *  without a manual page reload. */
   refreshKey?: number;
+  /** Live provider currently chosen in the admin Provider Settings dropdown
+   *  (not yet persisted). When set it drives which credential card renders and
+   *  scopes the credential fetch, so the card follows the dropdown in realtime
+   *  instead of waiting for a save. Omitted for non-admins → falls back to the
+   *  persisted deployment provider. */
+  providerOverride?: string;
   /** Reports `true` when a credential field holds a typed-but-unsaved value, so
    *  the AI Settings tab can warn before navigation. */
   onDirtyChange?: (dirty: boolean) => void;
@@ -59,7 +65,13 @@ interface Props {
   deferSave?: boolean;
 }
 
-export function MyCredentialsSection({ refreshKey = 0, onDirtyChange, panelRef, deferSave }: Props = {}) {
+export function MyCredentialsSection({
+  refreshKey = 0,
+  providerOverride,
+  onDirtyChange,
+  panelRef,
+  deferSave,
+}: Props = {}) {
   const { t } = useTranslation("credentials");
   const { showToast } = useToast();
   const [creds, setCreds] = useState<UserCredentialsStatus | null>(null);
@@ -91,13 +103,16 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange, panelRef, 
    */
   const refresh = useCallback(async () => {
     const [c, a] = await Promise.all([
-      fetchUserCredentials().catch(() => null),
+      // Scope the credential lookup to the live dropdown selection (when an
+      // admin is previewing an unsaved provider) so the connection pill
+      // reflects that provider's stored key, not the persisted one.
+      fetchUserCredentials(providerOverride).catch(() => null),
       apiJson<AuthStatus>("/api/auth/status").catch(() => null),
     ]);
     setCreds(c);
     setAuth(a);
     setLoadError(c ? null : t("loadError"));
-  }, [t]);
+  }, [t, providerOverride]);
 
   // Initial mount: refetch, then flip `initialLoading` once. After this
   // the panels are mounted for the lifetime of the section; save handlers
@@ -134,7 +149,9 @@ export function MyCredentialsSection({ refreshKey = 0, onDirtyChange, panelRef, 
   // `provider` column in `user_provider_credentials`). See
   // `crates/takuto-web/src/routes/credentials.rs::ProviderCredentialStatus`.
   const userProvider = creds?.provider?.provider ?? null;
-  const activeProvider = adminProvider ?? userProvider ?? "claude";
+  // The live dropdown selection (when an admin is previewing an unsaved
+  // provider) wins, so the card follows the dropdown before any save.
+  const activeProvider = providerOverride ?? adminProvider ?? userProvider ?? "claude";
 
   // Mismatch banner: admin switched the deployment provider but the user
   // still has a stored credential for the old one. UX §2.2 last row.

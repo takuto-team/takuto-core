@@ -140,6 +140,7 @@
     "providerSettingsHelp": "Admin-only. Pick the active AI provider, configure its sub-table, and choose which providers users can pick from.",
     "form": {
       "provider": "Provider",
+      "notFullyTested": "(not fully tested)",
       "model": "Model",
       "modelDefaultPlaceholder": "Leave empty for the vendor default",
       "opencodeModelHelp": "Required. The model id served by your self-hosted endpoint (e.g. <code>lmstudio/qwen3-coder</code> or <code>ollama/llama3</code>).",

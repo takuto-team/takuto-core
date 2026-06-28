@@ -140,6 +140,7 @@
     "providerSettingsHelp": "管理者のみ。アクティブな AI プロバイダーを選択し、そのサブテーブルを設定して、ユーザーが選べるプロバイダーを指定します。",
     "form": {
       "provider": "プロバイダー",
+      "notFullyTested": "（十分にテストされていません）",
       "model": "モデル",
       "modelDefaultPlaceholder": "ベンダーのデフォルトを使用する場合は空欄のまま",
       "opencodeModelHelp": "必須。セルフホストのエンドポイントが提供するモデル ID です（例: <code>lmstudio/qwen3-coder</code>、<code>ollama/llama3</code>）。",

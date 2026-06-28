@@ -140,6 +140,7 @@
     "providerSettingsHelp": "Solo administradores. Elige el proveedor de IA activo, configura sus opciones y define entre qué proveedores pueden elegir los usuarios.",
     "form": {
       "provider": "Proveedor",
+      "notFullyTested": "(no totalmente probado)",
       "model": "Modelo",
       "modelDefaultPlaceholder": "Déjalo vacío para el modelo predeterminado del proveedor",
       "opencodeModelHelp": "Obligatorio. El id del modelo servido por tu endpoint autoalojado (p. ej. <code>lmstudio/qwen3-coder</code> u <code>ollama/llama3</code>).",

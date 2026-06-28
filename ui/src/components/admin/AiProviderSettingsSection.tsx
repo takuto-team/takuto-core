@@ -28,10 +28,13 @@ interface Props extends ConfigSectionProps {
   /** Called after a successful save so sibling sections (e.g. the per-user
    *  credentials card) can refetch and reflect the newly-selected provider. */
   onProviderSaved?: () => void;
+  /** Called whenever the selected provider changes in the dropdown (before any
+   *  save), so the per-user credentials card can follow the selection live. */
+  onProviderChange?: (provider: string) => void;
 }
 
 export const AiProviderSettingsSection = forwardRef<ConfigSectionHandle, Props>(
-  function AiProviderSettingsSection({ onProviderSaved, onDirtyChange }: Props, ref) {
+  function AiProviderSettingsSection({ onProviderSaved, onProviderChange, onDirtyChange }: Props, ref) {
   const { t } = useTranslation("config");
   const {
     loading,
@@ -57,6 +60,14 @@ export const AiProviderSettingsSection = forwardRef<ConfigSectionHandle, Props>(
   useEffect(() => {
     onDirtyChange?.(isDirty);
   }, [isDirty, onDirtyChange]);
+
+  // Report the live selection once the config has loaded (selectedProvider is
+  // seeded from the persisted provider then). Gating on `!loading` avoids
+  // briefly reporting the hook's "claude" default before the seed.
+  useEffect(() => {
+    if (loading) return;
+    onProviderChange?.(selectedProvider);
+  }, [loading, selectedProvider, onProviderChange]);
 
   return (
     <section aria-labelledby="ai-provider-section-title" className="flex flex-col gap-3">

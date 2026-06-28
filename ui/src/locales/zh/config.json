@@ -140,6 +140,7 @@
     "providerSettingsHelp": "仅限管理员。选择当前启用的 AI 提供商，配置其专属选项，并指定允许用户选用哪些提供商。",
     "form": {
       "provider": "提供商",
+      "notFullyTested": "（未充分测试）",
       "model": "模型",
       "modelDefaultPlaceholder": "留空以使用厂商默认值",
       "opencodeModelHelp": "必填。你的自托管端点所提供的模型 id（例如 <code>lmstudio/qwen3-coder</code> 或 <code>ollama/llama3</code>）。",

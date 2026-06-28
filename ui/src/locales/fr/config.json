@@ -140,6 +140,7 @@
     "providerSettingsHelp": "Réservé aux administrateurs. Choisissez le fournisseur d'IA actif, configurez sa sous-table et définissez les fournisseurs proposés aux utilisateurs.",
     "form": {
       "provider": "Fournisseur",
+      "notFullyTested": "(pas entièrement testé)",
       "model": "Modèle",
       "modelDefaultPlaceholder": "Laisser vide pour la valeur par défaut du fournisseur",
       "opencodeModelHelp": "Requis. L'identifiant du modèle servi par votre endpoint auto-hébergé (par ex. <code>lmstudio/qwen3-coder</code> ou <code>ollama/llama3</code>).",

@@ -10,8 +10,13 @@
 import { Trans, useTranslation } from "react-i18next";
 import type { AgentProviderId } from "../../api/types";
 
-/** Providers wired in the v1 dashboard. `gemini` is a v2 placeholder. */
-const V1_PROVIDERS: AgentProviderId[] = ["claude", "cursor", "codex", "opencode"];
+/** Providers wired in the v1 dashboard, in picker display order (most-tested
+ *  first). `gemini` is a v2 placeholder. */
+const V1_PROVIDERS: AgentProviderId[] = ["cursor", "opencode", "claude", "codex"];
+
+/** Providers flagged as not fully tested in the picker — annotated in the
+ *  dropdown so operators pick them knowingly. */
+const NOT_FULLY_TESTED = new Set<AgentProviderId>(["claude", "codex"]);
 
 export const PROVIDER_LABEL: Record<AgentProviderId, string> = {
   claude: "Claude",
@@ -108,6 +113,7 @@ export function ProviderForm({
           {V1_PROVIDERS.map((p) => (
             <option key={p} value={p}>
               {PROVIDER_LABEL[p]}
+              {NOT_FULLY_TESTED.has(p) ? ` ${t("ai.form.notFullyTested")}` : ""}
             </option>
           ))}
         </select>

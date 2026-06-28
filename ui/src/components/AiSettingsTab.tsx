@@ -41,6 +41,10 @@ export function AiSettingsTab({ isAdmin, onDirtyChange, registerSave }: Props) {
   // Bumped when the admin saves a new active provider so the per-user
   // credential card refetches and shows the right provider without a reload.
   const [credRefreshKey, setCredRefreshKey] = useState(0);
+  // Live provider chosen in the admin dropdown (before any save) so the
+  // credential card follows the selection in realtime. Null until the admin
+  // section reports (or for non-admins, who never render it).
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
 
   const providerRef = useRef<ConfigSectionHandle>(null);
   const shareRef = useRef<ConfigSectionHandle>(null);
@@ -84,6 +88,7 @@ export function AiSettingsTab({ isAdmin, onDirtyChange, registerSave }: Props) {
           ref={providerRef}
           onDirtyChange={setProviderDirty}
           onProviderSaved={() => setCredRefreshKey((k) => k + 1)}
+          onProviderChange={setSelectedProvider}
         />
       )}
       {isAdmin && <ShareConversationSwitch ref={shareRef} onDirtyChange={setShareDirty} />}
@@ -91,6 +96,7 @@ export function AiSettingsTab({ isAdmin, onDirtyChange, registerSave }: Props) {
 
       <MyCredentialsSection
         refreshKey={credRefreshKey}
+        providerOverride={selectedProvider ?? undefined}
         onDirtyChange={setCredentialDirty}
         panelRef={credentialRef}
         deferSave
