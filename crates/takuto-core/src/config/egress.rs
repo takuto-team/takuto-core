@@ -42,6 +42,13 @@ const CURSOR_HOSTS: &[&str] = &[
     "api2.cursor.sh",
     "cursor.sh",
     "repo42.cursor.sh",
+    // Agent-CLI install sources: the unpinned version is parsed from
+    // `cursor.com/install` and the versioned tarball is fetched from
+    // `downloads.cursor.com`. Without these the boot-time agent install hangs
+    // on a dropped connection once egress is enforced on the install host (the
+    // npm CLIs are unaffected — they use the already-allowlisted npm registry).
+    "cursor.com",
+    "downloads.cursor.com",
 ];
 
 impl Config {

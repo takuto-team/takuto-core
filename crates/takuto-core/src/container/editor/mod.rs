@@ -22,7 +22,9 @@ mod port_alloc;
 mod token_gen;
 mod urls;
 
-pub use container_builder::{EditorInfo, get_editor_info, start_editor, stop_editor};
+pub use container_builder::{
+    EditorInfo, get_editor_info, pick_terminal_port, start_editor, stop_editor,
+};
 pub use labels::{parse_connection_token_from_labels, parse_label_value};
 pub use port_alloc::{allocate_single_port, release_editor_ports};
 pub use token_gen::{generate_connection_token, generate_session_path_token};

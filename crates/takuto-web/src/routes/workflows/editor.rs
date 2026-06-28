@@ -828,13 +828,12 @@ async fn ensure_workspace_container_up(
     )
     .await;
 
-    // Allocate the container's editor port set (vscode + dynamic spares),
-    // exactly as the editor entry point does. `start_editor` reuses
-    // `spare_ports[0]` as the IDE port, so this MUST reserve a dedicated port
-    // for the editor — never the terminal's ttyd port (the caller allocated
-    // that separately, so it is excluded from this set). Seeding the container
-    // with the ttyd port instead would make the editor collide with ttyd on the
-    // same port and the editor proxy route would 404.
+    // Allocate the container's published port pool (vscode at pool[0] + dynamic
+    // spares). The whole pool is published when the container is created; the
+    // IDE uses pool[0], the terminal picks a free published spare from the rest
+    // (`pick_terminal_port`), and run-commands forward onto the spares. With the
+    // workspace container on its own netns, only published ports are reachable
+    // through the `/s/` proxy, so the pool must be large enough for all three.
     let dynamic_ports = cfg_state.config.read().await.editor.dynamic_ports;
     let ws_ports = container::allocate_editor_ports(1 + dynamic_ports)
         .await
@@ -942,18 +941,10 @@ pub async fn open_terminal(
         }));
     }
 
-    // Allocate a single port for ttyd from the shared editor port range, up
-    // front so it can be published when the container is brought up on demand
-    // (local mode; ignored under DinD --network=host).
-    let port = container::allocate_single_port().await.ok_or((
-        StatusCode::CONFLICT,
-        "No free ports available for terminal.".into(),
-    ))?;
-
     // Bring up the shared per-item workspace container (`takuto-ws-<ticket>` —
     // the SAME container the editor and custom commands use) on demand when it
     // isn't already running, so opening the terminal first works without first
-    // opening the editor.
+    // opening the editor. It publishes its port pool at create time.
     if container::workspace::workspace_status(&id).await
         != container::workspace::WorkspaceStatus::Running
     {
@@ -967,6 +958,15 @@ pub async fn open_terminal(
         )
         .await?;
     }
+
+    // The workspace container has its own network namespace, so ttyd must bind a
+    // PUBLISHED port to be reachable through the `/s/` proxy. Pick a free spare
+    // from the container's published pool rather than allocating a fresh
+    // (unpublished) port, which the proxy could not reach.
+    let port = container::pick_terminal_port(&id).await.ok_or((
+        StatusCode::CONFLICT,
+        "No free published port available for the terminal.".into(),
+    ))?;
 
     let (_legacy_url, token) = container::start_terminal(&id, port)
         .await

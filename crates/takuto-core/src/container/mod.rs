@@ -42,8 +42,8 @@ pub use editor::{
     EditorInfo, allocate_editor_ports, allocate_single_port, build_editor_url,
     build_session_dynamic_port_url, build_session_editor_url, build_session_terminal_url,
     build_terminal_url, generate_connection_token, generate_session_path_token, get_editor_info,
-    parse_connection_token_from_labels, parse_label_value, release_editor_ports,
-    session_publish_arg, start_editor, stop_editor,
+    parse_connection_token_from_labels, parse_label_value, pick_terminal_port,
+    release_editor_ports, session_publish_arg, start_editor, stop_editor,
 };
 pub use port_scanner::{
     listening_ports_in_editor, live_socat_forwards, pkill_in_container, run_port_scanner,
@@ -112,11 +112,6 @@ pub(crate) fn sanitize_ticket_key(key: &str) -> String {
 /// don't embed that assumption directly.
 pub fn editor_host_port(container_port: u16) -> u16 {
     container_port
-}
-
-/// Whether we are running in Docker-in-Docker mode (DOCKER_HOST is set).
-pub(crate) fn is_dind_mode() -> bool {
-    std::env::var("DOCKER_HOST").is_ok()
 }
 
 #[cfg(test)]

@@ -267,6 +267,31 @@ async fn read_ws_spare_ports(name: &str) -> Option<Vec<u16>> {
     if ports.is_empty() { None } else { Some(ports) }
 }
 
+/// Pick a **published** spare host port for a new ttyd terminal from the
+/// workspace container's pool.
+///
+/// The workspace container has its own network namespace, so ttyd must bind a
+/// port that was published at `docker run` time to be reachable through the
+/// `/s/` reverse proxy — a freshly-allocated (unpublished) port would not be
+/// exposed. Reserves `pool[0]` for the IDE (vscode) and skips any port already
+/// listening (existing ttyd / vscode / run-command forwards), preferring the
+/// high end so it doesn't collide with run-command forwards (which take the low
+/// end). Returns `None` if the container has no free publishable spare.
+pub async fn pick_terminal_port(ticket_key: &str) -> Option<u16> {
+    let name = workspace_container_name(ticket_key);
+    let pool = read_ws_spare_ports(&name).await?;
+    if pool.len() < 2 {
+        return None;
+    }
+    let listening = super::super::listening_ports_in_editor(ticket_key).await;
+    pool[1..]
+        .iter()
+        .rev()
+        .copied()
+        .find(|p| !listening.contains(p))
+        .or_else(|| pool.last().copied())
+}
+
 /// Parse openvscode-server's `--port`, `--connection-token`, and
 /// `--server-base-path /s/<token>` from a `pgrep -af openvscode-server` line.
 /// Returns `None` if any is missing — mirrors `terminal::parse_terminal_auth_from_pgrep`

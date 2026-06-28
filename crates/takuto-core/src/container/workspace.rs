@@ -26,7 +26,7 @@ use super::runner::{
     passthrough_is_bundled,
 };
 use super::sanitize_ticket_key;
-use super::{editor::session_publish_arg, is_dind_mode};
+use super::editor::session_publish_arg;
 
 /// Shared scratch directory inside the workspace container where running
 /// services publish their (often randomly-assigned) URLs for other execs —
@@ -102,8 +102,10 @@ pub async fn workspace_status(ticket_key: &str) -> WorkspaceStatus {
 ///
 /// Pure (no I/O) so it is unit-testable without a Docker daemon. PID 1 is
 /// `sleep infinity`; openvscode-server / ttyd / run-commands are `docker
-/// exec`'d in afterwards. `dind` selects `--network=host` (DinD) vs per-port
-/// loopback publishing (local), matching the editor container's model.
+/// exec`'d in afterwards. The container always gets its OWN network namespace
+/// with published ports (never `--network=host`) so an egress allowlist applied
+/// inside it cannot touch the shared takuto/dind control-plane netns; the DinD
+/// daemon's docker-proxy still exposes the ports on the takuto netns.
 fn build_workspace_run_args(
     name: &str,
     image: &str,
@@ -111,7 +113,6 @@ fn build_workspace_run_args(
     isolate_workspace: bool,
     spare_ports: &[u16],
     secrets_bundle: Option<&crate::auth::WorkerSecretsBundle>,
-    dind: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -154,14 +155,17 @@ fn build_workspace_run_args(
         apply_secrets_bundle_to_args(&mut args, b);
     }
 
-    // Network / port publishing — same rationale as the editor container.
-    if dind {
-        args.push("--network=host".into());
-    } else {
-        for &sp in spare_ports {
-            args.push("-p".into());
-            args.push(session_publish_arg(sp, sp));
-        }
+    // Give the workspace container its OWN network namespace (never
+    // `--network=host`) so the egress allowlist applied inside it governs only
+    // its own processes — in DinD, `--network=host` would join the shared
+    // takuto/dind control-plane netns and a default-DROP there would firewall
+    // Takuto itself. Publish the port pool in both modes; in DinD the daemon's
+    // docker-proxy then exposes each port on the takuto netns at
+    // 127.0.0.1:<host_port> (exactly like local-Docker mode), so the `/s/`
+    // reverse proxy reaches the IDE/terminal/forwarded ports unchanged.
+    for &sp in spare_ports {
+        args.push("-p".into());
+        args.push(session_publish_arg(sp, sp));
     }
 
     args.push("-w".into());
@@ -201,8 +205,9 @@ fn build_workspace_run_args(
 /// restart-recovery point — after a Takuto restart the in-memory state is
 /// empty but a still-running container is reused via `docker inspect`.
 ///
-/// `spare_ports` are the host ports to publish (local mode) for the IDE,
-/// terminal, and run-command forwarding; ignored in DinD (`--network=host`).
+/// `spare_ports` are the host ports published for the IDE, terminal, and
+/// run-command forwarding (in both DinD and local modes — the container always
+/// has its own netns).
 ///
 /// `init_commands` are the workspace's per-user init commands; they run inside
 /// the container **whenever it is brought up** (created or started, not on
@@ -226,6 +231,13 @@ pub async fn ensure_workspace_container(
 
     match workspace_status(ticket_key).await {
         WorkspaceStatus::Running => {
+            // Re-assert the egress allowlist idempotently — covers a container
+            // created before this feature shipped, or a refresh loop that died.
+            // Best-effort on reuse: don't tear down an already-serving workspace
+            // if a transient re-apply fails (it was applied at bring-up).
+            if let Err(e) = apply_workspace_egress(&name).await {
+                warn!(name = %name, error = %e, "egress re-assert on reuse failed (continuing)");
+            }
             return Ok(WorkspaceInfo {
                 name,
                 spare_ports: spare_ports.to_vec(),
@@ -244,6 +256,9 @@ pub async fn ensure_workspace_container(
                     String::from_utf8_lossy(&out.stderr)
                 ));
             }
+            // Apply egress BEFORE init (fail-closed) so init commands run under
+            // the allowlist — matching the worker path.
+            apply_workspace_egress(&name).await?;
             // Re-run init on every bring-up: external side-effects (e.g. a dev
             // DB container) may have stopped while this one was down.
             run_init_commands(&name, worktree_path, init_commands).await;
@@ -263,7 +278,6 @@ pub async fn ensure_workspace_container(
         isolate_workspace,
         spare_ports,
         secrets_bundle,
-        is_dind_mode(),
     );
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     info!(name = %name, "Creating workspace container");
@@ -279,6 +293,17 @@ pub async fn ensure_workspace_container(
         ));
     }
 
+    // Apply the egress allowlist (fail-closed) BEFORE anything uses the
+    // container. On failure, tear the fresh container down so we never leave a
+    // workspace running with no allowlist for a later reuse to attach to.
+    if let Err(e) = apply_workspace_egress(&name).await {
+        let _ = tokio::process::Command::new("docker")
+            .args(["rm", "-f", &name])
+            .output()
+            .await;
+        return Err(e);
+    }
+
     // Fresh container — run the workspace's init commands before it's used.
     run_init_commands(&name, worktree_path, init_commands).await;
 
@@ -287,6 +312,82 @@ pub async fn ensure_workspace_container(
         spare_ports: spare_ports.to_vec(),
         created: true,
     })
+}
+
+/// Apply the egress allowlist inside the workspace container (as root — the
+/// container has `--cap-add=NET_ADMIN`) and start the runtime refresh loop
+/// (`TAKUTO_EGRESS_REFRESH=1`). The container has its own netns, so this never
+/// touches the shared takuto/dind control-plane netns.
+///
+/// Fail-closed: returns `Err` only when iptables IS available but the apply
+/// failed — the caller must not serve a workspace with no egress. When
+/// iptables/NET_ADMIN is absent (e.g. local dev without the capability), this
+/// is the documented "egress not enforced" mode: log and return `Ok`, matching
+/// `entrypoint.sh` / `worker-entrypoint.sh`.
+async fn apply_workspace_egress(name: &str) -> Result<(), String> {
+    // Safety guard: NEVER apply egress to a container that shares another
+    // netns (`--network=host` or `container:<id>`). A workspace container
+    // created by a pre-feature build used `--network=host` (the shared
+    // takuto/dind control-plane netns) — applying a default-DROP there would
+    // firewall Takuto itself. Fresh containers get their own netns
+    // (NetworkMode "default"/bridge) and are safe. Such legacy containers must
+    // be recreated to gain their own netns + egress.
+    let netmode = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{.HostConfig.NetworkMode}}",
+            name,
+        ])
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if netmode == "host" || netmode.starts_with("container:") {
+        warn!(
+            name = %name,
+            netmode = %netmode,
+            "workspace container shares a host/other netns (legacy --network=host) — skipping egress to avoid firewalling the control plane; recreate it to enable egress"
+        );
+        return Ok(());
+    }
+
+    // Capability probe — can we run iptables as root in this container?
+    let probe = tokio::process::Command::new("docker")
+        .args([
+            "exec", "-u", "0", name, "sh", "-c", "iptables -L -n >/dev/null 2>&1",
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("egress capability probe failed: {e}"))?;
+    if !probe.status.success() {
+        warn!(
+            name = %name,
+            "NET_ADMIN/iptables unavailable in workspace container — egress NOT enforced"
+        );
+        return Ok(());
+    }
+    let out = tokio::process::Command::new("docker")
+        .args([
+            "exec",
+            "-u",
+            "0",
+            "-e",
+            "TAKUTO_EGRESS_REFRESH=1",
+            name,
+            "/usr/local/bin/egress-rules.sh",
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("failed to apply egress rules: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "egress allowlist apply failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    info!(name = %name, "egress allowlist applied in workspace container");
+    Ok(())
 }
 
 /// Run the workspace's init commands inside the container, in the worktree,
@@ -418,7 +519,6 @@ mod tests {
             true,
             &[9101, 9102],
             None,
-            false, // local docker
         );
         // PID 1 is sleep infinity.
         let tail = args.iter().rev().take(3).cloned().collect::<Vec<_>>();
@@ -444,7 +544,10 @@ mod tests {
     }
 
     #[test]
-    fn run_args_dind_uses_host_network_no_publish() {
+    fn run_args_never_use_host_network_and_publish_ports() {
+        // The workspace container must NEVER use host networking — egress rules
+        // applied inside it would otherwise hit the shared takuto/dind netns.
+        // It always gets its own netns + published ports (both DinD and local).
         let args = build_workspace_run_args(
             "takuto-ws-proj-1",
             "takuto:latest",
@@ -452,9 +555,9 @@ mod tests {
             true,
             &[9101],
             None,
-            true, // dind
         );
-        assert!(args.iter().any(|a| a == "--network=host"));
-        assert!(!args.iter().any(|a| a == "-p"));
+        assert!(!args.iter().any(|a| a == "--network=host"));
+        assert!(args.iter().any(|a| a == "-p"));
+        assert!(args.iter().any(|a| a.contains("9101")));
     }
 }

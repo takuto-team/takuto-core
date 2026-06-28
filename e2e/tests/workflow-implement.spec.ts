@@ -323,4 +323,89 @@ test.describe.serial('opencode implement-workflow via the dashboard UI (Part B)'
       );
     }
   });
+
+  test('B8: egress allowlist is enforced in the workflow container, not the control plane', async () => {
+    test.setTimeout(SURFACE_TIMEOUT_MS + 120_000);
+    const card = new WorkItemCard(page, ticketKey);
+    await card.waitFor();
+    // Ensure the per-item workspace container (IDE/terminal/run-command) is up.
+    if (!(await card.isEditorRunning())) {
+      await card.clickEditor();
+      await expect
+        .poll(() => card.isEditorRunning(), {
+          timeout: SURFACE_TIMEOUT_MS,
+          message: 'workspace container never came up',
+        })
+        .toBe(true);
+    }
+    const ps = await dind.exec(['ps', '--format', '{{.Names}}']);
+    const ws = ps.stdout
+      .split('\n')
+      .map((s) => s.trim())
+      .find((n) => n.startsWith('takuto-ws-'));
+    expect(ws, `workspace container should be running (ps: ${ps.stdout})`).toBeTruthy();
+
+    // (1) Egress is applied inside the workspace container: default-DROP OUTPUT
+    // policy + a jump to the TAKUTO_EGRESS chain.
+    const rules = await dind.exec(['exec', '-u', '0', ws!, 'iptables', '-S', 'OUTPUT']);
+    expect(rules.stdout, `OUTPUT should default-DROP (got: ${rules.stdout})`).toMatch(
+      /-P OUTPUT DROP/,
+    );
+    expect(rules.stdout, `OUTPUT should jump to the TAKUTO_EGRESS chain`).toMatch(
+      /-j TAKUTO_EGRESS_[AB]/,
+    );
+
+    // (2) A non-allowlisted host is BLOCKED (the firewall is live).
+    const blocked = await dind.exec([
+      'exec',
+      ws!,
+      'bash',
+      '-lc',
+      'curl -sS --max-time 6 -o /dev/null https://example.com 2>/dev/null; echo EXIT=$?',
+    ]);
+    expect(
+      blocked.stdout,
+      `example.com must be blocked inside the workflow container (got: ${blocked.stdout})`,
+    ).not.toMatch(/EXIT=0/);
+
+    // (3) An ALLOWED non-GitHub host is reachable — proves ALL hosts are
+    // resolved into the allowlist, not just GitHub.
+    const allowed = await dind.exec([
+      'exec',
+      ws!,
+      'bash',
+      '-lc',
+      'curl -sS --max-time 15 -o /dev/null https://registry.npmjs.org 2>/dev/null; echo EXIT=$?',
+    ]);
+    expect(
+      allowed.stdout,
+      `registry.npmjs.org (allowlisted) must be reachable (got: ${allowed.stdout})`,
+    ).toMatch(/EXIT=0/);
+
+    // (4) The runtime refresh loop is running (pidfile + live process).
+    const refresh = await dind.exec([
+      'exec',
+      '-u',
+      '0',
+      ws!,
+      'sh',
+      '-lc',
+      'test -f /run/takuto-egress-refresh.pid && kill -0 "$(cat /run/takuto-egress-refresh.pid)" 2>/dev/null; echo EXIT=$?',
+    ]);
+    expect(refresh.stdout, `egress refresh loop should be running (got: ${refresh.stdout})`).toMatch(
+      /EXIT=0/,
+    );
+
+    // (5) The control plane is NOT firewalled: the takuto server still has
+    // unrestricted egress (the workflow container's DROP must not leak to the
+    // shared/control-plane netns).
+    const cp = await stackRef.exec([
+      'bash',
+      '-lc',
+      'curl -sS --max-time 8 -o /dev/null https://example.com 2>/dev/null; echo EXIT=$?',
+    ]);
+    expect(cp.stdout, `control-plane egress must remain intact (got: ${cp.stdout})`).toMatch(
+      /EXIT=0/,
+    );
+  });
 });

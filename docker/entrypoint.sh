@@ -40,15 +40,14 @@ if [ "$(id -u)" = "0" ]; then
     # install` in setup mode) writes here as the takuto user.
     chown_takuto_tree /opt/takuto-tools
 
-    if [ "${1:-}" != "setup" ] && [ "${1:-}" != "test-workflow" ]; then
-        if iptables -L -n >/dev/null 2>&1; then
-            echo "NET_ADMIN capability detected, applying egress rules..."
-            /usr/local/bin/egress-rules.sh
-        else
-            echo "WARNING: NET_ADMIN capability not available. Egress rules NOT applied."
-            echo "         Run container with --cap-add=NET_ADMIN to enable network restrictions."
-        fi
-    fi
+    # Egress rules are intentionally NOT applied on the main/control-plane
+    # container. The allowlist is enforced only in the ITEM context — flow
+    # workers (worker-entrypoint.sh) and the per-item workspace container
+    # (applied via `docker exec` on bring-up). Restricting the control-plane
+    # server here would firewall Takuto's own operations (GitHub/Jira/AI provider
+    # APIs, the boot-time agent-CLI install fetching from cursor.com /
+    # downloads.cursor.com / acli.atlassian.com, etc.) for no real isolation
+    # gain, since the server orchestrates everything anyway.
 
     # Task #37 (Phase 2c, deployment fix): make /etc/takuto/ writable for the
     # takuto user so ConfigWriter's atomic temp+rename can succeed at runtime.

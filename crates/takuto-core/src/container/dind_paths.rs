@@ -71,8 +71,8 @@ pub(crate) fn translate_path_for_dind_inner(
 /// Detect whether the docker daemon is on the OTHER end of a
 /// network socket (i.e. DinD via `tcp://`) — in which case the daemon
 /// resolves bind-mount sources in its own filesystem, and takuto must
-/// translate paths. Distinct from [`super::is_dind_mode`] (which returns
-/// true for ANY `DOCKER_HOST` setting including unix sockets — those
+/// translate paths. Distinct from a plain "is `DOCKER_HOST` set?" check
+/// (which is true for ANY `DOCKER_HOST` including unix sockets — those
 /// still share the filesystem with takuto and don't need path
 /// translation).
 pub(crate) fn is_remote_docker_daemon() -> bool {
