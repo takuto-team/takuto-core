@@ -539,17 +539,24 @@ async fn worktree_add_existing_branch(
     )
     .await;
 
-    let add_cmd = format!(
-        "git -c core.hooksPath=/dev/null worktree add {} {branch}",
-        worktree_path.display()
-    );
+    // argv (not an interpolated shell string) so a branch/path can never
+    // word-split into extra `git worktree add` args (see git::worktree slugify).
+    let worktree_str = worktree_path.display().to_string();
+    let add_args = [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "worktree",
+        "add",
+        worktree_str.as_str(),
+        branch,
+    ];
 
     // Fast path: branch present locally (fresh clone) → offline checkout.
-    let first = takuto_core::process::run_shell_command_with_env(
-        &add_cmd,
+    let first = takuto_core::process::run_command(
+        "git",
+        &add_args,
         repo_path,
         tokio_util::sync::CancellationToken::new(),
-        &[],
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -589,11 +596,11 @@ async fn worktree_add_existing_branch(
     }
 
     let _ = tokio::fs::remove_dir_all(&worktree_path).await;
-    let retry = takuto_core::process::run_shell_command_with_env(
-        &add_cmd,
+    let retry = takuto_core::process::run_command(
+        "git",
+        &add_args,
         repo_path,
         tokio_util::sync::CancellationToken::new(),
-        &[],
     )
     .await
     .map_err(|e| e.to_string())?;
