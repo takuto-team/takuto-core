@@ -245,6 +245,18 @@ fn err_with(
     (status, Json(serde_json::Value::Object(obj)))
 }
 
+/// Strip all whitespace (spaces, tabs, CR, LF) from a pasted API key.
+///
+/// Bearer / API keys never contain internal whitespace, so this repairs the
+/// common paste failures — a trailing newline, or an OAuth token that wrapped
+/// across two lines on screen and was pasted as two lines — that otherwise seal
+/// a malformed token and surface downstream as a `401 Invalid bearer token`
+/// from the agent CLI in the worker. Applied to `api_key` only; `cli_state`
+/// (a JSON blob) is left untouched.
+fn clean_api_key(raw: &str) -> String {
+    raw.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
 /// Reject empty / oversized API keys before they hit the seal layer.
 fn validate_api_key_shape(api_key: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let trimmed = api_key.trim();
@@ -415,12 +427,15 @@ pub async fn post_provider_credential(
                     "claude_session_json_not_allowed_for_api_key_kind",
                 ));
             }
-            let key = body
+            let raw = body
                 .api_key
                 .as_deref()
                 .ok_or_else(|| err(StatusCode::BAD_REQUEST, "api_key_required"))?;
-            validate_api_key_shape(key)?;
-            (ProviderCredentialKind::ApiKey, key.as_bytes().to_vec())
+            // Repair whitespace-mangled pastes (trailing newline, a token
+            // wrapped across two lines) before validating and sealing.
+            let key = clean_api_key(raw);
+            validate_api_key_shape(&key)?;
+            (ProviderCredentialKind::ApiKey, key.into_bytes())
         }
         "cli_state" => {
             // Only Claude accepts cli_state today; every other provider
@@ -1192,6 +1207,22 @@ mod tests {
 
     use crate::server::build_router;
     use crate::test_helpers::{TEST_ORIGIN, register_and_login, test_state_with_db};
+
+    #[test]
+    fn clean_api_key_strips_all_whitespace() {
+        use super::clean_api_key;
+        // Trailing newline (the single most common paste artifact).
+        assert_eq!(clean_api_key("sk-abc123\n"), "sk-abc123");
+        // Leading/trailing spaces + tabs + CRLF.
+        assert_eq!(clean_api_key("\t  sk-abc \r\n"), "sk-abc");
+        // OAuth token that wrapped across two lines and was pasted as two.
+        assert_eq!(
+            clean_api_key("sk-ant-oat01-AAAA\nBBBBCCCC\n"),
+            "sk-ant-oat01-AAAABBBBCCCC"
+        );
+        // All-whitespace collapses to empty (then rejected as api_key_empty).
+        assert_eq!(clean_api_key("   \n\t"), "");
+    }
 
     /// A configurable fake for the [`JiraHttp`] trait.
     ///
