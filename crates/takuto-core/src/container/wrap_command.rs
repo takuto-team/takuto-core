@@ -149,8 +149,30 @@ pub(crate) const BUNDLE_SOURCING_SH: &str = concat!(
     r#" fi"#,
 );
 
+/// Fail-fast guard: verify the agent binary resolves on `PATH` before
+/// `exec`ing it. The agent CLIs are runtime-installed into the shared
+/// `takuto-tools` volume (`/opt/takuto-tools/bin`) and reach workers through
+/// DinD; a broken volume mount (or a not-yet-completed install) otherwise
+/// surfaces as a bare `exec: <bin>: not found` → exit 127 mid-run with no
+/// hint at the cause. This turns that into one actionable stderr line the
+/// operator sees in the step output.
+pub(crate) fn reachability_guard(program: &str) -> String {
+    let msg = format!(
+        "[takuto] Agent CLI '{program}' not found on PATH in the worker container. \
+         The runtime-installed agent CLIs live in /opt/takuto-tools/bin, shared into \
+         workers via the 'takuto-tools' volume through DinD. Verify that volume is mounted \
+         at /opt/takuto-tools in BOTH the takuto and dind services and that the dependency \
+         install completed, then restart Takuto."
+    );
+    format!(
+        "command -v {} >/dev/null 2>&1 || {{ echo {} >&2; exit 127; }};",
+        shell_escape(program),
+        shell_escape(&msg),
+    )
+}
+
 /// Build the `sh -c` payload for `ContainerRunner::wrap_command`:
-/// `<restore>; <fix_perms>; <gh_token> [<bundle_source>;] exec <program> <args…>`.
+/// `<restore>; <fix_perms>; <gh_token> [<bundle_source>;] <cli_check> exec <program> <args…>`.
 ///
 /// When `has_bundle` is `false` the bundle-sourcing block is omitted
 /// entirely, keeping the legacy path's argv clean and matching the
@@ -162,13 +184,14 @@ pub(crate) fn build_sh_payload(has_bundle: bool, program: &str, args: &[&str]) -
         shell_parts.push(shell_escape(a));
     }
     let user_exec = shell_parts.join(" ");
+    let guard = reachability_guard(program);
     if has_bundle {
         format!(
-            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {BUNDLE_SOURCING_SH}; {GIT_CRED_HELPER_SNIPPET} exec {user_exec}"
+            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {BUNDLE_SOURCING_SH}; {GIT_CRED_HELPER_SNIPPET} {guard} exec {user_exec}"
         )
     } else {
         format!(
-            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {GIT_CRED_HELPER_SNIPPET} exec {user_exec}"
+            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {GIT_CRED_HELPER_SNIPPET} {guard} exec {user_exec}"
         )
     }
 }
@@ -456,13 +479,44 @@ mod tests {
     #[test]
     fn lock_in_build_sh_payload_no_bundle_exact_output() {
         let actual = build_sh_payload(false, "echo", &["hello", "world"]);
+        let guard = reachability_guard("echo");
         let expected = format!(
-            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {GIT_CRED_HELPER_SNIPPET} exec echo hello world"
+            "{RESTORE_SNIPPET}; {FIX_PERMS_SNIPPET}; {GH_TOKEN_SNIPPET} {GIT_CRED_HELPER_SNIPPET} {guard} exec echo hello world"
         );
         assert_eq!(
             actual, expected,
             "build_sh_payload(false, ...) wire-format drifted"
         );
+    }
+
+    /// The reachability guard must check the program on PATH, point at the
+    /// tools volume, and exit non-zero with the message on stderr.
+    #[test]
+    fn reachability_guard_checks_binary_and_fails_actionably() {
+        let g = reachability_guard("claude");
+        assert!(g.contains("command -v claude"), "must probe PATH: {g}");
+        assert!(g.contains("/opt/takuto-tools/bin"), "must name the tools dir: {g}");
+        assert!(g.contains(">&2"), "message must go to stderr: {g}");
+        assert!(g.contains("exit 127"), "must exit 127 on missing binary: {g}");
+    }
+
+    /// Both payload variants must run the reachability guard immediately
+    /// before `exec` (after all setup), so a missing agent CLI fails with the
+    /// actionable message rather than a bare `exec: not found`. `[takuto] Agent
+    /// CLI` is unique to the guard (the bundle block's `command -v jq` is not).
+    #[test]
+    fn build_sh_payload_guards_reachability_before_exec() {
+        for has_bundle in [true, false] {
+            let body = build_sh_payload(has_bundle, "claude", &["--version"]);
+            let guard_at = body
+                .find("[takuto] Agent CLI")
+                .unwrap_or_else(|| panic!("has_bundle={has_bundle}: guard missing: {body}"));
+            let exec_at = body.find("exec claude").expect("exec position");
+            assert!(
+                guard_at < exec_at,
+                "has_bundle={has_bundle}: guard must precede exec; guard@{guard_at} exec@{exec_at}"
+            );
+        }
     }
 
     /// Both payload variants must configure the git credential helper so the
