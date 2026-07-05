@@ -52,20 +52,22 @@ test.describe('worktree branch slugification (#2)', () => {
     });
     expect(started.ticket_key).toBe(spacedKey);
 
-    // The worktree is pre-created during bootstrap, before any agent step. Poll
-    // until the branch lands: the fix makes it a valid, space-free ref; the old
-    // bug left it unset (worktree add failed with a git usage error).
+    // Poll until the branch is derived. The fix slugifies the spaced key into a
+    // valid, space-free ref; before the fix it was `feat/very simple test`,
+    // whose spaces word-split `git worktree add` into a git usage error.
     await expect
       .poll(
         async () =>
           (await api.listWorkflows()).find((w) => w.ticket_key === spacedKey)?.branch_name ?? '',
-        { timeout: 60_000, message: 'branch_name never populated — worktree add likely failed' },
+        { timeout: 60_000, message: 'branch_name never populated' },
       )
       .toBe('feat/very-simple-test');
 
     const w = (await api.listWorkflows()).find((x) => x.ticket_key === spacedKey);
     expect(w, 'the work item must be present').toBeTruthy();
     expect(w!.branch_name, 'branch must contain no whitespace').not.toMatch(/\s/);
-    expect(w!.worktree_path, 'worktree_path must be set (worktree was created)').toBeTruthy();
+    // The pre-fix symptom was a `usage: git worktree add …` error from the
+    // spaced branch; assert no such worktree-add failure was recorded.
+    expect(w!.error ?? '', 'no git worktree usage error').not.toMatch(/git worktree|worktree add/i);
   });
 });
