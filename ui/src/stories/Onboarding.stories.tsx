@@ -3,7 +3,7 @@
 
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useEffect, useState, type ReactNode } from "react";
-import { fn, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Onboarding } from "../pages/Onboarding";
@@ -117,12 +117,23 @@ function withApiMock(mock: ApiMock = {}) {
   };
 }
 
-/** Click "Skip for now" `count` times, awaiting each next step to render. */
-async function skip(canvasElement: HTMLElement, count: number) {
+/**
+ * Advance the wizard `count` steps by clicking "Save and Continue" (there is no
+ * "Skip" button any more). Each per-step save is async and disables the button
+ * while it runs, so we wait for the Stepper's active step to reach the target
+ * before the next click — otherwise a click could land on the disabled button
+ * mid-save and be a no-op.
+ */
+async function advance(canvasElement: HTMLElement, count: number) {
   const canvas = within(canvasElement);
   for (let i = 0; i < count; i++) {
-    const btn = await canvas.findByText("Skip for now");
+    const target = i + 2; // step number reached after this click (start at 1)
+    const btn = await canvas.findByRole("button", { name: /save and continue/i });
     await userEvent.click(btn);
+    await waitFor(() => {
+      const active = canvasElement.querySelector('[aria-current="step"]');
+      expect(active?.textContent ?? "").toMatch(new RegExp(`^\\s*${target}\\.`));
+    });
   }
 }
 
@@ -177,31 +188,33 @@ export const FullWalkthrough: Story = {
   name: "Full wizard (interactive — click through all 5 steps)",
 };
 
-// Per-step snapshots: each auto-advances to its step via "Skip for now" so the
-// Storybook sidebar showcases the entire wizard step by step.
+// Per-step snapshots: each auto-advances to its step via "Save and Continue" so
+// the Storybook sidebar showcases the entire wizard step by step. Order mirrors
+// `ONBOARDING_STEPS`: Git & GitHub → Repositories → AI provider → Ticketing →
+// Workflows.
 
-export const Step1Ticketing: Story = {
-  name: "Step 1 — Ticketing",
+export const Step1Git: Story = {
+  name: "Step 1 — Git & GitHub",
 };
 
-export const Step2Provider: Story = {
-  name: "Step 2 — AI provider",
-  play: async ({ canvasElement }) => skip(canvasElement, 1),
+export const Step2Repositories: Story = {
+  name: "Step 2 — Repositories",
+  play: async ({ canvasElement }) => advance(canvasElement, 1),
 };
 
-export const Step3GitHub: Story = {
-  name: "Step 3 — Git & GitHub",
-  play: async ({ canvasElement }) => skip(canvasElement, 2),
+export const Step3Provider: Story = {
+  name: "Step 3 — AI provider",
+  play: async ({ canvasElement }) => advance(canvasElement, 2),
 };
 
-export const Step4Repositories: Story = {
-  name: "Step 4 — Repositories",
-  play: async ({ canvasElement }) => skip(canvasElement, 3),
+export const Step4Ticketing: Story = {
+  name: "Step 4 — Ticketing",
+  play: async ({ canvasElement }) => advance(canvasElement, 3),
 };
 
 export const Step5Workflows: Story = {
   name: "Step 5 — Workflows",
-  play: async ({ canvasElement }) => skip(canvasElement, 4),
+  play: async ({ canvasElement }) => advance(canvasElement, 4),
 };
 
 /** Variant: Jira already connected on the Ticketing step. */
