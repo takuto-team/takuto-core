@@ -5,6 +5,48 @@ title = "Takuto gitleaks config"
 [extend]
 useDefault = true
 
+# Extend upstream GitHub rules with the "github" keyword so the pre-filter
+# also matches content that mentions GitHub without a token prefix on the
+# same line (regex + entropy still required for a finding).
+[[rules]]
+id = "github-pat"
+keywords = ["ghp_", "github"]
+
+[[rules]]
+id = "github-fine-grained-pat"
+keywords = ["github_pat_", "github"]
+
+[[rules]]
+id = "github-oauth"
+keywords = ["gho_", "github"]
+
+[[rules]]
+id = "github-app-token"
+keywords = ["ghu_", "ghs_", "github"]
+
+[[rules]]
+id = "github-refresh-token"
+keywords = ["ghr_", "github"]
+
+# Upstream defaults cover curl Authorization headers and JWTs, but miss plain
+# `Bearer <token>` literals elsewhere (fetch headers, env samples, logs).
+[[rules]]
+id = "authorization-bearer-token"
+description = "Hardcoded HTTP Authorization Bearer token"
+regex = '''(?i)\bBearer(?:\s+|%20|\+)([A-Za-z0-9_\-+/=.]{20,})'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["bearer"]
+[[rules.allowlists]]
+description = "Placeholders, templates, and obvious non-secrets"
+regexTarget = "secret"
+regexes = [
+  '''(?i)^(?:mock|fake|test|example|placeholder|xxx+|your[_-]?token)''',
+  '''^\$\{''',
+  '''^\$[A-Z_][A-Z0-9_]*$''',
+  '''^\.{2,}$''',
+]
+
 [allowlist]
 description = "Known test/RFC values and synthetic fixtures — not real secrets"
 # Don't scan gitleaks' own config/ignore files: their comments quote planning-
@@ -19,8 +61,8 @@ regexes = [
   # non-secrets (repeating / structured hex), never real credentials.
   '''(?:0123456789abcdef)+''',
   '''(?:abcdef0123456789)+''',
-  '''(?:deadbeef)+''',
+  '''^(?:deadbeef)+$''',
   '''aaaa1111bbbb2222cccc3333dddd4444''',
   '''eeee5555ffff6666aaaa7777bbbb8888''',
-  '''(?:a{16,}|f{16,})''',
+  '''^(?:a{16,}|f{16,})$''',
 ]
